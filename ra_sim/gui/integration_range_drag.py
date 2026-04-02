@@ -184,6 +184,40 @@ def _clear_drag_coordinates(drag_state) -> None:
     drag_state.phi0 = None
     drag_state.tth1 = None
     drag_state.phi1 = None
+    setattr(drag_state, "_raw_drag_preview_center", None)
+    setattr(drag_state, "_raw_drag_preview_data", None)
+
+
+def _wrap_angle_degrees(value: float) -> float:
+    return float(((float(value) + 180.0) % 360.0) - 180.0)
+
+
+def _canonicalize_shortest_angle_interval(
+    angle0: object,
+    angle1: object,
+) -> tuple[float, float] | None:
+    if angle0 is None or angle1 is None:
+        return None
+    wrapped0 = _wrap_angle_degrees(float(angle0))
+    wrapped1 = _wrap_angle_degrees(float(angle1))
+    positive_span = (wrapped1 - wrapped0) % 360.0
+    if positive_span <= 180.0:
+        return (wrapped0, wrapped1)
+    return (wrapped1, wrapped0)
+
+
+def detector_phi_mask(
+    phi_values: object,
+    phi_start: object,
+    phi_end: object,
+) -> np.ndarray:
+    phi_array = np.asarray(phi_values, dtype=float)
+    wrapped = ((phi_array + 180.0) % 360.0) - 180.0
+    phi_start_val = float(phi_start)
+    phi_end_val = float(phi_end)
+    if phi_end_val >= phi_start_val:
+        return (wrapped >= phi_start_val) & (wrapped <= phi_end_val)
+    return (wrapped >= phi_start_val) | (wrapped <= phi_end_val)
 
 
 def clamp_to_axis_view(ax: object, x: float, y: float) -> tuple[float, float]:
@@ -273,8 +307,179 @@ def _sorted_detector_angle_bounds(
     if None in (tth0, phi0, tth1, phi1):
         return None
     tth_min, tth_max = sorted((float(tth0), float(tth1)))
-    phi_min, phi_max = sorted((float(phi0), float(phi1)))
-    return (float(tth_min), float(tth_max), float(phi_min), float(phi_max))
+    phi_bounds = _canonicalize_shortest_angle_interval(phi0, phi1)
+    if phi_bounds is None:
+        return None
+    return (float(tth_min), float(tth_max), float(phi_bounds[0]), float(phi_bounds[1]))
+
+
+def _display_polar_angle_degrees(
+    x_value: float,
+    y_value: float,
+    center_x: float,
+    center_y: float,
+) -> float:
+    return _wrap_angle_degrees(
+        np.degrees(
+            np.arctan2(
+                float(y_value) - float(center_y),
+                float(x_value) - float(center_x),
+            )
+        )
+    )
+
+
+def _detector_preview_center(two_theta: object) -> tuple[float, float] | None:
+    try:
+        array = np.asarray(two_theta, dtype=float)
+    except Exception:
+        return None
+    if array.ndim < 2 or array.size <= 0:
+        return None
+    finite_mask = np.isfinite(array)
+    if not np.any(finite_mask):
+        return None
+    masked = np.where(finite_mask, array, np.inf)
+    flat_index = int(np.argmin(masked))
+    row_idx, col_idx = np.unravel_index(flat_index, array.shape[:2])
+    return (float(col_idx), float(row_idx))
+
+
+def _preview_buffer(
+    drag_state: object,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    buffer = getattr(drag_state, "_raw_drag_preview_data", None)
+    if not isinstance(buffer, np.ndarray) or buffer.shape != tuple(shape):
+        buffer = np.zeros(shape, dtype=float)
+        setattr(drag_state, "_raw_drag_preview_data", buffer)
+    else:
+        buffer.fill(0.0)
+    return buffer
+
+
+def _stamp_preview_points(
+    preview: np.ndarray,
+    *,
+    x_values: object,
+    y_values: object,
+) -> None:
+    try:
+        x_array = np.rint(np.asarray(x_values, dtype=float)).astype(int).reshape(-1)
+        y_array = np.rint(np.asarray(y_values, dtype=float)).astype(int).reshape(-1)
+    except Exception:
+        return
+    if x_array.size <= 0 or y_array.size <= 0:
+        return
+    point_count = min(int(x_array.size), int(y_array.size))
+    if point_count <= 0:
+        return
+    x_clipped = np.clip(x_array[:point_count], 0, int(preview.shape[1]) - 1)
+    y_clipped = np.clip(y_array[:point_count], 0, int(preview.shape[0]) - 1)
+    for row_offset, col_offset in (
+        (0, 0),
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+    ):
+        row_idx = np.clip(y_clipped + int(row_offset), 0, int(preview.shape[0]) - 1)
+        col_idx = np.clip(x_clipped + int(col_offset), 0, int(preview.shape[1]) - 1)
+        preview[row_idx, col_idx] = 1.0
+
+
+def _update_detector_drag_arc_preview(
+    bindings: IntegrationRangeDragBindings,
+    *,
+    two_theta: object,
+) -> bool:
+    drag_state = bindings.drag_state
+    if None in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
+        return False
+
+    center = getattr(drag_state, "_raw_drag_preview_center", None)
+    if center is None:
+        center = _detector_preview_center(two_theta)
+        setattr(drag_state, "_raw_drag_preview_center", center)
+    if center is None:
+        return False
+    center_x, center_y = center
+    if not (np.isfinite(center_x) and np.isfinite(center_y)):
+        return False
+
+    try:
+        detector_shape = tuple(int(value) for value in np.asarray(two_theta).shape[:2])
+    except Exception:
+        return False
+    if len(detector_shape) != 2 or detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return False
+
+    preview = _preview_buffer(drag_state, detector_shape)
+    radius0 = float(
+        np.hypot(float(drag_state.x0) - float(center_x), float(drag_state.y0) - float(center_y))
+    )
+    radius1 = float(
+        np.hypot(float(drag_state.x1) - float(center_x), float(drag_state.y1) - float(center_y))
+    )
+    radius_min, radius_max = sorted((radius0, radius1))
+
+    angle_bounds = _canonicalize_shortest_angle_interval(
+        _display_polar_angle_degrees(
+            float(drag_state.x0),
+            float(drag_state.y0),
+            float(center_x),
+            float(center_y),
+        ),
+        _display_polar_angle_degrees(
+            float(drag_state.x1),
+            float(drag_state.y1),
+            float(center_x),
+            float(center_y),
+        ),
+    )
+    if angle_bounds is None:
+        return False
+    angle_start, angle_end = angle_bounds
+    span_degrees = (
+        float(angle_end - angle_start)
+        if float(angle_end) >= float(angle_start)
+        else float(angle_end + 360.0 - angle_start)
+    )
+    arc_samples = max(24, int(np.ceil(max(span_degrees * 2.0, radius_max - radius_min))))
+    edge_samples = max(4, int(np.ceil(abs(radius_max - radius_min))) + 1)
+    angle_values = np.linspace(float(angle_start), float(angle_start) + float(span_degrees), arc_samples)
+    angle_radians = np.deg2rad(angle_values)
+
+    outer_x = float(center_x) + float(radius_max) * np.cos(angle_radians)
+    outer_y = float(center_y) + float(radius_max) * np.sin(angle_radians)
+    inner_x = float(center_x) + float(radius_min) * np.cos(angle_radians)
+    inner_y = float(center_y) + float(radius_min) * np.sin(angle_radians)
+    radial_values = np.linspace(float(radius_min), float(radius_max), edge_samples)
+    start_radians = float(np.deg2rad(angle_start))
+    end_radians = float(np.deg2rad(angle_start + span_degrees))
+
+    _stamp_preview_points(preview, x_values=outer_x, y_values=outer_y)
+    _stamp_preview_points(preview, x_values=inner_x, y_values=inner_y)
+    _stamp_preview_points(
+        preview,
+        x_values=float(center_x) + radial_values * np.cos(start_radians),
+        y_values=float(center_y) + radial_values * np.sin(start_radians),
+    )
+    _stamp_preview_points(
+        preview,
+        x_values=float(center_x) + radial_values * np.cos(end_radians),
+        y_values=float(center_y) + radial_values * np.sin(end_radians),
+    )
+
+    if not np.any(preview):
+        return False
+
+    bindings.integration_region_rect.set_visible(False)
+    bindings.drag_select_rect.set_visible(False)
+    bindings.integration_region_overlay.set_data(preview)
+    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+    bindings.integration_region_overlay.set_visible(True)
+    return True
 
 
 def _update_detector_integration_overlay(
@@ -299,8 +504,7 @@ def _update_detector_integration_overlay(
     mask = (
         (two_theta >= float(tth_min))
         & (two_theta <= float(tth_max))
-        & (phi_vals >= float(phi_min))
-        & (phi_vals <= float(phi_max))
+        & detector_phi_mask(phi_vals, float(phi_min), float(phi_max))
     )
     if not np.any(mask):
         bindings.integration_region_overlay.set_visible(False)
@@ -354,14 +558,22 @@ def update_runtime_raw_drag_preview(
         return False
 
     bindings.drag_select_rect.set_visible(False)
-    updated = _update_detector_integration_overlay(
-        bindings,
-        ai=ai,
-        tth_min=bounds[0],
-        tth_max=bounds[1],
-        phi_min=bounds[2],
-        phi_max=bounds[3],
-    )
+    two_theta, _phi_vals = bindings.get_detector_angular_maps(ai)
+    updated = False
+    if two_theta is not None:
+        updated = _update_detector_drag_arc_preview(
+            bindings,
+            two_theta=two_theta,
+        )
+    if not updated:
+        updated = _update_detector_integration_overlay(
+            bindings,
+            ai=ai,
+            tth_min=bounds[0],
+            tth_max=bounds[1],
+            phi_min=bounds[2],
+            phi_max=bounds[3],
+        )
     _draw_idle(bindings)
     return bool(updated)
 
@@ -372,6 +584,8 @@ def set_runtime_integration_range_from_drag(
     y0: float,
     x1: float,
     y1: float,
+    *,
+    preserve_wrapped_phi: bool = False,
 ) -> bool:
     """Apply one completed drag to the integration-range controls."""
 
@@ -380,7 +594,13 @@ def set_runtime_integration_range_from_drag(
         return False
 
     tth_min, tth_max = sorted((float(x0), float(x1)))
-    phi_min, phi_max = sorted((float(y0), float(y1)))
+    if bool(preserve_wrapped_phi):
+        phi_bounds = _canonicalize_shortest_angle_interval(float(y0), float(y1))
+        if phi_bounds is None:
+            return False
+        phi_min, phi_max = phi_bounds
+    else:
+        phi_min, phi_max = sorted((float(y0), float(y1)))
 
     tth_lo = float(view_state.tth_min_slider.cget("from"))
     tth_hi = float(view_state.tth_min_slider.cget("to"))
@@ -394,7 +614,7 @@ def set_runtime_integration_range_from_drag(
     if tth_max <= tth_min:
         eps = max(abs(tth_min) * 1e-6, 1e-3)
         tth_max = min(tth_min + eps, max(tth_lo, tth_hi))
-    if phi_max <= phi_min:
+    if not bool(preserve_wrapped_phi) and phi_max <= phi_min:
         eps = max(abs(phi_min) * 1e-6, 1e-3)
         phi_max = min(phi_min + eps, max(phi_lo, phi_hi))
 
@@ -444,16 +664,18 @@ def update_runtime_integration_region_visuals(
     tth_min, tth_max = sorted(
         (float(view_state.tth_min_var.get()), float(view_state.tth_max_var.get()))
     )
-    phi_min, phi_max = sorted(
-        (float(view_state.phi_min_var.get()), float(view_state.phi_max_var.get()))
-    )
+    phi_min = float(view_state.phi_min_var.get())
+    phi_max = float(view_state.phi_max_var.get())
 
     if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
         bindings.integration_region_overlay.set_visible(False)
-        bindings.integration_region_rect.set_xy((tth_min, phi_min))
-        bindings.integration_region_rect.set_width(tth_max - tth_min)
-        bindings.integration_region_rect.set_height(phi_max - phi_min)
-        bindings.integration_region_rect.set_visible(True)
+        if phi_max >= phi_min:
+            bindings.integration_region_rect.set_xy((tth_min, phi_min))
+            bindings.integration_region_rect.set_width(tth_max - tth_min)
+            bindings.integration_region_rect.set_height(phi_max - phi_min)
+            bindings.integration_region_rect.set_visible(True)
+        else:
+            bindings.integration_region_rect.set_visible(False)
         return
 
     _update_detector_integration_overlay(
@@ -691,6 +913,7 @@ def handle_runtime_integration_drag_release(
                 drag_state.phi0,
                 drag_state.tth1,
                 drag_state.phi1,
+                preserve_wrapped_phi=True,
             )
         reset_runtime_integration_drag(bindings, redraw=False)
         if applied or ai is not None:

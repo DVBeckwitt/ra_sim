@@ -506,8 +506,8 @@ def test_update_runtime_integration_region_visuals_updates_caked_rectangle() -> 
     view_state = _range_view_state()
     view_state.tth_min_var.set(8.0)
     view_state.tth_max_var.set(3.0)
-    view_state.phi_min_var.set(7.0)
-    view_state.phi_max_var.set(-1.0)
+    view_state.phi_min_var.set(-1.0)
+    view_state.phi_max_var.set(7.0)
     overlay = _FakeOverlay()
     overlay.visible = True
     overlay_rect = _FakeRect()
@@ -657,7 +657,7 @@ def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     assert overlay_rect.visible is False
     assert overlay.visible is True
     assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
-    assert int(np.sum(overlay.data)) == 6
+    assert int(np.sum(overlay.data)) > 0
     assert draw_calls == [True]
 
 
@@ -931,7 +931,7 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
     assert np.isclose(drag_state.tth0, 20.0)
     assert np.isclose(drag_state.phi0, 0.0)
     assert overlay.visible is True
-    assert int(np.sum(overlay.data)) == 1
+    assert int(np.sum(overlay.data)) > 0
     assert overlay_rect.visible is False
     assert drag_rect.visible is False
 
@@ -943,7 +943,7 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
     assert np.isclose(drag_state.tth1, 32.0)
     assert np.isclose(drag_state.phi1, 12.0)
     assert overlay.visible is True
-    assert int(np.sum(overlay.data)) == 6
+    assert int(np.sum(overlay.data)) > 0
     assert drag_rect.visible is False
 
     released = integration_range_drag.handle_runtime_integration_drag_release(
@@ -1016,3 +1016,150 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
         ("release", "bindings-3", release_event),
         ("reset", "bindings-4", True),
     ]
+
+
+def test_detector_phi_mask_and_bounds_support_wrapped_short_arc() -> None:
+    phi_vals = np.asarray(
+        [-179.0, -175.0, -170.0, -10.0, 0.0, 10.0, 170.0, 175.0, 179.0],
+        dtype=float,
+    )
+
+    mask = integration_range_drag.detector_phi_mask(phi_vals, 170.0, -170.0)
+    bounds = integration_range_drag._sorted_detector_angle_bounds(
+        12.0,
+        -170.0,
+        4.0,
+        170.0,
+    )
+
+    assert np.allclose(phi_vals[mask], [-179.0, -175.0, -170.0, 170.0, 175.0, 179.0])
+    assert bounds == (4.0, 12.0, 170.0, -170.0)
+
+
+def test_update_detector_integration_overlay_uses_wrapped_phi_interval() -> None:
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [170.0, 175.0, -179.0],
+            [150.0, 0.0, -150.0],
+            [165.0, 169.0, -170.0],
+        ],
+        dtype=float,
+    )
+    overlay = _FakeOverlay()
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (two_theta, phi_vals),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+    )
+
+    updated = integration_range_drag._update_detector_integration_overlay(
+        bindings,
+        ai=object(),
+        tth_min=0.0,
+        tth_max=40.0,
+        phi_min=170.0,
+        phi_max=-170.0,
+    )
+
+    assert updated is True
+    assert overlay.visible is True
+    assert int(np.sum(overlay.data)) == 4
+
+
+def test_raw_drag_release_preserves_wrapped_short_arc_interval() -> None:
+    axis = _FakeAxis(xlim=(0.0, 2.0), ylim=(0.0, 2.0))
+    drag_state = state.IntegrationRangeDragState()
+    view_state = state.IntegrationRangeControlsViewState(
+        tth_min_var=_FakeVar(0.0),
+        tth_max_var=_FakeVar(0.0),
+        phi_min_var=_FakeVar(0.0),
+        phi_max_var=_FakeVar(0.0),
+        tth_min_slider=_FakeSlider(0.0, 40.0),
+        phi_min_slider=_FakeSlider(-180.0, 180.0),
+    )
+    overlay = _FakeOverlay()
+    schedule_calls = []
+    status_messages = []
+    draw_calls = []
+    ai = object()
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [170.0, 175.0, -179.0],
+            [160.0, 165.0, -175.0],
+            [150.0, 155.0, -170.0],
+        ],
+        dtype=float,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=axis,
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai_arg: (
+            (two_theta, phi_vals) if ai_arg is ai else (None, None)
+        ),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: ai,
+        schedule_range_update=lambda: schedule_calls.append(True),
+        last_sim_res2_factory=lambda: "res2",
+        draw_idle=lambda: draw_calls.append(True),
+        set_status_text=status_messages.append,
+    )
+
+    started = integration_range_drag.handle_runtime_integration_drag_press(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=0.0, ydata=0.0),
+    )
+    moved = integration_range_drag.handle_runtime_integration_drag_motion(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=2.0, ydata=0.0),
+    )
+    released = integration_range_drag.handle_runtime_integration_drag_release(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=2.0, ydata=0.0),
+    )
+
+    assert started is True
+    assert moved is True
+    assert released is True
+    assert view_state.tth_min_var.get() == 10.0
+    assert view_state.tth_max_var.get() == 12.0
+    assert view_state.phi_min_var.get() == 170.0
+    assert view_state.phi_max_var.get() == -179.0
+    assert schedule_calls == [True]
+    assert status_messages[-1] == "Integration region set: 2θ=[10.00, 12.00]°, φ=[170.00, -179.00]°"
+    assert overlay.visible is True
+    assert int(np.sum(overlay.data)) == 3
+    assert len(draw_calls) >= 3

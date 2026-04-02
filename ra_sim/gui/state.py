@@ -423,6 +423,16 @@ class GeometryOverlayActionsViewState:
     show_qr_cylinder_overlay_checkbutton: Any = None
     show_geometry_overlays_var: Any = None
     show_geometry_overlays_checkbutton: Any = None
+    fit_sigma_mosaic_var: Any = None
+    fit_sigma_mosaic_checkbutton: Any = None
+    fit_gamma_mosaic_var: Any = None
+    fit_gamma_mosaic_checkbutton: Any = None
+    fit_eta_var: Any = None
+    fit_eta_checkbutton: Any = None
+    refine_theta_var: Any = None
+    refine_theta_checkbutton: Any = None
+    mosaic_fit_toggle_vars: dict[str, Any] = field(default_factory=dict)
+    mosaic_fit_toggle_checkbuttons: dict[str, Any] = field(default_factory=dict)
     fit_button_mosaic: Any = None
 
 

@@ -5107,6 +5107,9 @@ def fit_mosaic_shape_parameters(
     refine_theta: bool = False,
     theta_mode: str = "auto",
     theta_bounds: Optional[Tuple[float, float]] = None,
+    fit_sigma_mosaic: bool = True,
+    fit_gamma_mosaic: bool = True,
+    fit_eta: bool = True,
 ) -> OptimizeResult:
     """Fit geometry-cached mosaic shape parameters with optional point anchors."""
 
@@ -5176,6 +5179,9 @@ def fit_mosaic_shape_parameters(
     ridge_weight = max(float(ridge_weight), 0.0)
     point_match_weight = max(float(point_match_weight), 0.0)
     point_match_f_scale = max(float(point_match_f_scale), 1.0e-6)
+    fit_sigma_mosaic = bool(fit_sigma_mosaic)
+    fit_gamma_mosaic = bool(fit_gamma_mosaic)
+    fit_eta = bool(fit_eta)
     point_match_missing_pair_penalty = max(
         float(point_match_missing_pair_penalty),
         0.0,
@@ -5370,6 +5376,49 @@ def fit_mosaic_shape_parameters(
         x0 = np.concatenate([x0, np.asarray(theta_seeds, dtype=np.float64)])
         lower = np.concatenate([lower, np.asarray(theta_lowers, dtype=np.float64)])
         upper = np.concatenate([upper, np.asarray(theta_uppers, dtype=np.float64)])
+
+    param_names = ["sigma_mosaic_deg", "gamma_mosaic_deg", "eta"]
+    if optimize_theta and theta_param_names:
+        param_names.extend(str(name) for name in theta_param_names)
+    active_mask = np.array(
+        [
+            fit_sigma_mosaic,
+            fit_gamma_mosaic,
+            fit_eta,
+            *([True] * len(theta_param_names) if optimize_theta else []),
+        ],
+        dtype=bool,
+    )
+    if active_mask.size != len(param_names):
+        raise RuntimeError("mosaic fit parameter bookkeeping is inconsistent")
+    active_indices = np.flatnonzero(active_mask)
+    fixed_indices = np.flatnonzero(~active_mask)
+    if active_indices.size == 0:
+        raise ValueError(
+            "At least one mosaic fit parameter must be enabled "
+            "(fit_sigma_mosaic, fit_gamma_mosaic, fit_eta, or refine_theta)."
+        )
+
+    full_x0 = np.asarray(x0, dtype=np.float64)
+    full_lower = np.asarray(lower, dtype=np.float64)
+    full_upper = np.asarray(upper, dtype=np.float64)
+    active_x0 = np.asarray(full_x0[active_indices], dtype=np.float64)
+    active_lower = np.asarray(full_lower[active_indices], dtype=np.float64)
+    active_upper = np.asarray(full_upper[active_indices], dtype=np.float64)
+    active_parameter_names = [str(param_names[idx]) for idx in active_indices.tolist()]
+    fixed_parameter_names = [str(param_names[idx]) for idx in fixed_indices.tolist()]
+
+    def _expand_active_vector(x_trial: Sequence[float]) -> np.ndarray:
+        x_arr = np.asarray(x_trial, dtype=np.float64).reshape(-1)
+        if active_indices.size == full_x0.size:
+            if x_arr.size != full_x0.size:
+                raise ValueError("mosaic fit parameter vector length mismatch")
+            return x_arr
+        if x_arr.size != active_indices.size:
+            raise ValueError("mosaic fit active parameter vector length mismatch")
+        full = np.array(full_x0, copy=True)
+        full[active_indices] = x_arr
+        return full
 
     def _apply_trial_params(x: Sequence[float]) -> Dict[str, object]:
         local = dict(base_params)
@@ -5663,7 +5712,7 @@ def fit_mosaic_shape_parameters(
 
     def residual(theta: np.ndarray) -> np.ndarray:
         residual_out, _, _, _ = _evaluate_residual(
-            np.asarray(theta, dtype=np.float64),
+            _expand_active_vector(np.asarray(theta, dtype=np.float64)),
             collect_diagnostics=False,
         )
         return residual_out
@@ -5672,15 +5721,15 @@ def fit_mosaic_shape_parameters(
         return least_squares(
             residual,
             np.asarray(x_start, dtype=np.float64),
-            bounds=(lower, upper),
+            bounds=(active_lower, active_upper),
             loss=loss,
             f_scale=f_scale,
             max_nfev=int(max_nfev),
         )
 
-    initial_residual = residual(x0)
+    initial_residual = residual(active_x0)
     initial_cost = _robust_cost(initial_residual, loss=loss, f_scale=f_scale)
-    primary_result = _run_solver(x0)
+    primary_result = _run_solver(active_x0)
     primary_cost = _robust_cost(
         np.asarray(primary_result.fun, dtype=np.float64),
         loss=loss,
@@ -5689,8 +5738,11 @@ def fit_mosaic_shape_parameters(
     restart_history: List[Dict[str, object]] = [
         {
             "restart": 0,
-            "start_x": np.asarray(x0, dtype=np.float64).tolist(),
-            "end_x": np.asarray(primary_result.x, dtype=np.float64).tolist(),
+            "start_x": np.asarray(_expand_active_vector(active_x0), dtype=np.float64).tolist(),
+            "end_x": np.asarray(
+                _expand_active_vector(primary_result.x),
+                dtype=np.float64,
+            ).tolist(),
             "cost": float(primary_cost),
             "success": bool(primary_result.success),
             "message": str(primary_result.message),
@@ -5702,25 +5754,25 @@ def fit_mosaic_shape_parameters(
     if max_restarts > 0:
         restart_rng = np.random.default_rng(20260329)
         anchor = np.asarray(primary_result.x, dtype=np.float64)
-        span_values = [
-            restart_jitter * max(abs(float(anchor[0])), 0.03),
-            restart_jitter * max(abs(float(anchor[1])), 0.03),
-            restart_jitter * 0.5,
-        ]
-        min_span_values = [1.0e-3, 1.0e-3, 1.0e-3]
-        if optimize_theta:
-            span_values.append(restart_jitter * max(abs(float(anchor[3])), 0.05))
-            min_span_values.append(1.0e-3)
+        range_span = np.abs(active_upper - active_lower)
+        base_span = np.maximum(np.abs(anchor), range_span)
+        for idx, name in enumerate(active_parameter_names):
+            if name in {"sigma_mosaic_deg", "gamma_mosaic_deg"}:
+                base_span[idx] = max(float(base_span[idx]), 0.03)
+            elif name == "eta":
+                base_span[idx] = max(float(base_span[idx]), 0.5)
+            elif name.startswith("theta_"):
+                base_span[idx] = max(float(range_span[idx]), 0.05)
         span = np.maximum(
-            np.array(span_values, dtype=np.float64),
-            np.array(min_span_values, dtype=np.float64),
+            restart_jitter * np.asarray(base_span, dtype=np.float64),
+            np.full(anchor.shape, 1.0e-3, dtype=np.float64),
         )
         restart_starts = [
             np.clip(
                 anchor
                 + restart_rng.uniform(-1.0, 1.0, size=anchor.size).astype(np.float64) * span,
-                lower,
-                upper,
+                active_lower,
+                active_upper,
             )
             for _ in range(int(max_restarts))
         ]
@@ -5748,8 +5800,14 @@ def fit_mosaic_shape_parameters(
             restart_history.append(
                 {
                     "restart": int(restart_idx),
-                    "start_x": np.asarray(seed, dtype=np.float64).tolist(),
-                    "end_x": np.asarray(trial.x, dtype=np.float64).tolist(),
+                    "start_x": np.asarray(
+                        _expand_active_vector(seed),
+                        dtype=np.float64,
+                    ).tolist(),
+                    "end_x": np.asarray(
+                        _expand_active_vector(trial.x),
+                        dtype=np.float64,
+                    ).tolist(),
                     "cost": float(trial_cost),
                     "success": bool(trial.success),
                     "message": str(trial.message),
@@ -5759,12 +5817,11 @@ def fit_mosaic_shape_parameters(
                 best_result = trial
                 best_cost = float(trial_cost)
 
+    best_full_x = _expand_active_vector(np.asarray(best_result.x, dtype=np.float64))
     final_residual, roi_diagnostics, dataset_diagnostics, roi_count_by_dataset = (
-        _evaluate_residual(
-            np.asarray(best_result.x, dtype=np.float64),
-            collect_diagnostics=True,
-        )
+        _evaluate_residual(best_full_x, collect_diagnostics=True)
     )
+    best_result.x = np.asarray(best_full_x, dtype=np.float64)
     best_result.fun = np.asarray(final_residual, dtype=np.float64)
     final_cost = _robust_cost(best_result.fun, loss=loss, f_scale=f_scale)
 
@@ -5811,14 +5868,11 @@ def fit_mosaic_shape_parameters(
     cost_reduction = float(
         (float(initial_cost) - float(final_cost)) / max(float(initial_cost), 1.0e-12)
     )
-    param_names = ["sigma_mosaic_deg", "gamma_mosaic_deg", "eta"]
-    if optimize_theta and theta_param_names:
-        param_names.extend(str(name) for name in theta_param_names)
     bound_hits = [
-        name
-        for idx, name in enumerate(param_names)
-        if np.isclose(best_result.x[idx], lower[idx], rtol=0.0, atol=1.0e-6)
-        or np.isclose(best_result.x[idx], upper[idx], rtol=0.0, atol=1.0e-6)
+        str(param_names[idx])
+        for idx in active_indices.tolist()
+        if np.isclose(best_result.x[idx], full_lower[idx], rtol=0.0, atol=1.0e-6)
+        or np.isclose(best_result.x[idx], full_upper[idx], rtol=0.0, atol=1.0e-6)
     ]
     boundary_warning = None
     if bound_hits:
@@ -5854,6 +5908,13 @@ def fit_mosaic_shape_parameters(
     best_result.total_roi_count = int(total_rois)
     best_result.solver_loss = str(loss)
     best_result.solver_f_scale = float(f_scale)
+    best_result.active_parameters = list(active_parameter_names)
+    best_result.fixed_parameters = list(fixed_parameter_names)
+    best_result.active_parameter_indices = active_indices.tolist()
+    best_result.fixed_parameter_indices = fixed_indices.tolist()
+    best_result.fit_sigma_mosaic = bool(fit_sigma_mosaic)
+    best_result.fit_gamma_mosaic = bool(fit_gamma_mosaic)
+    best_result.fit_eta = bool(fit_eta)
     best_result.theta_refinement_mode = str(resolved_theta_mode) if optimize_theta else None
     best_result.theta_param_name = (
         str(theta_param_names[0])

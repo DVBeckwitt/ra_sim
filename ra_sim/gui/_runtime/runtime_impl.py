@@ -3888,8 +3888,8 @@ integration_range_drag_runtime = (
         ),
         last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
         draw_idle_factory=lambda: (
-            _request_overlay_canvas_redraw
-            if callable(globals().get("_request_overlay_canvas_redraw"))
+            _request_main_canvas_redraw
+            if callable(globals().get("_request_main_canvas_redraw"))
             else None
         ),
         set_status_text_factory=lambda: (
@@ -4239,7 +4239,8 @@ def _auto_match_scale_factor_to_radial_peak():
         if ai is not None and sim_img is not None and bg_img is not None:
             try:
                 tth_min, tth_max = sorted((float(tth_min_var.get()), float(tth_max_var.get())))
-                phi_min, phi_max = sorted((float(phi_min_var.get()), float(phi_max_var.get())))
+                phi_min = float(phi_min_var.get())
+                phi_max = float(phi_max_var.get())
                 sim_res2 = caking(sim_img, ai)
                 i2t_sim, _, _, _ = caked_up(
                     sim_res2,
@@ -4664,15 +4665,26 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     azimuth_vals = _adjust_phi_zero(res2.azimuthal)
 
     tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
-    phi_min, phi_max = sorted((float(phi_min), float(phi_max)))
+    phi_min = float(phi_min)
+    phi_max = float(phi_max)
 
     mask_rad = (radial_2theta >= tth_min) & (radial_2theta <= tth_max)
     radial_filtered = radial_2theta[mask_rad]
 
-    mask_az = (azimuth_vals >= phi_min) & (azimuth_vals <= phi_max)
+    mask_az = gui_integration_range_drag.detector_phi_mask(
+        azimuth_vals,
+        phi_min,
+        phi_max,
+    )
     azimuth_sub = azimuth_vals[mask_az]
 
     intensity_sub = intensity[np.ix_(mask_az, mask_rad)]
+    if phi_max < phi_min and azimuth_sub.size:
+        azimuth_sub = np.asarray(azimuth_sub, dtype=float)
+        azimuth_sub = np.where(azimuth_sub < phi_min, azimuth_sub + 360.0, azimuth_sub)
+        azimuth_order = np.argsort(azimuth_sub)
+        azimuth_sub = azimuth_sub[azimuth_order]
+        intensity_sub = intensity_sub[azimuth_order, :]
     intensity_vs_2theta = np.sum(intensity_sub, axis=0)
     intensity_vs_phi = np.sum(intensity_sub, axis=1)
 
@@ -12639,7 +12651,46 @@ def on_fit_mosaic_click():
     point_match_missing_pair_penalty = float(
         solver_cfg.get("point_match_missing_pair_penalty_px", 20.0)
     )
-    refine_theta = bool(solver_cfg.get("refine_theta", True))
+    def _read_mosaic_toggle(toggle_var, fallback: bool) -> bool:
+        getter = getattr(toggle_var, "get", None)
+        if callable(getter):
+            try:
+                return bool(getter())
+            except Exception:
+                return bool(fallback)
+        return bool(fallback)
+
+    fit_sigma_mosaic = _read_mosaic_toggle(
+        geometry_overlay_actions_view_state.fit_sigma_mosaic_var,
+        bool(solver_cfg.get("fit_sigma_mosaic", True)),
+    )
+    fit_gamma_mosaic = _read_mosaic_toggle(
+        geometry_overlay_actions_view_state.fit_gamma_mosaic_var,
+        bool(solver_cfg.get("fit_gamma_mosaic", True)),
+    )
+    fit_eta = _read_mosaic_toggle(
+        geometry_overlay_actions_view_state.fit_eta_var,
+        bool(solver_cfg.get("fit_eta", True)),
+    )
+    refine_theta = _read_mosaic_toggle(
+        geometry_overlay_actions_view_state.refine_theta_var,
+        bool(solver_cfg.get("refine_theta", True)),
+    )
+    active_fit_parameters = []
+    if fit_sigma_mosaic:
+        active_fit_parameters.append("sigma")
+    if fit_gamma_mosaic:
+        active_fit_parameters.append("gamma")
+    if fit_eta:
+        active_fit_parameters.append("eta")
+    if refine_theta:
+        active_fit_parameters.append("theta_i")
+    if not active_fit_parameters:
+        progress_label_mosaic.config(
+            text="Mosaic shape fit unavailable: enable at least one fit parameter."
+        )
+        return
+
     theta_window_deg = max(abs(float(solver_cfg.get("theta_window_deg", 0.5))), 1.0e-6)
     theta_bounds = None
     if refine_theta:
@@ -12657,7 +12708,12 @@ def on_fit_mosaic_click():
         else:
             theta_bounds = (-theta_window_deg, theta_window_deg)
 
-    progress_label_mosaic.config(text="Running mosaic shape optimization…")
+    progress_label_mosaic.config(
+        text=(
+            "Running mosaic shape optimization "
+            f"({', '.join(active_fit_parameters)})..."
+        )
+    )
     mosaic_progressbar.start(10)
     root.update_idletasks()
 
@@ -12690,6 +12746,9 @@ def on_fit_mosaic_click():
             refine_theta=bool(refine_theta),
             theta_mode=str(theta_mode),
             theta_bounds=theta_bounds,
+            fit_sigma_mosaic=bool(fit_sigma_mosaic),
+            fit_gamma_mosaic=bool(fit_gamma_mosaic),
+            fit_eta=bool(fit_eta),
         )
     except Exception as exc:  # pragma: no cover - GUI feedback path
         progress_label_mosaic.config(text=f"Mosaic shape fit failed: {exc}")
@@ -13583,11 +13642,25 @@ def _on_qr_cylinder_display_mode_change(*_args) -> None:
 
 qr_cylinder_display_mode_var.trace_add("write", _on_qr_cylinder_display_mode_change)
 
+mosaic_shape_cfg = fit_config.get("mosaic_shape", {}) if isinstance(fit_config, dict) else {}
+mosaic_shape_solver_cfg = (
+    mosaic_shape_cfg.get("solver", {})
+    if isinstance(mosaic_shape_cfg, dict)
+    else {}
+)
+mosaic_fit_initial_values = {
+    "fit_sigma_mosaic": bool(mosaic_shape_solver_cfg.get("fit_sigma_mosaic", True)),
+    "fit_gamma_mosaic": bool(mosaic_shape_solver_cfg.get("fit_gamma_mosaic", True)),
+    "fit_eta": bool(mosaic_shape_solver_cfg.get("fit_eta", True)),
+    "refine_theta": bool(mosaic_shape_solver_cfg.get("refine_theta", True)),
+}
+
 gui_views.create_geometry_overlay_action_controls(
     parent=app_shell_view_state.match_peak_tools_frame,
     view_state=geometry_overlay_actions_view_state,
     on_toggle_geometry_overlays=_toggle_geometry_overlay_visibility,
     on_fit_mosaic=on_fit_mosaic_click,
+    mosaic_fit_initial_values=mosaic_fit_initial_values,
     include_fit_button=False,
 )
 gui_views.create_geometry_overlay_action_controls(
@@ -13595,6 +13668,7 @@ gui_views.create_geometry_overlay_action_controls(
     view_state=geometry_overlay_actions_view_state,
     on_toggle_geometry_overlays=_toggle_geometry_overlay_visibility,
     on_fit_mosaic=on_fit_mosaic_click,
+    mosaic_fit_initial_values=mosaic_fit_initial_values,
     include_geometry_toggle=False,
 )
 integration_range_update_runtime.create_analysis_controls(

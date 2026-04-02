@@ -2437,13 +2437,31 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
         view_state=view_state,
         on_toggle_geometry_overlays=lambda: calls.append("toggle-geometry-overlays"),
         on_fit_mosaic=lambda: calls.append("fit-mosaic"),
+        mosaic_fit_initial_values={
+            "fit_sigma_mosaic": True,
+            "fit_gamma_mosaic": False,
+            "fit_eta": True,
+            "refine_theta": False,
+        },
     )
 
     assert view_state.show_geometry_overlays_var.get() is True
+    assert view_state.fit_sigma_mosaic_var.get() is True
+    assert view_state.fit_gamma_mosaic_var.get() is False
+    assert view_state.fit_eta_var.get() is True
+    assert view_state.refine_theta_var.get() is False
     assert view_state.show_qr_cylinder_overlay_checkbutton is None
     assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit_button_mosaic is _FakeButton.created[0]
+    assert view_state.mosaic_fit_toggle_checkbuttons["fit_gamma_mosaic"] is _FakeCheckbutton.created[2]
     assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Geometry Overlays"
+    assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
+        "Show Geometry Overlays",
+        "Fit mosaic sigma",
+        "Fit mosaic gamma",
+        "Fit eta",
+        "Refine theta_i",
+    ]
     assert [button.kwargs["text"] for button in _FakeButton.created] == [
         "Fit Mosaic Shapes",
     ]
@@ -2467,6 +2485,7 @@ def test_geometry_overlay_action_controls_can_build_split_sections(monkeypatch) 
         view_state=view_state,
         on_toggle_geometry_overlays=lambda: None,
         on_fit_mosaic=lambda: None,
+        mosaic_fit_initial_values={"refine_theta": False},
         include_fit_button=False,
     )
     views.create_geometry_overlay_action_controls(
@@ -2474,11 +2493,18 @@ def test_geometry_overlay_action_controls_can_build_split_sections(monkeypatch) 
         view_state=view_state,
         on_toggle_geometry_overlays=lambda: None,
         on_fit_mosaic=lambda: None,
+        mosaic_fit_initial_values={"refine_theta": False},
         include_geometry_toggle=False,
     )
 
     assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit_button_mosaic is _FakeButton.created[0]
+    assert [check.kwargs["text"] for check in _FakeCheckbutton.created[1:]] == [
+        "Fit mosaic sigma",
+        "Fit mosaic gamma",
+        "Fit eta",
+        "Refine theta_i",
+    ]
 
 
 def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:

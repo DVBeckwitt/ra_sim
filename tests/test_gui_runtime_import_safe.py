@@ -114,6 +114,17 @@ def test_runtime_impl_uses_cached_caking_results_for_range_refreshes() -> None:
     assert "range_refresh_requires_pending_analysis_result(" in source
 
 
+def test_runtime_impl_preserves_wrapped_phi_ranges_for_detector_drags() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "draw_idle_factory=lambda: (" in source
+    assert "_request_main_canvas_redraw" in source
+    assert "phi_min = float(phi_min_var.get())" in source
+    assert "phi_max = float(phi_max_var.get())" in source
+    assert "gui_integration_range_drag.detector_phi_mask(" in source
+    assert "if phi_max < phi_min and azimuth_sub.size:" in source
+
+
 def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 

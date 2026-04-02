@@ -344,3 +344,112 @@ def test_process_peaks_parallel_cache_matches_uncached_image(monkeypatch):
     np.testing.assert_allclose(image_cached, image_uncached)
     np.testing.assert_allclose(np.asarray(hits_cached[0]), np.asarray(hits_uncached[0]))
     np.testing.assert_allclose(np.asarray(hits_cached[1]), np.asarray(hits_uncached[1]))
+
+
+def test_process_peaks_parallel_marks_matching_sphere_samples_for_reuse(monkeypatch):
+    observed: dict[str, np.ndarray] = {}
+
+    def fake_calculate_phi_precomputed(
+        H,
+        K,
+        L,
+        av,
+        cv,
+        image,
+        image_size,
+        reflection_intensity,
+        sigma_rad,
+        gamma_pv,
+        eta_pv,
+        debye_x,
+        debye_y,
+        center,
+        R_sample,
+        n_det_rot,
+        Detector_Pos,
+        e1_det,
+        e2_det,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
+        save_flag,
+        q_data,
+        q_count,
+        i_peaks_index,
+        record_status=False,
+        thickness=0.0,
+        optics_mode=0,
+        solve_q_steps=1000,
+        solve_q_rel_tol=5e-4,
+        solve_q_mode=0,
+        pixel_size_m=100e-6,
+        forced_sample_idx=-1,
+        sample_weights=None,
+    ):
+        observed["reps"] = np.asarray(
+            sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP],
+            dtype=np.float64,
+        ).copy()
+        observed["next"] = np.asarray(
+            sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_NEXT],
+            dtype=np.float64,
+        ).copy()
+        return (
+            np.empty((0, 7), dtype=np.float64),
+            np.empty(0, dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+            0,
+        )
+
+    monkeypatch.setattr(
+        diffraction,
+        "_calculate_phi_from_precomputed",
+        fake_calculate_phi_precomputed,
+    )
+
+    image_size = 16
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+    beam_x = np.array([0.0, 0.1, -0.1], dtype=np.float64)
+    beam_y = np.zeros(3, dtype=np.float64)
+    theta = np.zeros(3, dtype=np.float64)
+    phi = np.zeros(3, dtype=np.float64)
+    wavelength = np.ones(3, dtype=np.float64)
+
+    diffraction.process_peaks_parallel.py_func(
+        np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        beam_x,
+        beam_y,
+        theta,
+        phi,
+        0.5,
+        0.5,
+        0.0,
+        wavelength,
+        0.0,
+        0.0,
+        np.array([8.0, 8.0], dtype=np.float64),
+        6.0,
+        0.0,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=0,
+    )
+
+    np.testing.assert_allclose(observed["reps"], [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(observed["next"], [1.0, 2.0, -1.0])

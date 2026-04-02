@@ -379,10 +379,78 @@ def test_fit_mosaic_shape_parameters_refines_dataset_theta_from_point_matches(
     assert result.refined_theta_values_by_dataset == pytest.approx(
         {0: true_theta_values[0], 1: true_theta_values[1]}
     )
+    assert result.active_parameters == ["sigma_mosaic_deg", "gamma_mosaic_deg", "eta", "theta_initial[0]", "theta_initial[1]"]
+    assert result.fixed_parameters == []
     diag_by_label = {diag["dataset_label"]: diag for diag in result.dataset_diagnostics}
     assert diag_by_label["bg0"]["matched_pair_count"] == 4
     assert diag_by_label["bg1"]["matched_pair_count"] == 4
     assert result.cost_reduction >= 0.20
+
+
+def test_fit_mosaic_shape_parameters_can_lock_shape_parameters_and_fit_theta_only(
+    monkeypatch,
+):
+    image_size = 72
+    hkls = [(1, 1, 0), (0, 0, 1), (2, -1, 0), (1, 1, 1)]
+    intensities = np.array([4.0, 3.0, 2.5, 2.0], dtype=np.float64)
+    miller = np.asarray(hkls, dtype=np.float64)
+    cached_theta_values = [2.80, 3.55]
+    true_theta_values = [3.0, 3.35]
+    dataset_specs = _build_dataset_specs(
+        image_size,
+        theta_values=cached_theta_values,
+        measured_theta_values=true_theta_values,
+        hkls=hkls,
+        intensities=intensities,
+        true_shape=(0.82, 0.56, 0.62),
+        include_source_indices=True,
+    )
+
+    monkeypatch.setattr(
+        "ra_sim.fitting.optimization.process_peaks_parallel",
+        _make_fake_process_peaks([], include_hit_tables=True),
+    )
+
+    def theta_only_least_squares(fun, x0, bounds, **kwargs):
+        assert np.asarray(x0, dtype=np.float64).shape == (2,)
+        candidate = np.asarray(true_theta_values, dtype=np.float64)
+        return OptimizeResult(
+            x=candidate,
+            fun=fun(candidate),
+            success=True,
+            message="theta-only",
+        )
+
+    monkeypatch.setattr(
+        "ra_sim.fitting.optimization.least_squares",
+        theta_only_least_squares,
+    )
+
+    result = fit_mosaic_shape_parameters(
+        miller,
+        intensities,
+        image_size,
+        _base_params(image_size),
+        dataset_specs=dataset_specs,
+        max_restarts=0,
+        roi_half_width=8,
+        ridge_weight=0.0,
+        point_match_weight=1.0,
+        fit_sigma_mosaic=False,
+        fit_gamma_mosaic=False,
+        fit_eta=False,
+        refine_theta=True,
+        theta_mode="per_dataset",
+        theta_bounds=(-0.5, 0.5),
+    )
+
+    assert result.success
+    assert result.x[:3] == pytest.approx([0.35, 0.25, 0.25])
+    assert result.refined_theta_values_by_dataset == pytest.approx(
+        {0: true_theta_values[0], 1: true_theta_values[1]}
+    )
+    assert result.active_parameters == ["theta_initial[0]", "theta_initial[1]"]
+    assert result.fixed_parameters == ["sigma_mosaic_deg", "gamma_mosaic_deg", "eta"]
 
 
 def test_fit_mosaic_shape_parameters_keeps_residual_length_fixed(monkeypatch):
@@ -512,4 +580,40 @@ def test_fit_mosaic_shape_parameters_enforces_roi_minimums(monkeypatch):
             roi_half_width=8,
             min_total_rois=8,
             min_per_dataset_rois=3,
+        )
+
+
+def test_fit_mosaic_shape_parameters_requires_one_active_parameter(monkeypatch):
+    image_size = 72
+    hkls = [(1, 1, 0), (0, 0, 1), (2, -1, 0), (1, 1, 1)]
+    intensities = np.array([4.0, 3.0, 2.5, 2.0], dtype=np.float64)
+    miller = np.asarray(hkls, dtype=np.float64)
+    dataset_specs = _build_dataset_specs(
+        image_size,
+        theta_values=[3.0],
+        hkls=hkls,
+        intensities=intensities,
+        true_shape=(0.75, 0.45, 0.50),
+    )
+
+    monkeypatch.setattr(
+        "ra_sim.fitting.optimization.process_peaks_parallel",
+        _make_fake_process_peaks([]),
+    )
+
+    with pytest.raises(ValueError, match="At least one mosaic fit parameter must be enabled"):
+        fit_mosaic_shape_parameters(
+            miller,
+            intensities,
+            image_size,
+            _base_params(image_size),
+            dataset_specs=dataset_specs,
+            max_restarts=0,
+            roi_half_width=8,
+            min_total_rois=1,
+            min_per_dataset_rois=1,
+            fit_sigma_mosaic=False,
+            fit_gamma_mosaic=False,
+            fit_eta=False,
+            refine_theta=False,
         )

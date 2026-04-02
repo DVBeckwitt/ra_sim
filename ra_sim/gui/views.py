@@ -4031,7 +4031,9 @@ def create_geometry_overlay_action_controls(
     on_toggle_geometry_overlays: Callable[[], None],
     on_fit_mosaic: Callable[[], None],
     show_geometry_overlays: bool = True,
+    mosaic_fit_initial_values: Mapping[str, bool] | None = None,
     include_geometry_toggle: bool = True,
+    include_mosaic_fit_parameter_toggles: bool = True,
     include_fit_button: bool = True,
 ) -> None:
     """Create the overlay/mosaic action controls for the fit-actions column."""
@@ -4051,6 +4053,63 @@ def create_geometry_overlay_action_controls(
         )
 
     if include_fit_button:
+        toggle_defaults = dict(mosaic_fit_initial_values or {})
+        toggle_specs = (
+            (
+                "fit_sigma_mosaic",
+                "Fit mosaic sigma",
+                "fit_sigma_mosaic_var",
+                "fit_sigma_mosaic_checkbutton",
+                True,
+            ),
+            (
+                "fit_gamma_mosaic",
+                "Fit mosaic gamma",
+                "fit_gamma_mosaic_var",
+                "fit_gamma_mosaic_checkbutton",
+                True,
+            ),
+            (
+                "fit_eta",
+                "Fit eta",
+                "fit_eta_var",
+                "fit_eta_checkbutton",
+                True,
+            ),
+            (
+                "refine_theta",
+                "Refine theta_i",
+                "refine_theta_var",
+                "refine_theta_checkbutton",
+                True,
+            ),
+        )
+        if include_mosaic_fit_parameter_toggles:
+            view_state.mosaic_fit_toggle_vars = {}
+            view_state.mosaic_fit_toggle_checkbuttons = {}
+            for (
+                toggle_key,
+                label_text,
+                var_attr,
+                checkbutton_attr,
+                default_value,
+            ) in toggle_specs:
+                toggle_var = tk.BooleanVar(
+                    value=bool(toggle_defaults.get(toggle_key, default_value))
+                )
+                toggle_checkbutton = ttk.Checkbutton(
+                    parent,
+                    text=label_text,
+                    variable=toggle_var,
+                )
+                toggle_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
+                setattr(view_state, var_attr, toggle_var)
+                setattr(view_state, checkbutton_attr, toggle_checkbutton)
+                view_state.mosaic_fit_toggle_vars[toggle_key] = toggle_var
+                view_state.mosaic_fit_toggle_checkbuttons[toggle_key] = (
+                    toggle_checkbutton
+                )
+
         fit_button_mosaic = ttk.Button(
             parent,
             text="Fit Mosaic Shapes",

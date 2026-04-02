@@ -87,7 +87,9 @@ _SAMPLE_COL_K0 = 9
 _SAMPLE_COL_TI2 = 10
 _SAMPLE_COL_L_IN = 11
 _SAMPLE_COL_N2_REAL = 12
-_SAMPLE_COLS = 13
+_SAMPLE_COL_SOLVE_Q_REP = 13
+_SAMPLE_COL_SOLVE_Q_NEXT = 14
+_SAMPLE_COLS = 15
 
 _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "miller",
@@ -2832,6 +2834,8 @@ def _precompute_sample_terms(
     """Precompute sample- and beam-dependent terms shared by all reflections."""
     n_samp = beam_x_array.size
     sample_terms = np.zeros((n_samp, _SAMPLE_COLS), dtype=np.float64)
+    sample_terms[:, _SAMPLE_COL_SOLVE_Q_REP] = -1.0
+    sample_terms[:, _SAMPLE_COL_SOLVE_Q_NEXT] = -1.0
     n2_samp_out = np.empty(n_samp, dtype=np.complex128)
     eps2_out = np.empty(n_samp, dtype=np.complex128)
 
@@ -3046,7 +3050,68 @@ def _precompute_sample_terms(
         sample_terms[i_samp, _SAMPLE_COL_TI2] = Ti2
         sample_terms[i_samp, _SAMPLE_COL_L_IN] = L_in
 
+    _annotate_solve_q_sample_reuse(sample_terms)
     return R_sample, sample_terms, n2_samp_out, eps2_out, best_idx
+
+
+@njit(fastmath=True)
+def _solve_q_reuse_terms_match(sample_terms, idx_a, idx_b):
+    cols = (
+        _SAMPLE_COL_KX_SCAT,
+        _SAMPLE_COL_KY_SCAT,
+        _SAMPLE_COL_RE_KZ,
+        _SAMPLE_COL_K_SCAT,
+    )
+    for col in cols:
+        aval = sample_terms[idx_a, col]
+        bval = sample_terms[idx_b, col]
+        scale = np.abs(aval)
+        if np.abs(bval) > scale:
+            scale = np.abs(bval)
+        if np.abs(aval - bval) > (1.0e-12 * (1.0 + scale)):
+            return False
+    return True
+
+
+@njit(fastmath=True)
+def _annotate_solve_q_sample_reuse(sample_terms):
+    """Link samples whose `solve_q` inputs are numerically identical."""
+
+    n_samp = sample_terms.shape[0]
+    if n_samp <= 1:
+        return
+
+    group_reps = np.empty(n_samp, dtype=np.int64)
+    group_tails = np.empty(n_samp, dtype=np.int64)
+    group_count = 0
+
+    for i_samp in range(n_samp):
+        if sample_terms[i_samp, _SAMPLE_COL_VALID] <= 0.5:
+            sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_REP] = -1.0
+            sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_NEXT] = -1.0
+            continue
+
+        matched_group = -1
+        for i_grp in range(group_count):
+            rep_idx = group_reps[i_grp]
+            if _solve_q_reuse_terms_match(sample_terms, i_samp, rep_idx):
+                matched_group = i_grp
+                break
+
+        if matched_group < 0:
+            group_reps[group_count] = i_samp
+            group_tails[group_count] = i_samp
+            sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_REP] = float(i_samp)
+            sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_NEXT] = -1.0
+            group_count += 1
+            continue
+
+        rep_idx = group_reps[matched_group]
+        tail_idx = group_tails[matched_group]
+        sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_REP] = float(rep_idx)
+        sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_NEXT] = -1.0
+        sample_terms[tail_idx, _SAMPLE_COL_SOLVE_Q_NEXT] = float(i_samp)
+        group_tails[matched_group] = i_samp
 
 
 @njit(fastmath=True)
@@ -3412,42 +3477,47 @@ def _calculate_phi_from_precomputed(
     if 0 <= forced_sample_idx < n_samp:
         record_sample_idx = forced_sample_idx
 
+    can_reuse_q_solutions = False
+    if loop_start == 0 and loop_stop == n_samp and n_samp > 1:
+        valid_sample_count = 0
+        unique_q_group_count = 0
+        for i_samp in range(n_samp):
+            if sample_terms[i_samp, _SAMPLE_COL_VALID] <= 0.5:
+                continue
+            valid_sample_count += 1
+            if int(sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_REP]) == i_samp:
+                unique_q_group_count += 1
+        can_reuse_q_solutions = (
+            unique_q_group_count > 0 and unique_q_group_count < valid_sample_count
+        )
+
     best_candidate_sample_idx = -1
     for i_samp in range(loop_start, loop_stop):
         if sample_terms[i_samp, _SAMPLE_COL_VALID] <= 0.5:
             if record_status:
                 statuses[i_samp] = -10
             continue
-        sample_weight = 1.0
-        if sample_weights is not None:
-            sample_weight = sample_weights[i_samp]
-            if not np.isfinite(sample_weight) or sample_weight <= 0.0:
-                if record_status:
-                    statuses[i_samp] = -12
+
+        group_rep_idx = i_samp
+        if can_reuse_q_solutions:
+            group_rep_idx = int(sample_terms[i_samp, _SAMPLE_COL_SOLVE_Q_REP])
+            if group_rep_idx < 0:
+                group_rep_idx = i_samp
+            if group_rep_idx != i_samp:
                 continue
 
-        I_plane[0] = sample_terms[i_samp, _SAMPLE_COL_I_PLANE_X]
-        I_plane[1] = sample_terms[i_samp, _SAMPLE_COL_I_PLANE_Y]
-        I_plane[2] = sample_terms[i_samp, _SAMPLE_COL_I_PLANE_Z]
-        k_x_scat = sample_terms[i_samp, _SAMPLE_COL_KX_SCAT]
-        k_y_scat = sample_terms[i_samp, _SAMPLE_COL_KY_SCAT]
-        re_k_z = sample_terms[i_samp, _SAMPLE_COL_RE_KZ]
-        im_k_z = sample_terms[i_samp, _SAMPLE_COL_IM_KZ]
-        k_scat = sample_terms[i_samp, _SAMPLE_COL_K_SCAT]
-        k0 = sample_terms[i_samp, _SAMPLE_COL_K0]
-        Ti2 = sample_terms[i_samp, _SAMPLE_COL_TI2]
-        L_in = sample_terms[i_samp, _SAMPLE_COL_L_IN]
-        n2_real = sample_terms[i_samp, _SAMPLE_COL_N2_REAL]
-        n2_samp = n2_samp_array[i_samp]
-        eps2 = eps2_array[i_samp]
+        solve_k_x_scat = sample_terms[group_rep_idx, _SAMPLE_COL_KX_SCAT]
+        solve_k_y_scat = sample_terms[group_rep_idx, _SAMPLE_COL_KY_SCAT]
+        solve_re_k_z = sample_terms[group_rep_idx, _SAMPLE_COL_RE_KZ]
+        solve_k_scat = sample_terms[group_rep_idx, _SAMPLE_COL_K_SCAT]
 
-        k_in_crystal[0] = k_x_scat
-        k_in_crystal[1] = k_y_scat
-        k_in_crystal[2] = re_k_z
+        k_in_crystal[0] = solve_k_x_scat
+        k_in_crystal[1] = solve_k_y_scat
+        k_in_crystal[2] = solve_re_k_z
 
         All_Q, stat = solve_q(
             k_in_crystal,
-            k_scat,
+            solve_k_scat,
             G_vec,
             sigma_rad,
             gamma_pv,
@@ -3460,179 +3530,202 @@ def _calculate_phi_from_precomputed(
             solve_q_rel_tol,
             solve_q_mode,
         )
-        if record_status:
-            statuses[i_samp] = stat
 
         selected_sol_idx = np.full(2, -1, dtype=np.int64)
         selected_sol_count = 0
-        if capture_aux and i_samp == record_sample_idx:
+        record_group_sample = (
+            capture_aux
+            and 0 <= record_sample_idx < n_samp
+            and (
+                (not can_reuse_q_solutions and i_samp == record_sample_idx)
+                or (
+                    can_reuse_q_solutions
+                    and int(sample_terms[record_sample_idx, _SAMPLE_COL_SOLVE_Q_REP]) == group_rep_idx
+                )
+            )
+        )
+        if record_group_sample:
             selected_sol_idx, selected_sol_count = _select_g_peak_solution_indices(
                 All_Q,
                 k_in_crystal,
-                k_scat,
+                solve_k_scat,
                 G_vec,
             )
-        if (not use_exact_optics) and All_Q.shape[0] > 0 and fast_optics_ready[i_samp] == 0:
-            _build_fast_optics_lut_row(
-                fast_optics_lut[i_samp],
-                k0,
-                n2_samp,
-                n2_real,
-                thickness,
-            )
-            fast_optics_ready[i_samp] = 1
-
-        for i_sol in range(All_Q.shape[0]):
-            Qx = All_Q[i_sol, 0]
-            Qy = All_Q[i_sol, 1]
-            Qz = All_Q[i_sol, 2]
-            I_Q = All_Q[i_sol, 3]
-            if I_Q < 1e-5:
-                continue
-
-            record_this_solution = False
-            if capture_aux and i_samp == record_sample_idx:
-                for keep_idx in range(selected_sol_count):
-                    if i_sol == selected_sol_idx[keep_idx]:
-                        record_this_solution = True
+        chain_idx = i_samp
+        while chain_idx >= 0:
+            sample_weight = 1.0
+            if sample_weights is not None:
+                sample_weight = sample_weights[chain_idx]
+                if not np.isfinite(sample_weight) or sample_weight <= 0.0:
+                    if record_status:
+                        statuses[chain_idx] = -12
+                    if not can_reuse_q_solutions:
                         break
+                    chain_idx = int(sample_terms[chain_idx, _SAMPLE_COL_SOLVE_Q_NEXT])
+                    continue
 
-            k_tx_prime = Qx + k_x_scat
-            k_ty_prime = Qy + k_y_scat
-            k_tz_prime = Qz + re_k_z
+            I_plane[0] = sample_terms[chain_idx, _SAMPLE_COL_I_PLANE_X]
+            I_plane[1] = sample_terms[chain_idx, _SAMPLE_COL_I_PLANE_Y]
+            I_plane[2] = sample_terms[chain_idx, _SAMPLE_COL_I_PLANE_Z]
+            k_x_scat = sample_terms[chain_idx, _SAMPLE_COL_KX_SCAT]
+            k_y_scat = sample_terms[chain_idx, _SAMPLE_COL_KY_SCAT]
+            re_k_z = sample_terms[chain_idx, _SAMPLE_COL_RE_KZ]
+            im_k_z = sample_terms[chain_idx, _SAMPLE_COL_IM_KZ]
+            k_scat = sample_terms[chain_idx, _SAMPLE_COL_K_SCAT]
+            k0 = sample_terms[chain_idx, _SAMPLE_COL_K0]
+            Ti2 = sample_terms[chain_idx, _SAMPLE_COL_TI2]
+            L_in = sample_terms[chain_idx, _SAMPLE_COL_L_IN]
+            n2_real = sample_terms[chain_idx, _SAMPLE_COL_N2_REAL]
+            n2_samp = n2_samp_array[chain_idx]
+            eps2 = eps2_array[chain_idx]
 
-            kr = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
-            if kr < 1e-12:
-                twotheta_t_prime = 0.0
-            else:
-                twotheta_t_prime = np.arctan(k_tz_prime / kr)
+            if record_status:
+                statuses[chain_idx] = stat
 
-            th_t_out = np.abs(twotheta_t_prime)
-            if use_exact_optics:
-                k0_sq = k0 * k0
-                k_par_f = kr
-                k_par_f_sq = k_par_f * k_par_f
-
-                kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
-                kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
-
-                Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
-                Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
-                Tf2 = 0.5 * (
-                    _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
-                    + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+            if (not use_exact_optics) and All_Q.shape[0] > 0 and fast_optics_ready[chain_idx] == 0:
+                _build_fast_optics_lut_row(
+                    fast_optics_lut[chain_idx],
+                    k0,
+                    n2_samp,
+                    n2_real,
+                    thickness,
                 )
-                Tf2 = _sanitize_transmission_power(Tf2)
+                fast_optics_ready[chain_idx] = 1
 
-                im_k_z_f = np.abs(kz2_f.imag)
-                if thickness > 0.0:
-                    L_out = thickness
+            for i_sol in range(All_Q.shape[0]):
+                Qx = All_Q[i_sol, 0]
+                Qy = All_Q[i_sol, 1]
+                Qz = All_Q[i_sol, 2]
+                I_Q = All_Q[i_sol, 3]
+                if I_Q < 1e-5:
+                    continue
+
+                record_this_solution = False
+                if capture_aux and chain_idx == record_sample_idx:
+                    for keep_idx in range(selected_sol_count):
+                        if i_sol == selected_sol_idx[keep_idx]:
+                            record_this_solution = True
+                            break
+
+                k_tx_prime = Qx + k_x_scat
+                k_ty_prime = Qy + k_y_scat
+                k_tz_prime = Qz + re_k_z
+
+                kr = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
+                if kr < 1e-12:
+                    twotheta_t_prime = 0.0
                 else:
-                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
-            else:
-                Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics_lut_row(
-                    fast_optics_lut[i_samp],
-                    th_t_out,
-                )
+                    twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
-            prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
-            if not np.isfinite(prop_att) or prop_att <= 0.0:
-                continue
-            prop_fac = Ti2 * Tf2 * prop_att
-            if not np.isfinite(prop_fac) or prop_fac <= 0.0:
-                continue
+                th_t_out = np.abs(twotheta_t_prime)
+                if use_exact_optics:
+                    k0_sq = k0 * k0
+                    k_par_f = kr
+                    k_par_f_sq = k_par_f * k_par_f
 
-            if use_exact_optics:
-                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
-                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-                k_out_mag = k0
-            else:
-                twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
-                k_out_mag = k_scat
+                    kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+                    kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
 
-            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-            kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-            kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-            kf[2] = k_out_mag * np.sin(twotheta_t)
-
-            kf_prime[0] = (
-                R_sample[0, 0] * kf[0]
-                + R_sample[0, 1] * kf[1]
-                + R_sample[0, 2] * kf[2]
-            )
-            kf_prime[1] = (
-                R_sample[1, 0] * kf[0]
-                + R_sample[1, 1] * kf[1]
-                + R_sample[1, 2] * kf[2]
-            )
-            kf_prime[2] = (
-                R_sample[2, 0] * kf[0]
-                + R_sample[2, 1] * kf[1]
-                + R_sample[2, 2] * kf[2]
-            )
-
-            dx, dy, dz, valid_det = intersect_line_plane(
-                I_plane, kf_prime, Detector_Pos, n_det_rot
-            )
-            if not valid_det:
-                if capture_aux and n_missed < max_hits:
-                    missed_kf[n_missed, 0] = kf_prime[0]
-                    missed_kf[n_missed, 1] = kf_prime[1]
-                    missed_kf[n_missed, 2] = kf_prime[2]
-                    n_missed += 1
-                continue
-
-            plane_to_det[0] = dx - Detector_Pos[0]
-            plane_to_det[1] = dy - Detector_Pos[1]
-            plane_to_det[2] = dz - Detector_Pos[2]
-            x_det = (
-                plane_to_det[0] * e1_det[0]
-                + plane_to_det[1] * e1_det[1]
-                + plane_to_det[2] * e1_det[2]
-            )
-            y_det = (
-                plane_to_det[0] * e2_det[0]
-                + plane_to_det[1] * e2_det[1]
-                + plane_to_det[2] * e2_det[2]
-            )
-            if not np.isfinite(x_det) or not np.isfinite(y_det):
-                continue
-
-            row_f = center[0] - y_det * pixel_scale
-            col_f = center[1] + x_det * pixel_scale
-            if not np.isfinite(row_f) or not np.isfinite(col_f):
-                continue
-
-            val = (
-                reflection_intensity
-                * sample_weight
-                * I_Q
-                * prop_fac
-                * exp(-Qz * Qz * debye_x_sq)
-                * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq)
-            )
-            if not np.isfinite(val) or val <= 0.0:
-                continue
-
-            deposited = True
-            if accumulate_image:
-                deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
-                    image_size,
-                    row_f,
-                    col_f,
-                    val,
-                    cache_keys,
-                    cache_values,
-                    cache_entry_count,
-                    cache_flush_limit,
-                )
-                if needs_flush:
-                    cache_entry_count = _flush_local_pixel_cache(
-                        image,
-                        image_size,
-                        cache_keys,
-                        cache_values,
+                    Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+                    Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+                    Tf2 = 0.5 * (
+                        _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+                        + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
                     )
+                    Tf2 = _sanitize_transmission_power(Tf2)
+
+                    im_k_z_f = np.abs(kz2_f.imag)
+                    if thickness > 0.0:
+                        L_out = thickness
+                    else:
+                        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+                else:
+                    Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics_lut_row(
+                        fast_optics_lut[chain_idx],
+                        th_t_out,
+                    )
+
+                prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
+                if not np.isfinite(prop_att) or prop_att <= 0.0:
+                    continue
+                prop_fac = Ti2 * Tf2 * prop_att
+                if not np.isfinite(prop_fac) or prop_fac <= 0.0:
+                    continue
+
+                if use_exact_optics:
+                    cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
+                    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+                    k_out_mag = k0
+                else:
+                    twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
+                    k_out_mag = k_scat
+
+                phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+                kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+                kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+                kf[2] = k_out_mag * np.sin(twotheta_t)
+
+                kf_prime[0] = (
+                    R_sample[0, 0] * kf[0]
+                    + R_sample[0, 1] * kf[1]
+                    + R_sample[0, 2] * kf[2]
+                )
+                kf_prime[1] = (
+                    R_sample[1, 0] * kf[0]
+                    + R_sample[1, 1] * kf[1]
+                    + R_sample[1, 2] * kf[2]
+                )
+                kf_prime[2] = (
+                    R_sample[2, 0] * kf[0]
+                    + R_sample[2, 1] * kf[1]
+                    + R_sample[2, 2] * kf[2]
+                )
+
+                dx, dy, dz, valid_det = intersect_line_plane(
+                    I_plane, kf_prime, Detector_Pos, n_det_rot
+                )
+                if not valid_det:
+                    if capture_aux and n_missed < max_hits:
+                        missed_kf[n_missed, 0] = kf_prime[0]
+                        missed_kf[n_missed, 1] = kf_prime[1]
+                        missed_kf[n_missed, 2] = kf_prime[2]
+                        n_missed += 1
+                    continue
+
+                plane_to_det[0] = dx - Detector_Pos[0]
+                plane_to_det[1] = dy - Detector_Pos[1]
+                plane_to_det[2] = dz - Detector_Pos[2]
+                x_det = (
+                    plane_to_det[0] * e1_det[0]
+                    + plane_to_det[1] * e1_det[1]
+                    + plane_to_det[2] * e1_det[2]
+                )
+                y_det = (
+                    plane_to_det[0] * e2_det[0]
+                    + plane_to_det[1] * e2_det[1]
+                    + plane_to_det[2] * e2_det[2]
+                )
+                if not np.isfinite(x_det) or not np.isfinite(y_det):
+                    continue
+
+                row_f = center[0] - y_det * pixel_scale
+                col_f = center[1] + x_det * pixel_scale
+                if not np.isfinite(row_f) or not np.isfinite(col_f):
+                    continue
+
+                val = (
+                    reflection_intensity
+                    * sample_weight
+                    * I_Q
+                    * prop_fac
+                    * exp(-Qz * Qz * debye_x_sq)
+                    * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq)
+                )
+                if not np.isfinite(val) or val <= 0.0:
+                    continue
+
+                deposited = True
+                if accumulate_image:
                     deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
                         image_size,
                         row_f,
@@ -3644,48 +3737,69 @@ def _calculate_phi_from_precomputed(
                         cache_flush_limit,
                     )
                     if needs_flush:
-                        deposited = _accumulate_bilinear_hit(
+                        cache_entry_count = _flush_local_pixel_cache(
                             image,
+                            image_size,
+                            cache_keys,
+                            cache_values,
+                        )
+                        deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
                             image_size,
                             row_f,
                             col_f,
                             val,
+                            cache_keys,
+                            cache_values,
+                            cache_entry_count,
+                            cache_flush_limit,
                         )
-            if not deposited:
-                continue
+                        if needs_flush:
+                            deposited = _accumulate_bilinear_hit(
+                                image,
+                                image_size,
+                                row_f,
+                                col_f,
+                                val,
+                            )
+                if not deposited:
+                    continue
 
-            if record_this_solution and val > best_candidate_val:
-                best_candidate_val = val
-                if capture_aux:
-                    best_candidate[0] = val
-                    best_candidate[1] = col_f
-                    best_candidate[2] = row_f
-                    best_candidate[3] = phi_f
-                    best_candidate[4] = H
-                    best_candidate[5] = K
-                    best_candidate[6] = L
-                have_candidate = True
-                best_candidate_sample_idx = i_samp
+                if record_this_solution and val > best_candidate_val:
+                    best_candidate_val = val
+                    if capture_aux:
+                        best_candidate[0] = val
+                        best_candidate[1] = col_f
+                        best_candidate[2] = row_f
+                        best_candidate[3] = phi_f
+                        best_candidate[4] = H
+                        best_candidate[5] = K
+                        best_candidate[6] = L
+                    have_candidate = True
+                    best_candidate_sample_idx = chain_idx
 
-            if record_this_solution:
-                if n_hits < max_hits:
-                    pixel_hits[n_hits, 0] = val
-                    pixel_hits[n_hits, 1] = col_f
-                    pixel_hits[n_hits, 2] = row_f
-                    pixel_hits[n_hits, 3] = phi_f
-                    pixel_hits[n_hits, 4] = H
-                    pixel_hits[n_hits, 5] = K
-                    pixel_hits[n_hits, 6] = L
-                    n_hits += 1
-                recorded_nominal_hit = True
+                if record_this_solution:
+                    if n_hits < max_hits:
+                        pixel_hits[n_hits, 0] = val
+                        pixel_hits[n_hits, 1] = col_f
+                        pixel_hits[n_hits, 2] = row_f
+                        pixel_hits[n_hits, 3] = phi_f
+                        pixel_hits[n_hits, 4] = H
+                        pixel_hits[n_hits, 5] = K
+                        pixel_hits[n_hits, 6] = L
+                        n_hits += 1
+                    recorded_nominal_hit = True
 
-            if save_flag_eff == 1 and q_count[i_peaks_index] < q_data.shape[1]:
-                idx = q_count[i_peaks_index]
-                q_data[i_peaks_index, idx, 0] = Qx
-                q_data[i_peaks_index, idx, 1] = Qy
-                q_data[i_peaks_index, idx, 2] = Qz
-                q_data[i_peaks_index, idx, 3] = val
-                q_count[i_peaks_index] += 1
+                if save_flag_eff == 1 and q_count[i_peaks_index] < q_data.shape[1]:
+                    idx = q_count[i_peaks_index]
+                    q_data[i_peaks_index, idx, 0] = Qx
+                    q_data[i_peaks_index, idx, 1] = Qy
+                    q_data[i_peaks_index, idx, 2] = Qz
+                    q_data[i_peaks_index, idx, 3] = val
+                    q_count[i_peaks_index] += 1
+
+            if not can_reuse_q_solutions:
+                break
+            chain_idx = int(sample_terms[chain_idx, _SAMPLE_COL_SOLVE_Q_NEXT])
 
     if accumulate_image and cache_entry_count > 0:
         cache_entry_count = _flush_local_pixel_cache(
