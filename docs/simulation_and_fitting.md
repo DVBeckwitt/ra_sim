@@ -1436,19 +1436,25 @@ fit and it reuses that run's cached background bundle, including the exact
 selected backgrounds, per-background `theta_initial`, measured peak anchors,
 and oriented detector images.
 
-The optimizer still refines only:
+The optimizer refines:
 
 - `sigma_mosaic_deg`
 - `gamma_mosaic_deg`
 - `eta`
+- `theta_initial` for a single cached background, a shared `theta_offset`, or
+  per-background `theta_i` values depending on the current background-selection
+  mode
 
-but the objective is different from the legacy separable fitter. For each
+The objective is also different from the legacy separable fitter. For each
 cached measured peak it builds one fixed-size square ROI, preprocesses the
-measured patch into a ridge mask, and then compares measured and simulated
-ridge geometry with a symmetric local Chamfer residual. Each ROI block is
-normalized by the active ridge-pixel count, and each dataset block is scaled by
-`1 / sqrt(num_rois_in_dataset)` so one selected background cannot dominate just
-because it contributed more peaks.
+measured patch into a ridge mask, and compares measured and simulated ridge
+geometry with a symmetric local Chamfer residual. In parallel, it can evaluate
+the fixed measured-to-simulated peak correspondences carried over from the
+manual geometry fit, using the selected Qr/manual picks and their associated
+simulated hit-table rows rather than relying only on ridge overlap. Each ROI
+block is normalized by the active ridge-pixel count, and each dataset block is
+scaled by `1 / sqrt(num_rois_in_dataset)` so one selected background cannot
+dominate just because it contributed more peaks.
 
 The GUI step refuses to run if the geometry-fit cache is missing or stale. Any
 change to manual picks, selected backgrounds, shared-theta mode, or stored

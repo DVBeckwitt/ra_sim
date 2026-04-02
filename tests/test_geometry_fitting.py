@@ -2714,12 +2714,185 @@ def test_fit_geometry_parameters_manual_point_fit_mode_uses_lean_defaults(
     solver_debug = result.geometry_fit_debug_summary["solver"]
     assert bool(solver_debug["manual_point_fit_mode"]) is True
     assert np.isclose(float(solver_debug["f_scale_px"]), 1.0)
+    assert bool(solver_debug["q_group_line_constraints"]) is True
+    assert np.isclose(float(solver_debug["hk0_peak_priority_weight"]), 6.0)
     assert int(solver_debug["restarts"]) >= 1
     assert bool(solver_debug["use_measurement_uncertainty"]) is False
     assert bool(solver_debug["full_beam_polish_enabled"]) is False
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["enabled"]) is False
     assert str(result.full_beam_polish_summary["reason"]) == "disabled_by_config"
+
+
+def test_fit_geometry_parameters_manual_point_fit_adds_q_group_line_residuals(
+    monkeypatch,
+):
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 4.0, 5.0, 0.0, 1.0, 1.0, 0.0]],
+                dtype=np.float64,
+            ),
+            np.array(
+                [[1.0, 8.0, 9.0, 0.0, -1.0, 1.0, 0.0]],
+                dtype=np.float64,
+            ),
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        residual = np.asarray(residual_fn(x), dtype=float)
+        captured["residual"] = residual.copy()
+        return opt.OptimizeResult(
+            x=x,
+            fun=residual,
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 32
+    miller = np.array([[1.0, 1.0, 0.0], [-1.0, 1.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0, 1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["debye_x"] = 1.0
+    params["debye_y"] = 1.0
+    measured = [
+        {
+            "hkl": (1, 1, 0),
+            "x": 4.0,
+            "y": 5.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "q_group_key": ("q_group", "primary", 1, 0),
+        },
+        {
+            "hkl": (-1, 1, 0),
+            "x": 8.0,
+            "y": 9.0,
+            "source_table_index": 1,
+            "source_row_index": 0,
+            "q_group_key": ("q_group", "primary", 1, 0),
+        },
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={"solver": {"manual_point_fit_mode": True}},
+    )
+
+    assert result.success
+    assert captured["residual"].shape == (6,)
+    assert np.allclose(captured["residual"], 0.0, atol=1.0e-6)
+    assert int(result.point_match_summary["line_group_count"]) == 1
+    assert int(result.point_match_summary["resolved_line_group_count"]) == 1
+    assert int(result.point_match_summary["missing_line_group_count"]) == 0
+
+
+def test_fit_geometry_parameters_hk0_peaks_receive_priority_weight(monkeypatch):
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 5.0, 5.0, 0.0, 0.0, 0.0, 2.0]],
+                dtype=np.float64,
+            ),
+            np.array(
+                [[1.0, 9.0, 9.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            ),
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        residual = np.asarray(residual_fn(x), dtype=float)
+        captured["residual"] = residual.copy()
+        return opt.OptimizeResult(
+            x=x,
+            fun=residual,
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 24
+    miller = np.array([[0.0, 0.0, 2.0], [1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([10.0, 10.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (0, 0, 2),
+            "x": 4.0,
+            "y": 5.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "x": 8.0,
+            "y": 9.0,
+            "source_table_index": 1,
+            "source_row_index": 0,
+        },
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+                "hk0_peak_priority_weight": 5.0,
+            }
+        },
+    )
+
+    assert result.success
+    assert np.allclose(captured["residual"], [5.0, 0.0, 1.0, 0.0])
+    diag_by_hkl = {
+        tuple(diag["hkl"]): diag
+        for diag in result.point_match_diagnostics
+        if isinstance(diag.get("hkl"), tuple)
+    }
+    assert np.isclose(float(diag_by_hkl[(0, 0, 2)]["priority_weight"]), 5.0)
+    assert str(diag_by_hkl[(0, 0, 2)]["priority_class"]) == "hk0"
+    assert np.isclose(float(diag_by_hkl[(1, 0, 0)]["priority_weight"]), 1.0)
+    assert str(diag_by_hkl[(1, 0, 0)]["priority_class"]) == "default"
 
 
 def test_fit_geometry_parameters_manual_point_fit_guardrail_aborts_bound_hugging_bad_seed(

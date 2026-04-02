@@ -136,6 +136,7 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "sample_width_m",
     "sample_length_m",
     "n2_sample_array_override",
+    "accumulate_image",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -153,6 +154,7 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "sample_width_m": 0.0,
     "sample_length_m": 0.0,
     "n2_sample_array_override": None,
+    "accumulate_image": True,
 }
 
 _EMPTY_PROCESS_PEAKS_SAFE_STATS = {
@@ -2459,6 +2461,7 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
         rays_reused = int(source_template.get("q_cache_hits", 0))
 
     collect_hit_tables = bool(bound["collect_hit_tables"])
+    accumulate_image = bool(bound["accumulate_image"])
     hit_tables = []
     miss_tables = []
     best_sample_indices_out = bound["best_sample_indices_out"]
@@ -2485,7 +2488,7 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
                 source_template.get("flat_values", np.empty(0, dtype=np.float64)),
                 dtype=np.float64,
             ).reshape(-1)
-            if flat_indices.size > 0 and flat_values.size > 0:
+            if accumulate_image and flat_indices.size > 0 and flat_values.size > 0:
                 n_values = min(flat_indices.size, flat_values.size)
                 np.add.at(image_flat, flat_indices[:n_values], refl_intensity * flat_values[:n_values])
 
@@ -3306,6 +3309,10 @@ def _calculate_phi_from_precomputed(
     pixel_scale = 1.0 / pixel_size_eff
     save_flag_eff = int(save_flag)
     capture_aux = True
+    accumulate_image = True
+    if save_flag_eff >= 4:
+        save_flag_eff -= 4
+        accumulate_image = False
     if save_flag_eff >= 2:
         save_flag_eff -= 2
         capture_aux = False
@@ -3332,14 +3339,20 @@ def _calculate_phi_from_precomputed(
     kf = np.empty(3, dtype=np.float64)
     kf_prime = np.empty(3, dtype=np.float64)
     plane_to_det = np.empty(3, dtype=np.float64)
-    cache_capacity = _choose_local_pixel_cache_capacity(n_samp)
-    cache_keys = np.empty(cache_capacity, dtype=np.int64)
-    cache_values = np.empty(cache_capacity, dtype=np.float64)
-    _clear_local_pixel_cache(cache_keys, cache_values)
-    cache_entry_count = 0
-    cache_flush_limit = (cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM) // _LOCAL_PIXEL_CACHE_LOAD_DEN
-    if cache_flush_limit < 4:
-        cache_flush_limit = 4
+    if accumulate_image:
+        cache_capacity = _choose_local_pixel_cache_capacity(n_samp)
+        cache_keys = np.empty(cache_capacity, dtype=np.int64)
+        cache_values = np.empty(cache_capacity, dtype=np.float64)
+        _clear_local_pixel_cache(cache_keys, cache_values)
+        cache_entry_count = 0
+        cache_flush_limit = (cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM) // _LOCAL_PIXEL_CACHE_LOAD_DEN
+        if cache_flush_limit < 4:
+            cache_flush_limit = 4
+    else:
+        cache_keys = np.empty(1, dtype=np.int64)
+        cache_values = np.empty(1, dtype=np.float64)
+        cache_entry_count = 0
+        cache_flush_limit = 0
 
     use_exact_optics = optics_mode == OPTICS_MODE_EXACT
     eps3 = 1.0 + 0.0j
@@ -3601,23 +3614,8 @@ def _calculate_phi_from_precomputed(
             if not np.isfinite(val) or val <= 0.0:
                 continue
 
-            deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
-                image_size,
-                row_f,
-                col_f,
-                val,
-                cache_keys,
-                cache_values,
-                cache_entry_count,
-                cache_flush_limit,
-            )
-            if needs_flush:
-                cache_entry_count = _flush_local_pixel_cache(
-                    image,
-                    image_size,
-                    cache_keys,
-                    cache_values,
-                )
+            deposited = True
+            if accumulate_image:
                 deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
                     image_size,
                     row_f,
@@ -3629,13 +3627,30 @@ def _calculate_phi_from_precomputed(
                     cache_flush_limit,
                 )
                 if needs_flush:
-                    deposited = _accumulate_bilinear_hit(
+                    cache_entry_count = _flush_local_pixel_cache(
                         image,
+                        image_size,
+                        cache_keys,
+                        cache_values,
+                    )
+                    deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
                         image_size,
                         row_f,
                         col_f,
                         val,
+                        cache_keys,
+                        cache_values,
+                        cache_entry_count,
+                        cache_flush_limit,
                     )
+                    if needs_flush:
+                        deposited = _accumulate_bilinear_hit(
+                            image,
+                            image_size,
+                            row_f,
+                            col_f,
+                            val,
+                        )
             if not deposited:
                 continue
 
@@ -3672,7 +3687,7 @@ def _calculate_phi_from_precomputed(
                 q_data[i_peaks_index, idx, 3] = val
                 q_count[i_peaks_index] += 1
 
-    if cache_entry_count > 0:
+    if accumulate_image and cache_entry_count > 0:
         cache_entry_count = _flush_local_pixel_cache(
             image,
             image_size,
@@ -3851,6 +3866,7 @@ def process_peaks_parallel(
     sample_width_m=0.0,
     sample_length_m=0.0,
     n2_sample_array_override=None,
+    accumulate_image=True,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an
@@ -3962,10 +3978,13 @@ def process_peaks_parallel(
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
     collect_tables = bool(collect_hit_tables)
+    accumulate_image_flag = bool(accumulate_image)
     collect_aux_outputs = collect_tables
     core_save_flag = int(save_flag)
     if not collect_aux_outputs:
         core_save_flag += 2
+    if not accumulate_image_flag:
+        core_save_flag += 4
     hit_tables = List.empty_list(types.float64[:, ::1])
     miss_tables = List.empty_list(types.float64[:, ::1])
     if collect_tables:
@@ -4111,12 +4130,16 @@ def process_peaks_parallel(
     parallel_sources = (
         source_count > 1
         and save_flag != 1
-        and can_use_thread_local
-        and merge_cost_ok
+        and (
+            (accumulate_image_flag and can_use_thread_local and merge_cost_ok)
+            or not accumulate_image_flag
+        )
     )
 
     if parallel_sources:
-        image_partials = np.zeros((thread_count, image_size, image_size), dtype=np.float64)
+        image_partials = np.empty((1, 1, 1), dtype=np.float64)
+        if accumulate_image_flag:
+            image_partials = np.zeros((thread_count, image_size, image_size), dtype=np.float64)
         if collect_tables:
             max_hits = max(n_samp * 2, 16)
             src_hit_counts = np.zeros(source_count, dtype=np.int64)
@@ -4159,6 +4182,9 @@ def process_peaks_parallel(
             tid = get_thread_id()
             if tid < 0 or tid >= image_partials.shape[0]:
                 tid = 0
+            target_image = image
+            if accumulate_image_flag:
+                target_image = image_partials[tid]
             if sample_weight_array is None:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
                     H,
@@ -4166,7 +4192,7 @@ def process_peaks_parallel(
                     L,
                     av,
                     cv,
-                    image_partials[tid],
+                    target_image,
                     image_size,
                     reflI_eff,
                     sigma_rad,
@@ -4204,7 +4230,7 @@ def process_peaks_parallel(
                     L,
                     av,
                     cv,
-                    image_partials[tid],
+                    target_image,
                     image_size,
                     reflI_eff,
                     sigma_rad,
@@ -4263,7 +4289,8 @@ def process_peaks_parallel(
             if record_status:
                 src_status[i_src, :] = status_arr
 
-        _merge_thread_local_images(image, image_partials)
+        if accumulate_image_flag:
+            _merge_thread_local_images(image, image_partials)
 
         for i_src in range(source_count):
             i_pk = source_indices[i_src]
@@ -4979,6 +5006,7 @@ def process_qr_rods_parallel(
     sample_width_m=0.0,
     sample_length_m=0.0,
     n2_sample_array_override=None,
+    accumulate_image=True,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -5038,6 +5066,7 @@ def process_qr_rods_parallel(
         sample_width_m=sample_width_m,
         sample_length_m=sample_length_m,
         n2_sample_array_override=n2_sample_array_override,
+        accumulate_image=accumulate_image,
     )
 
     return (*result, degeneracy)

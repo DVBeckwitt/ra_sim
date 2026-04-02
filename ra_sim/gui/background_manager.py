@@ -255,8 +255,15 @@ def resolve_background_display_defaults(image) -> BackgroundDisplayDefaults:
         _finite_percentile(image, 99.0, 1.0),
     )
     slider_min = min(min_candidate, 0.0)
-    slider_max = max(vmax_default * 5.0, slider_min + 1.0)
-    slider_step = max((slider_max - slider_min) / 500.0, 0.01)
+    slider_max = max(
+        _finite_percentile(image, 100.0, vmax_default),
+        vmax_default,
+        slider_min + 1.0,
+    )
+    slider_step = max(
+        (max(vmax_default * 5.0, slider_min + 1.0) - slider_min) / 500.0,
+        0.01,
+    )
     return BackgroundDisplayDefaults(
         min_candidate=float(min_candidate),
         vmin_default=float(vmin_default),
@@ -353,8 +360,18 @@ def update_background_slider_defaults(
         min_candidate,
         max_candidate,
     )
+    max_limit = max(
+        _finite_percentile(image, 100.0, max_candidate),
+        max_candidate,
+        1.0,
+    )
     slider_from = min(float(background_min_slider.cget("from")), min_candidate, 0.0)
-    slider_to = max(float(background_min_slider.cget("to")), max_candidate, 1.0)
+    slider_to = float(max_limit)
+    if (
+        display_controls_state.background_limits_user_override
+        and not reset_override
+    ):
+        slider_to = max(slider_to, float(background_max_var.get()))
     background_min_slider.configure(from_=slider_from, to=slider_to)
     background_max_slider.configure(from_=slider_from, to=slider_to)
     display_controls_state.suppress_background_limit_callback = True

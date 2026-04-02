@@ -132,6 +132,7 @@ from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
+from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
@@ -1712,7 +1713,7 @@ matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 canvas = matplotlib_canvas
 FAST_VIEWER_DRAW_INTERVAL_S = 0.08
 FAST_VIEWER_STARTUP_ENABLED = gui_runtime_display_acceleration.parse_fast_viewer_env_flag(
-    os.environ.get("RA_SIM_FAST_VIEWER", "0")
+    os.environ.get("RA_SIM_FAST_VIEWER", "1")
 )
 
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -1777,7 +1778,10 @@ fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewe
     image_artist=image_display,
     background_artist=background_display,
     overlay_artist=integration_region_overlay,
-    marker_artist_factory=lambda: globals().get("center_marker"),
+    marker_artist_factory=lambda: (
+        globals().get("center_marker"),
+        globals().get("selected_peak_marker"),
+    ),
     display_controls_view_state_factory=lambda: globals().get("display_controls_view_state"),
     fast_toggle_var_factory=lambda: getattr(
         globals().get("display_controls_view_state"),
@@ -1835,6 +1839,7 @@ fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewe
     ),
     draw_interval_s=FAST_VIEWER_DRAW_INTERVAL_S,
     requested_enabled=FAST_VIEWER_STARTUP_ENABLED,
+    control_locked=True,
 )
 _fast_viewer_active = fast_viewer_workflow.active
 _fast_viewer_requested_enabled = fast_viewer_workflow.requested_enabled
@@ -1843,6 +1848,7 @@ _set_fast_viewer_requested_enabled = fast_viewer_workflow.set_requested_enabled
 _refresh_fast_viewer_runtime_mode = fast_viewer_workflow.refresh_runtime_mode
 _request_main_canvas_redraw = fast_viewer_workflow.request_main_canvas_redraw
 _request_overlay_canvas_redraw = fast_viewer_workflow.request_overlay_canvas_redraw
+_reset_fast_viewer_view = fast_viewer_workflow.reset_view
 _toggle_fast_viewer = fast_viewer_workflow.toggle
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
@@ -3186,6 +3192,51 @@ def qr_cylinder_overlay_runtime_toggle(*args, **kwargs):
     _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
+
+QR_CYLINDER_DISPLAY_MODE_OFF = "Off"
+QR_CYLINDER_DISPLAY_MODE_ADD = "Add to Image"
+QR_CYLINDER_DISPLAY_MODE_REPLACE = "Replace Simulation"
+QR_CYLINDER_DISPLAY_MODE_OPTIONS = (
+    QR_CYLINDER_DISPLAY_MODE_OFF,
+    QR_CYLINDER_DISPLAY_MODE_ADD,
+    QR_CYLINDER_DISPLAY_MODE_REPLACE,
+)
+
+
+def _qr_cylinder_display_mode(default=QR_CYLINDER_DISPLAY_MODE_OFF) -> str:
+    mode_var = getattr(
+        geometry_overlay_actions_view_state,
+        "qr_cylinder_display_mode_var",
+        None,
+    )
+    if mode_var is None:
+        return str(default)
+    try:
+        mode = str(mode_var.get()).strip()
+    except Exception:
+        return str(default)
+    if mode in QR_CYLINDER_DISPLAY_MODE_OPTIONS:
+        return mode
+    return str(default)
+
+
+def _qr_cylinder_replace_simulation_enabled() -> bool:
+    return _qr_cylinder_display_mode() == QR_CYLINDER_DISPLAY_MODE_REPLACE
+
+
+def _sync_qr_cylinder_overlay_visibility_var() -> None:
+    overlay_var = getattr(
+        geometry_overlay_actions_view_state,
+        "show_qr_cylinder_overlay_var",
+        None,
+    )
+    if overlay_var is None:
+        return
+    try:
+        overlay_var.set(_qr_cylinder_display_mode() != QR_CYLINDER_DISPLAY_MODE_OFF)
+    except Exception:
+        pass
+
 def _geometry_overlays_enabled() -> bool:
     """Return whether geometry overlays should currently be visible."""
 
@@ -3993,7 +4044,7 @@ gui_views.create_display_controls(
     on_apply_simulation_limits=_apply_simulation_limits,
     fast_viewer_enabled=FAST_VIEWER_STARTUP_ENABLED,
     on_toggle_fast_viewer=_toggle_fast_viewer,
-    fast_viewer_status_text="Open in a separate window for faster image interaction.",
+    fast_viewer_status_text="Replace the plot area with a faster viewer.",
 )
 
 background_display.set_clim(background_vmin_default, background_vmax_default)
@@ -4251,13 +4302,6 @@ def _auto_match_scale_factor_to_radial_peak():
             f"(sim max={sim_peak:.6g}, bg max={bg_peak:.6g})."
         )
     )
-
-
-ttk.Button(
-    display_controls_view_state.simulation_controls_frame,
-    text="Auto-Match Scale (Radial Peak)",
-    command=_auto_match_scale_factor_to_radial_peak,
-).pack(anchor=tk.W, padx=5, pady=(0, 6))
 
 
 def _update_chi_square_display(force=False):
@@ -5027,6 +5071,24 @@ def _worker_job_key(payload: object) -> tuple[object, int]:
     )
 
 
+def _cached_hit_tables_reusable(
+    requested_signature: object,
+    *,
+    run_primary: bool,
+    run_secondary: bool,
+) -> bool:
+    if requested_signature != simulation_runtime_state.stored_hit_table_signature:
+        return False
+    if bool(run_primary) and simulation_runtime_state.stored_primary_max_positions is None:
+        return False
+    if (
+        bool(run_secondary)
+        and simulation_runtime_state.stored_secondary_max_positions is None
+    ):
+        return False
+    return True
+
+
 def _analysis_job_key(payload: object) -> tuple[object, int, bool]:
     if not isinstance(payload, dict):
         return (None, -1, False)
@@ -5119,6 +5181,51 @@ def _current_app_shell_view_text() -> str:
     if show_1d:
         return f"{base} + 1D"
     return base
+
+
+def _default_primary_view_limits() -> tuple[float, float, float, float]:
+    current_x_label = " ".join(str(ax.get_xlabel() or "").split()).lower()
+    current_y_label = " ".join(str(ax.get_ylabel() or "").split()).lower()
+    showing_caked_view = (
+        current_x_label == "2θ (degrees)".lower()
+        and current_y_label == "φ (degrees)".lower()
+    )
+    if showing_caked_view:
+        radial_min, radial_max, azimuth_min, azimuth_max = (
+            list(simulation_runtime_state.last_caked_extent)
+            if simulation_runtime_state.last_caked_extent is not None
+            else [0.0, 90.0, -180.0, 180.0]
+        )
+        if not (
+            math.isfinite(radial_min)
+            and math.isfinite(radial_max)
+            and radial_max > radial_min
+        ):
+            radial_min, radial_max = 0.0, 90.0
+        if not (
+            math.isfinite(azimuth_min)
+            and math.isfinite(azimuth_max)
+            and azimuth_max > azimuth_min
+        ):
+            azimuth_min, azimuth_max = -180.0, 180.0
+        return (
+            float(radial_min),
+            float(radial_max),
+            float(azimuth_min),
+            float(azimuth_max),
+        )
+    return (0.0, float(image_size), float(image_size), 0.0)
+
+
+def _reset_primary_figure_view() -> None:
+    x0, x1, y0, y1 = _default_primary_view_limits()
+    ax.set_xlim(float(x0), float(x1))
+    ax.set_ylim(float(y0), float(y1))
+    try:
+        _reset_fast_viewer_view()
+    except Exception:
+        pass
+    _request_main_canvas_redraw(force_matplotlib=not _fast_viewer_active())
 
 
 def _current_geometry_preview_gate_summary() -> str:
@@ -5828,7 +5935,10 @@ def _build_preview_simulation_job(
 
     preview_indices = _preview_sample_indices(sample_count, max_samples=int(max_samples))
     preview_job = dict(job)
-    preview_job["collect_hit_tables"] = False
+    preview_job["collect_hit_tables"] = bool(
+        job.get("collect_hit_tables", False)
+        and not bool(job.get("accumulate_image", True))
+    )
     preview_job["is_preview"] = True
     preview_job["preview_sample_count"] = int(preview_indices.size)
     preview_job["mosaic_params"] = {
@@ -5858,6 +5968,29 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     mosaic_params_job = dict(job["mosaic_params"])
     image_generation_start_time = perf_counter()
+
+    if bool(job.get("qr_cylinder_replace_simulation", False)):
+        blank = np.zeros((image_size, image_size), dtype=np.float64)
+        return {
+            "job_id": int(job["job_id"]),
+            "signature": job["signature"],
+            "epoch": int(job["epoch"]),
+            "is_preview": bool(job.get("is_preview", False)),
+            "preview_sample_count": (
+                int(job.get("preview_sample_count", 0))
+                if job.get("preview_sample_count") is not None
+                else None
+            ),
+            "primary_image": blank.copy(),
+            "secondary_image": blank.copy(),
+            "primary_max_positions": [],
+            "secondary_max_positions": [],
+            "primary_peak_table_lattice": [],
+            "secondary_peak_table_lattice": [],
+            "image_generation_elapsed_ms": (
+                perf_counter() - image_generation_start_time
+            ) * 1e3,
+        }
 
     def build_request(
         miller_arr,
@@ -5928,6 +6061,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             thickness=float(job["sample_depth_m"]),
             optics_mode=int(job["optics_mode"]),
             collect_hit_tables=bool(job["collect_hit_tables"]),
+            accumulate_image=bool(job.get("accumulate_image", True)),
         )
 
     def run_one(data, intens_arr, a_val, c_val):
@@ -5991,6 +6125,18 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             float(job["c_secondary"]),
         )
 
+    if not bool(job.get("accumulate_image", True)):
+        img1 = gui_runtime_position_preview.build_peak_position_preview_image(
+            maxpos1,
+            image_size=image_size,
+            hit_tables_to_max_positions=hit_tables_to_max_positions,
+        )
+        img2 = gui_runtime_position_preview.build_peak_position_preview_image(
+            maxpos2,
+            image_size=image_size,
+            hit_tables_to_max_positions=hit_tables_to_max_positions,
+        )
+
     return {
         "job_id": int(job["job_id"]),
         "signature": job["signature"],
@@ -6003,6 +6149,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         ),
         "primary_image": img1,
         "secondary_image": img2,
+        "collected_hit_tables": bool(job["collect_hit_tables"]),
+        "hit_table_signature": job.get("hit_table_signature"),
         "primary_max_positions": list(maxpos1),
         "secondary_max_positions": list(maxpos2),
         "primary_peak_table_lattice": [
@@ -6155,18 +6303,22 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         result.get("secondary_image"),
         dtype=np.float64,
     )
-    simulation_runtime_state.stored_primary_max_positions = list(
-        result.get("primary_max_positions", [])
-    )
-    simulation_runtime_state.stored_secondary_max_positions = list(
-        result.get("secondary_max_positions", [])
-    )
-    simulation_runtime_state.stored_primary_peak_table_lattice = list(
-        result.get("primary_peak_table_lattice", [])
-    )
-    simulation_runtime_state.stored_secondary_peak_table_lattice = list(
-        result.get("secondary_peak_table_lattice", [])
-    )
+    if bool(result.get("collected_hit_tables", False)):
+        simulation_runtime_state.stored_primary_max_positions = list(
+            result.get("primary_max_positions", [])
+        )
+        simulation_runtime_state.stored_secondary_max_positions = list(
+            result.get("secondary_max_positions", [])
+        )
+        simulation_runtime_state.stored_primary_peak_table_lattice = list(
+            result.get("primary_peak_table_lattice", [])
+        )
+        simulation_runtime_state.stored_secondary_peak_table_lattice = list(
+            result.get("secondary_peak_table_lattice", [])
+        )
+        simulation_runtime_state.stored_hit_table_signature = result.get(
+            "hit_table_signature"
+        )
     simulation_runtime_state.stored_max_positions_local = None
     simulation_runtime_state.stored_peak_table_lattice = None
     simulation_runtime_state.stored_sim_image = None
@@ -6590,6 +6742,7 @@ simulation_runtime_state.prev_background_visible = True
 simulation_runtime_state.last_bg_signature = None
 simulation_runtime_state.last_sim_signature = None
 simulation_runtime_state.last_simulation_signature = None
+simulation_runtime_state.stored_hit_table_signature = None
 simulation_runtime_state.analysis_epoch = 0
 simulation_runtime_state.last_analysis_signature = None
 simulation_runtime_state.analysis_preview_active = False
@@ -6781,10 +6934,74 @@ def do_update():
 
     mosaic_params = build_mosaic_params()
     optics_mode_flag = _current_optics_mode_flag()
-    collect_hit_tables_requested = _should_collect_hit_tables_for_update()
+    accumulate_image_requested = True
+    qr_cylinder_replace_requested = _qr_cylinder_replace_simulation_enabled()
+    collect_hit_tables_requested = bool(_should_collect_hit_tables_for_update())
+    primary_source_signature = (
+        (
+            "qr",
+            id(simulation_runtime_state.sim_primary_qr),
+            len(simulation_runtime_state.sim_primary_qr),
+        )
+        if isinstance(simulation_runtime_state.sim_primary_qr, dict)
+        and len(simulation_runtime_state.sim_primary_qr) > 0
+        else (
+            "miller",
+            id(simulation_runtime_state.sim_miller1),
+            tuple(np.asarray(simulation_runtime_state.sim_miller1).shape),
+        )
+    )
+    secondary_source_signature = (
+        "miller",
+        id(simulation_runtime_state.sim_miller2),
+        tuple(np.asarray(simulation_runtime_state.sim_miller2).shape),
+    )
+    secondary_a = float(av2) if av2 is not None else float(a_updated)
+    secondary_c = float(cv2) if cv2 is not None else float(c_updated)
+
+    primary_data = (
+        gui_controllers.copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr)
+        if isinstance(simulation_runtime_state.sim_primary_qr, dict)
+        and len(simulation_runtime_state.sim_primary_qr) > 0
+        else np.asarray(simulation_runtime_state.sim_miller1, dtype=np.float64).copy()
+    )
+    primary_intensities = np.asarray(
+        simulation_runtime_state.sim_intens1,
+        dtype=np.float64,
+    ).copy()
+    if isinstance(primary_data, dict):
+        primary_data = _scaled_bragg_qr_dict(primary_data, ordered_structure_scale)
+    else:
+        primary_intensities *= float(ordered_structure_scale)
+    secondary_data = np.asarray(
+        simulation_runtime_state.sim_miller2,
+        dtype=np.float64,
+    ).copy()
+    secondary_intensities = np.asarray(
+        simulation_runtime_state.sim_intens2,
+        dtype=np.float64,
+    ).copy()
+    primary_available = (
+        len(primary_data) > 0
+        if isinstance(primary_data, dict)
+        else (
+            np.asarray(primary_data).ndim == 2
+            and np.asarray(primary_data).shape[0] > 0
+            and primary_intensities.size > 0
+        )
+    )
+    secondary_available = (
+        secondary_data.ndim == 2
+        and secondary_data.shape[0] > 0
+        and secondary_intensities.size > 0
+    )
 
 
-    def get_sim_signature(*, include_hit_tables: bool):
+    def _simulation_signature_base(
+        *,
+        optics_mode_component: int,
+        include_mosaic_shape: bool = True,
+    ):
         signature = (
             round(gamma_updated, 6),
             round(Gamma_updated, 6),
@@ -6803,9 +7020,6 @@ def do_update():
             round(cor_angle_updated, 6),
             round(center_x_up, 3),
             round(center_y_up, 3),
-            round(mosaic_params["sigma_mosaic_deg"], 6),
-            round(mosaic_params["gamma_mosaic_deg"], 6),
-            round(mosaic_params["eta"], 6),
             int(mosaic_params["solve_q_steps"]),
             round(float(mosaic_params["solve_q_rel_tol"]), 8),
             int(mosaic_params["solve_q_mode"]),
@@ -6814,22 +7028,49 @@ def do_update():
             int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0)),
             int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0)),
             round(ordered_structure_scale, 6),
-            int(optics_mode_flag),
+            int(optics_mode_component),
+            int(qr_cylinder_replace_requested),
             int(simulation_runtime_state.num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
             int(np.size(mosaic_params["theta_array"])),
+            primary_source_signature,
+            secondary_source_signature,
+            round(float(secondary_a), 6),
+            round(float(secondary_c), 6),
         )
-        if include_hit_tables:
-            return signature + (int(collect_hit_tables_requested),)
+        if include_mosaic_shape:
+            signature += (
+                round(mosaic_params["sigma_mosaic_deg"], 6),
+                round(mosaic_params["gamma_mosaic_deg"], 6),
+                round(mosaic_params["eta"], 6),
+            )
         return signature
 
+    # Optics transport and mosaic-shape changes rescale intensities but do not
+    # move detector hits, so a compatible cached hit-table bundle can be reused.
+    requested_hit_table_sig = _simulation_signature_base(
+        optics_mode_component=0,
+        include_mosaic_shape=False,
+    )
+    collect_hit_tables_for_job = bool(
+        collect_hit_tables_requested
+        and not _cached_hit_tables_reusable(
+            requested_hit_table_sig,
+            run_primary=primary_available,
+            run_secondary=secondary_available,
+        )
+    )
+
     _set_update_trace_stage("simulation_signature")
-    new_sim_image_sig = get_sim_signature(include_hit_tables=False)
-    new_sim_sig = get_sim_signature(include_hit_tables=True)
+    new_sim_image_sig = _simulation_signature_base(
+        optics_mode_component=int(optics_mode_flag)
+    )
+    new_sim_sig = new_sim_image_sig + (int(collect_hit_tables_for_job),)
     _trace_update(
         "do_update_signature",
         optics_mode=int(optics_mode_flag),
         collect_hit_tables=bool(collect_hit_tables_requested),
+        collect_hit_tables_for_job=bool(collect_hit_tables_for_job),
         num_samples=int(simulation_runtime_state.num_samples),
         image_signature_changed=bool(
             new_sim_image_sig != simulation_runtime_state.last_sim_signature
@@ -6860,49 +7101,11 @@ def do_update():
         new_sim_image_sig != simulation_runtime_state.last_sim_signature
     )
     need_hit_table_refresh = bool(
-        collect_hit_tables_requested
+        collect_hit_tables_for_job
         and new_sim_sig != simulation_runtime_state.last_simulation_signature
     )
 
-    def _build_simulation_job() -> dict[str, object]:
-        primary_data = (
-            gui_controllers.copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr)
-            if isinstance(simulation_runtime_state.sim_primary_qr, dict)
-            and len(simulation_runtime_state.sim_primary_qr) > 0
-            else np.asarray(simulation_runtime_state.sim_miller1, dtype=np.float64).copy()
-        )
-        primary_intensities = np.asarray(
-            simulation_runtime_state.sim_intens1,
-            dtype=np.float64,
-        ).copy()
-        if isinstance(primary_data, dict):
-            primary_data = _scaled_bragg_qr_dict(primary_data, ordered_structure_scale)
-        else:
-            primary_intensities *= float(ordered_structure_scale)
-        secondary_data = np.asarray(
-            simulation_runtime_state.sim_miller2,
-            dtype=np.float64,
-        ).copy()
-        secondary_intensities = np.asarray(
-            simulation_runtime_state.sim_intens2,
-            dtype=np.float64,
-        ).copy()
-        secondary_a = float(av2) if av2 is not None else float(a_updated)
-        secondary_c = float(cv2) if cv2 is not None else float(c_updated)
-        primary_available = (
-            len(primary_data) > 0
-            if isinstance(primary_data, dict)
-            else (
-                np.asarray(primary_data).ndim == 2
-                and np.asarray(primary_data).shape[0] > 0
-                and primary_intensities.size > 0
-            )
-        )
-        secondary_available = (
-            secondary_data.ndim == 2
-            and secondary_data.shape[0] > 0
-            and secondary_intensities.size > 0
-        )
+    def _build_simulation_job(*, collect_hit_tables_enabled: bool) -> dict[str, object]:
         return {
             "signature": new_sim_sig,
             "epoch": int(simulation_runtime_state.simulation_epoch),
@@ -6950,7 +7153,10 @@ def do_update():
             "debye_x": float(debye_x_updated),
             "debye_y": float(debye_y_updated),
             "optics_mode": int(optics_mode_flag),
-            "collect_hit_tables": bool(collect_hit_tables_requested),
+            "collect_hit_tables": bool(collect_hit_tables_enabled),
+            "hit_table_signature": requested_hit_table_sig,
+            "accumulate_image": bool(accumulate_image_requested),
+            "qr_cylinder_replace_simulation": bool(qr_cylinder_replace_requested),
             "n2_value": n2,
             "primary_data": primary_data,
             "primary_intensities": primary_intensities,
@@ -6981,7 +7187,9 @@ def do_update():
         simulation_runtime_state.peak_intensities.clear()
         simulation_runtime_state.peak_records.clear()
         simulation_runtime_state.selected_peak_record = None
-        simulation_job = _build_simulation_job()
+        simulation_job = _build_simulation_job(
+            collect_hit_tables_enabled=collect_hit_tables_for_job
+        )
         has_cached_simulation = (
             simulation_runtime_state.stored_primary_sim_image is not None
             or simulation_runtime_state.stored_secondary_sim_image is not None
@@ -7069,7 +7277,9 @@ def do_update():
                 return
     elif ready_simulation_result is None and need_hit_table_refresh:
         _set_update_trace_stage("simulation_generation")
-        request_status = _request_async_simulation_job(_build_simulation_job())
+        request_status = _request_async_simulation_job(
+            _build_simulation_job(collect_hit_tables_enabled=True)
+        )
         if (
             request_status in {"submitted", "queued", "running"}
             and "progress_label" in globals()
@@ -7276,11 +7486,20 @@ def do_update():
         )
 
     show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-    analysis_requested = (
+    show_1d_requested = bool(analysis_view_controls_view_state.show_1d_var.get())
+    one_d_analysis_requested = bool(
+        (not qr_cylinder_replace_requested)
+        and show_1d_requested
+    )
+    caked_analysis_requested = bool(
+        show_caked_2d
+        and simulation_runtime_state.unscaled_image is not None
+    )
+    analysis_requested = bool(
         simulation_runtime_state.unscaled_image is not None
         and (
-            show_caked_2d
-            or analysis_view_controls_view_state.show_1d_var.get()
+            caked_analysis_requested
+            or one_d_analysis_requested
         )
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
@@ -7315,7 +7534,7 @@ def do_update():
         if ready_analysis_result is not None:
             _apply_ready_analysis_result(ready_analysis_result)
             if (
-                analysis_view_controls_view_state.show_1d_var.get()
+                one_d_analysis_requested
                 and not bool(ready_analysis_result.get("is_preview", False))
             ):
                 _refresh_integration_from_cached_results()
@@ -7552,7 +7771,22 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
-        if showing_stale_caked_result and analysis_requested:
+        if qr_cylinder_replace_requested:
+            if showing_stale_caked_result and analysis_requested:
+                ax.set_title('2D Caked Qr Cylinder Lines (updating...)')
+            else:
+                ax.set_title('2D Caked Qr Cylinder Lines')
+        elif not accumulate_image_requested:
+            if showing_stale_caked_result and analysis_requested:
+                if show_1d_requested:
+                    ax.set_title('2D Caked Position Preview (updating, 1D paused)')
+                else:
+                    ax.set_title('2D Caked Position Preview (updating...)')
+            elif show_1d_requested:
+                ax.set_title('2D Caked Position Preview (1D paused)')
+            else:
+                ax.set_title('2D Caked Position Preview')
+        elif showing_stale_caked_result and analysis_requested:
             if desired_analysis_preview:
                 ax.set_title('2D Caked Preview (updating...)')
             else:
@@ -7572,7 +7806,19 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
-        if show_caked_2d and analysis_requested:
+        if qr_cylinder_replace_requested:
+            if show_caked_2d and analysis_requested:
+                ax.set_title('Detector Preview While 2D Caked Qr Cylinder Lines Load')
+            else:
+                ax.set_title('Qr Cylinder Lines')
+        elif not accumulate_image_requested:
+            if show_caked_2d and analysis_requested:
+                ax.set_title('Detector Preview While Caked Position Preview Loads')
+            elif show_1d_requested:
+                ax.set_title('Peak Position Preview (1D intensity paused)')
+            else:
+                ax.set_title('Peak Position Preview')
+        elif show_caked_2d and analysis_requested:
             if desired_analysis_preview:
                 ax.set_title('Detector Preview While Caked Preview Loads')
             else:
@@ -7594,7 +7840,7 @@ def do_update():
         
     # 1D integration
     if (
-        analysis_view_controls_view_state.show_1d_var.get()
+        one_d_analysis_requested
         and sim_res2 is not None
         and not defer_overlay_refresh
     ):
@@ -7894,6 +8140,7 @@ background_runtime_bindings_factory = background_workflow.bindings_factory
 background_runtime_callbacks = background_workflow.callbacks
 background_controls_runtime = background_workflow.controls_runtime
 toggle_background = background_workflow.toggle_visibility
+switch_background = background_workflow.switch_background
 
 def reset_to_defaults():
     _clear_geometry_fit_undo_stack()
@@ -8563,6 +8810,9 @@ def _gui_state_variable_items() -> dict[str, object]:
             "simulation_max_var": display_controls_view_state.simulation_max_var,
             "simulation_scale_factor_var": (
                 display_controls_view_state.simulation_scale_factor_var
+            ),
+            "qr_cylinder_display_mode_var": (
+                geometry_overlay_actions_view_state.qr_cylinder_display_mode_var
             ),
         }
     )
@@ -12284,12 +12534,18 @@ def on_fit_mosaic_click():
         background_theta_values = list(_current_background_theta_values(strict_count=True))
     except Exception:
         background_theta_values = list(_current_background_theta_values(strict_count=False))
+    try:
+        shared_theta_mode = bool(
+            _geometry_fit_uses_shared_theta_offset(selected_background_indices)
+        )
+    except Exception:
+        shared_theta_mode = bool(_geometry_fit_uses_shared_theta_offset())
 
     stale_reason = gui_geometry_fit.geometry_fit_dataset_cache_stale_reason(
         cache_payload,
         selected_background_indices=selected_background_indices,
         current_background_index=int(background_runtime_state.current_background_index),
-        joint_background_mode=bool(_geometry_fit_uses_shared_theta_offset()),
+        joint_background_mode=bool(shared_theta_mode),
         background_theta_values=background_theta_values,
     )
     if stale_reason:
@@ -12307,6 +12563,23 @@ def on_fit_mosaic_click():
             text="Mosaic shape fit unavailable: run geometry fit first."
         )
         return
+    missing_experimental_images = [
+        str(spec.get("label", spec.get("dataset_index", "?")))
+        for spec in dataset_specs
+        if not isinstance(spec.get("experimental_image"), np.ndarray)
+    ]
+    if missing_experimental_images:
+        progress_label_mosaic.config(
+            text=(
+                "Mosaic shape fit unavailable: cached experimental images are "
+                "missing. Rerun geometry fit first."
+            )
+        )
+        return
+
+    theta_mode = "single"
+    if len(dataset_specs) > 1:
+        theta_mode = "shared_offset" if shared_theta_mode else "per_dataset"
 
     params = {
         'a':             a_var.get(),
@@ -12357,6 +12630,32 @@ def on_fit_mosaic_click():
         if isinstance(mosaic_shape_cfg, dict)
         else {}
     )
+    ridge_weight = float(solver_cfg.get("ridge_weight", 1.0))
+    point_match_weight = float(solver_cfg.get("point_match_weight", 1.0))
+    point_match_f_scale = float(solver_cfg.get("point_match_f_scale_px", 6.0))
+    point_match_weighted_matching = bool(
+        solver_cfg.get("point_match_weighted_matching", False)
+    )
+    point_match_missing_pair_penalty = float(
+        solver_cfg.get("point_match_missing_pair_penalty_px", 20.0)
+    )
+    refine_theta = bool(solver_cfg.get("refine_theta", True))
+    theta_window_deg = max(abs(float(solver_cfg.get("theta_window_deg", 0.5))), 1.0e-6)
+    theta_bounds = None
+    if refine_theta:
+        if theta_mode == "shared_offset":
+            theta_bounds = (-theta_window_deg, theta_window_deg)
+        elif theta_mode == "single":
+            try:
+                theta_seed = float(dataset_specs[0].get("theta_initial"))
+            except Exception:
+                theta_seed = float(params["theta_initial"])
+            theta_bounds = (
+                float(theta_seed - theta_window_deg),
+                float(theta_seed + theta_window_deg),
+            )
+        else:
+            theta_bounds = (-theta_window_deg, theta_window_deg)
 
     progress_label_mosaic.config(text="Running mosaic shape optimization…")
     mosaic_progressbar.start(10)
@@ -12383,6 +12682,14 @@ def on_fit_mosaic_click():
             parallel_mode=str(solver_cfg.get("parallel_mode", "auto")),
             worker_numba_threads=solver_cfg.get("worker_numba_threads", 0),
             restart_jitter=float(solver_cfg.get("restart_jitter", 0.15)),
+            ridge_weight=float(ridge_weight),
+            point_match_weight=float(point_match_weight),
+            point_match_f_scale=float(point_match_f_scale),
+            point_match_weighted_matching=bool(point_match_weighted_matching),
+            point_match_missing_pair_penalty=float(point_match_missing_pair_penalty),
+            refine_theta=bool(refine_theta),
+            theta_mode=str(theta_mode),
+            theta_bounds=theta_bounds,
         )
     except Exception as exc:  # pragma: no cover - GUI feedback path
         progress_label_mosaic.config(text=f"Mosaic shape fit failed: {exc}")
@@ -12403,6 +12710,63 @@ def on_fit_mosaic_click():
     sigma_mosaic_var.set(sigma_deg)
     gamma_mosaic_var.set(gamma_deg)
     eta_var.set(eta_val)
+
+    theta_refinement_mode = str(getattr(result, "theta_refinement_mode", "") or "")
+    theta_status_text = ""
+    if theta_refinement_mode == "shared_offset":
+        try:
+            refined_theta_offset = float(getattr(result, "refined_theta_offset"))
+        except Exception:
+            refined_theta_offset = float("nan")
+        if np.isfinite(refined_theta_offset) and geometry_theta_offset_var is not None:
+            geometry_theta_offset_var.set(f"{refined_theta_offset:.6g}")
+            _apply_background_theta_metadata(trigger_update=False, sync_live_theta=True)
+            theta_status_text = f", θ offset={refined_theta_offset:.4f}°"
+    elif theta_refinement_mode == "single":
+        try:
+            refined_theta_value = float(getattr(result, "refined_theta_value"))
+        except Exception:
+            refined_theta_value = float("nan")
+        if np.isfinite(refined_theta_value):
+            theta_initial_var.set(refined_theta_value)
+            _apply_background_theta_metadata(trigger_update=False, sync_live_theta=True)
+            theta_status_text = f", θ={refined_theta_value:.4f}°"
+    elif theta_refinement_mode == "per_dataset":
+        refined_theta_values = dict(
+            getattr(result, "refined_theta_values_by_dataset", {}) or {}
+        )
+        if refined_theta_values:
+            try:
+                updated_theta_values = list(
+                    _current_background_theta_values(strict_count=False)
+                )
+            except Exception:
+                updated_theta_values = []
+            try:
+                theta_fill_value = float(theta_initial_var.get())
+            except Exception:
+                theta_fill_value = 0.0
+            target_count = max(
+                len(updated_theta_values),
+                len(getattr(background_runtime_state, "osc_files", []) or []),
+                max(int(idx) for idx in refined_theta_values) + 1,
+            )
+            if len(updated_theta_values) < target_count:
+                updated_theta_values.extend(
+                    [float(theta_fill_value)] * (target_count - len(updated_theta_values))
+                )
+            for dataset_index, theta_value in refined_theta_values.items():
+                dataset_idx = int(dataset_index)
+                if 0 <= dataset_idx < len(updated_theta_values):
+                    updated_theta_values[dataset_idx] = float(theta_value)
+            if background_theta_list_var is not None:
+                background_theta_list_var.set(
+                    _format_background_theta_values(updated_theta_values)
+                )
+            _apply_background_theta_metadata(trigger_update=False, sync_live_theta=True)
+            theta_status_text = (
+                f", θ_i refined for {len(refined_theta_values)} backgrounds"
+            )
 
     best_params = getattr(result, "best_params", None)
     if best_params and "mosaic_params" in best_params:
@@ -12457,7 +12821,7 @@ def on_fit_mosaic_click():
     progress_label_mosaic.config(
         text=(
             f"Mosaic shape fit {status_text}\n"
-            f"σ={sigma_deg:.3f}°, γ={gamma_deg:.3f}°, η={eta_val:.3f}\n"
+            f"σ={sigma_deg:.3f}°, γ={gamma_deg:.3f}°, η={eta_val:.3f}{theta_status_text}\n"
             f"datasets={dataset_count}, ROIs={roi_count}, cost reduction={cost_reduction:.1f}%"
             + (f"\nPer dataset: {dataset_summary}" if dataset_summary else "")
             + (f"\nWorst HKLs: {', '.join(worst_hkls)}" if worst_hkls else "")
@@ -13200,15 +13564,41 @@ gui_runtime_geometry_interaction.initialize_runtime_geometry_interaction_control
     update_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
 )
 
+qr_cylinder_display_mode_var = tk.StringVar(value=QR_CYLINDER_DISPLAY_MODE_OFF)
+geometry_overlay_actions_view_state.qr_cylinder_display_mode_var = (
+    qr_cylinder_display_mode_var
+)
+if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is None:
+    geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var = tk.BooleanVar(
+        value=False
+    )
+_sync_qr_cylinder_overlay_visibility_var()
+
+
+def _on_qr_cylinder_display_mode_change(*_args) -> None:
+    _sync_qr_cylinder_overlay_visibility_var()
+    qr_cylinder_overlay_runtime_toggle()
+    _invalidate_and_schedule_update()
+
+
+qr_cylinder_display_mode_var.trace_add("write", _on_qr_cylinder_display_mode_change)
+
+gui_views.create_geometry_overlay_action_controls(
+    parent=app_shell_view_state.match_peak_tools_frame,
+    view_state=geometry_overlay_actions_view_state,
+    on_toggle_geometry_overlays=_toggle_geometry_overlay_visibility,
+    on_fit_mosaic=on_fit_mosaic_click,
+    include_fit_button=False,
+)
 gui_views.create_geometry_overlay_action_controls(
     parent=app_shell_view_state.match_results_frame,
     view_state=geometry_overlay_actions_view_state,
-    on_toggle_qr_cylinder_overlay=qr_cylinder_overlay_runtime_toggle,
     on_toggle_geometry_overlays=_toggle_geometry_overlay_visibility,
     on_fit_mosaic=on_fit_mosaic_click,
+    include_geometry_toggle=False,
 )
 integration_range_update_runtime.create_analysis_controls(
-    parent=app_shell_view_state.analysis_views_frame,
+    parent=None,
 )
 gui_views.populate_app_shell_view_switcher(
     view_state=app_shell_view_state,
@@ -13802,6 +14192,58 @@ gui_views.populate_app_shell_quick_controls(
             "options": resolution_options,
         },
         {
+            "key": "qr_cylinder_mode",
+            "label": "Qr cylinder lines",
+            "control_type": "choice",
+            "variable": qr_cylinder_display_mode_var,
+            "options": QR_CYLINDER_DISPLAY_MODE_OPTIONS,
+        },
+        {
+            "key": "toggle_background",
+            "label": "Toggle Background",
+            "control_type": "button",
+            "command": toggle_background,
+        },
+        {
+            "key": "switch_background",
+            "label": "Switch Background",
+            "control_type": "button",
+            "command": switch_background,
+        },
+        {
+            "key": "fast_viewer",
+            "label": "Fast viewer",
+            "control_type": "check",
+            "variable": display_controls_view_state.fast_viewer_var,
+            "command": _toggle_fast_viewer,
+        },
+        {
+            "key": "reset_view",
+            "label": "Reset view",
+            "control_type": "button",
+            "command": _reset_primary_figure_view,
+        },
+        {
+            "key": "log_radial",
+            "label": "Log radial",
+            "control_type": "check",
+            "variable": analysis_view_controls_view_state.log_radial_var,
+            "command": toggle_log_radial,
+        },
+        {
+            "key": "log_azimuth",
+            "label": "Log azimuth",
+            "control_type": "check",
+            "variable": analysis_view_controls_view_state.log_azimuth_var,
+            "command": toggle_log_azimuth,
+        },
+        {
+            "key": "auto_match_scale",
+            "label": "Auto-Match Scale (Radial Peak)",
+            "control_type": "button",
+            "command": _auto_match_scale_factor_to_radial_peak,
+        },
+        {
             "key": "sf_prune_bias",
             "label": "SF prune bias",
             "variable": sf_prune_bias_var,
@@ -13811,6 +14253,15 @@ gui_views.populate_app_shell_quick_controls(
     ],
     on_more_controls=_open_refine_controls_from_quick_rail,
 )
+display_controls_view_state.fast_viewer_checkbutton = (
+    app_shell_view_state.quick_control_widgets.get("fast_viewer", {}).get(
+        "checkbutton"
+    )
+)
+try:
+    fast_viewer_workflow.refresh_status_text()
+except Exception:
+    pass
 
 
 def _refresh_refine_section_summaries(*_args) -> None:

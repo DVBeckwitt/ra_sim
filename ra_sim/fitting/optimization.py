@@ -305,6 +305,7 @@ class MosaicShapeDatasetContext:
     label: str
     theta_initial: float
     experimental_image: np.ndarray
+    geometry_context: "GeometryFitDatasetContext"
     miller: np.ndarray
     intensities: np.ndarray
     rois: List[MosaicShapeROI]
@@ -1747,6 +1748,398 @@ def _normalized_q_group_key(
     return None
 
 
+def _normalized_hkl_key(
+    value: object,
+) -> Optional[Tuple[int, int, int]]:
+    """Return one integer HKL tuple from a stored entry value."""
+
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    try:
+        return (
+            int(value[0]),
+            int(value[1]),
+            int(value[2]),
+        )
+    except Exception:
+        return None
+
+
+def _geometry_peak_priority_metadata(
+    entry: Mapping[str, object],
+    *,
+    hk0_peak_priority_weight: float,
+) -> Dict[str, object]:
+    """Return the objective-priority metadata for one measured peak."""
+
+    priority_weight = 1.0
+    priority_class = "default"
+    hkl_key = _normalized_hkl_key(entry.get("hkl"))
+    if (
+        hkl_key is not None
+        and hkl_key != (0, 0, 0)
+        and hkl_key[0] == 0
+        and hkl_key[1] == 0
+        and np.isfinite(hk0_peak_priority_weight)
+        and hk0_peak_priority_weight > 1.0
+    ):
+        priority_weight = float(hk0_peak_priority_weight)
+        priority_class = "hk0"
+
+    return {
+        "priority_weight": float(priority_weight),
+        "priority_class": str(priority_class),
+        "is_hk0_peak": bool(priority_class == "hk0"),
+    }
+
+
+def _geometry_line_group_ids(
+    entry: Mapping[str, object],
+) -> Tuple[Tuple[object, ...], ...]:
+    """Return the Qr-family line groups that one measured entry belongs to."""
+
+    group_ids: list[tuple[object, ...]] = []
+    q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
+    if q_group_key is not None:
+        group_ids.append(("q_group_line",) + q_group_key)
+
+    hkl_key = _normalized_hkl_key(entry.get("hkl"))
+    if hkl_key is not None and hkl_key[0] == 0 and hkl_key[1] == 0:
+        source_label = (
+            str(q_group_key[1])
+            if isinstance(q_group_key, tuple) and len(q_group_key) >= 2
+            else str(entry.get("source_label", "primary"))
+        )
+        group_ids.append(("qz_axis_line", str(source_label)))
+
+    return tuple(group_ids)
+
+
+def _eligible_geometry_line_group_ids(
+    entries: Sequence[Mapping[str, object]],
+) -> List[Tuple[object, ...]]:
+    """Return stable line groups backed by at least two measured entries."""
+
+    grouped: Dict[Tuple[object, ...], List[int]] = {}
+    ordered: List[Tuple[object, ...]] = []
+    for idx, entry in enumerate(entries):
+        for group_id in _geometry_line_group_ids(entry):
+            if group_id not in grouped:
+                grouped[group_id] = []
+                ordered.append(group_id)
+            grouped[group_id].append(int(idx))
+    return [group_id for group_id in ordered if len(grouped.get(group_id, ())) >= 2]
+
+
+def _fit_geometry_line_model(
+    points: Sequence[Sequence[float]] | np.ndarray,
+) -> Optional[Dict[str, np.ndarray | float]]:
+    """Fit one 2D PCA line model and return centroid/direction/span metadata."""
+
+    arr = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if arr.shape[0] < 2:
+        return None
+    finite_mask = np.isfinite(arr).all(axis=1)
+    arr = arr[finite_mask]
+    if arr.shape[0] < 2:
+        return None
+
+    centroid = np.mean(arr, axis=0)
+    centered = arr - centroid
+    if arr.shape[0] == 2:
+        direction = centered[1] - centered[0]
+    else:
+        try:
+            _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        except np.linalg.LinAlgError:
+            return None
+        if vh.size < 2:
+            return None
+        direction = vh[0]
+
+    direction_norm = float(np.linalg.norm(direction))
+    if not np.isfinite(direction_norm) or direction_norm <= 1.0e-12:
+        return None
+    direction = direction / direction_norm
+    if float(direction[0]) < 0.0 or (
+        abs(float(direction[0])) <= 1.0e-12 and float(direction[1]) < 0.0
+    ):
+        direction = -direction
+
+    projections = centered @ direction
+    proj_min = float(np.min(projections))
+    proj_max = float(np.max(projections))
+    if not (np.isfinite(proj_min) and np.isfinite(proj_max)):
+        return None
+    span = float(proj_max - proj_min)
+    if span <= 1.0e-9:
+        return None
+
+    return {
+        "centroid": np.asarray(centroid, dtype=np.float64),
+        "direction": np.asarray(direction, dtype=np.float64),
+        "span": float(span),
+    }
+
+
+def _unwrap_fit_space_phi_deg(
+    values: Sequence[float] | np.ndarray,
+    *,
+    reference: float | None = None,
+) -> np.ndarray:
+    """Unwrap phi values around one local reference without reordering points."""
+
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    out = np.full(arr.shape, np.nan, dtype=np.float64)
+    finite_mask = np.isfinite(arr)
+    if not np.any(finite_mask):
+        return out
+
+    finite_vals = arr[finite_mask]
+    ref = (
+        float(reference)
+        if reference is not None and np.isfinite(float(reference))
+        else float(finite_vals[0])
+    )
+    first_pass = np.array(
+        [ref + _angular_difference_deg(float(value), ref) for value in finite_vals],
+        dtype=np.float64,
+    )
+    if first_pass.size:
+        ref = float(np.mean(first_pass))
+    out[finite_mask] = np.array(
+        [ref + _angular_difference_deg(float(value), ref) for value in finite_vals],
+        dtype=np.float64,
+    )
+    return out
+
+
+def _build_geometry_line_constraint_residuals_from_detector_matches(
+    matched_pairs: Sequence[Mapping[str, object]],
+    eligible_group_ids: Sequence[Tuple[object, ...]],
+    *,
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+    gamma_deg: float = 0.0,
+    Gamma_deg: float = 0.0,
+    angle_weight: float = 1.0,
+    offset_weight: float = 1.0,
+    missing_penalty_px: float = 0.0,
+) -> Tuple[np.ndarray, Dict[str, object]]:
+    """Turn Qr-family line mismatch into extra pixel-scale residuals."""
+
+    fit_space_available = True
+    try:
+        centre_row = float(center[0]) if center is not None else float("nan")
+        centre_col = float(center[1]) if center is not None else float("nan")
+    except Exception:
+        centre_row = float("nan")
+        centre_col = float("nan")
+    if not (
+        np.isfinite(centre_row)
+        and np.isfinite(centre_col)
+        and np.isfinite(detector_distance)
+        and detector_distance > 0.0
+        and np.isfinite(pixel_size)
+        and pixel_size > 0.0
+    ):
+        fit_space_available = False
+
+    residual_components = np.zeros((len(eligible_group_ids), 2), dtype=np.float64)
+    summary: Dict[str, object] = {
+        "line_group_count": int(len(eligible_group_ids)),
+        "resolved_line_group_count": 0,
+        "missing_line_group_count": 0,
+        "line_angle_rms_px": float("nan"),
+        "line_offset_rms_px": float("nan"),
+        "line_fit_space_span_deg_mean": float("nan"),
+        "line_constraints_enabled": bool(fit_space_available),
+    }
+    if not eligible_group_ids or not fit_space_available:
+        return np.array([], dtype=float), summary
+
+    indexed_groups = {group_id: idx for idx, group_id in enumerate(eligible_group_ids)}
+    grouped_pairs: Dict[Tuple[object, ...], List[Mapping[str, object]]] = {
+        group_id: [] for group_id in eligible_group_ids
+    }
+    for pair in matched_pairs:
+        raw_group_ids = pair.get("group_ids", ())
+        if not isinstance(raw_group_ids, (list, tuple)):
+            continue
+        for raw_group_id in raw_group_ids:
+            if raw_group_id in indexed_groups:
+                grouped_pairs[raw_group_id].append(pair)
+
+    resolved_angle_px: List[float] = []
+    resolved_offset_px: List[float] = []
+    resolved_spans_deg: List[float] = []
+
+    def _assign_missing(slot: int) -> None:
+        residual_components[int(slot), 0] = (
+            float(angle_weight) * float(missing_penalty_px)
+        )
+        residual_components[int(slot), 1] = (
+            float(offset_weight) * float(missing_penalty_px)
+        )
+        summary["missing_line_group_count"] = int(summary["missing_line_group_count"]) + 1
+
+    for slot, group_id in enumerate(eligible_group_ids):
+        records = grouped_pairs.get(group_id, [])
+        if len(records) < 2:
+            _assign_missing(slot)
+            continue
+
+        meas_points: list[tuple[float, float]] = []
+        sim_points: list[tuple[float, float]] = []
+        for record in records:
+            try:
+                measured_point = tuple(record.get("measured_point", (np.nan, np.nan)))
+                simulated_point = tuple(record.get("simulated_point", (np.nan, np.nan)))
+                measured_xy = (float(measured_point[0]), float(measured_point[1]))
+                simulated_xy = (float(simulated_point[0]), float(simulated_point[1]))
+            except Exception:
+                continue
+            if not (
+                np.isfinite(measured_xy[0])
+                and np.isfinite(measured_xy[1])
+                and np.isfinite(simulated_xy[0])
+                and np.isfinite(simulated_xy[1])
+            ):
+                continue
+            meas_points.append(measured_xy)
+            sim_points.append(simulated_xy)
+
+        if len(meas_points) < 2 or len(sim_points) < 2:
+            _assign_missing(slot)
+            continue
+
+        meas_cols = np.array([point[0] for point in meas_points], dtype=np.float64)
+        meas_rows = np.array([point[1] for point in meas_points], dtype=np.float64)
+        sim_cols = np.array([point[0] for point in sim_points], dtype=np.float64)
+        sim_rows = np.array([point[1] for point in sim_points], dtype=np.float64)
+        meas_two_theta, meas_phi = _detector_pixels_to_fit_space(
+            meas_cols,
+            meas_rows,
+            center=center,
+            detector_distance=float(detector_distance),
+            pixel_size=float(pixel_size),
+            gamma_deg=float(gamma_deg),
+            Gamma_deg=float(Gamma_deg),
+        )
+        sim_two_theta, sim_phi = _detector_pixels_to_fit_space(
+            sim_cols,
+            sim_rows,
+            center=center,
+            detector_distance=float(detector_distance),
+            pixel_size=float(pixel_size),
+            gamma_deg=float(gamma_deg),
+            Gamma_deg=float(Gamma_deg),
+        )
+        valid_mask = (
+            np.isfinite(meas_two_theta)
+            & np.isfinite(meas_phi)
+            & np.isfinite(sim_two_theta)
+            & np.isfinite(sim_phi)
+        )
+        if int(np.count_nonzero(valid_mask)) < 2:
+            _assign_missing(slot)
+            continue
+
+        meas_cols = meas_cols[valid_mask]
+        meas_rows = meas_rows[valid_mask]
+        meas_two_theta = meas_two_theta[valid_mask]
+        meas_phi = meas_phi[valid_mask]
+        sim_two_theta = sim_two_theta[valid_mask]
+        sim_phi = sim_phi[valid_mask]
+        if meas_two_theta.size < 2:
+            _assign_missing(slot)
+            continue
+
+        meas_phi_unwrapped = _unwrap_fit_space_phi_deg(meas_phi)
+        measured_fit = np.column_stack((meas_two_theta, meas_phi_unwrapped))
+        measured_model = _fit_geometry_line_model(measured_fit)
+        if measured_model is None:
+            _assign_missing(slot)
+            continue
+
+        sim_phi_unwrapped = _unwrap_fit_space_phi_deg(
+            sim_phi,
+            reference=float(np.asarray(measured_model["centroid"], dtype=np.float64)[1]),
+        )
+        simulated_fit = np.column_stack((sim_two_theta, sim_phi_unwrapped))
+        simulated_model = _fit_geometry_line_model(simulated_fit)
+        if simulated_model is None:
+            _assign_missing(slot)
+            continue
+
+        detector_model = _fit_geometry_line_model(np.column_stack((meas_cols, meas_rows)))
+        fit_span_deg = float(
+            max(
+                float(measured_model["span"]),
+                float(simulated_model["span"]),
+            )
+        )
+        if not np.isfinite(fit_span_deg) or fit_span_deg <= 1.0e-9:
+            _assign_missing(slot)
+            continue
+
+        detector_span_px = (
+            float(detector_model["span"])
+            if detector_model is not None
+            else float("nan")
+        )
+        if not np.isfinite(detector_span_px) or detector_span_px <= 1.0e-9:
+            centered_detector = np.column_stack((meas_cols, meas_rows))
+            centered_detector = centered_detector - np.mean(centered_detector, axis=0)
+            detector_span_px = float(
+                2.0 * np.max(np.linalg.norm(centered_detector, axis=1))
+            )
+        if not np.isfinite(detector_span_px) or detector_span_px <= 1.0e-9:
+            _assign_missing(slot)
+            continue
+
+        px_per_fit_deg = float(detector_span_px / max(fit_span_deg, 1.0e-9))
+        measured_direction = np.asarray(measured_model["direction"], dtype=np.float64)
+        simulated_direction = np.asarray(simulated_model["direction"], dtype=np.float64)
+        dot_abs = float(
+            abs(np.clip(np.dot(measured_direction, simulated_direction), -1.0, 1.0))
+        )
+        angle_diff_rad = float(math.acos(dot_abs))
+        measured_normal = np.array(
+            [-float(measured_direction[1]), float(measured_direction[0])],
+            dtype=np.float64,
+        )
+        centroid_delta = (
+            np.asarray(simulated_model["centroid"], dtype=np.float64)
+            - np.asarray(measured_model["centroid"], dtype=np.float64)
+        )
+        offset_deg = float(np.dot(centroid_delta, measured_normal))
+
+        angle_residual_px = float(
+            abs(math.sin(angle_diff_rad)) * 0.5 * fit_span_deg * px_per_fit_deg
+        )
+        offset_residual_px = float(abs(offset_deg) * px_per_fit_deg)
+        residual_components[slot, 0] = float(angle_weight) * float(angle_residual_px)
+        residual_components[slot, 1] = float(offset_weight) * float(offset_residual_px)
+        summary["resolved_line_group_count"] = int(summary["resolved_line_group_count"]) + 1
+        resolved_angle_px.append(float(angle_residual_px))
+        resolved_offset_px.append(float(offset_residual_px))
+        resolved_spans_deg.append(float(fit_span_deg))
+
+    if resolved_angle_px:
+        angle_arr = np.asarray(resolved_angle_px, dtype=float)
+        summary["line_angle_rms_px"] = float(np.sqrt(np.mean(angle_arr * angle_arr)))
+    if resolved_offset_px:
+        offset_arr = np.asarray(resolved_offset_px, dtype=float)
+        summary["line_offset_rms_px"] = float(np.sqrt(np.mean(offset_arr * offset_arr)))
+    if resolved_spans_deg:
+        span_arr = np.asarray(resolved_spans_deg, dtype=float)
+        summary["line_fit_space_span_deg_mean"] = float(np.mean(span_arr))
+
+    return residual_components.reshape(-1), summary
+
+
 def _prepare_reflection_subset(
     miller: np.ndarray,
     intensities: np.ndarray,
@@ -2061,6 +2454,51 @@ def _evaluate_geometry_fit_dataset_point_matches(
     fit_intensities = simulation_subset.intensities
     normalized_measured = simulation_subset.measured_entries
     single_ray_indices = dataset_ctx.single_ray_indices
+    try:
+        hk0_peak_priority_weight = float(
+            local.get("_hk0_peak_priority_weight", 1.0)
+        )
+    except Exception:
+        hk0_peak_priority_weight = 1.0
+    if (
+        not np.isfinite(hk0_peak_priority_weight)
+        or hk0_peak_priority_weight < 1.0
+    ):
+        hk0_peak_priority_weight = 1.0
+    line_constraints_enabled = bool(local.get("_q_group_line_constraints_enabled", False))
+    try:
+        q_group_line_angle_weight = float(
+            local.get("_q_group_line_angle_weight", 0.6)
+        )
+    except Exception:
+        q_group_line_angle_weight = 0.6
+    if (
+        not np.isfinite(q_group_line_angle_weight)
+        or q_group_line_angle_weight < 0.0
+    ):
+        q_group_line_angle_weight = 0.6
+    try:
+        q_group_line_offset_weight = float(
+            local.get("_q_group_line_offset_weight", 1.0)
+        )
+    except Exception:
+        q_group_line_offset_weight = 1.0
+    if (
+        not np.isfinite(q_group_line_offset_weight)
+        or q_group_line_offset_weight < 0.0
+    ):
+        q_group_line_offset_weight = 1.0
+    try:
+        q_group_line_missing_penalty_scale = float(
+            local.get("_q_group_line_missing_penalty_scale", 0.35)
+        )
+    except Exception:
+        q_group_line_missing_penalty_scale = 0.35
+    if (
+        not np.isfinite(q_group_line_missing_penalty_scale)
+        or q_group_line_missing_penalty_scale < 0.0
+    ):
+        q_group_line_missing_penalty_scale = 0.35
 
     if not normalized_measured:
         return np.array([], dtype=float), [], {
@@ -2077,6 +2515,13 @@ def _evaluate_geometry_fit_dataset_point_matches(
             "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": bool(use_single_ray),
             "single_ray_forced_count": 0,
+            "line_group_count": 0,
+            "resolved_line_group_count": 0,
+            "missing_line_group_count": 0,
+            "line_angle_rms_px": float("nan"),
+            "line_offset_rms_px": float("nan"),
+            "line_fit_space_span_deg_mean": float("nan"),
+            "line_constraints_enabled": bool(line_constraints_enabled),
         }
 
     mosaic = local["mosaic_params"]
@@ -2137,6 +2582,12 @@ def _evaluate_geometry_fit_dataset_point_matches(
     matched_distances: List[float] = []
     matched_pair_count = 0
     anisotropic_sigma_count = 0
+    eligible_line_group_ids = (
+        _eligible_geometry_line_group_ids(normalized_measured)
+        if bool(line_constraints_enabled)
+        else []
+    )
+    line_match_records: List[Dict[str, object]] = []
     fixed_matches, fallback_measured, resolution_lookup = _resolve_fixed_source_matches(
         normalized_measured,
         hit_tables,
@@ -2185,6 +2636,24 @@ def _evaluate_geometry_fit_dataset_point_matches(
             custom_sigma_values.append(float(fields.get("measurement_sigma_px", np.nan)))
         if bool(fields.get("anisotropic_sigma_used", False)):
             anisotropic_sigma_count += 1
+        priority_fields = _geometry_peak_priority_metadata(
+            entry,
+            hk0_peak_priority_weight=float(hk0_peak_priority_weight),
+        )
+        priority_weight = float(priority_fields["priority_weight"])
+        for key in (
+            "weighted_dx_px",
+            "weighted_dy_px",
+            "weighted_radial_residual_px",
+            "weighted_tangential_residual_px",
+        ):
+            try:
+                value = float(fields.get(key, np.nan))
+            except Exception:
+                continue
+            if np.isfinite(value):
+                fields[key] = float(priority_weight * value)
+        fields.update(priority_fields)
         return fields
 
     def _placement_error_px(entry: Dict[str, object]) -> float:
@@ -2235,6 +2704,15 @@ def _evaluate_geometry_fit_dataset_point_matches(
         weighted_dx = float(weight_fields["weighted_dx_px"])
         weighted_dy = float(weight_fields["weighted_dy_px"])
         _assign_residual_pair(measured_entry, weighted_dx, weighted_dy)
+        group_ids = _geometry_line_group_ids(measured_entry)
+        if group_ids:
+            line_match_records.append(
+                {
+                    "group_ids": group_ids,
+                    "measured_point": meas_pt,
+                    "simulated_point": sim_pt,
+                }
+            )
         _add_diag(
             dict(resolution_lookup.get(id(measured_entry), {})),
             {
@@ -2250,7 +2728,9 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 "placement_error_px": _placement_error_px(measured_entry),
                 "distance_weight": float(distance_weight),
                 "weight": float(
-                    float(distance_weight) * float(weight_fields.get("sigma_weight", 1.0))
+                    float(distance_weight)
+                    * float(weight_fields.get("sigma_weight", 1.0))
+                    * float(weight_fields.get("priority_weight", 1.0))
                 ),
                 "measured_radius_px": _point_radius_px(meas_pt),
                 "simulated_radius_px": _point_radius_px(sim_pt),
@@ -2300,6 +2780,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
                     distance_weight=1.0,
                 )
                 penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
+                penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
                 missing_penalty = float(missing_pair_penalty) * penalty_weight
                 _assign_residual_pair(entry, missing_penalty, 0.0)
                 _add_diag(
@@ -2360,6 +2841,15 @@ def _evaluate_geometry_fit_dataset_point_matches(
             weighted_dx = float(weight_fields["weighted_dx_px"])
             weighted_dy = float(weight_fields["weighted_dy_px"])
             _assign_residual_pair(entry, weighted_dx, weighted_dy)
+            group_ids = _geometry_line_group_ids(entry)
+            if group_ids:
+                line_match_records.append(
+                    {
+                        "group_ids": group_ids,
+                        "measured_point": (float(meas_pt[0]), float(meas_pt[1])),
+                        "simulated_point": (float(sim_pt[0]), float(sim_pt[1])),
+                    }
+                )
             if 0 <= meas_idx < len(valid_entries_hkl):
                 sim_candidate = (
                     sim_candidates[sim_idx]
@@ -2386,7 +2876,9 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "placement_error_px": _placement_error_px(entry),
                         "distance_weight": float(distance_weight),
                         "weight": float(
-                            float(distance_weight) * float(weight_fields.get("sigma_weight", 1.0))
+                            float(distance_weight)
+                            * float(weight_fields.get("sigma_weight", 1.0))
+                            * float(weight_fields.get("priority_weight", 1.0))
                         ),
                         "measured_radius_px": _point_radius_px((float(meas_pt[0]), float(meas_pt[1]))),
                         "simulated_radius_px": _point_radius_px((float(sim_pt[0]), float(sim_pt[1]))),
@@ -2405,6 +2897,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 distance_weight=1.0,
             )
             penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
+            penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
             missing_penalty = float(missing_pair_penalty) * penalty_weight
             _assign_residual_pair(entry, missing_penalty, 0.0)
             _add_diag(
@@ -2445,7 +2938,20 @@ def _evaluate_geometry_fit_dataset_point_matches(
         if unresolved_idx < 0 or unresolved_idx >= len(normalized_measured):
             continue
         entry = normalized_measured[unresolved_idx]
-        residual_components[int(unresolved_idx), 0] = float(missing_pair_penalty)
+        measured_point = (
+            float(entry.get("x", np.nan)),
+            float(entry.get("y", np.nan)),
+        )
+        weight_fields = _weight_fields(
+            entry,
+            measured_point=measured_point,
+            distance_weight=1.0,
+        )
+        penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
+        penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
+        residual_components[int(unresolved_idx), 0] = (
+            float(missing_pair_penalty) * float(penalty_weight)
+        )
         residual_components[int(unresolved_idx), 1] = 0.0
         missing_pairs += 1
         if collect_diagnostics:
@@ -2476,8 +2982,9 @@ def _evaluate_geometry_fit_dataset_point_matches(
                     "distance_px": float("nan"),
                     "placement_error_px": _placement_error_px(entry),
                     "distance_weight": 1.0,
-                    "weight": 1.0,
-                    "weighted_missing_penalty_px": float(missing_pair_penalty),
+                    "weight": float(penalty_weight),
+                    "weighted_missing_penalty_px": float(missing_pair_penalty)
+                    * float(penalty_weight),
                     "measured_radius_px": _point_radius_px(
                         (
                             float(entry.get("x", np.nan)),
@@ -2485,10 +2992,38 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         )
                     ),
                     "simulated_radius_px": float("nan"),
+                    **weight_fields,
                 },
             )
 
+    line_summary = {
+        "line_group_count": 0,
+        "resolved_line_group_count": 0,
+        "missing_line_group_count": 0,
+        "line_angle_rms_px": float("nan"),
+        "line_offset_rms_px": float("nan"),
+        "line_fit_space_span_deg_mean": float("nan"),
+        "line_constraints_enabled": bool(line_constraints_enabled),
+    }
     residual_arr = residual_components.reshape(-1)
+    if bool(line_constraints_enabled):
+        line_residual_arr, line_summary = (
+            _build_geometry_line_constraint_residuals_from_detector_matches(
+                line_match_records,
+                eligible_line_group_ids,
+                center=local.get("center", []),
+                detector_distance=float(local.get("corto_detector", np.nan)),
+                pixel_size=float(local.get("debye_x", np.nan)),
+                gamma_deg=float(local.get("gamma", 0.0)),
+                Gamma_deg=float(local.get("Gamma", 0.0)),
+                angle_weight=float(q_group_line_angle_weight),
+                offset_weight=float(q_group_line_offset_weight),
+                missing_penalty_px=float(missing_pair_penalty)
+                * float(q_group_line_missing_penalty_scale),
+            )
+        )
+        if line_residual_arr.size:
+            residual_arr = np.concatenate((residual_arr, line_residual_arr))
     summary: Dict[str, object] = {
         "dataset_index": int(dataset_ctx.dataset_index),
         "dataset_label": str(dataset_ctx.label),
@@ -2554,6 +3089,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         )
     else:
         summary["peak_weighting_mode"] = "uniform"
+    summary.update(line_summary)
     return residual_arr, diagnostics, summary
 
 
@@ -2673,9 +3209,16 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
 
     for idx, measured_entry in enumerate(normalized_measured):
         diag = _entry_diag(measured_entry, idx)
+        priority_fields = _geometry_peak_priority_metadata(
+            measured_entry,
+            hk0_peak_priority_weight=float(hk0_peak_priority_weight),
+        )
+        priority_weight = float(priority_fields["priority_weight"])
         measured_anchor, measured_reason = _measured_detector_anchor(measured_entry)
         if measured_anchor is None:
-            residual_components[idx, 0] = float(missing_pair_penalty_deg)
+            residual_components[idx, 0] = (
+                float(missing_pair_penalty_deg) * float(priority_weight)
+            )
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
             if collect_diagnostics:
@@ -2699,7 +3242,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "delta_two_theta_deg": float("nan"),
                         "delta_phi_deg": float("nan"),
                         "angular_distance_deg": float("nan"),
-                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
+                        * float(priority_weight),
+                        **priority_fields,
                     }
                 )
             continue
@@ -2724,7 +3269,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 sim_point = None
                 sim_reason = "off_detector"
         if sim_point is None:
-            residual_components[idx, 0] = float(missing_pair_penalty_deg)
+            residual_components[idx, 0] = (
+                float(missing_pair_penalty_deg) * float(priority_weight)
+            )
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
             if collect_diagnostics:
@@ -2748,7 +3295,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "delta_two_theta_deg": float("nan"),
                         "delta_phi_deg": float("nan"),
                         "angular_distance_deg": float("nan"),
-                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
+                        * float(priority_weight),
+                        **priority_fields,
                     }
                 )
             continue
@@ -2771,7 +3320,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             or not np.isfinite(two_theta_arr[:2]).all()
             or not np.isfinite(phi_arr[:2]).all()
         ):
-            residual_components[idx, 0] = float(missing_pair_penalty_deg)
+            residual_components[idx, 0] = (
+                float(missing_pair_penalty_deg) * float(priority_weight)
+            )
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
             if collect_diagnostics:
@@ -2797,7 +3348,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "delta_two_theta_deg": float("nan"),
                         "delta_phi_deg": float("nan"),
                         "angular_distance_deg": float("nan"),
-                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
+                        * float(priority_weight),
+                        **priority_fields,
                     }
                 )
             continue
@@ -2808,8 +3361,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         sim_phi = float(phi_arr[1])
         delta_two_theta = float(sim_two_theta - meas_two_theta)
         delta_phi = float(_angular_difference_deg(sim_phi, meas_phi))
-        residual_components[idx, 0] = delta_two_theta
-        residual_components[idx, 1] = delta_phi
+        residual_components[idx, 0] = float(priority_weight) * float(delta_two_theta)
+        residual_components[idx, 1] = float(priority_weight) * float(delta_phi)
         matched_pair_count += 1
         pixel_dx = float(sim_col - measured_col)
         pixel_dy = float(sim_row - measured_row)
@@ -2843,6 +3396,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "delta_two_theta_deg": float(delta_two_theta),
                     "delta_phi_deg": float(delta_phi),
                     "angular_distance_deg": float(angular_distance),
+                    **priority_fields,
                 }
             )
 
@@ -2872,6 +3426,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "peak_weighting_mode": "uniform",
         "custom_sigma_count": 0,
         "anisotropic_sigma_count": 0,
+        "line_group_count": 0,
+        "resolved_line_group_count": 0,
+        "missing_line_group_count": 0,
+        "line_angle_rms_px": float("nan"),
+        "line_offset_rms_px": float("nan"),
+        "line_fit_space_span_deg_mean": float("nan"),
+        "line_constraints_enabled": False,
     }
     if pixel_distances:
         pixel_dist_arr = np.asarray(pixel_distances, dtype=float)
@@ -2948,6 +3509,17 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             "single_ray_forced_count": 0,
             "match_radius_px": float(match_radius_px),
         }
+    try:
+        hk0_peak_priority_weight = float(
+            local.get("_hk0_peak_priority_weight", 1.0)
+        )
+    except Exception:
+        hk0_peak_priority_weight = 1.0
+    if (
+        not np.isfinite(hk0_peak_priority_weight)
+        or hk0_peak_priority_weight < 1.0
+    ):
+        hk0_peak_priority_weight = 1.0
 
     fit_miller = dataset_ctx.subset.miller
     fit_intensities = dataset_ctx.subset.intensities
@@ -3040,6 +3612,24 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             custom_sigma_values.append(float(fields.get("measurement_sigma_px", np.nan)))
         if bool(fields.get("anisotropic_sigma_used", False)):
             anisotropic_sigma_count += 1
+        priority_fields = _geometry_peak_priority_metadata(
+            entry,
+            hk0_peak_priority_weight=float(hk0_peak_priority_weight),
+        )
+        priority_weight = float(priority_fields["priority_weight"])
+        for key in (
+            "weighted_dx_px",
+            "weighted_dy_px",
+            "weighted_radial_residual_px",
+            "weighted_tangential_residual_px",
+        ):
+            try:
+                value = float(fields.get(key, np.nan))
+            except Exception:
+                continue
+            if np.isfinite(value):
+                fields[key] = float(priority_weight * value)
+        fields.update(priority_fields)
         return fields
 
     def _placement_error_px(entry: Mapping[str, object]) -> float:
@@ -3068,8 +3658,15 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             measured_point = (float("nan"), float("nan"))
 
         if not (np.isfinite(measured_point[0]) and np.isfinite(measured_point[1])):
+            priority_fields = _geometry_peak_priority_metadata(
+                entry,
+                hk0_peak_priority_weight=float(hk0_peak_priority_weight),
+            )
+            priority_weight = float(priority_fields["priority_weight"])
             missing_pairs += 1
-            residual_components[entry_index, 0] = float(missing_pair_penalty)
+            residual_components[entry_index, 0] = (
+                float(missing_pair_penalty) * float(priority_weight)
+            )
             _add_diag(
                 entry,
                 {
@@ -3081,9 +3678,12 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                     "dx_px": float("nan"),
                     "dy_px": float("nan"),
                     "distance_px": float("nan"),
-                    "weighted_missing_penalty_px": float(missing_pair_penalty),
+                    "weighted_missing_penalty_px": float(missing_pair_penalty)
+                    * float(priority_weight),
                     "measured_radius_px": float("nan"),
                     "simulated_radius_px": float("nan"),
+                    "weight": float(priority_weight),
+                    **priority_fields,
                 },
             )
             continue
@@ -3094,6 +3694,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             distance_weight=1.0,
         )
         penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
+        penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
         missing_penalty = float(missing_pair_penalty) * penalty_weight
         simulated_point, simulated_reason = _geometry_fit_correspondence_simulated_point(
             entry,
@@ -3143,6 +3744,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                         "weight": float(
                             float(distance_weight)
                             * float(weight_fields.get("sigma_weight", 1.0))
+                            * float(weight_fields.get("priority_weight", 1.0))
                         ),
                         "measured_radius_px": _point_radius_px(measured_point),
                         "simulated_radius_px": _point_radius_px(simulated_point),
@@ -3219,6 +3821,13 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
         "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
         "match_radius_px": float(effective_match_radius),
+        "line_group_count": 0,
+        "resolved_line_group_count": 0,
+        "missing_line_group_count": 0,
+        "line_angle_rms_px": float("nan"),
+        "line_offset_rms_px": float("nan"),
+        "line_fit_space_span_deg_mean": float("nan"),
+        "line_constraints_enabled": False,
     }
     summary["anisotropic_sigma_count"] = int(anisotropic_sigma_count)
     if custom_sigma_values:
@@ -4351,6 +4960,7 @@ def _build_mosaic_shape_dataset_contexts(
 
         usable_hkls = set(two_theta_lookup)
         normalized_measured = _normalize_measured_peaks(subset.measured_entries)
+        usable_measured_entries: List[Dict[str, object]] = []
         rois: List[MosaicShapeROI] = []
         seen_centers: Set[Tuple[Tuple[int, int, int], int, int]] = set()
 
@@ -4369,6 +4979,7 @@ def _build_mosaic_shape_dataset_contexts(
                     }
                 )
                 continue
+            usable_measured_entries.append(dict(entry))
 
             center_row = float(entry["y"])
             center_col = float(entry["x"])
@@ -4433,12 +5044,26 @@ def _build_mosaic_shape_dataset_contexts(
                 )
             )
 
+        point_match_subset = _prepare_reflection_subset(
+            np.ascontiguousarray(subset_miller[keep_rows], dtype=np.float64),
+            np.ascontiguousarray(subset_intensities[keep_rows], dtype=np.float64),
+            usable_measured_entries,
+        )
+        geometry_context = GeometryFitDatasetContext(
+            dataset_index=int(dataset_ctx.dataset_index),
+            label=str(dataset_ctx.label),
+            theta_initial=float(dataset_ctx.theta_initial),
+            subset=point_match_subset,
+            experimental_image=experimental_image,
+        )
+
         prepared.append(
             MosaicShapeDatasetContext(
                 dataset_index=int(dataset_ctx.dataset_index),
                 label=str(dataset_ctx.label),
                 theta_initial=float(dataset_ctx.theta_initial),
                 experimental_image=experimental_image,
+                geometry_context=geometry_context,
                 miller=np.ascontiguousarray(subset_miller[keep_rows], dtype=np.float64),
                 intensities=np.ascontiguousarray(
                     subset_intensities[keep_rows],
@@ -4474,8 +5099,16 @@ def fit_mosaic_shape_parameters(
     parallel_mode: str = "auto",
     worker_numba_threads: object = 0,
     restart_jitter: float = 0.15,
+    ridge_weight: float = 1.0,
+    point_match_weight: float = 0.0,
+    point_match_f_scale: float = 6.0,
+    point_match_weighted_matching: bool = False,
+    point_match_missing_pair_penalty: float = 20.0,
+    refine_theta: bool = False,
+    theta_mode: str = "auto",
+    theta_bounds: Optional[Tuple[float, float]] = None,
 ) -> OptimizeResult:
-    """Fit geometry-cached detector ridge shapes by varying mosaic sigma/gamma/eta."""
+    """Fit geometry-cached mosaic shape parameters with optional point anchors."""
 
     dataset_spec_entries = _coerce_sequence_items(dataset_specs)
     miller = np.asarray(miller, dtype=np.float64)
@@ -4540,6 +5173,18 @@ def fit_mosaic_shape_parameters(
     smooth_sigma_px = max(float(smooth_sigma_px), 0.0)
     ridge_percentile = float(np.clip(float(ridge_percentile), 1.0, 99.9))
     restart_jitter = max(float(restart_jitter), 0.0)
+    ridge_weight = max(float(ridge_weight), 0.0)
+    point_match_weight = max(float(point_match_weight), 0.0)
+    point_match_f_scale = max(float(point_match_f_scale), 1.0e-6)
+    point_match_missing_pair_penalty = max(
+        float(point_match_missing_pair_penalty),
+        0.0,
+    )
+    if ridge_weight <= 0.0 and point_match_weight <= 0.0:
+        raise ValueError(
+            "At least one mosaic objective term must be enabled "
+            "(ridge_weight > 0 or point_match_weight > 0)."
+        )
 
     if roi_half_width is None:
         roi_half_width = _estimate_mosaic_shape_roi_half_width(
@@ -4584,7 +5229,21 @@ def fit_mosaic_shape_parameters(
             f"Mosaic shape fit needs at least {int(min_total_rois)} usable ROIs; got {total_rois}."
         )
 
-    multi_dataset_mode = len(prepared_datasets) > 1
+    dataset_count = int(len(prepared_datasets))
+    optimize_theta = bool(refine_theta)
+
+    theta_mode_key = str(theta_mode).strip().lower()
+    if theta_mode_key not in {"auto", "single", "shared_offset", "per_dataset"}:
+        raise ValueError(
+            "theta_mode must be one of {'auto', 'single', 'shared_offset', 'per_dataset'}"
+        )
+    if theta_mode_key == "auto":
+        resolved_theta_mode = "single" if dataset_count == 1 else "per_dataset"
+    else:
+        resolved_theta_mode = str(theta_mode_key)
+    if resolved_theta_mode == "single" and dataset_count != 1:
+        raise ValueError("theta_mode='single' requires exactly one prepared dataset")
+
     parallel_mode_key = str(parallel_mode).strip().lower()
     if parallel_mode_key not in {"auto", "datasets", "restarts", "off"}:
         raise ValueError("parallel_mode must be one of {'auto', 'datasets', 'restarts', 'off'}")
@@ -4644,6 +5303,74 @@ def fit_mosaic_shape_parameters(
             return float(fallback)
         return out
 
+    theta_param_names: List[str] = []
+    theta_param_dataset_indices: List[Optional[int]] = []
+    if optimize_theta:
+        theta_bound_lower: float
+        theta_bound_upper: float
+        if theta_bounds is None:
+            theta_bound_lower = -0.5
+            theta_bound_upper = 0.5
+        else:
+            theta_bound_lower = float(theta_bounds[0])
+            theta_bound_upper = float(theta_bounds[1])
+        if not (
+            np.isfinite(theta_bound_lower)
+            and np.isfinite(theta_bound_upper)
+        ):
+            raise ValueError("theta_bounds must be finite when refine_theta is enabled")
+        if theta_bound_lower >= theta_bound_upper:
+            raise ValueError(
+                "theta_bounds lower bound must be strictly less than the upper bound"
+            )
+
+        theta_seeds: List[float] = []
+        theta_lowers: List[float] = []
+        theta_uppers: List[float] = []
+        if resolved_theta_mode == "shared_offset":
+            theta_seed = _safe_float(params.get("theta_offset", 0.0), 0.0)
+            theta_param_names.append("theta_offset")
+            theta_param_dataset_indices.append(None)
+            theta_seeds.append(
+                float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper))
+            )
+            theta_lowers.append(float(theta_bound_lower))
+            theta_uppers.append(float(theta_bound_upper))
+        elif resolved_theta_mode == "single":
+            theta_seed = _safe_float(
+                params.get("theta_initial", prepared_datasets[0].theta_initial),
+                float(prepared_datasets[0].theta_initial),
+            )
+            theta_param_names.append("theta_initial")
+            theta_param_dataset_indices.append(int(prepared_datasets[0].dataset_index))
+            theta_seeds.append(
+                float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper))
+            )
+            theta_lowers.append(float(theta_bound_lower))
+            theta_uppers.append(float(theta_bound_upper))
+        else:
+            theta_seed_map = dict(
+                base_params.get("_mosaic_theta_initials_by_dataset", {})
+            )
+            for dataset_ctx in prepared_datasets:
+                dataset_idx = int(dataset_ctx.dataset_index)
+                dataset_theta = float(dataset_ctx.theta_initial)
+                theta_seed = _safe_float(
+                    theta_seed_map.get(dataset_idx, dataset_theta),
+                    dataset_theta,
+                )
+                lower_i = float(dataset_theta + theta_bound_lower)
+                upper_i = float(dataset_theta + theta_bound_upper)
+                theta_param_names.append(f"theta_initial[{dataset_idx}]")
+                theta_param_dataset_indices.append(int(dataset_idx))
+                theta_seeds.append(float(np.clip(theta_seed, lower_i, upper_i)))
+                theta_lowers.append(float(lower_i))
+                theta_uppers.append(float(upper_i))
+
+        x0 = np.concatenate([x0, np.asarray(theta_seeds, dtype=np.float64)])
+        lower = np.concatenate([lower, np.asarray(theta_lowers, dtype=np.float64)])
+        upper = np.concatenate([upper, np.asarray(theta_uppers, dtype=np.float64)])
+
     def _apply_trial_params(x: Sequence[float]) -> Dict[str, object]:
         local = dict(base_params)
         local_mosaic = dict(mosaic_params)
@@ -4657,6 +5384,18 @@ def fit_mosaic_shape_parameters(
         local_mosaic["wavelength_array"] = wavelength_array
         local["mosaic_params"] = local_mosaic
         local.setdefault("theta_offset", 0.0)
+        if optimize_theta:
+            theta_slice = np.asarray(x[3:], dtype=np.float64)
+            if resolved_theta_mode == "shared_offset" and theta_slice.size >= 1:
+                local["theta_offset"] = float(theta_slice[0])
+            elif resolved_theta_mode == "single" and theta_slice.size >= 1:
+                local["theta_initial"] = float(theta_slice[0])
+            elif resolved_theta_mode == "per_dataset" and theta_slice.size:
+                local["_mosaic_theta_initials_by_dataset"] = {
+                    int(dataset_idx): float(theta_slice[idx])
+                    for idx, dataset_idx in enumerate(theta_param_dataset_indices)
+                    if dataset_idx is not None and idx < theta_slice.size
+                }
         return local
 
     def _theta_initial_for_dataset(
@@ -4664,9 +5403,14 @@ def fit_mosaic_shape_parameters(
         dataset_ctx: MosaicShapeDatasetContext,
     ) -> float:
         theta_base = _safe_float(dataset_ctx.theta_initial, 0.0)
-        if multi_dataset_mode:
+        if resolved_theta_mode == "shared_offset":
             return float(theta_base + _safe_float(local.get("theta_offset", 0.0), 0.0))
-        return _safe_float(local.get("theta_initial", theta_base), theta_base)
+        if resolved_theta_mode == "single":
+            return _safe_float(local.get("theta_initial", theta_base), theta_base)
+        theta_map = local.get("_mosaic_theta_initials_by_dataset", {})
+        if isinstance(theta_map, Mapping):
+            return _safe_float(theta_map.get(int(dataset_ctx.dataset_index), theta_base), theta_base)
+        return float(theta_base)
 
     def _simulate_dataset_image(
         local: Dict[str, object],
@@ -4718,60 +5462,94 @@ def fit_mosaic_shape_parameters(
         )
         return np.asarray(image, dtype=np.float64)
 
+    ridge_term_enabled = bool(ridge_weight > 0.0)
+    point_match_term_enabled = bool(point_match_weight > 0.0)
+
     def _evaluate_one_dataset(
         item: Tuple[Dict[str, object], MosaicShapeDatasetContext, bool],
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
         local, dataset_ctx, collect_diagnostics = item
         theta_value = _theta_initial_for_dataset(local, dataset_ctx)
-        sim_image = _simulate_dataset_image(
-            local,
-            dataset_ctx,
-            theta_value=float(theta_value),
-        )
-
         roi_blocks: List[np.ndarray] = []
         roi_diags: List[Dict[str, object]] = []
-        for roi in dataset_ctx.rois:
-            row0, row1 = roi.row_bounds
-            col0, col1 = roi.col_bounds
-            patch = sim_image[row0:row1, col0:col1]
-            _, sim_mask, sim_distance = _prepare_mosaic_shape_patch(
-                patch,
-                smooth_sigma_px=float(smooth_sigma_px),
-                ridge_percentile=float(ridge_percentile),
+        if ridge_term_enabled:
+            sim_image = _simulate_dataset_image(
+                local,
+                dataset_ctx,
+                theta_value=float(theta_value),
             )
-            measured_term = roi.measured_mask.astype(np.float64) * sim_distance
-            sim_term = sim_mask.astype(np.float64) * roi.measured_distance
-            residual_raw = np.concatenate(
-                [measured_term.ravel(), sim_term.ravel()]
-            ).astype(np.float64, copy=False)
-            sim_active_pixels = int(np.count_nonzero(sim_mask))
-            active_pixels = int(roi.measured_active_pixels + sim_active_pixels)
-            residual_normed = residual_raw / math.sqrt(max(active_pixels, 1))
-            roi_blocks.append(np.asarray(residual_normed, dtype=np.float64))
-
-            if collect_diagnostics:
-                roi_diags.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": tuple(int(v) for v in roi.hkl),
-                        "center": (float(roi.center_col), float(roi.center_row)),
-                        "measured_active_pixels": int(roi.measured_active_pixels),
-                        "sim_active_pixels": int(sim_active_pixels),
-                        "active_mask_pixels": int(active_pixels),
-                        "two_theta_deg": float(roi.measured_two_theta),
-                        "rms": (
-                            float(np.sqrt(np.mean(residual_raw * residual_raw)))
-                            if residual_raw.size
-                            else 0.0
-                        ),
-                    }
+            for roi in dataset_ctx.rois:
+                row0, row1 = roi.row_bounds
+                col0, col1 = roi.col_bounds
+                patch = sim_image[row0:row1, col0:col1]
+                _, sim_mask, sim_distance = _prepare_mosaic_shape_patch(
+                    patch,
+                    smooth_sigma_px=float(smooth_sigma_px),
+                    ridge_percentile=float(ridge_percentile),
                 )
+                measured_term = roi.measured_mask.astype(np.float64) * sim_distance
+                sim_term = sim_mask.astype(np.float64) * roi.measured_distance
+                residual_raw = np.concatenate(
+                    [measured_term.ravel(), sim_term.ravel()]
+                ).astype(np.float64, copy=False)
+                sim_active_pixels = int(np.count_nonzero(sim_mask))
+                active_pixels = int(roi.measured_active_pixels + sim_active_pixels)
+                residual_normed = (
+                    residual_raw / math.sqrt(max(active_pixels, 1))
+                ) * float(ridge_weight)
+                roi_blocks.append(np.asarray(residual_normed, dtype=np.float64))
+
+                if collect_diagnostics:
+                    roi_diags.append(
+                        {
+                            "dataset_index": int(dataset_ctx.dataset_index),
+                            "dataset_label": str(dataset_ctx.label),
+                            "hkl": tuple(int(v) for v in roi.hkl),
+                            "center": (float(roi.center_col), float(roi.center_row)),
+                            "measured_active_pixels": int(roi.measured_active_pixels),
+                            "sim_active_pixels": int(sim_active_pixels),
+                            "active_mask_pixels": int(active_pixels),
+                            "two_theta_deg": float(roi.measured_two_theta),
+                            "rms": (
+                                float(np.sqrt(np.mean(residual_raw * residual_raw)))
+                                if residual_raw.size
+                                else 0.0
+                            ),
+                        }
+                    )
+
+        point_residual = np.zeros(0, dtype=np.float64)
+        point_summary: Dict[str, object] = {}
+        if point_match_term_enabled:
+            point_residual_raw, _point_diags, point_summary = (
+                _evaluate_geometry_fit_dataset_point_matches(
+                    local,
+                    dataset_ctx.geometry_context,
+                    image_size=image_size,
+                    pixel_tol=float("inf"),
+                    weighted_matching=bool(point_match_weighted_matching),
+                    solver_f_scale=float(point_match_f_scale),
+                    missing_pair_penalty=float(point_match_missing_pair_penalty),
+                    use_single_ray=False,
+                    theta_value=float(theta_value),
+                    collect_diagnostics=bool(collect_diagnostics),
+                )
+            )
+            point_residual = np.asarray(point_residual_raw, dtype=np.float64)
+            if point_residual.size:
+                point_residual = (
+                    point_residual / math.sqrt(max(point_residual.size, 1))
+                ) * float(point_match_weight)
+
+        residual_blocks: List[np.ndarray] = []
+        if roi_blocks:
+            residual_blocks.append(np.concatenate(roi_blocks))
+        if point_residual.size:
+            residual_blocks.append(point_residual)
 
         dataset_residual = (
-            np.concatenate(roi_blocks)
-            if roi_blocks
+            np.concatenate(residual_blocks)
+            if residual_blocks
             else np.zeros(0, dtype=np.float64)
         )
         dataset_weight = (
@@ -4789,7 +5567,29 @@ def fit_mosaic_shape_parameters(
             "measured_peak_count": int(dataset_ctx.measured_peak_count),
             "simulated_reflection_count": int(dataset_ctx.miller.shape[0]),
             "dataset_weight": float(dataset_weight),
+            "ridge_weight": float(ridge_weight),
+            "point_match_weight": float(point_match_weight),
         }
+        if point_summary:
+            dataset_summary.update(
+                {
+                    "matched_pair_count": int(
+                        point_summary.get("matched_pair_count", 0)
+                    ),
+                    "missing_pair_count": int(
+                        point_summary.get("missing_pair_count", 0)
+                    ),
+                    "fixed_source_resolved_count": int(
+                        point_summary.get("fixed_source_resolved_count", 0)
+                    ),
+                    "unweighted_peak_rms_px": float(
+                        point_summary.get("unweighted_peak_rms_px", float("nan"))
+                    ),
+                    "unweighted_peak_max_px": float(
+                        point_summary.get("unweighted_peak_max_px", float("nan"))
+                    ),
+                }
+            )
         if collect_diagnostics:
             ordered_roi_diags = sorted(
                 roi_diags,
@@ -4902,21 +5702,23 @@ def fit_mosaic_shape_parameters(
     if max_restarts > 0:
         restart_rng = np.random.default_rng(20260329)
         anchor = np.asarray(primary_result.x, dtype=np.float64)
+        span_values = [
+            restart_jitter * max(abs(float(anchor[0])), 0.03),
+            restart_jitter * max(abs(float(anchor[1])), 0.03),
+            restart_jitter * 0.5,
+        ]
+        min_span_values = [1.0e-3, 1.0e-3, 1.0e-3]
+        if optimize_theta:
+            span_values.append(restart_jitter * max(abs(float(anchor[3])), 0.05))
+            min_span_values.append(1.0e-3)
         span = np.maximum(
-            np.array(
-                [
-                    restart_jitter * max(abs(float(anchor[0])), 0.03),
-                    restart_jitter * max(abs(float(anchor[1])), 0.03),
-                    restart_jitter * 0.5,
-                ],
-                dtype=np.float64,
-            ),
-            np.array([1.0e-3, 1.0e-3, 1.0e-3], dtype=np.float64),
+            np.array(span_values, dtype=np.float64),
+            np.array(min_span_values, dtype=np.float64),
         )
         restart_starts = [
             np.clip(
                 anchor
-                + restart_rng.uniform(-1.0, 1.0, size=3).astype(np.float64) * span,
+                + restart_rng.uniform(-1.0, 1.0, size=anchor.size).astype(np.float64) * span,
                 lower,
                 upper,
             )
@@ -4980,11 +5782,38 @@ def fit_mosaic_shape_parameters(
             "eta": float(best_result.x[2]),
         }
     )
+    refined_theta_values_by_dataset: Dict[int, float] = {}
+    refined_theta_offset: Optional[float] = None
+    if optimize_theta:
+        theta_slice = np.asarray(best_result.x[3:], dtype=np.float64)
+        if resolved_theta_mode == "shared_offset" and theta_slice.size >= 1:
+            refined_theta_offset = float(theta_slice[0])
+            best_params["theta_offset"] = float(refined_theta_offset)
+            for dataset_ctx in prepared_datasets:
+                refined_theta_values_by_dataset[int(dataset_ctx.dataset_index)] = float(
+                    float(dataset_ctx.theta_initial) + refined_theta_offset
+                )
+        elif resolved_theta_mode == "single" and theta_slice.size >= 1:
+            refined_theta = float(theta_slice[0])
+            best_params["theta_initial"] = float(refined_theta)
+            refined_theta_values_by_dataset[int(prepared_datasets[0].dataset_index)] = (
+                float(refined_theta)
+            )
+        elif resolved_theta_mode == "per_dataset" and theta_slice.size:
+            theta_map = {
+                int(dataset_idx): float(theta_slice[idx])
+                for idx, dataset_idx in enumerate(theta_param_dataset_indices)
+                if dataset_idx is not None and idx < theta_slice.size
+            }
+            best_params["_mosaic_theta_initials_by_dataset"] = dict(theta_map)
+            refined_theta_values_by_dataset.update(theta_map)
 
     cost_reduction = float(
         (float(initial_cost) - float(final_cost)) / max(float(initial_cost), 1.0e-12)
     )
-    param_names = ("sigma_mosaic_deg", "gamma_mosaic_deg", "eta")
+    param_names = ["sigma_mosaic_deg", "gamma_mosaic_deg", "eta"]
+    if optimize_theta and theta_param_names:
+        param_names.extend(str(name) for name in theta_param_names)
     bound_hits = [
         name
         for idx, name in enumerate(param_names)
@@ -5002,6 +5831,12 @@ def fit_mosaic_shape_parameters(
         key=lambda item: float(item["rms"]),
         reverse=True,
     )
+    point_match_pairs_ok = True
+    if point_match_term_enabled:
+        point_match_pairs_ok = all(
+            int(diag.get("matched_pair_count", 0)) > 0
+            for diag in (dataset_diagnostics or [])
+        )
     best_result.best_params = best_params
     best_result.initial_cost = float(initial_cost)
     best_result.final_cost = float(final_cost)
@@ -5019,9 +5854,26 @@ def fit_mosaic_shape_parameters(
     best_result.total_roi_count = int(total_rois)
     best_result.solver_loss = str(loss)
     best_result.solver_f_scale = float(f_scale)
+    best_result.theta_refinement_mode = str(resolved_theta_mode) if optimize_theta else None
+    best_result.theta_param_name = (
+        str(theta_param_names[0])
+        if optimize_theta and len(theta_param_names) == 1
+        else None
+    )
+    best_result.theta_param_names = list(theta_param_names)
+    best_result.refined_theta_value = (
+        float(best_result.x[3])
+        if optimize_theta and len(theta_param_names) == 1 and best_result.x.size >= 4
+        else None
+    )
+    best_result.refined_theta_offset = float(refined_theta_offset) if refined_theta_offset is not None else None
+    best_result.refined_theta_values_by_dataset = dict(refined_theta_values_by_dataset)
+    best_result.ridge_weight = float(ridge_weight)
+    best_result.point_match_weight = float(point_match_weight)
     best_result.acceptance_passed = bool(
         float(cost_reduction) >= 0.20
         and not bound_hits
+        and point_match_pairs_ok
         and all(
             int(count) >= int(min_per_dataset_rois)
             for count in (roi_count_by_dataset or {}).values()
@@ -6904,6 +7756,41 @@ def fit_geometry_parameters(
     )
     if not np.isfinite(missing_pair_penalty_deg) or missing_pair_penalty_deg < 0.0:
         missing_pair_penalty_deg = 5.0
+    q_group_line_constraints_enabled = bool(
+        solver_cfg.get(
+            "q_group_line_constraints",
+            solver_cfg.get("q_group_line_constraints_enabled", manual_point_fit_mode),
+        )
+    )
+    q_group_line_angle_weight = float(
+        solver_cfg.get("q_group_line_angle_weight", 0.6)
+    )
+    if not np.isfinite(q_group_line_angle_weight) or q_group_line_angle_weight < 0.0:
+        q_group_line_angle_weight = 0.6
+    q_group_line_offset_weight = float(
+        solver_cfg.get("q_group_line_offset_weight", 1.0)
+    )
+    if not np.isfinite(q_group_line_offset_weight) or q_group_line_offset_weight < 0.0:
+        q_group_line_offset_weight = 1.0
+    q_group_line_missing_penalty_scale = float(
+        solver_cfg.get("q_group_line_missing_penalty_scale", 0.35)
+    )
+    if (
+        not np.isfinite(q_group_line_missing_penalty_scale)
+        or q_group_line_missing_penalty_scale < 0.0
+    ):
+        q_group_line_missing_penalty_scale = 0.35
+    hk0_peak_priority_weight = float(
+        solver_cfg.get(
+            "hk0_peak_priority_weight",
+            6.0 if manual_point_fit_mode else 1.0,
+        )
+    )
+    if (
+        not np.isfinite(hk0_peak_priority_weight)
+        or hk0_peak_priority_weight < 1.0
+    ):
+        hk0_peak_priority_weight = 1.0
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", False))
     use_measurement_uncertainty = bool(
@@ -7452,6 +8339,15 @@ def fit_geometry_parameters(
         local["center"] = [float(center_row), float(center_col)]
         local["center_x"] = float(center_row)
         local["center_y"] = float(center_col)
+        local["_q_group_line_constraints_enabled"] = bool(
+            q_group_line_constraints_enabled
+        )
+        local["_q_group_line_angle_weight"] = float(q_group_line_angle_weight)
+        local["_q_group_line_offset_weight"] = float(q_group_line_offset_weight)
+        local["_q_group_line_missing_penalty_scale"] = float(
+            q_group_line_missing_penalty_scale
+        )
+        local["_hk0_peak_priority_weight"] = float(hk0_peak_priority_weight)
         return local
 
     def _build_point_matches(
@@ -7986,6 +8882,13 @@ def fit_geometry_parameters(
             "single_ray_forced_count": 0,
             "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
             "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
+            "line_group_count": 0,
+            "resolved_line_group_count": 0,
+            "missing_line_group_count": 0,
+            "line_angle_rms_px": float("nan"),
+            "line_offset_rms_px": float("nan"),
+            "line_fit_space_span_deg_mean": float("nan"),
+            "line_constraints_enabled": bool(q_group_line_constraints_enabled),
         }
 
         def _evaluate_pixel_matches_for_dataset(
@@ -8042,6 +8945,9 @@ def fit_geometry_parameters(
                 "fixed_source_reflection_count",
                 "subset_fallback_hkl_count",
                 "single_ray_forced_count",
+                "line_group_count",
+                "resolved_line_group_count",
+                "missing_line_group_count",
             ):
                 summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
             summary["subset_reduced"] = bool(
@@ -8050,6 +8956,10 @@ def fit_geometry_parameters(
             summary["central_ray_mode"] = bool(
                 summary.get("central_ray_mode", False)
                 or bool(summary_i.get("central_ray_mode", False))
+            )
+            summary["line_constraints_enabled"] = bool(
+                summary.get("line_constraints_enabled", False)
+                or bool(summary_i.get("line_constraints_enabled", False))
             )
             if collect_diagnostics and diagnostics_i:
                 diagnostics.extend(diagnostics_i)
@@ -8156,6 +9066,51 @@ def fit_geometry_parameters(
             else:
                 summary["unweighted_peak_mean_px"] = float("nan")
             summary["unweighted_peak_max_px"] = float(matched_max)
+
+        line_resolved_total = int(summary.get("resolved_line_group_count", 0))
+        for rms_key, count_key in (
+            ("line_angle_rms_px", "resolved_line_group_count"),
+            ("line_offset_rms_px", "resolved_line_group_count"),
+        ):
+            weighted_sq_sum = 0.0
+            has_sq_stat = False
+            for summary_i in per_dataset_summaries:
+                try:
+                    dataset_rms = float(summary_i.get(rms_key, np.nan))
+                except Exception:
+                    dataset_rms = float("nan")
+                dataset_count = int(summary_i.get(count_key, 0))
+                if dataset_count <= 0 or not np.isfinite(dataset_rms):
+                    continue
+                weighted_sq_sum += (
+                    float(dataset_count) * float(dataset_rms) * float(dataset_rms)
+                )
+                has_sq_stat = True
+            if line_resolved_total > 0 and has_sq_stat:
+                summary[rms_key] = float(
+                    np.sqrt(weighted_sq_sum / float(line_resolved_total))
+                )
+            else:
+                summary[rms_key] = float("nan")
+
+        line_span_sum = 0.0
+        line_span_count = 0
+        for summary_i in per_dataset_summaries:
+            try:
+                dataset_span = float(summary_i.get("line_fit_space_span_deg_mean", np.nan))
+            except Exception:
+                dataset_span = float("nan")
+            dataset_count = int(summary_i.get("resolved_line_group_count", 0))
+            if dataset_count <= 0 or not np.isfinite(dataset_span):
+                continue
+            line_span_sum += float(dataset_count) * float(dataset_span)
+            line_span_count += int(dataset_count)
+        if line_span_count > 0:
+            summary["line_fit_space_span_deg_mean"] = float(
+                line_span_sum / float(line_span_count)
+            )
+        else:
+            summary["line_fit_space_span_deg_mean"] = float("nan")
         return residual_arr, diagnostics, summary
 
     def _evaluate_dynamic_point_matches(
@@ -8862,6 +9817,13 @@ def fit_geometry_parameters(
             "weighted_matching": bool(weighted_matching),
             "missing_pair_penalty_px": float(missing_pair_penalty),
             "missing_pair_penalty_deg": float(missing_pair_penalty_deg),
+            "q_group_line_constraints": bool(q_group_line_constraints_enabled),
+            "q_group_line_angle_weight": float(q_group_line_angle_weight),
+            "q_group_line_offset_weight": float(q_group_line_offset_weight),
+            "q_group_line_missing_penalty_scale": float(
+                q_group_line_missing_penalty_scale
+            ),
+            "hk0_peak_priority_weight": float(hk0_peak_priority_weight),
             "use_measurement_uncertainty": bool(use_measurement_uncertainty),
             "anisotropic_measurement_uncertainty": bool(anisotropic_uncertainty_enabled),
             "full_beam_polish_enabled": bool(full_beam_polish_enabled),
@@ -10897,6 +11859,17 @@ def fit_geometry_parameters(
             local_full = dict(local_item)
             local_full["mosaic_params"] = full_beam_mosaic_params
             local_full["_geometry_central_ray_mode"] = False
+            try:
+                hk0_peak_priority_weight = float(
+                    local_full.get("_hk0_peak_priority_weight", 1.0)
+                )
+            except Exception:
+                hk0_peak_priority_weight = 1.0
+            if (
+                not np.isfinite(hk0_peak_priority_weight)
+                or hk0_peak_priority_weight < 1.0
+            ):
+                hk0_peak_priority_weight = 1.0
             fit_miller = dataset_ctx.subset.miller
             fit_intensities = dataset_ctx.subset.intensities
             mosaic = local_full["mosaic_params"]
@@ -10987,6 +11960,24 @@ def fit_geometry_parameters(
                     custom_sigma_values.append(float(fields.get("measurement_sigma_px", np.nan)))
                 if bool(fields.get("anisotropic_sigma_used", False)):
                     anisotropic_sigma_count += 1
+                priority_fields = _geometry_peak_priority_metadata(
+                    entry,
+                    hk0_peak_priority_weight=float(hk0_peak_priority_weight),
+                )
+                priority_weight = float(priority_fields["priority_weight"])
+                for key in (
+                    "weighted_dx_px",
+                    "weighted_dy_px",
+                    "weighted_radial_residual_px",
+                    "weighted_tangential_residual_px",
+                ):
+                    try:
+                        value = float(fields.get(key, np.nan))
+                    except Exception:
+                        continue
+                    if np.isfinite(value):
+                        fields[key] = float(priority_weight * value)
+                fields.update(priority_fields)
                 return fields
 
             def _add_diag(base_entry: Dict[str, object], payload: Dict[str, object]) -> None:
@@ -11130,8 +12121,15 @@ def fit_geometry_parameters(
                 if not (
                     np.isfinite(measured_point[0]) and np.isfinite(measured_point[1])
                 ):
+                    priority_fields = _geometry_peak_priority_metadata(
+                        entry,
+                        hk0_peak_priority_weight=float(hk0_peak_priority_weight),
+                    )
+                    priority_weight = float(priority_fields["priority_weight"])
                     missing_pair_count_local += 1
-                    residual_components[slot, 0] = float(missing_pair_penalty)
+                    residual_components[slot, 0] = (
+                        float(missing_pair_penalty) * float(priority_weight)
+                    )
                     _add_diag(
                         base_diag,
                         {
@@ -11149,7 +12147,10 @@ def fit_geometry_parameters(
                             "simulated_radius_px": float("nan"),
                             "weighted_missing_penalty_px": float(
                                 missing_pair_penalty
-                            ),
+                            )
+                            * float(priority_weight),
+                            "weight": float(priority_weight),
+                            **priority_fields,
                         },
                     )
                     continue
@@ -11214,6 +12215,7 @@ def fit_geometry_parameters(
                                 "weight": float(
                                     float(distance_weight)
                                     * float(weight_fields.get("sigma_weight", 1.0))
+                                    * float(weight_fields.get("priority_weight", 1.0))
                                 ),
                                 "measured_radius_px": _point_radius_px(
                                     measured_point
@@ -11233,6 +12235,7 @@ def fit_geometry_parameters(
                     distance_weight=1.0,
                 )
                 penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
+                penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
                 residual_components[slot, 0] = (
                     float(missing_pair_penalty) * penalty_weight
                 )

@@ -42,6 +42,130 @@ def _parse_point(value: object) -> tuple[float, float] | None:
     return float(col), float(row)
 
 
+def _normalize_q_group_key(value: object) -> tuple[object, ...] | None:
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, list):
+        return tuple(value)
+    return None
+
+
+def _normalize_hkl_key(value: object) -> tuple[int, int, int] | None:
+    if not isinstance(value, tuple) or len(value) != 3:
+        return None
+    try:
+        return (
+            int(value[0]),
+            int(value[1]),
+            int(value[2]),
+        )
+    except Exception:
+        return None
+
+
+def _line_group_ids_for_entry(entry: dict[str, object]) -> tuple[tuple[object, ...], ...]:
+    group_ids: list[tuple[object, ...]] = []
+    q_group_key = _normalize_q_group_key(entry.get("q_group_key"))
+    if q_group_key is not None:
+        group_ids.append(("q_group_line",) + q_group_key)
+
+    hkl_key = _normalize_hkl_key(entry.get("hkl"))
+    if hkl_key is not None and hkl_key[0] == 0 and hkl_key[1] == 0:
+        source_label = (
+            str(q_group_key[1])
+            if isinstance(q_group_key, tuple) and len(q_group_key) >= 2
+            else "primary"
+        )
+        group_ids.append(("qz_axis_line", str(source_label)))
+    return tuple(group_ids)
+
+
+def _fit_overlay_line_segment(
+    points: Sequence[tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    arr = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if arr.shape[0] < 2:
+        return None
+    finite_mask = np.isfinite(arr).all(axis=1)
+    arr = arr[finite_mask]
+    if arr.shape[0] < 2:
+        return None
+
+    centroid = np.mean(arr, axis=0)
+    centered = arr - centroid
+    if arr.shape[0] == 2:
+        direction = centered[1] - centered[0]
+    else:
+        try:
+            _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        except np.linalg.LinAlgError:
+            return None
+        if vh.size < 2:
+            return None
+        direction = vh[0]
+    direction_norm = float(np.linalg.norm(direction))
+    if not np.isfinite(direction_norm) or direction_norm <= 1.0e-12:
+        return None
+    direction = direction / direction_norm
+    projections = centered @ direction
+    proj_min = float(np.min(projections))
+    proj_max = float(np.max(projections))
+    if not (np.isfinite(proj_min) and np.isfinite(proj_max)):
+        return None
+    if abs(proj_max - proj_min) <= 1.0e-9:
+        return None
+    start = centroid + proj_min * direction
+    end = centroid + proj_max * direction
+    return (
+        (float(start[0]), float(start[1])),
+        (float(end[0]), float(end[1])),
+    )
+
+
+def _draw_initial_q_group_lines(
+    ax: Any,
+    initial_pairs: Sequence[dict[str, object]],
+    *,
+    geometry_pick_artists: list[object],
+) -> None:
+    sim_points_by_group: dict[tuple[object, ...], list[tuple[float, float]]] = {}
+    bg_points_by_group: dict[tuple[object, ...], list[tuple[float, float]]] = {}
+
+    for entry in initial_pairs:
+        if not isinstance(entry, dict):
+            continue
+        group_ids = _line_group_ids_for_entry(entry)
+        if not group_ids:
+            continue
+        sim_display = _parse_point(entry.get("sim_display"))
+        bg_display = _parse_point(entry.get("bg_display"))
+        for group_id in group_ids:
+            if sim_display is not None:
+                sim_points_by_group.setdefault(group_id, []).append(sim_display)
+            if bg_display is not None:
+                bg_points_by_group.setdefault(group_id, []).append(bg_display)
+
+    for grouped_points, color, linestyle in (
+        (sim_points_by_group, "#74b9ff", "--"),
+        (bg_points_by_group, "#fdcb6e", "-."),
+    ):
+        for points in grouped_points.values():
+            segment = _fit_overlay_line_segment(points)
+            if segment is None:
+                continue
+            line, = ax.plot(
+                [float(segment[0][0]), float(segment[1][0])],
+                [float(segment[0][1]), float(segment[1][1])],
+                color=color,
+                linestyle=linestyle,
+                linewidth=1.15,
+                alpha=0.72,
+                zorder=5,
+                solid_capstyle="round",
+            )
+            geometry_pick_artists.append(line)
+
+
 def draw_geometry_fit_overlay(
     ax: Any,
     overlay_records: Sequence[dict[str, object]] | None,
@@ -295,6 +419,11 @@ def draw_initial_geometry_pairs_overlay(
 
     initial_pairs = normalize_initial_geometry_pairs_display(initial_pairs_display)
     clear_geometry_pick_artists(redraw=False)
+    _draw_initial_q_group_lines(
+        ax,
+        initial_pairs,
+        geometry_pick_artists=geometry_pick_artists,
+    )
 
     limit = max(1, int(max_display_markers))
     for idx, entry in enumerate(initial_pairs):

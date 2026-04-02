@@ -41,6 +41,7 @@ class RuntimeBackgroundWorkflow:
     callbacks: object
     controls_runtime: object
     toggle_visibility: Callable[..., Any]
+    switch_background: Callable[..., Any]
 
 
 def _resolve_runtime_value(value_or_factory: object) -> object:
@@ -156,4 +157,5 @@ def build_runtime_background_workflow(
         callbacks=callbacks,
         controls_runtime=controls_runtime,
         toggle_visibility=controls_runtime.toggle_visibility,
+        switch_background=callbacks.switch_background,
     )

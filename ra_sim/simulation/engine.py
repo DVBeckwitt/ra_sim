@@ -41,6 +41,7 @@ def simulate(
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
         collect_hit_tables=request.collect_hit_tables,
+        accumulate_image=request.accumulate_image,
     )
     if request.optics_mode is not None:
         peak_kwargs["optics_mode"] = request.optics_mode
@@ -120,6 +121,7 @@ def simulate_qr_rods(
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
         collect_hit_tables=request.collect_hit_tables,
+        accumulate_image=request.accumulate_image,
     )
     if request.optics_mode is not None:
         rod_kwargs["optics_mode"] = request.optics_mode

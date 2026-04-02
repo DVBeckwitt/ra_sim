@@ -196,6 +196,8 @@ class DisplayControlsViewState:
     simulation_max_slider: Any = None
     scale_factor_slider: Any = None
     scale_factor_entry: Any = None
+    accumulate_intensity_var: Any = None
+    accumulate_intensity_checkbutton: Any = None
     fast_viewer_var: Any = None
     fast_viewer_checkbutton: Any = None
     fast_viewer_status_var: Any = None
@@ -416,6 +418,7 @@ class HklLookupViewState:
 class GeometryOverlayActionsViewState:
     """Widget references and vars for overlay/mosaic action controls."""
 
+    qr_cylinder_display_mode_var: Any = None
     show_qr_cylinder_overlay_var: Any = None
     show_qr_cylinder_overlay_checkbutton: Any = None
     show_geometry_overlays_var: Any = None
@@ -817,6 +820,7 @@ class SimulationRuntimeState:
     last_bg_signature: object = None
     last_sim_signature: object = None
     last_simulation_signature: object = None
+    stored_hit_table_signature: object = None
     stored_max_positions_local: Any = None
     stored_sim_image: np.ndarray | None = None
     stored_peak_table_lattice: Any = None

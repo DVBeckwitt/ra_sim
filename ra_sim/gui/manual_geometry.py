@@ -1992,6 +1992,11 @@ def geometry_manual_session_initial_pairs_display(
             "overlay_match_index": int(pair_idx),
             "hkl": raw_entry.get("hkl", raw_entry.get("label")),
         }
+        raw_group_key = raw_entry.get("q_group_key")
+        if isinstance(raw_group_key, tuple):
+            entry["q_group_key"] = raw_group_key
+        elif isinstance(raw_group_key, list):
+            entry["q_group_key"] = tuple(raw_group_key)
         try:
             sim_col = float(raw_entry.get("sim_col"))
             sim_row = float(raw_entry.get("sim_row"))
@@ -2068,6 +2073,11 @@ def build_geometry_manual_initial_pairs_display(
             "overlay_match_index": int(pair_idx),
             "hkl": entry.get("hkl", entry.get("label")),
         }
+        raw_group_key = entry.get("q_group_key")
+        if isinstance(raw_group_key, tuple):
+            initial_entry["q_group_key"] = raw_group_key
+        elif isinstance(raw_group_key, list):
+            initial_entry["q_group_key"] = tuple(raw_group_key)
         bg_coords = entry_display_coords(entry)
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))

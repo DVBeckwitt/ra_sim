@@ -237,6 +237,13 @@ instrument:
         max_nfev: 80
         restarts: 2
         restart_jitter: 0.15
+        ridge_weight: 1.0
+        point_match_weight: 1.0
+        point_match_f_scale_px: 6.0
+        point_match_weighted_matching: false
+        point_match_missing_pair_penalty_px: 20.0
+        refine_theta: true
+        theta_window_deg: 0.5
         workers: auto
         parallel_mode: auto
         worker_numba_threads: 0

@@ -75,6 +75,7 @@ PANEL_METRIC_COLORS = {
     "radius_gyration_px": "#1f5aa6",
     "anisotropy_ratio": "#9c6644",
 }
+DEFAULT_WORKER_FRACTION = 0.9
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,13 @@ def _positive_int(raw_value: str) -> int:
     if value <= 0:
         raise argparse.ArgumentTypeError("value must be positive")
     return value
+
+
+def _default_worker_count() -> int:
+    """Return floor(90% of available CPU threads), with a minimum of one worker."""
+
+    cpu_count = os.cpu_count() or 1
+    return max(int(math.floor(float(cpu_count) * DEFAULT_WORKER_FRACTION)), 1)
 
 
 def _load_saved_state(path: Path) -> dict[str, object]:
@@ -293,12 +301,16 @@ def _build_sweep_tasks(sweep_specs: list[SweepSpec]) -> list[SweepTask]:
     return tasks
 
 
-def _resolve_worker_count(requested_workers: int, task_count: int) -> int:
+def _resolve_worker_count(requested_workers: int | None, task_count: int) -> int:
     """Clamp the requested process count against the concrete task count."""
 
     if task_count <= 0:
         return 1
-    return max(1, min(int(requested_workers), int(task_count)))
+    if requested_workers is None:
+        requested = _default_worker_count()
+    else:
+        requested = int(requested_workers)
+    return max(1, min(int(requested), int(task_count)))
 
 
 def _numba_threads_per_worker(worker_count: int) -> int:
@@ -852,7 +864,7 @@ def run_landscape_sweeps(
     context: LandscapeContext,
     sweep_specs: list[SweepSpec],
     *,
-    workers: int = 1,
+    workers: int | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, float]]:
     """Run all one-at-a-time geometry sweeps and return recorded rows."""
 
@@ -1098,8 +1110,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workers",
         type=_positive_int,
-        default=1,
-        help="CPU worker processes for independent sweep points (default: 1).",
+        default=_default_worker_count(),
+        help=(
+            "CPU worker processes for independent sweep points "
+            f"(default: floor(0.9 * available cores) = {_default_worker_count()})."
+        ),
     )
     parser.add_argument(
         "--outdir",

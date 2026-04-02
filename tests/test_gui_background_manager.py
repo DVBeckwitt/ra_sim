@@ -164,6 +164,20 @@ def test_background_manager_resolves_background_display_defaults_from_image() ->
     assert defaults.slider_step >= 0.01
 
 
+def test_background_manager_slider_max_uses_true_background_peak() -> None:
+    image = np.concatenate(
+        [
+            np.zeros(100, dtype=float),
+            np.array([1000.0], dtype=float),
+        ]
+    )
+
+    defaults = background_manager.resolve_background_display_defaults(image)
+
+    assert defaults.vmax_default == 1.0
+    assert defaults.slider_max == 1000.0
+
+
 def test_background_manager_applies_background_limits_and_transparency() -> None:
     display_state = state.DisplayControlsState()
     view_state = state.DisplayControlsViewState(
@@ -243,6 +257,35 @@ def test_background_manager_updates_background_slider_defaults() -> None:
     assert background_display.clim == reset
     assert view_state.background_min_slider.cget("to") >= reset[1]
     assert view_state.background_max_slider.cget("from") <= 0.0
+
+
+def test_background_manager_updates_slider_ceiling_to_true_background_peak() -> None:
+    display_state = state.DisplayControlsState(background_limits_user_override=False)
+    view_state = state.DisplayControlsViewState(
+        background_min_var=_DummyVar(0.0),
+        background_max_var=_DummyVar(1.0),
+        background_min_slider=_DummySlider(0.0, 5.0),
+        background_max_slider=_DummySlider(0.0, 5.0),
+    )
+    background_display = _DummyDisplay()
+    image = np.concatenate(
+        [
+            np.zeros(100, dtype=float),
+            np.array([1000.0], dtype=float),
+        ]
+    )
+
+    background_manager.update_background_slider_defaults(
+        display_state,
+        view_state,
+        background_display=background_display,
+        image=image,
+        reset_override=False,
+    )
+
+    assert view_state.background_min_slider.cget("to") == 1000.0
+    assert view_state.background_max_slider.cget("to") == 1000.0
+    assert view_state.background_max_var.get() == 1.0
 
 
 def test_background_manager_load_and_switch_update_state_in_place(tmp_path) -> None:

@@ -875,6 +875,11 @@ def normalize_initial_geometry_pairs_display(
             normalized_entry["sim_caked_display"] = sim_caked_display
         if bg_caked_display is not None:
             normalized_entry["bg_caked_display"] = bg_caked_display
+        raw_group_key = raw_entry.get("q_group_key")
+        if isinstance(raw_group_key, tuple):
+            normalized_entry["q_group_key"] = raw_group_key
+        elif isinstance(raw_group_key, list):
+            normalized_entry["q_group_key"] = tuple(raw_group_key)
         normalized.append(normalized_entry)
 
     return normalized

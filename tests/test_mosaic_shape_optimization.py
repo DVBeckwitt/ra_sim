@@ -68,7 +68,7 @@ def _render_image(
     return image
 
 
-def _make_fake_process_peaks(recorded_theta_values):
+def _make_fake_process_peaks(recorded_theta_values, *, include_hit_tables=False):
     def fake_process_peaks_parallel(
         miller_subset,
         intens_subset,
@@ -116,7 +116,31 @@ def _make_fake_process_peaks(recorded_theta_values):
         )
         buffer.fill(0.0)
         buffer += image
-        hit_tables = [np.empty((0, 7), dtype=np.float64) for _ in range(len(miller_subset))]
+        hit_tables = []
+        for idx, hkl in enumerate(np.asarray(miller_subset, dtype=np.float64)):
+            if include_hit_tables:
+                row, col = _center_for(
+                    tuple(int(round(v)) for v in hkl),
+                    float(theta_initial),
+                )
+                hit_tables.append(
+                    np.array(
+                        [
+                            [
+                                float(intens_subset[idx]),
+                                float(col),
+                                float(row),
+                                0.0,
+                                float(hkl[0]),
+                                float(hkl[1]),
+                                float(hkl[2]),
+                            ]
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+            else:
+                hit_tables.append(np.empty((0, 7), dtype=np.float64))
         miss_tables = [np.empty((0, 3), dtype=np.float64) for _ in range(len(miller_subset))]
         return (
             buffer.copy(),
@@ -170,30 +194,44 @@ def _base_params(image_size, sigma_deg=0.35, gamma_deg=0.25, eta=0.25):
     }
 
 
-def _build_dataset_specs(image_size, theta_values, hkls, intensities, true_shape):
+def _build_dataset_specs(
+    image_size,
+    theta_values,
+    hkls,
+    intensities,
+    true_shape,
+    *,
+    measured_theta_values=None,
+    include_source_indices=False,
+):
     specs = []
     miller = np.asarray(hkls, dtype=np.float64)
     intens_arr = np.asarray(intensities, dtype=np.float64)
+    if measured_theta_values is None:
+        measured_theta_values = theta_values
     for dataset_index, theta_initial in enumerate(theta_values):
+        measured_theta = float(measured_theta_values[dataset_index])
         image = _render_image(
             miller,
             intens_arr,
             image_size,
-            theta_initial=float(theta_initial),
+            theta_initial=float(measured_theta),
             sigma_deg=float(true_shape[0]),
             gamma_deg=float(true_shape[1]),
             eta=float(true_shape[2]),
         )
         measured_peaks = []
-        for hkl in hkls:
-            row, col = _center_for(hkl, theta_initial)
-            measured_peaks.append(
-                {
-                    "hkl": tuple(int(v) for v in hkl),
-                    "x": float(col),
-                    "y": float(row),
-                }
-            )
+        for reflection_index, hkl in enumerate(hkls):
+            row, col = _center_for(hkl, measured_theta)
+            peak = {
+                "hkl": tuple(int(v) for v in hkl),
+                "x": float(col),
+                "y": float(row),
+            }
+            if include_source_indices:
+                peak["source_table_index"] = int(reflection_index)
+                peak["source_row_index"] = 0
+            measured_peaks.append(peak)
         specs.append(
             {
                 "dataset_index": int(dataset_index),
@@ -266,6 +304,85 @@ def test_fit_mosaic_shape_parameters_recovers_shape_parameters_and_uses_dataset_
     assert result.cost_reduction >= 0.20
     assert np.allclose(result.x, np.asarray(true_shape, dtype=np.float64), atol=1.0e-9)
     assert {round(value, 2) for value in recorded_theta_values} >= {3.0, 3.35}
+
+
+def test_fit_mosaic_shape_parameters_refines_dataset_theta_from_point_matches(
+    monkeypatch,
+):
+    image_size = 72
+    hkls = [(1, 1, 0), (0, 0, 1), (2, -1, 0), (1, 1, 1)]
+    intensities = np.array([4.0, 3.0, 2.5, 2.0], dtype=np.float64)
+    miller = np.asarray(hkls, dtype=np.float64)
+    true_shape = (0.82, 0.56, 0.62)
+    cached_theta_values = [2.80, 3.55]
+    true_theta_values = [3.0, 3.35]
+    dataset_specs = _build_dataset_specs(
+        image_size,
+        theta_values=cached_theta_values,
+        measured_theta_values=true_theta_values,
+        hkls=hkls,
+        intensities=intensities,
+        true_shape=true_shape,
+        include_source_indices=True,
+    )
+
+    monkeypatch.setattr(
+        "ra_sim.fitting.optimization.process_peaks_parallel",
+        _make_fake_process_peaks([], include_hit_tables=True),
+    )
+
+    def select_best_lsq(fun, x0, **kwargs):
+        x0 = np.asarray(x0, dtype=np.float64)
+        candidates = [
+            x0,
+            np.array(
+                [x0[0], x0[1], x0[2], true_theta_values[0], true_theta_values[1]],
+                dtype=np.float64,
+            ),
+            np.array(
+                [x0[0], x0[1], x0[2], true_theta_values[0] + 0.15, true_theta_values[1] - 0.20],
+                dtype=np.float64,
+            ),
+        ]
+        scored = []
+        for candidate in candidates:
+            residual = np.asarray(fun(candidate), dtype=np.float64)
+            scored.append((float(np.dot(residual, residual)), candidate, residual))
+        _, best_x, best_fun = min(scored, key=lambda item: item[0])
+        return OptimizeResult(
+            x=np.asarray(best_x, dtype=np.float64),
+            fun=np.asarray(best_fun, dtype=np.float64),
+            success=True,
+            message="grid-search",
+        )
+
+    monkeypatch.setattr("ra_sim.fitting.optimization.least_squares", select_best_lsq)
+
+    result = fit_mosaic_shape_parameters(
+        miller,
+        intensities,
+        image_size,
+        _base_params(image_size),
+        dataset_specs=dataset_specs,
+        max_restarts=0,
+        roi_half_width=8,
+        ridge_weight=0.0,
+        point_match_weight=1.0,
+        refine_theta=True,
+        theta_mode="per_dataset",
+        theta_bounds=(-0.5, 0.5),
+    )
+
+    assert result.success
+    assert result.acceptance_passed is True
+    assert result.theta_refinement_mode == "per_dataset"
+    assert result.refined_theta_values_by_dataset == pytest.approx(
+        {0: true_theta_values[0], 1: true_theta_values[1]}
+    )
+    diag_by_label = {diag["dataset_label"]: diag for diag in result.dataset_diagnostics}
+    assert diag_by_label["bg0"]["matched_pair_count"] == 4
+    assert diag_by_label["bg1"]["matched_pair_count"] == 4
+    assert result.cost_reduction >= 0.20
 
 
 def test_fit_mosaic_shape_parameters_keeps_residual_length_fixed(monkeypatch):

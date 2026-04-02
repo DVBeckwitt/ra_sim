@@ -139,11 +139,19 @@ def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> Non
     assert "simulation_runtime_state.last_caked_extent is None" in source
 
 
-def test_runtime_impl_reuses_detector_image_when_only_hit_table_collection_changes() -> None:
+def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_updates() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "new_sim_image_sig = get_sim_signature(include_hit_tables=False)" in source
-    assert "new_sim_sig = get_sim_signature(include_hit_tables=True)" in source
+    assert "def _cached_hit_tables_reusable(" in source
+    assert "include_mosaic_shape: bool = True" in source
+    assert "if include_mosaic_shape:" in source
+    assert "requested_hit_table_sig = _simulation_signature_base(" in source
+    assert "optics_mode_component=0," in source
+    assert "include_mosaic_shape=False," in source
+    assert "collect_hit_tables_for_job = bool(" in source
+    assert "and not _cached_hit_tables_reusable(" in source
+    assert "\"collected_hit_tables\": bool(job[\"collect_hit_tables\"])," in source
+    assert "if bool(result.get(\"collected_hit_tables\", False)):" in source
     assert "simulation_runtime_state.last_sim_signature = new_sim_image_sig" in source
     assert "need_hit_table_refresh = bool(" in source
     assert "do_update_refresh_hit_tables_in_background" in source
@@ -164,3 +172,54 @@ def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
     assert "if _live_interaction_active():" in source
     assert "qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)" in source
     assert "_clear_deferred_overlays(clear_qr_overlay=False)" in source
+
+
+def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "one_d_analysis_requested = bool(" in source
+    assert "caked_analysis_requested = bool(" in source
+    assert "accumulate_image_requested" in source
+    assert "or one_d_analysis_requested" in source
+    assert "ax.set_title('2D Caked Position Preview')" in source
+    assert "ax.set_title('2D Caked Position Preview (1D paused)')" in source
+    assert "Detector Preview While Caked Position Preview Loads" in source
+
+
+def test_runtime_impl_keeps_1d_updates_gated_on_intensity_accumulation() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "if (\n                one_d_analysis_requested" in source
+
+
+def test_runtime_impl_places_qr_cylinder_mode_in_quick_controls() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '\"key\": \"qr_cylinder_mode\"' in source
+    assert "QR_CYLINDER_DISPLAY_MODE_REPLACE" in source
+    assert 'parent=app_shell_view_state.match_peak_tools_frame' in source
+
+
+def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_controls() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '\"key\": \"fast_viewer\"' in source
+    assert '\"key\": \"log_radial\"' in source
+    assert '\"key\": \"log_azimuth\"' in source
+    assert '\"key\": \"auto_match_scale\"' in source
+    assert "control_type\": \"check\"" in source
+    assert "control_type\": \"button\"" in source
+    assert "parent=None" in source
+    assert 'RA_SIM_FAST_VIEWER", "1"' in source
+    assert "control_locked=True" in source
+    assert "display_controls_view_state.fast_viewer_checkbutton = (" in source
+    assert "display_controls_view_state.simulation_controls_frame" not in source[
+        source.index("def _auto_match_scale_factor_to_radial_peak("):
+        source.index("def _update_chi_square_display(")
+    ]
+
+
+def test_runtime_impl_removes_display_intensity_toggle_from_ui() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "accumulate_intensity_enabled=True" not in source

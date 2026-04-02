@@ -2374,6 +2374,11 @@ def build_geometry_manual_fit_dataset(
             "overlay_match_index": int(pair_idx),
             "hkl": entry.get("hkl", entry.get("label")),
         }
+        raw_group_key = entry.get("q_group_key")
+        if isinstance(raw_group_key, tuple):
+            initial_entry["q_group_key"] = raw_group_key
+        elif isinstance(raw_group_key, list):
+            initial_entry["q_group_key"] = tuple(raw_group_key)
         bg_coords = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
         if bg_coords is not None and len(bg_coords) >= 2:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
@@ -2541,6 +2546,19 @@ def build_geometry_manual_fit_dataset(
             measured_entry["detector_x"] = float(detector_x)
             measured_entry["detector_y"] = float(detector_y)
         measured_entry["fit_source_identity_only"] = True
+    backend_background = manual_dataset_bindings.apply_background_backend_orientation(
+        native_background
+    )
+    if backend_background is None:
+        backend_background = native_background
+    experimental_image_for_fit = manual_dataset_bindings.orient_image_for_fit(
+        backend_background,
+        indexing_mode=orientation_choice["indexing_mode"],
+        k=orientation_choice["k"],
+        flip_x=orientation_choice["flip_x"],
+        flip_y=orientation_choice["flip_y"],
+        flip_order=orientation_choice["flip_order"],
+    )
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)
@@ -2586,6 +2604,7 @@ def build_geometry_manual_fit_dataset(
             "label": label,
             "theta_initial": float(theta_base),
             "measured_peaks": measured_for_fit,
+            "experimental_image": experimental_image_for_fit,
         },
     }
 
@@ -2994,6 +3013,21 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     )
     optimizer_cfg["missing_pair_penalty_deg"] = float(
         optimizer_cfg.get("missing_pair_penalty_deg", 5.0)
+    )
+    optimizer_cfg["q_group_line_constraints"] = bool(
+        optimizer_cfg.get("q_group_line_constraints", True)
+    )
+    optimizer_cfg["q_group_line_angle_weight"] = float(
+        optimizer_cfg.get("q_group_line_angle_weight", 0.6)
+    )
+    optimizer_cfg["q_group_line_offset_weight"] = float(
+        optimizer_cfg.get("q_group_line_offset_weight", 1.0)
+    )
+    optimizer_cfg["q_group_line_missing_penalty_scale"] = float(
+        optimizer_cfg.get("q_group_line_missing_penalty_scale", 0.35)
+    )
+    optimizer_cfg["hk0_peak_priority_weight"] = float(
+        optimizer_cfg.get("hk0_peak_priority_weight", 6.0)
     )
     optimizer_cfg["workers"] = 1
     optimizer_cfg["parallel_mode"] = "off"
@@ -3668,7 +3702,8 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
         lines.append(
             "solver loss={loss} f_scale_px={f_scale} max_nfev={max_nfev} "
             "restarts={restarts} weighted_matching={weighted} "
-            "missing_pair_penalty_px={missing} measurement_uncertainty={unc} "
+            "missing_pair_penalty_px={missing} hk0_peak_priority_weight={hk0} "
+            "measurement_uncertainty={unc} "
             "anisotropic_uncertainty={anisotropic} full_beam_polish={full_beam} "
             "full_beam_radius_px={full_beam_radius}".format(
                 loss=str(solver.get("loss", "<unknown>")),
@@ -3677,6 +3712,7 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
                 restarts=_geometry_fit_debug_value_text(solver.get("restarts", "<unknown>"), float_digits=0),
                 weighted=_geometry_fit_debug_value_text(solver.get("weighted_matching", False), float_digits=0),
                 missing=_geometry_fit_debug_value_text(solver.get("missing_pair_penalty_px", np.nan)),
+                hk0=_geometry_fit_debug_value_text(solver.get("hk0_peak_priority_weight", np.nan)),
                 unc=_geometry_fit_debug_value_text(solver.get("use_measurement_uncertainty", False), float_digits=0),
                 anisotropic=_geometry_fit_debug_value_text(
                     solver.get("anisotropic_measurement_uncertainty", False),

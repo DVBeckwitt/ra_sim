@@ -934,7 +934,7 @@ def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None
             preview_state=preview_state,
             q_group_state=q_group_state,
         )
-        == "Select Qr/Qz Peaks (1 off)"
+        == "Choose Active Qr/Qz Groups (1 off)"
     )
     assert "Included Qr/Qz groups: 1/2" in status
     assert "Selected peaks: 2/5" in status
@@ -2025,7 +2025,7 @@ def test_geometry_q_group_manager_preview_exclusion_open_reports_status(
     assert events[0] == ("open", "root-window", bindings)
     assert events[1] == (
         "status",
-        "Opened the Qr/Qz selector for manual geometry picking. Unchecked rows are unavailable when selecting Qr sets on the image.",
+        "Opened the Qr/Qz group selector. Unchecked rows are skipped during manual picking and geometry fitting.",
     )
 
 

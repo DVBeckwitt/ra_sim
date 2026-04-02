@@ -1612,6 +1612,7 @@ def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
     monkeypatch.setattr(views, "create_slider", _fake_create_slider)
     monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    _FakeCheckbutton.created = []
 
     view_state = state.DisplayControlsViewState()
 
@@ -1648,6 +1649,12 @@ def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
     assert view_state.simulation_max_slider is created[4]["slider"]
     assert view_state.scale_factor_slider is created[5]["slider"]
     assert view_state.scale_factor_entry is created[5]["entry"]
+    assert view_state.accumulate_intensity_var is None
+    assert view_state.accumulate_intensity_checkbutton is None
+    assert view_state.fast_viewer_var.get() is False
+    assert view_state.fast_viewer_checkbutton is None
+    assert view_state.fast_viewer_status_var.get() == ""
+    assert len(_FakeCheckbutton.created) == 0
     assert [item["label"] for item in created] == [
         "Background Min Intensity",
         "Background Max Intensity",
@@ -2295,7 +2302,7 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
     )
 
     assert view_state.geometry_manual_pick_button_var.get() == "Pick Qr Sets on Image"
-    assert view_state.geometry_preview_exclude_button_var.get() == "Select Qr/Qz Peaks"
+    assert view_state.geometry_preview_exclude_button_var.get() == "Choose Active Qr/Qz Groups"
     assert [button.kwargs.get("text") for button in _FakeButton.created[:4]] == [
         "Undo Fit",
         "Redo Fit",
@@ -2428,26 +2435,50 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
     views.create_geometry_overlay_action_controls(
         parent=object(),
         view_state=view_state,
-        on_toggle_qr_cylinder_overlay=lambda: calls.append("toggle-overlay"),
         on_toggle_geometry_overlays=lambda: calls.append("toggle-geometry-overlays"),
         on_fit_mosaic=lambda: calls.append("fit-mosaic"),
     )
 
-    assert view_state.show_qr_cylinder_overlay_var.get() is False
     assert view_state.show_geometry_overlays_var.get() is True
-    assert view_state.show_qr_cylinder_overlay_checkbutton is _FakeCheckbutton.created[0]
-    assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[1]
+    assert view_state.show_qr_cylinder_overlay_checkbutton is None
+    assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit_button_mosaic is _FakeButton.created[0]
-    assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Qr Cylinder Lines"
-    assert _FakeCheckbutton.created[1].kwargs["text"] == "Show Geometry Overlays"
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Geometry Overlays"
     assert [button.kwargs["text"] for button in _FakeButton.created] == [
         "Fit Mosaic Shapes",
     ]
 
     _FakeCheckbutton.created[0].command()
-    _FakeCheckbutton.created[1].command()
     _FakeButton.created[0].command()
-    assert calls == ["toggle-overlay", "toggle-geometry-overlays", "fit-mosaic"]
+    assert calls == ["toggle-geometry-overlays", "fit-mosaic"]
+
+
+def test_geometry_overlay_action_controls_can_build_split_sections(monkeypatch) -> None:
+    _FakeCheckbutton.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    view_state = state.GeometryOverlayActionsViewState()
+
+    views.create_geometry_overlay_action_controls(
+        parent=object(),
+        view_state=view_state,
+        on_toggle_geometry_overlays=lambda: None,
+        on_fit_mosaic=lambda: None,
+        include_fit_button=False,
+    )
+    views.create_geometry_overlay_action_controls(
+        parent=object(),
+        view_state=view_state,
+        on_toggle_geometry_overlays=lambda: None,
+        on_fit_mosaic=lambda: None,
+        include_geometry_toggle=False,
+    )
+
+    assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[0]
+    assert view_state.fit_button_mosaic is _FakeButton.created[0]
 
 
 def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
@@ -3082,3 +3113,55 @@ def test_populate_app_shell_quick_controls_supports_choice_controls(
     assert control["menu"].variable is variable
     assert control["menu"].default == "High"
     assert control["menu"].values == ("Low", "High", "Custom")
+
+
+def test_populate_app_shell_quick_controls_supports_check_and_button_controls(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeCheckbutton.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+
+    events = []
+    log_var = _FakeVar(False)
+    view_state = state.AppShellViewState(
+        quick_controls_body=_FakeFrame(object()),
+    )
+
+    views.populate_app_shell_quick_controls(
+        view_state=view_state,
+        controls=[
+            {
+                "key": "log_radial",
+                "label": "Log radial",
+                "control_type": "check",
+                "variable": log_var,
+                "command": lambda: events.append(("log", log_var.get())),
+            },
+            {
+                "key": "auto_match_scale",
+                "label": "Auto-Match Scale (Radial Peak)",
+                "control_type": "button",
+                "command": lambda: events.append("auto-match"),
+            },
+        ],
+    )
+
+    assert "log_radial" in view_state.quick_control_widgets
+    log_control = view_state.quick_control_widgets["log_radial"]
+    assert isinstance(log_control["checkbutton"], _FakeCheckbutton)
+    assert log_control["variable"] is log_var
+
+    log_var.set(True)
+    log_control["checkbutton"].command()
+
+    assert "auto_match_scale" in view_state.quick_control_widgets
+    button_control = view_state.quick_control_widgets["auto_match_scale"]
+    assert isinstance(button_control["button"], _FakeButton)
+    button_control["button"].command()
+
+    assert events == [("log", True), "auto-match"]

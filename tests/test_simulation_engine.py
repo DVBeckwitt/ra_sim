@@ -78,6 +78,7 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     request = _build_request()
     request.optics_mode = 7
     request.collect_hit_tables = False
+    request.accumulate_image = False
     request.single_sample_indices = np.array([0], dtype=np.int64)
     request.best_sample_indices_out = np.array([-1], dtype=np.int64)
     request.geometry.pixel_size_m = 172e-6
@@ -102,6 +103,7 @@ def test_simulate_forwards_extended_kernel_options() -> None:
 
     assert seen["optics_mode"] == 7
     assert seen["collect_hit_tables"] is False
+    assert seen["accumulate_image"] is False
     assert np.array_equal(seen["single_sample_indices"], request.single_sample_indices)
     assert np.array_equal(seen["best_sample_indices_out"], request.best_sample_indices_out)
     assert seen["pixel_size_m"] == request.geometry.pixel_size_m
@@ -136,6 +138,7 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     request = _build_request()
     request.optics_mode = 5
     request.collect_hit_tables = False
+    request.accumulate_image = False
     request.geometry.pixel_size_m = 90e-6
     request.geometry.sample_width_m = 1.0e-3
     request.geometry.sample_length_m = 3.0e-3
@@ -160,6 +163,7 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
 
     assert seen["optics_mode"] == 5
     assert seen["collect_hit_tables"] is False
+    assert seen["accumulate_image"] is False
     assert seen["pixel_size_m"] == request.geometry.pixel_size_m
     assert seen["sample_width_m"] == request.geometry.sample_width_m
     assert seen["sample_length_m"] == request.geometry.sample_length_m

@@ -1368,7 +1368,7 @@ def build_geometry_preview_exclude_button_label(
 ) -> str:
     """Return the toolbar label for the Qr/Qz preview-selector action."""
 
-    label = "Select Qr/Qz Peaks"
+    label = "Choose Active Qr/Qz Groups"
     excluded_count = geometry_q_group_excluded_count(
         preview_state,
         q_group_state,
@@ -2967,8 +2967,8 @@ def open_runtime_geometry_q_group_preview_exclusion_window(
     _set_status_text(
         bindings_factory().set_status_text,
         (
-            "Opened the Qr/Qz selector for manual geometry picking. "
-            "Unchecked rows are unavailable when selecting Qr sets on the image."
+            "Opened the Qr/Qz group selector. "
+            "Unchecked rows are skipped during manual picking and geometry fitting."
         ),
     )
     return opened

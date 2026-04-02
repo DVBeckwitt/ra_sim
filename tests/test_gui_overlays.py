@@ -108,6 +108,86 @@ def test_draw_initial_geometry_pairs_overlay_links_sim_and_background_points() -
         plt.close(fig)
 
 
+def test_draw_initial_geometry_pairs_overlay_draws_q_group_line_segments() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "sim_display": (10.0, 20.0),
+                    "bg_display": (12.0, 22.0),
+                },
+                {
+                    "hkl": (-1, 1, 0),
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "sim_display": (30.0, 24.0),
+                    "bg_display": (32.0, 26.0),
+                },
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        line_segments = [
+            line
+            for line in ax.lines
+            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+        ]
+
+        assert len(line_segments) == 2
+    finally:
+        plt.close(fig)
+
+
+def test_draw_initial_geometry_pairs_overlay_draws_shared_qz_axis_line_for_hk0() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            [
+                {
+                    "hkl": (0, 0, 2),
+                    "q_group_key": ("q_group", "primary", 0, 2),
+                    "sim_display": (40.0, 50.0),
+                    "bg_display": (42.0, 52.0),
+                },
+                {
+                    "hkl": (0, 0, 4),
+                    "q_group_key": ("q_group", "primary", 0, 4),
+                    "sim_display": (44.0, 60.0),
+                    "bg_display": (46.0, 62.0),
+                },
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        line_segments = [
+            line
+            for line in ax.lines
+            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+        ]
+
+        assert len(line_segments) == 2
+    finally:
+        plt.close(fig)
+
+
 def test_draw_geometry_fit_overlay_projects_native_points_in_caked_view() -> None:
     fig, ax = plt.subplots()
     try:

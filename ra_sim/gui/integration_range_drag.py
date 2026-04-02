@@ -264,6 +264,54 @@ def update_runtime_drag_rectangle(
     _draw_idle(bindings)
 
 
+def _sorted_detector_angle_bounds(
+    tth0: object,
+    phi0: object,
+    tth1: object,
+    phi1: object,
+) -> tuple[float, float, float, float] | None:
+    if None in (tth0, phi0, tth1, phi1):
+        return None
+    tth_min, tth_max = sorted((float(tth0), float(tth1)))
+    phi_min, phi_max = sorted((float(phi0), float(phi1)))
+    return (float(tth_min), float(tth_max), float(phi_min), float(phi_max))
+
+
+def _update_detector_integration_overlay(
+    bindings: IntegrationRangeDragBindings,
+    *,
+    ai: object,
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+) -> bool:
+    bindings.integration_region_rect.set_visible(False)
+    if ai is None:
+        bindings.integration_region_overlay.set_visible(False)
+        return False
+
+    two_theta, phi_vals = bindings.get_detector_angular_maps(ai)
+    if two_theta is None or phi_vals is None:
+        bindings.integration_region_overlay.set_visible(False)
+        return False
+
+    mask = (
+        (two_theta >= float(tth_min))
+        & (two_theta <= float(tth_max))
+        & (phi_vals >= float(phi_min))
+        & (phi_vals <= float(phi_max))
+    )
+    if not np.any(mask):
+        bindings.integration_region_overlay.set_visible(False)
+        return False
+
+    bindings.integration_region_overlay.set_data(mask.astype(float))
+    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+    bindings.integration_region_overlay.set_visible(True)
+    return True
+
+
 def display_to_detector_angles(
     bindings: IntegrationRangeDragBindings,
     col: float,
@@ -293,20 +341,29 @@ def update_runtime_raw_drag_preview(
     bindings: IntegrationRangeDragBindings,
     ai: object,
 ) -> bool:
-    """Refresh the raw-detector drag box for the current drag."""
+    """Refresh the raw-detector drag preview using the true angular footprint."""
 
     drag_state = bindings.drag_state
-    if None in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
+    bounds = _sorted_detector_angle_bounds(
+        drag_state.tth0,
+        drag_state.phi0,
+        drag_state.tth1,
+        drag_state.phi1,
+    )
+    if bounds is None:
         return False
 
-    update_runtime_drag_rectangle(
+    bindings.drag_select_rect.set_visible(False)
+    updated = _update_detector_integration_overlay(
         bindings,
-        drag_state.x0,
-        drag_state.y0,
-        drag_state.x1,
-        drag_state.y1,
+        ai=ai,
+        tth_min=bounds[0],
+        tth_max=bounds[1],
+        phi_min=bounds[2],
+        phi_max=bounds[3],
     )
-    return True
+    _draw_idle(bindings)
+    return bool(updated)
 
 
 def set_runtime_integration_range_from_drag(
@@ -399,29 +456,14 @@ def update_runtime_integration_region_visuals(
         bindings.integration_region_rect.set_visible(True)
         return
 
-    bindings.integration_region_rect.set_visible(False)
-    if ai is None:
-        bindings.integration_region_overlay.set_visible(False)
-        return
-
-    two_theta, phi_vals = bindings.get_detector_angular_maps(ai)
-    if two_theta is None or phi_vals is None:
-        bindings.integration_region_overlay.set_visible(False)
-        return
-
-    mask = (
-        (two_theta >= tth_min)
-        & (two_theta <= tth_max)
-        & (phi_vals >= phi_min)
-        & (phi_vals <= phi_max)
+    _update_detector_integration_overlay(
+        bindings,
+        ai=ai,
+        tth_min=tth_min,
+        tth_max=tth_max,
+        phi_min=phi_min,
+        phi_max=phi_max,
     )
-    if not np.any(mask):
-        bindings.integration_region_overlay.set_visible(False)
-        return
-
-    bindings.integration_region_overlay.set_data(mask.astype(float))
-    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
-    bindings.integration_region_overlay.set_visible(True)
 
 
 def refresh_runtime_integration_region_visuals(
@@ -448,6 +490,7 @@ def reset_runtime_integration_drag(
 
     _clear_drag_coordinates(bindings.drag_state)
     bindings.drag_select_rect.set_visible(False)
+    bindings.integration_region_overlay.set_visible(False)
     if redraw:
         _draw_idle(bindings)
 

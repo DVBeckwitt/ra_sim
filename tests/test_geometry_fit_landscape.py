@@ -53,6 +53,21 @@ def test_build_argument_parser_exposes_workers_flag() -> None:
     assert args.workers == 4
 
 
+def test_default_worker_count_uses_ninety_percent_of_available_cores(monkeypatch) -> None:
+    monkeypatch.setattr(geometry_fit_landscape.os, "cpu_count", lambda: 32)
+
+    assert geometry_fit_landscape._default_worker_count() == 28
+
+
+def test_build_argument_parser_defaults_workers_from_available_cores(monkeypatch) -> None:
+    monkeypatch.setattr(geometry_fit_landscape.os, "cpu_count", lambda: 10)
+
+    parser = geometry_fit_landscape.build_argument_parser()
+    args = parser.parse_args([])
+
+    assert args.workers == 9
+
+
 def test_resolve_geometry_sweep_range_supports_bounds_modes() -> None:
     bounds_cfg = {
         "gamma": {"mode": "relative", "min": -2.0, "max": 2.0},
@@ -148,6 +163,12 @@ def test_resolve_worker_count_clamps_to_task_count() -> None:
     assert geometry_fit_landscape._resolve_worker_count(8, 3) == 3
     assert geometry_fit_landscape._resolve_worker_count(2, 10) == 2
     assert geometry_fit_landscape._resolve_worker_count(4, 0) == 1
+
+
+def test_resolve_worker_count_uses_default_when_unspecified(monkeypatch) -> None:
+    monkeypatch.setattr(geometry_fit_landscape.os, "cpu_count", lambda: 20)
+
+    assert geometry_fit_landscape._resolve_worker_count(None, 100) == 18
 
 
 def test_compute_peak_metrics_returns_finite_defaults_for_empty_input() -> None:

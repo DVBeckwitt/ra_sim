@@ -243,6 +243,7 @@ def test_process_qr_rods_parallel_preserves_qr_intensity(monkeypatch):
     def fake_process_peaks_parallel(miller, intensities, *args, **kwargs):
         captured["miller"] = miller
         captured["intensities"] = intensities
+        captured["kwargs"] = kwargs
         return (None, None, None, None, None, None)
 
     monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_process_peaks_parallel)
@@ -289,7 +290,9 @@ def test_process_qr_rods_parallel_preserves_qr_intensity(monkeypatch):
         unit_x=np.array([1.0, 0.0, 0.0]),
         n_detector=np.array([0.0, 1.0, 0.0]),
         save_flag=0,
+        accumulate_image=False,
     )
 
     assert np.allclose(captured["intensities"], np.array([1.0, 2.0]))
+    assert captured["kwargs"]["accumulate_image"] is False
     assert np.array_equal(result[-1], np.array([3, 3], dtype=np.int32))

@@ -1325,8 +1325,7 @@ def create_app_shell(
 
     analysis_controls_frame = ttk.Frame(analyze_tab, padding=(10, 10, 10, 0))
     analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
-    analysis_views_frame = ttk.LabelFrame(analysis_controls_frame, text="View Options")
-    analysis_views_frame.pack(fill=tk.X, pady=(0, 5))
+    analysis_views_frame = analysis_controls_frame
     analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
     analysis_exports_frame.pack(fill=tk.X)
 
@@ -1779,6 +1778,23 @@ def populate_app_shell_quick_controls(
         control_type = str(control.get("control_type", "slider") or "slider").strip().lower()
         label_text = str(control.get("label", key))
         variable = control.get("variable")
+        if control_type in {"button", "action"}:
+            on_click = control.get("command")
+            if not callable(on_click):
+                continue
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=(0, 8))
+            button = ttk.Button(
+                row,
+                text=str(control.get("button_text", label_text)),
+                command=on_click,
+            )
+            button.pack(fill=tk.X)
+            view_state.quick_control_widgets[key] = {
+                "frame": row,
+                "button": button,
+            }
+            continue
         if variable is None:
             continue
         if control_type in {"choice", "option", "select"}:
@@ -1804,6 +1820,26 @@ def populate_app_shell_quick_controls(
                 "frame": row,
                 "menu": menu,
                 "options": options,
+                "variable": variable,
+            }
+            continue
+        if control_type in {"check", "checkbox", "toggle"}:
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=(0, 8))
+            checkbutton = ttk.Checkbutton(
+                row,
+                text=label_text,
+                variable=variable,
+                command=(
+                    control.get("command")
+                    if callable(control.get("command"))
+                    else None
+                ),
+            )
+            checkbutton.pack(anchor=tk.W)
+            view_state.quick_control_widgets[key] = {
+                "frame": row,
+                "checkbutton": checkbutton,
                 "variable": variable,
             }
             continue
@@ -2518,13 +2554,7 @@ def create_display_controls(
         parent=simulation_controls,
     )
     fast_viewer_var = tk.BooleanVar(value=bool(fast_viewer_enabled))
-    fast_viewer_checkbutton = ttk.Checkbutton(
-        simulation_controls,
-        text="Fast Viewer Window",
-        variable=fast_viewer_var,
-        command=on_toggle_fast_viewer,
-    )
-    fast_viewer_checkbutton.pack(anchor=tk.W, padx=5, pady=(2, 0))
+    fast_viewer_checkbutton = None
     fast_viewer_status_var = tk.StringVar(value=str(fast_viewer_status_text))
     fast_viewer_status_label = ttk.Label(
         simulation_controls,
@@ -3699,7 +3729,7 @@ def create_geometry_tool_action_controls(
     on_toggle_preview_exclude: Callable[[], None],
     on_clear_manual_pairs: Callable[[], None],
     manual_pick_text: str = "Pick Qr Sets on Image",
-    preview_exclude_text: str = "Select Qr/Qz Peaks",
+    preview_exclude_text: str = "Choose Active Qr/Qz Groups",
 ) -> None:
     """Create manual-geometry action controls and store their refs."""
 
@@ -3998,53 +4028,41 @@ def create_geometry_overlay_action_controls(
     *,
     parent: tk.Misc,
     view_state: GeometryOverlayActionsViewState,
-    on_toggle_qr_cylinder_overlay: Callable[[], None],
     on_toggle_geometry_overlays: Callable[[], None],
     on_fit_mosaic: Callable[[], None],
-    show_qr_cylinder_overlay: bool = False,
     show_geometry_overlays: bool = True,
+    include_geometry_toggle: bool = True,
+    include_fit_button: bool = True,
 ) -> None:
     """Create the overlay/mosaic action controls for the fit-actions column."""
 
-    show_qr_cylinder_overlay_var = tk.BooleanVar(value=bool(show_qr_cylinder_overlay))
-    show_qr_cylinder_overlay_checkbutton = ttk.Checkbutton(
-        parent,
-        text="Show Qr Cylinder Lines",
-        variable=show_qr_cylinder_overlay_var,
-        command=on_toggle_qr_cylinder_overlay,
-    )
-    show_qr_cylinder_overlay_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
+    if include_geometry_toggle:
+        show_geometry_overlays_var = tk.BooleanVar(value=bool(show_geometry_overlays))
+        show_geometry_overlays_checkbutton = ttk.Checkbutton(
+            parent,
+            text="Show Geometry Overlays",
+            variable=show_geometry_overlays_var,
+            command=on_toggle_geometry_overlays,
+        )
+        show_geometry_overlays_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
+        view_state.show_geometry_overlays_var = show_geometry_overlays_var
+        view_state.show_geometry_overlays_checkbutton = (
+            show_geometry_overlays_checkbutton
+        )
 
-    show_geometry_overlays_var = tk.BooleanVar(value=bool(show_geometry_overlays))
-    show_geometry_overlays_checkbutton = ttk.Checkbutton(
-        parent,
-        text="Show Geometry Overlays",
-        variable=show_geometry_overlays_var,
-        command=on_toggle_geometry_overlays,
-    )
-    show_geometry_overlays_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
-
-    fit_button_mosaic = ttk.Button(
-        parent,
-        text="Fit Mosaic Shapes",
-        command=on_fit_mosaic,
-    )
-    fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
-
-    view_state.show_qr_cylinder_overlay_var = show_qr_cylinder_overlay_var
-    view_state.show_qr_cylinder_overlay_checkbutton = (
-        show_qr_cylinder_overlay_checkbutton
-    )
-    view_state.show_geometry_overlays_var = show_geometry_overlays_var
-    view_state.show_geometry_overlays_checkbutton = (
-        show_geometry_overlays_checkbutton
-    )
-    view_state.fit_button_mosaic = fit_button_mosaic
+    if include_fit_button:
+        fit_button_mosaic = ttk.Button(
+            parent,
+            text="Fit Mosaic Shapes",
+            command=on_fit_mosaic,
+        )
+        fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
+        view_state.fit_button_mosaic = fit_button_mosaic
 
 
 def create_analysis_view_controls(
     *,
-    parent: tk.Misc,
+    parent: tk.Misc | None,
     view_state: AnalysisViewControlsViewState,
     on_toggle_1d_plots: Callable[[], None],
     on_toggle_caked_2d: Callable[[], None],
@@ -4061,22 +4079,26 @@ def create_analysis_view_controls(
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
 
     log_radial_var = tk.BooleanVar(value=bool(log_radial))
-    check_log_radial = ttk.Checkbutton(
-        parent,
-        text="Log Radial",
-        variable=log_radial_var,
-        command=on_toggle_log_radial,
-    )
-    check_log_radial.pack(side=tk.TOP, padx=5, pady=2)
+    check_log_radial = None
+    if parent is not None:
+        check_log_radial = ttk.Checkbutton(
+            parent,
+            text="Log Radial",
+            variable=log_radial_var,
+            command=on_toggle_log_radial,
+        )
+        check_log_radial.pack(side=tk.TOP, padx=5, pady=2)
 
     log_azimuth_var = tk.BooleanVar(value=bool(log_azimuth))
-    check_log_azimuth = ttk.Checkbutton(
-        parent,
-        text="Log Azimuth",
-        variable=log_azimuth_var,
-        command=on_toggle_log_azimuth,
-    )
-    check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
+    check_log_azimuth = None
+    if parent is not None:
+        check_log_azimuth = ttk.Checkbutton(
+            parent,
+            text="Log Azimuth",
+            variable=log_azimuth_var,
+            command=on_toggle_log_azimuth,
+        )
+        check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
 
     view_state.show_1d_var = show_1d_var
     view_state.check_1d = None

@@ -30,6 +30,7 @@ class RuntimeFastViewerWorkflow:
     refresh_runtime_mode: Callable[..., bool]
     request_main_canvas_redraw: Callable[..., None]
     request_overlay_canvas_redraw: Callable[..., None]
+    reset_view: Callable[[], None]
     refresh_status_text: Callable[[], None]
     toggle: Callable[[], None]
     shutdown: Callable[[], None]
@@ -76,6 +77,7 @@ def build_runtime_fast_viewer_workflow(
     ),
     draw_interval_s: float = 0.08,
     requested_enabled: bool = False,
+    control_locked: bool = False,
 ) -> RuntimeFastViewerWorkflow:
     """Build the fast-viewer runtime controller with late-bound dependencies."""
 
@@ -92,6 +94,7 @@ def build_runtime_fast_viewer_workflow(
 
     fast_image_viewer = None
     fast_canvas_proxy = None
+    fast_surface_mode = None
     fast_requested = bool(requested_enabled)
     fast_suspend_reason = None
     fast_unavailable_reason = None
@@ -122,6 +125,7 @@ def build_runtime_fast_viewer_workflow(
         checkbutton = getattr(view_state, "fast_viewer_checkbutton", None)
         if checkbutton is None:
             return
+        enabled = bool(enabled) and not bool(control_locked)
         try:
             state = getattr(checkbutton, "state", None)
             if callable(state):
@@ -138,11 +142,26 @@ def build_runtime_fast_viewer_workflow(
             except Exception:
                 pass
 
-    def _show_placeholder() -> None:
+    def _hide_matplotlib_canvas() -> None:
         try:
             matplotlib_canvas_widget.pack_forget()
         except Exception:
             pass
+
+    def _show_matplotlib_canvas() -> None:
+        _hide_placeholder()
+        try:
+            if str(matplotlib_canvas_widget.winfo_manager()) != "pack":
+                matplotlib_canvas_widget.pack(
+                    side=tk_module.TOP,
+                    fill=tk_module.BOTH,
+                    expand=True,
+                )
+        except Exception:
+            pass
+
+    def _show_placeholder() -> None:
+        _hide_matplotlib_canvas()
         try:
             if str(placeholder_label.winfo_manager()) != "pack":
                 placeholder_label.pack(
@@ -153,18 +172,25 @@ def build_runtime_fast_viewer_workflow(
         except Exception:
             pass
 
+    def _show_embedded_fast_viewer() -> None:
+        _hide_placeholder()
+        try:
+            matplotlib_canvas_widget.pack_forget()
+        except Exception:
+            pass
+        viewer = fast_image_viewer
+        if viewer is None:
+            return
+        try:
+            resize = getattr(viewer, "resize_to_tk_host", None)
+            if callable(resize):
+                resize(canvas_frame)
+        except Exception:
+            pass
+
     def _hide_placeholder() -> None:
         try:
             placeholder_label.pack_forget()
-        except Exception:
-            pass
-        try:
-            if str(matplotlib_canvas_widget.winfo_manager()) != "pack":
-                matplotlib_canvas_widget.pack(
-                    side=tk_module.TOP,
-                    fill=tk_module.BOTH,
-                    expand=True,
-                )
         except Exception:
             pass
 
@@ -181,7 +207,7 @@ def build_runtime_fast_viewer_workflow(
         bind_canvas_interactions(canvas=target_canvas, callbacks=callbacks)
         bound_canvas_ids.add(target_id)
 
-    def _sync_from_matplotlib() -> None:
+    def _sync_from_matplotlib(*, force_view_range: bool = False) -> None:
         proxy = fast_canvas_proxy
         if proxy is None:
             return
@@ -192,6 +218,7 @@ def build_runtime_fast_viewer_workflow(
                 background_artist=background_artist,
                 overlay_artist=overlay_artist,
                 marker_artist=_marker_artist(),
+                force_view_range=bool(force_view_range),
             )
         except Exception:
             pass
@@ -210,7 +237,12 @@ def build_runtime_fast_viewer_workflow(
 
         if _active():
             _set_fast_viewer_control_enabled(True)
-            _set_status_text("Fast viewer active. Embedded canvas paused.")
+            if fast_surface_mode == "embedded":
+                _set_status_text(
+                    "Fast viewer active in plot area. Matplotlib canvas paused."
+                )
+            else:
+                _set_status_text("Fast viewer active in separate window.")
             return
         if isinstance(fast_unavailable_reason, str):
             _set_fast_viewer_control_enabled(False)
@@ -238,7 +270,7 @@ def build_runtime_fast_viewer_workflow(
         if bool(fast_requested):
             _set_status_text("Fast viewer requested.")
             return
-        _set_status_text("Open in a separate window for faster image interaction.")
+        _set_status_text("Replace the plot area with a faster viewer.")
 
     def _set_requested_enabled(enabled: bool) -> None:
         nonlocal fast_requested
@@ -290,18 +322,61 @@ def build_runtime_fast_viewer_workflow(
             return "geometry overlays are visible"
         return None
 
+    def _embed_fast_viewer(viewer) -> bool:
+        mount = getattr(viewer, "mount_into_tk", None)
+        if not callable(mount):
+            return False
+        try:
+            if not bool(mount(canvas_frame)):
+                return False
+        except Exception:
+            return False
+        _show_embedded_fast_viewer()
+        return True
+
+    def _resize_embedded_fast_viewer() -> None:
+        if fast_surface_mode != "embedded":
+            return
+        viewer = fast_image_viewer
+        if viewer is None:
+            return
+        try:
+            resize = getattr(viewer, "resize_to_tk_host", None)
+            if callable(resize):
+                resize(canvas_frame)
+        except Exception:
+            pass
+
+    binder = getattr(canvas_frame, "bind", None)
+    if callable(binder):
+        try:
+            binder(
+                "<Configure>",
+                lambda _event=None: _resize_embedded_fast_viewer(),
+                add="+",
+            )
+        except Exception:
+            pass
+
     def _enable(*, announce: bool = True) -> bool:
-        nonlocal fast_image_viewer, fast_canvas_proxy, fast_unavailable_reason
+        nonlocal fast_canvas_proxy, fast_image_viewer, fast_surface_mode
+        nonlocal fast_unavailable_reason
 
         if _active():
             set_canvas(fast_canvas_proxy)
-            _show_placeholder()
+            if fast_surface_mode == "embedded":
+                _show_embedded_fast_viewer()
+            else:
+                _show_placeholder()
             _ensure_canvas_interaction_bindings(fast_canvas_proxy)
             _sync_from_matplotlib()
             _refresh_status_text()
             return True
 
-        viewer = fast_plot_viewer_module.FastPlotViewer(title="RA-SIM Fast Viewer")
+        viewer = fast_plot_viewer_module.FastPlotViewer(
+            title="RA-SIM Fast Viewer",
+            show_window=False,
+        )
         if not bool(getattr(viewer, "available", False)):
             error_text = str(getattr(viewer, "error_message", "Unavailable"))
             fast_unavailable_reason = error_text
@@ -321,27 +396,41 @@ def build_runtime_fast_viewer_workflow(
         fast_image_viewer = viewer
         fast_canvas_proxy = proxy
         fast_unavailable_reason = None
+        fast_surface_mode = "embedded" if _embed_fast_viewer(viewer) else "window"
+        if fast_surface_mode == "embedded":
+            _show_embedded_fast_viewer()
+        else:
+            try:
+                show_window = getattr(viewer, "show_window", None)
+                if callable(show_window):
+                    show_window()
+            except Exception:
+                pass
+            _show_placeholder()
         set_canvas(proxy)
-        _show_placeholder()
         _ensure_canvas_interaction_bindings(proxy)
         _sync_from_matplotlib()
         proxy.process_fast_events()
         _refresh_status_text()
         if announce and callable(set_progress_text):
-            set_progress_text(
-                "Fast viewer enabled. Using external primary image renderer."
-            )
+            if fast_surface_mode == "embedded":
+                set_progress_text("Fast viewer enabled in plot area.")
+            else:
+                set_progress_text(
+                    "Fast viewer enabled. Using external primary image renderer."
+                )
         _refresh_run_status_bar()
         return True
 
     def _disable(*, announce: bool = True) -> None:
-        nonlocal fast_image_viewer, fast_canvas_proxy
+        nonlocal fast_canvas_proxy, fast_image_viewer, fast_surface_mode
 
         viewer = fast_image_viewer
         fast_image_viewer = None
         fast_canvas_proxy = None
+        fast_surface_mode = None
         set_canvas(matplotlib_canvas)
-        _hide_placeholder()
+        _show_matplotlib_canvas()
         matplotlib_canvas.draw()
         if viewer is not None:
             try:
@@ -374,7 +463,7 @@ def build_runtime_fast_viewer_workflow(
         if _active():
             _disable(announce=False)
         else:
-            _hide_placeholder()
+            _show_matplotlib_canvas()
 
         _refresh_status_text()
         _refresh_run_status_bar()
@@ -409,6 +498,20 @@ def build_runtime_fast_viewer_workflow(
             force_matplotlib=bool(force and not _active())
         )
 
+    def _reset_view() -> None:
+        _refresh_runtime_mode(announce=False)
+        if not _active():
+            try:
+                matplotlib_canvas.draw_idle()
+            except Exception:
+                pass
+            return
+        _sync_from_matplotlib(force_view_range=True)
+        try:
+            fast_canvas_proxy.process_fast_events()
+        except Exception:
+            pass
+
     def _toggle() -> None:
         toggle_var = _resolve_runtime_value(fast_toggle_var_factory)
         enabled = bool(toggle_var.get()) if toggle_var is not None else False
@@ -416,13 +519,14 @@ def build_runtime_fast_viewer_workflow(
         _refresh_runtime_mode(announce=True)
 
     def _shutdown() -> None:
-        nonlocal fast_image_viewer, fast_canvas_proxy
+        nonlocal fast_canvas_proxy, fast_image_viewer, fast_surface_mode
 
         viewer = fast_image_viewer
         fast_image_viewer = None
         fast_canvas_proxy = None
+        fast_surface_mode = None
         set_canvas(matplotlib_canvas)
-        _hide_placeholder()
+        _show_matplotlib_canvas()
         if viewer is not None:
             try:
                 viewer.close()
@@ -437,6 +541,7 @@ def build_runtime_fast_viewer_workflow(
         refresh_runtime_mode=_refresh_runtime_mode,
         request_main_canvas_redraw=_request_main_canvas_redraw,
         request_overlay_canvas_redraw=_request_overlay_canvas_redraw,
+        reset_view=_reset_view,
         refresh_status_text=_refresh_status_text,
         toggle=_toggle,
         shutdown=_shutdown,

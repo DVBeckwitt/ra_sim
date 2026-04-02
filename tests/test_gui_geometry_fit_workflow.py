@@ -523,6 +523,7 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "fit_source_identity_only": True,
                 }
             ],
+            "experimental_image": "fit-image",
         }
     ]
     assert prepared.max_display_markers == 90
@@ -634,6 +635,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         {
             "overlay_match_index": 0,
             "hkl": (1, 1, 0),
+            "q_group_key": ("q", 1),
             "bg_display": (50.0, 60.0),
             "sim_display": (9.0, 8.0),
             "bg_native": (30.0, 40.0),
@@ -650,6 +652,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "label": "bg0.osc",
         "theta_initial": 1.5,
         "measured_peaks": measured_for_fit,
+        "experimental_image": "fit-image",
     }
     assert dataset["measured_for_fit"] == [
         {
@@ -667,6 +670,17 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert prefer_cache is False
     assert calls["unrotate"][1:] == ((6, 7), 3)
     assert calls["display_to_native"] == (9.0, 8.0, (100, 100))
+    assert calls["backend_image"] is native_background
+    assert calls["orient_image"] == (
+        native_background,
+        {
+            "indexing_mode": "yx",
+            "k": 1,
+            "flip_x": False,
+            "flip_y": True,
+            "flip_order": "xy",
+        },
+    )
     assert calls["select_orientation"] == (
         [(1.0, 2.0)],
         [(30.0, 40.0)],
@@ -1984,6 +1998,11 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert changed["solver"]["manual_point_fit_mode"] is True
     assert changed["solver"]["missing_pair_penalty_px"] == 20.0
     assert changed["solver"]["missing_pair_penalty_deg"] == 7.5
+    assert changed["solver"]["q_group_line_constraints"] is True
+    assert changed["solver"]["q_group_line_angle_weight"] == 0.6
+    assert changed["solver"]["q_group_line_offset_weight"] == 1.0
+    assert changed["solver"]["q_group_line_missing_penalty_scale"] == 0.35
+    assert changed["solver"]["hk0_peak_priority_weight"] == 6.0
     assert changed["solver"]["workers"] == 1
     assert changed["solver"]["parallel_mode"] == "off"
     assert changed["solver"]["worker_numba_threads"] == 1

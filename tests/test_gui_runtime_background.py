@@ -95,7 +95,10 @@ def test_build_runtime_background_theta_workflow_exposes_bootstrap_callbacks() -
 
 def test_build_runtime_background_workflow_composes_runtime_and_controls() -> None:
     calls: list[tuple[str, object]] = []
-    runtime_callbacks = SimpleNamespace(refresh_status=lambda: "status")
+    runtime_callbacks = SimpleNamespace(
+        refresh_status=lambda: "status",
+        switch_background=lambda: "switched",
+    )
     runtime_obj = SimpleNamespace(
         bindings_factory="background-bindings",
         callbacks=runtime_callbacks,
@@ -131,6 +134,7 @@ def test_build_runtime_background_workflow_composes_runtime_and_controls() -> No
     assert workflow.callbacks is runtime_callbacks
     assert workflow.controls_runtime is controls_runtime
     assert workflow.toggle_visibility() is True
+    assert workflow.switch_background() == "switched"
     assert calls == [
         (
             "background",

@@ -6,7 +6,9 @@ done lazily at runtime.
 
 from __future__ import annotations
 
+import sys
 import time
+from dataclasses import dataclass
 from typing import Callable
 from types import SimpleNamespace
 
@@ -26,6 +28,31 @@ def _qt_mouse_button_to_mpl(value: object) -> int | None:
     if raw == 4:
         return 2
     return None
+
+
+def _qt_button_mask_matches(button: object, target: object) -> bool:
+    try:
+        return bool(int(button) & int(target))
+    except Exception:
+        return button == target
+
+
+def _should_consume_fast_viewer_viewport_event(
+    event_type: object,
+    *,
+    button: object,
+    buttons: object,
+    left_button: object,
+) -> bool:
+    try:
+        normalized_type = int(event_type)
+    except Exception:
+        return False
+    if normalized_type in {2, 3, 4}:
+        return _qt_button_mask_matches(button, left_button)
+    if normalized_type == 5:
+        return _qt_button_mask_matches(buttons, left_button)
+    return False
 
 
 def _build_turbo_lut(zero_white: bool) -> np.ndarray:
@@ -58,15 +85,306 @@ def _to_2d_float32(array_like) -> np.ndarray | None:
     return np.ascontiguousarray(arr.astype(np.float32, copy=False))
 
 
+@dataclass(frozen=True)
+class _RectangleOverlaySpec:
+    x: float
+    y: float
+    width: float
+    height: float
+    edge_rgba: tuple[int, int, int, int]
+    linewidth: float
+    linestyle: object
+    zorder: float
+
+
+@dataclass(frozen=True)
+class _MarkerOverlaySpec:
+    x_values: tuple[float, ...]
+    y_values: tuple[float, ...]
+    symbol: str
+    size: float
+    edge_rgba: tuple[int, int, int, int]
+    face_rgba: tuple[int, int, int, int]
+    pen_width: float
+    zorder: float
+
+
+def _to_rgba_uint8(color: object) -> tuple[int, int, int, int]:
+    try:
+        import matplotlib.colors as mcolors
+
+        rgba = mcolors.to_rgba(color)
+        return tuple(int(round(float(value) * 255.0)) for value in rgba)
+    except Exception:
+        pass
+
+    try:
+        values = np.asarray(color, dtype=float).reshape(-1)
+    except Exception:
+        return (255, 255, 255, 255)
+
+    if values.size == 0:
+        return (255, 255, 255, 255)
+    if values.size == 1:
+        values = np.repeat(values[:1], 4)
+    elif values.size == 2:
+        values = np.array([values[0], values[0], values[0], values[1]], dtype=float)
+    elif values.size == 3:
+        values = np.concatenate([values[:3], [1.0]])
+    else:
+        values = values[:4]
+
+    if np.nanmax(np.abs(values)) <= 1.0:
+        values = values * 255.0
+    values = np.clip(
+        np.nan_to_num(values, nan=0.0, posinf=255.0, neginf=0.0),
+        0.0,
+        255.0,
+    )
+    return tuple(int(round(float(value))) for value in values)
+
+
+def _extract_visible_rectangle_specs(ax) -> tuple[_RectangleOverlaySpec, ...]:
+    specs: list[_RectangleOverlaySpec] = []
+    for patch in tuple(getattr(ax, "patches", ()) or ()):
+        visible_getter = getattr(patch, "get_visible", None)
+        if callable(visible_getter) and not bool(visible_getter()):
+            continue
+        if not all(
+            callable(getattr(patch, attr_name, None))
+            for attr_name in (
+                "get_xy",
+                "get_width",
+                "get_height",
+                "get_edgecolor",
+                "get_linewidth",
+                "get_linestyle",
+            )
+        ):
+            continue
+        try:
+            x0, y0 = patch.get_xy()
+            width = float(patch.get_width())
+            height = float(patch.get_height())
+        except Exception:
+            continue
+        if not all(np.isfinite(value) for value in (x0, y0, width, height)):
+            continue
+
+        x1 = float(x0) + width
+        y1 = float(y0) + height
+        x_min, x_max = sorted((float(x0), float(x1)))
+        y_min, y_max = sorted((float(y0), float(y1)))
+        edge_rgba = _to_rgba_uint8(patch.get_edgecolor())
+        if edge_rgba[3] <= 0:
+            continue
+
+        try:
+            linewidth = max(float(patch.get_linewidth()), 0.5)
+        except Exception:
+            linewidth = 1.0
+        try:
+            zorder = float(patch.get_zorder())
+        except Exception:
+            zorder = 6.0
+
+        specs.append(
+            _RectangleOverlaySpec(
+                x=x_min,
+                y=y_min,
+                width=x_max - x_min,
+                height=y_max - y_min,
+                edge_rgba=edge_rgba,
+                linewidth=linewidth,
+                linestyle=patch.get_linestyle(),
+                zorder=zorder,
+            )
+        )
+
+    specs.sort(key=lambda spec: spec.zorder)
+    return tuple(specs)
+
+
+def _iter_artist_collection(artist_or_artists: object) -> tuple[object, ...]:
+    if artist_or_artists is None:
+        return ()
+    if isinstance(artist_or_artists, (list, tuple, set, frozenset)):
+        return tuple(item for item in artist_or_artists if item is not None)
+    return (artist_or_artists,)
+
+
+def _marker_symbol_for_pg(marker: object) -> str | None:
+    normalized = str(marker or "").strip().lower()
+    if normalized in {"", "none", "null", " ", "nan"}:
+        return None
+    symbol_map = {
+        "o": "o",
+        "s": "s",
+        "square": "s",
+        "d": "d",
+        "diamond": "d",
+        "+": "+",
+        "plus": "+",
+        "x": "x",
+        "^": "t",
+        "triangle_up": "t",
+        "triangle-up": "t",
+        "t": "t",
+        "*": "star",
+        "star": "star",
+        "p": "p",
+        "pentagon": "p",
+        "h": "h",
+        "hexagon": "h",
+    }
+    return symbol_map.get(normalized, "o")
+
+
+def _extract_visible_marker_specs(marker_artist) -> tuple[_MarkerOverlaySpec, ...]:
+    specs: list[_MarkerOverlaySpec] = []
+    for artist in _iter_artist_collection(marker_artist):
+        visible_getter = getattr(artist, "get_visible", None)
+        if callable(visible_getter) and not bool(visible_getter()):
+            continue
+        if not all(
+            callable(getattr(artist, attr_name, None))
+            for attr_name in (
+                "get_xdata",
+                "get_ydata",
+                "get_marker",
+            )
+        ):
+            continue
+        symbol = _marker_symbol_for_pg(artist.get_marker())
+        if symbol is None:
+            continue
+
+        try:
+            x_raw = np.asarray(artist.get_xdata(), dtype=float).reshape(-1)
+            y_raw = np.asarray(artist.get_ydata(), dtype=float).reshape(-1)
+        except Exception:
+            continue
+        if x_raw.size == 0 or y_raw.size == 0:
+            continue
+        point_count = min(int(x_raw.size), int(y_raw.size))
+        if point_count <= 0:
+            continue
+        x_vals = x_raw[:point_count]
+        y_vals = y_raw[:point_count]
+        finite_mask = np.isfinite(x_vals) & np.isfinite(y_vals)
+        if not np.any(finite_mask):
+            continue
+
+        markeredgecolor_getter = getattr(artist, "get_markeredgecolor", None)
+        markerfacecolor_getter = getattr(artist, "get_markerfacecolor", None)
+        color_getter = getattr(artist, "get_color", None)
+        markeredgewidth_getter = getattr(artist, "get_markeredgewidth", None)
+        linewidth_getter = getattr(artist, "get_linewidth", None)
+        markersize_getter = getattr(artist, "get_markersize", None)
+        zorder_getter = getattr(artist, "get_zorder", None)
+
+        edge_rgba = _to_rgba_uint8(
+            markeredgecolor_getter() if callable(markeredgecolor_getter) else None
+        )
+        if edge_rgba[3] <= 0 and callable(color_getter):
+            edge_rgba = _to_rgba_uint8(color_getter())
+        face_rgba = _to_rgba_uint8(
+            markerfacecolor_getter() if callable(markerfacecolor_getter) else None
+        )
+        if face_rgba[3] <= 0 and edge_rgba[3] <= 0:
+            continue
+
+        try:
+            pen_width = float(
+                markeredgewidth_getter()
+                if callable(markeredgewidth_getter)
+                else linewidth_getter()
+            )
+        except Exception:
+            pen_width = 1.0
+        try:
+            size = float(markersize_getter()) if callable(markersize_getter) else 8.0
+        except Exception:
+            size = 8.0
+        try:
+            zorder = float(zorder_getter()) if callable(zorder_getter) else 10.0
+        except Exception:
+            zorder = 10.0
+
+        specs.append(
+            _MarkerOverlaySpec(
+                x_values=tuple(float(value) for value in x_vals[finite_mask]),
+                y_values=tuple(float(value) for value in y_vals[finite_mask]),
+                symbol=str(symbol),
+                size=max(float(size), 1.0),
+                edge_rgba=edge_rgba,
+                face_rgba=face_rgba,
+                pen_width=max(float(pen_width), 0.5),
+                zorder=zorder,
+            )
+        )
+
+    specs.sort(key=lambda spec: spec.zorder)
+    return tuple(specs)
+
+
+def _normalize_view_range(
+    x0: object,
+    x1: object,
+    y0: object,
+    y1: object,
+) -> tuple[float, float, float, float] | None:
+    try:
+        normalized = tuple(float(value) for value in (x0, x1, y0, y1))
+    except Exception:
+        return None
+    if not all(np.isfinite(value) for value in normalized):
+        return None
+    return normalized
+
+
+def _view_ranges_match(
+    left: tuple[float, float, float, float] | None,
+    right: tuple[float, float, float, float] | None,
+    *,
+    atol: float = 1e-6,
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    return all(abs(float(a) - float(b)) <= float(atol) for a, b in zip(left, right))
+
+
+def _should_apply_matplotlib_view_range(
+    *,
+    current_range: tuple[float, float, float, float] | None,
+    last_synced_range: tuple[float, float, float, float] | None,
+    target_range: tuple[float, float, float, float] | None,
+) -> bool:
+    if target_range is None:
+        return False
+    if last_synced_range is None:
+        return True
+    if not _view_ranges_match(target_range, last_synced_range):
+        return True
+    return _view_ranges_match(current_range, last_synced_range)
+
+
 class FastPlotViewer:
     """High-performance 2D viewer powered by PyQtGraph."""
 
-    def __init__(self, *, title: str = "RA-SIM Fast Viewer", use_opengl: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        title: str = "RA-SIM Fast Viewer",
+        use_opengl: bool = True,
+        show_window: bool = True,
+    ) -> None:
         self.available = False
         self.error_message: str | None = None
 
         self._pg = None
         self._QtGui = None
+        self._QtCore = None
         self._app = None
         self._window = None
         self._plot_widget = None
@@ -74,8 +392,17 @@ class FastPlotViewer:
         self._background_item = None
         self._simulation_item = None
         self._overlay_item = None
-        self._marker_item = None
+        self._marker_items: list[object] = []
+        self._rectangle_items: list[object] = []
+        self._last_synced_view_range: tuple[float, float, float, float] | None = None
         self._mouse_event_callback: Callable[..., None] | None = None
+        self._embedded_tk_host = None
+        self._embedded_parent_hwnd: int | None = None
+        self._native_hwnd: int | None = None
+        if not bool(show_window):
+            # Embedded Qt child windows are materially less stable with
+            # OpenGL-backed viewports on some Windows driver stacks.
+            use_opengl = False
 
         try:
             import pyqtgraph as pg
@@ -98,20 +425,26 @@ class FastPlotViewer:
             app = QtWidgets.QApplication([])
         self._app = app
 
-        self._window = QtWidgets.QMainWindow()
+        self._window = QtWidgets.QWidget()
         self._window.setWindowTitle(title)
         self._window.resize(1050, 850)
+        layout = QtWidgets.QVBoxLayout(self._window)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        self._plot_widget = pg.PlotWidget(background="w")
+        self._plot_item = pg.PlotItem(viewBox=self._new_view_box())
+        self._plot_widget = pg.PlotWidget(
+            background="w",
+            plotItem=self._plot_item,
+        )
         self._plot_widget.setMouseEnabled(x=True, y=True)
         self._plot_widget.showGrid(x=True, y=True, alpha=0.2)
         self._plot_widget.getPlotItem().getViewBox().setAspectLocked(False)
         self._plot_widget.setMouseTracking(True)
-        self._window.setCentralWidget(self._plot_widget)
+        layout.addWidget(self._plot_widget)
         self._viewport_event_filter = self._make_viewport_event_filter()
         self._plot_widget.viewport().installEventFilter(self._viewport_event_filter)
 
-        self._plot_item = self._plot_widget.getPlotItem()
         self._plot_item.setLabel("bottom", "X (pixels)")
         self._plot_item.setLabel("left", "Y (pixels)")
         self._plot_item.setTitle("Simulated Diffraction Pattern")
@@ -128,15 +461,6 @@ class FastPlotViewer:
         self._plot_item.addItem(self._simulation_item)
         self._plot_item.addItem(self._overlay_item)
 
-        self._marker_item = pg.ScatterPlotItem(
-            size=12,
-            pen=pg.mkPen((255, 255, 0, 255), width=2),
-            brush=pg.mkBrush(0, 0, 0, 0),
-        )
-        self._marker_item.setZValue(10)
-        self._marker_item.setVisible(False)
-        self._plot_item.addItem(self._marker_item)
-
         self._background_item.setLookupTable(_build_turbo_lut(zero_white=False))
         self._simulation_item.setLookupTable(_build_turbo_lut(zero_white=True))
         self._overlay_item.setLookupTable(
@@ -149,9 +473,260 @@ class FastPlotViewer:
             )
         )
 
-        self._window.show()
         self.available = True
+        if bool(show_window):
+            self.show_window()
         self.process_events()
+
+    def _new_view_box(self):
+        assert self._pg is not None
+        assert self._QtCore is not None
+
+        pg = self._pg
+        QtCore = self._QtCore
+        right_button = getattr(
+            getattr(QtCore.Qt, "MouseButton", None),
+            "RightButton",
+            getattr(QtCore.Qt, "RightButton", None),
+        )
+        left_button = getattr(
+            getattr(QtCore.Qt, "MouseButton", None),
+            "LeftButton",
+            getattr(QtCore.Qt, "LeftButton", None),
+        )
+        middle_button = getattr(
+            getattr(QtCore.Qt, "MouseButton", None),
+            "MiddleButton",
+            getattr(QtCore.Qt, "MiddleButton", None),
+        )
+
+        class _FastViewBox(pg.ViewBox):  # pragma: no cover - exercised via GUI
+            def __init__(self):
+                super().__init__(enableMenu=False)
+
+            def mouseDragEvent(self, ev, axis=None):
+                button = ev.button()
+                if _qt_button_mask_matches(button, left_button):
+                    ev.accept()
+                    return
+                if not (
+                    _qt_button_mask_matches(button, right_button)
+                    or _qt_button_mask_matches(button, middle_button)
+                ):
+                    return super().mouseDragEvent(ev, axis=axis)
+
+                ev.accept()
+                pos = ev.pos()
+                last_pos = ev.lastPos()
+                delta = (pos - last_pos) * -1
+
+                mouse_enabled = np.array(self.state["mouseEnabled"], dtype=np.float64)
+                mask = mouse_enabled.copy()
+                if axis is not None:
+                    mask[1 - axis] = 0.0
+
+                transform = self.childGroup.transform()
+                transform = pg.functions.invertQTransform(transform)
+                translated = transform.map(delta * mask) - transform.map(pg.Point(0, 0))
+
+                x_delta = translated.x() if mask[0] == 1 else None
+                y_delta = translated.y() if mask[1] == 1 else None
+
+                self._resetTarget()
+                if x_delta is not None or y_delta is not None:
+                    self.translateBy(x=x_delta, y=y_delta)
+                self.sigRangeChangedManually.emit(self.state["mouseEnabled"])
+
+        return _FastViewBox()
+
+    def show_window(self) -> None:
+        if not self.available or self._window is None:
+            return
+        try:
+            self._window.show()
+        except Exception:
+            return
+        self.process_events()
+
+    def _window_handle(self) -> int | None:
+        if self._window is None or self._QtCore is None:
+            return None
+        try:
+            widget_attr = getattr(self._QtCore.Qt, "WidgetAttribute", None)
+            native_flag = (
+                getattr(widget_attr, "WA_NativeWindow", None)
+                if widget_attr is not None
+                else getattr(self._QtCore.Qt, "WA_NativeWindow", None)
+            )
+            if native_flag is not None:
+                self._window.setAttribute(native_flag, True)
+        except Exception:
+            pass
+        try:
+            return int(self._window.winId())
+        except Exception:
+            return None
+
+    def _resize_native_window(self, width: int, height: int) -> None:
+        if self._native_hwnd is None or not sys.platform.startswith("win"):
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.MoveWindow.argtypes = [
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.BOOL,
+            ]
+            user32.MoveWindow.restype = wintypes.BOOL
+            user32.MoveWindow(
+                wintypes.HWND(self._native_hwnd),
+                0,
+                0,
+                max(int(width), 1),
+                max(int(height), 1),
+                True,
+            )
+        except Exception:
+            pass
+
+    def resize_to_tk_host(self, tk_host) -> None:
+        if not self.available or self._window is None:
+            return
+        self._embedded_tk_host = tk_host
+        try:
+            updater = getattr(tk_host, "update_idletasks", None)
+            if callable(updater):
+                updater()
+        except Exception:
+            pass
+        try:
+            width = max(int(tk_host.winfo_width()), 1)
+            height = max(int(tk_host.winfo_height()), 1)
+        except Exception:
+            width = 1
+            height = 1
+
+        self._resize_native_window(width, height)
+        try:
+            self._window.resize(width, height)
+        except Exception:
+            pass
+        self.process_events()
+
+    def mount_into_tk(self, tk_host) -> bool:
+        if not self.available or self._window is None:
+            return False
+        if not sys.platform.startswith("win"):
+            self.error_message = (
+                "in-place fast viewer embedding is currently supported on Windows only"
+            )
+            return False
+        winfo_id = getattr(tk_host, "winfo_id", None)
+        if not callable(winfo_id):
+            self.error_message = "Tk host does not expose a native window handle"
+            return False
+        try:
+            parent_hwnd = int(winfo_id())
+        except Exception as exc:
+            self.error_message = str(exc)
+            return False
+        if parent_hwnd <= 0:
+            self.error_message = "Tk host returned an invalid native window handle"
+            return False
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+            user32.SetParent.argtypes = [wintypes.HWND, wintypes.HWND]
+            user32.SetParent.restype = wintypes.HWND
+            user32.SetWindowLongPtrW.argtypes = [
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_ssize_t,
+            ]
+            user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+            user32.SetWindowPos.argtypes = [
+                wintypes.HWND,
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+            ]
+            user32.SetWindowPos.restype = wintypes.BOOL
+
+            hwnd = self._window_handle()
+            if hwnd is None or hwnd <= 0:
+                raise RuntimeError("failed to obtain a native fast-viewer window handle")
+
+            GWL_STYLE = -16
+            GWL_EXSTYLE = -20
+            WS_CHILD = 0x40000000
+            WS_VISIBLE = 0x10000000
+            WS_POPUP = 0x80000000
+            WS_CAPTION = 0x00C00000
+            WS_THICKFRAME = 0x00040000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_SYSMENU = 0x00080000
+            WS_EX_APPWINDOW = 0x00040000
+            WS_EX_WINDOWEDGE = 0x00000100
+            WS_EX_CLIENTEDGE = 0x00000200
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            SWP_SHOWWINDOW = 0x0040
+
+            style = int(user32.GetWindowLongPtrW(wintypes.HWND(hwnd), GWL_STYLE) or 0)
+            exstyle = int(
+                user32.GetWindowLongPtrW(wintypes.HWND(hwnd), GWL_EXSTYLE) or 0
+            )
+            style = (style | WS_CHILD | WS_VISIBLE) & ~(
+                WS_POPUP
+                | WS_CAPTION
+                | WS_THICKFRAME
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+                | WS_SYSMENU
+            )
+            exstyle = exstyle & ~(
+                WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
+            )
+
+            user32.SetParent(wintypes.HWND(hwnd), wintypes.HWND(parent_hwnd))
+            user32.SetWindowLongPtrW(wintypes.HWND(hwnd), GWL_STYLE, style)
+            user32.SetWindowLongPtrW(wintypes.HWND(hwnd), GWL_EXSTYLE, exstyle)
+            self._window.show()
+            user32.SetWindowPos(
+                wintypes.HWND(hwnd),
+                wintypes.HWND(0),
+                0,
+                0,
+                1,
+                1,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            )
+
+            self._embedded_tk_host = tk_host
+            self._embedded_parent_hwnd = parent_hwnd
+            self._native_hwnd = hwnd
+            self.error_message = None
+            self.resize_to_tk_host(tk_host)
+            return True
+        except Exception as exc:
+            self.error_message = str(exc)
+            return False
 
     def _new_image_item(self):
         assert self._pg is not None
@@ -210,6 +785,121 @@ class FastPlotViewer:
         self._set_item_transform(item, image.shape, extent)
         item.setVisible(True)
 
+    def _qt_pen_style(self, linestyle: object):
+        qt = getattr(self._QtCore, "Qt", None)
+        if qt is None:
+            return None
+        pen_style = getattr(qt, "PenStyle", None)
+
+        def _enum(name: str):
+            if pen_style is not None:
+                value = getattr(pen_style, name, None)
+                if value is not None:
+                    return value
+            return getattr(qt, name, None)
+
+        normalized = str(linestyle or "-").strip().lower()
+        if normalized in {"--", "dashed", "dash"}:
+            return _enum("DashLine")
+        if normalized in {":", "dotted", "dot"}:
+            return _enum("DotLine")
+        if normalized in {"-.", "dashdot", "dash-dot"}:
+            return _enum("DashDotLine")
+        return _enum("SolidLine")
+
+    def _make_pen(self, *, color: tuple[int, int, int, int], width: float, linestyle: object):
+        assert self._pg is not None
+        pen = self._pg.mkPen(color=color, width=max(float(width), 0.5))
+        style = self._qt_pen_style(linestyle)
+        if style is not None:
+            try:
+                pen.setStyle(style)
+            except Exception:
+                pass
+        return pen
+
+    def _ensure_rectangle_items(self, count: int) -> None:
+        assert self._pg is not None
+        while len(self._rectangle_items) < int(count):
+            item = self._pg.PlotCurveItem()
+            item.setVisible(False)
+            self._plot_item.addItem(item)
+            self._rectangle_items.append(item)
+
+    def _sync_rectangle_items(self, ax) -> None:
+        if not self.available or self._pg is None or self._plot_item is None:
+            return
+
+        specs = _extract_visible_rectangle_specs(ax)
+        self._ensure_rectangle_items(len(specs))
+
+        for item, spec in zip(self._rectangle_items, specs):
+            x0 = float(spec.x)
+            y0 = float(spec.y)
+            x1 = x0 + float(spec.width)
+            y1 = y0 + float(spec.height)
+            item.setData(
+                x=[x0, x1, x1, x0, x0],
+                y=[y0, y0, y1, y1, y0],
+            )
+            item.setPen(
+                self._make_pen(
+                    color=spec.edge_rgba,
+                    width=spec.linewidth,
+                    linestyle=spec.linestyle,
+                )
+            )
+            item.setZValue(float(spec.zorder))
+            item.setVisible(True)
+
+        for item in self._rectangle_items[len(specs) :]:
+            item.setVisible(False)
+
+    def _ensure_marker_items(self, count: int) -> None:
+        assert self._pg is not None
+        while len(self._marker_items) < int(count):
+            item = self._pg.ScatterPlotItem()
+            item.setVisible(False)
+            self._plot_item.addItem(item)
+            self._marker_items.append(item)
+
+    def _sync_marker_items(self, marker_artist) -> None:
+        if not self.available or self._pg is None or self._plot_item is None:
+            return
+
+        specs = _extract_visible_marker_specs(marker_artist)
+        self._ensure_marker_items(len(specs))
+
+        for item, spec in zip(self._marker_items, specs):
+            item.setData(
+                x=list(spec.x_values),
+                y=list(spec.y_values),
+                symbol=spec.symbol,
+                size=float(spec.size),
+                pen=self._make_pen(
+                    color=spec.edge_rgba,
+                    width=spec.pen_width,
+                    linestyle="-",
+                ),
+                brush=self._pg.mkBrush(spec.face_rgba),
+            )
+            item.setZValue(float(spec.zorder))
+            item.setVisible(True)
+
+        for item in self._marker_items[len(specs) :]:
+            item.setVisible(False)
+
+    def _current_view_range(self) -> tuple[float, float, float, float] | None:
+        if self._plot_item is None:
+            return None
+        try:
+            x_range, y_range = self._plot_item.getViewBox().viewRange()
+        except Exception:
+            return None
+        if len(x_range) < 2 or len(y_range) < 2:
+            return None
+        return _normalize_view_range(x_range[0], x_range[1], y_range[0], y_range[1])
+
     def set_mouse_event_callback(self, callback: Callable[..., None] | None) -> None:
         """Set callback for normalized mouse events.
 
@@ -221,6 +911,11 @@ class FastPlotViewer:
     def _make_viewport_event_filter(self):
         QtCore = self._QtCore
         viewer = self
+        left_button = getattr(
+            getattr(QtCore.Qt, "MouseButton", None),
+            "LeftButton",
+            getattr(QtCore.Qt, "LeftButton", None),
+        )
 
         class _ViewportEventFilter(QtCore.QObject):  # pragma: no cover - UI
             def eventFilter(self, watched, event):
@@ -230,6 +925,17 @@ class FastPlotViewer:
                     event_type = int(event.type())
                 except Exception:
                     return False
+
+                button = None
+                buttons = None
+                try:
+                    button = getattr(event, "button", lambda: None)()
+                except Exception:
+                    button = None
+                try:
+                    buttons = getattr(event, "buttons", lambda: None)()
+                except Exception:
+                    buttons = None
 
                 # Qt event type ints:
                 # 2  -> MouseButtonPress
@@ -244,7 +950,12 @@ class FastPlotViewer:
                     viewer._forward_mouse_event("button_press_event", event, dblclick=True)
                 elif event_type == 5:
                     viewer._forward_mouse_event("motion_notify_event", event, dblclick=False)
-                return False
+                return _should_consume_fast_viewer_viewport_event(
+                    event_type,
+                    button=button,
+                    buttons=buttons,
+                    left_button=left_button,
+                )
 
         return _ViewportEventFilter()
 
@@ -282,6 +993,7 @@ class FastPlotViewer:
         background_artist,
         overlay_artist,
         marker_artist=None,
+        force_view_range: bool = False,
     ) -> None:
         if not self.available:
             return
@@ -322,15 +1034,8 @@ class FastPlotViewer:
             extent=overlay_artist.get_extent(),
         )
 
-        if marker_artist is not None and marker_artist.get_visible():
-            x_vals, y_vals = marker_artist.get_data()
-            if len(x_vals) > 0 and len(y_vals) > 0:
-                self._marker_item.setData([float(x_vals[0])], [float(y_vals[0])])
-                self._marker_item.setVisible(True)
-            else:
-                self._marker_item.setVisible(False)
-        else:
-            self._marker_item.setVisible(False)
+        self._sync_marker_items(marker_artist)
+        self._sync_rectangle_items(ax)
 
         self._plot_item.setTitle(str(ax.get_title()))
         self._plot_item.setLabel("bottom", str(ax.get_xlabel() or "X (pixels)"))
@@ -338,12 +1043,23 @@ class FastPlotViewer:
 
         x0, x1 = ax.get_xlim()
         y0, y1 = ax.get_ylim()
-        self._plot_item.getViewBox().setRange(
-            xRange=(float(x0), float(x1)),
-            yRange=(float(y0), float(y1)),
-            padding=0.0,
-            disableAutoRange=True,
-        )
+        target_range = _normalize_view_range(x0, x1, y0, y1)
+        current_range = self._current_view_range()
+        should_apply_range = bool(force_view_range)
+        if not should_apply_range:
+            should_apply_range = _should_apply_matplotlib_view_range(
+                current_range=current_range,
+                last_synced_range=self._last_synced_view_range,
+                target_range=target_range,
+            )
+        if should_apply_range:
+            self._plot_item.getViewBox().setRange(
+                xRange=(float(x0), float(x1)),
+                yRange=(float(y0), float(y1)),
+                padding=0.0,
+                disableAutoRange=True,
+            )
+            self._last_synced_view_range = target_range
 
     def process_events(self) -> None:
         if not self.available or self._app is None:
@@ -360,6 +1076,9 @@ class FastPlotViewer:
             self._window.close()
         except Exception:
             pass
+        self._embedded_tk_host = None
+        self._embedded_parent_hwnd = None
+        self._native_hwnd = None
         self.process_events()
 
 
@@ -384,6 +1103,9 @@ class MatplotlibCanvasProxy:
         self._event_axes = event_axes
         self._callbacks: dict[str, dict[int, Callable]] = {}
         self._next_cid = 1
+        self._fast_event_dispatch_depth = 0
+        self._pending_fast_viewer_sync: dict[str, object] | None = None
+        self._fast_viewer_sync_scheduled = False
         if not self._render_matplotlib:
             self._fast_viewer.set_mouse_event_callback(self._dispatch_mouse_event)
 
@@ -395,6 +1117,8 @@ class MatplotlibCanvasProxy:
         self._sync_callback = callback
 
     def process_fast_events(self) -> None:
+        if self._fast_event_dispatch_depth > 0:
+            return
         self._fast_viewer.process_events()
 
     def sync_from_matplotlib(
@@ -405,14 +1129,55 @@ class MatplotlibCanvasProxy:
         background_artist,
         overlay_artist,
         marker_artist=None,
+        force_view_range: bool = False,
     ) -> None:
+        kwargs = {
+            "ax": ax,
+            "image_artist": image_artist,
+            "background_artist": background_artist,
+            "overlay_artist": overlay_artist,
+            "marker_artist": marker_artist,
+            "force_view_range": bool(force_view_range),
+        }
+        if self._fast_event_dispatch_depth > 0:
+            self._pending_fast_viewer_sync = kwargs
+            self._schedule_deferred_fast_viewer_sync()
+            return
+        self._apply_fast_viewer_sync(kwargs)
+
+    def _apply_fast_viewer_sync(self, kwargs: dict[str, object]) -> None:
         self._fast_viewer.update_from_matplotlib(
-            ax=ax,
-            image_artist=image_artist,
-            background_artist=background_artist,
-            overlay_artist=overlay_artist,
-            marker_artist=marker_artist,
+            ax=kwargs["ax"],
+            image_artist=kwargs["image_artist"],
+            background_artist=kwargs["background_artist"],
+            overlay_artist=kwargs["overlay_artist"],
+            marker_artist=kwargs["marker_artist"],
+            force_view_range=bool(kwargs["force_view_range"]),
         )
+
+    def _schedule_deferred_fast_viewer_sync(self) -> None:
+        if self._fast_viewer_sync_scheduled:
+            return
+        qtcore = getattr(self._fast_viewer, "_QtCore", None)
+        timer = getattr(qtcore, "QTimer", None) if qtcore is not None else None
+        if timer is None:
+            return
+        try:
+            self._fast_viewer_sync_scheduled = True
+            timer.singleShot(0, self._flush_deferred_fast_viewer_sync)
+        except Exception:
+            self._fast_viewer_sync_scheduled = False
+
+    def _flush_deferred_fast_viewer_sync(self) -> None:
+        self._fast_viewer_sync_scheduled = False
+        if self._fast_event_dispatch_depth > 0:
+            self._schedule_deferred_fast_viewer_sync()
+            return
+        kwargs = self._pending_fast_viewer_sync
+        self._pending_fast_viewer_sync = None
+        if kwargs is None:
+            return
+        self._apply_fast_viewer_sync(kwargs)
 
     def _sync(self) -> None:
         if self._sync_callback is not None:
@@ -420,7 +1185,7 @@ class MatplotlibCanvasProxy:
                 self._sync_callback()
             except Exception:
                 pass
-        self._fast_viewer.process_events()
+        self.process_fast_events()
 
     def _should_draw_matplotlib(self, *, force: bool) -> bool:
         if force:
@@ -493,11 +1258,24 @@ class MatplotlibCanvasProxy:
             dblclick=bool(dblclick),
             inaxes=inaxes,
         )
-        for callback in callbacks:
-            try:
-                callback(event)
-            except Exception:
-                pass
+        self._fast_event_dispatch_depth += 1
+        try:
+            for callback in callbacks:
+                try:
+                    callback(event)
+                except Exception:
+                    pass
+        finally:
+            self._fast_event_dispatch_depth = max(
+                0,
+                self._fast_event_dispatch_depth - 1,
+            )
+            if (
+                self._fast_event_dispatch_depth == 0
+                and self._pending_fast_viewer_sync is not None
+                and not self._fast_viewer_sync_scheduled
+            ):
+                self._flush_deferred_fast_viewer_sync()
 
     def __getattr__(self, name):
         return getattr(self._canvas, name)
