@@ -362,6 +362,214 @@ The live forward path is `simulate(...)` or `simulate_qr_rods(...)` through [`ra
 
 The simulation is deterministic once the beam arrays are fixed. There is no Monte Carlo scattering inside the kernel itself; even the beam sampling is low-discrepancy and can be clustered into deterministic weighted representatives.
 
+## Pedagogical view of the optics modes
+
+The code has two optics branches:
+
+- `OPTICS_MODE_FAST`, labeled in the GUI as `Original Fast Approx (Fresnel + Beer-Lambert)`
+- `OPTICS_MODE_EXACT`, labeled in the GUI as `Complex-k DWBA slab optics (Precise)`
+
+Pedagogically, both modes do the same three-stage calculation:
+
+1. Build an in-sample incoming wave from the incident beam.
+2. Scatter that wave through the same reciprocal-space `solve_q(...)` machinery.
+3. Build an outgoing wave, transmit it back out of the sample, and project it to the detector.
+
+The difference is therefore not in the reflection list, the `solve_q(...)`
+geometry, the structure-factor model, or the detector mapping. The difference
+is in how the code computes the entry and exit transport through the sample.
+
+### Shared intensity skeleton
+
+For any accepted reciprocal-space solution `Q = (Q_x, Q_y, Q_z)`, both modes
+ultimately use the same detector intensity structure:
+
+\[
+I_{\mathrm{hit}}
+= I_{\mathrm{reflection}}
+\cdot w_{\mathrm{sample}}
+\cdot I_Q
+\cdot \mathrm{prop\_fac}
+\cdot \exp(-Q_z^2 d_x^2)
+\cdot \exp(-(Q_x^2 + Q_y^2)d_y^2),
+\]
+
+with
+
+\[
+\mathrm{prop\_fac}
+= T_i^2 T_f^2
+\cdot \exp(-2\,\Im(k_{z,\mathrm{in}})\,L_{\mathrm{in}})
+\cdot \exp(-2\,\Im(k_{z,\mathrm{out}})\,L_{\mathrm{out}}).
+\]
+
+So the optics mode only changes the four quantities
+
+\[
+T_i^2,\quad T_f^2,\quad k_{z,\mathrm{in}},\quad k_{z,\mathrm{out}},
+\]
+
+and the corresponding in-sample and outgoing wavevectors built from them.
+
+### Fast mode: refracted-angle plus exponential attenuation
+
+The fast branch treats the sample optics as a transmitted grazing-angle problem
+plus exponential damping through an absorbing medium.
+
+For entry, let `k_0 = 2\pi/\lambda` and let `\theta_i'` be the local grazing
+angle on the sample. The code first computes an approximate transmitted angle
+
+\[
+\theta_t' = \mathrm{transmit\_angle\_grazing}(\theta_i', n_2),
+\]
+
+then sets an in-sample wavevector magnitude
+
+\[
+k_{\mathrm{scat}} = k_0 \sqrt{\max(\Re(\epsilon_2), 0)}.
+\]
+
+Using the local in-plane azimuth `\phi_i'`, the in-sample incoming components are
+
+\[
+k_{x,\mathrm{scat}} = k_{\mathrm{scat}}\cos\theta_t' \sin\phi_i',
+\qquad
+k_{y,\mathrm{scat}} = k_{\mathrm{scat}}\cos\theta_t' \cos\phi_i'.
+\]
+
+The normal component is taken from the helper
+
+\[
+(\Re(k_z), \Im(k_z)) = \mathrm{ktz\_components}(k_0, n_2, \theta_t'),
+\]
+
+with the implementation flipping the real part so the wave points into the
+sample:
+
+\[
+\Re(k_z) \leftarrow -\Re(k_z).
+\]
+
+The entry transmission factor is an approximate polarization average:
+
+\[
+T_i^2 \approx \frac{|t_s|^2 + |t_p|^2}{2},
+\]
+
+where `t_s` and `t_p` come from `fresnel_transmission(...)`.
+
+For exit, the code takes the absolute in-sample exit angle derived from the
+candidate outgoing wavevector,
+
+\[
+|2\theta_t'| = \left|\operatorname{atan}\left(\frac{k_{tz}'}{k_r}\right)\right|,
+\]
+
+and looks up four precomputed quantities as a function of that angle:
+
+- `T_f^2`
+- `\Im(k_{z,\mathrm{out}})`
+- `L_{\mathrm{out}}`
+- the absolute external exit angle
+
+So the fast mode is best thought of as:
+
+- use a refracted transmitted angle to define the in-sample ray,
+- approximate Fresnel transmission with squared amplitudes,
+- attenuate with exponential damping,
+- and reuse a lookup table for the exit optics so the inner loop stays cheap.
+
+### Exact mode: complex-`k_z` slab transport
+
+The exact branch keeps the same scattering geometry but replaces the helper
+angle model with a complex wavevector construction that enforces the slab
+dispersion relation and interface matching more directly.
+
+For entry, the in-plane wavevector is conserved:
+
+\[
+k_{\parallel,i} = k_0 |\cos\theta_i'|.
+\]
+
+The code then forms the vacuum-side and sample-side normal wavevector
+components
+
+\[
+k_{z1,i} = \mathrm{kz\_branch\_decay}(k_0^2 - k_{\parallel,i}^2),
+\qquad
+k_{z2,i} = \mathrm{kz\_branch\_decay}(\epsilon_2 k_0^2 - k_{\parallel,i}^2).
+\]
+
+The branch choice is the decaying one, so `\Im(k_{z2,i}) \ge 0`. The stored
+incoming in-sample wavevector components become
+
+\[
+k_{x,\mathrm{scat}} = k_{\parallel,i}\sin\phi_i',
+\qquad
+k_{y,\mathrm{scat}} = k_{\parallel,i}\cos\phi_i',
+\qquad
+\Re(k_z) = -|\Re(k_{z2,i})|,
+\qquad
+\Im(k_z) = |\Im(k_{z2,i})|.
+\]
+
+Instead of using `|t|^2` directly, the code converts the exact Fresnel
+transmission amplitudes into transmitted power using the appropriate flux
+ratio:
+
+\[
+T_i^2 = \frac{1}{2}\left(T_{i,s}^{\mathrm{power}} + T_{i,p}^{\mathrm{power}}\right).
+\]
+
+For exit, after adding `Q` to the in-sample incident wavevector, the radial
+in-plane magnitude is
+
+\[
+k_r = \sqrt{k_{tx}'^2 + k_{ty}'^2}.
+\]
+
+The outgoing slab and vacuum normal components are then
+
+\[
+k_{z2,f} = \mathrm{kz\_branch\_decay}(\epsilon_2 k_0^2 - k_r^2),
+\qquad
+k_{z3,f} = \mathrm{kz\_branch\_decay}(k_0^2 - k_r^2),
+\]
+
+with an exact polarization-average exit transmission
+
+\[
+T_f^2 = \frac{1}{2}\left(T_{f,s}^{\mathrm{power}} + T_{f,p}^{\mathrm{power}}\right).
+\]
+
+The external exit angle is then reconstructed from the vacuum dispersion:
+
+\[
+2\theta_t = \arccos\left(\mathrm{clamp}\left(\frac{k_r}{k_0}, -1, 1\right)\right)\operatorname{sign}(2\theta_t').
+\]
+
+So the exact mode is best thought of as:
+
+- conserve the in-plane component of the wavevector at the interface,
+- solve for the complex normal component from the dispersion relation,
+- use that same complex `k_z` for both transmission and attenuation,
+- and recompute the exit optics per accepted scattering solution instead of
+  interpolating a cached table.
+
+### What "more exact" means here
+
+In this repository, "exact" does not mean a different diffraction model. It
+means the transport through the air/sample interfaces is computed from the
+complex slab wavevector rather than from a transmitted-angle shortcut.
+
+That is why the exact mode is slower but usually more faithful near critical
+angles, strong refraction regions, or other situations where the normal
+component of the wavevector becomes delicate.
+
+The current exact path is still a single air/sample/air slab, not a general
+multilayer reflectivity stack. The detailed implementation-faithful formulas
+for each step appear in the next sections.
+
 ## Exact per-sample ray tracing and entry optics
 
 The beam-sample precompute lives in [`_precompute_sample_terms`](../ra_sim/simulation/diffraction.py). This section describes the exact formulas used there.
@@ -1446,15 +1654,36 @@ The optimizer refines:
   mode
 
 The objective is also different from the legacy separable fitter. For each
-cached measured peak it builds one fixed-size square ROI, preprocesses the
-measured patch into a ridge mask, and compares measured and simulated ridge
-geometry with a symmetric local Chamfer residual. In parallel, it can evaluate
-the fixed measured-to-simulated peak correspondences carried over from the
-manual geometry fit, using the selected Qr/manual picks and their associated
-simulated hit-table rows rather than relying only on ridge overlap. Each ROI
-block is normalized by the active ridge-pixel count, and each dataset block is
-scaled by `1 / sqrt(num_rois_in_dataset)` so one selected background cannot
-dominate just because it contributed more peaks.
+cached measured peak it first attempts to build one fixed angular-profile ROI.
+The inclusion rule is:
+
+- every selected cached peak with `(h, k) = (0, 0)` is treated as specular
+- every other selected cached peak with `(h, k) != (0, 0)` is treated as
+  off-specular
+
+The family assignment controls which residual block that peak contributes to;
+it is not meant to exclude valid selected rods just because `h != k`.
+
+For specular `(00l)` peaks the fitter:
+
+- compares the measured and simulated `2theta` line shape directly
+- solves one shared per-dataset scale factor for the whole specular bundle
+- optionally adds a relative-intensity term across the selected specular peaks
+
+For every selected off-specular peak with `(h, k) != (0, 0)` the fitter:
+
+- extracts a `phi` profile at the measured anchor
+- compares normalized line shape only
+- does not add an inter-peak relative-intensity term
+
+A selected peak can still be dropped before optimization if ROI preparation
+fails, for example because the measured anchor is missing, the ROI is
+degenerate, the local angular transform is invalid, there are too few support
+pixels in the profile window, or the measured profile is empty after background
+subtraction.
+
+Each dataset block is scaled by `1 / sqrt(num_rois_in_dataset)` so one
+selected background cannot dominate just because it contributed more peaks.
 
 The GUI step refuses to run if the geometry-fit cache is missing or stale. Any
 change to manual picks, selected backgrounds, shared-theta mode, or stored

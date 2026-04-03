@@ -1366,6 +1366,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     messages = []
     sync_calls = []
     deactivate_calls = []
+    mode_change_calls = []
     calls = []
 
     bindings = peak_selection.SelectedPeakRuntimeBindings(
@@ -1386,6 +1387,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         native_sim_to_display_coords=lambda col, row, image_shape: (col, row),
         simulate_ideal_hkl_native_center=lambda *_args: None,
         deactivate_conflicting_modes=lambda: deactivate_calls.append(True),
+        on_hkl_pick_mode_changed=lambda enabled: mode_change_calls.append(bool(enabled)),
         n2="n2",
         tcl_error_types=(RuntimeError,),
     )
@@ -1398,6 +1400,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     assert view_state.hkl_pick_button_var.get() == "Pick HKL on Image (Armed)"
     assert sync_calls == [True]
     assert deactivate_calls == [True]
+    assert mode_change_calls == [True]
     assert messages == ["armed"]
 
     monkeypatch.setattr(

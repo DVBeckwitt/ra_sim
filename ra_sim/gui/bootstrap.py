@@ -913,6 +913,7 @@ def build_runtime_selected_peak_bootstrap(
     draw_idle_factory: object = None,
     display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None,
     deactivate_conflicting_modes_factory: object = None,
+    on_hkl_pick_mode_changed_factory: object = None,
     n2: Any = None,
     process_peaks_parallel: Callable[..., object] | None = None,
     tcl_error_types: tuple[type[BaseException], ...] = (),
@@ -990,6 +991,7 @@ def build_runtime_selected_peak_bootstrap(
         native_sim_to_display_coords=native_sim_to_display_coords,
         simulate_ideal_hkl_native_center=config_factories.ideal_center,
         deactivate_conflicting_modes_factory=deactivate_conflicting_modes_factory,
+        on_hkl_pick_mode_changed_factory=on_hkl_pick_mode_changed_factory,
         n2=n2,
         tcl_error_types=tcl_error_types,
     )

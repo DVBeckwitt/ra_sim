@@ -150,6 +150,16 @@ def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> Non
     assert "simulation_runtime_state.last_caked_extent is None" in source
 
 
+def test_runtime_impl_preserves_primary_axis_limits_across_same_mode_redraws() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "previous_primary_view_mode = _current_primary_figure_mode()" in source
+    assert "preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)" in source
+    assert "gui_canvas_interactions.restore_axis_view(" in source
+    assert 'preserve=(previous_primary_view_mode == "caked")' in source
+    assert 'preserve=(previous_primary_view_mode == "detector")' in source
+
+
 def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_updates() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -183,6 +193,35 @@ def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
     assert "if _live_interaction_active():" in source
     assert "qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)" in source
     assert "_clear_deferred_overlays(clear_qr_overlay=False)" in source
+
+
+def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:" in source
+    assert "gui_qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(" in source
+    assert "def toggle_caked_2d() -> None:" in source
+    assert "_invalidate_qr_cylinder_overlay_view_state(clear_artists=True)" in source
+    assert "_toggle_caked_2d_impl()" in source
+
+
+def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "deactivate_conflicting_modes_factory=lambda: (" in source
+    assert "_set_geometry_manual_pick_mode(False)" in source
+    assert "_set_geometry_preview_exclude_mode(False)" in source
+
+
+def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "hkl_pick_armed_factory=lambda: getattr(" in source
+    assert 'globals().get("peak_selection_state")' in source
+    assert 'def _handle_hkl_pick_mode_changed(_armed: bool) -> None:' in source
+    assert 'globals().get("_refresh_fast_viewer_runtime_mode")' in source
+    assert "refresh_fast_viewer(announce=False)" in source
+    assert "on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed" in source
 
 
 def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> None:

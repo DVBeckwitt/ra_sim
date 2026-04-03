@@ -30,6 +30,7 @@ import argparse
 import copy
 from dataclasses import dataclass
 from datetime import datetime
+import json
 import math
 from pathlib import Path
 import sys
@@ -44,6 +45,7 @@ from ra_sim.config import get_instrument_config, get_path
 from ra_sim.fitting.optimization import (
     build_geometry_fit_central_mosaic_params,
     fit_geometry_parameters,
+    fit_mosaic_shape_parameters,
     simulate_and_compare_hkl,
 )
 from ra_sim.gui import background as gui_background
@@ -434,11 +436,18 @@ def _build_headless_geometry_mosaic_params(
     beam_config: Mapping[str, object],
     lambda_angstrom: float,
     active_cif_path: str,
+    sample_count_override: int | None = None,
+    solve_q_steps_override: object = None,
+    rng_seed: np.random.Generator | int | None = None,
 ) -> tuple[dict[str, object], int]:
     """Build the deterministic runtime mosaic payload used by geometry fitting."""
 
     fwhm2sigma = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
-    sample_count = _headless_geometry_fit_sample_count(saved_variables)
+    sample_count = (
+        max(int(sample_count_override), 1)
+        if sample_count_override is not None
+        else _headless_geometry_fit_sample_count(saved_variables)
+    )
     divergence_sigma = math.radians(
         float(beam_config.get("divergence_fwhm_deg", 0.05)) * fwhm2sigma
     )
@@ -456,13 +465,26 @@ def _build_headless_geometry_mosaic_params(
             10.0,
         )
     )
+    solve_q_steps_source = (
+        solve_q_steps_override
+        if solve_q_steps_override is not None
+        else _saved_state_var_value(
+            saved_variables,
+            "solve_q_steps_var",
+            beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        )
+    )
+    try:
+        solve_q_steps_value = int(round(float(solve_q_steps_source)))
+    except (TypeError, ValueError):
+        solve_q_steps_value = _saved_state_int(
+            saved_variables,
+            "solve_q_steps_var",
+            beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        )
     solve_q_steps = int(
         np.clip(
-            _saved_state_int(
-                saved_variables,
-                "solve_q_steps_var",
-                beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-            ),
+            int(solve_q_steps_value),
             32,
             8192,
         )
@@ -498,6 +520,7 @@ def _build_headless_geometry_mosaic_params(
         float(bandwidth_sigma),
         float(lambda_angstrom),
         float(bandwidth_percent) / 100.0,
+        rng=rng_seed,
     )
     n2_sample_array = resolve_index_of_refraction_array(
         np.asarray(wavelength_array, dtype=np.float64) * 1.0e-10,
@@ -528,6 +551,7 @@ def run_headless_geometry_fit(
     *,
     source_path: str | Path,
     output_dir: str | Path | None = None,
+    run_mosaic_shape_fit: bool = False,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting directly from one saved GUI-state payload."""
 
@@ -656,6 +680,9 @@ def run_headless_geometry_fit(
     sample_width_var = _HeadlessVar(_saved_state_float(saved_variables, "sample_width_var", sample_width_default))
     sample_length_var = _HeadlessVar(_saved_state_float(saved_variables, "sample_length_var", sample_length_default))
     sample_depth_var = _HeadlessVar(_saved_state_float(saved_variables, "sample_depth_var", sample_depth_default))
+    sigma_mosaic_var = _HeadlessVar(_saved_state_float(saved_variables, "sigma_mosaic_var", float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8))))
+    gamma_mosaic_var = _HeadlessVar(_saved_state_float(saved_variables, "gamma_mosaic_var", float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7))))
+    eta_var = _HeadlessVar(_saved_state_float(saved_variables, "eta_var", float(beam_cfg.get("eta", 0.0))))
     debye_x_var = _HeadlessVar(_saved_state_float(saved_variables, "debye_x_var", debye_x_default))
     debye_y_var = _HeadlessVar(_saved_state_float(saved_variables, "debye_y_var", debye_y_default))
     geometry_theta_offset_var = _HeadlessVar(_saved_state_text(saved_variables, "geometry_theta_offset_var", "0.0"))
@@ -1134,6 +1161,232 @@ def run_headless_geometry_fit(
             rejection_reason += f" (log: {execution_result.log_path})"
         raise RuntimeError(rejection_reason)
 
+    mosaic_shape_report: dict[str, object] | None = None
+    if run_mosaic_shape_fit:
+        mosaic_shape_cfg = (
+            fit_cfg.get("mosaic_shape", {})
+            if isinstance(fit_cfg, Mapping)
+            else {}
+        )
+        mosaic_shape_cfg = (
+            dict(mosaic_shape_cfg) if isinstance(mosaic_shape_cfg, Mapping) else {}
+        )
+        solver_cfg_raw = mosaic_shape_cfg.get("solver", {})
+        solver_cfg = (
+            dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+        )
+        roi_cfg_raw = mosaic_shape_cfg.get("roi", {})
+        roi_cfg = dict(roi_cfg_raw) if isinstance(roi_cfg_raw, Mapping) else {}
+        preprocessing_cfg_raw = mosaic_shape_cfg.get("preprocessing", {})
+        preprocessing_cfg = (
+            dict(preprocessing_cfg_raw)
+            if isinstance(preprocessing_cfg_raw, Mapping)
+            else {}
+        )
+        sampling_cfg_raw = mosaic_shape_cfg.get("sampling", {})
+        sampling_cfg = (
+            dict(sampling_cfg_raw) if isinstance(sampling_cfg_raw, Mapping) else {}
+        )
+
+        try:
+            fit_sample_floor = int(
+                sampling_cfg.get(
+                    "min_num_samples",
+                    detector_cfg.get(
+                        "monte_carlo_samples",
+                        HEADLESS_GEOMETRY_SAMPLE_COUNTS["High"],
+                    ),
+                )
+            )
+        except (TypeError, ValueError):
+            fit_sample_floor = HEADLESS_GEOMETRY_SAMPLE_COUNTS["High"]
+        fit_sample_count = max(
+            int(simulation_runtime_state.num_samples),
+            max(int(fit_sample_floor), 1),
+        )
+        fit_solve_q_steps = sampling_cfg.get("solve_q_steps")
+        fit_sample_seed = sampling_cfg.get("seed", 0)
+        fit_mosaic_params, fit_sample_count = _build_headless_geometry_mosaic_params(
+            saved_variables=saved_variables,
+            beam_config=beam_cfg,
+            lambda_angstrom=lambda_angstrom,
+            active_cif_path=str(active_cif_path),
+            sample_count_override=int(fit_sample_count),
+            solve_q_steps_override=fit_solve_q_steps,
+            rng_seed=fit_sample_seed,
+        )
+
+        dataset_cache_payload = dataset_cache_state.get("payload")
+        raw_dataset_specs = []
+        if isinstance(dataset_cache_payload, Mapping):
+            raw_dataset_specs = list(dataset_cache_payload.get("dataset_specs", []))
+        if not raw_dataset_specs:
+            raw_dataset_specs = list(prepare_result.prepared_run.dataset_specs or [])
+        dataset_specs = [
+            gui_geometry_fit.copy_geometry_fit_state_value(dict(spec))
+            for spec in raw_dataset_specs
+            if isinstance(spec, Mapping)
+        ]
+        if not dataset_specs:
+            raise RuntimeError("Mosaic shape fit could not prepare any datasets.")
+
+        fit_sigma_mosaic = _saved_state_bool(
+            saved_variables,
+            "fit_sigma_mosaic_var",
+            bool(solver_cfg.get("fit_sigma_mosaic", True)),
+        )
+        fit_gamma_mosaic = _saved_state_bool(
+            saved_variables,
+            "fit_gamma_mosaic_var",
+            bool(solver_cfg.get("fit_gamma_mosaic", True)),
+        )
+        fit_eta = _saved_state_bool(
+            saved_variables,
+            "fit_eta_var",
+            bool(solver_cfg.get("fit_eta", True)),
+        )
+        fit_theta_i = _saved_state_bool(
+            saved_variables,
+            "fit_theta_i_var",
+            bool(solver_cfg.get("fit_theta_i", solver_cfg.get("refine_theta", True))),
+        )
+        if not any((fit_sigma_mosaic, fit_gamma_mosaic, fit_eta, fit_theta_i)):
+            raise RuntimeError(
+                "Mosaic shape fit unavailable: enable at least one fit parameter."
+            )
+
+        theta_i_mode = str(
+            solver_cfg.get("theta_i_mode", solver_cfg.get("theta_mode", "auto"))
+        ).strip().lower()
+        raw_theta_i_bounds = solver_cfg.get(
+            "theta_i_bounds_deg",
+            solver_cfg.get("theta_bounds", None),
+        )
+        theta_i_bounds_deg = None
+        if isinstance(raw_theta_i_bounds, (list, tuple)) and len(raw_theta_i_bounds) == 2:
+            try:
+                theta_i_bounds_deg = (
+                    float(raw_theta_i_bounds[0]),
+                    float(raw_theta_i_bounds[1]),
+                )
+            except (TypeError, ValueError):
+                theta_i_bounds_deg = None
+
+        mosaic_fit_params = value_callbacks.current_params()
+        mosaic_fit_params["mosaic_params"] = fit_mosaic_params
+        result = fit_mosaic_shape_parameters(
+            np.asarray(structure_model_state.miller, dtype=np.float64),
+            np.asarray(structure_model_state.intensities, dtype=np.float64),
+            int(image_size),
+            mosaic_fit_params,
+            dataset_specs=dataset_specs,
+            loss=str(solver_cfg.get("loss", "soft_l1")),
+            f_scale=float(solver_cfg.get("f_scale_px", 1.0)),
+            max_nfev=int(solver_cfg.get("max_nfev", 80)),
+            max_restarts=int(solver_cfg.get("restarts", 2)),
+            smooth_sigma_px=float(preprocessing_cfg.get("smooth_sigma_px", 1.0)),
+            ridge_percentile=float(preprocessing_cfg.get("ridge_percentile", 85.0)),
+            min_total_rois=int(roi_cfg.get("min_total_rois", 8)),
+            min_per_dataset_rois=int(roi_cfg.get("min_per_dataset_rois", 3)),
+            equal_dataset_weights=bool(roi_cfg.get("equal_dataset_weights", True)),
+            workers=solver_cfg.get("workers", "auto"),
+            parallel_mode=str(solver_cfg.get("parallel_mode", "auto")),
+            worker_numba_threads=solver_cfg.get("worker_numba_threads", 0),
+            restart_jitter=float(solver_cfg.get("restart_jitter", 0.15)),
+            ridge_weight=float(solver_cfg.get("ridge_weight", 1.0)),
+            specular_relative_intensity_weight=float(
+                solver_cfg.get(
+                    "specular_relative_intensity_weight",
+                    solver_cfg.get("point_match_weight", 1.0),
+                )
+            ),
+            fit_theta_i=bool(fit_theta_i),
+            theta_i_mode=str(theta_i_mode),
+            theta_i_bounds_deg=theta_i_bounds_deg,
+            fit_sigma_mosaic=bool(fit_sigma_mosaic),
+            fit_gamma_mosaic=bool(fit_gamma_mosaic),
+            fit_eta=bool(fit_eta),
+        )
+        if result.x is None or not np.all(np.isfinite(result.x)):
+            raise RuntimeError(
+                "Mosaic shape fit failed: optimizer returned invalid parameters."
+            )
+
+        sigma_deg, gamma_deg, eta_val = map(float, np.asarray(result.x[:3], dtype=np.float64))
+        sigma_mosaic_var.set(sigma_deg)
+        gamma_mosaic_var.set(gamma_deg)
+        eta_var.set(eta_val)
+
+        best_params = getattr(result, "best_params", None)
+        if isinstance(best_params, Mapping) and isinstance(best_params.get("mosaic_params"), Mapping):
+            simulation_runtime_state.profile_cache = copy.deepcopy(
+                dict(best_params["mosaic_params"])
+            )
+        else:
+            simulation_runtime_state.profile_cache = copy.deepcopy(fit_mosaic_params)
+            simulation_runtime_state.profile_cache.update(
+                {
+                    "sigma_mosaic_deg": float(sigma_deg),
+                    "gamma_mosaic_deg": float(gamma_deg),
+                    "eta": float(eta_val),
+                }
+            )
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        mosaic_log_path = Path(downloads_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
+        status = (
+            "accepted"
+            if bool(getattr(result, "acceptance_passed", False))
+            else ("converged" if bool(getattr(result, "success", False)) else "finished")
+        )
+        message = str(getattr(result, "message", "") or "").strip()
+        roi_count_by_dataset = dict(getattr(result, "roi_count_by_dataset", {}) or {})
+        roi_count = int(
+            getattr(result, "total_roi_count", sum(roi_count_by_dataset.values()))
+        )
+        dataset_diagnostics = list(getattr(result, "dataset_diagnostics", []) or [])
+        dataset_summary = ", ".join(
+            f"{diag.get('dataset_label', diag.get('dataset_index'))}={int(diag.get('roi_count', 0))}"
+            for diag in dataset_diagnostics
+            if isinstance(diag, Mapping)
+        )
+        with mosaic_log_path.open("w", encoding="utf-8") as handle:
+            handle.write(f"Mosaic shape fit started: {stamp}\n")
+            handle.write(f"status={status}\n")
+            handle.write(f"message={message}\n")
+            handle.write(f"sigma_mosaic_deg={sigma_deg:.6f}\n")
+            handle.write(f"gamma_mosaic_deg={gamma_deg:.6f}\n")
+            handle.write(f"eta={eta_val:.6f}\n")
+            handle.write(f"dataset_count={len(dataset_specs)}\n")
+            handle.write(f"roi_count={roi_count}\n")
+            handle.write(
+                f"cost_reduction={float(getattr(result, 'cost_reduction', 0.0) or 0.0):.6f}\n"
+            )
+            if dataset_summary:
+                handle.write(f"dataset_summary={dataset_summary}\n")
+            boundary_warning = str(getattr(result, "boundary_warning", "") or "").strip()
+            if boundary_warning:
+                handle.write(f"boundary_warning={boundary_warning}\n")
+            debug_summary = getattr(result, "mosaic_fit_debug_summary", None)
+            if isinstance(debug_summary, Mapping):
+                handle.write("\nDebug summary (JSON):\n")
+                json.dump(debug_summary, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+
+        mosaic_shape_report = {
+            "accepted": bool(getattr(result, "acceptance_passed", False)),
+            "success": bool(getattr(result, "success", False)),
+            "message": message,
+            "log_path": str(mosaic_log_path),
+            "sigma_mosaic_deg": float(sigma_deg),
+            "gamma_mosaic_deg": float(gamma_deg),
+            "eta": float(eta_val),
+            "dataset_count": int(len(dataset_specs)),
+            "roi_count": int(roi_count),
+            "cost_reduction": float(getattr(result, "cost_reduction", 0.0) or 0.0),
+            "boundary_warning": str(getattr(result, "boundary_warning", "") or "").strip(),
+        }
+
     updated_variables = _saved_state_section(updated_state, "variables")
     updated_variables.update(
         {
@@ -1163,6 +1416,9 @@ def run_headless_geometry_fit(
             "c_var": c_var.get(),
             "center_x_var": center_x_var.get(),
             "center_y_var": center_y_var.get(),
+            "sigma_mosaic_var": sigma_mosaic_var.get(),
+            "gamma_mosaic_var": gamma_mosaic_var.get(),
+            "eta_var": eta_var.get(),
             "sample_width_var": sample_width_var.get(),
             "sample_length_var": sample_length_var.get(),
             "sample_depth_var": sample_depth_var.get(),
@@ -1200,7 +1456,24 @@ def run_headless_geometry_fit(
             "command_log": list(command_log),
             "overlay_state": overlay_state["payload"],
             "dataset_cache": dataset_cache_state["payload"],
+            "mosaic_shape_fit": mosaic_shape_report,
         },
+    )
+
+
+def run_headless_mosaic_shape_fit(
+    payload: Mapping[str, object],
+    *,
+    source_path: str | Path,
+    output_dir: str | Path | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Run geometry fitting followed by profile-based mosaic fitting from one saved GUI state."""
+
+    return run_headless_geometry_fit(
+        payload,
+        source_path=source_path,
+        output_dir=output_dir,
+        run_mosaic_shape_fit=True,
     )
 
 
@@ -1677,6 +1950,25 @@ def _resolve_fit_geometry_output_path(
     return input_path.with_name(f"{input_path.stem}_fit{suffix}")
 
 
+def _resolve_fit_mosaic_shape_output_path(
+    args: argparse.Namespace,
+    *,
+    input_path: Path,
+) -> Path:
+    """Return the output GUI-state path for headless mosaic-shape fitting."""
+
+    if bool(getattr(args, "in_place", False)):
+        return input_path
+
+    for attr_name in ("out_state", "output_state", "output"):
+        raw_value = getattr(args, attr_name, None)
+        if raw_value:
+            return Path(str(raw_value)).expanduser()
+
+    suffix = input_path.suffix or ".json"
+    return input_path.with_name(f"{input_path.stem}_mosaic_fit{suffix}")
+
+
 def _extract_fit_geometry_state_result(
     result: object,
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -1719,6 +2011,48 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
             print(f"Geometry fit log: {log_path}")
         if matched_peaks_path:
             print(f"Matched peaks: {matched_peaks_path}")
+    except Exception as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _cmd_fit_mosaic_shape(args: argparse.Namespace) -> None:
+    """Run geometry fitting and then mosaic-shape fitting from a saved GUI state."""
+
+    input_path = _resolve_fit_geometry_input_path(args)
+    output_path = _resolve_fit_mosaic_shape_output_path(args, input_path=input_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        payload = load_gui_state_file(input_path)
+        state_result, report = _extract_fit_geometry_state_result(
+            run_headless_mosaic_shape_fit(
+                payload,
+                source_path=input_path,
+                output_dir=output_path.parent,
+            )
+        )
+        save_gui_state_file(output_path, state_result)
+        print(f"Wrote fitted GUI state to {output_path}")
+        log_path = report.get("log_path")
+        matched_peaks_path = report.get("matched_peaks_path")
+        mosaic_fit_report = report.get("mosaic_shape_fit")
+        if log_path:
+            print(f"Geometry fit log: {log_path}")
+        if matched_peaks_path:
+            print(f"Matched peaks: {matched_peaks_path}")
+        if isinstance(mosaic_fit_report, Mapping):
+            mosaic_log_path = mosaic_fit_report.get("log_path")
+            if mosaic_log_path:
+                print(f"Mosaic shape fit log: {mosaic_log_path}")
+            sigma_mosaic_deg = mosaic_fit_report.get("sigma_mosaic_deg")
+            gamma_mosaic_deg = mosaic_fit_report.get("gamma_mosaic_deg")
+            eta = mosaic_fit_report.get("eta")
+            if all(value is not None for value in (sigma_mosaic_deg, gamma_mosaic_deg, eta)):
+                print(
+                    "Mosaic shape fit result: "
+                    f"sigma={float(sigma_mosaic_deg):.4f} deg, "
+                    f"gamma={float(gamma_mosaic_deg):.4f} deg, "
+                    f"eta={float(eta):.4f}"
+                )
     except Exception as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -1788,6 +2122,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite the input GUI state instead of writing a new file.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
+
+    fit_mosaic_shape_parser = subparsers.add_parser(
+        "fit-mosaic-shape",
+        aliases=["fit-mosaic"],
+        help=(
+            "Run geometry fitting followed by profile-based mosaic-shape fitting "
+            "from a saved GUI state without launching the GUI."
+        ),
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "state",
+        help="Path to a saved GUI state JSON file.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--out-state",
+        dest="out_state",
+        default=None,
+        help="Optional output GUI state path. Defaults to '<input>_mosaic_fit.json'.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--in-place",
+        action="store_true",
+        help="Overwrite the input GUI state instead of writing a new file.",
+    )
+    fit_mosaic_shape_parser.set_defaults(func=_cmd_fit_mosaic_shape)
 
     hbn_parser = subparsers.add_parser(
         "hbn-fit", help="Run the hBN ellipse fitting workflow without the GUI."
@@ -1899,6 +2258,8 @@ def main(argv: list[str] | None = None) -> None:
         "gui",
         "simulate",
         "fit-geometry",
+        "fit-mosaic-shape",
+        "fit-mosaic",
         "hbn-fit",
         "calibrant",
         "calibrant-fit",

@@ -114,7 +114,10 @@ class _FakeWindow:
         self.destroyed = False
         self.title_text = None
         self.geometry_text = None
+        self.minsize_args = None
+        self.transient_parent = None
         self.protocols = {}
+        self.bindings = {}
         self.lifted = False
         self.focused = False
 
@@ -132,8 +135,17 @@ class _FakeWindow:
     def geometry(self, text: str) -> None:
         self.geometry_text = text
 
+    def minsize(self, width: int, height: int) -> None:
+        self.minsize_args = (width, height)
+
+    def transient(self, parent) -> None:
+        self.transient_parent = parent
+
     def protocol(self, name: str, callback) -> None:
         self.protocols[name] = callback
+
+    def bind(self, event: str, callback) -> None:
+        self.bindings[event] = callback
 
     def lift(self) -> None:
         self.lifted = True
@@ -907,6 +919,87 @@ def test_open_hbn_geometry_debug_window_populates_and_reuses_existing_window(
     assert closed == [True]
 
 
+def test_analysis_popout_view_helpers_close_and_report_open(monkeypatch) -> None:
+    view_state = state.AnalysisPopoutViewState()
+
+    assert views.analysis_popout_window_open(view_state) is False
+
+    window = _FakeWindow()
+    view_state.window = window
+    view_state.exports_frame = object()
+    view_state.peak_tools_frame = object()
+    view_state.plot_frame = object()
+    view_state.dock_button = object()
+
+    assert views.analysis_popout_window_open(view_state) is True
+
+    views.close_analysis_popout_window(view_state)
+    assert window.destroyed is True
+    assert view_state.window is None
+    assert view_state.exports_frame is None
+    assert view_state.peak_tools_frame is None
+    assert view_state.plot_frame is None
+    assert view_state.dock_button is None
+
+    view_state.window = _FakeWindow(exists="error")
+    assert views.analysis_popout_window_open(view_state) is False
+
+
+def test_open_analysis_popout_window_populates_and_reuses_existing_window(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    created_windows = []
+
+    monkeypatch.setattr(
+        views.tk,
+        "Toplevel",
+        lambda _root: created_windows.append(_FakeWindow()) or created_windows[-1],
+    )
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+
+    closed = []
+    root = object()
+    view_state = state.AnalysisPopoutViewState()
+
+    opened = views.open_analysis_popout_window(
+        root=root,
+        view_state=view_state,
+        on_close=lambda: closed.append(True),
+    )
+
+    assert opened is True
+    assert len(created_windows) == 1
+    assert created_windows[0].title_text == "Analyze"
+    assert created_windows[0].geometry_text == "900x820"
+    assert created_windows[0].minsize_args == (620, 440)
+    assert created_windows[0].transient_parent is root
+    assert created_windows[0].protocols["WM_DELETE_WINDOW"] is not None
+    assert "<Escape>" in created_windows[0].bindings
+    assert isinstance(view_state.exports_frame, _FakeFrame)
+    assert isinstance(view_state.peak_tools_frame, _FakeFrame)
+    assert isinstance(view_state.plot_frame, _FakeFrame)
+    assert view_state.dock_button is _FakeButton.created[0]
+    assert view_state.dock_button.kwargs["text"] == "Dock Back"
+
+    reopened = views.open_analysis_popout_window(
+        root=root,
+        view_state=view_state,
+        on_close=lambda: closed.append(False),
+    )
+
+    assert reopened is False
+    assert len(created_windows) == 1
+    assert created_windows[0].lifted is True
+    assert created_windows[0].focused is True
+
+    created_windows[0].protocols["WM_DELETE_WINDOW"]()
+    assert closed == [True]
+
+
 def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     monkeypatch,
 ) -> None:
@@ -985,6 +1078,9 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert "Fit results will appear here" in view_state.match_results_var.get()
     assert isinstance(view_state.analysis_views_frame, _FakeFrame)
     assert isinstance(view_state.analysis_exports_frame, _FakeFrame)
+    assert isinstance(view_state.analysis_peak_tools_frame, _FakeFrame)
+    assert isinstance(view_state.analysis_popout_button, _FakeButton)
+    assert view_state.analysis_popout_button.kwargs["text"] == "Pop Out Analyze Window"
     assert isinstance(view_state.status_frame, _FakeFrame)
     assert isinstance(view_state.fig_frame, _FakeFrame)
     assert isinstance(view_state.figure_workspace_frame, _FakeFrame)
@@ -2434,7 +2530,7 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
             "fit_sigma_mosaic": True,
             "fit_gamma_mosaic": False,
             "fit_eta": True,
-            "refine_theta": False,
+            "fit_theta_i": False,
         },
     )
 
@@ -2442,18 +2538,19 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
     assert view_state.fit_sigma_mosaic_var.get() is True
     assert view_state.fit_gamma_mosaic_var.get() is False
     assert view_state.fit_eta_var.get() is True
-    assert view_state.refine_theta_var.get() is False
+    assert view_state.fit_theta_i_var.get() is False
     assert view_state.show_qr_cylinder_overlay_checkbutton is None
     assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit_button_mosaic is _FakeButton.created[0]
     assert view_state.mosaic_fit_toggle_checkbuttons["fit_gamma_mosaic"] is _FakeCheckbutton.created[2]
+    assert view_state.mosaic_fit_toggle_checkbuttons["fit_theta_i"] is _FakeCheckbutton.created[4]
     assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Geometry Overlays"
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
         "Show Geometry Overlays",
         "Fit mosaic sigma",
         "Fit mosaic gamma",
         "Fit eta",
-        "Refine theta_i",
+        "Fit theta_i",
     ]
     assert [button.kwargs["text"] for button in _FakeButton.created] == [
         "Fit Mosaic Shapes",
@@ -2478,7 +2575,6 @@ def test_geometry_overlay_action_controls_can_build_split_sections(monkeypatch) 
         view_state=view_state,
         on_toggle_geometry_overlays=lambda: None,
         on_fit_mosaic=lambda: None,
-        mosaic_fit_initial_values={"refine_theta": False},
         include_fit_button=False,
     )
     views.create_geometry_overlay_action_controls(
@@ -2486,7 +2582,6 @@ def test_geometry_overlay_action_controls_can_build_split_sections(monkeypatch) 
         view_state=view_state,
         on_toggle_geometry_overlays=lambda: None,
         on_fit_mosaic=lambda: None,
-        mosaic_fit_initial_values={"refine_theta": False},
         include_geometry_toggle=False,
     )
 
@@ -2496,7 +2591,7 @@ def test_geometry_overlay_action_controls_can_build_split_sections(monkeypatch) 
         "Fit mosaic sigma",
         "Fit mosaic gamma",
         "Fit eta",
-        "Refine theta_i",
+        "Fit theta_i",
     ]
 
 
@@ -2533,6 +2628,64 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
     assert calls == ["toggle-radial", "toggle-azimuth"]
+
+
+def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> None:
+    _FakeCheckbutton.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.AnalysisPeakToolsViewState()
+    calls = []
+
+    views.create_analysis_peak_tools_controls(
+        parent=object(),
+        view_state=view_state,
+        on_toggle_pick_mode=lambda: calls.append("pick"),
+        on_clear_selection=lambda: calls.append("clear"),
+        on_fit_selected_peaks=lambda: calls.append("fit"),
+        pick_enabled=True,
+        fit_gaussian=True,
+        fit_lorentzian=False,
+        fit_pseudo_voigt=True,
+        fit_radial=True,
+        fit_azimuth=False,
+        selection_status_text="Selected peaks: 2",
+        fit_results_text="Radial fits ready.",
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.pick_button is _FakeButton.created[0]
+    assert view_state.clear_button is _FakeButton.created[1]
+    assert view_state.fit_button is _FakeButton.created[2]
+    assert view_state.pick_button.kwargs["text"] == "Stop Picking Peaks"
+    assert view_state.clear_button.kwargs["text"] == "Clear Peaks and Fits"
+    assert view_state.fit_button.kwargs["text"] == "Fit Selected Peaks"
+    assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
+        "Gaussian",
+        "Lorentzian",
+        "Pseudo-Voigt (eta)",
+        "Radial (2θ)",
+        "Azimuth (φ)",
+    ]
+    assert view_state.fit_gaussian_var.get() is True
+    assert view_state.fit_lorentzian_var.get() is False
+    assert view_state.fit_pseudo_voigt_var.get() is True
+    assert view_state.fit_radial_var.get() is True
+    assert view_state.fit_azimuth_var.get() is False
+    assert view_state.selection_status_var.get() == "Selected peaks: 2"
+    assert view_state.fit_results_var.get() == "Radial fits ready."
+
+    view_state.pick_button.command()
+    view_state.clear_button.command()
+    view_state.fit_button.command()
+    assert calls == ["pick", "clear", "fit"]
 
 
 def test_create_integration_range_controls_store_vars_bindings_and_commands(

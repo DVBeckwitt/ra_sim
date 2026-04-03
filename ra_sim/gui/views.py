@@ -21,6 +21,8 @@ from .state import (
     AppShellViewState,
     AnalysisViewControlsViewState,
     AnalysisExportControlsViewState,
+    AnalysisPeakToolsViewState,
+    AnalysisPopoutViewState,
     BeamMosaicParameterSlidersViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
@@ -1285,8 +1287,18 @@ def create_app_shell(
     analysis_controls_frame = ttk.Frame(analyze_tab, padding=(10, 10, 10, 0))
     analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
     analysis_views_frame = analysis_controls_frame
+    analysis_popout_button = ttk.Button(
+        analysis_controls_frame,
+        text="Pop Out Analyze Window",
+    )
+    analysis_popout_button.pack(anchor=tk.W, pady=(0, 8))
     analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
     analysis_exports_frame.pack(fill=tk.X)
+    analysis_peak_tools_frame = ttk.LabelFrame(
+        analysis_controls_frame,
+        text="Peak Picking and Fitting",
+    )
+    analysis_peak_tools_frame.pack(fill=tk.X, pady=(8, 0))
 
     app_version_text = _get_app_version_text()
     config_dir_text = str(get_config_dir())
@@ -1503,6 +1515,8 @@ def create_app_shell(
     view_state.analysis_controls_frame = analysis_controls_frame
     view_state.analysis_views_frame = analysis_views_frame
     view_state.analysis_exports_frame = analysis_exports_frame
+    view_state.analysis_peak_tools_frame = analysis_peak_tools_frame
+    view_state.analysis_popout_button = analysis_popout_button
     view_state.status_frame = status_frame
     view_state.fig_frame = fig_frame
     view_state.figure_workspace_frame = figure_workspace_frame
@@ -4036,10 +4050,10 @@ def create_geometry_overlay_action_controls(
                 True,
             ),
             (
-                "refine_theta",
-                "Refine theta_i",
-                "refine_theta_var",
-                "refine_theta_checkbutton",
+                "fit_theta_i",
+                "Fit theta_i",
+                "fit_theta_i_var",
+                "fit_theta_i_checkbutton",
                 True,
             ),
         )
@@ -4288,6 +4302,132 @@ def create_analysis_export_controls(
     view_state.snapshot_button = snapshot_button
     view_state.save_q_button = save_q_button
     view_state.save_1d_grid_button = save_1d_grid_button
+
+
+def create_analysis_peak_tools_controls(
+    *,
+    parent: tk.Misc,
+    view_state: AnalysisPeakToolsViewState,
+    on_toggle_pick_mode: Callable[[], None],
+    on_clear_selection: Callable[[], None],
+    on_fit_selected_peaks: Callable[[], None],
+    pick_enabled: bool = False,
+    fit_gaussian: bool = False,
+    fit_lorentzian: bool = False,
+    fit_pseudo_voigt: bool = True,
+    fit_radial: bool = True,
+    fit_azimuth: bool = True,
+    selection_status_text: str = "No peaks selected.",
+    fit_results_text: str = "Fit results will appear here.",
+) -> None:
+    """Create analysis peak-picking controls and store their widget refs."""
+
+    frame = ttk.Frame(parent)
+    frame.pack(fill=tk.X, padx=5, pady=5)
+
+    pick_button = ttk.Button(
+        frame,
+        text=("Stop Picking Peaks" if pick_enabled else "Pick Peaks in Region"),
+        command=on_toggle_pick_mode,
+    )
+    pick_button.pack(side=tk.TOP, anchor=tk.W, pady=(0, 4))
+
+    action_row = ttk.Frame(frame)
+    action_row.pack(fill=tk.X)
+
+    clear_button = ttk.Button(
+        action_row,
+        text="Clear Peaks and Fits",
+        command=on_clear_selection,
+    )
+    clear_button.pack(side=tk.LEFT, padx=(0, 6), pady=(0, 4))
+
+    fit_button = ttk.Button(
+        action_row,
+        text="Fit Selected Peaks",
+        command=on_fit_selected_peaks,
+    )
+    fit_button.pack(side=tk.LEFT, pady=(0, 4))
+
+    model_frame = ttk.LabelFrame(frame, text="Profiles")
+    model_frame.pack(fill=tk.X, pady=(2, 4))
+    fit_gaussian_var = tk.BooleanVar(value=bool(fit_gaussian))
+    fit_gaussian_checkbutton = ttk.Checkbutton(
+        model_frame,
+        text="Gaussian",
+        variable=fit_gaussian_var,
+    )
+    fit_gaussian_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_lorentzian_var = tk.BooleanVar(value=bool(fit_lorentzian))
+    fit_lorentzian_checkbutton = ttk.Checkbutton(
+        model_frame,
+        text="Lorentzian",
+        variable=fit_lorentzian_var,
+    )
+    fit_lorentzian_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_pseudo_voigt_var = tk.BooleanVar(value=bool(fit_pseudo_voigt))
+    fit_pseudo_voigt_checkbutton = ttk.Checkbutton(
+        model_frame,
+        text="Pseudo-Voigt (eta)",
+        variable=fit_pseudo_voigt_var,
+    )
+    fit_pseudo_voigt_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+
+    axis_frame = ttk.LabelFrame(frame, text="Fit Axes")
+    axis_frame.pack(fill=tk.X, pady=(0, 4))
+    fit_radial_var = tk.BooleanVar(value=bool(fit_radial))
+    fit_radial_checkbutton = ttk.Checkbutton(
+        axis_frame,
+        text="Radial (2θ)",
+        variable=fit_radial_var,
+    )
+    fit_radial_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_azimuth_var = tk.BooleanVar(value=bool(fit_azimuth))
+    fit_azimuth_checkbutton = ttk.Checkbutton(
+        axis_frame,
+        text="Azimuth (φ)",
+        variable=fit_azimuth_var,
+    )
+    fit_azimuth_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+
+    selection_status_var = tk.StringVar(value=str(selection_status_text))
+    selection_status_label = ttk.Label(
+        frame,
+        textvariable=selection_status_var,
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=520,
+    )
+    selection_status_label.pack(fill=tk.X, pady=(0, 4))
+
+    fit_results_var = tk.StringVar(value=str(fit_results_text))
+    fit_results_label = ttk.Label(
+        frame,
+        textvariable=fit_results_var,
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=520,
+    )
+    fit_results_label.pack(fill=tk.X)
+
+    view_state.frame = frame
+    view_state.pick_button = pick_button
+    view_state.clear_button = clear_button
+    view_state.fit_button = fit_button
+    view_state.fit_gaussian_var = fit_gaussian_var
+    view_state.fit_gaussian_checkbutton = fit_gaussian_checkbutton
+    view_state.fit_lorentzian_var = fit_lorentzian_var
+    view_state.fit_lorentzian_checkbutton = fit_lorentzian_checkbutton
+    view_state.fit_pseudo_voigt_var = fit_pseudo_voigt_var
+    view_state.fit_pseudo_voigt_checkbutton = fit_pseudo_voigt_checkbutton
+    view_state.fit_radial_var = fit_radial_var
+    view_state.fit_radial_checkbutton = fit_radial_checkbutton
+    view_state.fit_azimuth_var = fit_azimuth_var
+    view_state.fit_azimuth_checkbutton = fit_azimuth_checkbutton
+    view_state.selection_status_var = selection_status_var
+    view_state.selection_status_label = selection_status_label
+    view_state.fit_results_var = fit_results_var
+    view_state.fit_results_label = fit_results_label
 
 
 def set_background_file_status_text(
@@ -4840,6 +4980,96 @@ def geometry_q_group_window_open(view_state: GeometryQGroupViewState) -> bool:
         return bool(view_state.window.winfo_exists())
     except tk.TclError:
         return False
+
+
+def analysis_popout_window_open(view_state: AnalysisPopoutViewState) -> bool:
+    """Return whether the detached Analyze window currently exists."""
+
+    if view_state.window is None:
+        return False
+    try:
+        return bool(view_state.window.winfo_exists())
+    except tk.TclError:
+        return False
+
+
+def close_analysis_popout_window(view_state: AnalysisPopoutViewState) -> None:
+    """Destroy the detached Analyze window and clear its widget references."""
+
+    if view_state.window is not None:
+        try:
+            view_state.window.destroy()
+        except tk.TclError:
+            pass
+    view_state.window = None
+    view_state.exports_frame = None
+    view_state.peak_tools_frame = None
+    view_state.plot_frame = None
+    view_state.dock_button = None
+
+
+def open_analysis_popout_window(
+    *,
+    root: tk.Misc,
+    view_state: AnalysisPopoutViewState,
+    on_close: Callable[[], None],
+) -> bool:
+    """Open the detached Analyze window if needed and expose its content frames."""
+
+    if analysis_popout_window_open(view_state):
+        try:
+            view_state.window.lift()
+            view_state.window.focus_force()
+        except tk.TclError:
+            pass
+        return False
+
+    window = tk.Toplevel(root)
+    window.title("Analyze")
+    window.geometry("900x820")
+    window.minsize(620, 440)
+    window.transient(root)
+
+    body = ttk.Frame(window, padding=10)
+    body.pack(fill=tk.BOTH, expand=True)
+
+    header = ttk.Frame(body)
+    header.pack(fill=tk.X)
+    ttk.Label(
+        header,
+        text=(
+            "The integration figures are detached from the Analyze tab while this "
+            "window is open."
+        ),
+        justify=tk.LEFT,
+        wraplength=620,
+    ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+    dock_button = ttk.Button(
+        header,
+        text="Dock Back",
+        command=on_close,
+    )
+    dock_button.pack(side=tk.RIGHT)
+
+    exports_frame = ttk.LabelFrame(body, text="Exports")
+    exports_frame.pack(fill=tk.X, pady=(10, 0))
+
+    peak_tools_frame = ttk.LabelFrame(body, text="Peak Picking and Fitting")
+    peak_tools_frame.pack(fill=tk.X, pady=(10, 0))
+
+    plot_frame = ttk.Frame(body, padding=(0, 10, 0, 0))
+    plot_frame.pack(fill=tk.BOTH, expand=True)
+
+    window.protocol("WM_DELETE_WINDOW", on_close)
+    window.bind("<Escape>", lambda _event: on_close())
+
+    view_state.window = window
+    view_state.exports_frame = exports_frame
+    view_state.peak_tools_frame = peak_tools_frame
+    view_state.plot_frame = plot_frame
+    view_state.dock_button = dock_button
+    _sync_fit2d_theme_scope(root, window)
+    return True
 
 
 def set_geometry_q_group_status_text(

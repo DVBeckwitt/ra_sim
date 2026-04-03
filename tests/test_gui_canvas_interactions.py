@@ -69,6 +69,18 @@ class _PeakCallbacks:
         return True
 
 
+class _AnalysisPeakCallbacks:
+    def __init__(self):
+        self.calls = []
+
+    def set_pick_mode(self, enabled, message=None):
+        self.calls.append(("set", bool(enabled), message))
+
+    def select_peak_from_canvas_click(self, col, row):
+        self.calls.append(("click", float(col), float(row)))
+        return True
+
+
 class _DragCallbacks:
     def __init__(self):
         self.calls = []
@@ -245,6 +257,80 @@ def test_canvas_click_routes_cancel_manual_preview_and_hkl_paths() -> None:
     assert peak_callbacks.calls[-1] == ("click", 9.5, 10.5)
 
 
+def test_canvas_click_routes_analysis_peak_pick_before_caked_drag() -> None:
+    axis = _FakeAxis()
+    peak_callbacks = _PeakCallbacks()
+    analysis_callbacks = _AnalysisPeakCallbacks()
+    drag_callbacks = _DragCallbacks()
+
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=peak_callbacks,
+        integration_range_drag_callbacks=drag_callbacks,
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: True,
+        analysis_peak_state=state.AnalysisPeakSelectionState(pick_armed=True),
+        analysis_peak_callbacks=analysis_callbacks,
+    )
+
+    event = _FakeEvent(button=1, inaxes=axis, xdata=14.5, ydata=-7.5)
+
+    assert canvas_interactions.handle_runtime_canvas_click(bindings, event) is True
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, event) is True
+    assert analysis_callbacks.calls == [("click", 14.5, -7.5)]
+    assert drag_callbacks.calls == []
+
+
+def test_canvas_right_click_cancels_analysis_peak_pick_mode() -> None:
+    axis = _FakeAxis()
+    analysis_callbacks = _AnalysisPeakCallbacks()
+    geometry_runtime = state.GeometryRuntimeState()
+
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=geometry_runtime,
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=_DragCallbacks(),
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: True,
+        analysis_peak_state=state.AnalysisPeakSelectionState(pick_armed=True),
+        analysis_peak_callbacks=analysis_callbacks,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_click(bindings, _FakeEvent(button=3)) is True
+    assert analysis_callbacks.calls == [("set", False, "Analysis peak picking canceled.")]
+    assert getattr(geometry_runtime, "_suppress_pan_press_once", False) is True
+
+
 def test_canvas_first_manual_pick_click_does_not_immediately_place_background_point() -> None:
     axis = _FakeAxis()
     peak_callbacks = _PeakCallbacks()
@@ -371,6 +457,40 @@ def test_canvas_press_does_not_start_integration_drag_while_manual_qr_pick_is_ar
     assert canvas_interactions.handle_runtime_canvas_press(bindings, event) is True
 
     assert calls == [("toggle", 12.0, 18.0)]
+    assert drag_callbacks.calls == []
+
+
+def test_canvas_press_does_not_start_integration_drag_while_hkl_pick_is_armed() -> None:
+    axis = _FakeAxis()
+    peak_callbacks = _PeakCallbacks()
+    drag_callbacks = _DragCallbacks()
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(hkl_pick_armed=True),
+        peak_selection_callbacks=peak_callbacks,
+        integration_range_drag_callbacks=drag_callbacks,
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: False,
+    )
+
+    event = _FakeEvent(button=1, inaxes=axis, xdata=12.0, ydata=18.0)
+
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, event) is True
+    assert peak_callbacks.calls == []
     assert drag_callbacks.calls == []
 
 
@@ -699,3 +819,51 @@ def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
     assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_out) is True
     assert axis.get_xlim() == pytest.approx((0.0, 100.0))
     assert axis.get_ylim() == pytest.approx((-180.0, 180.0))
+
+
+def test_restore_axis_view_keeps_existing_zoom_within_new_bounds() -> None:
+    axis = _FakeAxis(xlim=(20.0, 40.0), ylim=(90.0, 60.0))
+
+    restored = canvas_interactions.restore_axis_view(
+        axis,
+        preserved_limits=canvas_interactions.capture_axis_limits(axis),
+        default_xlim=(0.0, 100.0),
+        default_ylim=(100.0, 0.0),
+        preserve=True,
+    )
+
+    assert restored is True
+    assert axis.get_xlim() == pytest.approx((20.0, 40.0))
+    assert axis.get_ylim() == pytest.approx((90.0, 60.0))
+
+
+def test_restore_axis_view_clamps_preserved_window_into_smaller_bounds() -> None:
+    axis = _FakeAxis(xlim=(80.0, 120.0), ylim=(30.0, -10.0))
+
+    restored = canvas_interactions.restore_axis_view(
+        axis,
+        preserved_limits=canvas_interactions.capture_axis_limits(axis),
+        default_xlim=(10.0, 90.0),
+        default_ylim=(20.0, -20.0),
+        preserve=True,
+    )
+
+    assert restored is True
+    assert axis.get_xlim() == pytest.approx((50.0, 90.0))
+    assert axis.get_ylim() == pytest.approx((20.0, -20.0))
+
+
+def test_restore_axis_view_uses_defaults_when_preserve_disabled() -> None:
+    axis = _FakeAxis(xlim=(20.0, 40.0), ylim=(90.0, 60.0))
+
+    restored = canvas_interactions.restore_axis_view(
+        axis,
+        preserved_limits=canvas_interactions.capture_axis_limits(axis),
+        default_xlim=(0.0, 100.0),
+        default_ylim=(100.0, 0.0),
+        preserve=False,
+    )
+
+    assert restored is True
+    assert axis.get_xlim() == pytest.approx((0.0, 100.0))
+    assert axis.get_ylim() == pytest.approx((100.0, 0.0))

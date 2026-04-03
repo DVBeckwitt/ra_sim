@@ -5666,64 +5666,6 @@ def _build_current_dataset_structure_text() -> str:
     return f"{phase_parts[0]} | phase weight {weight1_value:.2f}"
 
 
-def _refresh_match_workflow_control_states(
-    *,
-    peak_tools_ready: bool,
-    fit_controls_ready: bool,
-    manual_pairs_ready: bool,
-) -> None:
-    """Enable only the Match-step controls that make sense for the current state."""
-
-    enable_peak_tools = bool(peak_tools_ready)
-    enable_fit_controls = bool(fit_controls_ready)
-    enable_run_fit = bool(fit_controls_ready and manual_pairs_ready)
-
-    gui_views.set_widget_enabled(
-        getattr(geometry_tool_actions_view_state, "geometry_manual_pick_button", None),
-        enable_peak_tools,
-    )
-    gui_views.set_widget_enabled(
-        getattr(geometry_tool_actions_view_state, "geometry_preview_exclude_button", None),
-        enable_peak_tools,
-    )
-    gui_views.set_widget_enabled(
-        getattr(geometry_tool_actions_view_state, "geometry_manual_import_button", None),
-        enable_peak_tools,
-    )
-    gui_views.set_widget_enabled(
-        getattr(geometry_tool_actions_view_state, "geometry_manual_undo_button", None),
-        manual_pairs_ready,
-    )
-    gui_views.set_widget_enabled(
-        getattr(geometry_tool_actions_view_state, "geometry_manual_export_button", None),
-        manual_pairs_ready,
-    )
-    gui_views.set_widget_enabled(
-        getattr(
-            geometry_tool_actions_view_state,
-            "clear_geometry_preview_exclusions_button",
-            None,
-        ),
-        manual_pairs_ready,
-    )
-
-    for widget in (
-        getattr(hkl_lookup_view_state, "select_button", None),
-        getattr(hkl_lookup_view_state, "hkl_pick_button", None),
-        getattr(hkl_lookup_view_state, "clear_button", None),
-        getattr(hkl_lookup_view_state, "show_bragg_ewald_button", None),
-        getattr(hkl_lookup_view_state, "bragg_qr_groups_button", None),
-    ):
-        gui_views.set_widget_enabled(widget, enable_peak_tools)
-
-    for widget in (
-        getattr(geometry_fit_parameter_controls_view_state, "toggle_checkbuttons", {}) or {}
-    ).values():
-        gui_views.set_widget_enabled(widget, enable_fit_controls)
-
-    gui_views.set_widget_enabled(globals().get("fit_button_geometry"), enable_run_fit)
-
-
 def _refresh_session_summary_panel() -> None:
     """Refresh the always-visible session summary shown above the tabs."""
 
@@ -5819,15 +5761,6 @@ def _refresh_session_summary_panel() -> None:
             else "missing"
         ),
     }
-    peak_tools_ready = background_total > 0 and bool(cif_path)
-    fit_controls_ready = peak_tools_ready and fit_selection_ready
-    manual_pairs_ready = manual_pair_total > 0
-    _refresh_match_workflow_control_states(
-        peak_tools_ready=peak_tools_ready,
-        fit_controls_ready=fit_controls_ready,
-        manual_pairs_ready=manual_pairs_ready,
-    )
-
     gui_views.set_app_shell_session_summary_text(
         app_shell_view_state,
         "\n".join(
@@ -5865,33 +5798,12 @@ def _refresh_session_summary_panel() -> None:
         _current_app_shell_view_mode(),
     )
 
-    if background_total <= 0:
-        match_results_text = (
-            "Load at least one background in Setup before starting the Match workflow."
-        )
-    elif not cif_path:
-        match_results_text = (
-            "Load the primary CIF in Setup before selecting peaks and fitting geometry."
-        )
-    elif not fit_selection_ready:
-        match_results_text = (
-            "Choose the backgrounds used for geometry fitting in Step 1 before moving on."
-        )
-    elif manual_pair_total <= 0:
-        match_results_text = (
-            "Add at least one measured-to-simulated peak match in Step 2 to enable the geometry fit."
-        )
-    elif freshness_status == "Fresh":
-        match_results_text = (
-            f"{fit_quality_text}. Review detector overlays and the status strip after each fit."
-        )
-    else:
-        match_results_text = (
-            "Peak matches are ready. Run the geometry fit, then review the overlays and fit health."
-        )
     gui_views.set_match_results_text(
         app_shell_view_state,
-        match_results_text,
+        (
+            f"{fit_quality_text}. Review overlays on the detector image and the "
+            "status panel below after each fit."
+        ),
     )
     refresh_selector = globals().get("_refresh_geometry_fit_background_table")
     if callable(refresh_selector):
@@ -14522,12 +14434,11 @@ on_fit_geometry_click = lambda: None
 
 fit_button_geometry = ttk.Button(
     app_shell_view_state.match_run_frame,
-    text="Run Geometry Fit",
-    command=on_fit_geometry_click,
-    state=tk.DISABLED,
+    text="Fit Positions & Geometry",
+    command=on_fit_geometry_click
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
-fit_button_geometry.config(text="Run Geometry Fit", command=on_fit_geometry_click)
+fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
 gui_views.create_geometry_fit_history_controls(
     parent=app_shell_view_state.match_run_frame,
     view_state=geometry_tool_actions_view_state,
@@ -15729,11 +15640,7 @@ def _set_analysis_popout_button_state(*, detached: bool) -> None:
         return
     try:
         button.configure(
-            text=(
-                "Return Analyze to Tab"
-                if detached
-                else "Open Analyze in Separate Window"
-            ),
+            text=("Dock Analyze Window" if detached else "Pop Out Analyze Window"),
             command=_toggle_analysis_popout,
         )
     except Exception:
@@ -16183,7 +16090,7 @@ gui_views.populate_app_shell_quick_controls(
     controls=[
         {
             "key": "theta_initial",
-            "label": "Theta",
+            "label": "theta",
             "variable": theta_initial_var,
             "scale": theta_initial_scale,
             "command": schedule_update,
@@ -16191,25 +16098,44 @@ gui_views.populate_app_shell_quick_controls(
         },
         {
             "key": "corto_detector",
-            "label": "Detector distance",
+            "label": "distance",
             "variable": corto_detector_var,
             "scale": corto_detector_scale,
             "command": schedule_update,
             "step": 0.0001,
         },
         {
+            "key": "sampling_resolution",
+            "label": "sampling resolution",
+            "control_type": "choice",
+            "variable": resolution_var,
+            "options": resolution_options,
+        },
+        {
+            "key": "qr_cylinder_mode",
+            "label": "Qr cylinder lines",
+            "control_type": "choice",
+            "variable": qr_cylinder_display_mode_var,
+            "options": QR_CYLINDER_DISPLAY_MODE_OPTIONS,
+        },
+        {
             "key": "show_geometry_overlays",
-            "label": "Show geometry overlays",
+            "label": "Show Geometry Overlays",
             "control_type": "check",
             "variable": geometry_overlay_actions_view_state.show_geometry_overlays_var,
             "command": _toggle_geometry_overlay_visibility,
         },
         {
             "key": "toggle_background",
-            "label": "Show or hide background",
+            "label": "Toggle Background",
             "control_type": "button",
-            "button_text": "Show/Hide Background",
             "command": toggle_background,
+        },
+        {
+            "key": "switch_background",
+            "label": "Switch Background",
+            "control_type": "button",
+            "command": switch_background,
         },
         {
             "key": "fast_viewer",
@@ -16220,13 +16146,38 @@ gui_views.populate_app_shell_quick_controls(
         },
         {
             "key": "reset_view",
-            "label": "Reset plot view",
+            "label": "Reset view",
             "control_type": "button",
-            "button_text": "Reset Plot View",
             "command": _reset_primary_figure_view,
         },
+        {
+            "key": "log_radial",
+            "label": "Log radial",
+            "control_type": "check",
+            "variable": analysis_view_controls_view_state.log_radial_var,
+            "command": toggle_log_radial,
+        },
+        {
+            "key": "log_azimuth",
+            "label": "Log azimuth",
+            "control_type": "check",
+            "variable": analysis_view_controls_view_state.log_azimuth_var,
+            "command": toggle_log_azimuth,
+        },
+        {
+            "key": "auto_match_scale",
+            "label": "Auto-Match Scale (Radial Peak)",
+            "control_type": "button",
+            "command": _auto_match_scale_factor_to_radial_peak,
+        },
+        {
+            "key": "sf_prune_bias",
+            "label": "SF prune bias",
+            "variable": sf_prune_bias_var,
+            "scale": sf_prune_bias_scale,
+            "step": 0.01,
+        },
     ],
-    on_more_controls=lambda: app_shell_view_state.control_tab_var.set("refine"),
 )
 geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
     app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
@@ -16242,7 +16193,6 @@ try:
     fast_viewer_workflow.refresh_status_text()
 except Exception:
     pass
-_refresh_session_summary_panel()
 
 
 def _refresh_refine_section_summaries(*_args) -> None:

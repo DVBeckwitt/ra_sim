@@ -108,6 +108,7 @@ class SelectedPeakRuntimeBindings:
     native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None
     simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None
     deactivate_conflicting_modes: Callable[[], None] | None = None
+    on_hkl_pick_mode_changed: Callable[[bool], None] | None = None
     n2: Any = None
     tcl_error_types: tuple[type[BaseException], ...] = ()
 
@@ -2236,6 +2237,11 @@ def set_runtime_hkl_pick_mode(
     ):
         bindings.deactivate_conflicting_modes()
     update_runtime_hkl_pick_button_label(bindings)
+    if callable(bindings.on_hkl_pick_mode_changed):
+        try:
+            bindings.on_hkl_pick_mode_changed(bindings.peak_selection_state.hkl_pick_armed)
+        except Exception:
+            pass
     if message:
         _set_status_text(bindings.set_status_text, message)
 
@@ -2441,6 +2447,7 @@ def make_runtime_peak_selection_bindings_factory(
     native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None,
     simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None,
     deactivate_conflicting_modes_factory: object = None,
+    on_hkl_pick_mode_changed_factory: object = None,
     n2: Any = None,
     tcl_error_types: tuple[type[BaseException], ...] = (),
 ):
@@ -2466,6 +2473,9 @@ def make_runtime_peak_selection_bindings_factory(
             simulate_ideal_hkl_native_center=simulate_ideal_hkl_native_center,
             deactivate_conflicting_modes=_resolve_runtime_value(
                 deactivate_conflicting_modes_factory
+            ),
+            on_hkl_pick_mode_changed=_resolve_runtime_value(
+                on_hkl_pick_mode_changed_factory
             ),
             n2=n2,
             tcl_error_types=tuple(tcl_error_types or ()),

@@ -429,8 +429,8 @@ class GeometryOverlayActionsViewState:
     fit_gamma_mosaic_checkbutton: Any = None
     fit_eta_var: Any = None
     fit_eta_checkbutton: Any = None
-    refine_theta_var: Any = None
-    refine_theta_checkbutton: Any = None
+    fit_theta_i_var: Any = None
+    fit_theta_i_checkbutton: Any = None
     mosaic_fit_toggle_vars: dict[str, Any] = field(default_factory=dict)
     mosaic_fit_toggle_checkbuttons: dict[str, Any] = field(default_factory=dict)
     fit_button_mosaic: Any = None
@@ -457,6 +457,41 @@ class AnalysisExportControlsViewState:
     snapshot_button: Any = None
     save_q_button: Any = None
     save_1d_grid_button: Any = None
+
+
+@dataclass
+class AnalysisPeakToolsViewState:
+    """Widget references and vars for analysis peak picking and 1D fitting."""
+
+    frame: Any = None
+    pick_button: Any = None
+    clear_button: Any = None
+    fit_button: Any = None
+    fit_gaussian_var: Any = None
+    fit_gaussian_checkbutton: Any = None
+    fit_lorentzian_var: Any = None
+    fit_lorentzian_checkbutton: Any = None
+    fit_pseudo_voigt_var: Any = None
+    fit_pseudo_voigt_checkbutton: Any = None
+    fit_radial_var: Any = None
+    fit_radial_checkbutton: Any = None
+    fit_azimuth_var: Any = None
+    fit_azimuth_checkbutton: Any = None
+    selection_status_var: Any = None
+    selection_status_label: Any = None
+    fit_results_var: Any = None
+    fit_results_label: Any = None
+
+
+@dataclass
+class AnalysisPopoutViewState:
+    """Widget references for the detached Analyze window."""
+
+    window: Any = None
+    exports_frame: Any = None
+    peak_tools_frame: Any = None
+    plot_frame: Any = None
+    dock_button: Any = None
 
 
 @dataclass
@@ -493,6 +528,22 @@ class IntegrationRangeControlsViewState:
     phi_max_slider: Any = None
     phi_max_entry_var: Any = None
     phi_max_entry: Any = None
+
+
+@dataclass
+class AnalysisPeakSelectionState:
+    """Selection/fitting state for analysis peaks picked from the caked view."""
+
+    pick_armed: bool = False
+    saved_axis_limits: tuple[tuple[float, float], tuple[float, float]] | None = None
+    selected_peaks: list[dict[str, object]] = field(default_factory=list)
+    radial_fit_results: list[dict[str, object]] = field(default_factory=list)
+    azimuth_fit_results: list[dict[str, object]] = field(default_factory=list)
+    caked_peak_artists: list[Any] = field(default_factory=list)
+    radial_peak_artists: list[Any] = field(default_factory=list)
+    azimuth_peak_artists: list[Any] = field(default_factory=list)
+    radial_fit_artists: list[Any] = field(default_factory=list)
+    azimuth_fit_artists: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -661,6 +712,8 @@ class AppShellViewState:
     analysis_controls_frame: Any = None
     analysis_views_frame: Any = None
     analysis_exports_frame: Any = None
+    analysis_peak_tools_frame: Any = None
+    analysis_popout_button: Any = None
     status_frame: Any = None
     fig_frame: Any = None
     figure_workspace_frame: Any = None
@@ -997,8 +1050,17 @@ class AppState:
     analysis_export_controls_view: AnalysisExportControlsViewState = field(
         default_factory=AnalysisExportControlsViewState
     )
+    analysis_peak_tools_view: AnalysisPeakToolsViewState = field(
+        default_factory=AnalysisPeakToolsViewState
+    )
+    analysis_popout_view: AnalysisPopoutViewState = field(
+        default_factory=AnalysisPopoutViewState
+    )
     integration_range_controls_view: IntegrationRangeControlsViewState = field(
         default_factory=IntegrationRangeControlsViewState
+    )
+    analysis_peak_selection: AnalysisPeakSelectionState = field(
+        default_factory=AnalysisPeakSelectionState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

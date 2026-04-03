@@ -798,6 +798,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
                 "native_sim_to_display_coords": "display-coords",
                 "simulate_ideal_hkl_native_center": "ideal-center",
                 "deactivate_conflicting_modes_factory": "deactivate-modes",
+                "on_hkl_pick_mode_changed_factory": None,
                 "n2": "n2",
                 "tcl_error_types": (RuntimeError,),
             },

@@ -34,6 +34,8 @@ class CanvasInteractionBindings:
     restore_geometry_manual_pick_view: Callable[..., None]
     render_current_geometry_manual_pairs: Callable[..., object]
     caked_view_enabled_factory: object
+    analysis_peak_state: Any = None
+    analysis_peak_callbacks: Any = None
     set_geometry_status_text: Callable[[str], None] | None = None
     draw_idle: Callable[[], None] | None = None
 
@@ -131,6 +133,101 @@ def _set_axis_limits(
     except Exception:
         return False
     return True
+
+
+def capture_axis_limits(
+    axis: Any,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Return the finite x/y limits for one Matplotlib-like axis."""
+
+    return _axis_limits(axis)
+
+
+def _coerce_preserved_limits(
+    preserved_limits: tuple[float, float] | list[float],
+    default_limits: tuple[float, float] | list[float],
+) -> tuple[float, float]:
+    """Clamp one preserved axis window into the new data bounds."""
+
+    try:
+        preserved_start = float(preserved_limits[0])
+        preserved_end = float(preserved_limits[1])
+        default_start = float(default_limits[0])
+        default_end = float(default_limits[1])
+    except Exception:
+        return (float(default_limits[0]), float(default_limits[1]))
+
+    if not all(
+        np.isfinite(value)
+        for value in (
+            preserved_start,
+            preserved_end,
+            default_start,
+            default_end,
+        )
+    ):
+        return (default_start, default_end)
+
+    preserved_lo = min(preserved_start, preserved_end)
+    preserved_hi = max(preserved_start, preserved_end)
+    default_lo = min(default_start, default_end)
+    default_hi = max(default_start, default_end)
+    preserved_span = preserved_hi - preserved_lo
+    default_span = default_hi - default_lo
+    if preserved_span <= 1.0e-9 or default_span <= 1.0e-9:
+        return (default_start, default_end)
+
+    if preserved_span >= default_span:
+        clamped_lo = default_lo
+        clamped_hi = default_hi
+    else:
+        clamped_lo = preserved_lo
+        clamped_hi = preserved_hi
+        if clamped_lo < default_lo:
+            shift = default_lo - clamped_lo
+            clamped_lo += shift
+            clamped_hi += shift
+        if clamped_hi > default_hi:
+            shift = clamped_hi - default_hi
+            clamped_lo -= shift
+            clamped_hi -= shift
+        clamped_lo = max(clamped_lo, default_lo)
+        clamped_hi = min(clamped_hi, default_hi)
+        if clamped_hi - clamped_lo <= 1.0e-9:
+            clamped_lo = default_lo
+            clamped_hi = default_hi
+
+    if preserved_start <= preserved_end:
+        return (float(clamped_lo), float(clamped_hi))
+    return (float(clamped_hi), float(clamped_lo))
+
+
+def restore_axis_view(
+    axis: Any,
+    *,
+    preserved_limits: tuple[tuple[float, float], tuple[float, float]] | None,
+    default_xlim: tuple[float, float] | list[float],
+    default_ylim: tuple[float, float] | list[float],
+    preserve: bool,
+) -> bool:
+    """Apply a preserved axis view when possible, else reset to defaults."""
+
+    resolved_xlim = (float(default_xlim[0]), float(default_xlim[1]))
+    resolved_ylim = (float(default_ylim[0]), float(default_ylim[1]))
+    if preserve and preserved_limits is not None:
+        resolved_xlim = _coerce_preserved_limits(
+            preserved_limits[0],
+            resolved_xlim,
+        )
+        resolved_ylim = _coerce_preserved_limits(
+            preserved_limits[1],
+            resolved_ylim,
+        )
+    return _set_axis_limits(
+        axis,
+        xlim=resolved_xlim,
+        ylim=resolved_ylim,
+    )
 
 
 def _event_has_axis_data(
@@ -310,6 +407,14 @@ def handle_runtime_canvas_click(
                 "Preview exclusion mode canceled.",
             )
             return True
+        analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
+        if bool(getattr(analysis_peak_state, "pick_armed", False)):
+            setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
+            callbacks = getattr(bindings, "analysis_peak_callbacks", None)
+            setter = getattr(callbacks, "set_pick_mode", None)
+            if callable(setter):
+                setter(False, "Analysis peak picking canceled.")
+                return True
         return False
 
     if getattr(event, "button", None) != 1:
@@ -329,6 +434,20 @@ def handle_runtime_canvas_click(
             float(event.ydata),
         )
         return True
+
+    analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
+    if bool(getattr(analysis_peak_state, "pick_armed", False)):
+        if (
+            getattr(event, "inaxes", None) is not bindings.axis
+            or getattr(event, "xdata", None) is None
+            or getattr(event, "ydata", None) is None
+        ):
+            return False
+        callbacks = getattr(bindings, "analysis_peak_callbacks", None)
+        click_handler = getattr(callbacks, "select_peak_from_canvas_click", None)
+        if not callable(click_handler):
+            return False
+        return bool(click_handler(float(event.xdata), float(event.ydata)))
 
     if _runtime_caked_view_enabled(bindings):
         return False
@@ -425,6 +544,32 @@ def handle_runtime_canvas_press(
         # The paired click handler owns Qr/Qz-set selection while armed. Consuming
         # the press here prevents integration-range dragging from stealing the same
         # left click in detector or caked views.
+        return True
+
+    if bool(bindings.peak_selection_state.hkl_pick_armed):
+        if getattr(event, "button", None) != 1:
+            return False
+        if (
+            getattr(event, "inaxes", None) is not bindings.axis
+            or getattr(event, "xdata", None) is None
+            or getattr(event, "ydata", None) is None
+        ):
+            return False
+        # The paired click handler owns HKL peak selection while armed. Consuming
+        # the press here prevents integration-range dragging from stealing the same
+        # left click before or after the click-selection callback resolves.
+        return True
+
+    analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
+    if bool(getattr(analysis_peak_state, "pick_armed", False)):
+        if getattr(event, "button", None) != 1:
+            return False
+        if (
+            getattr(event, "inaxes", None) is not bindings.axis
+            or getattr(event, "xdata", None) is None
+            or getattr(event, "ydata", None) is None
+        ):
+            return False
         return True
 
     on_press = getattr(bindings.integration_range_drag_callbacks, "on_press", None)
@@ -590,6 +735,8 @@ def make_runtime_canvas_interaction_bindings_factory(
     restore_geometry_manual_pick_view: Callable[..., None],
     render_current_geometry_manual_pairs: Callable[..., object],
     caked_view_enabled_factory: object,
+    analysis_peak_state: Any = None,
+    analysis_peak_callbacks: Any = None,
     set_geometry_status_text_factory: object | None = None,
     draw_idle_factory: object | None = None,
 ) -> Callable[[], CanvasInteractionBindings]:
@@ -617,6 +764,8 @@ def make_runtime_canvas_interaction_bindings_factory(
             restore_geometry_manual_pick_view=restore_geometry_manual_pick_view,
             render_current_geometry_manual_pairs=render_current_geometry_manual_pairs,
             caked_view_enabled_factory=caked_view_enabled_factory,
+            analysis_peak_state=analysis_peak_state,
+            analysis_peak_callbacks=analysis_peak_callbacks,
             set_geometry_status_text=_resolve_runtime_value(
                 set_geometry_status_text_factory
             ),

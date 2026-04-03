@@ -365,6 +365,20 @@ def clear_runtime_qr_cylinder_overlay_artists(
     )
 
 
+def invalidate_runtime_qr_cylinder_overlay_cache(
+    bindings: QrCylinderOverlayRuntimeBindings,
+    *,
+    clear_artists: bool = False,
+    redraw: bool = False,
+) -> None:
+    """Drop cached overlay paths so the next refresh rebuilds them."""
+
+    bindings.overlay_cache["signature"] = None
+    bindings.overlay_cache["paths"] = []
+    if clear_artists:
+        clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=redraw)
+
+
 def refresh_runtime_qr_cylinder_overlay(
     bindings: QrCylinderOverlayRuntimeBindings,
     *,
@@ -379,8 +393,7 @@ def refresh_runtime_qr_cylinder_overlay(
 
     entries = list(bindings.get_active_entries() or [])
     if not entries:
-        bindings.overlay_cache["signature"] = None
-        bindings.overlay_cache["paths"] = []
+        invalidate_runtime_qr_cylinder_overlay_cache(bindings)
         clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=redraw)
         if update_status:
             _set_status_text(

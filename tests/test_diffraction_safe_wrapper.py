@@ -156,3 +156,5 @@ def test_process_peaks_parallel_safe_can_prefer_python_runner(monkeypatch) -> No
     )
 
     assert call_order == ["python"]
+    stats = diffraction.get_last_process_peaks_safe_stats()
+    assert stats["used_python_runner"] is True

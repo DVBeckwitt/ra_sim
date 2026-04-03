@@ -35,8 +35,9 @@
 
 ## Highlights
 
-- Full 2D DWBA forward modeling with refraction, footprint, divergence, and detector
-  geometry handling for grazing-incidence diffraction.
+- Full 2D grazing-incidence forward modeling with refraction, footprint,
+  divergence, detector geometry handling, and a switch between the original fast
+  optics approximation and a more exact complex-k DWBA slab transport model.
 - Calibration workflow for fitting hBN ring ellipses and transferring detector
   geometry into simulation runs.
 - Refinement controls for mosaic orientation distributions, stacking disorder,
@@ -121,6 +122,29 @@ A typical workflow looks like this:
    integrations.
 4. Refine mosaic, stacking, and structural parameters and save parameter
    snapshots for reproducibility.
+
+### Optics Modes
+
+RA-SIM currently exposes two optics-transport models in the GUI and headless
+paths:
+
+- `Original Fast Approx (Fresnel + Beer-Lambert)` uses a grazing-angle
+  transmitted-angle approximation, Fresnel transmission factors, and
+  exponential depth attenuation. Exit optics are cached in a lookup table, so
+  this mode is much faster and is the default for interactive fitting.
+- `Complex-k DWBA slab optics (Precise)` keeps the same reflection list,
+  `solve_q` search, structure factors, and detector projection, but replaces
+  the entry and exit transport with a complex-`k_z` slab treatment. It computes
+  the in-sample and exit wavevectors from the slab dispersion relation and uses
+  exact Fresnel power transmission at the air/sample interfaces.
+
+In other words, the "DWBA" difference here is mainly in how the beam is
+refracted, transmitted, and attenuated on the way into and out of the sample.
+It is not a separate detector model or a different structure-factor engine.
+
+The current exact path is an air/sample/air slab model rather than a general
+multilayer stack. Use the fast mode when you need throughput, and the exact
+mode when refraction and near-critical-angle transport matter more than speed.
 
 ### Manual Geometry Fit
 

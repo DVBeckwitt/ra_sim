@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 import numpy as np
 
 from ra_sim.fitting import optimization as opt
@@ -83,6 +86,44 @@ def _fake_process_three_reflections(*args, **kwargs):
             )
         )
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+
+def _process_wrapper_args(image_size: int):
+    params = _base_params(image_size)
+    mosaic = params["mosaic_params"]
+    return (
+        np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        int(image_size),
+        float(params["a"]),
+        float(params["c"]),
+        float(params["lambda"]),
+        np.zeros((image_size, image_size), dtype=np.float64),
+        float(params["corto_detector"]),
+        float(params["gamma"]),
+        float(params["Gamma"]),
+        float(params["chi"]),
+        float(params["psi"]),
+        float(params["psi_z"]),
+        float(params["zs"]),
+        float(params["zb"]),
+        params["n2"],
+        np.asarray(mosaic["beam_x_array"], dtype=np.float64),
+        np.asarray(mosaic["beam_y_array"], dtype=np.float64),
+        np.asarray(mosaic["theta_array"], dtype=np.float64),
+        np.asarray(mosaic["phi_array"], dtype=np.float64),
+        float(mosaic["sigma_mosaic_deg"]),
+        float(mosaic["gamma_mosaic_deg"]),
+        float(mosaic["eta"]),
+        np.asarray(mosaic["wavelength_array"], dtype=np.float64),
+        float(params["debye_x"]),
+        float(params["debye_y"]),
+        np.asarray(params["center"], dtype=np.float64),
+        float(params["theta_initial"]),
+        float(params["cor_angle"]),
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+    )
 
 
 def test_build_global_point_matches_uses_global_assignment():
@@ -410,6 +451,79 @@ def test_process_peaks_wrapper_prefers_python_runner_when_numba_disabled(monkeyp
         assert np.allclose(call["theta_array"], [0.0])
         assert np.allclose(call["phi_array"], [0.0])
         assert np.allclose(call["wavelength_array"], [1.0])
+
+
+def test_process_peaks_wrapper_serializes_first_numba_warmup(monkeypatch):
+    process_calls = []
+    call_gate = threading.Barrier(2)
+    state_lock = threading.Lock()
+    active_calls = 0
+    max_active_calls = 0
+
+    def fake_process(*args, **kwargs):
+        nonlocal active_calls
+        nonlocal max_active_calls
+        with state_lock:
+            active_calls += 1
+            max_active_calls = max(max_active_calls, active_calls)
+            process_calls.append(dict(kwargs))
+        try:
+            threading.Event().wait(0.05)
+            return _fake_process_peaks(*args, **kwargs)
+        finally:
+            with state_lock:
+                active_calls -= 1
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", fake_process)
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", False)
+
+    process_args = _process_wrapper_args(8)
+
+    def run_once():
+        call_gate.wait(timeout=5.0)
+        return opt._process_peaks_parallel_safe(*process_args, save_flag=0)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(run_once) for _ in range(2)]
+        for future in futures:
+            image, *_ = future.result(timeout=5.0)
+            assert image.shape == (8, 8)
+
+    assert len(process_calls) == 2
+    assert max_active_calls == 1
+    assert opt._NUMBA_PROCESS_PEAKS_WARMED is True
+
+
+def test_process_peaks_wrapper_disables_numba_after_python_fallback(monkeypatch):
+    process_calls = []
+    safe_stats = {"used_python_runner": True}
+
+    def fake_safe_wrapper(*args, **kwargs):
+        process_calls.append(dict(kwargs))
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", fake_safe_wrapper)
+    monkeypatch.setattr(opt, "_DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER", fake_safe_wrapper)
+    monkeypatch.setattr(
+        opt,
+        "get_last_process_peaks_safe_stats",
+        lambda: dict(safe_stats),
+    )
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", False)
+
+    process_args = _process_wrapper_args(8)
+
+    opt._process_peaks_parallel_safe(*process_args, save_flag=0)
+
+    assert opt._USE_NUMBA_PROCESS_PEAKS is False
+    assert opt._NUMBA_PROCESS_PEAKS_WARMED is False
+    assert process_calls[0].get("prefer_python_runner") is None
+
+    opt._process_peaks_parallel_safe(*process_args, save_flag=0)
+
+    assert process_calls[1].get("prefer_python_runner") is True
 
 
 def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_reflections(

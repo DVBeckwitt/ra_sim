@@ -161,6 +161,7 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
 
 _EMPTY_PROCESS_PEAKS_SAFE_STATS = {
     "used_safe_cache": False,
+    "used_python_runner": False,
     "source_templates_built": 0,
     "source_templates_reused": 0,
     "rays_reused": 0,
@@ -4790,7 +4791,9 @@ def process_peaks_parallel_safe(*args, **kwargs):
         for call_args, call_kwargs, call_meta in call_variants:
             try:
                 result = runner(*call_args, **call_kwargs)
-                _set_last_process_peaks_safe_stats()
+                _set_last_process_peaks_safe_stats(
+                    used_python_runner=bool(callable(py_runner) and runner is py_runner),
+                )
                 return _finalize_clustered_process_peaks_result(result, call_meta)
             except TypeError as exc:
                 last_exc = exc

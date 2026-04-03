@@ -278,6 +278,7 @@ def _build_workflow(
     fast_plot_viewer_module=None,
     requested_enabled: bool = False,
     manual_pick_armed_factory=None,
+    hkl_pick_armed_factory=None,
     overlay_model_factory=None,
     layer_versions_factory=None,
     control_locked: bool = False,
@@ -333,6 +334,11 @@ def _build_workflow(
             if manual_pick_armed_factory is None
             else manual_pick_armed_factory
         ),
+        hkl_pick_armed_factory=(
+            (lambda: False)
+            if hkl_pick_armed_factory is None
+            else hkl_pick_armed_factory
+        ),
         integration_drag_active_factory=integration_drag_active_factory,
         requested_enabled=bool(requested_enabled),
         control_locked=bool(control_locked),
@@ -358,6 +364,20 @@ def test_fast_viewer_control_disables_when_launch_is_blocked() -> None:
     assert (
         display_view_state.fast_viewer_status_var.get()
         == "Fast viewer unavailable while manual geometry picking is active."
+    )
+
+
+def test_fast_viewer_control_disables_while_hkl_image_pick_is_active() -> None:
+    workflow, display_view_state, _refs = _build_workflow(
+        hkl_pick_armed_factory=lambda: True,
+    )
+
+    workflow.refresh_runtime_mode(announce=False)
+
+    assert display_view_state.fast_viewer_checkbutton.disabled is True
+    assert (
+        display_view_state.fast_viewer_status_var.get()
+        == "Fast viewer unavailable while HKL image-pick is active."
     )
 
 

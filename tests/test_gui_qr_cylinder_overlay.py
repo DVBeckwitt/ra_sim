@@ -487,3 +487,40 @@ def test_qr_cylinder_overlay_toggle_and_callback_helpers_use_live_bindings(
         ("refresh", "bindings-1", False, True),
         ("toggle", "bindings-2"),
     ]
+
+
+def test_invalidate_runtime_qr_cylinder_overlay_cache_resets_paths_and_artists(
+    monkeypatch,
+) -> None:
+    clear_calls = []
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay.gui_overlays,
+        "clear_artists",
+        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append(
+            (list(artists), redraw)
+        ),
+    )
+
+    bindings = qr_cylinder_overlay.QrCylinderOverlayRuntimeBindings(
+        ax=object(),
+        overlay_artists=["artist"],
+        overlay_cache={"signature": "cached", "paths": ["path"]},
+        overlay_enabled_factory=lambda: True,
+        get_active_entries=lambda: [],
+        render_config_factory=lambda: None,
+        ai_factory=lambda: None,
+        get_detector_angular_maps=lambda _ai: (None, None),
+        native_sim_to_display_coords=lambda col, row, shape: (col, row),
+        draw_idle=lambda: None,
+        set_status_text=lambda _text: None,
+    )
+
+    qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(
+        bindings,
+        clear_artists=True,
+        redraw=False,
+    )
+
+    assert bindings.overlay_cache == {"signature": None, "paths": []}
+    assert clear_calls == [(["artist"], False)]

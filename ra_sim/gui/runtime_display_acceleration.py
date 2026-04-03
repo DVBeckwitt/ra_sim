@@ -67,6 +67,7 @@ def build_runtime_fast_viewer_workflow(
     set_progress_text: Callable[[str], None] | None = None,
     refresh_run_status_bar: Callable[[], None] | None = None,
     manual_pick_armed_factory: object = None,
+    hkl_pick_armed_factory: object = None,
     manual_pick_session_active_factory: object = None,
     geometry_preview_exclude_armed_factory: object = None,
     live_geometry_preview_enabled_factory: object = None,
@@ -308,6 +309,11 @@ def build_runtime_fast_viewer_workflow(
         try:
             if bool(_resolve_runtime_value(manual_pick_armed_factory)):
                 return "manual geometry picking is active"
+        except Exception:
+            pass
+        try:
+            if bool(_resolve_runtime_value(hkl_pick_armed_factory)):
+                return "HKL image-pick is active"
         except Exception:
             pass
         try:
