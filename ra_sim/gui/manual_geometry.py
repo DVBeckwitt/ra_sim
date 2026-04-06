@@ -923,6 +923,78 @@ def geometry_manual_prioritize_candidate_entries(
     return reordered
 
 
+def geometry_manual_central_candidate(
+    candidate_entries: Sequence[dict[str, object]] | None,
+    *,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+) -> dict[str, object] | None:
+    """Return one deterministic central-ray representative for a Qr/Qz group."""
+
+    entries = [dict(entry) for entry in candidate_entries or [] if isinstance(entry, dict)]
+    if not entries:
+        return None
+
+    finite_entries: list[dict[str, object]] = []
+    weights: list[float] = []
+    cols: list[float] = []
+    rows: list[float] = []
+    for entry in entries:
+        try:
+            sim_col = float(entry.get("sim_col", np.nan))
+            sim_row = float(entry.get("sim_row", np.nan))
+        except Exception:
+            continue
+        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            continue
+        try:
+            weight = float(entry.get("weight", 1.0))
+        except Exception:
+            weight = 1.0
+        if not np.isfinite(weight) or weight <= 0.0:
+            weight = 1.0
+        finite_entries.append(entry)
+        cols.append(float(sim_col))
+        rows.append(float(sim_row))
+        weights.append(float(weight))
+
+    if not finite_entries:
+        return dict(entries[0])
+
+    weight_arr = np.asarray(weights, dtype=float)
+    col_arr = np.asarray(cols, dtype=float)
+    row_arr = np.asarray(rows, dtype=float)
+    center_col = float(np.average(col_arr, weights=weight_arr))
+    center_row = float(np.average(row_arr, weights=weight_arr))
+
+    def _sort_key(entry: dict[str, object]) -> tuple[object, ...]:
+        try:
+            sim_col = float(entry.get("sim_col", np.nan))
+            sim_row = float(entry.get("sim_row", np.nan))
+        except Exception:
+            sim_col = float("nan")
+            sim_row = float("nan")
+        if np.isfinite(sim_col) and np.isfinite(sim_row):
+            d2 = (sim_col - center_col) ** 2 + (sim_row - center_row) ** 2
+        else:
+            d2 = float("inf")
+        try:
+            weight = float(entry.get("weight", 0.0))
+        except Exception:
+            weight = 0.0
+        source_key = candidate_source_key(entry)
+        return (
+            float(d2),
+            -float(weight) if np.isfinite(weight) else 0.0,
+            repr(source_key) if source_key is not None else "",
+            str(entry.get("label", "")),
+        )
+
+    return dict(min(finite_entries, key=_sort_key))
+
+
 def geometry_manual_tagged_candidate_from_session(
     pick_session: dict[str, object] | None,
     candidate_entries: Sequence[dict[str, object]] | None,
@@ -1281,6 +1353,10 @@ def geometry_manual_group_target_count(
 ) -> int:
     """Return how many manual background peaks a selected group should collect."""
 
+    entries = [dict(entry) for entry in group_entries or [] if isinstance(entry, dict)]
+    if not entries:
+        return 0
+
     if isinstance(group_key, tuple) and len(group_key) >= 4:
         try:
             if int(group_key[2]) == 0:
@@ -1288,19 +1364,11 @@ def geometry_manual_group_target_count(
         except Exception:
             pass
 
-    entries = [dict(entry) for entry in group_entries or [] if isinstance(entry, dict)]
-    if not entries:
-        return 0
-
-    all_00l = True
     for entry in entries:
         hkl = normalize_hkl_key(entry.get("hkl", entry.get("label")))
         if hkl is None or int(hkl[0]) != 0 or int(hkl[1]) != 0:
-            all_00l = False
-            break
-    if all_00l:
-        return 1
-    return int(len(entries))
+            return int(len(entries))
+    return 1
 
 
 def geometry_manual_pick_session_active(
@@ -3191,8 +3259,8 @@ def geometry_manual_toggle_selection_at(
     if callable(set_status_text):
         seed_dist = tagged_dist if np.isfinite(tagged_dist) else best_dist
         set_status_text(
-            f"Selected {q_label} (nearest seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
-            + (f"Tagged central-beam seed [{tagged_label}]. " if tagged_label else "")
+            f"Selected {q_label} (nearest Bragg seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
+            + (f"Tagged seed [{tagged_label}]. " if tagged_label else "")
             + f"Click background peak 1 of {max(1, int(target_count))}; "
             + (
                 "it will attach to that tagged simulated peak."

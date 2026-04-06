@@ -15821,17 +15821,11 @@ mosaic_frame = CollapsibleFrame(
 )
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
-sampling_frame = CollapsibleFrame(
+sampling_pruning_frame = CollapsibleFrame(
     app_shell_view_state.right_col,
-    text='Sampling && Optics',
+    text='Sampling, Optics, Arc Integration && Pruning',
 )
-sampling_frame.pack(fill=tk.X, padx=5, pady=5)
-
-pruning_frame = CollapsibleFrame(
-    app_shell_view_state.right_col,
-    text='Arc Integration && Pruning',
-)
-pruning_frame.pack(fill=tk.X, padx=5, pady=5)
+sampling_pruning_frame.pack(fill=tk.X, padx=5, pady=5)
 
 initial_resolution = defaults.get('sampling_resolution', 'Low')
 resolution_options = [*resolution_sample_counts.keys(), CUSTOM_SAMPLING_OPTION]
@@ -15883,9 +15877,25 @@ def _refresh_resolution_display():
         optics_summary = _normalize_optics_mode_label(optics_mode_var.get())
     except Exception:
         optics_summary = _normalize_optics_mode_label(defaults.get("optics_mode", "fast"))
+    solve_q_mode_summary = ""
+    solve_q_mode_var = getattr(
+        structure_factor_pruning_controls_view_state,
+        "solve_q_mode_var",
+        None,
+    )
+    if solve_q_mode_var is not None:
+        try:
+            solve_q_mode_summary = gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(
+                solve_q_mode_var.get()
+            )
+        except Exception:
+            solve_q_mode_summary = ""
+    summary_parts = [summary_text, f"optics {optics_summary}"]
+    if solve_q_mode_summary:
+        summary_parts.append(f"arc {solve_q_mode_summary}")
     gui_views.set_collapsible_header_summary(
-        sampling_frame,
-        f"{summary_text} | optics {optics_summary}",
+        sampling_pruning_frame,
+        " | ".join(summary_parts),
     )
 
 
@@ -15955,7 +15965,7 @@ else:
     initial_custom_samples_text = str(int(max(1, simulation_runtime_state.num_samples)))
 
 gui_views.create_sampling_optics_controls(
-    parent=sampling_frame.frame,
+    parent=sampling_pruning_frame.frame,
     view_state=sampling_optics_controls_view_state,
     resolution_options=resolution_options,
     initial_resolution=initial_resolution,
@@ -15985,7 +15995,7 @@ def on_optics_mode_change(*_):
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
-structure_factor_pruning_controls_runtime.create_controls(parent=pruning_frame.frame)
+structure_factor_pruning_controls_runtime.create_controls(parent=sampling_pruning_frame.frame)
 sf_prune_bias_var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
 sf_prune_bias_scale = structure_factor_pruning_controls_view_state.sf_prune_bias_scale
 sf_prune_status_var = structure_factor_pruning_controls_view_state.sf_prune_status_var
@@ -15996,6 +16006,10 @@ solve_q_rel_tol_var = structure_factor_pruning_controls_view_state.solve_q_rel_t
 solve_q_rel_tol_scale = (
     structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
 )
+trace_add = getattr(solve_q_mode_var, "trace_add", None)
+if callable(trace_add):
+    trace_add("write", lambda *_args: _refresh_resolution_display())
+_refresh_resolution_display()
 
 center_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)

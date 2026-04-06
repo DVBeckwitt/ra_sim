@@ -294,6 +294,19 @@ def test_geometry_manual_group_target_count_uses_single_bg_peak_for_00l() -> Non
     ) == 2
 
 
+def test_geometry_manual_central_candidate_picks_group_representative() -> None:
+    candidate = mg.geometry_manual_central_candidate(
+        [
+            {"label": "left", "sim_col": 10.0, "sim_row": 10.0, "weight": 1.0},
+            {"label": "center", "sim_col": 20.0, "sim_row": 20.0, "weight": 2.0},
+            {"label": "right", "sim_col": 35.0, "sim_row": 35.0, "weight": 1.0},
+        ]
+    )
+
+    assert candidate is not None
+    assert candidate["label"] == "center"
+
+
 def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_peak() -> None:
     candidate, dist = mg.geometry_manual_nearest_candidate_to_point(
         28.0,
@@ -2043,14 +2056,16 @@ def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l
                         "hkl": (1, 0, 2),
                         "sim_col": 10.0,
                         "sim_row": 20.0,
+                        "weight": 1.0,
                         "source_table_index": 1,
                         "source_row_index": 2,
                     },
                     {
-                        "label": "-1,0,2",
+                        "label": "right",
                         "hkl": (-1, 0, 2),
                         "sim_col": 30.0,
                         "sim_row": 40.0,
+                        "weight": 1.0,
                         "source_table_index": 1,
                         "source_row_index": 3,
                     },
@@ -2076,8 +2091,11 @@ def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l
     assert next_session["group_key"] == group_key
     assert next_session["target_count"] == 2
     assert set_sessions[-1]["target_count"] == 2
+    assert len(next_session["group_entries"]) == 2
+    assert next_session["group_entries"][0]["label"] == "1,0,2"
     assert ("render", False) in calls
     assert ("button", None) in calls
+    assert "Tagged seed [1,0,2]" in status_messages[-1]
     assert "Click background peak 1 of 2" in status_messages[-1]
 
 
@@ -2101,14 +2119,16 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
                         "hkl": (1, 0, 2),
                         "sim_col": 10.0,
                         "sim_row": 20.0,
+                        "weight": 1.0,
                         "source_table_index": 1,
                         "source_row_index": 2,
                     },
                     {
-                        "label": "-1,0,2",
+                        "label": "right",
                         "hkl": (-1, 0, 2),
                         "sim_col": 30.0,
                         "sim_row": 40.0,
+                        "weight": 1.0,
                         "source_table_index": 1,
                         "source_row_index": 3,
                     },
@@ -2131,10 +2151,11 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
 
     assert handled is True
     assert suppress_drag is True
+    assert next_session["target_count"] == 2
     assert next_session["tagged_candidate_key"] == ("source", 1, 3)
     assert next_session["group_entries"][0]["source_row_index"] == 3
-    assert next_session["tagged_candidate"]["label"] == "-1,0,2"
-    assert "Tagged central-beam seed [-1,0,2]" in status_messages[-1]
+    assert next_session["tagged_candidate"]["label"] == "right"
+    assert "Tagged seed [right]" in status_messages[-1]
     assert set_sessions[-1]["tagged_candidate_key"] == ("source", 1, 3)
 
 
