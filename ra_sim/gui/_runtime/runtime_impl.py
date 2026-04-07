@@ -15862,27 +15862,7 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
                 _request_overlay_canvas_redraw()
         return
 
-    # Temporary debug overlay: X-mark the cached intersection points in the
-    # currently active 2D view so detector and caked projections can be checked.
-    for table in cache_tables:
-        coords = _analysis_cache_overlay_coords(table, show_caked=show_caked)
-        if coords is None:
-            continue
-        try:
-            marker_artist = ax.plot(
-                coords[0],
-                coords[1],
-                linestyle="none",
-                marker="x",
-                markersize=8.0,
-                color="#ff6a00",
-                markeredgewidth=2.0,
-                alpha=0.9,
-                zorder=20,
-            )[0]
-            analysis_peak_selection_state.caked_peak_artists.append(marker_artist)
-        except Exception:
-            continue
+    # Disabled: temporary debug overlay that X-marked cached intersection points.
 
     if show_caked:
         for idx, peak_entry in enumerate(selected_peaks, start=1):
