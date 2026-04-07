@@ -2952,8 +2952,15 @@ def create_sampling_optics_controls(
     initial_resolution: str,
     custom_samples_text: str,
     resolution_count_text: str,
+    rod_points_per_gz_value: int,
+    rod_points_per_gz_min: int,
+    rod_points_per_gz_max: int,
+    rod_points_per_gz_text: str,
+    rod_point_total_text: str,
     optics_mode_text: str,
     on_apply_custom_samples: Callable[[], None],
+    on_rod_points_per_gz_slide: Callable[[object], None],
+    on_commit_rod_points_per_gz: Callable[[object], None],
 ) -> None:
     """Create the sampling-resolution / optics controls and store their refs."""
 
@@ -3001,6 +3008,45 @@ def create_sampling_optics_controls(
     )
     resolution_count_label.pack(anchor=tk.W, padx=5, pady=(2, 0))
 
+    rod_points_per_gz_frame = ttk.Frame(parent)
+    rod_points_per_gz_frame.pack(fill=tk.X, pady=(6, 2))
+    ttk.Label(rod_points_per_gz_frame, text="Rod Points per Gz").pack(
+        anchor=tk.W,
+        padx=5,
+    )
+
+    rod_points_row = ttk.Frame(rod_points_per_gz_frame)
+    rod_points_row.pack(fill=tk.X, padx=5, pady=(2, 0))
+
+    rod_points_per_gz_var = tk.IntVar(value=int(rod_points_per_gz_value))
+    rod_points_per_gz_scale = tk.Scale(
+        rod_points_row,
+        from_=int(rod_points_per_gz_min),
+        to=int(rod_points_per_gz_max),
+        orient=tk.HORIZONTAL,
+        resolution=1,
+        showvalue=False,
+        variable=rod_points_per_gz_var,
+        command=on_rod_points_per_gz_slide,
+    )
+    rod_points_per_gz_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    rod_points_per_gz_scale.bind("<ButtonRelease-1>", on_commit_rod_points_per_gz)
+
+    rod_points_per_gz_value_var = tk.StringVar(value=str(rod_points_per_gz_text))
+    rod_points_per_gz_value_label = ttk.Label(
+        rod_points_row,
+        textvariable=rod_points_per_gz_value_var,
+        width=12,
+    )
+    rod_points_per_gz_value_label.pack(side=tk.LEFT, padx=(8, 0))
+
+    rod_point_total_var = tk.StringVar(value=str(rod_point_total_text))
+    rod_point_total_label = ttk.Label(
+        rod_points_per_gz_frame,
+        textvariable=rod_point_total_var,
+    )
+    rod_point_total_label.pack(anchor=tk.W, padx=5, pady=(2, 0))
+
     optics_mode_frame = ttk.Frame(parent)
     optics_mode_frame.pack(fill=tk.X, pady=(6, 2))
     ttk.Label(optics_mode_frame, text="Optics Transport").pack(anchor=tk.W, padx=5)
@@ -3031,6 +3077,13 @@ def create_sampling_optics_controls(
     view_state.custom_samples_row = custom_samples_row
     view_state.custom_samples_entry = custom_samples_entry
     view_state.custom_samples_apply_button = custom_samples_apply_button
+    view_state.rod_points_per_gz_frame = rod_points_per_gz_frame
+    view_state.rod_points_per_gz_var = rod_points_per_gz_var
+    view_state.rod_points_per_gz_scale = rod_points_per_gz_scale
+    view_state.rod_points_per_gz_value_var = rod_points_per_gz_value_var
+    view_state.rod_points_per_gz_value_label = rod_points_per_gz_value_label
+    view_state.rod_point_total_var = rod_point_total_var
+    view_state.rod_point_total_label = rod_point_total_label
     view_state.optics_mode_frame = optics_mode_frame
     view_state.optics_mode_var = optics_mode_var
     view_state.fast_optics_button = fast_optics_button
@@ -3044,6 +3097,28 @@ def set_sampling_resolution_summary_text(
     """Update the sampling-resolution summary label."""
 
     setter = getattr(view_state.resolution_count_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def set_sampling_rod_points_per_gz_text(
+    view_state: SamplingOpticsControlsViewState,
+    text: str,
+) -> None:
+    """Update the rod-density label beside the slider."""
+
+    setter = getattr(view_state.rod_points_per_gz_value_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def set_sampling_rod_point_total_text(
+    view_state: SamplingOpticsControlsViewState,
+    text: str,
+) -> None:
+    """Update the live total-point summary for the longest rod."""
+
+    setter = getattr(view_state.rod_point_total_var, "set", None)
     if callable(setter):
         setter(str(text))
 

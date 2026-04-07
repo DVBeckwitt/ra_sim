@@ -845,6 +845,7 @@ defaults = {
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'Low',
+    'rod_points_per_gz': gui_controllers.default_rod_points_per_gz(cv),
     'bandwidth_percent': float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
     'sf_prune_bias': sf_prune_bias_default,
     'solve_q_steps': solve_q_steps_default,
@@ -899,7 +900,7 @@ def _sync_structure_model_aliases() -> None:
     global _last_occ_for_ht, _last_p_triplet, _last_weights
     global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
-    global _last_finite_stack, _last_stack_layers
+    global _last_finite_stack, _last_stack_layers, _last_rod_points_per_gz
     global _last_atom_site_fractional_signature
 
     cf = structure_model_state.cf
@@ -935,6 +936,7 @@ def _sync_structure_model_aliases() -> None:
     _last_phase_delta_expression = str(structure_model_state.last_phase_delta_expression)
     _last_finite_stack = bool(structure_model_state.last_finite_stack)
     _last_stack_layers = int(structure_model_state.last_stack_layers)
+    _last_rod_points_per_gz = int(structure_model_state.last_rod_points_per_gz)
     _last_atom_site_fractional_signature = tuple(
         structure_model_state.last_atom_site_fractional_signature
     )
@@ -9615,6 +9617,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
         )
     _sync_finite_controls()
+    _apply_rod_points_per_gz(trigger_update=False)
     _apply_geometry_fit_background_selection(trigger_update=False)
     _refresh_background_status()
     _update_geometry_preview_exclude_button_label()
@@ -9705,6 +9708,7 @@ def _import_full_gui_state() -> None:
             center_y_var,
             resolution_var,
             custom_samples_var,
+            rod_points_per_gz_var,
             bandwidth_percent_var=bandwidth_percent_var,
             optics_mode_var=optics_mode_var,
             phase_delta_expr_var=phase_delta_expr_var,
@@ -9727,6 +9731,7 @@ def _import_full_gui_state() -> None:
                 ),
             )
         _sync_finite_controls()
+        _apply_rod_points_per_gz(trigger_update=False)
         ensure_valid_resolution_choice()
         schedule_update()
         progress_label.config(text=message)
@@ -14431,6 +14436,7 @@ def on_fit_ordered_structure_click():
             phi_l_divisor_current=_current_phi_l_divisor(),
             atom_site_values=[tuple(values) for values in local_atom_values],
             iodine_z_current=local_iodine_z,
+            rod_points_per_gz=_current_rod_points_per_gz(),
             atom_site_override_state=local_atom_site_override_state,
             simulation_runtime_state=local_simulation_state,
             combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
@@ -16070,6 +16076,21 @@ def _current_custom_sample_count(default=None):
     return _parse_sample_count(raw_value, fallback)
 
 
+def _parse_rod_points_per_gz(raw_value, fallback):
+    return gui_controllers.normalize_rod_points_per_gz(raw_value, fallback)
+
+
+def _current_rod_points_per_gz(default=None):
+    fallback = gui_controllers.default_rod_points_per_gz(
+        defaults.get("c", cv),
+    )
+    if default is not None:
+        fallback = _parse_rod_points_per_gz(default, fallback)
+    rod_var = sampling_optics_controls_view_state.rod_points_per_gz_var
+    raw_value = rod_var.get() if rod_var is not None else fallback
+    return _parse_rod_points_per_gz(raw_value, fallback)
+
+
 def _set_custom_sample_controls_state():
     resolution_var = sampling_optics_controls_view_state.resolution_var
     enabled = bool(
@@ -16100,6 +16121,21 @@ def _refresh_resolution_display():
         sampling_optics_controls_view_state,
         summary_text,
     )
+    rod_points_per_gz = _current_rod_points_per_gz(
+        default=defaults.get("rod_points_per_gz"),
+    )
+    gui_views.set_sampling_rod_points_per_gz_text(
+        sampling_optics_controls_view_state,
+        gui_controllers.format_rod_points_per_gz(rod_points_per_gz),
+    )
+    gui_views.set_sampling_rod_point_total_text(
+        sampling_optics_controls_view_state,
+        gui_controllers.format_longest_rod_point_summary(
+            rod_points_per_gz,
+            two_theta_max=two_theta_range[1],
+            lambda_angstrom=lambda_,
+        ),
+    )
     try:
         optics_summary = _normalize_optics_mode_label(optics_mode_var.get())
     except Exception:
@@ -16117,7 +16153,11 @@ def _refresh_resolution_display():
             )
         except Exception:
             solve_q_mode_summary = ""
-    summary_parts = [summary_text, f"optics {optics_summary}"]
+    summary_parts = [
+        summary_text,
+        f"rods {rod_points_per_gz:,}/Gz",
+        f"optics {optics_summary}",
+    ]
     if solve_q_mode_summary:
         summary_parts.append(f"arc {solve_q_mode_summary}")
     gui_views.set_collapsible_header_summary(
@@ -16163,6 +16203,79 @@ def _apply_custom_sample_count(_event=None):
     _apply_resolution_selection(trigger_update=True)
 
 
+def _current_structure_model_rebuild_inputs():
+    try:
+        new_occ = [float(var.get()) for var in _occupancy_control_vars()]
+    except (tk.TclError, ValueError):
+        new_occ = list(occ)
+    if not all(np.isfinite(v) for v in new_occ):
+        new_occ = list(occ)
+    new_occ = gui_controllers.clamp_site_occupancy_values(
+        new_occ,
+        fallback_values=occ,
+    )
+
+    try:
+        p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+    except (tk.TclError, ValueError):
+        p_vals = list(structure_model_state.last_p_triplet or [defaults["p0"], defaults["p1"], defaults["p2"]])
+
+    try:
+        w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+    except (tk.TclError, ValueError):
+        w_raw = list(structure_model_state.last_weights or [1.0, 0.0, 0.0])
+    weights = gui_controllers.normalize_stacking_weight_values(w_raw)
+    return new_occ, p_vals, weights
+
+
+def _preview_rod_points_per_gz(_value=None):
+    rod_var = sampling_optics_controls_view_state.rod_points_per_gz_var
+    normalized = _current_rod_points_per_gz(
+        default=defaults.get("rod_points_per_gz"),
+    )
+    if rod_var is not None:
+        try:
+            current_value = int(round(float(rod_var.get())))
+        except Exception:
+            current_value = normalized
+        if current_value != normalized:
+            rod_var.set(normalized)
+    _refresh_resolution_display()
+
+
+def _apply_rod_points_per_gz(*, trigger_update=True):
+    rod_var = sampling_optics_controls_view_state.rod_points_per_gz_var
+    normalized = _current_rod_points_per_gz(
+        default=defaults.get("rod_points_per_gz"),
+    )
+    if rod_var is not None:
+        rod_var.set(normalized)
+    defaults["rod_points_per_gz"] = int(normalized)
+    _refresh_resolution_display()
+
+    if int(normalized) == int(getattr(structure_model_state, "last_rod_points_per_gz", normalized)):
+        return
+    if (
+        globals().get("a_var") is None
+        or globals().get("c_var") is None
+        or globals().get("p0_var") is None
+        or globals().get("p1_var") is None
+        or globals().get("p2_var") is None
+    ):
+        return
+
+    new_occ, p_vals, weights = _current_structure_model_rebuild_inputs()
+    _rebuild_diffraction_inputs(
+        new_occ,
+        p_vals,
+        weights,
+        a_var.get(),
+        c_var.get(),
+        force=False,
+        trigger_update=trigger_update,
+    )
+
+
 def ensure_valid_resolution_choice():
     resolution_var = sampling_optics_controls_view_state.resolution_var
     if resolution_var is None:
@@ -16191,6 +16304,10 @@ if initial_resolution != CUSTOM_SAMPLING_OPTION:
 else:
     initial_custom_samples_text = str(int(max(1, simulation_runtime_state.num_samples)))
 
+initial_rod_points_per_gz = _current_rod_points_per_gz(
+    default=defaults.get("rod_points_per_gz"),
+)
+
 gui_views.create_sampling_optics_controls(
     parent=sampling_pruning_frame.frame,
     view_state=sampling_optics_controls_view_state,
@@ -16198,11 +16315,27 @@ gui_views.create_sampling_optics_controls(
     initial_resolution=initial_resolution,
     custom_samples_text=initial_custom_samples_text,
     resolution_count_text="",
+    rod_points_per_gz_value=initial_rod_points_per_gz,
+    rod_points_per_gz_min=gui_controllers.ROD_POINTS_PER_GZ_MIN,
+    rod_points_per_gz_max=gui_controllers.ROD_POINTS_PER_GZ_MAX,
+    rod_points_per_gz_text=gui_controllers.format_rod_points_per_gz(
+        initial_rod_points_per_gz
+    ),
+    rod_point_total_text=gui_controllers.format_longest_rod_point_summary(
+        initial_rod_points_per_gz,
+        two_theta_max=two_theta_range[1],
+        lambda_angstrom=lambda_,
+    ),
     optics_mode_text=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')),
     on_apply_custom_samples=_apply_custom_sample_count,
+    on_rod_points_per_gz_slide=_preview_rod_points_per_gz,
+    on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(
+        trigger_update=True
+    ),
 )
 resolution_var = sampling_optics_controls_view_state.resolution_var
 custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
+rod_points_per_gz_var = sampling_optics_controls_view_state.rod_points_per_gz_var
 optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
 
 def on_resolution_option_change(*_):
@@ -16211,6 +16344,7 @@ def on_resolution_option_change(*_):
 
 _set_custom_sample_controls_state()
 _apply_resolution_selection(trigger_update=False)
+_apply_rod_points_per_gz(trigger_update=False)
 resolution_var.trace_add('write', on_resolution_option_change)
 
 
@@ -16883,6 +17017,7 @@ def _rebuild_diffraction_inputs(
         phi_l_divisor_current=_current_phi_l_divisor(),
         atom_site_values=_current_atom_site_fractional_values(),
         iodine_z_current=_current_iodine_z(),
+        rod_points_per_gz=_current_rod_points_per_gz(),
         atom_site_override_state=atom_site_override_state,
         simulation_runtime_state=simulation_runtime_state,
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
@@ -17485,6 +17620,7 @@ def _build_diffuse_ht_request():
         stack_layers=int(max(1, stack_layers_var.get())),
         phase_delta_expression=_current_phase_delta_expression(),
         phi_l_divisor=_current_phi_l_divisor(),
+        rod_points_per_gz=_current_rod_points_per_gz(),
         tcl_error_types=(tk.TclError,),
     )
 
@@ -17509,6 +17645,7 @@ def _open_diffuse_cif_toggle():
                 iodine_z=request.iodine_z,
                 phase_delta_expression=request.phase_delta_expression,
                 phi_l_divisor=request.phi_l_divisor,
+                rod_points_per_gz=request.rod_points_per_gz,
             )
         ),
         set_status_text=lambda text: progress_label.config(text=text),
@@ -17539,6 +17676,7 @@ def _export_diffuse_ht_txt():
                 iodine_z=request.iodine_z,
                 phase_delta_expression=request.phase_delta_expression,
                 phi_l_divisor=request.phi_l_divisor,
+                rod_points_per_gz=request.rod_points_per_gz,
             )
         ),
         set_status_text=lambda text: progress_label.config(text=text),
@@ -17641,6 +17779,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             center_y_var,
             resolution_var,
             custom_samples_var,
+            rod_points_per_gz_var,
             bandwidth_percent_var=bandwidth_percent_var,
             optics_mode_var=optics_mode_var,
             phase_delta_expr_var=phase_delta_expr_var,
@@ -17662,6 +17801,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                     _current_phi_l_divisor()
                 ),
             )
+        _apply_rod_points_per_gz(trigger_update=False)
         ensure_valid_resolution_choice()
         profile_loaded = True
     else:

@@ -352,6 +352,26 @@ def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> 
         fallback_count=16,
     ) == "32 samples"
 
+    assert controllers.default_rod_points_per_gz(
+        2.0 * np.pi,
+    ) == 100
+    assert controllers.normalize_rod_points_per_gz("275.4", 100) == 275
+    assert np.isclose(
+        controllers.rod_l_step_from_points_per_gz(250, 5.0),
+        5.0 / (2.0 * np.pi * 250.0),
+    )
+    assert controllers.longest_rod_point_count(
+        100,
+        two_theta_max=60.0,
+        lambda_angstrom=1.54,
+    ) == 408
+    assert controllers.format_rod_points_per_gz(250) == "250 / Gz"
+    assert controllers.format_longest_rod_point_summary(
+        100,
+        two_theta_max=60.0,
+        lambda_angstrom=1.54,
+    ) == "Longest rod: 408 points (Gz max 4.080)"
+
 
 def test_finite_stack_controller_helpers_normalize_and_format() -> None:
     assert controllers.normalize_finite_stack_layer_count("72", 10) == 72

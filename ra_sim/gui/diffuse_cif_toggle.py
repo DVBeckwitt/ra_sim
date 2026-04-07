@@ -8,6 +8,7 @@ from time import perf_counter
 
 import numpy as np
 
+from ra_sim.gui import controllers as gui_controllers
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,
     DEFAULT_PHI_L_DIVISOR,
@@ -144,6 +145,7 @@ def _build_algebraic_ht_export_rows(
     stack_layers=50,
     iodine_z=None,
     phase_delta_expression=None,
+    rod_points_per_gz=0,
 ):
     """Return row dictionaries for the algebraic HT text export."""
 
@@ -190,11 +192,17 @@ def _build_algebraic_ht_export_rows(
     if iodine_z_value is None or not np.isfinite(float(iodine_z_value)):
         iodine_z_value = 0.0
     iodine_z_value = float(np.clip(float(iodine_z_value), 0.0, 1.0))
+    rod_l_step = gui_controllers.rod_l_step_from_points_per_gz(
+        rod_points_per_gz,
+        c_axis_for_recip,
+        fallback_points=gui_controllers.default_rod_points_per_gz(c_axis_for_recip),
+        fallback_l_step=gui_controllers.DEFAULT_ROD_L_STEP,
+    )
 
     base = _get_base_curves(
         cif_path=cif_path,
         mx=hk_limit,
-        L_step=0.01,
+        L_step=rod_l_step,
         L_max=10.0,
         two_theta_max=two_theta_max,
         lambda_=float(lambda_angstrom),
@@ -320,6 +328,7 @@ def export_algebraic_ht_txt(
     iodine_z=None,
     phase_delta_expression=None,
     phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
+    rod_points_per_gz=0,
 ):
     """Write algebraic HT values to a legacy fixed-width text table."""
 
@@ -338,6 +347,7 @@ def export_algebraic_ht_txt(
         iodine_z=iodine_z,
         phase_delta_expression=phase_delta_expression,
         phi_l_divisor=phi_l_divisor,
+        rod_points_per_gz=rod_points_per_gz,
     )
 
     out_path = Path(str(output_path)).expanduser()
@@ -380,6 +390,7 @@ def open_diffuse_cif_toggle_algebraic(
     iodine_z=None,
     phase_delta_expression=None,
     phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
+    rod_points_per_gz=0,
 ):
     """Open an interactive diffuse viewer using algebraic HT only."""
 
@@ -428,12 +439,18 @@ def open_diffuse_cif_toggle_algebraic(
     if iodine_z_default is None or not np.isfinite(float(iodine_z_default)):
         iodine_z_default = 0.0
     iodine_z_default = float(np.clip(float(iodine_z_default), 0.0, 1.0))
+    rod_l_step = gui_controllers.rod_l_step_from_points_per_gz(
+        rod_points_per_gz,
+        c_axis_for_recip,
+        fallback_points=gui_controllers.default_rod_points_per_gz(c_axis_for_recip),
+        fallback_l_step=gui_controllers.DEFAULT_ROD_L_STEP,
+    )
 
     def _build_curve_data(iodine_z_current):
         base_local = _get_base_curves(
             cif_path=cif_path,
             mx=hk_limit,
-            L_step=0.01,
+            L_step=rod_l_step,
             L_max=10.0,
             # Keep diffuse HT plots on the canonical full L domain [0, 10]
             # regardless of detector two-theta clipping used by simulation.

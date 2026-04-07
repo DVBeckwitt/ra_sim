@@ -286,6 +286,13 @@ class SamplingOpticsControlsViewState:
     custom_samples_row: Any = None
     custom_samples_entry: Any = None
     custom_samples_apply_button: Any = None
+    rod_points_per_gz_frame: Any = None
+    rod_points_per_gz_var: Any = None
+    rod_points_per_gz_scale: Any = None
+    rod_points_per_gz_value_var: Any = None
+    rod_points_per_gz_value_label: Any = None
+    rod_point_total_var: Any = None
+    rod_point_total_label: Any = None
     optics_mode_frame: Any = None
     optics_mode_var: Any = None
     fast_optics_button: Any = None

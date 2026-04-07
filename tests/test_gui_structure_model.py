@@ -171,6 +171,68 @@ def test_build_initial_structure_model_state_initializes_single_cif(monkeypatch)
     assert state.last_occ_for_ht == [1.0]
 
 
+def test_build_ht_cache_derives_l_step_from_rod_points_per_gz(monkeypatch) -> None:
+    captured = {}
+
+    def fake_ht_iinf_dict(**kwargs):
+        captured.update(kwargs)
+        return {
+            (1, 0): {
+                "L": np.array([0.0, 1.0], dtype=float),
+                "I": np.array([0.0, 2.0], dtype=float),
+            }
+        }
+
+    monkeypatch.setattr(structure_model, "ht_Iinf_dict", fake_ht_iinf_dict)
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_qr_dict",
+        lambda curves: {1: {"L": curves[(1, 0)]["L"], "I": curves[(1, 0)]["I"]}},
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_arrays",
+        lambda curves: (
+            np.array([[1.0, 0.0, 1.0]]),
+            np.array([2.0]),
+            np.array([1]),
+            [["detail"]],
+        ),
+    )
+
+    state = structure_model.StructureModelState(
+        cif_file="primary.cif",
+        cf=None,
+        blk=None,
+        occupancy_site_labels=["I1"],
+        occupancy_site_expanded_map=[0],
+        occ=[1.0],
+        mx=8,
+        lambda_angstrom=1.54,
+        two_theta_range=(0.0, 30.0),
+    )
+
+    cache = structure_model.build_ht_cache(
+        state,
+        0.1,
+        [1.0],
+        3.0,
+        2.0 * np.pi,
+        0.2,
+        1.0,
+        True,
+        8,
+        "0",
+        100,
+        cif_path_override="primary.cif",
+    )
+
+    assert np.isclose(captured["L_step"], 0.01)
+    assert cache["rod_points_per_gz"] == 100
+    assert np.isclose(cache["L_step"], 0.01)
+    assert np.array_equal(cache["ht"][(1, 0)]["L"], np.array([1.0]))
+
+
 def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> None:
     monkeypatch.setattr(
         structure_model,
@@ -189,6 +251,7 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
             "phase_delta_expression": "0",
             "finite_stack": True,
             "stack_layers": 8,
+            "rod_points_per_gz": 500,
             "cif_path": "primary.cif",
         },
     )
@@ -250,6 +313,7 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
         phi_l_divisor_current=1.0,
         atom_site_values=[],
         iodine_z_current=0.2,
+        rod_points_per_gz=500,
         atom_site_override_state=override_state,
         simulation_runtime_state=runtime_state,
         combine_weighted_intensities=lambda a, _b, **_kwargs: np.asarray(a, dtype=float),
@@ -439,6 +503,7 @@ def test_build_diffuse_ht_request_packages_runtime_inputs(monkeypatch, tmp_path)
         stack_layers=5,
         phase_delta_expression="0",
         phi_l_divisor=2.0,
+        rod_points_per_gz=420,
     )
 
     assert request.source_cif == str(cif_path)
@@ -456,6 +521,7 @@ def test_build_diffuse_ht_request_packages_runtime_inputs(monkeypatch, tmp_path)
     assert request.iodine_z == 0.42
     assert request.phase_delta_expression == "0"
     assert request.phi_l_divisor == 2.0
+    assert request.rod_points_per_gz == 420
 
 
 def test_primary_cif_dialog_helpers_choose_initial_dir_and_apply_selection(tmp_path) -> None:

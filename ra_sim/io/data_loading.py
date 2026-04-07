@@ -297,6 +297,7 @@ def load_parameters(
     center_y_var,      # <--- ADDED
     resolution_var=None,
     custom_samples_var=None,
+    rod_points_per_gz_var=None,
     bandwidth_percent_var=None,
     optics_mode_var=None,
     phase_delta_expr_var=None,
@@ -360,6 +361,15 @@ def load_parameters(
                     parsed_custom_count = None
                 if parsed_custom_count is not None and parsed_custom_count > 0:
                     custom_samples_var.set(str(parsed_custom_count))
+        if rod_points_per_gz_var is not None:
+            stored_rod_points = params.get('rod_points_per_gz')
+            if stored_rod_points is not None:
+                try:
+                    parsed_rod_points = int(round(float(stored_rod_points)))
+                except (TypeError, ValueError):
+                    parsed_rod_points = None
+                if parsed_rod_points is not None and parsed_rod_points > 0:
+                    rod_points_per_gz_var.set(parsed_rod_points)
         if bandwidth_percent_var is not None:
             stored_bandwidth = params.get('bandwidth_percent')
             if stored_bandwidth is not None:
@@ -468,6 +478,7 @@ def save_all_parameters(
     center_y_var,    # <--- ADDED
     resolution_var=None,
     custom_samples_var=None,
+    rod_points_per_gz_var=None,
     bandwidth_percent_var=None,
     optics_mode_var=None,
     phase_delta_expr_var=None,
@@ -531,6 +542,13 @@ def save_all_parameters(
             parameters['sampling_custom_count'] = custom_sample_count
             if resolution_value == "Custom":
                 parameters['sampling_count'] = custom_sample_count
+    if rod_points_per_gz_var is not None:
+        try:
+            rod_points_per_gz = int(round(float(rod_points_per_gz_var.get())))
+        except (TypeError, ValueError):
+            rod_points_per_gz = None
+        if rod_points_per_gz is not None and rod_points_per_gz > 0:
+            parameters['rod_points_per_gz'] = rod_points_per_gz
     if bandwidth_percent_var is not None:
         try:
             bandwidth_percent = float(bandwidth_percent_var.get())

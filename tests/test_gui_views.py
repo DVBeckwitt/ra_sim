@@ -1943,16 +1943,20 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     _FakeLabel.created = []
     _FakeRadiobutton.created = []
     _FakeOptionMenu.created = []
+    _FakeScale.created = []
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Button", _FakeButton)
     monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
     monkeypatch.setattr(views.ttk, "OptionMenu", _FakeOptionMenu)
+    monkeypatch.setattr(views.tk, "IntVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "Scale", _FakeScale)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
     view_state = state.SamplingOpticsControlsViewState()
     applied = []
+    rod_commits = []
 
     views.create_sampling_optics_controls(
         parent=object(),
@@ -1961,14 +1965,24 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         initial_resolution="High",
         custom_samples_text="2500",
         resolution_count_text="2,500 samples",
+        rod_points_per_gz_value=480,
+        rod_points_per_gz_min=10,
+        rod_points_per_gz_max=2000,
+        rod_points_per_gz_text="480 / Gz",
+        rod_point_total_text="Longest rod: 960 points",
         optics_mode_text="exact",
         on_apply_custom_samples=lambda: applied.append("apply"),
+        on_rod_points_per_gz_slide=lambda _value: rod_commits.append("slide"),
+        on_commit_rod_points_per_gz=lambda _event: rod_commits.append("commit"),
     )
 
     assert isinstance(view_state.resolution_selector_frame, _FakeFrame)
     assert view_state.resolution_var.get() == "High"
     assert view_state.custom_samples_var.get() == "2500"
     assert view_state.resolution_count_var.get() == "2,500 samples"
+    assert view_state.rod_points_per_gz_var.get() == 480
+    assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
+    assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
     assert view_state.optics_mode_var.get() == "exact"
     assert view_state.custom_samples_entry.textvariable is view_state.custom_samples_var
     assert view_state.custom_samples_apply_button is _FakeButton.created[0]
@@ -1976,9 +1990,14 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert _FakeOptionMenu.created[0].default == "High"
     assert _FakeOptionMenu.created[0].values == ("Low", "High", "Custom")
     assert [radio.value for radio in _FakeRadiobutton.created] == ["fast", "exact"]
+    assert view_state.rod_points_per_gz_scale is _FakeScale.created[0]
 
     views.set_sampling_resolution_summary_text(view_state, "3,600 samples (custom)")
     assert view_state.resolution_count_var.get() == "3,600 samples (custom)"
+    views.set_sampling_rod_points_per_gz_text(view_state, "512 / Gz")
+    views.set_sampling_rod_point_total_text(view_state, "Longest rod: 1,024 points")
+    assert view_state.rod_points_per_gz_value_var.get() == "512 / Gz"
+    assert view_state.rod_point_total_var.get() == "Longest rod: 1,024 points"
 
     views.set_sampling_custom_controls_enabled(view_state, enabled=False)
     assert view_state.custom_samples_entry.state == tk.DISABLED
@@ -1990,7 +2009,10 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
 
     view_state.custom_samples_entry.bindings["<Return>"](None)
     _FakeButton.created[0].command()
+    view_state.rod_points_per_gz_scale.command(512)
+    view_state.rod_points_per_gz_scale.bindings["<ButtonRelease-1>"][0](None)
     assert applied == ["apply", "apply"]
+    assert rod_commits == ["slide", "commit"]
 
 
 def test_finite_stack_controls_store_vars_bindings_and_helper_updates(

@@ -35,6 +35,9 @@ BRAGG_QR_L_KEY_SCALE = 1_000_000
 BRAGG_QR_L_INVALID_KEY = int(np.iinfo(np.int64).min)
 SF_PRUNE_BIAS_MIN = -2.0
 SF_PRUNE_BIAS_MAX = 3.0
+DEFAULT_ROD_L_STEP = 0.01
+ROD_POINTS_PER_GZ_MIN = 10
+ROD_POINTS_PER_GZ_MAX = 2000
 _SF_PRUNE_RETAIN_BASE = 0.9997
 _SF_PRUNE_RETAIN_MAX = 0.99998
 _SF_PRUNE_RETAIN_MIN = 0.90
@@ -141,6 +144,140 @@ def format_sampling_resolution_summary(
     )
     suffix = " (custom)" if normalized == custom_label else ""
     return f"{count:,} samples{suffix}" if count >= 1000 else f"{count} samples{suffix}"
+
+
+def default_rod_points_per_gz(
+    c_lattice: object,
+    *,
+    l_step: float = DEFAULT_ROD_L_STEP,
+    fallback: int = 500,
+) -> int:
+    """Return the legacy-equivalent rod density in points per unit ``Gz``."""
+
+    try:
+        c_value = float(c_lattice)
+        l_step_value = float(l_step)
+    except (TypeError, ValueError):
+        c_value = float("nan")
+        l_step_value = float("nan")
+
+    if (
+        np.isfinite(c_value)
+        and c_value > 0.0
+        and np.isfinite(l_step_value)
+        and l_step_value > 0.0
+    ):
+        points = int(round(c_value / (2.0 * np.pi * l_step_value)))
+    else:
+        points = int(fallback)
+    return int(np.clip(points, ROD_POINTS_PER_GZ_MIN, ROD_POINTS_PER_GZ_MAX))
+
+
+def normalize_rod_points_per_gz(
+    raw_value: object,
+    fallback: object,
+    *,
+    minimum: int = ROD_POINTS_PER_GZ_MIN,
+    maximum: int = ROD_POINTS_PER_GZ_MAX,
+) -> int:
+    """Normalize one rod-density value to a bounded positive integer."""
+
+    parsed = parse_sampling_count(raw_value, fallback, minimum=max(1, int(minimum)))
+    lower = int(minimum)
+    upper = int(maximum)
+    if upper < lower:
+        lower, upper = upper, lower
+    return int(np.clip(parsed, lower, upper))
+
+
+def rod_l_step_from_points_per_gz(
+    points_per_gz: object,
+    c_lattice: object,
+    *,
+    fallback_points: object = 500,
+    fallback_l_step: float = DEFAULT_ROD_L_STEP,
+) -> float:
+    """Return the ``L``-grid spacing that matches one rod-density setting."""
+
+    normalized_points = normalize_rod_points_per_gz(
+        points_per_gz,
+        fallback_points,
+    )
+    try:
+        c_value = float(c_lattice)
+    except (TypeError, ValueError):
+        c_value = float("nan")
+    if not np.isfinite(c_value) or c_value <= 0.0:
+        return float(fallback_l_step)
+    return float(c_value / (2.0 * np.pi * float(normalized_points)))
+
+
+def rod_gz_max_from_two_theta(
+    two_theta_max: object,
+    lambda_angstrom: object,
+) -> float:
+    """Return the largest accessible ``Gz`` span for the specular rod."""
+
+    try:
+        two_theta_value = float(two_theta_max)
+        lambda_value = float(lambda_angstrom)
+    except (TypeError, ValueError):
+        return 0.0
+    if (
+        not np.isfinite(two_theta_value)
+        or not np.isfinite(lambda_value)
+        or lambda_value <= 0.0
+    ):
+        return 0.0
+    half_angle_rad = np.radians(max(two_theta_value, 0.0) / 2.0)
+    return float((4.0 * np.pi / lambda_value) * np.sin(half_angle_rad))
+
+
+def longest_rod_point_count(
+    points_per_gz: object,
+    *,
+    two_theta_max: object,
+    lambda_angstrom: object,
+) -> int:
+    """Return the positive-point count on the longest rod in the active window."""
+
+    normalized_points = normalize_rod_points_per_gz(
+        points_per_gz,
+        default_rod_points_per_gz(1.0),
+    )
+    gz_max = rod_gz_max_from_two_theta(two_theta_max, lambda_angstrom)
+    if not np.isfinite(gz_max) or gz_max <= 0.0:
+        return 0
+    return int(max(0.0, np.floor(gz_max * float(normalized_points) + 0.5)))
+
+
+def format_rod_points_per_gz(points_per_gz: object) -> str:
+    """Format one rod-density value for the sampling/optics panel."""
+
+    normalized_points = normalize_rod_points_per_gz(
+        points_per_gz,
+        default_rod_points_per_gz(1.0),
+    )
+    return f"{normalized_points:,} / Gz"
+
+
+def format_longest_rod_point_summary(
+    points_per_gz: object,
+    *,
+    two_theta_max: object,
+    lambda_angstrom: object,
+) -> str:
+    """Format the live summary for the longest rod in the active HT window."""
+
+    point_count = longest_rod_point_count(
+        points_per_gz,
+        two_theta_max=two_theta_max,
+        lambda_angstrom=lambda_angstrom,
+    )
+    gz_max = rod_gz_max_from_two_theta(two_theta_max, lambda_angstrom)
+    if np.isfinite(gz_max) and gz_max > 0.0:
+        return f"Longest rod: {point_count:,} points (Gz max {gz_max:.3f})"
+    return f"Longest rod: {point_count:,} points"
 
 
 def normalize_finite_stack_layer_count(

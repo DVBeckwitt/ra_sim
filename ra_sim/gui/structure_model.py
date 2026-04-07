@@ -17,6 +17,7 @@ import CifFile
 import Dans_Diffraction as dif
 import numpy as np
 
+from ra_sim.gui import controllers as gui_controllers
 from ra_sim.utils.stacking_fault import (
     _infer_iodine_z_like_diffuse,
     ht_Iinf_dict,
@@ -306,6 +307,7 @@ class StructureModelState:
     last_phase_delta_expression: str = ""
     last_finite_stack: bool = False
     last_stack_layers: int = 1
+    last_rod_points_per_gz: int = 0
     last_atom_site_fractional_signature: tuple[float, ...] = field(default_factory=tuple)
     miller_generator: Callable[..., tuple[object, object, object, object]] | None = None
     inject_fractional_reflections: Callable[..., tuple[object, object]] | None = None
@@ -367,6 +369,7 @@ class DiffuseHTRequest:
     iodine_z: float = 0.0
     phase_delta_expression: str = ""
     phi_l_divisor: float = 1.0
+    rod_points_per_gz: int = 0
 
 
 def _coerce_iodine_z(value, fallback):
@@ -793,6 +796,7 @@ def build_diffuse_ht_request(
     stack_layers,
     phase_delta_expression,
     phi_l_divisor,
+    rod_points_per_gz=0,
     occupancy_values=None,
     atom_site_values=None,
     tcl_error_types: tuple[type[BaseException], ...] = (),
@@ -845,6 +849,10 @@ def build_diffuse_ht_request(
         ),
         phase_delta_expression=str(phase_delta_expression),
         phi_l_divisor=float(phi_l_divisor),
+        rod_points_per_gz=gui_controllers.normalize_rod_points_per_gz(
+            rod_points_per_gz,
+            gui_controllers.default_rod_points_per_gz(c_lattice),
+        ),
     )
 
 
@@ -1001,10 +1009,21 @@ def build_ht_cache(
     finite_stack_flag,
     stack_layers_count,
     phase_delta_expression,
+    rod_points_per_gz=0,
     *,
     cif_path_override=None,
 ):
     layers = int(max(1, stack_layers_count))
+    rod_points_value = gui_controllers.normalize_rod_points_per_gz(
+        rod_points_per_gz,
+        gui_controllers.default_rod_points_per_gz(c_axis),
+    )
+    l_step = gui_controllers.rod_l_step_from_points_per_gz(
+        rod_points_value,
+        c_axis,
+        fallback_points=rod_points_value,
+        fallback_l_step=gui_controllers.DEFAULT_ROD_L_STEP,
+    )
     occ_expanded = expand_occupancy_values_for_generated_sites(
         occ_vals,
         occupancy_site_labels=state.occupancy_site_labels,
@@ -1020,7 +1039,7 @@ def build_ht_cache(
         mx=int(state.mx),
         occ=occ_expanded,
         p=p_val,
-        L_step=0.01,
+        L_step=l_step,
         two_theta_max=state.two_theta_range[1],
         lambda_=state.lambda_angstrom,
         a_lattice=a_axis,
@@ -1056,6 +1075,8 @@ def build_ht_cache(
         "phase_delta_expression": str(phase_delta_expression),
         "finite_stack": bool(finite_stack_flag),
         "stack_layers": layers,
+        "rod_points_per_gz": int(rod_points_value),
+        "L_step": float(l_step),
         "cif_path": active_cif_path,
     }
 
@@ -1156,6 +1177,10 @@ def build_initial_structure_model_state(
 
     default_a_axis = float(state.defaults["a"])
     default_c_axis = float(state.defaults["c"])
+    default_rod_points_per_gz = gui_controllers.normalize_rod_points_per_gz(
+        state.defaults.get("rod_points_per_gz"),
+        gui_controllers.default_rod_points_per_gz(default_c_axis),
+    )
     state.ht_cache_multi = {
         "p0": build_ht_cache(
             state,
@@ -1168,6 +1193,7 @@ def build_initial_structure_model_state(
             state.defaults["finite_stack"],
             state.defaults["stack_layers"],
             state.defaults["phase_delta_expression"],
+            default_rod_points_per_gz,
         ),
         "p1": build_ht_cache(
             state,
@@ -1180,6 +1206,7 @@ def build_initial_structure_model_state(
             state.defaults["finite_stack"],
             state.defaults["stack_layers"],
             state.defaults["phase_delta_expression"],
+            default_rod_points_per_gz,
         ),
         "p2": build_ht_cache(
             state,
@@ -1192,6 +1219,7 @@ def build_initial_structure_model_state(
             state.defaults["finite_stack"],
             state.defaults["stack_layers"],
             state.defaults["phase_delta_expression"],
+            default_rod_points_per_gz,
         ),
     }
 
@@ -1221,6 +1249,7 @@ def build_initial_structure_model_state(
         "phase_delta_expression": str(state.defaults["phase_delta_expression"]),
         "finite_stack": bool(state.defaults["finite_stack"]),
         "stack_layers": int(max(1, state.defaults["stack_layers"])),
+        "rod_points_per_gz": int(default_rod_points_per_gz),
     }
     state.last_occ_for_ht = list(state.occ)
     state.last_p_triplet = [
@@ -1236,6 +1265,7 @@ def build_initial_structure_model_state(
     state.last_phase_delta_expression = str(state.defaults["phase_delta_expression"])
     state.last_finite_stack = bool(state.defaults["finite_stack"])
     state.last_stack_layers = int(max(1, state.defaults["stack_layers"]))
+    state.last_rod_points_per_gz = int(default_rod_points_per_gz)
     state.last_atom_site_fractional_signature = atom_site_fractional_signature(
         atom_site_fractional_default_values(state)
     )
@@ -1347,6 +1377,7 @@ def rebuild_diffraction_inputs(
     phi_l_divisor_current,
     atom_site_values,
     iodine_z_current,
+    rod_points_per_gz=0,
     atom_site_override_state,
     simulation_runtime_state,
     combine_weighted_intensities: Callable[..., np.ndarray],
@@ -1361,6 +1392,10 @@ def rebuild_diffraction_inputs(
 ):
     """Refresh cached HT curves and peak lists for the current settings."""
 
+    rod_points_per_gz = gui_controllers.normalize_rod_points_per_gz(
+        rod_points_per_gz,
+        gui_controllers.default_rod_points_per_gz(c_axis),
+    )
     atom_site_signature = atom_site_fractional_signature(atom_site_values)
     active_cif = active_primary_cif_path(
         state,
@@ -1381,6 +1416,7 @@ def rebuild_diffraction_inputs(
         and phase_delta_expression_current == state.last_phase_delta_expression
         and state.last_finite_stack == bool(finite_stack_flag)
         and (not finite_stack_flag or state.last_stack_layers == int(layers))
+        and int(rod_points_per_gz) == int(state.last_rod_points_per_gz)
         and atom_site_signature == state.last_atom_site_fractional_signature
     ):
         simulation_runtime_state.last_sim_signature = None
@@ -1403,6 +1439,7 @@ def rebuild_diffraction_inputs(
             or cache.get("phase_delta_expression", "") != phase_delta_expression_current
             or bool(cache.get("finite_stack")) != bool(finite_stack_flag)
             or (finite_stack_flag and cache.get("stack_layers") != int(layers))
+            or int(cache.get("rod_points_per_gz", -1)) != int(rod_points_per_gz)
             or cache.get("cif_path", str(state.cif_file)) != active_cif
         ):
             cache = build_ht_cache(
@@ -1416,6 +1453,7 @@ def rebuild_diffraction_inputs(
                 finite_stack_flag,
                 layers,
                 phase_delta_expression_current,
+                rod_points_per_gz,
                 cif_path_override=active_cif,
             )
             state.ht_cache_multi[label] = cache
@@ -1441,6 +1479,7 @@ def rebuild_diffraction_inputs(
         "phase_delta_expression": str(phase_delta_expression_current),
         "finite_stack": bool(finite_stack_flag),
         "stack_layers": int(layers),
+        "rod_points_per_gz": int(rod_points_per_gz),
     }
     state.last_occ_for_ht = list(new_occ)
     state.last_p_triplet = list(p_vals)
@@ -1452,6 +1491,7 @@ def rebuild_diffraction_inputs(
     state.last_phase_delta_expression = str(phase_delta_expression_current)
     state.last_finite_stack = bool(finite_stack_flag)
     state.last_stack_layers = int(max(1, layers))
+    state.last_rod_points_per_gz = int(rod_points_per_gz)
     state.last_atom_site_fractional_signature = atom_site_signature
 
     m1, i1, d1, det1 = arrays_local
