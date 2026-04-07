@@ -916,6 +916,9 @@ class SimulationRuntimeState:
     stored_secondary_max_positions: Any = None
     stored_primary_peak_table_lattice: Any = None
     stored_secondary_peak_table_lattice: Any = None
+    stored_primary_intersection_cache: list[Any] | None = None
+    stored_secondary_intersection_cache: list[Any] | None = None
+    stored_intersection_cache: list[Any] | None = None
     last_unscaled_image_signature: object = None
     normalization_scale_cache: dict[str, object] = field(
         default_factory=lambda: {
@@ -938,6 +941,7 @@ class SimulationRuntimeState:
             "bg_results": {},
         }
     )
+    last_caked_intersection_cache: list[Any] | None = None
     chi_square_update_token: int = 0
     chi_square_state: dict[str, object] = field(
         default_factory=lambda: {

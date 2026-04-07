@@ -346,6 +346,13 @@ def _runtime_int(value_or_callable: object, default: int = 0) -> int:
         return int(default)
 
 
+def _runtime_bool(value_or_callable: object, default: bool = False) -> bool:
+    try:
+        return bool(_resolve_runtime_value(value_or_callable))
+    except Exception:
+        return bool(default)
+
+
 def _runtime_sequence(value_or_callable: object) -> Sequence[object] | None:
     raw_value = _resolve_runtime_value(value_or_callable)
     if raw_value is None:
@@ -1120,6 +1127,11 @@ def ensure_runtime_peak_overlay_data(
     primary_c: object,
     native_sim_to_display_coords: Callable[..., tuple[float, float]],
     reflection_q_group_metadata: Callable[..., tuple[object, object, object]],
+    caked_view_enabled_factory: object = False,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
     max_hits_per_reflection: object = 0,
     min_separation_px: object = 0.0,
     force: bool = False,
@@ -1150,6 +1162,7 @@ def ensure_runtime_peak_overlay_data(
 
     max_hits_raw = _runtime_int(max_hits_per_reflection, 0)
     min_separation_value = _runtime_float(min_separation_px, 0.0)
+    show_caked = _runtime_bool(caked_view_enabled_factory, False)
     peak_sig = (
         simulation_runtime_state.last_simulation_signature,
         id(max_positions_local),
@@ -1157,6 +1170,10 @@ def ensure_runtime_peak_overlay_data(
         tuple(updated_image.shape),
         int(max_hits_raw),
         float(min_separation_value),
+        bool(show_caked),
+        id(getattr(simulation_runtime_state, "last_caked_radial_values", None)),
+        id(getattr(simulation_runtime_state, "last_caked_azimuth_values", None)),
+        getattr(simulation_runtime_state, "last_analysis_signature", None),
     )
     peak_cached = (
         not force
@@ -1214,7 +1231,22 @@ def ensure_runtime_peak_overlay_data(
                 continue
             cx = float(xpix)
             cy = float(ypix)
-            disp_cx, disp_cy = native_sim_to_display_coords(cx, cy, image_shape)
+            caked_coords = None
+            if show_caked and callable(native_detector_coords_to_caked_display_coords):
+                try:
+                    caked_coords = native_detector_coords_to_caked_display_coords(cx, cy)
+                except Exception:
+                    caked_coords = None
+            if (
+                isinstance(caked_coords, tuple)
+                and len(caked_coords) >= 2
+                and np.isfinite(float(caked_coords[0]))
+                and np.isfinite(float(caked_coords[1]))
+            ):
+                disp_cx = float(caked_coords[0])
+                disp_cy = float(caked_coords[1])
+            else:
+                disp_cx, disp_cy = native_sim_to_display_coords(cx, cy, image_shape)
             too_close = False
             for _, _, _, _, prev_col, prev_row in chosen_rows:
                 d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
@@ -1229,6 +1261,24 @@ def ensure_runtime_peak_overlay_data(
 
         for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
             I, _xpix, _ypix, phi_val, H, K, L = row[:7]
+            two_theta_deg = float("nan")
+            phi_deg = float("nan")
+            if show_caked and callable(native_detector_coords_to_caked_display_coords):
+                try:
+                    caked_coords = native_detector_coords_to_caked_display_coords(
+                        float(cx),
+                        float(cy),
+                    )
+                except Exception:
+                    caked_coords = None
+                if (
+                    isinstance(caked_coords, tuple)
+                    and len(caked_coords) >= 2
+                    and np.isfinite(float(caked_coords[0]))
+                    and np.isfinite(float(caked_coords[1]))
+                ):
+                    two_theta_deg = float(caked_coords[0])
+                    phi_deg = float(caked_coords[1])
             simulation_runtime_state.peak_positions.append((disp_cx, disp_cy))
             simulation_runtime_state.peak_intensities.append(float(I))
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
@@ -1262,6 +1312,8 @@ def ensure_runtime_peak_overlay_data(
                     "qz": float(qz_val),
                     "q_group_key": q_group_key,
                     "phi": float(phi_val),
+                    "two_theta_deg": float(two_theta_deg),
+                    "phi_deg": float(phi_deg),
                     "source_table_index": int(table_idx),
                     "source_row_index": int(row_idx),
                     "source_label": str(source_label),
@@ -1289,6 +1341,11 @@ def make_runtime_peak_overlay_data_callback(
     primary_c_factory: object,
     native_sim_to_display_coords: Callable[..., tuple[float, float]],
     reflection_q_group_metadata: Callable[..., tuple[object, object, object]],
+    caked_view_enabled_factory: object = False,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
     max_hits_per_reflection: object = 0,
     min_separation_px: object = 0.0,
 ) -> Callable[..., bool]:
@@ -1301,6 +1358,10 @@ def make_runtime_peak_overlay_data_callback(
             primary_c=primary_c_factory,
             native_sim_to_display_coords=native_sim_to_display_coords,
             reflection_q_group_metadata=reflection_q_group_metadata,
+            caked_view_enabled_factory=caked_view_enabled_factory,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
             max_hits_per_reflection=max_hits_per_reflection,
             min_separation_px=min_separation_px,
             force=force,

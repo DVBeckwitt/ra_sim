@@ -906,6 +906,10 @@ def build_runtime_selected_peak_bootstrap(
     overlay_primary_a_factory: object | None = None,
     overlay_primary_c_factory: object | None = None,
     native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
     reflection_q_group_metadata: Callable[..., object] | None = None,
     max_hits_per_reflection: object = None,
     schedule_update_factory: object = None,
@@ -969,6 +973,10 @@ def build_runtime_selected_peak_bootstrap(
         ),
         native_sim_to_display_coords=native_sim_to_display_coords,
         reflection_q_group_metadata=reflection_q_group_metadata,
+        caked_view_enabled_factory=caked_view_enabled_factory,
+        native_detector_coords_to_caked_display_coords=(
+            native_detector_coords_to_caked_display_coords
+        ),
         max_hits_per_reflection=max_hits_per_reflection,
         min_separation_px=min_separation_px,
     )

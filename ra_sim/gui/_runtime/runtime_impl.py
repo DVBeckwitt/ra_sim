@@ -3302,6 +3302,26 @@ def _detector_pixel_to_scattering_angles(
     return two_theta, _wrap_phi_range(phi)
 
 
+def _native_detector_coords_to_live_caked_coords(
+    col: float,
+    row: float,
+) -> tuple[float, float] | None:
+    ai = simulation_runtime_state.ai_cache.get("ai")
+    return _native_detector_coords_to_caked_display_coords(
+        col,
+        row,
+        ai=ai,
+        get_detector_angular_maps=lambda ai_value: _get_detector_angular_maps(ai_value),
+        detector_pixel_to_scattering_angles=_detector_pixel_to_scattering_angles,
+        center=(float(center_x_var.get()), float(center_y_var.get())),
+        detector_distance=float(corto_detector_var.get()),
+        pixel_size=float(pixel_size_m),
+        wrap_phi_range=_wrap_phi_range,
+        caked_radial_values=simulation_runtime_state.last_caked_radial_values,
+        caked_azimuth_values=simulation_runtime_state.last_caked_azimuth_values,
+    )
+
+
 def _scattering_angles_to_detector_pixel(
     two_theta_deg: float,
     phi_deg: float,
@@ -3965,6 +3985,9 @@ peak_selection_workflow = (
             float(c_var.get()) if "c_var" in globals() else float(cv)
         ),
         native_sim_to_display_coords=_native_sim_to_display_coords,
+        native_detector_coords_to_caked_display_coords=(
+            _native_detector_coords_to_live_caked_coords
+        ),
         reflection_q_group_metadata=(
             gui_geometry_q_group_manager.reflection_q_group_metadata
         ),
@@ -5145,6 +5168,18 @@ def caking(data, ai, *, npt_rad=1000, npt_azim=720):
     )
 
 
+def _copy_intersection_cache_tables(cache):
+    copied = []
+    if not isinstance(cache, (list, tuple)):
+        return copied
+    for table in cache:
+        try:
+            copied.append(np.asarray(table, dtype=np.float64).copy())
+        except Exception:
+            copied.append(np.empty((0, 14), dtype=np.float64))
+    return copied
+
+
 def _auto_caked_limits(image):
     """Return sensible display limits for a caked image."""
 
@@ -5228,17 +5263,22 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     return intensity_vs_2theta, intensity_vs_phi, azimuth_sub, radial_filtered
 
 
-def _get_detector_angular_maps(ai):
+def _detector_angular_maps_for_shape(ai, detector_shape):
     if ai is None:
         return None, None
 
-    detector_shape = getattr(global_image_buffer, "shape", None)
     if detector_shape is None or len(detector_shape) < 2:
         return None, None
     if detector_shape[0] <= 0 or detector_shape[1] <= 0:
         return None, None
 
-    if simulation_runtime_state.ai_cache.get("detector_shape") != detector_shape:
+    detector_shape = tuple(int(v) for v in detector_shape[:2])
+    use_cache = getattr(global_image_buffer, "shape", None) == detector_shape
+
+    if use_cache and simulation_runtime_state.ai_cache.get("detector_shape") == detector_shape:
+        two_theta = simulation_runtime_state.ai_cache.get("detector_two_theta")
+        phi_vals = simulation_runtime_state.ai_cache.get("detector_phi")
+    else:
         try:
             two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
         except TypeError:
@@ -5249,16 +5289,105 @@ def _get_detector_angular_maps(ai):
         except TypeError:
             phi_vals = np.rad2deg(ai.chiArray(shape=detector_shape))
 
-        simulation_runtime_state.ai_cache["detector_shape"] = detector_shape
-        simulation_runtime_state.ai_cache["detector_two_theta"] = two_theta
-        simulation_runtime_state.ai_cache["detector_phi"] = phi_vals
+        if use_cache:
+            simulation_runtime_state.ai_cache["detector_shape"] = detector_shape
+            simulation_runtime_state.ai_cache["detector_two_theta"] = two_theta
+            simulation_runtime_state.ai_cache["detector_phi"] = phi_vals
 
-    two_theta = simulation_runtime_state.ai_cache.get("detector_two_theta")
-    phi_vals = simulation_runtime_state.ai_cache.get("detector_phi")
     if two_theta is None or phi_vals is None:
         return None, None
 
-    return two_theta, _adjust_phi_zero(phi_vals)
+    return np.asarray(two_theta, dtype=float), _adjust_phi_zero(phi_vals)
+
+
+def _get_detector_angular_maps(ai):
+    return _detector_angular_maps_for_shape(
+        ai,
+        getattr(global_image_buffer, "shape", None),
+    )
+
+
+def _snap_caked_axis_value(axis_values, value):
+    if axis_values is None or not np.isfinite(value):
+        return float("nan")
+    try:
+        axis = np.asarray(axis_values, dtype=float).reshape(-1)
+    except Exception:
+        return float("nan")
+    if axis.size <= 0:
+        return float("nan")
+    finite_axis = axis[np.isfinite(axis)]
+    if finite_axis.size <= 0:
+        return float("nan")
+    best_idx = int(np.argmin(np.abs(finite_axis - float(value))))
+    return float(finite_axis[best_idx])
+
+
+def _prepare_caked_intersection_cache(
+    intersection_cache,
+    *,
+    center,
+    detector_distance,
+    pixel_size,
+):
+    source_tables = _copy_intersection_cache_tables(intersection_cache)
+    if not source_tables:
+        return source_tables
+
+    try:
+        center_arr = np.asarray(center, dtype=float).reshape(-1)
+    except Exception:
+        center_arr = np.empty((0,), dtype=float)
+    if (
+        center_arr.size < 2
+        or not np.isfinite(center_arr[0])
+        or not np.isfinite(center_arr[1])
+    ):
+        return source_tables
+
+    if not (np.isfinite(detector_distance) and float(detector_distance) > 0.0):
+        return source_tables
+    if not (np.isfinite(pixel_size) and float(pixel_size) > 0.0):
+        return source_tables
+
+    center_row = float(center_arr[0])
+    center_col = float(center_arr[1])
+    detector_distance = float(detector_distance)
+    pixel_size = float(pixel_size)
+
+    transformed = []
+    for table in source_tables:
+        try:
+            arr = np.asarray(table, dtype=float)
+        except Exception:
+            arr = np.empty((0, 16), dtype=float)
+
+        if arr.ndim != 2:
+            transformed.append(arr.copy())
+            continue
+
+        # Keep the raw detector-space columns intact and refresh the trailing
+        # 2theta / phi slots from detector geometry.
+        out_cols = max(int(arr.shape[1]), 16)
+        out = np.full((arr.shape[0], out_cols), np.nan, dtype=float)
+        if arr.shape[0] > 0 and arr.shape[1] > 0:
+            out[:, : arr.shape[1]] = arr
+        if arr.shape[0] == 0 or arr.shape[1] < 4:
+            transformed.append(out)
+            continue
+
+        cols = np.asarray(arr[:, 2], dtype=float)
+        rows = np.asarray(arr[:, 3], dtype=float)
+        valid = np.isfinite(cols) & np.isfinite(rows)
+        if np.any(valid):
+            dx = (cols[valid] - center_col) * pixel_size
+            dy = (center_row - rows[valid]) * pixel_size
+            radius = np.hypot(dx, dy)
+            out[valid, 14] = np.degrees(np.arctan2(radius, detector_distance))
+            out[valid, 15] = _wrap_phi_range(np.degrees(np.arctan2(dx, dy)))
+        transformed.append(out)
+
+    return transformed
 simulation_runtime_state.profile_cache = {}
 simulation_runtime_state.last_1d_integration_data = {
     "radials_sim": None,
@@ -5277,6 +5406,7 @@ simulation_runtime_state.last_caked_extent = None
 simulation_runtime_state.last_caked_background_image_unscaled = None
 simulation_runtime_state.last_caked_radial_values = None
 simulation_runtime_state.last_caked_azimuth_values = None
+simulation_runtime_state.last_caked_intersection_cache = None
 
 simulation_runtime_state.last_res2_background = None
 simulation_runtime_state.last_res2_sim = None
@@ -6485,6 +6615,7 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_caked_background_image_unscaled = None
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
+    simulation_runtime_state.last_caked_intersection_cache = None
     simulation_runtime_state.last_1d_integration_data.update(
         {
             "radials_sim": None,
@@ -7002,7 +7133,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         buf = np.zeros((image_size, image_size), dtype=np.float64)
         if isinstance(data, dict):
             if len(data) == 0:
-                return buf, []
+                return buf, [], []
             result = simulate_qr_rods_request(
                 data,
                 build_request(
@@ -7013,15 +7144,19 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                     image_buffer=buf,
                 ),
             )
-            return result.image, list(result.hit_tables)
+            return (
+                result.image,
+                list(result.hit_tables),
+                _copy_intersection_cache_tables(result.intersection_cache),
+            )
 
         miller_arr = np.asarray(data, dtype=np.float64)
         intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
         if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
-            return buf, []
+            return buf, [], []
         row_count = min(miller_arr.shape[0], intens_vals.shape[0])
         if row_count <= 0:
-            return buf, []
+            return buf, [], []
         result = simulate_request(
             build_request(
                 miller_arr[:row_count, :],
@@ -7031,7 +7166,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 image_buffer=buf,
             )
         )
-        return result.image, list(result.hit_tables)
+        return (
+            result.image,
+            list(result.hit_tables),
+            _copy_intersection_cache_tables(result.intersection_cache),
+        )
 
     primary_data = job["primary_data"]
     primary_intensities = job["primary_intensities"]
@@ -7042,9 +7181,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     img2 = np.zeros((image_size, image_size), dtype=np.float64)
     maxpos1: list[object] = []
     maxpos2: list[object] = []
+    cache1: list[object] = []
+    cache2: list[object] = []
 
     if bool(job["run_primary"]):
-        img1, maxpos1 = run_one(
+        img1, maxpos1, cache1 = run_one(
             primary_data,
             primary_intensities,
             float(job["a_primary"]),
@@ -7052,7 +7193,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         )
 
     if bool(job["run_secondary"]):
-        img2, maxpos2 = run_one(
+        img2, maxpos2, cache2 = run_one(
             secondary_data,
             secondary_intensities,
             float(job["a_secondary"]),
@@ -7087,6 +7228,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         "hit_table_signature": job.get("hit_table_signature"),
         "primary_max_positions": list(maxpos1),
         "secondary_max_positions": list(maxpos2),
+        "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
+        "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
         "primary_peak_table_lattice": [
             (float(job["a_primary"]), float(job["c_primary"]), "primary")
             for _ in maxpos1
@@ -7244,6 +7387,12 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_secondary_max_positions = list(
             result.get("secondary_max_positions", [])
         )
+        simulation_runtime_state.stored_primary_intersection_cache = _copy_intersection_cache_tables(
+            result.get("primary_intersection_cache", [])
+        )
+        simulation_runtime_state.stored_secondary_intersection_cache = _copy_intersection_cache_tables(
+            result.get("secondary_intersection_cache", [])
+        )
         simulation_runtime_state.stored_primary_peak_table_lattice = list(
             result.get("primary_peak_table_lattice", [])
         )
@@ -7349,6 +7498,14 @@ def _restore_caked_display_payload_from_cached_results(
         dtype=float,
     )
     simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
+    caked_intersection_cache = _prepare_caked_intersection_cache(
+        getattr(simulation_runtime_state, "stored_intersection_cache", ()),
+        center=(float(center_x_var.get()), float(center_y_var.get())),
+        detector_distance=float(corto_detector_var.get()),
+        pixel_size=float(pixel_size_m),
+    )
+    simulation_runtime_state.stored_intersection_cache = caked_intersection_cache
+    simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
 
     bg_caked = None
     if background_visible and simulation_runtime_state.last_res2_background is not None:
@@ -7375,6 +7532,7 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     is_preview = bool(job.get("is_preview", False))
     cached_bg_res2 = job.get("cached_bg_res2")
     cached_bg_caked = job.get("cached_bg_caked")
+    intersection_cache = _copy_intersection_cache_tables(job.get("intersection_cache"))
 
     analysis_start_time = perf_counter()
     sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
@@ -7389,6 +7547,12 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         bg_caked = dict(cached_bg_caked)
     else:
         bg_caked = _prepare_caked_display_payload(bg_res2)
+    sim_caked_intersection_cache = _prepare_caked_intersection_cache(
+        intersection_cache,
+        center=job.get("center"),
+        detector_distance=float(job.get("distance_m", float("nan"))),
+        pixel_size=float(job.get("pixel_size_m", float("nan"))),
+    )
 
     return {
         "job_id": int(job["job_id"]),
@@ -7403,6 +7567,7 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         "sim_res2": sim_res2,
         "bg_res2": bg_res2,
         "sim_caked": sim_caked,
+        "sim_caked_intersection_cache": sim_caked_intersection_cache,
         "bg_caked": bg_caked,
         "analysis_elapsed_ms": (perf_counter() - analysis_start_time) * 1e3,
     }
@@ -7580,11 +7745,17 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
             dtype=float,
         )
         simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
+        caked_intersection_cache = _copy_intersection_cache_tables(
+            result.get("sim_caked_intersection_cache", [])
+        )
+        simulation_runtime_state.stored_intersection_cache = caked_intersection_cache
+        simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
         simulation_runtime_state.last_caked_extent = None
+        simulation_runtime_state.last_caked_intersection_cache = None
 
     bg_caked = result.get("bg_caked")
     if isinstance(bg_caked, dict):
@@ -7690,6 +7861,9 @@ simulation_runtime_state.stored_primary_max_positions = None
 simulation_runtime_state.stored_secondary_max_positions = None
 simulation_runtime_state.stored_primary_peak_table_lattice = None
 simulation_runtime_state.stored_secondary_peak_table_lattice = None
+simulation_runtime_state.stored_primary_intersection_cache = None
+simulation_runtime_state.stored_secondary_intersection_cache = None
+simulation_runtime_state.stored_intersection_cache = None
 simulation_runtime_state.last_unscaled_image_signature = None
 simulation_runtime_state.normalization_scale_cache = {"sig": None, "value": 1.0}
 simulation_runtime_state.peak_overlay_cache = {
@@ -8278,6 +8452,26 @@ def do_update():
 
     simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
     simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
+    intersection_cache_local = []
+    if (
+        run_primary
+        and simulation_runtime_state.stored_primary_intersection_cache is not None
+    ):
+        intersection_cache_local.extend(
+            _copy_intersection_cache_tables(
+                simulation_runtime_state.stored_primary_intersection_cache
+            )
+        )
+    if (
+        run_secondary
+        and simulation_runtime_state.stored_secondary_intersection_cache is not None
+    ):
+        intersection_cache_local.extend(
+            _copy_intersection_cache_tables(
+                simulation_runtime_state.stored_secondary_intersection_cache
+            )
+        )
+    simulation_runtime_state.stored_intersection_cache = intersection_cache_local
     simulation_runtime_state.stored_sim_image = updated_image
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
@@ -8573,6 +8767,9 @@ def do_update():
                     None
                     if not isinstance(cached_bg_entry, dict)
                     else cached_bg_entry.get("payload")
+                ),
+                "intersection_cache": _copy_intersection_cache_tables(
+                    simulation_runtime_state.stored_intersection_cache
                 ),
                 "distance_m": float(corto_det_up),
                 "center": np.asarray(
@@ -15590,20 +15787,67 @@ def _analysis_peak_axis_value(
     )
 
 
+def _analysis_cache_overlay_tables(show_caked: bool) -> list[object]:
+    cache_tables = (
+        simulation_runtime_state.last_caked_intersection_cache
+        if bool(show_caked)
+        else simulation_runtime_state.stored_intersection_cache
+    )
+    if not cache_tables:
+        cache_tables = (
+            simulation_runtime_state.stored_intersection_cache
+            if bool(show_caked)
+            else simulation_runtime_state.last_caked_intersection_cache
+        )
+    return list(cache_tables or [])
+
+
+def _analysis_cache_overlay_coords(
+    table: object,
+    *,
+    show_caked: bool,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    try:
+        arr = np.asarray(table, dtype=float)
+    except Exception:
+        return None
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 4:
+        return None
+
+    if bool(show_caked):
+        x_vals = np.full(arr.shape[0], np.nan, dtype=float)
+        y_vals = np.full(arr.shape[0], np.nan, dtype=float)
+        if arr.shape[1] >= 16:
+            x_vals[:] = arr[:, 14]
+            y_vals[:] = arr[:, 15]
+        invalid = ~(np.isfinite(x_vals) & np.isfinite(y_vals))
+        if np.any(invalid):
+            for idx in np.flatnonzero(invalid):
+                col = float(arr[idx, 2])
+                row = float(arr[idx, 3])
+                converted = _native_detector_coords_to_live_caked_coords(col, row)
+                if converted is None:
+                    continue
+                try:
+                    x_vals[idx] = float(converted[0])
+                    y_vals[idx] = float(converted[1])
+                except Exception:
+                    continue
+        valid = np.isfinite(x_vals) & np.isfinite(y_vals)
+    else:
+        x_vals = np.asarray(arr[:, 2], dtype=float)
+        y_vals = np.asarray(arr[:, 3], dtype=float)
+        valid = np.isfinite(x_vals) & np.isfinite(y_vals)
+
+    if not np.any(valid):
+        return None
+    return x_vals[valid], y_vals[valid]
+
+
 def _render_analysis_peak_overlays(*, redraw: bool) -> None:
     _clear_analysis_peak_overlay_artists(redraw=False)
 
     selected_peaks = list(analysis_peak_selection_state.selected_peaks)
-    if not selected_peaks:
-        if redraw:
-            try:
-                canvas_1d.draw_idle()
-            except Exception:
-                pass
-            if callable(globals().get("_request_overlay_canvas_redraw")):
-                _request_overlay_canvas_redraw(force=True)
-        return
-
     show_caked = bool(
         getattr(
             analysis_view_controls_view_state.show_caked_2d_var,
@@ -15611,6 +15855,42 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
             lambda: False,
         )()
     )
+    cache_tables = _analysis_cache_overlay_tables(show_caked)
+    if not selected_peaks and not cache_tables:
+        if redraw:
+            try:
+                canvas_1d.draw_idle()
+            except Exception:
+                pass
+            if callable(globals().get("_request_overlay_canvas_redraw")):
+                _request_overlay_canvas_redraw(force=True)
+        else:
+            if callable(globals().get("_request_overlay_canvas_redraw")):
+                _request_overlay_canvas_redraw()
+        return
+
+    # Temporary debug overlay: X-mark the cached intersection points in the
+    # currently active 2D view so detector and caked projections can be checked.
+    for table in cache_tables:
+        coords = _analysis_cache_overlay_coords(table, show_caked=show_caked)
+        if coords is None:
+            continue
+        try:
+            marker_artist = ax.plot(
+                coords[0],
+                coords[1],
+                linestyle="none",
+                marker="x",
+                markersize=8.0,
+                color="#ff6a00",
+                markeredgewidth=2.0,
+                alpha=0.9,
+                zorder=20,
+            )[0]
+            analysis_peak_selection_state.caked_peak_artists.append(marker_artist)
+        except Exception:
+            continue
+
     if show_caked:
         for idx, peak_entry in enumerate(selected_peaks, start=1):
             try:
@@ -15741,6 +16021,8 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
             pass
         if callable(globals().get("_request_overlay_canvas_redraw")):
             _request_overlay_canvas_redraw(force=True)
+    elif callable(globals().get("_request_overlay_canvas_redraw")):
+        _request_overlay_canvas_redraw()
 
 
 def _render_analysis_peak_tools_controls(parent) -> None:
