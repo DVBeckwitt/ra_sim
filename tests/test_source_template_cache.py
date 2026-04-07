@@ -46,6 +46,7 @@ def _call_safe(intensities, *, save_flag=0, theta_initial=6.0):
         unit_x,
         n_detector,
         save_flag=save_flag,
+        sample_qr_ring_once=False,
     )
 
 

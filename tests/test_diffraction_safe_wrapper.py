@@ -87,6 +87,7 @@ def test_process_peaks_parallel_safe_clusters_and_expands_outputs(monkeypatch) -
         save_flag=0,
         record_status=True,
         best_sample_indices_out=best_indices,
+        sample_qr_ring_once=False,
     )
 
     raw_n = int(np.asarray(args[16]).shape[0])
@@ -121,6 +122,7 @@ def test_process_peaks_parallel_safe_keeps_raw_samples_for_forced_indices(monkey
         *args,
         save_flag=0,
         single_sample_indices=np.array([17], dtype=np.int64),
+        sample_qr_ring_once=False,
     )
 
     assert observed["sample_count"] == int(np.asarray(args[16]).shape[0])
@@ -153,8 +155,38 @@ def test_process_peaks_parallel_safe_can_prefer_python_runner(monkeypatch) -> No
         *args,
         save_flag=0,
         prefer_python_runner=True,
+        sample_qr_ring_once=False,
     )
 
     assert call_order == ["python"]
     stats = diffraction.get_last_process_peaks_safe_stats()
     assert stats["used_python_runner"] is True
+
+
+def test_process_peaks_parallel_safe_keeps_raw_beams_for_q_ring_sampling(monkeypatch) -> None:
+    args = _build_process_args(128)
+    observed: dict[str, object] = {}
+
+    def fake_kernel(*kernel_args, **kernel_kwargs):
+        observed["sample_count"] = int(np.asarray(kernel_args[16]).shape[0])
+        observed["has_sample_weights"] = "sample_weights" in kernel_kwargs
+        observed["sample_qr_ring_once"] = kernel_kwargs.get("sample_qr_ring_once")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(kernel_args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
+
+    diffraction.process_peaks_parallel_safe(
+        *args,
+        save_flag=0,
+    )
+
+    assert observed["sample_count"] == int(np.asarray(args[16]).shape[0])
+    assert observed["has_sample_weights"] is False
+    assert observed["sample_qr_ring_once"] is True

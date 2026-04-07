@@ -43,6 +43,7 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
     ):
         called_l_values.append(float(L))
         return (
@@ -170,6 +171,7 @@ def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
     ):
         return (
             np.empty((0, 7), dtype=np.float64),
@@ -487,6 +489,86 @@ def test_calculate_phi_from_precomputed_uses_pixel_size(monkeypatch):
     assert float(hits_100[0, 1]) > float(hits_200[0, 1])
     np.testing.assert_allclose(float(hits_100[0, 1]), 10.0, atol=1.0e-12, rtol=0.0)
     np.testing.assert_allclose(float(hits_200[0, 1]), 9.0, atol=1.0e-12, rtol=0.0)
+
+
+def test_calculate_phi_from_precomputed_samples_one_ring_point_using_total_ring_mass(monkeypatch):
+    monkeypatch.setattr(
+        diffraction,
+        "_nominal_reflection_visible",
+        lambda *_args, **_kwargs: (True, 0, False),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "solve_q",
+        lambda *_args, **_kwargs: (
+            np.array(
+                [
+                    [0.0, 0.0, 0.0, 1.0],
+                    [0.0, 0.0, 0.0, 3.0],
+                ],
+                dtype=np.float64,
+            ),
+            0,
+        ),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_sample_q_ring_solution",
+        lambda *_args, **_kwargs: (1, 4.0),
+    )
+    monkeypatch.setattr(diffraction, "_build_fast_optics_lut_row", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        diffraction,
+        "_lookup_fast_optics_lut_row",
+        lambda *_args, **_kwargs: (1.0, 0.0, 1.0, 0.0),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "intersect_line_plane",
+        lambda *_args, **_kwargs: (0.0, 0.0, 0.0, True),
+    )
+
+    sample_terms = np.zeros((1, diffraction._SAMPLE_COLS), dtype=np.float64)
+    sample_terms[0, diffraction._SAMPLE_COL_VALID] = 1.0
+    sample_terms[0, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+    sample_terms[0, diffraction._SAMPLE_COL_K0] = 1.0
+    sample_terms[0, diffraction._SAMPLE_COL_TI2] = 1.0
+    sample_terms[0, diffraction._SAMPLE_COL_L_IN] = 1.0
+    sample_terms[0, diffraction._SAMPLE_COL_N2_REAL] = 1.0
+
+    hits, *_ = diffraction._calculate_phi_from_precomputed.py_func(
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        np.zeros((16, 16), dtype=np.float64),
+        16,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        np.array([8.0, 8.0], dtype=np.float64),
+        np.eye(3, dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        sample_terms,
+        np.array([1.0 + 0.0j], dtype=np.complex128),
+        np.array([1.0 + 0.0j], dtype=np.complex128),
+        0,
+        0,
+        np.zeros((1, 1, 5), dtype=np.float64),
+        np.zeros(1, dtype=np.int64),
+        0,
+        sample_qr_ring_once=True,
+    )
+
+    assert hits.shape == (1, 7)
+    np.testing.assert_allclose(float(hits[0, 0]), 8.0, atol=1.0e-12, rtol=0.0)
 
 
 def test_resolve_index_of_refraction_uses_cif_when_available():

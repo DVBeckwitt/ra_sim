@@ -44,6 +44,7 @@ SOLVE_Q_MODE_UNIFORM = 0
 SOLVE_Q_MODE_ADAPTIVE = 1
 DEFAULT_SOLVE_Q_MODE = SOLVE_Q_MODE_UNIFORM
 _INTENSITY_CUTOFF = float(np.exp(-100.0))
+_Q_RING_SAMPLE_MIN_MASS = 1.0e-5
 _SOLVE_Q_ABS_ERR_TOL = 1.0e-20
 _LOCAL_ARC_MAX_ROOTS = 4
 _LOCAL_ARC_MAX_WINDOWS = 8
@@ -139,6 +140,7 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "sample_length_m",
     "n2_sample_array_override",
     "accumulate_image",
+    "sample_qr_ring_once",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -157,6 +159,7 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "sample_length_m": 0.0,
     "n2_sample_array_override": None,
     "accumulate_image": True,
+    "sample_qr_ring_once": True,
 }
 
 _EMPTY_PROCESS_PEAKS_SAFE_STATS = {
@@ -2405,6 +2408,8 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
         return None
     if int(bound["save_flag"]) != 0:
         return None
+    if bool(bound["sample_qr_ring_once"]):
+        return None
 
     miller = np.asarray(bound["miller"], dtype=np.float64)
     intensities = np.asarray(bound["intensities"], dtype=np.float64).reshape(-1)
@@ -3323,6 +3328,47 @@ def _nominal_reflection_visible(
 
 
 @njit(fastmath=True)
+def _ring_sample_unit_interval(peak_idx, sample_idx):
+    """Return a deterministic quasi-random ``u`` in ``[0, 1)`` for ring sampling."""
+
+    u = (
+        0.5
+        + (float(peak_idx) + 1.0) * 0.6180339887498949
+        + (float(sample_idx) + 1.0) * 0.41421356237309503
+    )
+    return u - np.floor(u)
+
+
+@njit(fastmath=True)
+def _sample_q_ring_solution(all_q, peak_idx, sample_idx):
+    """Sample one ``solve_q`` row using the ring mass as the PDF."""
+
+    total_mass = 0.0
+    last_valid_idx = -1
+    for idx in range(all_q.shape[0]):
+        mass_i = all_q[idx, 3]
+        if not np.isfinite(mass_i) or mass_i < _Q_RING_SAMPLE_MIN_MASS:
+            continue
+        total_mass += mass_i
+        last_valid_idx = idx
+
+    if total_mass <= 0.0 or last_valid_idx < 0:
+        return -1, 0.0
+
+    target_mass = _ring_sample_unit_interval(peak_idx, sample_idx) * total_mass
+    running_mass = 0.0
+    for idx in range(all_q.shape[0]):
+        mass_i = all_q[idx, 3]
+        if not np.isfinite(mass_i) or mass_i < _Q_RING_SAMPLE_MIN_MASS:
+            continue
+        running_mass += mass_i
+        if running_mass >= target_mass:
+            return idx, total_mass
+
+    return last_valid_idx, total_mass
+
+
+@njit(fastmath=True)
 def _calculate_phi_from_precomputed(
     H,
     K,
@@ -3359,6 +3405,7 @@ def _calculate_phi_from_precomputed(
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     pixel_size_m=100e-6,
     forced_sample_idx=-1,
+    sample_qr_ring_once=True,
     sample_weights=None,
 ):
     """Reflection core using precomputed sample-geometry terms."""
@@ -3534,24 +3581,25 @@ def _calculate_phi_from_precomputed(
 
         selected_sol_idx = np.full(2, -1, dtype=np.int64)
         selected_sol_count = 0
-        record_group_sample = (
-            capture_aux
-            and 0 <= record_sample_idx < n_samp
-            and (
-                (not can_reuse_q_solutions and i_samp == record_sample_idx)
-                or (
-                    can_reuse_q_solutions
-                    and int(sample_terms[record_sample_idx, _SAMPLE_COL_SOLVE_Q_REP]) == group_rep_idx
+        if not sample_qr_ring_once:
+            record_group_sample = (
+                capture_aux
+                and 0 <= record_sample_idx < n_samp
+                and (
+                    (not can_reuse_q_solutions and i_samp == record_sample_idx)
+                    or (
+                        can_reuse_q_solutions
+                        and int(sample_terms[record_sample_idx, _SAMPLE_COL_SOLVE_Q_REP]) == group_rep_idx
+                    )
                 )
             )
-        )
-        if record_group_sample:
-            selected_sol_idx, selected_sol_count = _select_g_peak_solution_indices(
-                All_Q,
-                k_in_crystal,
-                solve_k_scat,
-                G_vec,
-            )
+            if record_group_sample:
+                selected_sol_idx, selected_sol_count = _select_g_peak_solution_indices(
+                    All_Q,
+                    k_in_crystal,
+                    solve_k_scat,
+                    G_vec,
+                )
         chain_idx = i_samp
         while chain_idx >= 0:
             sample_weight = 1.0
@@ -3560,6 +3608,20 @@ def _calculate_phi_from_precomputed(
                 if not np.isfinite(sample_weight) or sample_weight <= 0.0:
                     if record_status:
                         statuses[chain_idx] = -12
+                    if not can_reuse_q_solutions:
+                        break
+                    chain_idx = int(sample_terms[chain_idx, _SAMPLE_COL_SOLVE_Q_NEXT])
+                    continue
+
+            sampled_sol_idx = -1
+            sampled_ring_mass = 1.0
+            if sample_qr_ring_once:
+                sampled_sol_idx, sampled_ring_mass = _sample_q_ring_solution(
+                    All_Q,
+                    i_peaks_index,
+                    chain_idx,
+                )
+                if sampled_sol_idx < 0 or sampled_ring_mass <= 0.0:
                     if not can_reuse_q_solutions:
                         break
                     chain_idx = int(sample_terms[chain_idx, _SAMPLE_COL_SOLVE_Q_NEXT])
@@ -3594,15 +3656,19 @@ def _calculate_phi_from_precomputed(
                 fast_optics_ready[chain_idx] = 1
 
             for i_sol in range(All_Q.shape[0]):
+                if sample_qr_ring_once and i_sol != sampled_sol_idx:
+                    continue
                 Qx = All_Q[i_sol, 0]
                 Qy = All_Q[i_sol, 1]
                 Qz = All_Q[i_sol, 2]
                 I_Q = All_Q[i_sol, 3]
-                if I_Q < 1e-5:
+                if I_Q < _Q_RING_SAMPLE_MIN_MASS:
                     continue
 
                 record_this_solution = False
-                if capture_aux and chain_idx == record_sample_idx:
+                if sample_qr_ring_once:
+                    record_this_solution = capture_aux
+                elif capture_aux and chain_idx == record_sample_idx:
                     for keep_idx in range(selected_sol_count):
                         if i_sol == selected_sol_idx[keep_idx]:
                             record_this_solution = True
@@ -3717,7 +3783,7 @@ def _calculate_phi_from_precomputed(
                 val = (
                     reflection_intensity
                     * sample_weight
-                    * I_Q
+                    * (sampled_ring_mass if sample_qr_ring_once else I_Q)
                     * prop_fac
                     * exp(-Qz * Qz * debye_x_sq)
                     * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq)
@@ -3867,6 +3933,7 @@ def calculate_phi(
     sample_width_m=0.0,
     sample_length_m=0.0,
     forced_sample_idx=-1,
+    sample_qr_ring_once=True,
 ):
     """
     For a single reflection (H,K,L), build a mosaic Q_grid around G_vec.
@@ -3944,6 +4011,7 @@ def calculate_phi(
         solve_q_mode,
         pixel_size_m,
         forced_sample_idx,
+        sample_qr_ring_once,
     )
 
 
@@ -3982,6 +4050,7 @@ def process_peaks_parallel(
     sample_length_m=0.0,
     n2_sample_array_override=None,
     accumulate_image=True,
+    sample_qr_ring_once=True,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an
@@ -4337,6 +4406,7 @@ def process_peaks_parallel(
                     solve_q_mode_i,
                     pixel_size_m,
                     forced_idx,
+                    sample_qr_ring_once,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
@@ -4375,6 +4445,7 @@ def process_peaks_parallel(
                     solve_q_mode_i,
                     pixel_size_m,
                     forced_idx,
+                    sample_qr_ring_once,
                     sample_weight_array,
                 )
             if collect_tables:
@@ -4499,6 +4570,7 @@ def process_peaks_parallel(
                     solve_q_mode_i,
                     pixel_size_m,
                     forced_idx,
+                    sample_qr_ring_once,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
@@ -4537,6 +4609,7 @@ def process_peaks_parallel(
                     solve_q_mode_i,
                     pixel_size_m,
                     forced_idx,
+                    sample_qr_ring_once,
                     sample_weight_array,
                 )
 
@@ -4647,6 +4720,8 @@ def _prepare_clustered_process_peaks_call(args, kwargs):
     if len(args) <= 23:
         return args, call_kwargs, None
 
+    if bool(call_kwargs.get("sample_qr_ring_once", True)):
+        return args, call_kwargs, None
     save_flag = int(call_kwargs.get("save_flag", args[31] if len(args) > 31 else 0))
     if save_flag == 1:
         return args, call_kwargs, None
@@ -4761,6 +4836,8 @@ def process_peaks_parallel_safe(*args, **kwargs):
 
     prefer_python_runner = bool(kwargs.pop("prefer_python_runner", False))
     enable_safe_cache = kwargs.pop("enable_safe_cache", None)
+    sample_qr_ring_once = bool(kwargs.pop("sample_qr_ring_once", True))
+    kwargs["sample_qr_ring_once"] = sample_qr_ring_once
     _set_last_process_peaks_safe_stats()
     safe_cache_result = _maybe_run_process_peaks_safe_cache(
         args,
@@ -5124,6 +5201,7 @@ def process_qr_rods_parallel(
     sample_length_m=0.0,
     n2_sample_array_override=None,
     accumulate_image=True,
+    sample_qr_ring_once=True,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -5184,6 +5262,7 @@ def process_qr_rods_parallel(
         sample_length_m=sample_length_m,
         n2_sample_array_override=n2_sample_array_override,
         accumulate_image=accumulate_image,
+        sample_qr_ring_once=sample_qr_ring_once,
     )
 
     return (*result, degeneracy)
