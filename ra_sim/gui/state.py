@@ -387,6 +387,7 @@ class GeometryToolActionsViewState:
     redo_geometry_fit_button: Any = None
     geometry_manual_pick_button_var: Any = None
     geometry_manual_pick_button: Any = None
+    geometry_manual_refine_button: Any = None
     geometry_manual_undo_button: Any = None
     geometry_manual_export_button: Any = None
     geometry_manual_import_button: Any = None

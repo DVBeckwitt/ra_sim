@@ -525,6 +525,29 @@ def normalize_geometry_manual_pair_entry(
             normalized[x_key] = float(caked_x_val)
             normalized[y_key] = float(caked_y_val)
 
+    for x_key, y_key in (
+        ("refined_sim_x", "refined_sim_y"),
+        ("refined_sim_native_x", "refined_sim_native_y"),
+        ("refined_sim_caked_x", "refined_sim_caked_y"),
+    ):
+        raw_x_local = entry.get(x_key)
+        raw_y_local = entry.get(y_key)
+        try:
+            refined_x_val = (
+                float(raw_x_local) if raw_x_local is not None else float("nan")
+            )
+        except Exception:
+            refined_x_val = float("nan")
+        try:
+            refined_y_val = (
+                float(raw_y_local) if raw_y_local is not None else float("nan")
+            )
+        except Exception:
+            refined_y_val = float("nan")
+        if np.isfinite(refined_x_val) and np.isfinite(refined_y_val):
+            normalized[x_key] = float(refined_x_val)
+            normalized[y_key] = float(refined_y_val)
+
     placement_error_value = entry.get("placement_error_px")
     if placement_error_value is None and np.isfinite(raw_x_val) and np.isfinite(raw_y_val):
         placement_error_value = geometry_manual_position_error_px(
@@ -676,6 +699,72 @@ def peak_maximum_near_in_image(
     max_idx = int(np.nanargmax(window))
     win_r, win_c = np.unravel_index(max_idx, window.shape)
     return float(c0 + win_c), float(r0 + win_r)
+
+
+def geometry_manual_apply_refined_simulated_override(
+    entry: dict[str, object] | None,
+    resolved_source_entry: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Overlay one saved refined-simulation position onto a resolved source entry."""
+
+    result = dict(resolved_source_entry) if isinstance(resolved_source_entry, dict) else {}
+    if not isinstance(entry, dict):
+        return result or None
+
+    if not result:
+        for key in (
+            "hkl",
+            "label",
+            "source_table_index",
+            "source_row_index",
+            "source_peak_index",
+            "source_label",
+            "q_group_key",
+        ):
+            if key in entry:
+                result[key] = entry.get(key)
+
+    def _pair(x_key: str, y_key: str) -> tuple[float, float] | None:
+        try:
+            x_val = float(entry.get(x_key, np.nan))
+            y_val = float(entry.get(y_key, np.nan))
+        except Exception:
+            return None
+        if not (np.isfinite(x_val) and np.isfinite(y_val)):
+            return None
+        return float(x_val), float(y_val)
+
+    refined_raw = _pair("refined_sim_x", "refined_sim_y")
+    refined_native = _pair("refined_sim_native_x", "refined_sim_native_y")
+    refined_caked = _pair("refined_sim_caked_x", "refined_sim_caked_y")
+
+    use_caked_display = False
+    try:
+        use_caked_display = np.isfinite(float(result.get("caked_x", np.nan))) and np.isfinite(
+            float(result.get("caked_y", np.nan))
+        )
+    except Exception:
+        use_caked_display = False
+
+    if refined_raw is not None:
+        result["sim_col_raw"] = float(refined_raw[0])
+        result["sim_row_raw"] = float(refined_raw[1])
+        if not use_caked_display:
+            result["sim_col"] = float(refined_raw[0])
+            result["sim_row"] = float(refined_raw[1])
+
+    if refined_native is not None:
+        result["sim_native_x"] = float(refined_native[0])
+        result["sim_native_y"] = float(refined_native[1])
+
+    if refined_caked is not None:
+        result["caked_x"] = float(refined_caked[0])
+        result["caked_y"] = float(refined_caked[1])
+        if use_caked_display or refined_raw is None:
+            result["sim_col"] = float(refined_caked[0])
+            result["sim_row"] = float(refined_caked[1])
+
+    return result or None
 
 
 def caked_axis_to_image_index(
@@ -2158,6 +2247,7 @@ def build_geometry_manual_initial_pairs_display(
             source_key = None
         if source_key is not None:
             sim_entry = simulated_lookup.get(source_key)
+            sim_entry = geometry_manual_apply_refined_simulated_override(entry, sim_entry)
             if isinstance(sim_entry, dict):
                 try:
                     sim_col = float(sim_entry.get("sim_col"))
@@ -4033,6 +4123,12 @@ def geometry_manual_pair_entry_to_jsonable(
         "raw_caked_y",
         "placement_error_px",
         "sigma_px",
+        "refined_sim_x",
+        "refined_sim_y",
+        "refined_sim_native_x",
+        "refined_sim_native_y",
+        "refined_sim_caked_x",
+        "refined_sim_caked_y",
     ):
         value = normalized.get(key)
         if value is None:

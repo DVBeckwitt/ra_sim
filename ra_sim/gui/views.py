@@ -3696,6 +3696,7 @@ def create_geometry_tool_action_controls(
     parent: tk.Misc,
     view_state: GeometryToolActionsViewState,
     on_toggle_manual_pick: Callable[[], None],
+    on_refine_manual_pairs: Callable[[], None],
     on_undo_manual_placement: Callable[[], None],
     on_export_manual_pairs: Callable[[], None],
     on_import_manual_pairs: Callable[[], None],
@@ -3707,12 +3708,22 @@ def create_geometry_tool_action_controls(
     """Create manual-geometry action controls and store their refs."""
 
     geometry_manual_pick_button_var = tk.StringVar(value=str(manual_pick_text))
+    geometry_manual_pick_row = ttk.Frame(parent)
+    geometry_manual_pick_row.pack(side=tk.TOP, padx=0, pady=0, anchor="w")
+
     geometry_manual_pick_button = ttk.Button(
-        parent,
+        geometry_manual_pick_row,
         textvariable=geometry_manual_pick_button_var,
         command=on_toggle_manual_pick,
     )
-    geometry_manual_pick_button.pack(side=tk.TOP, padx=5, pady=2)
+    geometry_manual_pick_button.pack(side=tk.LEFT, padx=5, pady=2)
+
+    geometry_manual_refine_button = ttk.Button(
+        geometry_manual_pick_row,
+        text="Refine Qr Sets",
+        command=on_refine_manual_pairs,
+    )
+    geometry_manual_refine_button.pack(side=tk.LEFT, padx=5, pady=2)
 
     geometry_manual_undo_button = ttk.Button(
         parent,
@@ -3752,6 +3763,7 @@ def create_geometry_tool_action_controls(
 
     view_state.geometry_manual_pick_button_var = geometry_manual_pick_button_var
     view_state.geometry_manual_pick_button = geometry_manual_pick_button
+    view_state.geometry_manual_refine_button = geometry_manual_refine_button
     view_state.geometry_manual_undo_button = geometry_manual_undo_button
     view_state.geometry_manual_export_button = geometry_manual_export_button
     view_state.geometry_manual_import_button = geometry_manual_import_button

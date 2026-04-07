@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.utils.notifications import play_completion_chime
 
 
@@ -2333,6 +2334,12 @@ def build_geometry_manual_fit_dataset(
         if q_group_key is not None:
             entry["q_group_key"] = q_group_key
         resolved_source_entry = _resolve_source_entry(entry)
+        resolved_source_entry = gui_manual_geometry.geometry_manual_apply_refined_simulated_override(
+            entry,
+            dict(resolved_source_entry)
+            if isinstance(resolved_source_entry, Mapping)
+            else None,
+        )
         selected_records.append(
             {
             "entry": entry,

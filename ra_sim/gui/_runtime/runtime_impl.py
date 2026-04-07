@@ -2273,6 +2273,179 @@ def _undo_last_geometry_manual_placement() -> None:
     progress_label_geometry.config(text="Undid the last manual placement change.")
 
 
+def _refine_current_geometry_manual_pairs() -> None:
+    """Refine current saved manual-pair simulation points onto local simulation maxima."""
+
+    background_index = int(background_runtime_state.current_background_index)
+    if gui_manual_geometry.geometry_manual_pick_session_active(
+        geometry_manual_state.pick_session,
+        current_background_index=background_index,
+    ):
+        progress_label_geometry.config(
+            text="Finish the active Qr/Qz placement before refining the saved simulation peaks."
+        )
+        return
+
+    current_entries = [dict(entry) for entry in _geometry_manual_pairs_for_index(background_index)]
+    if not current_entries:
+        progress_label_geometry.config(
+            text="No saved Qr/Qz placements exist for the current background image."
+        )
+        return
+
+    stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+    if stored_sim_image is None:
+        progress_label_geometry.config(
+            text="No full simulation intensity image is available. Run Update Simulation first."
+        )
+        return
+
+    try:
+        native_sim_image = np.asarray(stored_sim_image, dtype=float)
+        native_image_shape = tuple(int(v) for v in native_sim_image.shape[:2])
+        sim_display_image = np.rot90(native_sim_image, SIM_DISPLAY_ROTATE_K)
+    except Exception:
+        progress_label_geometry.config(
+            text="The current simulation image could not be prepared for peak refinement."
+        )
+        return
+
+    if native_sim_image.ndim < 2 or native_sim_image.size == 0:
+        progress_label_geometry.config(
+            text="The current simulation image does not contain any peak data to refine."
+        )
+        return
+
+    try:
+        simulated_peaks = _geometry_manual_simulated_peaks_for_params(
+            dict(_current_geometry_fit_params()),
+            prefer_cache=False,
+        )
+    except Exception:
+        simulated_peaks = []
+    simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
+    if not simulated_lookup:
+        progress_label_geometry.config(
+            text="The current central-ray simulation does not expose any Qr/Qz source peaks to refine."
+        )
+        return
+
+    updated_entries: list[dict[str, object]] = []
+    refined_count = 0
+    moved_count = 0
+    skipped_count = 0
+    for raw_entry in current_entries:
+        entry = dict(raw_entry)
+        for key in (
+            "refined_sim_x",
+            "refined_sim_y",
+            "refined_sim_native_x",
+            "refined_sim_native_y",
+            "refined_sim_caked_x",
+            "refined_sim_caked_y",
+        ):
+            entry.pop(key, None)
+
+        try:
+            source_key = (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            )
+        except Exception:
+            source_key = None
+        source_entry = simulated_lookup.get(source_key) if source_key is not None else None
+        if not isinstance(source_entry, dict):
+            updated_entries.append(entry)
+            skipped_count += 1
+            continue
+
+        try:
+            seed_col = float(source_entry.get("sim_col_raw", source_entry.get("sim_col", np.nan)))
+            seed_row = float(source_entry.get("sim_row_raw", source_entry.get("sim_row", np.nan)))
+        except Exception:
+            seed_col = float("nan")
+            seed_row = float("nan")
+        if not (np.isfinite(seed_col) and np.isfinite(seed_row)):
+            updated_entries.append(entry)
+            skipped_count += 1
+            continue
+
+        refined_col, refined_row = gui_manual_geometry.peak_maximum_near_in_image(
+            sim_display_image,
+            float(seed_col),
+            float(seed_row),
+            search_radius=6,
+        )
+        if not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+            updated_entries.append(entry)
+            skipped_count += 1
+            continue
+
+        entry["refined_sim_x"] = float(refined_col)
+        entry["refined_sim_y"] = float(refined_row)
+        refined_count += 1
+        if abs(float(refined_col) - float(seed_col)) > 1.0e-9 or abs(
+            float(refined_row) - float(seed_row)
+        ) > 1.0e-9:
+            moved_count += 1
+
+        try:
+            native_point = _display_to_native_sim_coords(
+                float(refined_col),
+                float(refined_row),
+                native_image_shape,
+            )
+        except Exception:
+            native_point = None
+        if (
+            isinstance(native_point, tuple)
+            and len(native_point) >= 2
+            and np.isfinite(float(native_point[0]))
+            and np.isfinite(float(native_point[1]))
+        ):
+            entry["refined_sim_native_x"] = float(native_point[0])
+            entry["refined_sim_native_y"] = float(native_point[1])
+            try:
+                refined_caked = _native_to_caked_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+            except Exception:
+                refined_caked = None
+            if (
+                isinstance(refined_caked, tuple)
+                and len(refined_caked) >= 2
+                and refined_caked[0] is not None
+                and refined_caked[1] is not None
+                and np.isfinite(float(refined_caked[0]))
+                and np.isfinite(float(refined_caked[1]))
+            ):
+                entry["refined_sim_caked_x"] = float(refined_caked[0])
+                entry["refined_sim_caked_y"] = float(refined_caked[1])
+
+        updated_entries.append(entry)
+
+    if refined_count <= 0:
+        progress_label_geometry.config(
+            text="No saved Qr/Qz placements could be mapped onto the current simulation image."
+        )
+        return
+
+    _push_geometry_manual_undo_state()
+    _set_geometry_manual_pairs_for_index(background_index, updated_entries)
+    _clear_geometry_fit_dataset_cache()
+    _clear_geometry_manual_preview_artists(redraw=False)
+    _render_current_geometry_manual_pairs(update_status=False)
+    _update_geometry_manual_pick_button_label()
+    _refresh_background_status()
+    progress_label_geometry.config(
+        text=(
+            f"Refined {refined_count} Qr/Qz simulation points on background {background_index + 1} "
+            f"({moved_count} moved, {skipped_count} skipped)."
+        )
+    )
+
+
 def _copy_geometry_fit_state_value(value):
     """Deep-copy simple geometry-fit GUI state."""
 
@@ -14453,6 +14626,7 @@ geometry_tool_actions_runtime = (
         views_module=gui_views,
         view_state=geometry_tool_actions_view_state,
         on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
+        on_refine_manual_pairs=_refine_current_geometry_manual_pairs,
         on_undo_manual_placement=_undo_last_geometry_manual_placement,
         on_export_manual_pairs=_export_geometry_manual_pairs,
         on_import_manual_pairs=_import_geometry_manual_pairs,
