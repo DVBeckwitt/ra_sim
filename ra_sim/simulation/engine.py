@@ -6,7 +6,11 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .diffraction import process_peaks_parallel_safe, process_qr_rods_parallel_safe
+from .diffraction import (
+    build_intersection_cache,
+    process_peaks_parallel_safe,
+    process_qr_rods_parallel_safe,
+)
 from .types import SimulationRequest, SimulationResult
 
 
@@ -88,6 +92,11 @@ def simulate(
         request.geometry.n_detector,
         **peak_kwargs,
     )
+    intersection_cache = build_intersection_cache(
+        hit_tables,
+        request.geometry.av,
+        request.geometry.cv,
+    )
 
     return SimulationResult(
         image=np.asarray(image, dtype=np.float64),
@@ -97,6 +106,7 @@ def simulate(
         all_status=all_status,
         miss_tables=miss_tables,
         degeneracy=None,
+        intersection_cache=intersection_cache,
     )
 
 
@@ -163,6 +173,11 @@ def simulate_qr_rods(
         request.geometry.n_detector,
         **rod_kwargs,
     )
+    intersection_cache = build_intersection_cache(
+        hit_tables,
+        request.geometry.av,
+        request.geometry.cv,
+    )
 
     return SimulationResult(
         image=np.asarray(image, dtype=np.float64),
@@ -172,4 +187,5 @@ def simulate_qr_rods(
         all_status=all_status,
         miss_tables=miss_tables,
         degeneracy=degeneracy,
+        intersection_cache=intersection_cache,
     )

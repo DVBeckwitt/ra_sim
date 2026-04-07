@@ -88,3 +88,4 @@ class SimulationResult:
     all_status: np.ndarray
     miss_tables: list[Any]
     degeneracy: np.ndarray | None = None
+    intersection_cache: list[Any] | None = None

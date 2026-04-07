@@ -174,6 +174,7 @@ _PHASE_SPACE_CACHE = {}
 _SOURCE_TEMPLATE_CACHE = {}
 _Q_VECTOR_CACHE = {}
 _LAST_PROCESS_PEAKS_SAFE_STATS = dict(_EMPTY_PROCESS_PEAKS_SAFE_STATS)
+_LAST_INTERSECTION_CACHE = []
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -4839,12 +4840,17 @@ def process_peaks_parallel_safe(*args, **kwargs):
     sample_qr_ring_once = bool(kwargs.pop("sample_qr_ring_once", True))
     kwargs["sample_qr_ring_once"] = sample_qr_ring_once
     _set_last_process_peaks_safe_stats()
+    av, cv = _extract_process_peaks_lattice(args, kwargs)
+    _set_last_intersection_cache([])
     safe_cache_result = _maybe_run_process_peaks_safe_cache(
         args,
         kwargs,
         enable_safe_cache,
     )
     if safe_cache_result is not None:
+        _set_last_intersection_cache(
+            build_intersection_cache(safe_cache_result[1], av, cv)
+        )
         return safe_cache_result
     clustered_args, clustered_kwargs, cluster_meta = _prepare_clustered_process_peaks_call(
         args,
@@ -4870,6 +4876,9 @@ def process_peaks_parallel_safe(*args, **kwargs):
                 result = runner(*call_args, **call_kwargs)
                 _set_last_process_peaks_safe_stats(
                     used_python_runner=bool(callable(py_runner) and runner is py_runner),
+                )
+                _set_last_intersection_cache(
+                    build_intersection_cache(result[1], av, cv)
                 )
                 return _finalize_clustered_process_peaks_result(result, call_meta)
             except TypeError as exc:
@@ -5155,6 +5164,83 @@ def hit_tables_to_max_positions(hit_tables):
             max_positions[i, 3:6] = secondary
 
     return max_positions
+
+
+def _copy_intersection_cache(cache):
+    """Return one detached copy of the mosaic-ring intersection cache."""
+
+    return [np.asarray(table, dtype=np.float64).copy() for table in cache]
+
+
+def _set_last_intersection_cache(cache):
+    """Store the latest detector intersection cache."""
+
+    global _LAST_INTERSECTION_CACHE
+    if cache is None:
+        _LAST_INTERSECTION_CACHE = []
+        return
+    _LAST_INTERSECTION_CACHE = _copy_intersection_cache(cache)
+
+
+def get_last_intersection_cache():
+    """Return the last detector-hit cache keyed by Qr/Qz set.
+
+    Each table aligns with one simulated reflection and stores
+    ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L]``.
+    """
+
+    return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
+
+
+def build_intersection_cache(hit_tables, av, cv):
+    """Convert hit tables into a per-reflection Qr/Qz detector cache."""
+
+    if hit_tables is None:
+        return []
+
+    av_val = float(av)
+    cv_val = float(cv)
+    qr_scale = np.nan
+    qz_scale = np.nan
+    if np.isfinite(av_val) and abs(av_val) > 1.0e-12:
+        qr_scale = 4.0 * np.pi / av_val
+    if np.isfinite(cv_val) and abs(cv_val) > 1.0e-12:
+        qz_scale = 2.0 * np.pi / cv_val
+
+    cache = []
+    for hits in hit_tables:
+        hits_arr = np.asarray(hits, dtype=np.float64)
+        if hits_arr.ndim != 2 or hits_arr.shape[1] < 7 or hits_arr.shape[0] == 0:
+            cache.append(np.empty((0, 9), dtype=np.float64))
+            continue
+
+        h_vals = hits_arr[:, 4]
+        k_vals = hits_arr[:, 5]
+        l_vals = hits_arr[:, 6]
+        qr_vals = qr_scale * np.sqrt(
+            np.clip((h_vals * h_vals + h_vals * k_vals + k_vals * k_vals) / 3.0, 0.0, None)
+        )
+        qz_vals = qz_scale * l_vals
+
+        cache_table = np.empty((hits_arr.shape[0], 9), dtype=np.float64)
+        cache_table[:, 0] = qr_vals
+        cache_table[:, 1] = qz_vals
+        cache_table[:, 2] = hits_arr[:, 1]
+        cache_table[:, 3] = hits_arr[:, 2]
+        cache_table[:, 4] = hits_arr[:, 0]
+        cache_table[:, 5] = hits_arr[:, 3]
+        cache_table[:, 6:9] = hits_arr[:, 4:7]
+        cache.append(cache_table)
+
+    return cache
+
+
+def _extract_process_peaks_lattice(args, kwargs):
+    """Return ``(av, cv)`` from one process-peaks call."""
+
+    if len(args) >= 5:
+        return args[3], args[4]
+    return kwargs.get("av", np.nan), kwargs.get("cv", np.nan)
 
 
 def process_qr_rods_parallel(
