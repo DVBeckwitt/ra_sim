@@ -4840,7 +4840,17 @@ def process_peaks_parallel_safe(*args, **kwargs):
     sample_qr_ring_once = bool(kwargs.pop("sample_qr_ring_once", True))
     kwargs["sample_qr_ring_once"] = sample_qr_ring_once
     _set_last_process_peaks_safe_stats()
-    av, cv = _extract_process_peaks_lattice(args, kwargs)
+    (
+        av,
+        cv,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+        single_sample_indices,
+        best_sample_indices_out,
+    ) = _extract_process_peaks_context(args, kwargs)
     _set_last_intersection_cache([])
     safe_cache_result = _maybe_run_process_peaks_safe_cache(
         args,
@@ -4849,7 +4859,18 @@ def process_peaks_parallel_safe(*args, **kwargs):
     )
     if safe_cache_result is not None:
         _set_last_intersection_cache(
-            build_intersection_cache(safe_cache_result[1], av, cv)
+            build_intersection_cache(
+                safe_cache_result[1],
+                av,
+                cv,
+                beam_x_array=beam_x_array,
+                beam_y_array=beam_y_array,
+                theta_array=theta_array,
+                phi_array=phi_array,
+                wavelength_array=wavelength_array,
+                single_sample_indices=single_sample_indices,
+                best_sample_indices_out=best_sample_indices_out,
+            )
         )
         return safe_cache_result
     clustered_args, clustered_kwargs, cluster_meta = _prepare_clustered_process_peaks_call(
@@ -4878,7 +4899,18 @@ def process_peaks_parallel_safe(*args, **kwargs):
                     used_python_runner=bool(callable(py_runner) and runner is py_runner),
                 )
                 _set_last_intersection_cache(
-                    build_intersection_cache(result[1], av, cv)
+                    build_intersection_cache(
+                        result[1],
+                        av,
+                        cv,
+                        beam_x_array=beam_x_array,
+                        beam_y_array=beam_y_array,
+                        theta_array=theta_array,
+                        phi_array=phi_array,
+                        wavelength_array=wavelength_array,
+                        single_sample_indices=single_sample_indices,
+                        best_sample_indices_out=best_sample_indices_out,
+                    )
                 )
                 return _finalize_clustered_process_peaks_result(result, call_meta)
             except TypeError as exc:
@@ -5186,17 +5218,46 @@ def get_last_intersection_cache():
     """Return the last detector-hit cache keyed by Qr/Qz set.
 
     Each table aligns with one simulated reflection and stores
-    ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L]``.
+    ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
+    beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset, wavelength_offset]``.
     """
 
     return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
 
 
-def build_intersection_cache(hit_tables, av, cv):
-    """Convert hit tables into a per-reflection Qr/Qz detector cache."""
+def build_intersection_cache(
+    hit_tables,
+    av,
+    cv,
+    beam_x_array=None,
+    beam_y_array=None,
+    theta_array=None,
+    phi_array=None,
+    wavelength_array=None,
+    single_sample_indices=None,
+    best_sample_indices_out=None,
+):
+    """Convert hit tables into a per-reflection Qr/Qz detector cache.
+
+    Columns are:
+    ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
+    beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset, wavelength_offset]``.
+    """
 
     if hit_tables is None:
         return []
+
+    beam_x_arr = None if beam_x_array is None else np.asarray(beam_x_array, dtype=np.float64)
+    beam_y_arr = None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64)
+    theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64)
+    phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64)
+    wavelength_arr = None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
+    best_sample_arr = (
+        None if best_sample_indices_out is None else np.asarray(best_sample_indices_out, dtype=np.int64)
+    )
+    single_sample_arr = (
+        None if single_sample_indices is None else np.asarray(single_sample_indices, dtype=np.int64)
+    )
 
     av_val = float(av)
     cv_val = float(cv)
@@ -5211,7 +5272,7 @@ def build_intersection_cache(hit_tables, av, cv):
     for hits in hit_tables:
         hits_arr = np.asarray(hits, dtype=np.float64)
         if hits_arr.ndim != 2 or hits_arr.shape[1] < 7 or hits_arr.shape[0] == 0:
-            cache.append(np.empty((0, 9), dtype=np.float64))
+            cache.append(np.empty((0, 14), dtype=np.float64))
             continue
 
         h_vals = hits_arr[:, 4]
@@ -5222,7 +5283,8 @@ def build_intersection_cache(hit_tables, av, cv):
         )
         qz_vals = qz_scale * l_vals
 
-        cache_table = np.empty((hits_arr.shape[0], 9), dtype=np.float64)
+        n_rows = hits_arr.shape[0]
+        cache_table = np.empty((n_rows, 14), dtype=np.float64)
         cache_table[:, 0] = qr_vals
         cache_table[:, 1] = qz_vals
         cache_table[:, 2] = hits_arr[:, 1]
@@ -5230,17 +5292,100 @@ def build_intersection_cache(hit_tables, av, cv):
         cache_table[:, 4] = hits_arr[:, 0]
         cache_table[:, 5] = hits_arr[:, 3]
         cache_table[:, 6:9] = hits_arr[:, 4:7]
+
+        if beam_x_arr is not None and beam_x_arr.size > 0:
+            beam_x_center = float(np.mean(beam_x_arr))
+        else:
+            beam_x_center = float("nan")
+        if beam_y_arr is not None and beam_y_arr.size > 0:
+            beam_y_center = float(np.mean(beam_y_arr))
+        else:
+            beam_y_center = float("nan")
+        if theta_arr is not None and theta_arr.size > 0:
+            theta_center = float(np.mean(theta_arr))
+        else:
+            theta_center = float("nan")
+        if phi_arr is not None and phi_arr.size > 0:
+            phi_center = float(np.mean(phi_arr))
+        else:
+            phi_center = float("nan")
+        if wavelength_arr is not None and wavelength_arr.size > 0:
+            wavelength_center = float(np.mean(wavelength_arr))
+        else:
+            wavelength_center = float("nan")
+
+        if best_sample_arr is not None and i < best_sample_arr.shape[0]:
+            sample_idx = int(best_sample_arr[i])
+        elif single_sample_arr is not None and i < single_sample_arr.shape[0]:
+            sample_idx = int(single_sample_arr[i])
+        else:
+            sample_idx = -1
+
+        has_beam_ctx = (
+            sample_idx >= 0
+            and beam_x_arr is not None
+            and beam_y_arr is not None
+            and theta_arr is not None
+            and phi_arr is not None
+            and wavelength_arr is not None
+            and sample_idx < beam_x_arr.shape[0]
+            and sample_idx < beam_y_arr.shape[0]
+            and sample_idx < theta_arr.shape[0]
+            and sample_idx < phi_arr.shape[0]
+            and sample_idx < wavelength_arr.shape[0]
+        )
+        if has_beam_ctx:
+            cache_table[:, 9] = beam_x_arr[sample_idx] - beam_x_center
+            cache_table[:, 10] = beam_y_arr[sample_idx] - beam_y_center
+            cache_table[:, 11] = theta_arr[sample_idx] - theta_center
+            cache_table[:, 12] = phi_arr[sample_idx] - phi_center
+            cache_table[:, 13] = wavelength_arr[sample_idx] - wavelength_center
+        else:
+            cache_table[:, 9:] = np.nan
+
         cache.append(cache_table)
 
     return cache
 
 
-def _extract_process_peaks_lattice(args, kwargs):
-    """Return ``(av, cv)`` from one process-peaks call."""
+def _extract_process_peaks_context(args, kwargs):
+    """Return lattice and sample-context arrays from one process-peaks call."""
 
     if len(args) >= 5:
-        return args[3], args[4]
-    return kwargs.get("av", np.nan), kwargs.get("cv", np.nan)
+        av = args[3]
+        cv = args[4]
+    else:
+        av = kwargs.get("av", np.nan)
+        cv = kwargs.get("cv", np.nan)
+
+    if len(args) >= 20:
+        beam_x_array = args[16]
+        beam_y_array = args[17]
+        theta_array = args[18]
+        phi_array = args[19]
+    else:
+        beam_x_array = kwargs.get("beam_x_array")
+        beam_y_array = kwargs.get("beam_y_array")
+        theta_array = kwargs.get("theta_array")
+        phi_array = kwargs.get("phi_array")
+
+    wavelength_array = kwargs.get("wavelength_array", None)
+    if len(args) >= 24:
+        wavelength_array = args[23]
+
+    single_sample_indices = kwargs.get("single_sample_indices", None)
+    best_sample_indices_out = kwargs.get("best_sample_indices_out", None)
+    return (
+        av,
+        cv,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+        single_sample_indices,
+        best_sample_indices_out,
+    )
 
 
 def process_qr_rods_parallel(

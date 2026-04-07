@@ -96,6 +96,13 @@ def simulate(
         hit_tables,
         request.geometry.av,
         request.geometry.cv,
+        beam_x_array=request.beam.beam_x_array,
+        beam_y_array=request.beam.beam_y_array,
+        theta_array=request.beam.theta_array,
+        phi_array=request.beam.phi_array,
+        wavelength_array=request.beam.wavelength_array,
+        best_sample_indices_out=request.best_sample_indices_out,
+        single_sample_indices=request.single_sample_indices,
     )
 
     return SimulationResult(
@@ -177,6 +184,13 @@ def simulate_qr_rods(
         hit_tables,
         request.geometry.av,
         request.geometry.cv,
+        beam_x_array=request.beam.beam_x_array,
+        beam_y_array=request.beam.beam_y_array,
+        theta_array=request.beam.theta_array,
+        phi_array=request.beam.phi_array,
+        wavelength_array=request.beam.wavelength_array,
+        best_sample_indices_out=request.best_sample_indices_out,
+        single_sample_indices=request.single_sample_indices,
     )
 
     return SimulationResult(
