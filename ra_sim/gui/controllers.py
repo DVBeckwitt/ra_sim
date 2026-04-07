@@ -77,6 +77,36 @@ def parse_sampling_count(
     return max(int(minimum), parsed)
 
 
+def parse_sampling_float(
+    raw_value: object,
+    fallback: object,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    """Coerce one numeric sampling value to a finite float."""
+
+    try:
+        parsed = float(str(raw_value).strip().replace(",", ""))
+    except (TypeError, ValueError):
+        try:
+            parsed = float(str(fallback).strip().replace(",", ""))
+        except (TypeError, ValueError):
+            parsed = 0.0
+
+    if not np.isfinite(parsed):
+        try:
+            fallback_value = float(fallback)
+        except (TypeError, ValueError):
+            fallback_value = 0.0
+        parsed = fallback_value if np.isfinite(fallback_value) else 0.0
+    if minimum is not None:
+        parsed = max(float(minimum), parsed)
+    if maximum is not None:
+        parsed = min(float(maximum), parsed)
+    return float(parsed)
+
+
 def normalize_sampling_resolution_choice(
     resolution_value: object,
     *,
@@ -144,6 +174,39 @@ def format_sampling_resolution_summary(
     )
     suffix = " (custom)" if normalized == custom_label else ""
     return f"{count:,} samples{suffix}" if count >= 1000 else f"{count} samples{suffix}"
+
+
+def stratified_total_ray_count(sample_counts: Sequence[object]) -> int:
+    """Return the total Cartesian-product ray count for one sample-count list."""
+
+    total = 1
+    for count in sample_counts:
+        total *= parse_sampling_count(count, 1)
+    return int(max(1, total))
+
+
+def format_stratified_ray_count_summary(sample_counts: Sequence[object]) -> str:
+    """Format the live total-ray label for stratified Gaussian sampling."""
+
+    counts = [parse_sampling_count(count, 1) for count in sample_counts]
+    total = stratified_total_ray_count(counts)
+    factors = " x ".join(str(count) for count in counts)
+    return f"Total rays: {total:,} = {factors}"
+
+
+def format_stratified_ray_count_warning(
+    sample_counts: Sequence[object],
+    *,
+    warning_threshold: int,
+) -> str:
+    """Return a guardrail warning when stratified ray counts grow large."""
+
+    total = stratified_total_ray_count(sample_counts)
+    if total < int(max(1, warning_threshold)):
+        return ""
+    return (
+        f"Warning: {total:,} rays may make updates slow or memory-heavy."
+    )
 
 
 def default_rod_points_per_gz(

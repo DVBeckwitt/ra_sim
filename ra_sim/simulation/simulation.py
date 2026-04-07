@@ -24,7 +24,7 @@ from ra_sim.simulation.types import (
 
 
 def _resolve_profile_samples(profile_samples):
-    """Normalize optional precomputed beam samples into five aligned arrays."""
+    """Normalize optional precomputed beam samples into one aligned payload."""
 
     if profile_samples is None:
         return None
@@ -40,10 +40,14 @@ def _resolve_profile_samples(profile_samples):
             profile_samples.get("phi_array"),
             wavelength,
         )
+        sample_weights = profile_samples.get("sample_weights")
+        n2_sample_array = profile_samples.get("n2_sample_array")
     else:
         arrays = tuple(profile_samples)
         if len(arrays) != 5:
             raise ValueError("profile_samples must provide five arrays")
+        sample_weights = None
+        n2_sample_array = None
 
     resolved = tuple(np.asarray(arr, dtype=np.float64).reshape(-1) for arr in arrays)
     sample_count = int(resolved[0].size) if resolved else 0
@@ -51,7 +55,31 @@ def _resolve_profile_samples(profile_samples):
         raise ValueError("profile_samples must not be empty")
     if any(arr.size != sample_count for arr in resolved[1:]):
         raise ValueError("profile_samples arrays must all have the same length")
-    return resolved
+
+    resolved_weights = None
+    if sample_weights is not None:
+        resolved_weights = np.asarray(sample_weights, dtype=np.float64).reshape(-1)
+        if resolved_weights.size != sample_count:
+            raise ValueError("profile_samples sample_weights must match the beam arrays")
+
+    resolved_n2_sample_array = None
+    if n2_sample_array is not None:
+        resolved_n2_sample_array = np.asarray(
+            n2_sample_array,
+            dtype=np.complex128,
+        ).reshape(-1)
+        if resolved_n2_sample_array.size != sample_count:
+            raise ValueError("profile_samples n2_sample_array must match the beam arrays")
+
+    return {
+        "beam_x_array": resolved[0],
+        "beam_y_array": resolved[1],
+        "theta_array": resolved[2],
+        "phi_array": resolved[3],
+        "wavelength_array": resolved[4],
+        "sample_weights": resolved_weights,
+        "n2_sample_array": resolved_n2_sample_array,
+    }
 
 
 def _read_runtime_value(value: Any) -> Any:
@@ -118,12 +146,26 @@ def _build_legacy_request(
                 rng=profile_rng,
             )
         )
+        sample_weights = None
+        resolved_n2_sample_array = None
     else:
-        beam_x_array, beam_y_array, theta_array, phi_array, wavelength_array = (
-            resolved_profile_samples
-        )
+        beam_x_array = resolved_profile_samples["beam_x_array"]
+        beam_y_array = resolved_profile_samples["beam_y_array"]
+        theta_array = resolved_profile_samples["theta_array"]
+        phi_array = resolved_profile_samples["phi_array"]
+        wavelength_array = resolved_profile_samples["wavelength_array"]
+        sample_weights = resolved_profile_samples["sample_weights"]
+        resolved_n2_sample_array = resolved_profile_samples["n2_sample_array"]
 
     image_size_int = int(image_size)
+    beam_n2_sample_array = None
+    if n2_sample_array is not None:
+        beam_n2_sample_array = np.asarray(n2_sample_array, dtype=np.complex128)
+    elif resolved_n2_sample_array is not None:
+        beam_n2_sample_array = np.asarray(
+            resolved_n2_sample_array,
+            dtype=np.complex128,
+        )
     geometry = DetectorGeometry(
         image_size=image_size_int,
         av=float(av),
@@ -152,11 +194,12 @@ def _build_legacy_request(
         theta_array=np.asarray(theta_array, dtype=np.float64),
         phi_array=np.asarray(phi_array, dtype=np.float64),
         wavelength_array=np.asarray(wavelength_array, dtype=np.float64),
-        n2_sample_array=(
+        sample_weights=(
             None
-            if n2_sample_array is None
-            else np.asarray(n2_sample_array, dtype=np.complex128)
+            if sample_weights is None
+            else np.asarray(sample_weights, dtype=np.float64)
         ),
+        n2_sample_array=beam_n2_sample_array,
     )
     mosaic = MosaicParams(
         sigma_mosaic_deg=float(_read_runtime_value(sigma_mosaic_var)),

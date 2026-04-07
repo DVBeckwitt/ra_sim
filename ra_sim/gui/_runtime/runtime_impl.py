@@ -85,7 +85,12 @@ from ra_sim.fitting.background_peak_matching import (
     build_background_peak_context,
     match_simulated_peaks_to_peak_context,
 )
-from ra_sim.simulation.mosaic_profiles import generate_random_profiles
+from ra_sim.simulation.mosaic_profiles import (
+    RANDOM_GAUSSIAN_SAMPLING,
+    STRATIFIED_GAUSSIAN_SAMPLING,
+    generate_random_profiles,
+    generate_stratified_profiles,
+)
 from ra_sim.simulation.diffraction import (
     DEFAULT_SOLVE_Q_REL_TOL,
     DEFAULT_SOLVE_Q_MODE,
@@ -502,6 +507,12 @@ resolution_sample_counts = {
     "Medium": 250,
     "High": 500,
 }
+BEAM_SAMPLING_METHOD_OPTIONS = (
+    RANDOM_GAUSSIAN_SAMPLING,
+    STRATIFIED_GAUSSIAN_SAMPLING,
+)
+STRATIFIED_SAMPLING_AXES = ("x", "y", "dx", "dz", "lambda")
+STRATIFIED_RAY_WARNING_THRESHOLD = 10000
 MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT = 50000
 MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS = 3
 CUSTOM_SAMPLING_OPTION = "Custom"
@@ -844,7 +855,24 @@ defaults = {
     'phi_l_divisor': float(phi_l_divisor_default),
     'center_x': center_default[0],
     'center_y': center_default[1],
+    'beam_sampling_method': RANDOM_GAUSSIAN_SAMPLING,
+    'beam_sampling_seed': 0,
     'sampling_resolution': 'Low',
+    'x_mean': 0.0,
+    'x_sigma': float(bw_sigma),
+    'x_samples': 2,
+    'y_mean': 0.0,
+    'y_sigma': float(bw_sigma),
+    'y_samples': 2,
+    'dx_mean': 0.0,
+    'dx_sigma': float(divergence_sigma),
+    'dx_samples': 2,
+    'dz_mean': 0.0,
+    'dz_sigma': float(divergence_sigma),
+    'dz_samples': 2,
+    'lambda_mean': float(lambda_),
+    'lambda_sigma': float(lambda_ * bandwidth),
+    'lambda_samples': 2,
     'rod_points_per_gz': gui_controllers.default_rod_points_per_gz(cv),
     'bandwidth_percent': float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
     'sf_prune_bias': sf_prune_bias_default,
@@ -1959,6 +1987,11 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
     phi_array = simulation_runtime_state.profile_cache["phi_array"]
     wavelength_array = simulation_runtime_state.profile_cache["wavelength_array"]
     n2_sample_array = simulation_runtime_state.profile_cache.get("n2_sample_array")
+    sample_weights = simulation_runtime_state.profile_cache.get("sample_weights")
+    sampling_signature = tuple(
+        simulation_runtime_state.profile_cache.get("_sampling_signature", ())
+    )
+    sampling_method = _current_beam_sampling_method()
 
     target_sample_count = None
     if sample_count is not None:
@@ -1979,20 +2012,72 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
                 resolved_rng_seed = int(rng_seed)
             except (TypeError, ValueError):
                 resolved_rng_seed = 0
-        (
-            beam_x_array,
-            beam_y_array,
-            theta_array,
-            phi_array,
-            wavelength_array,
-        ) = generate_random_profiles(
-            num_samples=target_sample_count,
-            divergence_sigma=divergence_sigma,
-            bw_sigma=bw_sigma,
-            lambda0=lambda_,
-            bandwidth=_current_bandwidth_fraction(),
-            rng=resolved_rng_seed,
-        )
+        if sampling_method == STRATIFIED_GAUSSIAN_SAMPLING:
+            stratified_config = _current_stratified_sampling_config()
+            scaled_counts = _scale_stratified_sample_counts(
+                [
+                    stratified_config[f"{axis}_samples"]
+                    for axis in STRATIFIED_SAMPLING_AXES
+                ],
+                target_sample_count,
+            )
+            (
+                beam_x_array,
+                beam_y_array,
+                theta_array,
+                phi_array,
+                wavelength_array,
+                sample_weights,
+            ) = generate_stratified_profiles(
+                x_mean=float(stratified_config["x_mean"]),
+                x_sigma=float(stratified_config["x_sigma"]),
+                x_samples=int(scaled_counts[0]),
+                y_mean=float(stratified_config["y_mean"]),
+                y_sigma=float(stratified_config["y_sigma"]),
+                y_samples=int(scaled_counts[1]),
+                dx_mean=float(stratified_config["dx_mean"]),
+                dx_sigma=float(stratified_config["dx_sigma"]),
+                dx_samples=int(scaled_counts[2]),
+                dz_mean=float(stratified_config["dz_mean"]),
+                dz_sigma=float(stratified_config["dz_sigma"]),
+                dz_samples=int(scaled_counts[3]),
+                lambda_mean=float(stratified_config["lambda_mean"]),
+                lambda_sigma=float(stratified_config["lambda_sigma"]),
+                lambda_samples=int(scaled_counts[4]),
+                rng=max(int(resolved_rng_seed), 0),
+            )
+            sampling_signature = (
+                sampling_method,
+                "override",
+                *[int(value) for value in scaled_counts],
+                max(int(resolved_rng_seed), 0),
+            )
+        else:
+            (
+                beam_x_array,
+                beam_y_array,
+                theta_array,
+                phi_array,
+                wavelength_array,
+            ) = generate_random_profiles(
+                num_samples=target_sample_count,
+                divergence_sigma=divergence_sigma,
+                bw_sigma=bw_sigma,
+                lambda0=lambda_,
+                bandwidth=_current_bandwidth_fraction(),
+                rng=resolved_rng_seed,
+            )
+            sample_weights = None
+            sampling_signature = (
+                sampling_method,
+                "override",
+                int(target_sample_count),
+                int(resolved_rng_seed),
+                float(divergence_sigma),
+                float(bw_sigma),
+                float(lambda_),
+                float(_current_bandwidth_fraction()),
+            )
         n2_sample_array = _current_sample_n2_array(wavelength_array)
 
     resolved_solve_q_steps = solve_q.steps
@@ -2008,6 +2093,7 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
         "theta_array":        theta_array,
         "phi_array":          phi_array,
         "wavelength_array":   wavelength_array,   #  <<< name fixed
+        "sample_weights":     sample_weights,
         "n2_sample_array":    n2_sample_array,
         "sigma_mosaic_deg":   sigma_mosaic_var.get(),
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
@@ -2015,6 +2101,8 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
         "solve_q_steps":      resolved_solve_q_steps,
         "solve_q_rel_tol":    solve_q.rel_tol,
         "solve_q_mode":       solve_q.mode_flag,
+        "beam_sampling_method": sampling_method,
+        "_sampling_signature": sampling_signature,
     }
 
 
@@ -5328,22 +5416,207 @@ def _current_bandwidth_fraction() -> float:
     except Exception:
         bw_percent = defaults.get("bandwidth_percent", bandwidth * 100.0)
     return _clip_bandwidth_percent(bw_percent) / 100.0
+
+
+def _normalize_beam_sampling_method(value) -> str:
+    fallback = str(defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING))
+    if value is None:
+        return fallback
+
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {
+        RANDOM_GAUSSIAN_SAMPLING,
+        "random",
+        "randomgaussian",
+    }:
+        return RANDOM_GAUSSIAN_SAMPLING
+    if text in {
+        STRATIFIED_GAUSSIAN_SAMPLING,
+        "stratified",
+        "stratifiedgaussian",
+    }:
+        return STRATIFIED_GAUSSIAN_SAMPLING
+    return fallback
+
+
+def _beam_sampling_method_label(method: str) -> str:
+    normalized = _normalize_beam_sampling_method(method)
+    if normalized == STRATIFIED_GAUSSIAN_SAMPLING:
+        return "Stratified Gaussian"
+    return "Random Gaussian"
+
+
+def _current_beam_sampling_method() -> str:
+    method_var = globals().get("sampling_method_var")
+    if method_var is None:
+        return _normalize_beam_sampling_method(
+            defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING)
+        )
+    try:
+        return _normalize_beam_sampling_method(method_var.get())
+    except Exception:
+        return _normalize_beam_sampling_method(
+            defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING)
+        )
+
+
+def _stratified_sampling_var(axis: str, field_name: str):
+    controls = getattr(
+        sampling_optics_controls_view_state,
+        "stratified_control_vars",
+        {},
+    )
+    if not isinstance(controls, Mapping):
+        return None
+    axis_controls = controls.get(axis, {})
+    if not isinstance(axis_controls, Mapping):
+        return None
+    return axis_controls.get(field_name)
+
+
+def _current_stratified_sampling_config() -> dict[str, object]:
+    config: dict[str, object] = {}
+    for axis in STRATIFIED_SAMPLING_AXES:
+        mean_key = f"{axis}_mean"
+        sigma_key = f"{axis}_sigma"
+        samples_key = f"{axis}_samples"
+
+        mean_var = _stratified_sampling_var(axis, "mean")
+        sigma_var = _stratified_sampling_var(axis, "sigma")
+        samples_var = _stratified_sampling_var(axis, "samples")
+
+        raw_mean = mean_var.get() if mean_var is not None else defaults.get(mean_key, 0.0)
+        raw_sigma = sigma_var.get() if sigma_var is not None else defaults.get(sigma_key, 0.0)
+        raw_samples = (
+            samples_var.get() if samples_var is not None else defaults.get(samples_key, 1)
+        )
+
+        config[mean_key] = gui_controllers.parse_sampling_float(
+            raw_mean,
+            defaults.get(mean_key, 0.0),
+        )
+        config[sigma_key] = gui_controllers.parse_sampling_float(
+            raw_sigma,
+            defaults.get(sigma_key, 0.0),
+            minimum=0.0,
+        )
+        config[samples_key] = gui_controllers.parse_sampling_count(
+            raw_samples,
+            defaults.get(samples_key, 1),
+            minimum=1,
+        )
+
+    seed_var = getattr(sampling_optics_controls_view_state, "seed_var", None)
+    raw_seed = seed_var.get() if seed_var is not None else defaults.get("beam_sampling_seed", 0)
+    try:
+        seed_value = int(round(float(str(raw_seed).strip().replace(",", ""))))
+    except (TypeError, ValueError):
+        seed_value = int(defaults.get("beam_sampling_seed", 0))
+    config["seed"] = max(seed_value, 0)
+    return config
+
+
+def _set_stratified_sampling_config(config: Mapping[str, object]) -> None:
+    for axis in STRATIFIED_SAMPLING_AXES:
+        for field_name in ("mean", "sigma", "samples"):
+            var = _stratified_sampling_var(axis, field_name)
+            if var is None:
+                continue
+            key = f"{axis}_{field_name}"
+            value = config.get(key, defaults.get(key, 0))
+            if field_name == "samples":
+                var.set(str(int(value)))
+            else:
+                var.set(f"{float(value):.12g}")
+
+    seed_var = getattr(sampling_optics_controls_view_state, "seed_var", None)
+    if seed_var is not None:
+        seed_var.set(str(int(config.get("seed", defaults.get("beam_sampling_seed", 0)))))
+
+
+def _current_stratified_sample_counts() -> tuple[int, int, int, int, int]:
+    config = _current_stratified_sampling_config()
+    return tuple(
+        int(config.get(f"{axis}_samples", 1)) for axis in STRATIFIED_SAMPLING_AXES
+    )
+
+
+def _current_stratified_total_ray_count() -> int:
+    return gui_controllers.stratified_total_ray_count(
+        _current_stratified_sample_counts()
+    )
+
+
+def _scale_stratified_sample_counts(
+    base_counts: Sequence[object],
+    target_total: int,
+) -> tuple[int, int, int, int, int]:
+    counts = [
+        gui_controllers.parse_sampling_count(value, 1, minimum=1)
+        for value in base_counts
+    ]
+    if not counts:
+        return (1, 1, 1, 1, 1)
+
+    resolved_target = max(int(target_total), 1)
+    current_total = gui_controllers.stratified_total_ray_count(counts)
+    if current_total == resolved_target:
+        return tuple(int(value) for value in counts)
+
+    scale = float(resolved_target / current_total) ** (1.0 / len(counts))
+    if resolved_target >= current_total:
+        scaled = [max(1, int(math.ceil(value * scale))) for value in counts]
+    else:
+        scaled = [max(1, int(math.floor(value * scale))) for value in counts]
+    return tuple(int(value) for value in scaled)
 def update_mosaic_cache():
     """
-    Keep the current random beam/mosaic samples unless sampling inputs changed.
+    Keep the current beam/mosaic samples unless sampling inputs changed.
 
     This preserves the same sampled beam positions/divergence across normal
-    simulation updates so changing unrelated sliders does not re-randomize the
-    detector pattern.
+    simulation updates so changing unrelated sliders does not rebuild the
+    detector pattern unnecessarily.
     """
+    sampling_method = _current_beam_sampling_method()
     active_bandwidth = _current_bandwidth_fraction()
-    sampling_signature = (
-        int(simulation_runtime_state.num_samples),
-        float(divergence_sigma),
-        float(bw_sigma),
-        float(lambda_),
-        float(active_bandwidth),
-    )
+    sample_weights_array = None
+    if sampling_method == STRATIFIED_GAUSSIAN_SAMPLING:
+        stratified_config = _current_stratified_sampling_config()
+        expected_sample_count = gui_controllers.stratified_total_ray_count(
+            [
+                stratified_config[f"{axis}_samples"]
+                for axis in STRATIFIED_SAMPLING_AXES
+            ]
+        )
+        sampling_signature = (
+            sampling_method,
+            float(stratified_config["x_mean"]),
+            float(stratified_config["x_sigma"]),
+            int(stratified_config["x_samples"]),
+            float(stratified_config["y_mean"]),
+            float(stratified_config["y_sigma"]),
+            int(stratified_config["y_samples"]),
+            float(stratified_config["dx_mean"]),
+            float(stratified_config["dx_sigma"]),
+            int(stratified_config["dx_samples"]),
+            float(stratified_config["dz_mean"]),
+            float(stratified_config["dz_sigma"]),
+            int(stratified_config["dz_samples"]),
+            float(stratified_config["lambda_mean"]),
+            float(stratified_config["lambda_sigma"]),
+            int(stratified_config["lambda_samples"]),
+            int(stratified_config["seed"]),
+        )
+    else:
+        expected_sample_count = int(max(1, simulation_runtime_state.num_samples))
+        sampling_signature = (
+            sampling_method,
+            expected_sample_count,
+            float(divergence_sigma),
+            float(bw_sigma),
+            float(lambda_),
+            float(active_bandwidth),
+        )
 
     beam_x_cached = np.asarray(simulation_runtime_state.profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
     beam_y_cached = np.asarray(simulation_runtime_state.profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
@@ -5353,7 +5626,7 @@ def update_mosaic_cache():
 
     has_cached_samples = (
         beam_x_cached.size > 0
-        and beam_x_cached.size == int(simulation_runtime_state.num_samples)
+        and beam_x_cached.size == int(expected_sample_count)
         and beam_y_cached.size == beam_x_cached.size
         and theta_cached.size == beam_x_cached.size
         and phi_cached.size == beam_x_cached.size
@@ -5372,25 +5645,57 @@ def update_mosaic_cache():
             should_resample = tuple(cached_signature) != sampling_signature
 
     if should_resample:
-        (beam_x_array,
-         beam_y_array,
-         theta_array,
-         phi_array,
-         wavelength_array) = generate_random_profiles(
-             num_samples=simulation_runtime_state.num_samples,
-             divergence_sigma=divergence_sigma,
-             bw_sigma=bw_sigma,
-             lambda0=lambda_,
-             bandwidth=active_bandwidth
-         )
+        if sampling_method == STRATIFIED_GAUSSIAN_SAMPLING:
+            (
+                beam_x_array,
+                beam_y_array,
+                theta_array,
+                phi_array,
+                wavelength_array,
+                sample_weights_array,
+            ) = generate_stratified_profiles(
+                x_mean=float(stratified_config["x_mean"]),
+                x_sigma=float(stratified_config["x_sigma"]),
+                x_samples=int(stratified_config["x_samples"]),
+                y_mean=float(stratified_config["y_mean"]),
+                y_sigma=float(stratified_config["y_sigma"]),
+                y_samples=int(stratified_config["y_samples"]),
+                dx_mean=float(stratified_config["dx_mean"]),
+                dx_sigma=float(stratified_config["dx_sigma"]),
+                dx_samples=int(stratified_config["dx_samples"]),
+                dz_mean=float(stratified_config["dz_mean"]),
+                dz_sigma=float(stratified_config["dz_sigma"]),
+                dz_samples=int(stratified_config["dz_samples"]),
+                lambda_mean=float(stratified_config["lambda_mean"]),
+                lambda_sigma=float(stratified_config["lambda_sigma"]),
+                lambda_samples=int(stratified_config["lambda_samples"]),
+                rng=int(stratified_config["seed"]),
+            )
+        else:
+            (
+                beam_x_array,
+                beam_y_array,
+                theta_array,
+                phi_array,
+                wavelength_array,
+            ) = generate_random_profiles(
+                num_samples=expected_sample_count,
+                divergence_sigma=divergence_sigma,
+                bw_sigma=bw_sigma,
+                lambda0=lambda_,
+                bandwidth=active_bandwidth,
+            )
         simulation_runtime_state.profile_cache = {
             "beam_x_array": beam_x_array,
             "beam_y_array": beam_y_array,
             "theta_array": theta_array,
             "phi_array": phi_array,
             "wavelength_array": wavelength_array,
+            "sample_weights": sample_weights_array,
             "_sampling_signature": sampling_signature,
         }
+    else:
+        sample_weights_array = simulation_runtime_state.profile_cache.get("sample_weights")
 
     active_optics_cif_path = _resolve_optics_cif_path()
     optics_signature = (
@@ -5413,6 +5718,8 @@ def update_mosaic_cache():
             "solve_q_rel_tol": current_solve_q_values().rel_tol,
             "solve_q_mode": current_solve_q_values().mode_flag,
             "bandwidth_percent": active_bandwidth * 100.0,
+            "beam_sampling_method": sampling_method,
+            "sample_weights": sample_weights_array,
         }
     )
 
@@ -5514,6 +5821,7 @@ UPDATE_DEBOUNCE_MS = 120
 RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
 SIMULATION_WORKER_POLL_MS = 40
+PREVIEW_CALCULATIONS_ENABLED = False
 INITIAL_PREVIEW_MAX_SAMPLES = 24
 LIVE_DRAG_PREVIEW_MAX_SAMPLES = 8
 LIVE_DRAG_ANALYSIS_RADIAL_BINS = 240
@@ -6517,6 +6825,8 @@ def _build_preview_simulation_job(
     *,
     max_samples: int = INITIAL_PREVIEW_MAX_SAMPLES,
 ) -> dict[str, object] | None:
+    if not PREVIEW_CALCULATIONS_ENABLED:
+        return None
     if not isinstance(job, dict):
         return None
     mosaic_params = job.get("mosaic_params")
@@ -6556,6 +6866,14 @@ def _build_preview_simulation_job(
         "theta_array": theta[preview_indices].copy(),
         "phi_array": phi[preview_indices].copy(),
         "wavelength_array": wavelength[preview_indices].copy(),
+        "sample_weights": (
+            None
+            if mosaic_params.get("sample_weights") is None
+            else np.asarray(
+                mosaic_params["sample_weights"],
+                dtype=np.float64,
+            ).reshape(-1)[preview_indices].copy()
+        ),
         "n2_sample_array": (
             None
             if mosaic_params.get("n2_sample_array") is None
@@ -6641,6 +6959,14 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 wavelength_array=np.asarray(
                     mosaic_params_job["wavelength_array"],
                     dtype=np.float64,
+                ),
+                sample_weights=(
+                    None
+                    if mosaic_params_job.get("sample_weights") is None
+                    else np.asarray(
+                        mosaic_params_job["sample_weights"],
+                        dtype=np.float64,
+                    )
                 ),
                 n2_sample_array=(
                     None
@@ -7631,14 +7957,13 @@ def do_update():
             int(mosaic_params["solve_q_steps"]),
             round(float(mosaic_params["solve_q_rel_tol"]), 8),
             int(mosaic_params["solve_q_mode"]),
-            round(_current_bandwidth_fraction(), 8),
+            tuple(mosaic_params.get("_sampling_signature", ())),
             round(current_sf_prune_bias(), 3),
             int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0)),
             int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0)),
             round(ordered_structure_scale, 6),
             int(optics_mode_component),
             int(qr_cylinder_replace_requested),
-            int(simulation_runtime_state.num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
             int(np.size(mosaic_params["theta_array"])),
             primary_source_signature,
@@ -7729,6 +8054,14 @@ def do_update():
                     mosaic_params["wavelength_array"],
                     dtype=np.float64,
                 ).copy(),
+                "sample_weights": (
+                    None
+                    if mosaic_params.get("sample_weights") is None
+                    else np.asarray(
+                        mosaic_params["sample_weights"],
+                        dtype=np.float64,
+                    ).copy()
+                ),
                 "n2_sample_array": (
                     None
                     if mosaic_params.get("n2_sample_array") is None
@@ -7743,6 +8076,9 @@ def do_update():
                 "solve_q_steps": int(mosaic_params["solve_q_steps"]),
                 "solve_q_rel_tol": float(mosaic_params["solve_q_rel_tol"]),
                 "solve_q_mode": int(mosaic_params["solve_q_mode"]),
+                "_sampling_signature": tuple(
+                    mosaic_params.get("_sampling_signature", ())
+                ),
             },
             "lambda_value": float(lambda_),
             "distance_m": float(corto_det_up),
@@ -8112,7 +8448,8 @@ def do_update():
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
     desired_analysis_preview = bool(
-        analysis_requested
+        PREVIEW_CALCULATIONS_ENABLED
+        and analysis_requested
         and (
             simulation_runtime_state.preview_active
             or _live_interaction_active()
@@ -8787,6 +9124,12 @@ def reset_to_defaults():
     bandwidth_percent_var.set(_clip_bandwidth_percent(defaults.get('bandwidth_percent', bandwidth * 100.0)))
     a_var.set(defaults['a'])
     c_var.set(defaults['c'])
+    if sampling_method_var is not None:
+        sampling_method_var.set(
+            _normalize_beam_sampling_method(
+                defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING)
+            )
+        )
     default_resolution = defaults['sampling_resolution']
     resolution_var.set(default_resolution)
     custom_samples_var.set(
@@ -8800,6 +9143,16 @@ def reset_to_defaults():
                 )
             )
         )
+    )
+    _set_stratified_sampling_config(
+        {
+            **{
+                f"{axis}_{field}": defaults.get(f"{axis}_{field}")
+                for axis in STRATIFIED_SAMPLING_AXES
+                for field in ("mean", "sigma", "samples")
+            },
+            "seed": defaults.get("beam_sampling_seed", 0),
+        }
     )
     pruning_defaults = gui_runtime_fit_analysis.resolve_runtime_pruning_control_defaults(
         structure_factor_pruning_module=gui_structure_factor_pruning,
@@ -9148,6 +9501,7 @@ gui_views.populate_stacked_button_group(
                     solve_q_steps=current_solve_q_values().steps,
                     solve_q_rel_tol=current_solve_q_values().rel_tol,
                     solve_q_mode=current_solve_q_values().mode_flag,
+                    profile_samples=simulation_runtime_state.profile_cache,
                     pixel_size_m=float(pixel_size_m),
                     sample_width_m=float(sample_width_var.get()),
                     sample_length_m=float(sample_length_var.get()),
@@ -9710,6 +10064,9 @@ def _import_full_gui_state() -> None:
             custom_samples_var,
             rod_points_per_gz_var,
             bandwidth_percent_var=bandwidth_percent_var,
+            beam_sampling_method_var=sampling_method_var,
+            beam_sampling_seed_var=seed_var,
+            stratified_sampling_vars=_legacy_stratified_sampling_vars(),
             optics_mode_var=optics_mode_var,
             phase_delta_expr_var=phase_delta_expr_var,
             phi_l_divisor_var=phi_l_divisor_var,
@@ -10478,7 +10835,10 @@ geometry_q_group_workflow = (
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
         live_geometry_preview_enabled=lambda: (
-            bool(live_geometry_preview_var.get())
+            (
+                PREVIEW_CALCULATIONS_ENABLED
+                and bool(live_geometry_preview_var.get())
+            )
             if "live_geometry_preview_var" in globals()
             else False
         ),
@@ -10588,6 +10948,15 @@ def _clear_live_geometry_preview_exclusions(*args, **kwargs):
 
 
 def _on_live_geometry_preview_toggle(*args, **kwargs):
+    if not PREVIEW_CALCULATIONS_ENABLED:
+        try:
+            live_geometry_preview_var.set(False)
+        except Exception:
+            pass
+        gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
+        _clear_geometry_preview_artists(redraw=True)
+        _refresh_fast_viewer_runtime_mode(announce=False)
+        return False
     result = _on_live_geometry_preview_toggle_impl(*args, **kwargs)
     _refresh_fast_viewer_runtime_mode(announce=False)
     return result
@@ -12504,6 +12873,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                             pixel_size_m=float(pixel_size_m),
                             sample_width_m=float(sample_width_var.get()),
                             sample_length_m=float(sample_length_var.get()),
+                            sample_weights=mosaic.get("sample_weights"),
                             n2_sample_array_override=mosaic.get("n2_sample_array"),
                         )
 
@@ -12616,6 +12986,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                         pixel_size_m=float(pixel_size_m),
                         sample_width_m=float(sample_width_var.get()),
                         sample_length_m=float(sample_length_var.get()),
+                        sample_weights=mosaic.get("sample_weights"),
                         n2_sample_array_override=mosaic.get("n2_sample_array"),
                     )
 
@@ -14263,6 +14634,14 @@ def on_fit_ordered_structure_click():
                             mask_mosaic_params["wavelength_array"],
                             dtype=np.float64,
                         ).copy(),
+                        "sample_weights": (
+                            None
+                            if mask_mosaic_params.get("sample_weights") is None
+                            else np.asarray(
+                                mask_mosaic_params["sample_weights"],
+                                dtype=np.float64,
+                            ).copy()
+                        ),
                         "n2_sample_array": (
                             None
                             if mask_mosaic_params.get("n2_sample_array") is None
@@ -14277,6 +14656,9 @@ def on_fit_ordered_structure_click():
                         "solve_q_steps": int(mask_mosaic_params["solve_q_steps"]),
                         "solve_q_rel_tol": float(mask_mosaic_params["solve_q_rel_tol"]),
                         "solve_q_mode": int(mask_mosaic_params["solve_q_mode"]),
+                        "_sampling_signature": tuple(
+                            mask_mosaic_params.get("_sampling_signature", ())
+                        ),
                     },
                     "lambda_value": float(lambda_),
                     "distance_m": float(mask_distance),
@@ -14500,6 +14882,14 @@ def on_fit_ordered_structure_click():
                         base_mosaic_params["wavelength_array"],
                         dtype=np.float64,
                     ).copy(),
+                    "sample_weights": (
+                        None
+                        if base_mosaic_params.get("sample_weights") is None
+                        else np.asarray(
+                            base_mosaic_params["sample_weights"],
+                            dtype=np.float64,
+                        ).copy()
+                    ),
                     "n2_sample_array": (
                         None
                         if base_mosaic_params.get("n2_sample_array") is None
@@ -14514,6 +14904,9 @@ def on_fit_ordered_structure_click():
                     "solve_q_steps": int(base_mosaic_params["solve_q_steps"]),
                     "solve_q_rel_tol": float(base_mosaic_params["solve_q_rel_tol"]),
                     "solve_q_mode": int(base_mosaic_params["solve_q_mode"]),
+                    "_sampling_signature": tuple(
+                        base_mosaic_params.get("_sampling_signature", ())
+                    ),
                 },
                 "lambda_value": float(lambda_),
                 "distance_m": float(base_distance),
@@ -14855,6 +15248,7 @@ def save_q_space_representation():
         "theta_array":  simulation_runtime_state.profile_cache.get("theta_array", []),
         "phi_array":    simulation_runtime_state.profile_cache.get("phi_array", []),
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        "sample_weights": simulation_runtime_state.profile_cache.get("sample_weights"),
         "n2_sample_array": simulation_runtime_state.profile_cache.get("n2_sample_array"),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
@@ -14914,6 +15308,7 @@ def save_q_space_representation():
         pixel_size_m=float(pixel_size_m),
         sample_width_m=float(sample_width_var.get()),
         sample_length_m=float(sample_length_var.get()),
+        sample_weights=mosaic_params.get("sample_weights"),
         n2_sample_array_override=mosaic_params.get("n2_sample_array"),
     )
 
@@ -16091,35 +16486,104 @@ def _current_rod_points_per_gz(default=None):
     return _parse_rod_points_per_gz(raw_value, fallback)
 
 
+def _current_random_sample_count(default=None):
+    fallback = int(
+        max(
+            1,
+            default
+            if default is not None
+            else resolution_sample_counts.get(
+                defaults.get("sampling_resolution", "Low"),
+                resolution_sample_counts["Low"],
+            ),
+        )
+    )
+    resolution_var = sampling_optics_controls_view_state.resolution_var
+    custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
+    resolution_value = (
+        resolution_var.get()
+        if resolution_var is not None
+        else defaults.get("sampling_resolution", "Low")
+    )
+    custom_value = custom_samples_var.get() if custom_samples_var is not None else fallback
+    return gui_controllers.resolve_sampling_count(
+        resolution_value,
+        custom_option=CUSTOM_SAMPLING_OPTION,
+        custom_value=custom_value,
+        preset_counts=resolution_sample_counts,
+        fallback_resolution=defaults.get("sampling_resolution", "Low"),
+        fallback_count=fallback,
+    )
+
+
+def _current_active_sample_count() -> int:
+    if _current_beam_sampling_method() == STRATIFIED_GAUSSIAN_SAMPLING:
+        return _current_stratified_total_ray_count()
+    return _current_random_sample_count(default=max(1, simulation_runtime_state.num_samples))
+
+
+def _sync_active_sample_count() -> int:
+    simulation_runtime_state.num_samples = int(max(1, _current_active_sample_count()))
+    return int(simulation_runtime_state.num_samples)
+
+
 def _set_custom_sample_controls_state():
     resolution_var = sampling_optics_controls_view_state.resolution_var
     enabled = bool(
-        resolution_var is not None and resolution_var.get() == CUSTOM_SAMPLING_OPTION
+        _current_beam_sampling_method() == RANDOM_GAUSSIAN_SAMPLING
+        and resolution_var is not None
+        and resolution_var.get() == CUSTOM_SAMPLING_OPTION
     )
     gui_views.set_sampling_custom_controls_enabled(
         sampling_optics_controls_view_state,
         enabled=enabled,
     )
 
+
+def _set_sampling_method_controls_state():
+    method = _current_beam_sampling_method()
+    gui_views.set_sampling_method_controls_enabled(
+        sampling_optics_controls_view_state,
+        random_enabled=method == RANDOM_GAUSSIAN_SAMPLING,
+        stratified_enabled=method == STRATIFIED_GAUSSIAN_SAMPLING,
+    )
+    _set_custom_sample_controls_state()
+
+
 def _refresh_resolution_display():
     resolution_var = sampling_optics_controls_view_state.resolution_var
     if resolution_var is None:
         return
-    summary_text = gui_controllers.format_sampling_resolution_summary(
+    random_summary_text = gui_controllers.format_sampling_resolution_summary(
         resolution_var.get(),
         custom_option=CUSTOM_SAMPLING_OPTION,
         custom_value=(
             sampling_optics_controls_view_state.custom_samples_var.get()
             if sampling_optics_controls_view_state.custom_samples_var is not None
-            else max(1, simulation_runtime_state.num_samples)
+            else _current_random_sample_count()
         ),
         preset_counts=resolution_sample_counts,
         fallback_resolution=defaults.get('sampling_resolution', 'Low'),
-        fallback_count=max(1, simulation_runtime_state.num_samples),
+        fallback_count=_current_random_sample_count(),
     )
     gui_views.set_sampling_resolution_summary_text(
         sampling_optics_controls_view_state,
-        summary_text,
+        random_summary_text,
+    )
+    stratified_counts = _current_stratified_sample_counts()
+    stratified_summary_text = gui_controllers.format_stratified_ray_count_summary(
+        stratified_counts
+    )
+    gui_views.set_sampling_ray_count_text(
+        sampling_optics_controls_view_state,
+        stratified_summary_text,
+    )
+    gui_views.set_sampling_ray_warning_text(
+        sampling_optics_controls_view_state,
+        gui_controllers.format_stratified_ray_count_warning(
+            stratified_counts,
+            warning_threshold=STRATIFIED_RAY_WARNING_THRESHOLD,
+        ),
     )
     rod_points_per_gz = _current_rod_points_per_gz(
         default=defaults.get("rod_points_per_gz"),
@@ -16153,8 +16617,15 @@ def _refresh_resolution_display():
             )
         except Exception:
             solve_q_mode_summary = ""
+    sampling_method = _current_beam_sampling_method()
+    active_summary_text = (
+        stratified_summary_text
+        if sampling_method == STRATIFIED_GAUSSIAN_SAMPLING
+        else random_summary_text
+    )
     summary_parts = [
-        summary_text,
+        _beam_sampling_method_label(sampling_method),
+        active_summary_text,
         f"rods {rod_points_per_gz:,}/Gz",
         f"optics {optics_summary}",
     ]
@@ -16167,26 +16638,24 @@ def _refresh_resolution_display():
 
 
 def _apply_resolution_selection(trigger_update=True):
-
     resolution_var = sampling_optics_controls_view_state.resolution_var
     custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
     if resolution_var is None:
         return
     previous_num_samples = int(simulation_runtime_state.num_samples)
-    selected_count = gui_controllers.resolve_sampling_count(
-        resolution_var.get(),
-        custom_option=CUSTOM_SAMPLING_OPTION,
-        custom_value=custom_samples_var.get() if custom_samples_var is not None else simulation_runtime_state.num_samples,
-        preset_counts=resolution_sample_counts,
-        fallback_resolution=defaults.get('sampling_resolution', 'Low'),
-        fallback_count=max(1, simulation_runtime_state.num_samples),
+    selected_count = _current_random_sample_count(
+        default=max(1, simulation_runtime_state.num_samples)
     )
     if resolution_var.get() == CUSTOM_SAMPLING_OPTION and custom_samples_var is not None:
         custom_samples_var.set(str(selected_count))
 
-    simulation_runtime_state.num_samples = selected_count
+    _sync_active_sample_count()
     _refresh_resolution_display()
-    if trigger_update and simulation_runtime_state.num_samples != previous_num_samples:
+    if (
+        trigger_update
+        and _current_beam_sampling_method() == RANDOM_GAUSSIAN_SAMPLING
+        and simulation_runtime_state.num_samples != previous_num_samples
+    ):
         update_mosaic_cache()
         schedule_update()
 
@@ -16201,6 +16670,29 @@ def _apply_custom_sample_count(_event=None):
         resolution_var.set(CUSTOM_SAMPLING_OPTION)
         return
     _apply_resolution_selection(trigger_update=True)
+
+
+def _apply_stratified_sampling(*, trigger_update=True):
+    config = _current_stratified_sampling_config()
+    _set_stratified_sampling_config(config)
+    _sync_active_sample_count()
+    _refresh_resolution_display()
+    if trigger_update and _current_beam_sampling_method() == STRATIFIED_GAUSSIAN_SAMPLING:
+        update_mosaic_cache()
+        schedule_update()
+
+
+def _reset_stratified_sampling_defaults(*, trigger_update=True):
+    config = {
+        **{
+            f"{axis}_{field}": defaults.get(f"{axis}_{field}")
+            for axis in STRATIFIED_SAMPLING_AXES
+            for field in ("mean", "sigma", "samples")
+        },
+        "seed": defaults.get("beam_sampling_seed", 0),
+    }
+    _set_stratified_sampling_config(config)
+    _apply_stratified_sampling(trigger_update=trigger_update)
 
 
 def _current_structure_model_rebuild_inputs():
@@ -16287,8 +16779,23 @@ def ensure_valid_resolution_choice():
     )
     if resolution_var.get() != normalized:
         resolution_var.set(normalized)
-    _set_custom_sample_controls_state()
-    _apply_resolution_selection(trigger_update=False)
+    method_var = sampling_optics_controls_view_state.sampling_method_var
+    if method_var is not None:
+        normalized_method = _normalize_beam_sampling_method(method_var.get())
+        if method_var.get() != normalized_method:
+            method_var.set(normalized_method)
+            return
+    _set_sampling_method_controls_state()
+    _sync_active_sample_count()
+    _refresh_resolution_display()
+
+
+def _legacy_stratified_sampling_vars() -> dict[str, object]:
+    return {
+        f"{axis}_{field}": _stratified_sampling_var(axis, field)
+        for axis in STRATIFIED_SAMPLING_AXES
+        for field in ("mean", "sigma", "samples")
+    }
 
 if initial_resolution != CUSTOM_SAMPLING_OPTION:
     initial_custom_samples_text = str(
@@ -16304,6 +16811,17 @@ if initial_resolution != CUSTOM_SAMPLING_OPTION:
 else:
     initial_custom_samples_text = str(int(max(1, simulation_runtime_state.num_samples)))
 
+initial_sampling_method = _normalize_beam_sampling_method(
+    defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING)
+)
+initial_stratified_values = {
+    f"{axis}_{field}": defaults.get(f"{axis}_{field}")
+    for axis in STRATIFIED_SAMPLING_AXES
+    for field in ("mean", "sigma", "samples")
+}
+initial_stratified_counts = [
+    initial_stratified_values[f"{axis}_samples"] for axis in STRATIFIED_SAMPLING_AXES
+]
 initial_rod_points_per_gz = _current_rod_points_per_gz(
     default=defaults.get("rod_points_per_gz"),
 )
@@ -16311,10 +16829,20 @@ initial_rod_points_per_gz = _current_rod_points_per_gz(
 gui_views.create_sampling_optics_controls(
     parent=sampling_pruning_frame.frame,
     view_state=sampling_optics_controls_view_state,
+    initial_sampling_method=initial_sampling_method,
     resolution_options=resolution_options,
     initial_resolution=initial_resolution,
     custom_samples_text=initial_custom_samples_text,
     resolution_count_text="",
+    stratified_values=initial_stratified_values,
+    seed_text=str(int(defaults.get("beam_sampling_seed", 0))),
+    ray_count_text=gui_controllers.format_stratified_ray_count_summary(
+        initial_stratified_counts
+    ),
+    ray_warning_text=gui_controllers.format_stratified_ray_count_warning(
+        initial_stratified_counts,
+        warning_threshold=STRATIFIED_RAY_WARNING_THRESHOLD,
+    ),
     rod_points_per_gz_value=initial_rod_points_per_gz,
     rod_points_per_gz_min=gui_controllers.ROD_POINTS_PER_GZ_MIN,
     rod_points_per_gz_max=gui_controllers.ROD_POINTS_PER_GZ_MAX,
@@ -16328,13 +16856,21 @@ gui_views.create_sampling_optics_controls(
     ),
     optics_mode_text=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')),
     on_apply_custom_samples=_apply_custom_sample_count,
+    on_apply_stratified_sampling=lambda: _apply_stratified_sampling(
+        trigger_update=True
+    ),
+    on_reset_stratified_defaults=lambda: _reset_stratified_sampling_defaults(
+        trigger_update=True
+    ),
     on_rod_points_per_gz_slide=_preview_rod_points_per_gz,
     on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(
         trigger_update=True
     ),
 )
+sampling_method_var = sampling_optics_controls_view_state.sampling_method_var
 resolution_var = sampling_optics_controls_view_state.resolution_var
 custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
+seed_var = sampling_optics_controls_view_state.seed_var
 rod_points_per_gz_var = sampling_optics_controls_view_state.rod_points_per_gz_var
 optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
 
@@ -16342,10 +16878,28 @@ def on_resolution_option_change(*_):
     _set_custom_sample_controls_state()
     _apply_resolution_selection(trigger_update=True)
 
-_set_custom_sample_controls_state()
-_apply_resolution_selection(trigger_update=False)
+def on_sampling_method_change(*_):
+    _set_sampling_method_controls_state()
+    _sync_active_sample_count()
+    _refresh_resolution_display()
+    update_mosaic_cache()
+    schedule_update()
+
+_set_sampling_method_controls_state()
+_sync_active_sample_count()
+_refresh_resolution_display()
 _apply_rod_points_per_gz(trigger_update=False)
 resolution_var.trace_add('write', on_resolution_option_change)
+sampling_method_var.trace_add('write', on_sampling_method_change)
+for _axis in STRATIFIED_SAMPLING_AXES:
+    for _field_name in ("mean", "sigma", "samples"):
+        _trace_var = _stratified_sampling_var(_axis, _field_name)
+        _trace_add = getattr(_trace_var, "trace_add", None)
+        if callable(_trace_add):
+            _trace_add("write", lambda *_args: _refresh_resolution_display())
+seed_trace_add = getattr(seed_var, "trace_add", None)
+if callable(seed_trace_add):
+    seed_trace_add("write", lambda *_args: _refresh_resolution_display())
 
 
 def on_optics_mode_change(*_):
@@ -17781,6 +18335,9 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             custom_samples_var,
             rod_points_per_gz_var,
             bandwidth_percent_var=bandwidth_percent_var,
+            beam_sampling_method_var=sampling_method_var,
+            beam_sampling_seed_var=seed_var,
+            stratified_sampling_vars=_legacy_stratified_sampling_vars(),
             optics_mode_var=optics_mode_var,
             phase_delta_expr_var=phase_delta_expr_var,
             phi_l_divisor_var=phi_l_divisor_var,

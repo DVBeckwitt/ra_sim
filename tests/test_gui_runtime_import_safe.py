@@ -236,6 +236,16 @@ def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> No
     assert "Detector Preview While Caked Position Preview Loads" in source
 
 
+def test_runtime_impl_disables_preview_calculations_in_runtime_update_paths() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "PREVIEW_CALCULATIONS_ENABLED = False" in source
+    assert "if not PREVIEW_CALCULATIONS_ENABLED:" in source
+    assert "desired_analysis_preview = bool(" in source
+    assert "PREVIEW_CALCULATIONS_ENABLED\n        and analysis_requested" in source
+    assert "PREVIEW_CALCULATIONS_ENABLED\n                and bool(live_geometry_preview_var.get())" in source
+
+
 def test_runtime_impl_keeps_1d_updates_gated_on_intensity_accumulation() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 

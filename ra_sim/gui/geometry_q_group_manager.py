@@ -647,6 +647,7 @@ def simulate_geometry_fit_hit_tables(
             mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)
         ),
         solve_q_mode=int(mosaic.get("solve_q_mode", default_solve_q_mode)),
+        sample_weights=mosaic.get("sample_weights"),
     )
     return list(hit_tables)
 

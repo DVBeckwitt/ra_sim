@@ -981,6 +981,7 @@ def simulate_ideal_hkl_native_center(
         phi_arr: np.ndarray,
         wavelength_arr: np.ndarray,
         *,
+        sample_weights_arr: np.ndarray | None = None,
         forced_sample_indices: np.ndarray | None = None,
     ) -> tuple[float, float] | None:
         image_buf = np.zeros(
@@ -1031,6 +1032,7 @@ def simulate_ideal_hkl_native_center(
                 solve_q_steps=int(config.solve_q_steps),
                 solve_q_rel_tol=float(config.solve_q_rel_tol),
                 solve_q_mode=int(config.solve_q_mode),
+                sample_weights=sample_weights_arr,
                 single_sample_indices=forced_sample_indices,
             )
         except Exception:
@@ -1070,6 +1072,9 @@ def simulate_ideal_hkl_native_center(
         simulation_runtime_state.profile_cache.get("wavelength_array", []),
         dtype=np.float64,
     ).ravel()
+    sample_weights_arr = simulation_runtime_state.profile_cache.get("sample_weights")
+    if sample_weights_arr is not None:
+        sample_weights_arr = np.asarray(sample_weights_arr, dtype=np.float64).ravel()
 
     n_samp = beam_x.size
     if (
@@ -1080,6 +1085,8 @@ def simulate_ideal_hkl_native_center(
         or wavelength_arr.size != n_samp
     ):
         return None
+    if sample_weights_arr is not None and sample_weights_arr.size != n_samp:
+        sample_weights_arr = None
 
     metric = theta_arr * theta_arr + phi_arr * phi_arr
     valid_metric = np.where(np.isfinite(metric), metric, np.inf)
@@ -1094,6 +1101,7 @@ def simulate_ideal_hkl_native_center(
         theta_arr,
         phi_arr,
         wavelength_arr,
+        sample_weights_arr=sample_weights_arr,
         forced_sample_indices=forced,
     )
 

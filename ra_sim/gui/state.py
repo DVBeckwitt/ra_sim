@@ -277,6 +277,11 @@ class BeamMosaicParameterSlidersViewState:
 class SamplingOpticsControlsViewState:
     """Widget references and vars for sampling-resolution / optics controls."""
 
+    sampling_method_frame: Any = None
+    sampling_method_var: Any = None
+    random_gaussian_button: Any = None
+    stratified_gaussian_button: Any = None
+    random_sampling_frame: Any = None
     resolution_selector_frame: Any = None
     resolution_var: Any = None
     resolution_menu: Any = None
@@ -293,6 +298,16 @@ class SamplingOpticsControlsViewState:
     rod_points_per_gz_value_label: Any = None
     rod_point_total_var: Any = None
     rod_point_total_label: Any = None
+    stratified_sampling_frame: Any = None
+    stratified_control_vars: dict[str, dict[str, Any]] = field(default_factory=dict)
+    stratified_control_entries: dict[str, dict[str, Any]] = field(default_factory=dict)
+    seed_var: Any = None
+    seed_entry: Any = None
+    reset_sampling_button: Any = None
+    ray_count_var: Any = None
+    ray_count_label: Any = None
+    ray_warning_var: Any = None
+    ray_warning_label: Any = None
     optics_mode_frame: Any = None
     optics_mode_var: Any = None
     fast_optics_button: Any = None
