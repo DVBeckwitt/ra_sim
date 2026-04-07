@@ -439,10 +439,9 @@ def test_build_intersection_cache_keeps_two_non_specular_representatives(monkeyp
     ]
     cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
 
-    table = np.asarray(cache[0], dtype=np.float64)
-    assert table.shape == (2, 14)
+    assert len(cache) == 2
     np.testing.assert_allclose(
-        table[:, 2:4],
+        np.vstack([np.asarray(table, dtype=np.float64)[:, 2:4] for table in cache]),
         np.array(
             [
                 [11.0, 12.0],
@@ -451,6 +450,73 @@ def test_build_intersection_cache_keeps_two_non_specular_representatives(monkeyp
             dtype=np.float64,
         ),
     )
+
+
+def test_build_intersection_cache_merges_specular_tables_by_nominal_l(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    hit_tables = [
+        np.array([[1.0, 10.0, 10.0, 0.0, 0.0, 0.0, 2.99]], dtype=np.float64),
+        np.array([[1.0, 20.0, 20.0, 0.0, 0.0, 0.0, 3.00]], dtype=np.float64),
+        np.array([[1.0, 21.0, 21.0, 0.0, 0.0, 0.0, 3.01]], dtype=np.float64),
+        np.array([[1.0, 40.0, 40.0, 0.0, 0.0, 0.0, 3.02]], dtype=np.float64),
+    ]
+
+    cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
+
+    assert len(cache) == 1
+    table = np.asarray(cache[0], dtype=np.float64)
+    assert table.shape == (1, 14)
+    np.testing.assert_allclose(table[0, 2:4], np.array([21.0, 21.0]))
+    assert int(np.rint(float(table[0, 8]))) == 3
+
+
+def test_build_intersection_cache_merges_non_specular_tables_by_nominal_peak_and_side(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    hit_tables = [
+        np.array([[1.0, 9.0, 10.0, 0.0, 1.0, 0.0, 1.98]], dtype=np.float64),
+        np.array([[1.0, 11.0, 10.0, 0.0, 1.0, 0.0, 2.00]], dtype=np.float64),
+        np.array([[1.0, 13.0, 10.0, 0.0, 1.0, 0.0, 2.02]], dtype=np.float64),
+        np.array([[1.0, 47.0, 10.0, 0.0, 1.0, 0.0, 1.98]], dtype=np.float64),
+        np.array([[1.0, 50.0, 10.0, 0.0, 1.0, 0.0, 2.00]], dtype=np.float64),
+        np.array([[1.0, 53.0, 10.0, 0.0, 1.0, 0.0, 2.02]], dtype=np.float64),
+    ]
+
+    cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
+
+    assert len(cache) == 2
+    for table in cache:
+        assert np.asarray(table, dtype=np.float64).shape == (1, 14)
+    np.testing.assert_allclose(
+        np.vstack([np.asarray(table, dtype=np.float64)[0, 2:4] for table in cache]),
+        np.array(
+            [
+                [11.0, 10.0],
+                [50.0, 10.0],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    for table in cache:
+        assert int(np.rint(float(np.asarray(table, dtype=np.float64)[0, 8]))) == 2
+
+
+def test_build_intersection_cache_skips_empty_tables(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    hit_tables = [
+        np.empty((0, 7), dtype=np.float64),
+        np.array([[1.0, 20.0, 21.0, 0.0, 0.0, 0.0, 3.0]], dtype=np.float64),
+        np.empty((0, 7), dtype=np.float64),
+    ]
+
+    cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
+
+    assert len(cache) == 1
+    table = np.asarray(cache[0], dtype=np.float64)
+    assert table.shape == (1, 14)
+    np.testing.assert_allclose(table[0, 2:4], np.array([20.0, 21.0]))
 
 
 def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monkeypatch):

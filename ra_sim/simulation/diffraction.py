@@ -5507,6 +5507,69 @@ def _collapse_intersection_cache_table(cache_table: np.ndarray) -> np.ndarray:
     return table[np.asarray(selected_indices[:target_count], dtype=np.int64), :].copy()
 
 
+def _intersection_cache_nominal_integer(values: np.ndarray) -> int | None:
+    """Return the nearest integer Bragg index represented by one cache column."""
+
+    try:
+        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    finite = arr[np.isfinite(arr)]
+    if finite.size <= 0:
+        return None
+    return int(np.rint(float(np.mean(finite))))
+
+
+def _intersection_cache_group_key(cache_table: np.ndarray) -> tuple[object, ...] | None:
+    """Return the nominal Bragg-family key for one cache table."""
+
+    table = np.asarray(cache_table, dtype=np.float64)
+    if table.ndim != 2 or table.shape[0] <= 0 or table.shape[1] < 9:
+        return None
+
+    l_key = _intersection_cache_nominal_integer(table[:, 8])
+    if l_key is None:
+        return None
+
+    if _intersection_cache_target_row_count(table) <= 1:
+        return ("specular", l_key)
+
+    qr_vals = np.asarray(table[:, 0], dtype=np.float64).reshape(-1)
+    finite_qr = qr_vals[np.isfinite(qr_vals)]
+    if finite_qr.size > 0:
+        return ("non_specular", round(float(np.mean(finite_qr)), 8), l_key)
+
+    h_key = _intersection_cache_nominal_integer(table[:, 6])
+    k_key = _intersection_cache_nominal_integer(table[:, 7])
+    return ("non_specular_hkl", h_key, k_key, l_key)
+
+
+def _expand_intersection_cache_group(cache_tables: list[np.ndarray]) -> list[np.ndarray]:
+    """Reduce one nominal Bragg family to final one-row cache tables."""
+
+    valid_tables = []
+    for cache_table in cache_tables:
+        table = np.asarray(cache_table, dtype=np.float64)
+        if table.ndim != 2 or table.shape[0] <= 0:
+            continue
+        valid_tables.append(table)
+    if not valid_tables:
+        return []
+
+    combined_table = (
+        np.vstack(valid_tables)
+        if len(valid_tables) > 1
+        else np.asarray(valid_tables[0], dtype=np.float64)
+    )
+    collapsed_table = _collapse_intersection_cache_table(combined_table)
+    if collapsed_table.ndim != 2 or collapsed_table.shape[0] <= 0:
+        return []
+    return [
+        np.asarray(collapsed_table[row_idx : row_idx + 1, :], dtype=np.float64).copy()
+        for row_idx in range(collapsed_table.shape[0])
+    ]
+
+
 def build_intersection_cache(
     hit_tables,
     av,
@@ -5519,13 +5582,14 @@ def build_intersection_cache(
     single_sample_indices=None,
     best_sample_indices_out=None,
 ):
-    """Convert hit tables into a per-reflection Qr/Qz detector cache.
+    """Convert hit tables into a per-Bragg-peak detector intersection cache.
 
     Columns are:
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
     beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset, wavelength_offset]``.
-    Each table is reduced to the central representative detector branches for
-    that Qr/Qz group: one for ``00L`` and two for non-specular peaks.
+    Hit tables are merged by nominal Bragg family before reduction, then the
+    final cache keeps one one-row table for each ``00L`` peak and one one-row
+    table per detector-side branch for non-specular peaks.
     """
 
     if hit_tables is None:
@@ -5566,7 +5630,7 @@ def build_intersection_cache(
     if np.isfinite(cv_val) and abs(cv_val) > 1.0e-12:
         qz_scale = 2.0 * np.pi / cv_val
 
-    cache = []
+    grouped_cache_tables: dict[tuple[object, ...], list[np.ndarray]] = {}
     beam_x_center = float("nan")
     beam_y_center = float("nan")
     theta_center = float("nan")
@@ -5586,7 +5650,6 @@ def build_intersection_cache(
     for table_idx, hits in enumerate(hit_tables):
         hits_arr = np.asarray(hits, dtype=np.float64)
         if hits_arr.ndim != 2 or hits_arr.shape[1] < 7 or hits_arr.shape[0] == 0:
-            cache.append(np.empty((0, 14), dtype=np.float64))
             continue
 
         h_vals = hits_arr[:, 4]
@@ -5643,7 +5706,14 @@ def build_intersection_cache(
         else:
             cache_table[:, 9:] = np.nan
 
-        cache.append(_collapse_intersection_cache_table(cache_table))
+        group_key = _intersection_cache_group_key(cache_table)
+        if group_key is None:
+            group_key = ("ungrouped", int(table_idx))
+        grouped_cache_tables.setdefault(group_key, []).append(cache_table)
+
+    cache = []
+    for group_tables in grouped_cache_tables.values():
+        cache.extend(_expand_intersection_cache_group(group_tables))
 
     if _should_log_intersection_cache():
         _write_intersection_cache_log(
