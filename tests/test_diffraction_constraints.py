@@ -374,6 +374,33 @@ def test_process_peaks_parallel_compiled_allows_missing_n2_override():
     assert result[0].shape == (image_size, image_size)
 
 
+def test_build_intersection_cache_prefers_per_peak_sample_indices(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    hit_tables = [
+        np.array([[1.0, 10.0, 20.0, 30.0, 1.0, 0.0, 1.0]], dtype=np.float64),
+        np.array([[2.0, 11.0, 21.0, 31.0, 1.0, 0.0, 1.0]], dtype=np.float64),
+    ]
+    cache = diffraction.build_intersection_cache(
+        hit_tables,
+        4.0,
+        7.0,
+        beam_x_array=np.array([0.0, 5.0, 10.0], dtype=np.float64),
+        beam_y_array=np.array([0.0, 10.0, 20.0], dtype=np.float64),
+        theta_array=np.array([0.0, 1.0, 2.0], dtype=np.float64),
+        phi_array=np.array([0.0, 2.0, 4.0], dtype=np.float64),
+        wavelength_array=np.array([1.0, 1.5, 2.0], dtype=np.float64),
+        single_sample_indices=np.array([2, 2], dtype=np.int64),
+        best_sample_indices_out=np.array([0, -1], dtype=np.int64),
+    )
+
+    first = np.asarray(cache[0], dtype=np.float64)
+    second = np.asarray(cache[1], dtype=np.float64)
+
+    np.testing.assert_allclose(first[:, 9:], np.array([[-5.0, -10.0, -1.0, -2.0, -0.5]]))
+    np.testing.assert_allclose(second[:, 9:], np.array([[5.0, 10.0, 1.0, 2.0, 0.5]]))
+
+
 def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monkeypatch):
     monkeypatch.setattr(
         diffraction,

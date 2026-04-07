@@ -1,6 +1,13 @@
 """Core diffraction routines used by the simulator."""
 
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
+from ra_sim.config import get_dir
 from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
@@ -161,6 +168,95 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "accumulate_image": True,
     "sample_qr_ring_once": True,
 }
+
+
+def _should_log_intersection_cache() -> bool:
+    value = str(os.environ.get("RA_SIM_LOG_INTERSECTION_CACHE", "1")).strip().lower()
+    return value not in {"0", "false", "off", "no", ""}
+
+
+def _resolve_intersection_cache_log_root() -> Path:
+    configured_root = str(os.environ.get("RA_SIM_INTERSECTION_CACHE_LOG_DIR", "")).strip()
+    if configured_root:
+        return Path(os.path.expanduser(configured_root)).expanduser()
+    try:
+        return Path(get_dir("debug_log_dir"))
+    except Exception:
+        return Path.cwd() / "logs"
+
+
+def _write_intersection_cache_log(
+    cache: list[np.ndarray],
+    *,
+    av: object,
+    cv: object,
+    beam_x_center: float,
+    beam_y_center: float,
+    theta_center: float,
+    phi_center: float,
+    wavelength_center: float,
+    source_label: str | None = None,
+) -> None:
+    if not _should_log_intersection_cache():
+        return
+    if cache is None:
+        cache = []
+
+    cache_root = _resolve_intersection_cache_log_root() / "intersection_cache"
+    try:
+        cache_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    log_dir = cache_root / f"intersection_cache_{stamp}_{os.getpid()}"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=False)
+    except Exception:
+        return
+    try:
+        print(f"[intersection_cache] wrote cache to: {log_dir}")
+    except Exception:
+        pass
+
+    cache_tables = []
+    row_counts = []
+    for idx, table in enumerate(cache):
+        table_arr = np.asarray(table, dtype=np.float64)
+        if table_arr.ndim != 2:
+            table_arr = np.empty((0, 14), dtype=np.float64)
+        row_counts.append(int(table_arr.shape[0]))
+        try:
+            np.save(log_dir / f"table_{idx:04d}.npy", table_arr)
+            cache_tables.append(f"table_{idx:04d}.npy")
+        except Exception:
+            continue
+
+    metadata = {
+        "created_at": datetime.now().isoformat(),
+        "created_at_unix": float(time.time()),
+        "source": source_label or "build_intersection_cache",
+        "av": float(av) if isinstance(av, (int, float, np.floating)) else None,
+        "cv": float(cv) if isinstance(cv, (int, float, np.floating)) else None,
+        "beam_x_center": beam_x_center,
+        "beam_y_center": beam_y_center,
+        "theta_center": theta_center,
+        "phi_center": phi_center,
+        "wavelength_center": wavelength_center,
+        "table_count": int(len(cache)),
+        "rows_per_table": row_counts,
+        "total_rows": int(sum(int(v) for v in row_counts)),
+        "table_files": cache_tables,
+        "log_root": str(_resolve_intersection_cache_log_root()),
+        "log_dir": str(log_dir),
+    }
+
+    try:
+        with (log_dir / "meta.json").open("w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    except Exception:
+        return
 
 _EMPTY_PROCESS_PEAKS_SAFE_STATS = {
     "used_safe_cache": False,
@@ -5320,6 +5416,16 @@ def build_intersection_cache(
     theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64)
     phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64)
     wavelength_arr = None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
+    best_sample_arr = (
+        None
+        if best_sample_indices_out is None
+        else np.asarray(best_sample_indices_out, dtype=np.int64).reshape(-1)
+    )
+    single_sample_arr = (
+        None
+        if single_sample_indices is None
+        else np.asarray(single_sample_indices, dtype=np.int64).reshape(-1)
+    )
     # Keep API compatibility with previous positional/named arguments, but
     # cache context is now always derived from the source sample nearest the
     # central (mean) beam/divergence/wavelength values.
@@ -5341,7 +5447,23 @@ def build_intersection_cache(
         qz_scale = 2.0 * np.pi / cv_val
 
     cache = []
-    for hits in hit_tables:
+    beam_x_center = float("nan")
+    beam_y_center = float("nan")
+    theta_center = float("nan")
+    phi_center = float("nan")
+    wavelength_center = float("nan")
+    if beam_x_arr is not None and beam_x_arr.size > 0:
+        beam_x_center = float(np.mean(beam_x_arr))
+    if beam_y_arr is not None and beam_y_arr.size > 0:
+        beam_y_center = float(np.mean(beam_y_arr))
+    if theta_arr is not None and theta_arr.size > 0:
+        theta_center = float(np.mean(theta_arr))
+    if phi_arr is not None and phi_arr.size > 0:
+        phi_center = float(np.mean(phi_arr))
+    if wavelength_arr is not None and wavelength_arr.size > 0:
+        wavelength_center = float(np.mean(wavelength_arr))
+
+    for table_idx, hits in enumerate(hit_tables):
         hits_arr = np.asarray(hits, dtype=np.float64)
         if hits_arr.ndim != 2 or hits_arr.shape[1] < 7 or hits_arr.shape[0] == 0:
             cache.append(np.empty((0, 14), dtype=np.float64))
@@ -5365,28 +5487,19 @@ def build_intersection_cache(
         cache_table[:, 5] = hits_arr[:, 3]
         cache_table[:, 6:9] = hits_arr[:, 4:7]
 
-        if beam_x_arr is not None and beam_x_arr.size > 0:
-            beam_x_center = float(np.mean(beam_x_arr))
-        else:
-            beam_x_center = float("nan")
-        if beam_y_arr is not None and beam_y_arr.size > 0:
-            beam_y_center = float(np.mean(beam_y_arr))
-        else:
-            beam_y_center = float("nan")
-        if theta_arr is not None and theta_arr.size > 0:
-            theta_center = float(np.mean(theta_arr))
-        else:
-            theta_center = float("nan")
-        if phi_arr is not None and phi_arr.size > 0:
-            phi_center = float(np.mean(phi_arr))
-        else:
-            phi_center = float("nan")
-        if wavelength_arr is not None and wavelength_arr.size > 0:
-            wavelength_center = float(np.mean(wavelength_arr))
-        else:
-            wavelength_center = float("nan")
-
         sample_idx = central_sample_idx
+        if best_sample_arr is not None and table_idx < best_sample_arr.shape[0]:
+            candidate_idx = int(best_sample_arr[table_idx])
+            if candidate_idx >= 0:
+                sample_idx = candidate_idx
+        if (
+            sample_idx == central_sample_idx
+            and single_sample_arr is not None
+            and table_idx < single_sample_arr.shape[0]
+        ):
+            candidate_idx = int(single_sample_arr[table_idx])
+            if candidate_idx >= 0:
+                sample_idx = candidate_idx
 
         has_beam_ctx = (
             sample_idx >= 0
@@ -5411,6 +5524,18 @@ def build_intersection_cache(
             cache_table[:, 9:] = np.nan
 
         cache.append(cache_table)
+
+    if _should_log_intersection_cache():
+        _write_intersection_cache_log(
+            cache,
+            av=av,
+            cv=cv,
+            beam_x_center=beam_x_center,
+            beam_y_center=beam_y_center,
+            theta_center=theta_center,
+            phi_center=phi_center,
+            wavelength_center=wavelength_center,
+        )
 
     return cache
 

@@ -25,6 +25,39 @@ def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
     return np.zeros((size, size), dtype=np.float64)
 
 
+def _capture_hit_tables_for_intersection_cache(
+    *,
+    hit_tables: Any,
+    collect_hit_tables_requested: bool,
+    runner: Callable[..., tuple[Any, ...]],
+    runner_args: tuple[Any, ...],
+    runner_kwargs: dict[str, Any],
+    image_arg_index: int,
+) -> Any:
+    """Return hit tables suitable for building the per-peak intersection cache."""
+
+    try:
+        if hit_tables is not None and len(hit_tables) > 0:
+            return hit_tables
+    except TypeError:
+        if hit_tables is not None:
+            return hit_tables
+
+    if collect_hit_tables_requested:
+        return hit_tables
+
+    rerun_args = list(runner_args)
+    rerun_args[image_arg_index] = np.zeros_like(
+        np.asarray(rerun_args[image_arg_index], dtype=np.float64)
+    )
+    rerun_kwargs = dict(runner_kwargs)
+    rerun_kwargs["collect_hit_tables"] = True
+    rerun_kwargs["accumulate_image"] = False
+
+    rerun_result = runner(*rerun_args, **rerun_kwargs)
+    return rerun_result[1]
+
+
 def simulate(
     request: SimulationRequest,
     *,
@@ -58,7 +91,7 @@ def simulate(
     if request.best_sample_indices_out is not None:
         peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
 
-    image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
+    peak_args = (
         request.miller,
         request.intensities,
         request.geometry.image_size,
@@ -90,10 +123,21 @@ def simulate(
         request.geometry.cor_angle_deg,
         request.geometry.unit_x,
         request.geometry.n_detector,
+    )
+    image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
+        *peak_args,
         **peak_kwargs,
     )
+    cache_hit_tables = _capture_hit_tables_for_intersection_cache(
+        hit_tables=hit_tables,
+        collect_hit_tables_requested=bool(request.collect_hit_tables),
+        runner=peak_runner,
+        runner_args=peak_args,
+        runner_kwargs=peak_kwargs,
+        image_arg_index=6,
+    )
     intersection_cache = build_intersection_cache(
-        hit_tables,
+        cache_hit_tables,
         request.geometry.av,
         request.geometry.cv,
         beam_x_array=request.beam.beam_x_array,
@@ -147,7 +191,7 @@ def simulate_qr_rods(
     if request.beam.n2_sample_array is not None:
         rod_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
 
-    image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
+    rod_args = (
         qr_dict,
         request.geometry.image_size,
         request.geometry.av,
@@ -178,10 +222,21 @@ def simulate_qr_rods(
         request.geometry.cor_angle_deg,
         request.geometry.unit_x,
         request.geometry.n_detector,
+    )
+    image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
+        *rod_args,
         **rod_kwargs,
     )
+    cache_hit_tables = _capture_hit_tables_for_intersection_cache(
+        hit_tables=hit_tables,
+        collect_hit_tables_requested=bool(request.collect_hit_tables),
+        runner=peak_runner,
+        runner_args=rod_args,
+        runner_kwargs=rod_kwargs,
+        image_arg_index=5,
+    )
     intersection_cache = build_intersection_cache(
-        hit_tables,
+        cache_hit_tables,
         request.geometry.av,
         request.geometry.cv,
         beam_x_array=request.beam.beam_x_array,

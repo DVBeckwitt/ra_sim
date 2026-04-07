@@ -112,6 +112,53 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
 
 
+def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped() -> None:
+    request = _build_request()
+    request.collect_hit_tables = False
+    calls: list[dict[str, object]] = []
+
+    def fake_runner(*args, **kwargs):
+        calls.append(
+            {
+                "collect_hit_tables": kwargs["collect_hit_tables"],
+                "accumulate_image": kwargs["accumulate_image"],
+            }
+        )
+        image = np.array(args[6], copy=True)
+        hit_tables = []
+        if kwargs["collect_hit_tables"]:
+            hit_tables = [
+                np.array(
+                    [[3.0, 4.0, 5.0, 6.0, 1.0, 0.0, 1.0]],
+                    dtype=np.float64,
+                )
+            ]
+        return (
+            image,
+            hit_tables,
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    result = simulate(request, peak_runner=fake_runner)
+
+    assert calls == [
+        {"collect_hit_tables": False, "accumulate_image": True},
+        {"collect_hit_tables": True, "accumulate_image": False},
+    ]
+    assert len(result.hit_tables) == 0
+    assert result.intersection_cache is not None
+    assert len(result.intersection_cache) == 1
+    table = np.asarray(result.intersection_cache[0], dtype=np.float64)
+    assert table.shape == (1, 14)
+    assert np.isclose(float(table[0, 0]), np.pi / np.sqrt(3.0))
+    assert np.isclose(float(table[0, 1]), 2.0 * np.pi / 7.0)
+    assert np.isclose(float(table[0, 2]), 4.0)
+    assert np.isclose(float(table[0, 3]), 5.0)
+
+
 def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:
     request = _build_request()
     qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
@@ -168,3 +215,51 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     assert seen["sample_width_m"] == request.geometry.sample_width_m
     assert seen["sample_length_m"] == request.geometry.sample_length_m
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
+
+
+def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are_skipped() -> None:
+    request = _build_request()
+    request.collect_hit_tables = False
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    calls: list[dict[str, object]] = []
+
+    def fake_runner(*args, **kwargs):
+        calls.append(
+            {
+                "collect_hit_tables": kwargs["collect_hit_tables"],
+                "accumulate_image": kwargs["accumulate_image"],
+            }
+        )
+        image = np.array(args[5], copy=True)
+        hit_tables = []
+        if kwargs["collect_hit_tables"]:
+            hit_tables = [
+                np.array(
+                    [[2.0, 7.0, 8.0, 9.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                )
+            ]
+        return (
+            image,
+            hit_tables,
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert calls == [
+        {"collect_hit_tables": False, "accumulate_image": True},
+        {"collect_hit_tables": True, "accumulate_image": False},
+    ]
+    assert len(result.hit_tables) == 0
+    assert result.intersection_cache is not None
+    assert len(result.intersection_cache) == 1
+    table = np.asarray(result.intersection_cache[0], dtype=np.float64)
+    assert table.shape == (1, 14)
+    assert np.isclose(float(table[0, 2]), 7.0)
+    assert np.isclose(float(table[0, 3]), 8.0)
+    assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))

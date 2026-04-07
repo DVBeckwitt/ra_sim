@@ -7200,6 +7200,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             float(job["c_secondary"]),
         )
 
+    primary_peak_table_count = max(len(maxpos1), len(cache1))
+    secondary_peak_table_count = max(len(maxpos2), len(cache2))
+
     if not bool(job.get("accumulate_image", True)):
         img1 = gui_runtime_position_preview.build_peak_position_preview_image(
             maxpos1,
@@ -7232,11 +7235,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
         "primary_peak_table_lattice": [
             (float(job["a_primary"]), float(job["c_primary"]), "primary")
-            for _ in maxpos1
+            for _ in range(primary_peak_table_count)
         ],
         "secondary_peak_table_lattice": [
             (float(job["a_secondary"]), float(job["c_secondary"]), "secondary")
-            for _ in maxpos2
+            for _ in range(secondary_peak_table_count)
         ],
         "image_generation_elapsed_ms": (
             perf_counter() - image_generation_start_time
@@ -7380,24 +7383,24 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         result.get("secondary_image"),
         dtype=np.float64,
     )
+    simulation_runtime_state.stored_primary_intersection_cache = _copy_intersection_cache_tables(
+        result.get("primary_intersection_cache", [])
+    )
+    simulation_runtime_state.stored_secondary_intersection_cache = _copy_intersection_cache_tables(
+        result.get("secondary_intersection_cache", [])
+    )
+    simulation_runtime_state.stored_primary_peak_table_lattice = list(
+        result.get("primary_peak_table_lattice", [])
+    )
+    simulation_runtime_state.stored_secondary_peak_table_lattice = list(
+        result.get("secondary_peak_table_lattice", [])
+    )
     if bool(result.get("collected_hit_tables", False)):
         simulation_runtime_state.stored_primary_max_positions = list(
             result.get("primary_max_positions", [])
         )
         simulation_runtime_state.stored_secondary_max_positions = list(
             result.get("secondary_max_positions", [])
-        )
-        simulation_runtime_state.stored_primary_intersection_cache = _copy_intersection_cache_tables(
-            result.get("primary_intersection_cache", [])
-        )
-        simulation_runtime_state.stored_secondary_intersection_cache = _copy_intersection_cache_tables(
-            result.get("secondary_intersection_cache", [])
-        )
-        simulation_runtime_state.stored_primary_peak_table_lattice = list(
-            result.get("primary_peak_table_lattice", [])
-        )
-        simulation_runtime_state.stored_secondary_peak_table_lattice = list(
-            result.get("secondary_peak_table_lattice", [])
         )
         simulation_runtime_state.stored_hit_table_signature = result.get(
             "hit_table_signature"

@@ -172,6 +172,10 @@ def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_update
     assert "collect_hit_tables_for_job = bool(" in source
     assert "and not _cached_hit_tables_reusable(" in source
     assert "\"collected_hit_tables\": bool(job[\"collect_hit_tables\"])," in source
+    assert "stored_primary_intersection_cache = _copy_intersection_cache_tables(" in source
+    assert "stored_secondary_intersection_cache = _copy_intersection_cache_tables(" in source
+    assert "stored_primary_peak_table_lattice = list(" in source
+    assert "stored_secondary_peak_table_lattice = list(" in source
     assert "if bool(result.get(\"collected_hit_tables\", False)):" in source
     assert "simulation_runtime_state.last_sim_signature = new_sim_image_sig" in source
     assert "need_hit_table_refresh = bool(" in source
