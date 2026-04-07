@@ -5204,6 +5204,74 @@ def _copy_intersection_cache(cache):
     return [np.asarray(table, dtype=np.float64).copy() for table in cache]
 
 
+def _central_sample_index(
+    beam_x_array=None,
+    beam_y_array=None,
+    theta_array=None,
+    phi_array=None,
+    wavelength_array=None,
+):
+    """Return index of source sample closest to central (mean) values."""
+
+    if (
+        beam_x_array is None
+        or beam_y_array is None
+        or theta_array is None
+        or phi_array is None
+        or wavelength_array is None
+    ):
+        return -1
+
+    beam_x_arr = np.asarray(beam_x_array, dtype=np.float64)
+    beam_y_arr = np.asarray(beam_y_array, dtype=np.float64)
+    theta_arr = np.asarray(theta_array, dtype=np.float64)
+    phi_arr = np.asarray(phi_array, dtype=np.float64)
+    wavelength_arr = np.asarray(wavelength_array, dtype=np.float64)
+
+    n = min(
+        beam_x_arr.size,
+        beam_y_arr.size,
+        theta_arr.size,
+        phi_arr.size,
+        wavelength_arr.size,
+    )
+    if n <= 0:
+        return -1
+
+    beam_x_arr = beam_x_arr[:n]
+    beam_y_arr = beam_y_arr[:n]
+    theta_arr = theta_arr[:n]
+    phi_arr = phi_arr[:n]
+    wavelength_arr = wavelength_arr[:n]
+
+    beam_x_center = np.nanmean(beam_x_arr)
+    beam_y_center = np.nanmean(beam_y_arr)
+    theta_center = np.nanmean(theta_arr)
+    phi_center = np.nanmean(phi_arr)
+    wavelength_center = np.nanmean(wavelength_arr)
+
+    deltas = [
+        beam_x_arr - beam_x_center,
+        beam_y_arr - beam_y_center,
+        theta_arr - theta_center,
+        phi_arr - phi_center,
+        wavelength_arr - wavelength_center,
+    ]
+
+    valid_mask = np.ones(n, dtype=np.bool_)
+    dist_sq = np.zeros(n, dtype=np.float64)
+    for delta in deltas:
+        finite = np.isfinite(delta)
+        valid_mask &= finite
+        dist_sq[finite] += delta[finite] * delta[finite]
+
+    if not np.any(valid_mask):
+        return -1
+
+    dist_sq[~valid_mask] = np.inf
+    return int(np.argmin(dist_sq))
+
+
 def _set_last_intersection_cache(cache):
     """Store the latest detector intersection cache."""
 
@@ -5252,11 +5320,15 @@ def build_intersection_cache(
     theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64)
     phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64)
     wavelength_arr = None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
-    best_sample_arr = (
-        None if best_sample_indices_out is None else np.asarray(best_sample_indices_out, dtype=np.int64)
-    )
-    single_sample_arr = (
-        None if single_sample_indices is None else np.asarray(single_sample_indices, dtype=np.int64)
+    # Keep API compatibility with previous positional/named arguments, but
+    # cache context is now always derived from the source sample nearest the
+    # central (mean) beam/divergence/wavelength values.
+    central_sample_idx = _central_sample_index(
+        beam_x_array=beam_x_arr,
+        beam_y_array=beam_y_arr,
+        theta_array=theta_arr,
+        phi_array=phi_arr,
+        wavelength_array=wavelength_arr,
     )
 
     av_val = float(av)
@@ -5314,12 +5386,7 @@ def build_intersection_cache(
         else:
             wavelength_center = float("nan")
 
-        if best_sample_arr is not None and i < best_sample_arr.shape[0]:
-            sample_idx = int(best_sample_arr[i])
-        elif single_sample_arr is not None and i < single_sample_arr.shape[0]:
-            sample_idx = int(single_sample_arr[i])
-        else:
-            sample_idx = -1
+        sample_idx = central_sample_idx
 
         has_beam_ctx = (
             sample_idx >= 0
