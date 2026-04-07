@@ -3306,19 +3306,9 @@ def _native_detector_coords_to_live_caked_coords(
     col: float,
     row: float,
 ) -> tuple[float, float] | None:
-    ai = simulation_runtime_state.ai_cache.get("ai")
     return _native_detector_coords_to_caked_display_coords(
         col,
         row,
-        ai=ai,
-        get_detector_angular_maps=lambda ai_value: _get_detector_angular_maps(ai_value),
-        detector_pixel_to_scattering_angles=_detector_pixel_to_scattering_angles,
-        center=(float(center_x_var.get()), float(center_y_var.get())),
-        detector_distance=float(corto_detector_var.get()),
-        pixel_size=float(pixel_size_m),
-        wrap_phi_range=_wrap_phi_range,
-        caked_radial_values=simulation_runtime_state.last_caked_radial_values,
-        caked_azimuth_values=simulation_runtime_state.last_caked_azimuth_values,
     )
 
 

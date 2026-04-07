@@ -5389,6 +5389,124 @@ def get_last_intersection_cache():
     return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
 
 
+def _intersection_cache_target_row_count(table: np.ndarray) -> int:
+    """Return how many representative detector rows one cache table should keep."""
+
+    if table.ndim != 2 or table.shape[0] <= 0 or table.shape[1] < 8:
+        return 0
+    try:
+        h_val = float(table[0, 6])
+        k_val = float(table[0, 7])
+    except Exception:
+        return 1
+    if np.isfinite(h_val) and np.isfinite(k_val) and abs(h_val) < 1.0e-12 and abs(k_val) < 1.0e-12:
+        return 1
+    return 2
+
+
+def _intersection_cache_representative_local_index(coords: np.ndarray) -> int:
+    """Return the row index nearest the unweighted mean detector position."""
+
+    if coords.ndim != 2 or coords.shape[0] <= 0:
+        return 0
+    center = np.mean(coords, axis=0, dtype=np.float64)
+    deltas = coords - center
+    dist_sq = np.sum(deltas * deltas, axis=1)
+    return int(np.argmin(dist_sq))
+
+
+def _intersection_cache_two_row_clusters(coords: np.ndarray) -> list[np.ndarray]:
+    """Split detector coordinates into two spatial groups for non-specular peaks."""
+
+    if coords.ndim != 2 or coords.shape[0] <= 1:
+        return [np.arange(coords.shape[0], dtype=np.int64)]
+
+    centered = coords - np.mean(coords, axis=0, dtype=np.float64)
+    try:
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        axis = np.asarray(vh[0], dtype=np.float64)
+    except Exception:
+        axis = np.array([1.0, 0.0], dtype=np.float64)
+    if axis.shape[0] < 2 or not np.all(np.isfinite(axis)):
+        axis = np.array([1.0, 0.0], dtype=np.float64)
+
+    projections = centered @ axis[:2]
+    left = np.flatnonzero(projections < 0.0)
+    right = np.flatnonzero(projections >= 0.0)
+    if left.size > 0 and right.size > 0:
+        return [
+            np.asarray(left, dtype=np.int64),
+            np.asarray(right, dtype=np.int64),
+        ]
+
+    ordered = np.argsort(projections, kind="mergesort")
+    split_idx = max(1, coords.shape[0] // 2)
+    if split_idx >= ordered.size:
+        split_idx = ordered.size - 1
+    if split_idx <= 0:
+        return [np.asarray(ordered, dtype=np.int64)]
+    return [
+        np.asarray(ordered[:split_idx], dtype=np.int64),
+        np.asarray(ordered[split_idx:], dtype=np.int64),
+    ]
+
+
+def _collapse_intersection_cache_table(cache_table: np.ndarray) -> np.ndarray:
+    """Keep one central row per expected detector branch inside one Qr/Qz table."""
+
+    table = np.asarray(cache_table, dtype=np.float64)
+    if table.ndim != 2 or table.shape[0] <= 1:
+        return table
+
+    target_count = _intersection_cache_target_row_count(table)
+    if target_count <= 0 or table.shape[0] <= target_count:
+        return table
+
+    coords = np.asarray(table[:, 2:4], dtype=np.float64)
+    finite_mask = np.isfinite(coords[:, 0]) & np.isfinite(coords[:, 1])
+    valid_indices = np.flatnonzero(finite_mask)
+    if valid_indices.size <= 0:
+        return table[:target_count, :].copy()
+
+    valid_coords = coords[valid_indices, :]
+    if target_count == 1 or valid_indices.size == 1:
+        rep_local_idx = _intersection_cache_representative_local_index(valid_coords)
+        return table[[int(valid_indices[rep_local_idx])], :].copy()
+
+    selected_indices: list[int] = []
+    for cluster_local_indices in _intersection_cache_two_row_clusters(valid_coords):
+        if cluster_local_indices.size <= 0:
+            continue
+        cluster_coords = valid_coords[cluster_local_indices, :]
+        rep_local_idx = _intersection_cache_representative_local_index(cluster_coords)
+        selected_indices.append(
+            int(valid_indices[int(cluster_local_indices[rep_local_idx])])
+        )
+
+    if not selected_indices:
+        rep_local_idx = _intersection_cache_representative_local_index(valid_coords)
+        return table[[int(valid_indices[rep_local_idx])], :].copy()
+
+    if len(selected_indices) < target_count:
+        remaining = [idx for idx in valid_indices.tolist() if int(idx) not in selected_indices]
+        remaining_coords = coords[np.asarray(remaining, dtype=np.int64), :]
+        while remaining and len(selected_indices) < target_count:
+            rep_local_idx = _intersection_cache_representative_local_index(remaining_coords)
+            selected_indices.append(int(remaining.pop(rep_local_idx)))
+            if remaining:
+                remaining_coords = coords[np.asarray(remaining, dtype=np.int64), :]
+
+    selected_indices = sorted(
+        {int(idx) for idx in selected_indices},
+        key=lambda idx: (
+            float(table[idx, 2]) if np.isfinite(table[idx, 2]) else float("inf"),
+            float(table[idx, 3]) if np.isfinite(table[idx, 3]) else float("inf"),
+            int(idx),
+        ),
+    )
+    return table[np.asarray(selected_indices[:target_count], dtype=np.int64), :].copy()
+
+
 def build_intersection_cache(
     hit_tables,
     av,
@@ -5406,6 +5524,8 @@ def build_intersection_cache(
     Columns are:
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
     beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset, wavelength_offset]``.
+    Each table is reduced to the central representative detector branches for
+    that Qr/Qz group: one for ``00L`` and two for non-specular peaks.
     """
 
     if hit_tables is None:
@@ -5523,7 +5643,7 @@ def build_intersection_cache(
         else:
             cache_table[:, 9:] = np.nan
 
-        cache.append(cache_table)
+        cache.append(_collapse_intersection_cache_table(cache_table))
 
     if _should_log_intersection_cache():
         _write_intersection_cache_log(

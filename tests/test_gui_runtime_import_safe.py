@@ -209,6 +209,16 @@ def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
     assert "_toggle_caked_2d_impl()" in source
 
 
+def test_runtime_impl_uses_bound_caked_projection_callback_for_live_overlay_coords() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _native_detector_coords_to_live_caked_coords(")
+    helper_end = source.index("def _scattering_angles_to_detector_pixel(", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert "return _native_detector_coords_to_caked_display_coords(\n        col,\n        row,\n    )" in helper_source
+    assert "ai=" not in helper_source
+
+
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
