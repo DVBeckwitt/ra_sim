@@ -2293,28 +2293,57 @@ def _refine_current_geometry_manual_pairs() -> None:
         )
         return
 
-    stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
-    if stored_sim_image is None:
-        progress_label_geometry.config(
-            text="No full simulation intensity image is available. Run Update Simulation first."
-        )
-        return
-
     try:
-        native_sim_image = np.asarray(stored_sim_image, dtype=float)
-        native_image_shape = tuple(int(v) for v in native_sim_image.shape[:2])
-        sim_display_image = np.rot90(native_sim_image, SIM_DISPLAY_ROTATE_K)
+        caked_sim_image = np.asarray(
+            simulation_runtime_state.last_caked_image_unscaled,
+            dtype=float,
+        )
+        radial_axis = np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float)
+        azimuth_axis = np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float)
     except Exception:
         progress_label_geometry.config(
-            text="The current simulation image could not be prepared for peak refinement."
+            text="No caked simulation image is available. Run Update Simulation first."
         )
         return
 
-    if native_sim_image.ndim < 2 or native_sim_image.size == 0:
+    if (
+        caked_sim_image.ndim != 2
+        or caked_sim_image.size == 0
+        or radial_axis.size <= 0
+        or azimuth_axis.size <= 0
+    ):
         progress_label_geometry.config(
-            text="The current simulation image does not contain any peak data to refine."
+            text="The current caked simulation image cannot be used for Qr/Qz refinement."
         )
         return
+
+    stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+    if stored_sim_image is not None:
+        native_image_shape = tuple(int(v) for v in np.asarray(stored_sim_image).shape[:2])
+    else:
+        native_image_shape = (int(image_size), int(image_size))
+
+    try:
+        placement_refine_cache = _get_geometry_manual_pick_cache(
+            param_set=dict(_current_geometry_fit_params()),
+            prefer_cache=True,
+            background_image=_current_geometry_manual_pick_background_image(),
+        )
+        sim_match_cfg = dict(placement_refine_cache.get("match_config", {}))
+    except Exception:
+        sim_match_cfg = {}
+    try:
+        resolved_sim_match_cfg, sim_background_context = _auto_match_background_context(
+            caked_sim_image,
+            sim_match_cfg,
+        )
+    except Exception:
+        resolved_sim_match_cfg = dict(sim_match_cfg)
+        sim_background_context = None
+    sim_refine_cache = {
+        "match_config": dict(resolved_sim_match_cfg),
+        "background_context": sim_background_context,
+    }
 
     try:
         simulated_peaks = _geometry_manual_simulated_peaks_for_params(
@@ -2360,40 +2389,65 @@ def _refine_current_geometry_manual_pairs() -> None:
             continue
 
         try:
-            seed_col = float(source_entry.get("sim_col_raw", source_entry.get("sim_col", np.nan)))
-            seed_row = float(source_entry.get("sim_row_raw", source_entry.get("sim_row", np.nan)))
+            seed_tth = float(source_entry.get("caked_x", np.nan))
+            seed_phi = float(source_entry.get("caked_y", np.nan))
         except Exception:
-            seed_col = float("nan")
-            seed_row = float("nan")
-        if not (np.isfinite(seed_col) and np.isfinite(seed_row)):
+            seed_tth = float("nan")
+            seed_phi = float("nan")
+        if not (np.isfinite(seed_tth) and np.isfinite(seed_phi)):
             updated_entries.append(entry)
             skipped_count += 1
             continue
 
-        refined_col, refined_row = gui_manual_geometry.peak_maximum_near_in_image(
-            sim_display_image,
-            float(seed_col),
-            float(seed_row),
-            search_radius=6,
+        refined_tth, refined_phi = gui_manual_geometry.geometry_manual_refine_preview_point(
+            dict(source_entry),
+            float(seed_tth),
+            float(seed_phi),
+            display_background=caked_sim_image,
+            cache_data=sim_refine_cache,
+            use_caked_space=True,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            match_simulated_peaks_to_peak_context=match_simulated_peaks_to_peak_context,
+            caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+            caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+            refine_caked_peak_center_fn=_refine_caked_peak_center,
         )
-        if not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+        if not (np.isfinite(refined_tth) and np.isfinite(refined_phi)):
             updated_entries.append(entry)
             skipped_count += 1
             continue
 
-        entry["refined_sim_x"] = float(refined_col)
-        entry["refined_sim_y"] = float(refined_row)
+        entry["refined_sim_caked_x"] = float(refined_tth)
+        entry["refined_sim_caked_y"] = float(refined_phi)
         refined_count += 1
-        if abs(float(refined_col) - float(seed_col)) > 1.0e-9 or abs(
-            float(refined_row) - float(seed_row)
+        if abs(float(refined_tth) - float(seed_tth)) > 1.0e-9 or abs(
+            float(refined_phi) - float(seed_phi)
         ) > 1.0e-9:
             moved_count += 1
 
         try:
-            native_point = _display_to_native_sim_coords(
-                float(refined_col),
-                float(refined_row),
-                native_image_shape,
+            refined_background_display = _caked_angles_to_background_display_coords(
+                float(refined_tth),
+                float(refined_phi),
+            )
+        except Exception:
+            refined_background_display = None
+        try:
+            native_point = (
+                _background_display_to_native_detector_coords(
+                    float(refined_background_display[0]),
+                    float(refined_background_display[1]),
+                )
+                if (
+                    isinstance(refined_background_display, tuple)
+                    and len(refined_background_display) >= 2
+                    and refined_background_display[0] is not None
+                    and refined_background_display[1] is not None
+                    and np.isfinite(float(refined_background_display[0]))
+                    and np.isfinite(float(refined_background_display[1]))
+                )
+                else None
             )
         except Exception:
             native_point = None
@@ -2406,22 +2460,21 @@ def _refine_current_geometry_manual_pairs() -> None:
             entry["refined_sim_native_x"] = float(native_point[0])
             entry["refined_sim_native_y"] = float(native_point[1])
             try:
-                refined_caked = _native_to_caked_display_coords(
+                refined_display = _native_sim_to_display_coords(
                     float(native_point[0]),
                     float(native_point[1]),
+                    native_image_shape,
                 )
             except Exception:
-                refined_caked = None
+                refined_display = None
             if (
-                isinstance(refined_caked, tuple)
-                and len(refined_caked) >= 2
-                and refined_caked[0] is not None
-                and refined_caked[1] is not None
-                and np.isfinite(float(refined_caked[0]))
-                and np.isfinite(float(refined_caked[1]))
+                isinstance(refined_display, tuple)
+                and len(refined_display) >= 2
+                and np.isfinite(float(refined_display[0]))
+                and np.isfinite(float(refined_display[1]))
             ):
-                entry["refined_sim_caked_x"] = float(refined_caked[0])
-                entry["refined_sim_caked_y"] = float(refined_caked[1])
+                entry["refined_sim_x"] = float(refined_display[0])
+                entry["refined_sim_y"] = float(refined_display[1])
 
         updated_entries.append(entry)
 

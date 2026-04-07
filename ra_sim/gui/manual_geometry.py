@@ -740,9 +740,32 @@ def geometry_manual_apply_refined_simulated_override(
 
     use_caked_display = False
     try:
-        use_caked_display = np.isfinite(float(result.get("caked_x", np.nan))) and np.isfinite(
-            float(result.get("caked_y", np.nan))
-        )
+        sim_col = float(result.get("sim_col", np.nan))
+        sim_row = float(result.get("sim_row", np.nan))
+        sim_col_raw = float(result.get("sim_col_raw", sim_col))
+        sim_row_raw = float(result.get("sim_row_raw", sim_row))
+        caked_x = float(result.get("caked_x", np.nan))
+        caked_y = float(result.get("caked_y", np.nan))
+        if (
+            np.isfinite(sim_col)
+            and np.isfinite(sim_row)
+            and np.isfinite(caked_x)
+            and np.isfinite(caked_y)
+        ):
+            use_caked_display = (
+                abs(float(sim_col) - float(caked_x)) <= 1.0e-9
+                and abs(float(sim_row) - float(caked_y)) <= 1.0e-9
+            )
+        elif (
+            np.isfinite(sim_col)
+            and np.isfinite(sim_row)
+            and np.isfinite(sim_col_raw)
+            and np.isfinite(sim_row_raw)
+        ):
+            use_caked_display = (
+                abs(float(sim_col) - float(sim_col_raw)) > 1.0e-9
+                or abs(float(sim_row) - float(sim_row_raw)) > 1.0e-9
+            )
     except Exception:
         use_caked_display = False
 
@@ -760,7 +783,7 @@ def geometry_manual_apply_refined_simulated_override(
     if refined_caked is not None:
         result["caked_x"] = float(refined_caked[0])
         result["caked_y"] = float(refined_caked[1])
-        if use_caked_display or refined_raw is None:
+        if use_caked_display:
             result["sim_col"] = float(refined_caked[0])
             result["sim_row"] = float(refined_caked[1])
 
@@ -2245,18 +2268,17 @@ def build_geometry_manual_initial_pairs_display(
             )
         except Exception:
             source_key = None
-        if source_key is not None:
-            sim_entry = simulated_lookup.get(source_key)
-            sim_entry = geometry_manual_apply_refined_simulated_override(entry, sim_entry)
-            if isinstance(sim_entry, dict):
-                try:
-                    sim_col = float(sim_entry.get("sim_col"))
-                    sim_row = float(sim_entry.get("sim_row"))
-                except Exception:
-                    sim_col = float("nan")
-                    sim_row = float("nan")
-                if np.isfinite(sim_col) and np.isfinite(sim_row):
-                    initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+        sim_entry = simulated_lookup.get(source_key) if source_key is not None else None
+        sim_entry = geometry_manual_apply_refined_simulated_override(entry, sim_entry)
+        if isinstance(sim_entry, dict):
+            try:
+                sim_col = float(sim_entry.get("sim_col"))
+                sim_row = float(sim_entry.get("sim_row"))
+            except Exception:
+                sim_col = float("nan")
+                sim_row = float("nan")
+            if np.isfinite(sim_col) and np.isfinite(sim_row):
+                initial_entry["sim_display"] = (float(sim_col), float(sim_row))
         initial_pairs_display.append(initial_entry)
 
     return measured_display, initial_pairs_display
