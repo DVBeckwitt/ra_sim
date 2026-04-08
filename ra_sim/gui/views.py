@@ -2995,15 +2995,10 @@ def create_sampling_optics_controls(
     *,
     parent: tk.Misc,
     view_state: SamplingOpticsControlsViewState,
-    initial_sampling_method: str,
     sample_count_value: int,
     sample_count_min: int,
     sample_count_max: int,
     sample_count_text: str,
-    stratified_values: Mapping[str, object],
-    seed_text: str,
-    ray_count_text: str,
-    ray_warning_text: str,
     rod_points_per_gz_value: int,
     rod_points_per_gz_min: int,
     rod_points_per_gz_max: int,
@@ -3012,44 +3007,15 @@ def create_sampling_optics_controls(
     optics_mode_text: str,
     on_sample_count_slide: Callable[[object], None],
     on_commit_sample_count: Callable[[object], None],
-    on_apply_stratified_sampling: Callable[[], None],
-    on_reset_stratified_defaults: Callable[[], None],
     on_rod_points_per_gz_slide: Callable[[object], None],
     on_commit_rod_points_per_gz: Callable[[object], None],
+    **_ignored_legacy_sampling_kwargs,
 ) -> None:
     """Create the sample-count / optics controls and store their refs."""
-
-    def _bind_commit(widget: object, callback: Callable[[], None]) -> None:
-        bind = getattr(widget, "bind", None)
-        if callable(bind):
-            bind("<Return>", lambda _event: callback())
-            bind("<FocusOut>", lambda _event: callback())
-
-    sampling_method_frame = ttk.Frame(parent)
-    sampling_method_frame.pack(fill=tk.X, pady=5)
-    ttk.Label(sampling_method_frame, text="Beam Sampling").pack(anchor=tk.W, padx=5)
-
-    sampling_method_var = tk.StringVar(value=str(initial_sampling_method))
-    random_gaussian_button = ttk.Radiobutton(
-        sampling_method_frame,
-        text="Random Gaussian",
-        variable=sampling_method_var,
-        value="random_gaussian",
-    )
-    random_gaussian_button.pack(anchor=tk.W, padx=12)
-    _attach_tooltip(random_gaussian_button, "current stochastic sampling")
-
-    stratified_gaussian_button = ttk.Radiobutton(
-        sampling_method_frame,
-        text="Stratified Gaussian",
-        variable=sampling_method_var,
-        value="stratified_gaussian",
-    )
-    stratified_gaussian_button.pack(anchor=tk.W, padx=12)
-    _attach_tooltip(
-        stratified_gaussian_button,
-        "smoother Gaussian coverage with equal-weight rays, but not iid sampling",
-    )
+    sampling_method_var = tk.StringVar(value="random_gaussian")
+    sampling_method_frame = None
+    random_gaussian_button = None
+    stratified_gaussian_button = None
 
     random_sampling_frame = ttk.Frame(parent)
     random_sampling_frame.pack(fill=tk.X, pady=(2, 0))
@@ -3085,100 +3051,6 @@ def create_sampling_optics_controls(
         width=14,
     )
     sample_count_value_label.pack(side=tk.LEFT, padx=(8, 0))
-
-    stratified_sampling_frame = ttk.Frame(parent)
-    stratified_sampling_frame.pack(fill=tk.X, pady=(6, 2))
-    ttk.Label(
-        stratified_sampling_frame,
-        text="Stratified Gaussian Parameters",
-    ).pack(anchor=tk.W, padx=5)
-
-    seed_row = ttk.Frame(stratified_sampling_frame)
-    seed_row.pack(fill=tk.X, padx=5, pady=(4, 0))
-    ttk.Label(seed_row, text="Seed").grid(row=0, column=0, sticky="w")
-    seed_var = tk.StringVar(value=str(seed_text))
-    seed_entry = ttk.Entry(
-        seed_row,
-        textvariable=seed_var,
-        width=12,
-        justify="right",
-    )
-    seed_entry.grid(row=0, column=1, sticky="e", padx=(8, 0))
-    _bind_commit(seed_entry, on_apply_stratified_sampling)
-
-    grid_header = ttk.Frame(stratified_sampling_frame)
-    grid_header.pack(fill=tk.X, padx=5, pady=(6, 0))
-    ttk.Label(grid_header, text="Axis", width=8).grid(row=0, column=0, sticky="w")
-    ttk.Label(grid_header, text="Mean", width=12).grid(row=0, column=1, sticky="w")
-    ttk.Label(grid_header, text="Sigma", width=12).grid(row=0, column=2, sticky="w")
-    ttk.Label(grid_header, text="Samples", width=12).grid(row=0, column=3, sticky="w")
-
-    stratified_control_vars: dict[str, dict[str, Any]] = {}
-    stratified_control_entries: dict[str, dict[str, Any]] = {}
-    for axis_key, axis_label in (
-        ("x", "x"),
-        ("y", "y"),
-        ("dx", "dx"),
-        ("dz", "dz"),
-        ("lambda", "lambda"),
-    ):
-        row = ttk.Frame(stratified_sampling_frame)
-        row.pack(fill=tk.X, padx=5, pady=(2, 0))
-        ttk.Label(row, text=axis_label, width=8).grid(row=0, column=0, sticky="w")
-
-        mean_var = tk.StringVar(value=str(stratified_values.get(f"{axis_key}_mean", "0")))
-        sigma_var = tk.StringVar(value=str(stratified_values.get(f"{axis_key}_sigma", "0")))
-        samples_var = tk.StringVar(
-            value=str(stratified_values.get(f"{axis_key}_samples", "1"))
-        )
-
-        mean_entry = ttk.Entry(row, textvariable=mean_var, width=12, justify="right")
-        sigma_entry = ttk.Entry(row, textvariable=sigma_var, width=12, justify="right")
-        samples_entry = ttk.Entry(
-            row,
-            textvariable=samples_var,
-            width=12,
-            justify="right",
-        )
-        mean_entry.grid(row=0, column=1, sticky="ew", padx=(0, 6))
-        sigma_entry.grid(row=0, column=2, sticky="ew", padx=(0, 6))
-        samples_entry.grid(row=0, column=3, sticky="ew")
-
-        _bind_commit(mean_entry, on_apply_stratified_sampling)
-        _bind_commit(sigma_entry, on_apply_stratified_sampling)
-        _bind_commit(samples_entry, on_apply_stratified_sampling)
-
-        stratified_control_vars[axis_key] = {
-            "mean": mean_var,
-            "sigma": sigma_var,
-            "samples": samples_var,
-        }
-        stratified_control_entries[axis_key] = {
-            "mean": mean_entry,
-            "sigma": sigma_entry,
-            "samples": samples_entry,
-        }
-
-    reset_sampling_button = ttk.Button(
-        stratified_sampling_frame,
-        text="Reset Stratified Defaults",
-        command=on_reset_stratified_defaults,
-    )
-    reset_sampling_button.pack(anchor=tk.W, padx=5, pady=(6, 0))
-
-    ray_count_var = tk.StringVar(value=str(ray_count_text))
-    ray_count_label = ttk.Label(
-        stratified_sampling_frame,
-        textvariable=ray_count_var,
-    )
-    ray_count_label.pack(anchor=tk.W, padx=5, pady=(4, 0))
-
-    ray_warning_var = tk.StringVar(value=str(ray_warning_text))
-    ray_warning_label = ttk.Label(
-        stratified_sampling_frame,
-        textvariable=ray_warning_var,
-    )
-    ray_warning_label.pack(anchor=tk.W, padx=5, pady=(2, 0))
 
     rod_points_per_gz_frame = ttk.Frame(parent)
     rod_points_per_gz_frame.pack(fill=tk.X, pady=(6, 2))
@@ -3257,16 +3129,16 @@ def create_sampling_optics_controls(
     view_state.rod_points_per_gz_value_label = rod_points_per_gz_value_label
     view_state.rod_point_total_var = rod_point_total_var
     view_state.rod_point_total_label = rod_point_total_label
-    view_state.stratified_sampling_frame = stratified_sampling_frame
-    view_state.stratified_control_vars = stratified_control_vars
-    view_state.stratified_control_entries = stratified_control_entries
-    view_state.seed_var = seed_var
-    view_state.seed_entry = seed_entry
-    view_state.reset_sampling_button = reset_sampling_button
-    view_state.ray_count_var = ray_count_var
-    view_state.ray_count_label = ray_count_label
-    view_state.ray_warning_var = ray_warning_var
-    view_state.ray_warning_label = ray_warning_label
+    view_state.stratified_sampling_frame = None
+    view_state.stratified_control_vars = {}
+    view_state.stratified_control_entries = {}
+    view_state.seed_var = None
+    view_state.seed_entry = None
+    view_state.reset_sampling_button = None
+    view_state.ray_count_var = None
+    view_state.ray_count_label = None
+    view_state.ray_warning_var = None
+    view_state.ray_warning_label = None
     view_state.optics_mode_frame = optics_mode_frame
     view_state.optics_mode_var = optics_mode_var
     view_state.fast_optics_button = fast_optics_button

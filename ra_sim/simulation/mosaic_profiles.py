@@ -17,7 +17,6 @@ _AUTO_CLUSTER_MULTIPLIER = 3.0
 _AUTO_CLUSTER_MIN_REDUCTION = 0.75
 _AUTO_CLUSTER_KMEANS_ITERS = 12
 RANDOM_GAUSSIAN_SAMPLING = "random_gaussian"
-STRATIFIED_GAUSSIAN_SAMPLING = "stratified_gaussian"
 
 
 def _as_profile_matrix(
@@ -220,51 +219,6 @@ def _gaussian_offsets_from_unit(unit: np.ndarray) -> np.ndarray:
     return ndtri(clipped)
 
 
-def sample_stratified_gaussian_1d(
-    num_samples: int,
-    *,
-    mean: float,
-    sigma: float,
-    rng: np.random.Generator | int | None = None,
-) -> np.ndarray:
-    """Return one equal-weight 1D stratified Gaussian sample array."""
-
-    sample_count = max(int(num_samples), 0)
-    if sample_count == 0:
-        return np.empty((0,), dtype=np.float64)
-
-    mean_value = float(mean)
-    sigma_value = float(sigma)
-    if not np.isfinite(mean_value):
-        raise ValueError("mean must be finite")
-    if not np.isfinite(sigma_value):
-        raise ValueError("sigma must be finite")
-    if sigma_value < 0.0:
-        raise ValueError("sigma must be non-negative")
-    if sigma_value == 0.0:
-        return np.full(sample_count, mean_value, dtype=np.float64)
-
-    rng_obj = _coerce_rng(rng)
-    unit = (
-        np.arange(sample_count, dtype=np.float64) + rng_obj.random(sample_count)
-    ) / float(sample_count)
-    unit = rng_obj.permutation(unit)
-    gaussian = _gaussian_offsets_from_unit(unit)
-    return mean_value + sigma_value * gaussian
-
-
-def _cartesian_product_axis(values: np.ndarray, counts: tuple[int, ...], axis: int) -> np.ndarray:
-    """Broadcast one 1D coordinate sample array across the full Cartesian product."""
-
-    if not counts or any(count <= 0 for count in counts):
-        return np.empty((0,), dtype=np.float64)
-
-    axis_values = np.asarray(values, dtype=np.float64).reshape(-1)
-    inner = int(np.prod(counts[axis + 1 :], dtype=np.int64)) if axis + 1 < len(counts) else 1
-    outer = int(np.prod(counts[:axis], dtype=np.int64)) if axis > 0 else 1
-    return np.tile(np.repeat(axis_values, inner), outer)
-
-
 def generate_random_profiles(
     num_samples,
     divergence_sigma,
@@ -314,86 +268,5 @@ def generate_random_profiles(
         np.asarray(theta_array, dtype=np.float64),
         np.asarray(phi_array, dtype=np.float64),
         np.asarray(wavelength_array, dtype=np.float64),
-    )
-
-
-def generate_stratified_profiles(
-    *,
-    x_mean: float,
-    x_sigma: float,
-    x_samples: int,
-    y_mean: float,
-    y_sigma: float,
-    y_samples: int,
-    dx_mean: float,
-    dx_sigma: float,
-    dx_samples: int,
-    dz_mean: float,
-    dz_sigma: float,
-    dz_samples: int,
-    lambda_mean: float,
-    lambda_sigma: float,
-    lambda_samples: int,
-    rng: np.random.Generator | int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return equal-weight Cartesian-product Gaussian beam samples.
-
-    User-facing axes are ``(x, y, dx, dz, lambda)``. Internally ``dx`` maps to
-    ``phi_array`` and ``dz`` maps to ``theta_array``.
-    """
-
-    counts = (
-        max(int(x_samples), 0),
-        max(int(y_samples), 0),
-        max(int(dx_samples), 0),
-        max(int(dz_samples), 0),
-        max(int(lambda_samples), 0),
-    )
-    if any(count <= 0 for count in counts):
-        empty = np.empty((0,), dtype=np.float64)
-        return empty, empty, empty, empty, empty, empty
-
-    rng_obj = _coerce_rng(rng)
-    x_values = sample_stratified_gaussian_1d(
-        counts[0],
-        mean=x_mean,
-        sigma=x_sigma,
-        rng=rng_obj,
-    )
-    y_values = sample_stratified_gaussian_1d(
-        counts[1],
-        mean=y_mean,
-        sigma=y_sigma,
-        rng=rng_obj,
-    )
-    dx_values = sample_stratified_gaussian_1d(
-        counts[2],
-        mean=dx_mean,
-        sigma=dx_sigma,
-        rng=rng_obj,
-    )
-    dz_values = sample_stratified_gaussian_1d(
-        counts[3],
-        mean=dz_mean,
-        sigma=dz_sigma,
-        rng=rng_obj,
-    )
-    lambda_values = sample_stratified_gaussian_1d(
-        counts[4],
-        mean=lambda_mean,
-        sigma=lambda_sigma,
-        rng=rng_obj,
-    )
-
-    total_count = int(np.prod(counts, dtype=np.int64))
-    weights = np.full(total_count, 1.0 / float(total_count), dtype=np.float64)
-
-    return (
-        _cartesian_product_axis(x_values, counts, 0),
-        _cartesian_product_axis(y_values, counts, 1),
-        _cartesian_product_axis(dz_values, counts, 3),
-        _cartesian_product_axis(dx_values, counts, 2),
-        _cartesian_product_axis(lambda_values, counts, 4),
-        weights,
     )
 

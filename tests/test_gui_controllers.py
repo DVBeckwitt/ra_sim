@@ -355,18 +355,6 @@ def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> 
         fallback_count=16,
     ) == "32 samples"
     assert controllers.format_sampling_count_summary(50) == "50 samples"
-    assert controllers.stratified_total_ray_count([2, 3, 2, 2, 4]) == 96
-    assert controllers.format_stratified_ray_count_summary([2, 3, 2, 2, 4]) == (
-        "Total rays: 96 = 2 x 3 x 2 x 2 x 4"
-    )
-    assert controllers.format_stratified_ray_count_warning(
-        [10, 10, 10, 10, 10],
-        warning_threshold=50_000,
-    ) == "Warning: 100,000 rays may make updates slow or memory-heavy."
-    assert controllers.format_stratified_ray_count_warning(
-        [2, 3, 2, 2, 4],
-        warning_threshold=50_000,
-    ) == ""
 
     assert controllers.default_rod_points_per_gz(
         2.0 * np.pi,

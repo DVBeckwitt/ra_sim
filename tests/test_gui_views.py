@@ -1954,38 +1954,15 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
 
     view_state = state.SamplingOpticsControlsViewState()
     sample_count_events = []
-    stratified_applies = []
-    stratified_resets = []
     rod_commits = []
 
     views.create_sampling_optics_controls(
         parent=object(),
         view_state=view_state,
-        initial_sampling_method="stratified_gaussian",
         sample_count_value=2500,
         sample_count_min=1,
         sample_count_max=5000,
         sample_count_text="2,500 samples",
-        stratified_values={
-            "x_mean": "0.1",
-            "x_sigma": "0.01",
-            "x_samples": "2",
-            "y_mean": "0.2",
-            "y_sigma": "0.02",
-            "y_samples": "3",
-            "dx_mean": "0.3",
-            "dx_sigma": "0.03",
-            "dx_samples": "4",
-            "dz_mean": "0.4",
-            "dz_sigma": "0.04",
-            "dz_samples": "5",
-            "lambda_mean": "1.54",
-            "lambda_sigma": "0.005",
-            "lambda_samples": "6",
-        },
-        seed_text="17",
-        ray_count_text="Total rays: 720 = 2 x 3 x 4 x 5 x 6",
-        ray_warning_text="Warning: 720 rays may make updates slow or memory-heavy.",
         rod_points_per_gz_value=480,
         rod_points_per_gz_min=10,
         rod_points_per_gz_max=2000,
@@ -1994,24 +1971,18 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         optics_mode_text="exact",
         on_sample_count_slide=lambda value: sample_count_events.append(("slide", value)),
         on_commit_sample_count=lambda _event: sample_count_events.append(("commit", None)),
-        on_apply_stratified_sampling=lambda: stratified_applies.append("apply"),
-        on_reset_stratified_defaults=lambda: stratified_resets.append("reset"),
         on_rod_points_per_gz_slide=lambda _value: rod_commits.append("slide"),
         on_commit_rod_points_per_gz=lambda _event: rod_commits.append("commit"),
     )
 
     assert isinstance(view_state.sample_count_frame, _FakeFrame)
-    assert view_state.sampling_method_var.get() == "stratified_gaussian"
+    assert view_state.sampling_method_var.get() == "random_gaussian"
     assert view_state.sample_count_var.get() == 2500
     assert view_state.sample_count_value_var.get() == "2,500 samples"
-    assert view_state.seed_var.get() == "17"
-    assert view_state.stratified_control_vars["x"]["mean"].get() == "0.1"
-    assert view_state.stratified_control_vars["lambda"]["samples"].get() == "6"
-    assert view_state.ray_count_var.get() == "Total rays: 720 = 2 x 3 x 4 x 5 x 6"
-    assert (
-        view_state.ray_warning_var.get()
-        == "Warning: 720 rays may make updates slow or memory-heavy."
-    )
+    assert view_state.seed_var is None
+    assert view_state.stratified_control_vars == {}
+    assert view_state.ray_count_var is None
+    assert view_state.ray_warning_var is None
     assert view_state.rod_points_per_gz_var.get() == 480
     assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
@@ -2020,10 +1991,7 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.sample_count_scale.variable is view_state.sample_count_var
     assert view_state.sample_count_scale.cget("from") == 1
     assert view_state.sample_count_scale.cget("to") == 5000
-    assert view_state.reset_sampling_button is _FakeButton.created[0]
     assert [radio.value for radio in _FakeRadiobutton.created] == [
-        "random_gaussian",
-        "stratified_gaussian",
         "fast",
         "exact",
     ]
@@ -2033,12 +2001,12 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.sample_count_value_var.get() == "3,600 samples"
     views.set_sampling_rod_points_per_gz_text(view_state, "512 / Gz")
     views.set_sampling_rod_point_total_text(view_state, "Longest rod: 1,024 points")
-    views.set_sampling_ray_count_text(view_state, "Total rays: 96 = 2 x 3 x 2 x 2 x 4")
+    views.set_sampling_ray_count_text(view_state, "unused")
     views.set_sampling_ray_warning_text(view_state, "")
     assert view_state.rod_points_per_gz_value_var.get() == "512 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 1,024 points"
-    assert view_state.ray_count_var.get() == "Total rays: 96 = 2 x 3 x 2 x 2 x 4"
-    assert view_state.ray_warning_var.get() == ""
+    assert view_state.ray_count_var is None
+    assert view_state.ray_warning_var is None
 
     views.set_sampling_sample_count_controls_enabled(view_state, enabled=False)
     assert view_state.sample_count_scale.state == tk.DISABLED
@@ -2052,19 +2020,12 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         stratified_enabled=True,
     )
     assert view_state.sample_count_scale.state == tk.DISABLED
-    assert view_state.seed_entry.state == tk.NORMAL
-    assert view_state.stratified_control_entries["dx"]["samples"].state == tk.NORMAL
 
     view_state.sample_count_scale.command("3600")
     view_state.sample_count_scale.bindings["<ButtonRelease-1>"][0](None)
-    view_state.seed_entry.bindings["<Return>"](None)
-    view_state.stratified_control_entries["x"]["samples"].bindings["<FocusOut>"](None)
-    _FakeButton.created[0].command()
     view_state.rod_points_per_gz_scale.command(512)
     view_state.rod_points_per_gz_scale.bindings["<ButtonRelease-1>"][0](None)
     assert sample_count_events == [("slide", "3600"), ("commit", None)]
-    assert stratified_applies == ["apply", "apply"]
-    assert stratified_resets == ["reset"]
     assert rod_commits == ["slide", "commit"]
 
 

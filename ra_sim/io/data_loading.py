@@ -300,9 +300,6 @@ def load_parameters(
     custom_samples_var=None,
     rod_points_per_gz_var=None,
     bandwidth_percent_var=None,
-    beam_sampling_method_var=None,
-    beam_sampling_seed_var=None,
-    stratified_sampling_vars=None,
     optics_mode_var=None,
     phase_delta_expr_var=None,
     iodine_z_var=None,
@@ -311,6 +308,7 @@ def load_parameters(
     solve_q_steps_var=None,
     solve_q_rel_tol_var=None,
     solve_q_mode_var=None,
+    **_ignored_legacy_sampling_kwargs,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -383,42 +381,6 @@ def load_parameters(
                     bandwidth_val = None
                 if bandwidth_val is not None and np.isfinite(bandwidth_val):
                     bandwidth_percent_var.set(float(np.clip(bandwidth_val, 0.0, 10.0)))
-        if beam_sampling_method_var is not None:
-            stored_method = params.get('beam_sampling_method')
-            if stored_method is not None:
-                beam_sampling_method_var.set(str(stored_method))
-        if beam_sampling_seed_var is not None:
-            stored_seed = params.get('beam_sampling_seed')
-            if stored_seed is not None:
-                try:
-                    seed_val = int(round(float(stored_seed)))
-                except (TypeError, ValueError):
-                    seed_val = None
-                if seed_val is not None:
-                    beam_sampling_seed_var.set(str(max(0, seed_val)))
-        if isinstance(stratified_sampling_vars, Mapping):
-            for key, var in stratified_sampling_vars.items():
-                if var is None or key not in params:
-                    continue
-                stored_value = params.get(key)
-                if stored_value is None:
-                    continue
-                if str(key).endswith("_samples"):
-                    try:
-                        parsed_value = int(round(float(stored_value)))
-                    except (TypeError, ValueError):
-                        continue
-                    if parsed_value > 0:
-                        var.set(str(parsed_value))
-                else:
-                    try:
-                        parsed_value = float(stored_value)
-                    except (TypeError, ValueError):
-                        continue
-                    if np.isfinite(parsed_value):
-                        if str(key).endswith("_sigma"):
-                            parsed_value = max(0.0, parsed_value)
-                        var.set(f"{parsed_value:.12g}")
         if resolution_var is not None:
             stored_resolution = params.get('sampling_resolution')
             if stored_resolution:
@@ -520,9 +482,6 @@ def save_all_parameters(
     custom_samples_var=None,
     rod_points_per_gz_var=None,
     bandwidth_percent_var=None,
-    beam_sampling_method_var=None,
-    beam_sampling_seed_var=None,
-    stratified_sampling_vars=None,
     optics_mode_var=None,
     phase_delta_expr_var=None,
     iodine_z_var=None,
@@ -531,6 +490,7 @@ def save_all_parameters(
     solve_q_steps_var=None,
     solve_q_rel_tol_var=None,
     solve_q_mode_var=None,
+    **_ignored_legacy_sampling_kwargs,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -599,39 +559,6 @@ def save_all_parameters(
             bandwidth_percent = None
         if bandwidth_percent is not None and np.isfinite(bandwidth_percent):
             parameters['bandwidth_percent'] = float(np.clip(bandwidth_percent, 0.0, 10.0))
-    if beam_sampling_method_var is not None:
-        parameters['beam_sampling_method'] = str(beam_sampling_method_var.get())
-    if beam_sampling_seed_var is not None:
-        try:
-            beam_sampling_seed = int(round(float(beam_sampling_seed_var.get())))
-        except (TypeError, ValueError):
-            beam_sampling_seed = None
-        if beam_sampling_seed is not None:
-            parameters['beam_sampling_seed'] = max(0, int(beam_sampling_seed))
-    if isinstance(stratified_sampling_vars, Mapping):
-        for key, var in stratified_sampling_vars.items():
-            if var is None:
-                continue
-            try:
-                raw_value = var.get()
-            except Exception:
-                continue
-            if str(key).endswith("_samples"):
-                try:
-                    parsed_value = int(round(float(raw_value)))
-                except (TypeError, ValueError):
-                    continue
-                if parsed_value > 0:
-                    parameters[str(key)] = int(parsed_value)
-            else:
-                try:
-                    parsed_value = float(raw_value)
-                except (TypeError, ValueError):
-                    continue
-                if np.isfinite(parsed_value):
-                    if str(key).endswith("_sigma"):
-                        parsed_value = max(0.0, parsed_value)
-                    parameters[str(key)] = float(parsed_value)
 
     if optics_mode_var is not None:
         parameters['optics_mode'] = _normalize_optics_mode(

@@ -202,39 +202,6 @@ def format_sampling_count_summary(sample_count: object) -> str:
     return f"{count:,} samples" if count >= 1000 else f"{count} samples"
 
 
-def stratified_total_ray_count(sample_counts: Sequence[object]) -> int:
-    """Return the total Cartesian-product ray count for one sample-count list."""
-
-    total = 1
-    for count in sample_counts:
-        total *= parse_sampling_count(count, 1)
-    return int(max(1, total))
-
-
-def format_stratified_ray_count_summary(sample_counts: Sequence[object]) -> str:
-    """Format the live total-ray label for stratified Gaussian sampling."""
-
-    counts = [parse_sampling_count(count, 1) for count in sample_counts]
-    total = stratified_total_ray_count(counts)
-    factors = " x ".join(str(count) for count in counts)
-    return f"Total rays: {total:,} = {factors}"
-
-
-def format_stratified_ray_count_warning(
-    sample_counts: Sequence[object],
-    *,
-    warning_threshold: int,
-) -> str:
-    """Return a guardrail warning when stratified ray counts grow large."""
-
-    total = stratified_total_ray_count(sample_counts)
-    if total < int(max(1, warning_threshold)):
-        return ""
-    return (
-        f"Warning: {total:,} rays may make updates slow or memory-heavy."
-    )
-
-
 def default_rod_points_per_gz(
     c_lattice: object,
     *,
