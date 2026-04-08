@@ -497,6 +497,8 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
         "primary_c": captured["kwargs"]["primary_c"],
         "native_sim_to_display_coords": "coords",
         "reflection_q_group_metadata": "q-group",
+        "caked_view_enabled_factory": False,
+        "native_detector_coords_to_caked_display_coords": None,
         "max_hits_per_reflection": captured["kwargs"]["max_hits_per_reflection"],
         "min_separation_px": 2.5,
         "force": True,
@@ -542,28 +544,26 @@ def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cach
     assert runtime_state.peak_positions == [(110.0, 220.0)]
     assert runtime_state.peak_millers == [(1, 0, 2)]
     assert runtime_state.peak_intensities == [8.0]
-    assert runtime_state.peak_records == [
-        {
-            "display_col": 110.0,
-            "display_row": 220.0,
-            "native_col": 10.0,
-            "native_row": 20.0,
-            "hkl": (1, 0, 2),
-            "hkl_raw": (1.0, 0.0, 2.0),
-            "intensity": 8.0,
-            "qr": runtime_state.peak_records[0]["qr"],
-            "qz": 0.75,
-            "q_group_key": "group-key",
-            "phi": 0.125,
-            "source_table_index": 0,
-            "source_row_index": 0,
-            "source_label": "primary",
-            "av": 4.0,
-            "cv": 6.0,
-        }
-    ]
+    record = runtime_state.peak_records[0]
+    assert record["display_col"] == 110.0
+    assert record["display_row"] == 220.0
+    assert record["native_col"] == 10.0
+    assert record["native_row"] == 20.0
+    assert record["hkl"] == (1, 0, 2)
+    assert record["hkl_raw"] == (1.0, 0.0, 2.0)
+    assert record["intensity"] == 8.0
+    assert record["qz"] == 0.75
+    assert record["q_group_key"] == "group-key"
+    assert record["phi"] == 0.125
+    assert np.isnan(record["two_theta_deg"])
+    assert np.isnan(record["phi_deg"])
+    assert record["source_table_index"] == 0
+    assert record["source_row_index"] == 0
+    assert record["source_label"] == "primary"
+    assert record["av"] == 4.0
+    assert record["cv"] == 6.0
     assert np.isclose(
-        runtime_state.peak_records[0]["qr"],
+        record["qr"],
         (2.0 * np.pi / 4.0) * np.sqrt(4.0 / 3.0),
     )
     assert coord_calls == [(10.0, 20.0, (64, 64))]
@@ -604,6 +604,149 @@ def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cach
     assert runtime_state.peak_intensities == [8.0]
     assert runtime_state.peak_records[0]["source_label"] == "primary"
     assert runtime_state.peak_overlay_cache["sig"] is not None
+
+
+def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_centers() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=[
+            np.asarray(
+                [[50.0, 10.0, 20.0, 0.125, 1.0, 0.0, 2.0]],
+                dtype=float,
+            )
+        ],
+        stored_primary_intersection_cache=[
+            np.asarray(
+                [[np.nan, np.nan, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+    coord_calls = []
+    q_group_calls = []
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            coord_calls.append((col, row, image_shape)) or (col + 100.0, row + 200.0)
+        ),
+        reflection_q_group_metadata=lambda hkl_raw, **kwargs: (
+            q_group_calls.append((tuple(hkl_raw), kwargs)) or ("group-key", None, 0.75)
+        ),
+        max_hits_per_reflection=0,
+        min_separation_px=0.0,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(140.0, 250.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2)]
+    assert runtime_state.peak_intensities == [8.0]
+    assert coord_calls == [(40.0, 50.0, (64, 64))]
+    assert q_group_calls == [
+        (
+            (1.0, 0.0, 2.0),
+            {
+                "source_label": "primary",
+                "a_value": 4.0,
+                "c_value": 6.0,
+                "qr_value": runtime_state.peak_records[0]["qr"],
+            },
+        )
+    ]
+    record = runtime_state.peak_records[0]
+    assert record["display_col"] == 140.0
+    assert record["display_row"] == 250.0
+    assert record["native_col"] == 40.0
+    assert record["native_row"] == 50.0
+    assert record["hkl"] == (1, 0, 2)
+    assert record["hkl_raw"] == (1.0, 0.0, 2.0)
+    assert record["intensity"] == 8.0
+    assert record["qz"] == 0.75
+    assert record["q_group_key"] == "group-key"
+    assert record["phi"] == 0.375
+    assert np.isnan(record["two_theta_deg"])
+    assert np.isnan(record["phi_deg"])
+    assert record["source_table_index"] == 0
+    assert record["source_row_index"] == 0
+    assert record["source_label"] == "primary"
+    assert record["av"] == 4.0
+    assert record["cv"] == 6.0
+    assert np.isclose(
+        record["qr"],
+        (2.0 * np.pi / 4.0) * np.sqrt(4.0 / 3.0),
+    )
+
+
+def test_peak_selection_runtime_peak_overlay_data_uses_cached_caked_coords() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=None,
+        stored_primary_intersection_cache=[
+            np.asarray(
+                [
+                    [
+                        1.5,
+                        2.5,
+                        40.0,
+                        50.0,
+                        8.0,
+                        0.375,
+                        1.0,
+                        0.0,
+                        2.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        17.5,
+                        -32.0,
+                    ]
+                ],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("caked cache rows should not use raw display conversion")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
+        caked_view_enabled_factory=True,
+        native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("cached caked coordinates should be used directly")
+        ),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(17.5, -32.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2)]
+    assert runtime_state.peak_intensities == [8.0]
+    record = runtime_state.peak_records[0]
+    assert record["display_col"] == 17.5
+    assert record["display_row"] == -32.0
+    assert record["native_col"] == 40.0
+    assert record["native_row"] == 50.0
+    assert record["hkl"] == (1, 0, 2)
+    assert record["hkl_raw"] == (1.0, 0.0, 2.0)
+    assert record["intensity"] == 8.0
+    assert record["qr"] == 1.5
+    assert record["qz"] == 2.5
+    assert record["q_group_key"] == "group-key"
+    assert record["phi"] == 0.375
+    assert record["two_theta_deg"] == 17.5
+    assert record["phi_deg"] == -32.0
+    assert record["source_label"] == "primary"
+    assert record["av"] == 4.0
+    assert record["cv"] == 6.0
+    assert "source_table_index" not in record
+    assert "source_row_index" not in record
 
 
 def test_peak_selection_runtime_peak_overlay_data_clears_state_when_unavailable() -> None:
@@ -1270,6 +1413,99 @@ def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_c
     assert kwargs["selected_display"] == (10.5, 12.5)
     assert kwargs["selected_native"] == (100.5, 101.5)
     assert kwargs["sync_hkl_vars"] is True
+    assert pick_mode_calls == [(False, None)]
+    assert peak_state.suppress_drag_press_once is True
+    assert sync_calls == [True]
+    assert status_messages == []
+
+
+def test_select_peak_from_canvas_click_uses_intersection_cache_centers_for_nearest_hkl() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=[
+            np.asarray(
+                [
+                    [50.0, 10.0, 10.0, 0.125, 1.0, 0.0, 2.0],
+                    [60.0, 40.0, 40.0, 0.250, 2.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            )
+        ],
+        stored_primary_intersection_cache=[
+            np.asarray(
+                [
+                    [np.nan, np.nan, 100.0, 100.0, 8.0, 0.125, 1.0, 0.0, 2.0],
+                    [np.nan, np.nan, 30.0, 30.0, 9.0, 0.250, 2.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((128, 128), dtype=float),
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    pick_mode_calls = []
+    select_calls = []
+    status_messages = []
+    sync_calls = []
+
+    def ensure_peak_overlay_data(*, force: bool = False) -> bool:
+        return peak_selection.ensure_runtime_peak_overlay_data(
+            runtime_state,
+            primary_a=5.0,
+            primary_c=7.0,
+            native_sim_to_display_coords=lambda col, row, image_shape: (
+                float(col),
+                float(row),
+            ),
+            reflection_q_group_metadata=lambda *_args, **_kwargs: (
+                "group-key",
+                None,
+                0.0,
+            ),
+            max_hits_per_reflection=0,
+            min_separation_px=0.0,
+            force=force,
+        )
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        96.0,
+        98.0,
+        config=_canvas_pick_config(image_shape=(128, 128)),
+        ensure_peak_overlay_data=ensure_peak_overlay_data,
+        schedule_update=lambda: (_ for _ in ()).throw(
+            AssertionError("cache-backed overlay should build without scheduling another frame")
+        ),
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: select_calls.append((idx, kwargs)) or True,
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        sync_peak_selection_state=lambda: sync_calls.append(True),
+        set_status_text=status_messages.append,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(100.0, 100.0), (30.0, 30.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2), (2, 0, 1)]
+    assert runtime_state.peak_records[0]["source_row_index"] == 0
+    assert runtime_state.peak_records[1]["source_row_index"] == 1
+    assert len(select_calls) == 1
+    idx, kwargs = select_calls[0]
+    assert idx == 0
+    assert kwargs["prefix"] == "Nearest peak (Δ=4.5px)"
+    assert kwargs["clicked_display"] == (96.0, 98.0)
+    assert kwargs["clicked_native"] == (96.0, 98.0)
+    assert kwargs["selected_display"] is None
+    assert kwargs["selected_native"] == (100.0, 100.0)
     assert pick_mode_calls == [(False, None)]
     assert peak_state.suppress_drag_press_once is True
     assert sync_calls == [True]
