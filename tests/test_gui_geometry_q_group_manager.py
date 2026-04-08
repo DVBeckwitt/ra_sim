@@ -1076,6 +1076,10 @@ def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None
     )
 
     assert "primary" in line
+    assert "Qr=    1.25" in line
+    assert "Qz=    0.50" in line
+    assert "1.2500" not in line
+    assert "0.5000" not in line
     assert "HKL=" in line
     assert ", ..." in line
     assert (

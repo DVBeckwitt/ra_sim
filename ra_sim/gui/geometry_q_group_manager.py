@@ -1428,9 +1428,9 @@ def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
     gz_text = f"{int(gz_index):4d}" if gz_index is not None else " n/a"
     return (
         f"{source_label:<9}  "
-        f"Qr={qr_val:8.4f}  "
+        f"Qr={qr_val:8.2f}  "
         f"Gz={gz_text}  "
-        f"Qz={qz_val:8.4f}  "
+        f"Qz={qz_val:8.2f}  "
         f"I={total_intensity:10.3f}  "
         f"hits={peak_count:4d}"
         + (f"  HKL={hkl_preview}" if hkl_preview else "")
