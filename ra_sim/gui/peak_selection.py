@@ -1131,6 +1131,13 @@ def _clear_peak_overlay_lists(simulation_runtime_state) -> None:
     simulation_runtime_state.peak_records.clear()
 
 
+def _peak_overlay_has_restored_gui_state_cache(simulation_runtime_state) -> bool:
+    """Return whether the overlay cache came from an imported GUI-state snapshot."""
+
+    cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
+    return isinstance(cache, Mapping) and bool(cache.get("restored_from_gui_state"))
+
+
 def _peak_overlay_has_intersection_cache(simulation_runtime_state) -> bool:
     """Return whether any detector/caked intersection cache tables are available."""
 
@@ -1410,6 +1417,10 @@ def ensure_runtime_peak_overlay_data(
             and not _peak_overlay_has_intersection_cache(simulation_runtime_state)
         )
     ):
+        if _peak_overlay_has_restored_gui_state_cache(
+            simulation_runtime_state
+        ) and _restore_peak_overlay_lists_from_cached_records(simulation_runtime_state):
+            return True
         _clear_peak_overlay_lists(simulation_runtime_state)
         return False
 
@@ -1603,6 +1614,7 @@ def ensure_runtime_peak_overlay_data(
                 "click_spatial_index": _build_peak_click_spatial_index(
                     simulation_runtime_state.peak_positions
                 ),
+                "restored_from_gui_state": False,
             }
         )
         return True
@@ -1753,6 +1765,7 @@ def ensure_runtime_peak_overlay_data(
             "click_spatial_index": _build_peak_click_spatial_index(
                 simulation_runtime_state.peak_positions
             ),
+            "restored_from_gui_state": False,
         }
     )
     return True
@@ -1866,6 +1879,92 @@ def _build_peak_click_spatial_index(
         "position_count": int(position_count),
         "cells": cells,
     }
+
+
+def _restore_peak_overlay_lists_from_cached_records(simulation_runtime_state) -> bool:
+    """Rebuild live overlay lists from imported cached peak records."""
+
+    cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
+    raw_records = cache.get("records") if isinstance(cache, Mapping) else None
+    if not isinstance(raw_records, (list, tuple)):
+        raw_records = getattr(simulation_runtime_state, "peak_records", ())
+
+    restored_records: list[dict[str, object]] = []
+    restored_positions: list[tuple[float, float]] = []
+    restored_millers: list[tuple[int, int, int]] = []
+    restored_intensities: list[float] = []
+
+    for raw_record in raw_records or ():
+        if not isinstance(raw_record, Mapping):
+            continue
+        try:
+            display_col = float(raw_record.get("display_col", np.nan))
+            display_row = float(raw_record.get("display_row", np.nan))
+        except Exception:
+            continue
+        if not (np.isfinite(display_col) and np.isfinite(display_row)):
+            continue
+
+        hkl_value = raw_record.get("hkl")
+        if not isinstance(hkl_value, (list, tuple)) or len(hkl_value) < 3:
+            continue
+        try:
+            hkl_triplet = (
+                int(hkl_value[0]),
+                int(hkl_value[1]),
+                int(hkl_value[2]),
+            )
+        except Exception:
+            continue
+
+        try:
+            intensity = float(raw_record.get("intensity", raw_record.get("weight", 0.0)))
+        except Exception:
+            intensity = 0.0
+        if not np.isfinite(intensity):
+            intensity = 0.0
+
+        record = dict(raw_record)
+        if isinstance(record.get("hkl"), list):
+            record["hkl"] = hkl_triplet
+        if isinstance(record.get("hkl_raw"), list) and len(record["hkl_raw"]) >= 3:
+            try:
+                record["hkl_raw"] = (
+                    float(record["hkl_raw"][0]),
+                    float(record["hkl_raw"][1]),
+                    float(record["hkl_raw"][2]),
+                )
+            except Exception:
+                pass
+        if isinstance(record.get("q_group_key"), list):
+            record["q_group_key"] = tuple(record["q_group_key"])
+
+        restored_records.append(record)
+        restored_positions.append((float(display_col), float(display_row)))
+        restored_millers.append(hkl_triplet)
+        restored_intensities.append(float(intensity))
+
+    _clear_peak_overlay_lists(simulation_runtime_state)
+    simulation_runtime_state.peak_positions.extend(restored_positions)
+    simulation_runtime_state.peak_millers.extend(restored_millers)
+    simulation_runtime_state.peak_intensities.extend(restored_intensities)
+    simulation_runtime_state.peak_records.extend(restored_records)
+
+    if isinstance(cache, dict):
+        cache.update(
+            {
+                "positions": list(restored_positions),
+                "millers": list(restored_millers),
+                "intensities": list(restored_intensities),
+                "records": [dict(record) for record in restored_records],
+                "click_spatial_index": _build_peak_click_spatial_index(
+                    restored_positions
+                ),
+                "restored_from_gui_state": bool(restored_records),
+            }
+        )
+
+    return bool(restored_records)
 
 
 def _peak_click_spatial_index(

@@ -776,6 +776,62 @@ def test_peak_selection_runtime_peak_overlay_data_clears_state_when_unavailable(
     assert runtime_state.peak_records == []
 
 
+def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache() -> None:
+    record = {
+        "display_col": 110.0,
+        "display_row": 220.0,
+        "native_col": 10.0,
+        "native_row": 20.0,
+        "hkl": [1, 0, 2],
+        "hkl_raw": [1.0, 0.0, 2.0],
+        "intensity": 8.0,
+        "qr": 1.5,
+        "qz": 2.5,
+        "q_group_key": ["q_group", "primary", 1.5, 2],
+    }
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "sig": None,
+            "positions": [],
+            "millers": [],
+            "intensities": [],
+            "records": [dict(record)],
+            "click_spatial_index": None,
+            "restored_from_gui_state": True,
+        },
+        peak_records=[dict(record)],
+        stored_max_positions_local=None,
+        stored_sim_image=None,
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("restored GUI-state cache should avoid display reprojection")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("restored GUI-state cache should avoid legacy peak rebuild")
+        ),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(110.0, 220.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2)]
+    assert runtime_state.peak_intensities == [8.0]
+    assert runtime_state.peak_records[0]["hkl"] == (1, 0, 2)
+    assert runtime_state.peak_records[0]["hkl_raw"] == (1.0, 0.0, 2.0)
+    assert runtime_state.peak_records[0]["q_group_key"] == (
+        "q_group",
+        "primary",
+        1.5,
+        2,
+    )
+    assert runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert runtime_state.peak_overlay_cache["click_spatial_index"] is not None
+
+
 def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:
     assert peak_selection.brightest_hit_native_from_table([]) is None
     assert peak_selection.brightest_hit_native_from_table([[1.0, 5.0, 6.0]]) == (

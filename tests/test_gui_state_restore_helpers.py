@@ -212,6 +212,14 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
         ],
         geometry_q_group_rows=[{"key": ["q", 1], "included": True}],
         geometry_manual_pairs=[{"background_index": 0, "entries": []}],
+        geometry_peak_records=[
+            {
+                "display_col": 10.0,
+                "display_row": 20.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1.0, 2),
+            }
+        ],
         selected_hkl_target=(1, 2, 3),
         primary_cif_path=tmp_path / "primary.cif",
         secondary_cif_path=None,
@@ -232,7 +240,50 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
         {"x": 0.1, "y": 0.2, "z": 0.3}
     ]
     assert snapshot["geometry"]["selected_hkl_target"] == [1, 2, 3]
+    assert snapshot["geometry"]["peak_records"] == [
+        {
+            "display_col": 10.0,
+            "display_row": 20.0,
+            "hkl": (1, 0, 2),
+            "q_group_key": ("q_group", "primary", 1.0, 2),
+        }
+    ]
     assert snapshot["files"]["background_files"] == [str(tmp_path / "a.osc")]
+
+
+def test_apply_gui_state_geometry_restores_peak_cache_when_present() -> None:
+    restored_peak_records: list[object] = []
+
+    updated = state_io.apply_gui_state_geometry(
+        {
+            "peak_records": [
+                {
+                    "display_col": 10.0,
+                    "display_row": 20.0,
+                    "hkl": [1, 0, 2],
+                }
+            ],
+            "manual_pairs": [],
+        },
+        geometry_preview_excluded_q_groups=set(),
+        geometry_q_group_key_from_jsonable=lambda value: tuple(value) if isinstance(value, list) else None,
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
+        replace_runtime_peak_cache=lambda rows: restored_peak_records.extend(
+            list(rows or ())
+        ),
+        current_background_index=0,
+        selected_hkl_target=None,
+    )
+
+    assert updated["warnings"] == []
+    assert restored_peak_records == [
+        {
+            "display_col": 10.0,
+            "display_row": 20.0,
+            "hkl": [1, 0, 2],
+        }
+    ]
 
 
 def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:

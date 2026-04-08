@@ -244,6 +244,7 @@ def collect_full_gui_state_snapshot(
     atom_site_fract_vars: Sequence[object],
     geometry_q_group_rows: Sequence[dict[str, object]],
     geometry_manual_pairs: Sequence[dict[str, object]],
+    geometry_peak_records: Sequence[dict[str, object]] | None,
     selected_hkl_target: object,
     primary_cif_path: object,
     secondary_cif_path: object | None,
@@ -294,6 +295,11 @@ def collect_full_gui_state_snapshot(
     geometry_state: dict[str, object] = {
         "q_group_rows": list(geometry_q_group_rows),
         "manual_pairs": list(geometry_manual_pairs),
+        "peak_records": [
+            dict(record)
+            for record in (geometry_peak_records or ())
+            if isinstance(record, Mapping)
+        ],
     }
     if isinstance(selected_hkl_target, tuple) and len(selected_hkl_target) == 3:
         geometry_state["selected_hkl_target"] = [
@@ -581,6 +587,7 @@ def apply_gui_state_geometry(
     ],
     invalidate_geometry_manual_pick_cache: Callable[[], None],
     apply_geometry_manual_pairs_snapshot: Callable[..., object],
+    replace_runtime_peak_cache: Callable[[Sequence[object] | None], None] | None,
     current_background_index: int,
     selected_hkl_target: tuple[int, int, int] | None,
 ) -> dict[str, Any]:
@@ -593,6 +600,15 @@ def apply_gui_state_geometry(
             "selected_hkl_target": updated_selected_hkl_target,
             "warnings": warnings,
         }
+
+    if "peak_records" in geometry_state and callable(replace_runtime_peak_cache):
+        raw_peak_records = geometry_state.get("peak_records")
+        try:
+            replace_runtime_peak_cache(
+                raw_peak_records if isinstance(raw_peak_records, list) else []
+            )
+        except Exception as exc:
+            warnings.append(f"peak cache: {exc}")
 
     saved_rows = geometry_state.get("q_group_rows", [])
     if isinstance(saved_rows, list):

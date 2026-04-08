@@ -10032,6 +10032,125 @@ def _gui_state_variable_items() -> dict[str, object]:
     return items
 
 
+def _restore_gui_state_peak_record(
+    raw_record: object,
+) -> dict[str, object] | None:
+    """Normalize one imported GUI-state peak cache record for runtime use."""
+
+    if not isinstance(raw_record, Mapping):
+        return None
+
+    record = dict(raw_record)
+
+    hkl_value = record.get("hkl")
+    if isinstance(hkl_value, list) and len(hkl_value) >= 3:
+        try:
+            record["hkl"] = (
+                int(hkl_value[0]),
+                int(hkl_value[1]),
+                int(hkl_value[2]),
+            )
+        except Exception:
+            pass
+
+    hkl_raw_value = record.get("hkl_raw")
+    if isinstance(hkl_raw_value, list) and len(hkl_raw_value) >= 3:
+        try:
+            record["hkl_raw"] = (
+                float(hkl_raw_value[0]),
+                float(hkl_raw_value[1]),
+                float(hkl_raw_value[2]),
+            )
+        except Exception:
+            pass
+
+    q_group_key = record.get("q_group_key")
+    if isinstance(q_group_key, list):
+        record["q_group_key"] = tuple(q_group_key)
+
+    degenerate_hkls = record.get("degenerate_hkls")
+    if isinstance(degenerate_hkls, list):
+        normalized_deg_hkls: list[tuple[int, int, int]] = []
+        for entry in degenerate_hkls:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 3:
+                continue
+            try:
+                normalized_deg_hkls.append(
+                    (int(entry[0]), int(entry[1]), int(entry[2]))
+                )
+            except Exception:
+                continue
+        record["degenerate_hkls"] = normalized_deg_hkls
+
+    return record
+
+
+def _replace_gui_state_peak_cache(
+    peak_records: Sequence[object] | None,
+) -> None:
+    """Replace the live peak-overlay cache from imported GUI-state records."""
+
+    restored_records: list[dict[str, object]] = []
+    restored_positions: list[tuple[float, float]] = []
+    restored_millers: list[tuple[int, int, int]] = []
+    restored_intensities: list[float] = []
+
+    for raw_record in peak_records or ():
+        record = _restore_gui_state_peak_record(raw_record)
+        if record is None:
+            continue
+
+        try:
+            display_col = float(record.get("display_col", np.nan))
+            display_row = float(record.get("display_row", np.nan))
+        except Exception:
+            display_col = float("nan")
+            display_row = float("nan")
+
+        hkl_value = record.get("hkl")
+        if not isinstance(hkl_value, tuple) or len(hkl_value) < 3:
+            continue
+        try:
+            hkl_triplet = (
+                int(hkl_value[0]),
+                int(hkl_value[1]),
+                int(hkl_value[2]),
+            )
+        except Exception:
+            continue
+
+        try:
+            intensity = float(record.get("intensity", record.get("weight", 0.0)))
+        except Exception:
+            intensity = 0.0
+        if not np.isfinite(intensity):
+            intensity = 0.0
+
+        restored_records.append(record)
+        if np.isfinite(display_col) and np.isfinite(display_row):
+            restored_positions.append((float(display_col), float(display_row)))
+        else:
+            restored_positions.append((float("nan"), float("nan")))
+        restored_millers.append(hkl_triplet)
+        restored_intensities.append(float(intensity))
+
+    simulation_runtime_state.peak_records = restored_records
+    simulation_runtime_state.peak_positions = restored_positions
+    simulation_runtime_state.peak_millers = restored_millers
+    simulation_runtime_state.peak_intensities = restored_intensities
+    simulation_runtime_state.selected_peak_record = None
+    simulation_runtime_state.peak_overlay_cache = {
+        "sig": None,
+        "positions": list(restored_positions),
+        "millers": list(restored_millers),
+        "intensities": list(restored_intensities),
+        "records": [dict(record) for record in restored_records],
+        "click_spatial_index": None,
+        "restored_from_gui_state": bool(restored_records),
+    }
+    _invalidate_geometry_manual_pick_cache()
+
+
 def _collect_full_gui_state_snapshot() -> dict[str, object]:
     return gui_state_io.collect_full_gui_state_snapshot(
         global_items=_gui_state_variable_items(),
@@ -10040,6 +10159,7 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         atom_site_fract_vars=_atom_site_fractional_control_vars(),
         geometry_q_group_rows=_geometry_q_group_export_rows(),
         geometry_manual_pairs=_geometry_manual_pairs_export_rows(),
+        geometry_peak_records=simulation_runtime_state.peak_records,
         selected_hkl_target=peak_selection_state.selected_hkl_target,
         primary_cif_path=_current_primary_cif_path(),
         secondary_cif_path=structure_model_state.cif_file2,
@@ -10182,6 +10302,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         apply_geometry_manual_pairs_snapshot=_apply_geometry_manual_pairs_snapshot,
+        replace_runtime_peak_cache=_replace_gui_state_peak_cache,
         current_background_index=background_runtime_state.current_background_index,
         selected_hkl_target=peak_selection_state.selected_hkl_target,
     )
@@ -10215,6 +10336,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     _refresh_background_status()
     _update_geometry_preview_exclude_button_label()
     geometry_q_group_runtime_callbacks.refresh_window()
+    peak_selection_runtime_callbacks.reselect_current_peak()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
     toggle_caked_2d()
