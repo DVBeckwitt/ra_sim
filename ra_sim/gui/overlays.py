@@ -216,7 +216,7 @@ def _format_pair_identity_label(
         except Exception:
             value = float("nan")
         if np.isfinite(value):
-            q_parts.append(f"{prefix}={value:.10f}")
+            q_parts.append(f"{prefix}={value:.2f}")
     if not q_parts:
         return label
     q_text = "  ".join(q_parts)
