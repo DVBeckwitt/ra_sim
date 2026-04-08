@@ -2386,7 +2386,10 @@ def select_peak_from_canvas_click(
 ) -> bool:
     """Select the nearest visible peak from one raw-image click."""
 
-    ensure_peak_overlay_data(force=False)
+    # Click picking should stay on the cached overlay path; only hydrate the
+    # overlay if the live lists are currently empty.
+    if not getattr(simulation_runtime_state, "peak_positions", ()):
+        ensure_peak_overlay_data(force=False)
     if not simulation_runtime_state.peak_positions:
         schedule_update()
         set_status_text("Preparing simulated peak map... click again after update.")
@@ -2422,36 +2425,27 @@ def select_peak_from_canvas_click(
         cy,
         image_shape,
     )
-    selected_display, selected_native = _resolve_selected_peak_click_coordinates(
-        simulation_runtime_state,
-        best_i,
-        click_col=float(click_col),
-        click_row=float(click_row),
-        clicked_native_col=float(clicked_native_col),
-        clicked_native_row=float(clicked_native_row),
-        config=config,
-        native_sim_to_display_coords=native_sim_to_display_coords,
-        simulate_ideal_hkl_native_center=simulate_ideal_hkl_native_center,
-    )
-
-    prefix = f"Nearest peak (Δ={best_d2**0.5:.1f}px)"
-    if selected_display is not None:
-        snapped_dist = float(
-            np.hypot(
-                float(selected_display[0]) - float(click_col),
-                float(selected_display[1]) - float(click_row),
-            )
-        )
-        prefix = f"Ideal HKL center (click Δ={snapped_dist:.1f}px)"
+    selected_native = None
+    if best_i < len(simulation_runtime_state.peak_records):
+        peak_record = simulation_runtime_state.peak_records[best_i]
+        if isinstance(peak_record, Mapping):
+            try:
+                native_col = float(peak_record.get("native_col"))
+                native_row = float(peak_record.get("native_row"))
+            except Exception:
+                native_col = float("nan")
+                native_row = float("nan")
+            if np.isfinite(native_col) and np.isfinite(native_row):
+                selected_native = (float(native_col), float(native_row))
 
     picked = bool(
         select_peak_by_index(
             best_i,
-            prefix=prefix,
+            prefix=f"Nearest peak (Δ={best_d2**0.5:.1f}px)",
             sync_hkl_vars=True,
             clicked_display=(float(click_col), float(click_row)),
             clicked_native=(float(clicked_native_col), float(clicked_native_row)),
-            selected_display=selected_display,
+            selected_display=None,
             selected_native=selected_native,
         )
     )

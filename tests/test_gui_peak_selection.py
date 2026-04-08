@@ -1346,7 +1346,7 @@ def test_select_peak_from_canvas_click_prepares_update_when_peak_map_missing() -
     assert status_messages[-1] == "Preparing simulated peak map... click again after update."
 
 
-def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_center() -> None:
+def test_select_peak_from_canvas_click_selects_nearest_cached_peak_without_reprobe() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(10.0, 12.0), (30.0, 40.0)],
         peak_millers=[(1, 0, 2), (2, 0, 1)],
@@ -1384,7 +1384,9 @@ def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_c
         9.8,
         12.4,
         config=_canvas_pick_config(image_shape=(80, 80)),
-        ensure_peak_overlay_data=lambda **_kwargs: True,
+        ensure_peak_overlay_data=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("click selection should reuse the cached peak overlay")
+        ),
         schedule_update=lambda: None,
         display_to_native_sim_coords=lambda col, row, image_shape: (
             float(col) + 0.25,
@@ -1394,7 +1396,9 @@ def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_c
             float(col) - 90.0,
             float(row) - 89.0,
         ),
-        simulate_ideal_hkl_native_center=lambda h, k, l, av, cv: (100.5, 101.5),
+        simulate_ideal_hkl_native_center=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("click selection should not re-probe ideal HKL centers")
+        ),
         select_peak_by_index=fake_select_peak_by_index,
         set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
             (bool(enabled), message)
@@ -1407,11 +1411,11 @@ def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_c
     assert len(select_calls) == 1
     idx, kwargs = select_calls[0]
     assert idx == 0
-    assert kwargs["prefix"].startswith("Ideal HKL center (click")
+    assert kwargs["prefix"] == "Nearest peak (Δ=0.4px)"
     assert kwargs["clicked_display"] == (9.8, 12.4)
     assert kwargs["clicked_native"] == (10.25, 12.75)
-    assert kwargs["selected_display"] == (10.5, 12.5)
-    assert kwargs["selected_native"] == (100.5, 101.5)
+    assert kwargs["selected_display"] is None
+    assert kwargs["selected_native"] == (100.0, 101.0)
     assert kwargs["sync_hkl_vars"] is True
     assert pick_mode_calls == [(False, None)]
     assert peak_state.suppress_drag_press_once is True
@@ -1448,7 +1452,9 @@ def test_select_peak_from_canvas_click_uses_100x100_square_search_window() -> No
             min_separation_px=2.0,
             image_shape=(128, 128),
         ),
-        ensure_peak_overlay_data=lambda **_kwargs: True,
+        ensure_peak_overlay_data=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("click selection should reuse the cached peak overlay")
+        ),
         schedule_update=lambda: None,
         display_to_native_sim_coords=lambda col, row, image_shape: (
             float(col),
