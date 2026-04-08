@@ -1419,6 +1419,64 @@ def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_c
     assert status_messages == []
 
 
+def test_select_peak_from_canvas_click_uses_100x100_square_search_window() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(50.0, 50.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[5.0],
+        peak_records=[
+            {
+                "native_col": 50.0,
+                "native_row": 50.0,
+            }
+        ],
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    pick_mode_calls = []
+    select_calls = []
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        0.0,
+        0.0,
+        config=peak_selection.build_selected_peak_canvas_pick_config(
+            image_size=128,
+            primary_a=5.0,
+            primary_c=7.0,
+            max_distance_px=50.0,
+            min_separation_px=2.0,
+            image_shape=(128, 128),
+        ),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: select_calls.append((idx, kwargs)) or True,
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+    )
+
+    assert ok is True
+    assert len(select_calls) == 1
+    idx, kwargs = select_calls[0]
+    assert idx == 0
+    assert kwargs["prefix"] == "Nearest peak (Δ=70.7px)"
+    assert kwargs["selected_native"] == (50.0, 50.0)
+    assert pick_mode_calls == [(False, None)]
+    assert peak_state.suppress_drag_press_once is True
+
+
 def test_select_peak_from_canvas_click_uses_intersection_cache_centers_for_nearest_hkl() -> None:
     runtime_state = state.SimulationRuntimeState(
         stored_max_positions_local=[

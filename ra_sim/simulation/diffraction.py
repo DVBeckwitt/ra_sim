@@ -5294,6 +5294,55 @@ def hit_tables_to_max_positions(hit_tables):
     return max_positions
 
 
+def intersection_cache_to_hit_tables(intersection_cache):
+    """Convert intersection-cache tables into legacy hit-table rows.
+
+    Cache tables store columns ``[Qr, Qz, detector_col, detector_row, intensity,
+    phi, H, K, L, ...]``. Downstream geometry and selection paths still expect
+    hit-table rows shaped ``[intensity, col, row, phi, H, K, L]``. Preserve the
+    input table count so existing table-to-lattice alignment remains stable.
+    """
+
+    hit_tables = []
+    if intersection_cache is None:
+        return hit_tables
+
+    for table in intersection_cache:
+        try:
+            cache_arr = np.asarray(table, dtype=np.float64)
+        except Exception:
+            hit_tables.append(np.empty((0, 7), dtype=np.float64))
+            continue
+
+        if cache_arr.size == 0:
+            hit_tables.append(np.empty((0, 7), dtype=np.float64))
+            continue
+        if cache_arr.ndim == 1:
+            cache_arr = cache_arr.reshape(1, -1)
+        if cache_arr.ndim != 2 or cache_arr.shape[1] < 9:
+            hit_tables.append(np.empty((0, 7), dtype=np.float64))
+            continue
+
+        hit_table = np.empty((cache_arr.shape[0], 7), dtype=np.float64)
+        hit_table[:, 0] = cache_arr[:, 4]
+        hit_table[:, 1] = cache_arr[:, 2]
+        hit_table[:, 2] = cache_arr[:, 3]
+        hit_table[:, 3] = cache_arr[:, 5]
+        hit_table[:, 4] = cache_arr[:, 6]
+        hit_table[:, 5] = cache_arr[:, 7]
+        hit_table[:, 6] = cache_arr[:, 8]
+
+        finite_rows = np.isfinite(hit_table[:, 0])
+        finite_rows &= np.isfinite(hit_table[:, 1])
+        finite_rows &= np.isfinite(hit_table[:, 2])
+        finite_rows &= np.isfinite(hit_table[:, 4])
+        finite_rows &= np.isfinite(hit_table[:, 5])
+        finite_rows &= np.isfinite(hit_table[:, 6])
+        hit_tables.append(np.asarray(hit_table[finite_rows], dtype=np.float64).copy())
+
+    return hit_tables
+
+
 def _copy_intersection_cache(cache):
     """Return one detached copy of the mosaic-ring intersection cache."""
 

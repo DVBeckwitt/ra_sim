@@ -44,6 +44,7 @@ _SPECULAR_VIEW_DEFAULT_SAMPLE_WIDTH_M = 0.02
 _SPECULAR_VIEW_DEFAULT_SAMPLE_HEIGHT_M = 0.08
 _SPECULAR_VIEW_DEFAULT_DETECTOR_DISTANCE_M = 0.075
 _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M = 100e-6
+_PEAK_CLICK_INDEX_CELL_SIZE_PX = 50.0
 
 
 @dataclass(frozen=True)
@@ -1584,6 +1585,9 @@ def ensure_runtime_peak_overlay_data(
                 "millers": list(simulation_runtime_state.peak_millers),
                 "intensities": list(simulation_runtime_state.peak_intensities),
                 "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
+                "click_spatial_index": _build_peak_click_spatial_index(
+                    simulation_runtime_state.peak_positions
+                ),
             }
         )
         return True
@@ -1725,6 +1729,9 @@ def ensure_runtime_peak_overlay_data(
             "millers": list(simulation_runtime_state.peak_millers),
             "intensities": list(simulation_runtime_state.peak_intensities),
             "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
+            "click_spatial_index": _build_peak_click_spatial_index(
+                simulation_runtime_state.peak_positions
+            ),
         }
     )
     return True
@@ -1807,6 +1814,101 @@ def _apply_selected_peak_record_coordinates(
         record["selected_native_col"] = float(record["native_col"])
         record["selected_native_row"] = float(record["native_row"])
     return record
+
+
+def _build_peak_click_spatial_index(
+    peak_positions: Sequence[tuple[float, float]] | None,
+    *,
+    cell_size_px: float = _PEAK_CLICK_INDEX_CELL_SIZE_PX,
+) -> dict[str, object]:
+    """Bucket peak positions into a coarse spatial grid for fast click lookup."""
+
+    cell_size = max(1.0, float(cell_size_px))
+    cells: dict[tuple[int, int], list[int]] = {}
+    position_count = 0
+    for idx, coords in enumerate(peak_positions or ()):
+        position_count += 1
+        try:
+            px = float(coords[0])
+            py = float(coords[1])
+        except Exception:
+            continue
+        if not (np.isfinite(px) and np.isfinite(py)) or px < 0.0:
+            continue
+        cell_key = (
+            int(np.floor(px / cell_size)),
+            int(np.floor(py / cell_size)),
+        )
+        cells.setdefault(cell_key, []).append(int(idx))
+    return {
+        "cell_size_px": float(cell_size),
+        "position_count": int(position_count),
+        "cells": cells,
+    }
+
+
+def _peak_click_spatial_index(
+    simulation_runtime_state,
+    *,
+    cell_size_px: float = _PEAK_CLICK_INDEX_CELL_SIZE_PX,
+) -> dict[str, object]:
+    """Return the cached click spatial index, rebuilding it when needed."""
+
+    cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
+    position_count = len(getattr(simulation_runtime_state, "peak_positions", ()))
+    if isinstance(cache, dict):
+        payload = cache.get("click_spatial_index")
+        if (
+            isinstance(payload, Mapping)
+            and int(payload.get("position_count", -1)) == int(position_count)
+            and abs(float(payload.get("cell_size_px", 0.0)) - float(cell_size_px)) <= 1.0e-9
+            and isinstance(payload.get("cells"), Mapping)
+        ):
+            return dict(payload)
+
+    payload = _build_peak_click_spatial_index(
+        getattr(simulation_runtime_state, "peak_positions", ()),
+        cell_size_px=float(cell_size_px),
+    )
+    if isinstance(cache, dict):
+        cache["click_spatial_index"] = payload
+    return payload
+
+
+def _peak_click_candidate_indices(
+    simulation_runtime_state,
+    click_col: float,
+    click_row: float,
+    *,
+    max_axis_distance_px: float,
+) -> list[int]:
+    """Return candidate peak indices whose grid cells intersect the click window."""
+
+    half_window = max(0.0, float(max_axis_distance_px))
+    if half_window <= 0.0:
+        return []
+
+    payload = _peak_click_spatial_index(simulation_runtime_state)
+    try:
+        cell_size = max(1.0, float(payload.get("cell_size_px", _PEAK_CLICK_INDEX_CELL_SIZE_PX)))
+    except Exception:
+        cell_size = float(_PEAK_CLICK_INDEX_CELL_SIZE_PX)
+    cells = payload.get("cells")
+    if not isinstance(cells, Mapping):
+        return []
+
+    min_cell_x = int(np.floor((float(click_col) - half_window) / cell_size))
+    max_cell_x = int(np.floor((float(click_col) + half_window) / cell_size))
+    min_cell_y = int(np.floor((float(click_row) - half_window) / cell_size))
+    max_cell_y = int(np.floor((float(click_row) + half_window) / cell_size))
+
+    candidate_indices: list[int] = []
+    for cell_x in range(min_cell_x, max_cell_x + 1):
+        for cell_y in range(min_cell_y, max_cell_y + 1):
+            cell_entries = cells.get((cell_x, cell_y))
+            if isinstance(cell_entries, Sequence):
+                candidate_indices.extend(int(idx) for idx in cell_entries)
+    return candidate_indices
 
 
 def select_peak_by_index(
@@ -2125,23 +2227,62 @@ def _nearest_peak_index_for_click(
     simulation_runtime_state,
     click_col: float,
     click_row: float,
-) -> tuple[int, float]:
-    best_i = -1
-    best_d2 = float("inf")
-    best_i_val = float("-inf")
-    for i, (px, py) in enumerate(simulation_runtime_state.peak_positions):
-        if float(px) < 0.0:
-            continue
-        d2 = (float(px) - float(click_col)) ** 2 + (float(py) - float(click_row)) ** 2
-        val = simulation_runtime_state.peak_intensities[i]
-        score_val = float(val) if np.isfinite(val) else float("-inf")
-        if d2 < best_d2 - 1e-9 or (
-            abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val
-        ):
-            best_i = int(i)
-            best_d2 = float(d2)
-            best_i_val = float(score_val)
-    return best_i, best_d2
+    *,
+    max_axis_distance_px: float | None = None,
+) -> tuple[int, float, bool]:
+    peak_positions = getattr(simulation_runtime_state, "peak_positions", ())
+    peak_intensities = getattr(simulation_runtime_state, "peak_intensities", ())
+
+    def _best_peak(
+        candidate_indices: Sequence[int] | None,
+        *,
+        apply_window: bool,
+    ) -> tuple[int, float]:
+        best_i = -1
+        best_d2 = float("inf")
+        best_i_val = float("-inf")
+        for raw_idx in candidate_indices or ():
+            i = int(raw_idx)
+            if i < 0 or i >= len(peak_positions):
+                continue
+            px, py = peak_positions[i]
+            try:
+                px = float(px)
+                py = float(py)
+            except Exception:
+                continue
+            if not (np.isfinite(px) and np.isfinite(py)) or px < 0.0:
+                continue
+            if apply_window and max_axis_distance_px is not None and (
+                abs(px - float(click_col)) > float(max_axis_distance_px)
+                or abs(py - float(click_row)) > float(max_axis_distance_px)
+            ):
+                continue
+            d2 = (px - float(click_col)) ** 2 + (py - float(click_row)) ** 2
+            val = peak_intensities[i] if i < len(peak_intensities) else float("nan")
+            score_val = float(val) if np.isfinite(val) else float("-inf")
+            if d2 < best_d2 - 1e-9 or (
+                abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val
+            ):
+                best_i = int(i)
+                best_d2 = float(d2)
+                best_i_val = float(score_val)
+        return best_i, best_d2
+
+    candidate_indices = _peak_click_candidate_indices(
+        simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+        max_axis_distance_px=float(max_axis_distance_px)
+        if max_axis_distance_px is not None
+        else 0.0,
+    )
+    best_i, best_d2 = _best_peak(candidate_indices, apply_window=True)
+    if best_i != -1:
+        return best_i, best_d2, True
+
+    best_i, best_d2 = _best_peak(range(len(peak_positions)), apply_window=False)
+    return best_i, best_d2, False
 
 
 def _resolve_selected_peak_click_coordinates(
@@ -2251,18 +2392,21 @@ def select_peak_from_canvas_click(
         set_status_text("Preparing simulated peak map... click again after update.")
         return False
 
-    best_i, best_d2 = _nearest_peak_index_for_click(
+    half_window_px = max(0.0, float(config.max_distance_px))
+    best_i, best_d2, within_window = _nearest_peak_index_for_click(
         simulation_runtime_state,
         float(click_col),
         float(click_row),
+        max_axis_distance_px=float(half_window_px),
     )
     if best_i == -1:
         set_status_text("No peaks on screen.")
         return False
-    if best_d2 > float(config.max_distance_px) ** 2:
+    if not within_window:
+        window_size_px = max(1.0, 2.0 * float(half_window_px))
         set_status_text(
-            f"No simulated peak within {float(config.max_distance_px):.0f}px "
-            f"(nearest is {best_d2**0.5:.1f}px away)."
+            f"No simulated peak within the {window_size_px:.0f}x{window_size_px:.0f}px "
+            f"search window (nearest is {best_d2**0.5:.1f}px away)."
         )
         return False
 

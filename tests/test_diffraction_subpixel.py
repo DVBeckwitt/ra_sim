@@ -71,3 +71,36 @@ def test_hit_tables_to_max_positions_prefers_local_peak_over_cluster_tail():
     assert float(maxpos[0, 1]) < raw_centroid_col - 0.1
     assert 10.05 < float(maxpos[0, 1]) < 10.25
     assert 19.95 < float(maxpos[0, 2]) < 20.15
+
+
+def test_intersection_cache_to_hit_tables_maps_cache_centers_into_hit_rows():
+    cache = [
+        np.array(
+            [
+                [0.1, 0.2, 10.5, 20.5, 7.0, 30.0, 1.0, 0.0, 2.0, 0, 0, 0, 0, 0],
+                [0.3, 0.4, 11.5, 21.5, 3.0, 31.0, 1.0, 0.0, 2.0, 0, 0, 0, 0, 0],
+            ],
+            dtype=np.float64,
+        ),
+        np.empty((0, 14), dtype=np.float64),
+        np.array(
+            [[0.5, 0.6, 12.5, 22.5, 4.0, 32.0, np.nan, 0.0, 3.0, 0, 0, 0, 0, 0]],
+            dtype=np.float64,
+        ),
+    ]
+
+    hit_tables = diffraction.intersection_cache_to_hit_tables(cache)
+
+    assert len(hit_tables) == 3
+    np.testing.assert_allclose(
+        hit_tables[0],
+        np.array(
+            [
+                [7.0, 10.5, 20.5, 30.0, 1.0, 0.0, 2.0],
+                [3.0, 11.5, 21.5, 31.0, 1.0, 0.0, 2.0],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    assert hit_tables[1].shape == (0, 7)
+    assert hit_tables[2].shape == (0, 7)
