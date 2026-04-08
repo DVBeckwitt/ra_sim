@@ -275,22 +275,18 @@ class BeamMosaicParameterSlidersViewState:
 
 @dataclass
 class SamplingOpticsControlsViewState:
-    """Widget references and vars for sampling-resolution / optics controls."""
+    """Widget references and vars for sample-count / optics controls."""
 
     sampling_method_frame: Any = None
     sampling_method_var: Any = None
     random_gaussian_button: Any = None
     stratified_gaussian_button: Any = None
     random_sampling_frame: Any = None
-    resolution_selector_frame: Any = None
-    resolution_var: Any = None
-    resolution_menu: Any = None
-    resolution_count_var: Any = None
-    resolution_count_label: Any = None
-    custom_samples_var: Any = None
-    custom_samples_row: Any = None
-    custom_samples_entry: Any = None
-    custom_samples_apply_button: Any = None
+    sample_count_frame: Any = None
+    sample_count_var: Any = None
+    sample_count_scale: Any = None
+    sample_count_value_var: Any = None
+    sample_count_value_label: Any = None
     rod_points_per_gz_frame: Any = None
     rod_points_per_gz_var: Any = None
     rod_points_per_gz_scale: Any = None

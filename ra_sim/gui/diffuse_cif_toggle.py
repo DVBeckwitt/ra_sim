@@ -156,7 +156,7 @@ def _build_algebraic_ht_export_rows(
         raise ValueError("lambda_angstrom and mx are required.")
 
     p_triplet = _as_triplet(p_values, [0.01, 0.99, 0.5])
-    w_triplet = _as_triplet(w_values, [50.0, 50.0, 0.0])
+    w_triplet = _as_triplet(w_values, [100.0, 0.0, 0.0])
     weights = _normalize_weights(w_triplet)
     hk_limit = int(max(2, int(mx)))
 
@@ -404,7 +404,7 @@ def open_diffuse_cif_toggle_algebraic(
         raise ValueError("lambda_angstrom and mx are required.")
 
     p_triplet = _as_triplet(p_values, [0.01, 0.99, 0.5])
-    w_triplet = _as_triplet(w_values, [50.0, 50.0, 0.0])
+    w_triplet = _as_triplet(w_values, [100.0, 0.0, 0.0])
     hk_limit = int(max(2, int(mx)))
 
     a_cif = None

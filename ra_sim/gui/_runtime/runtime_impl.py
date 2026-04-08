@@ -502,11 +502,14 @@ if tilt_hint:
 
 image_size = int(app_state.image_size)
 pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
-resolution_sample_counts = {
+legacy_resolution_sample_counts = {
     "Low": 25,
     "Medium": 250,
     "High": 500,
 }
+DEFAULT_RANDOM_SAMPLE_COUNT = 50
+MIN_RANDOM_SAMPLE_COUNT = 1
+MAX_RANDOM_SAMPLE_COUNT = 5000
 BEAM_SAMPLING_METHOD_OPTIONS = (
     RANDOM_GAUSSIAN_SAMPLING,
     STRATIFIED_GAUSSIAN_SAMPLING,
@@ -516,7 +519,7 @@ STRATIFIED_RAY_WARNING_THRESHOLD = 10000
 MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT = 50000
 MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS = 3
 CUSTOM_SAMPLING_OPTION = "Custom"
-simulation_runtime_state.num_samples = resolution_sample_counts["Low"]
+simulation_runtime_state.num_samples = DEFAULT_RANDOM_SAMPLE_COUNT
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
 vmax_default = detector_config.get("vmax", 1000)
@@ -785,7 +788,7 @@ p_defaults = _ensure_triplet(
     hendricks_config.get("default_p"), [0.01, 0.99, 0.5]
 )
 w_defaults = _ensure_triplet(
-    hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
+    hendricks_config.get("default_w"), [100.0, 0.0, 0.0]
 )
 phase_delta_expression_default = normalize_phase_delta_expression(
     hendricks_config.get(
@@ -857,7 +860,8 @@ defaults = {
     'center_y': center_default[1],
     'beam_sampling_method': RANDOM_GAUSSIAN_SAMPLING,
     'beam_sampling_seed': 0,
-    'sampling_resolution': 'Low',
+    'sampling_resolution': CUSTOM_SAMPLING_OPTION,
+    'sampling_count': DEFAULT_RANDOM_SAMPLE_COUNT,
     'x_mean': 0.0,
     'x_sigma': float(bw_sigma),
     'x_samples': 2,
@@ -5051,6 +5055,12 @@ def apply_scale_factor_to_existing_results(
                 simulation_runtime_state.last_1d_integration_data["azimuths_sim"],
                 simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] * scale,
             )
+        if "ax_1d_radial" in globals():
+            ax_1d_radial.relim()
+            ax_1d_radial.autoscale_view(scalex=False, scaley=True)
+        if "ax_1d_azim" in globals():
+            ax_1d_azim.relim()
+            ax_1d_azim.autoscale_view(scalex=False, scaley=True)
         _clear_analysis_peak_fit_results(redraw=False, update_text=True)
         _render_analysis_peak_overlays(redraw=False)
         if "canvas_1d" in globals():
@@ -6259,15 +6269,8 @@ def _build_current_dataset_geometry_text(
 def _build_current_dataset_simulation_text(*, view_text: str) -> str:
     """Summarize the live simulation controls that shape the current dataset."""
 
-    resolution_control = globals().get("resolution_var")
     optics_control = globals().get("optics_mode_var")
-
-    try:
-        sample_mode = str(resolution_control.get()).strip()
-    except Exception:
-        sample_mode = ""
-    if not sample_mode:
-        sample_mode = "Custom"
+    sampling_method = _beam_sampling_method_label(_current_beam_sampling_method())
 
     try:
         optics_text = _normalize_optics_mode_label(optics_control.get())
@@ -6284,7 +6287,7 @@ def _build_current_dataset_simulation_text(*, view_text: str) -> str:
         sf_text = "SF pruning unavailable"
     return (
         f"{view_text} | optics {optics_text} | "
-        f"sampling {sample_mode} ({sample_count:,} samples) | {sf_text}"
+        f"sampling {sampling_method} ({sample_count:,} samples) | {sf_text}"
     )
 
 
@@ -9320,20 +9323,14 @@ def reset_to_defaults():
                 defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING)
             )
         )
-    default_resolution = defaults['sampling_resolution']
-    resolution_var.set(default_resolution)
-    custom_samples_var.set(
-        str(
-            int(
-                max(
-                    1,
-                    resolution_sample_counts.get(
-                        default_resolution, resolution_sample_counts['Low']
-                    ),
-                )
-            )
-        )
+    default_sample_count = gui_controllers.normalize_sample_count(
+        defaults.get("sampling_count", DEFAULT_RANDOM_SAMPLE_COUNT),
+        DEFAULT_RANDOM_SAMPLE_COUNT,
+        minimum=MIN_RANDOM_SAMPLE_COUNT,
+        maximum=MAX_RANDOM_SAMPLE_COUNT,
     )
+    resolution_var.set(CUSTOM_SAMPLING_OPTION)
+    custom_samples_var.set(default_sample_count)
     _set_stratified_sampling_config(
         {
             **{
@@ -16710,20 +16707,31 @@ sampling_pruning_frame = CollapsibleFrame(
 )
 sampling_pruning_frame.pack(fill=tk.X, padx=5, pady=5)
 
-initial_resolution = defaults.get('sampling_resolution', 'Low')
-resolution_options = [*resolution_sample_counts.keys(), CUSTOM_SAMPLING_OPTION]
-if initial_resolution not in resolution_options:
-    initial_resolution = 'Low'
+legacy_resolution_options = [*legacy_resolution_sample_counts.keys(), CUSTOM_SAMPLING_OPTION]
+initial_resolution = str(defaults.get("sampling_resolution", CUSTOM_SAMPLING_OPTION))
+if initial_resolution not in legacy_resolution_options:
+    initial_resolution = CUSTOM_SAMPLING_OPTION
 
 def _parse_sample_count(raw_value, fallback):
-    return gui_controllers.parse_sampling_count(raw_value, fallback)
+    return gui_controllers.normalize_sample_count(
+        raw_value,
+        fallback,
+        minimum=MIN_RANDOM_SAMPLE_COUNT,
+        maximum=MAX_RANDOM_SAMPLE_COUNT,
+    )
 
 
-def _current_custom_sample_count(default=None):
-    fallback = int(max(1, default if default is not None else simulation_runtime_state.num_samples))
-    custom_var = sampling_optics_controls_view_state.custom_samples_var
-    raw_value = custom_var.get() if custom_var is not None else fallback
-    return _parse_sample_count(raw_value, fallback)
+def _default_random_sample_count() -> int:
+    configured_count = defaults.get("sampling_count")
+    if configured_count is not None:
+        return _parse_sample_count(configured_count, DEFAULT_RANDOM_SAMPLE_COUNT)
+
+    legacy_choice = str(defaults.get("sampling_resolution", CUSTOM_SAMPLING_OPTION))
+    legacy_count = legacy_resolution_sample_counts.get(
+        legacy_choice,
+        DEFAULT_RANDOM_SAMPLE_COUNT,
+    )
+    return _parse_sample_count(legacy_count, DEFAULT_RANDOM_SAMPLE_COUNT)
 
 
 def _parse_rod_points_per_gz(raw_value, fallback):
@@ -16742,33 +16750,13 @@ def _current_rod_points_per_gz(default=None):
 
 
 def _current_random_sample_count(default=None):
-    fallback = int(
-        max(
-            1,
-            default
-            if default is not None
-            else resolution_sample_counts.get(
-                defaults.get("sampling_resolution", "Low"),
-                resolution_sample_counts["Low"],
-            ),
-        )
+    fallback = _parse_sample_count(
+        default if default is not None else _default_random_sample_count(),
+        DEFAULT_RANDOM_SAMPLE_COUNT,
     )
-    resolution_var = sampling_optics_controls_view_state.resolution_var
-    custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
-    resolution_value = (
-        resolution_var.get()
-        if resolution_var is not None
-        else defaults.get("sampling_resolution", "Low")
-    )
-    custom_value = custom_samples_var.get() if custom_samples_var is not None else fallback
-    return gui_controllers.resolve_sampling_count(
-        resolution_value,
-        custom_option=CUSTOM_SAMPLING_OPTION,
-        custom_value=custom_value,
-        preset_counts=resolution_sample_counts,
-        fallback_resolution=defaults.get("sampling_resolution", "Low"),
-        fallback_count=fallback,
-    )
+    sample_count_var = sampling_optics_controls_view_state.sample_count_var
+    raw_value = sample_count_var.get() if sample_count_var is not None else fallback
+    return _parse_sample_count(raw_value, fallback)
 
 
 def _current_active_sample_count() -> int:
@@ -16782,14 +16770,9 @@ def _sync_active_sample_count() -> int:
     return int(simulation_runtime_state.num_samples)
 
 
-def _set_custom_sample_controls_state():
-    resolution_var = sampling_optics_controls_view_state.resolution_var
-    enabled = bool(
-        _current_beam_sampling_method() == RANDOM_GAUSSIAN_SAMPLING
-        and resolution_var is not None
-        and resolution_var.get() == CUSTOM_SAMPLING_OPTION
-    )
-    gui_views.set_sampling_custom_controls_enabled(
+def _set_random_sample_controls_state():
+    enabled = bool(_current_beam_sampling_method() == RANDOM_GAUSSIAN_SAMPLING)
+    gui_views.set_sampling_sample_count_controls_enabled(
         sampling_optics_controls_view_state,
         enabled=enabled,
     )
@@ -16802,26 +16785,14 @@ def _set_sampling_method_controls_state():
         random_enabled=method == RANDOM_GAUSSIAN_SAMPLING,
         stratified_enabled=method == STRATIFIED_GAUSSIAN_SAMPLING,
     )
-    _set_custom_sample_controls_state()
+    _set_random_sample_controls_state()
 
 
 def _refresh_resolution_display():
-    resolution_var = sampling_optics_controls_view_state.resolution_var
-    if resolution_var is None:
-        return
-    random_summary_text = gui_controllers.format_sampling_resolution_summary(
-        resolution_var.get(),
-        custom_option=CUSTOM_SAMPLING_OPTION,
-        custom_value=(
-            sampling_optics_controls_view_state.custom_samples_var.get()
-            if sampling_optics_controls_view_state.custom_samples_var is not None
-            else _current_random_sample_count()
-        ),
-        preset_counts=resolution_sample_counts,
-        fallback_resolution=defaults.get('sampling_resolution', 'Low'),
-        fallback_count=_current_random_sample_count(),
+    random_summary_text = gui_controllers.format_sampling_count_summary(
+        _current_random_sample_count()
     )
-    gui_views.set_sampling_resolution_summary_text(
+    gui_views.set_sampling_sample_count_text(
         sampling_optics_controls_view_state,
         random_summary_text,
     )
@@ -16892,18 +16863,32 @@ def _refresh_resolution_display():
     )
 
 
-def _apply_resolution_selection(trigger_update=True):
-    resolution_var = sampling_optics_controls_view_state.resolution_var
-    custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
-    if resolution_var is None:
-        return
+def _normalize_random_sample_count_control(default=None) -> int:
+    sample_count_var = sampling_optics_controls_view_state.sample_count_var
+    normalized = _current_random_sample_count(default=default)
+    if sample_count_var is not None:
+        try:
+            current_value = int(round(float(sample_count_var.get())))
+        except Exception:
+            current_value = normalized
+        if current_value != normalized:
+            sample_count_var.set(normalized)
+    defaults["sampling_count"] = int(normalized)
+    if resolution_var.get() != CUSTOM_SAMPLING_OPTION:
+        resolution_var.set(CUSTOM_SAMPLING_OPTION)
+    return int(normalized)
+
+
+def _preview_random_sample_count(_value=None):
+    _normalize_random_sample_count_control(default=_default_random_sample_count())
+    _refresh_resolution_display()
+
+
+def _apply_random_sample_count(*, trigger_update=True):
     previous_num_samples = int(simulation_runtime_state.num_samples)
-    selected_count = _current_random_sample_count(
+    _normalize_random_sample_count_control(
         default=max(1, simulation_runtime_state.num_samples)
     )
-    if resolution_var.get() == CUSTOM_SAMPLING_OPTION and custom_samples_var is not None:
-        custom_samples_var.set(str(selected_count))
-
     _sync_active_sample_count()
     _refresh_resolution_display()
     if (
@@ -16913,18 +16898,6 @@ def _apply_resolution_selection(trigger_update=True):
     ):
         update_mosaic_cache()
         schedule_update()
-
-
-def _apply_custom_sample_count(_event=None):
-    resolution_var = sampling_optics_controls_view_state.resolution_var
-    custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
-    parsed_value = _current_custom_sample_count(default=max(1, simulation_runtime_state.num_samples))
-    if custom_samples_var is not None:
-        custom_samples_var.set(str(parsed_value))
-    if resolution_var is not None and resolution_var.get() != CUSTOM_SAMPLING_OPTION:
-        resolution_var.set(CUSTOM_SAMPLING_OPTION)
-        return
-    _apply_resolution_selection(trigger_update=True)
 
 
 def _apply_stratified_sampling(*, trigger_update=True):
@@ -17024,14 +16997,22 @@ def _apply_rod_points_per_gz(*, trigger_update=True):
 
 
 def ensure_valid_resolution_choice():
-    resolution_var = sampling_optics_controls_view_state.resolution_var
-    if resolution_var is None:
-        return
     normalized = gui_controllers.normalize_sampling_resolution_choice(
         resolution_var.get(),
-        allowed_options=resolution_options,
-        fallback=defaults.get('sampling_resolution', 'Low'),
+        allowed_options=legacy_resolution_options,
+        fallback=CUSTOM_SAMPLING_OPTION,
     )
+    if normalized != CUSTOM_SAMPLING_OPTION:
+        mapped_count = legacy_resolution_sample_counts.get(
+            normalized,
+            _default_random_sample_count(),
+        )
+        sample_count_var = sampling_optics_controls_view_state.sample_count_var
+        if sample_count_var is not None:
+            sample_count_var.set(
+                _parse_sample_count(mapped_count, _default_random_sample_count())
+            )
+        normalized = CUSTOM_SAMPLING_OPTION
     if resolution_var.get() != normalized:
         resolution_var.set(normalized)
     method_var = sampling_optics_controls_view_state.sampling_method_var
@@ -17040,6 +17021,7 @@ def ensure_valid_resolution_choice():
         if method_var.get() != normalized_method:
             method_var.set(normalized_method)
             return
+    _normalize_random_sample_count_control(default=_default_random_sample_count())
     _set_sampling_method_controls_state()
     _sync_active_sample_count()
     _refresh_resolution_display()
@@ -17053,18 +17035,15 @@ def _legacy_stratified_sampling_vars() -> dict[str, object]:
     }
 
 if initial_resolution != CUSTOM_SAMPLING_OPTION:
-    initial_custom_samples_text = str(
-        int(
-            max(
-                1,
-                resolution_sample_counts.get(
-                    initial_resolution, resolution_sample_counts['Low']
-                ),
-            )
-        )
+    initial_sample_count = _parse_sample_count(
+        legacy_resolution_sample_counts.get(
+            initial_resolution,
+            _default_random_sample_count(),
+        ),
+        _default_random_sample_count(),
     )
 else:
-    initial_custom_samples_text = str(int(max(1, simulation_runtime_state.num_samples)))
+    initial_sample_count = _default_random_sample_count()
 
 initial_sampling_method = _normalize_beam_sampling_method(
     defaults.get("beam_sampling_method", RANDOM_GAUSSIAN_SAMPLING)
@@ -17085,10 +17064,12 @@ gui_views.create_sampling_optics_controls(
     parent=sampling_pruning_frame.frame,
     view_state=sampling_optics_controls_view_state,
     initial_sampling_method=initial_sampling_method,
-    resolution_options=resolution_options,
-    initial_resolution=initial_resolution,
-    custom_samples_text=initial_custom_samples_text,
-    resolution_count_text="",
+    sample_count_value=initial_sample_count,
+    sample_count_min=MIN_RANDOM_SAMPLE_COUNT,
+    sample_count_max=MAX_RANDOM_SAMPLE_COUNT,
+    sample_count_text=gui_controllers.format_sampling_count_summary(
+        initial_sample_count
+    ),
     stratified_values=initial_stratified_values,
     seed_text=str(int(defaults.get("beam_sampling_seed", 0))),
     ray_count_text=gui_controllers.format_stratified_ray_count_summary(
@@ -17110,7 +17091,10 @@ gui_views.create_sampling_optics_controls(
         lambda_angstrom=lambda_,
     ),
     optics_mode_text=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')),
-    on_apply_custom_samples=_apply_custom_sample_count,
+    on_sample_count_slide=_preview_random_sample_count,
+    on_commit_sample_count=lambda _event: _apply_random_sample_count(
+        trigger_update=True
+    ),
     on_apply_stratified_sampling=lambda: _apply_stratified_sampling(
         trigger_update=True
     ),
@@ -17123,15 +17107,16 @@ gui_views.create_sampling_optics_controls(
     ),
 )
 sampling_method_var = sampling_optics_controls_view_state.sampling_method_var
-resolution_var = sampling_optics_controls_view_state.resolution_var
-custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
+custom_samples_var = sampling_optics_controls_view_state.sample_count_var
+resolution_var = tk.StringVar(value=CUSTOM_SAMPLING_OPTION)
+sample_count_var = sampling_optics_controls_view_state.sample_count_var
+sample_count_scale = sampling_optics_controls_view_state.sample_count_scale
 seed_var = sampling_optics_controls_view_state.seed_var
 rod_points_per_gz_var = sampling_optics_controls_view_state.rod_points_per_gz_var
 optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
 
 def on_resolution_option_change(*_):
-    _set_custom_sample_controls_state()
-    _apply_resolution_selection(trigger_update=True)
+    ensure_valid_resolution_choice()
 
 def on_sampling_method_change(*_):
     _set_sampling_method_controls_state()
@@ -17145,6 +17130,9 @@ _sync_active_sample_count()
 _refresh_resolution_display()
 _apply_rod_points_per_gz(trigger_update=False)
 resolution_var.trace_add('write', on_resolution_option_change)
+sample_count_trace_add = getattr(sample_count_var, "trace_add", None)
+if callable(sample_count_trace_add):
+    sample_count_trace_add("write", lambda *_args: _refresh_resolution_display())
 sampling_method_var.trace_add('write', on_sampling_method_change)
 for _axis in STRATIFIED_SAMPLING_AXES:
     for _field_name in ("mean", "sigma", "samples"):
@@ -17289,11 +17277,12 @@ gui_views.populate_app_shell_quick_controls(
             "step": 0.0001,
         },
         {
-            "key": "sampling_resolution",
-            "label": "sampling resolution",
-            "control_type": "choice",
-            "variable": resolution_var,
-            "options": resolution_options,
+            "key": "sampling_count",
+            "label": "samples",
+            "variable": sample_count_var,
+            "scale": sample_count_scale,
+            "command": lambda: _apply_random_sample_count(trigger_update=True),
+            "step": 1,
         },
         {
             "key": "qr_cylinder_mode",
@@ -18619,7 +18608,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     else:
         ensure_valid_resolution_choice()
 
-    sample_mode = resolution_var.get()
+    sample_mode = _beam_sampling_method_label(_current_beam_sampling_method())
     sample_count = int(max(1, simulation_runtime_state.num_samples))
     cif_summary = Path(_current_primary_cif_path()).name
     if structure_model_state.cif_file2:

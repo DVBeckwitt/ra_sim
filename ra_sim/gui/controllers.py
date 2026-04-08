@@ -77,6 +77,25 @@ def parse_sampling_count(
     return max(int(minimum), parsed)
 
 
+def normalize_sample_count(
+    raw_value: object,
+    fallback: object,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
+    """Normalize one sample-count value to an integer slider range."""
+
+    normalized = parse_sampling_count(raw_value, fallback, minimum=max(1, int(minimum)))
+    if maximum is not None:
+        upper = int(maximum)
+        lower = max(1, int(minimum))
+        if upper < lower:
+            lower, upper = upper, lower
+        normalized = int(np.clip(normalized, lower, upper))
+    return int(normalized)
+
+
 def parse_sampling_float(
     raw_value: object,
     fallback: object,
@@ -174,6 +193,13 @@ def format_sampling_resolution_summary(
     )
     suffix = " (custom)" if normalized == custom_label else ""
     return f"{count:,} samples{suffix}" if count >= 1000 else f"{count} samples{suffix}"
+
+
+def format_sampling_count_summary(sample_count: object) -> str:
+    """Format one numeric sample count for GUI display."""
+
+    count = parse_sampling_count(sample_count, 1)
+    return f"{count:,} samples" if count >= 1000 else f"{count} samples"
 
 
 def stratified_total_ray_count(sample_counts: Sequence[object]) -> int:

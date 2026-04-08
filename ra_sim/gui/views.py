@@ -2996,10 +2996,10 @@ def create_sampling_optics_controls(
     parent: tk.Misc,
     view_state: SamplingOpticsControlsViewState,
     initial_sampling_method: str,
-    resolution_options: Sequence[object],
-    initial_resolution: str,
-    custom_samples_text: str,
-    resolution_count_text: str,
+    sample_count_value: int,
+    sample_count_min: int,
+    sample_count_max: int,
+    sample_count_text: str,
     stratified_values: Mapping[str, object],
     seed_text: str,
     ray_count_text: str,
@@ -3010,13 +3010,14 @@ def create_sampling_optics_controls(
     rod_points_per_gz_text: str,
     rod_point_total_text: str,
     optics_mode_text: str,
-    on_apply_custom_samples: Callable[[], None],
+    on_sample_count_slide: Callable[[object], None],
+    on_commit_sample_count: Callable[[object], None],
     on_apply_stratified_sampling: Callable[[], None],
     on_reset_stratified_defaults: Callable[[], None],
     on_rod_points_per_gz_slide: Callable[[object], None],
     on_commit_rod_points_per_gz: Callable[[object], None],
 ) -> None:
-    """Create the sampling-resolution / optics controls and store their refs."""
+    """Create the sample-count / optics controls and store their refs."""
 
     def _bind_commit(widget: object, callback: Callable[[], None]) -> None:
         bind = getattr(widget, "bind", None)
@@ -3053,49 +3054,37 @@ def create_sampling_optics_controls(
     random_sampling_frame = ttk.Frame(parent)
     random_sampling_frame.pack(fill=tk.X, pady=(2, 0))
 
-    resolution_selector_frame = ttk.Frame(random_sampling_frame)
-    resolution_selector_frame.pack(fill=tk.X, pady=(0, 2))
-    ttk.Label(resolution_selector_frame, text="Sampling Resolution").pack(
+    sample_count_frame = ttk.Frame(random_sampling_frame)
+    sample_count_frame.pack(fill=tk.X, pady=(0, 2))
+    ttk.Label(sample_count_frame, text="Samples").pack(
         anchor=tk.W,
         padx=5,
     )
 
-    resolution_var = tk.StringVar(value=str(initial_resolution))
-    resolution_menu = ttk.OptionMenu(
-        resolution_selector_frame,
-        resolution_var,
-        resolution_var.get(),
-        *[str(option) for option in resolution_options],
-    )
-    resolution_menu.pack(fill=tk.X, padx=5, pady=(2, 0))
+    sample_count_row = ttk.Frame(sample_count_frame)
+    sample_count_row.pack(fill=tk.X, padx=5, pady=(2, 0))
 
-    custom_samples_row = ttk.Frame(resolution_selector_frame)
-    custom_samples_row.pack(fill=tk.X, padx=5, pady=(2, 0))
-    ttk.Label(custom_samples_row, text="Custom Samples").pack(side=tk.LEFT)
-
-    custom_samples_var = tk.StringVar(value=str(custom_samples_text))
-    custom_samples_entry = ttk.Entry(
-        custom_samples_row,
-        textvariable=custom_samples_var,
-        width=10,
-        justify="right",
+    sample_count_var = tk.IntVar(value=int(sample_count_value))
+    sample_count_scale = tk.Scale(
+        sample_count_row,
+        from_=int(sample_count_min),
+        to=int(sample_count_max),
+        orient=tk.HORIZONTAL,
+        resolution=1,
+        showvalue=False,
+        variable=sample_count_var,
+        command=on_sample_count_slide,
     )
-    custom_samples_entry.pack(side=tk.LEFT, padx=(6, 4))
-    custom_samples_entry.bind("<Return>", lambda _event: on_apply_custom_samples())
+    sample_count_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    sample_count_scale.bind("<ButtonRelease-1>", on_commit_sample_count)
 
-    custom_samples_apply_button = ttk.Button(
-        custom_samples_row,
-        text="Apply",
-        command=on_apply_custom_samples,
+    sample_count_value_var = tk.StringVar(value=str(sample_count_text))
+    sample_count_value_label = ttk.Label(
+        sample_count_row,
+        textvariable=sample_count_value_var,
+        width=14,
     )
-    custom_samples_apply_button.pack(side=tk.LEFT)
-
-    resolution_count_var = tk.StringVar(value=str(resolution_count_text))
-    resolution_count_label = ttk.Label(
-        resolution_selector_frame,
-        textvariable=resolution_count_var,
-    )
-    resolution_count_label.pack(anchor=tk.W, padx=5, pady=(2, 0))
+    sample_count_value_label.pack(side=tk.LEFT, padx=(8, 0))
 
     stratified_sampling_frame = ttk.Frame(parent)
     stratified_sampling_frame.pack(fill=tk.X, pady=(6, 2))
@@ -3256,15 +3245,11 @@ def create_sampling_optics_controls(
     view_state.random_gaussian_button = random_gaussian_button
     view_state.stratified_gaussian_button = stratified_gaussian_button
     view_state.random_sampling_frame = random_sampling_frame
-    view_state.resolution_selector_frame = resolution_selector_frame
-    view_state.resolution_var = resolution_var
-    view_state.resolution_menu = resolution_menu
-    view_state.resolution_count_var = resolution_count_var
-    view_state.resolution_count_label = resolution_count_label
-    view_state.custom_samples_var = custom_samples_var
-    view_state.custom_samples_row = custom_samples_row
-    view_state.custom_samples_entry = custom_samples_entry
-    view_state.custom_samples_apply_button = custom_samples_apply_button
+    view_state.sample_count_frame = sample_count_frame
+    view_state.sample_count_var = sample_count_var
+    view_state.sample_count_scale = sample_count_scale
+    view_state.sample_count_value_var = sample_count_value_var
+    view_state.sample_count_value_label = sample_count_value_label
     view_state.rod_points_per_gz_frame = rod_points_per_gz_frame
     view_state.rod_points_per_gz_var = rod_points_per_gz_var
     view_state.rod_points_per_gz_scale = rod_points_per_gz_scale
@@ -3288,15 +3273,24 @@ def create_sampling_optics_controls(
     view_state.exact_optics_button = exact_optics_button
 
 
+def set_sampling_sample_count_text(
+    view_state: SamplingOpticsControlsViewState,
+    text: str,
+) -> None:
+    """Update the live sample-count label beside the slider."""
+
+    setter = getattr(view_state.sample_count_value_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
 def set_sampling_resolution_summary_text(
     view_state: SamplingOpticsControlsViewState,
     text: str,
 ) -> None:
-    """Update the sampling-resolution summary label."""
+    """Compatibility wrapper for older call sites/tests."""
 
-    setter = getattr(view_state.resolution_count_var, "set", None)
-    if callable(setter):
-        setter(str(text))
+    set_sampling_sample_count_text(view_state, text)
 
 
 def set_sampling_rod_points_per_gz_text(
@@ -3351,16 +3345,25 @@ def _configure_widget_state(widget: object | None, state: str) -> None:
         configure(state=state)
 
 
+def set_sampling_sample_count_controls_enabled(
+    view_state: SamplingOpticsControlsViewState,
+    *,
+    enabled: bool,
+) -> None:
+    """Enable or disable the random-sampling count slider."""
+
+    state_value = tk.NORMAL if enabled else tk.DISABLED
+    _configure_widget_state(view_state.sample_count_scale, state_value)
+
+
 def set_sampling_custom_controls_enabled(
     view_state: SamplingOpticsControlsViewState,
     *,
     enabled: bool,
 ) -> None:
-    """Enable or disable the custom-sample entry and apply button."""
+    """Compatibility wrapper for older call sites/tests."""
 
-    state_value = tk.NORMAL if enabled else tk.DISABLED
-    _configure_widget_state(view_state.custom_samples_entry, state_value)
-    _configure_widget_state(view_state.custom_samples_apply_button, state_value)
+    set_sampling_sample_count_controls_enabled(view_state, enabled=enabled)
 
 
 def set_sampling_method_controls_enabled(
@@ -3374,9 +3377,7 @@ def set_sampling_method_controls_enabled(
     random_state = tk.NORMAL if random_enabled else tk.DISABLED
     stratified_state = tk.NORMAL if stratified_enabled else tk.DISABLED
 
-    _configure_widget_state(view_state.resolution_menu, random_state)
-    _configure_widget_state(view_state.custom_samples_entry, random_state)
-    _configure_widget_state(view_state.custom_samples_apply_button, random_state)
+    _configure_widget_state(view_state.sample_count_scale, random_state)
 
     _configure_widget_state(view_state.seed_entry, stratified_state)
     _configure_widget_state(view_state.reset_sampling_button, stratified_state)

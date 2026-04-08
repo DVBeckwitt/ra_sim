@@ -296,7 +296,7 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         cv2 = None
 
     p_defaults = _ensure_triplet(ht_cfg.get("default_p"), [0.01, 0.99, 0.5])
-    w_defaults = _ensure_triplet(ht_cfg.get("default_w"), [50.0, 50.0, 0.0])
+    w_defaults = _ensure_triplet(ht_cfg.get("default_w"), [100.0, 0.0, 0.0])
     try:
         iodine_z_default = float(_infer_iodine_z_like_diffuse(primary_cif_path))
     except Exception:

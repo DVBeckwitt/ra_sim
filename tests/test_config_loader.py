@@ -142,3 +142,14 @@ def test_loader_get_temp_dir_uses_temp_root_and_caches_per_config_dir(
     assert temp_dir_a == temp_dir_b
     assert temp_dir_a.parent == tmp_path / "scratch"
     assert temp_dir_a.exists()
+
+
+def test_repo_instrument_defaults_weight_p0_fully_by_default() -> None:
+    instrument_path = Path(__file__).resolve().parents[1] / "config" / "instrument.yaml"
+    instrument = yaml.safe_load(instrument_path.read_text(encoding="utf-8"))
+
+    assert instrument["instrument"]["hendricks_teller"]["default_w"] == [
+        100.0,
+        0.0,
+        0.0,
+    ]

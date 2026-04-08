@@ -53,7 +53,7 @@ instrument:
     default: [1.0, 1.0, 1.0]
   hendricks_teller:
     default_p: [0.01, 0.99, 0.5]
-    default_w: [50.0, 50.0, 0.0]
+    default_w: [100.0, 0.0, 0.0]
     # Structure-factor pruning bias used by the GUI speed/quality control.
     # -2.0 keeps more points, 0.0 is the recommended default, +3.0 prunes harder.
     sf_prune_bias: 0.0

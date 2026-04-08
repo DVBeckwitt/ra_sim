@@ -1942,20 +1942,18 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     _FakeButton.created = []
     _FakeLabel.created = []
     _FakeRadiobutton.created = []
-    _FakeOptionMenu.created = []
     _FakeScale.created = []
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Button", _FakeButton)
     monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
-    monkeypatch.setattr(views.ttk, "OptionMenu", _FakeOptionMenu)
     monkeypatch.setattr(views.tk, "IntVar", _FakeVar)
     monkeypatch.setattr(views.tk, "Scale", _FakeScale)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
     view_state = state.SamplingOpticsControlsViewState()
-    applied = []
+    sample_count_events = []
     stratified_applies = []
     stratified_resets = []
     rod_commits = []
@@ -1964,10 +1962,10 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         parent=object(),
         view_state=view_state,
         initial_sampling_method="stratified_gaussian",
-        resolution_options=["Low", "High", "Custom"],
-        initial_resolution="High",
-        custom_samples_text="2500",
-        resolution_count_text="2,500 samples",
+        sample_count_value=2500,
+        sample_count_min=1,
+        sample_count_max=5000,
+        sample_count_text="2,500 samples",
         stratified_values={
             "x_mean": "0.1",
             "x_sigma": "0.01",
@@ -1994,18 +1992,18 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         rod_points_per_gz_text="480 / Gz",
         rod_point_total_text="Longest rod: 960 points",
         optics_mode_text="exact",
-        on_apply_custom_samples=lambda: applied.append("apply"),
+        on_sample_count_slide=lambda value: sample_count_events.append(("slide", value)),
+        on_commit_sample_count=lambda _event: sample_count_events.append(("commit", None)),
         on_apply_stratified_sampling=lambda: stratified_applies.append("apply"),
         on_reset_stratified_defaults=lambda: stratified_resets.append("reset"),
         on_rod_points_per_gz_slide=lambda _value: rod_commits.append("slide"),
         on_commit_rod_points_per_gz=lambda _event: rod_commits.append("commit"),
     )
 
-    assert isinstance(view_state.resolution_selector_frame, _FakeFrame)
+    assert isinstance(view_state.sample_count_frame, _FakeFrame)
     assert view_state.sampling_method_var.get() == "stratified_gaussian"
-    assert view_state.resolution_var.get() == "High"
-    assert view_state.custom_samples_var.get() == "2500"
-    assert view_state.resolution_count_var.get() == "2,500 samples"
+    assert view_state.sample_count_var.get() == 2500
+    assert view_state.sample_count_value_var.get() == "2,500 samples"
     assert view_state.seed_var.get() == "17"
     assert view_state.stratified_control_vars["x"]["mean"].get() == "0.1"
     assert view_state.stratified_control_vars["lambda"]["samples"].get() == "6"
@@ -2018,22 +2016,21 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
     assert view_state.optics_mode_var.get() == "exact"
-    assert view_state.custom_samples_entry.textvariable is view_state.custom_samples_var
-    assert view_state.custom_samples_apply_button is _FakeButton.created[0]
-    assert view_state.reset_sampling_button is _FakeButton.created[1]
-    assert _FakeOptionMenu.created[0].variable is view_state.resolution_var
-    assert _FakeOptionMenu.created[0].default == "High"
-    assert _FakeOptionMenu.created[0].values == ("Low", "High", "Custom")
+    assert view_state.sample_count_scale is _FakeScale.created[0]
+    assert view_state.sample_count_scale.variable is view_state.sample_count_var
+    assert view_state.sample_count_scale.cget("from") == 1
+    assert view_state.sample_count_scale.cget("to") == 5000
+    assert view_state.reset_sampling_button is _FakeButton.created[0]
     assert [radio.value for radio in _FakeRadiobutton.created] == [
         "random_gaussian",
         "stratified_gaussian",
         "fast",
         "exact",
     ]
-    assert view_state.rod_points_per_gz_scale is _FakeScale.created[0]
+    assert view_state.rod_points_per_gz_scale is _FakeScale.created[1]
 
-    views.set_sampling_resolution_summary_text(view_state, "3,600 samples (custom)")
-    assert view_state.resolution_count_var.get() == "3,600 samples (custom)"
+    views.set_sampling_sample_count_text(view_state, "3,600 samples")
+    assert view_state.sample_count_value_var.get() == "3,600 samples"
     views.set_sampling_rod_points_per_gz_text(view_state, "512 / Gz")
     views.set_sampling_rod_point_total_text(view_state, "Longest rod: 1,024 points")
     views.set_sampling_ray_count_text(view_state, "Total rays: 96 = 2 x 3 x 2 x 2 x 4")
@@ -2043,31 +2040,29 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.ray_count_var.get() == "Total rays: 96 = 2 x 3 x 2 x 2 x 4"
     assert view_state.ray_warning_var.get() == ""
 
-    views.set_sampling_custom_controls_enabled(view_state, enabled=False)
-    assert view_state.custom_samples_entry.state == tk.DISABLED
-    assert view_state.custom_samples_apply_button.state == tk.DISABLED
+    views.set_sampling_sample_count_controls_enabled(view_state, enabled=False)
+    assert view_state.sample_count_scale.state == tk.DISABLED
 
-    views.set_sampling_custom_controls_enabled(view_state, enabled=True)
-    assert view_state.custom_samples_entry.state == tk.NORMAL
-    assert view_state.custom_samples_apply_button.state == tk.NORMAL
+    views.set_sampling_sample_count_controls_enabled(view_state, enabled=True)
+    assert view_state.sample_count_scale.state == tk.NORMAL
 
     views.set_sampling_method_controls_enabled(
         view_state,
         random_enabled=False,
         stratified_enabled=True,
     )
-    assert view_state.custom_samples_entry.state == tk.DISABLED
+    assert view_state.sample_count_scale.state == tk.DISABLED
     assert view_state.seed_entry.state == tk.NORMAL
     assert view_state.stratified_control_entries["dx"]["samples"].state == tk.NORMAL
 
-    view_state.custom_samples_entry.bindings["<Return>"](None)
-    _FakeButton.created[0].command()
+    view_state.sample_count_scale.command("3600")
+    view_state.sample_count_scale.bindings["<ButtonRelease-1>"][0](None)
     view_state.seed_entry.bindings["<Return>"](None)
     view_state.stratified_control_entries["x"]["samples"].bindings["<FocusOut>"](None)
-    _FakeButton.created[1].command()
+    _FakeButton.created[0].command()
     view_state.rod_points_per_gz_scale.command(512)
     view_state.rod_points_per_gz_scale.bindings["<ButtonRelease-1>"][0](None)
-    assert applied == ["apply", "apply"]
+    assert sample_count_events == [("slide", "3600"), ("commit", None)]
     assert stratified_applies == ["apply", "apply"]
     assert stratified_resets == ["reset"]
     assert rod_commits == ["slide", "commit"]
@@ -3334,16 +3329,20 @@ def test_populate_app_shell_quick_controls_builds_linked_inputs(monkeypatch) -> 
     assert changed == [5.25, "more"]
 
 
-def test_populate_app_shell_quick_controls_supports_choice_controls(
+def test_populate_app_shell_quick_controls_supports_sample_count_slider(
     monkeypatch,
 ) -> None:
     _FakeLabel.created = []
-    _FakeOptionMenu.created = []
+    _FakeScale.created = []
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
-    monkeypatch.setattr(views.ttk, "OptionMenu", _FakeOptionMenu)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Scale", _FakeScale)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
-    variable = _FakeStringVar("High")
+    changed = []
+    variable = _FakeVar(50)
+    source_scale = _FakeScale(object(), from_=1, to=5000)
     view_state = state.AppShellViewState(
         quick_controls_body=_FakeFrame(object()),
     )
@@ -3352,23 +3351,26 @@ def test_populate_app_shell_quick_controls_supports_choice_controls(
         view_state=view_state,
         controls=[
             {
-                "key": "sampling_resolution",
-                "label": "sampling resolution",
-                "control_type": "choice",
+                "key": "sampling_count",
+                "label": "samples",
                 "variable": variable,
-                "options": ("Low", "High", "Custom"),
+                "scale": source_scale,
+                "command": lambda: changed.append(variable.get()),
+                "step": 1,
             }
         ],
     )
 
-    assert "sampling_resolution" in view_state.quick_control_widgets
-    control = view_state.quick_control_widgets["sampling_resolution"]
-    assert isinstance(control["menu"], _FakeOptionMenu)
-    assert control["options"] == ("Low", "High", "Custom")
-    assert control["variable"] is variable
-    assert control["menu"].variable is variable
-    assert control["menu"].default == "High"
-    assert control["menu"].values == ("Low", "High", "Custom")
+    assert "sampling_count" in view_state.quick_control_widgets
+    control = view_state.quick_control_widgets["sampling_count"]
+    assert isinstance(control["scale"], _FakeScale)
+    assert control["scale"].variable is variable
+    assert control["scale"].cget("from") == 1
+    assert control["scale"].cget("to") == 5000
+    control["entry_var"].set("125")
+    control["entry"].bindings["<Return>"](None)
+    assert variable.get() == 125
+    assert changed == [125]
 
 
 def test_populate_app_shell_quick_controls_supports_check_and_button_controls(

@@ -1,13 +1,9 @@
 # TODO
 
 ## Next Up
-- Fix the scaling of the analyze figures for phi and theta to update if auto-match scale is run. 
 - optimize ray tracing parallelization now that it samples differently 
 - improve import GUI State speed
-- Sampling resolution should be numerical not just "low, medium high". 
 - Remove stratified parameters or implement it into the new random gaussian technique.
-- Increase the default sampling amount.
-- w(p=1) stacking prob should be 0 by default.
 - Improve draw time of image
 - Fit mosaic 
 - Fit SF 
@@ -19,3 +15,6 @@
 
 ## Done
 - [ ] 
+- Increase the default sampling amount.
+- Fix the scaling of the analyze figures for phi and theta to update if auto-match scale is run. 
+- Sampling resolution should be numerical not just "low, medium high". 

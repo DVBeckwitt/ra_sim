@@ -660,7 +660,7 @@ def run_headless_geometry_fit(
     p_defaults = list(ht_cfg.get("default_p", [0.01, 0.99, 0.5]))
     while len(p_defaults) < 3:
         p_defaults.append(p_defaults[-1] if p_defaults else 0.5)
-    w_defaults = list(ht_cfg.get("default_w", [50.0, 50.0, 0.0]))
+    w_defaults = list(ht_cfg.get("default_w", [100.0, 0.0, 0.0]))
     while len(w_defaults) < 3:
         w_defaults.append(0.0)
 
@@ -1596,7 +1596,7 @@ def build_headless_simulation_defaults(
 
     p_values = tuple(ht_cfg.get("default_p", [0.01, 0.99, 0.5]))
     w_defaults = np.asarray(
-        ht_cfg.get("default_w", [50.0, 50.0, 0.0]),
+        ht_cfg.get("default_w", [100.0, 0.0, 0.0]),
         dtype=np.float64,
     )
     weights = w_defaults / (w_defaults.sum() if w_defaults.sum() else 1.0)
