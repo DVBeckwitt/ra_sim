@@ -3435,6 +3435,13 @@ geometry_manual_projection_workflow = (
         build_live_preview_simulated_peaks_from_cache=(
             lambda: globals()["_build_live_preview_simulated_peaks_from_cache"]()
         ),
+        ensure_peak_overlay_data=(
+            lambda force=False: (
+                globals()["ensure_peak_overlay_data"](force=force)
+                if callable(globals().get("ensure_peak_overlay_data"))
+                else False
+            )
+        ),
         miller=lambda: miller,
         intensities=lambda: intensities,
         image_size=int(image_size),

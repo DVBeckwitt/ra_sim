@@ -69,6 +69,51 @@ def test_geometry_q_group_manager_geometry_metadata_helpers() -> None:
     assert np.isnan(missing_qr)
     assert np.isnan(missing_qz)
 
+    nominal_key, nominal_qr, nominal_qz = (
+        geometry_q_group_manager.reflection_q_group_metadata(
+            (1.0, 0.0, 1.25),
+            source_label="primary",
+            a_value=3.0,
+            c_value=6.0,
+            allow_nominal_hkl_indices=True,
+        )
+    )
+    assert nominal_key == ("q_group", "primary", 1, 1)
+    assert np.isclose(nominal_qr, (2.0 * np.pi / 3.0) * np.sqrt(4.0 / 3.0))
+    assert np.isclose(nominal_qz, 2.0 * np.pi / 6.0)
+
+
+def test_geometry_q_group_manager_nominal_hkl_grouping_supports_cache_rows() -> None:
+    cache_like_hit_tables = [
+        np.asarray(
+            [
+                [12.0, 10.2, 20.8, 0.0, 1.0, 0.0, 1.29],
+            ],
+            dtype=float,
+        )
+    ]
+
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        cache_like_hit_tables,
+        image_shape=(32, 32),
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        allow_nominal_hkl_indices=True,
+    )
+    entries = geometry_q_group_manager.build_geometry_q_group_entries(
+        cache_like_hit_tables,
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        allow_nominal_hkl_indices=True,
+    )
+
+    assert len(peaks) == 1
+    assert peaks[0]["hkl"] == (1, 0, 1)
+    assert peaks[0]["q_group_key"] == ("q_group", "primary", 1, 1)
+    assert peaks[0]["q_group_nominal_hkl"] is True
+    assert len(entries) == 1
+    assert entries[0]["key"] == ("q_group", "primary", 1, 1)
+    assert entries[0]["hkl_preview"] == [(1, 0, 1)]
+
 
 def test_geometry_q_group_manager_builds_entries_from_hit_tables() -> None:
     entries = geometry_q_group_manager.build_geometry_q_group_entries(
@@ -653,6 +698,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "primary_c": 9.0,
             "default_source_label": "primary",
             "round_pixel_centers": True,
+            "allow_nominal_hkl_indices": False,
         },
     ) in calls
     assert (
@@ -675,6 +721,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "peak_table_lattice": [(3.0, 5.0, "primary")],
             "primary_a": 7.0,
             "primary_c": 9.0,
+            "allow_nominal_hkl_indices": False,
         },
     ) in calls
     assert (
@@ -726,6 +773,52 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
     assert cached_preview_peaks[0]["label"] == "1,0,0"
     assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+    runtime_state.peak_records[0].pop("q_group_key")
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+    assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+
+
+def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_nominal_cache_grouping() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=[
+            np.asarray(
+                [[12.0, 10.2, 20.8, 0.0, 1.0, 0.0, 1.29]],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((32, 32), dtype=float),
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+        stored_primary_intersection_cache=[
+            np.asarray(
+                [[1.1, 1.2, 10.2, 20.8, 12.0, 0.0, 1.0, 0.0, 1.29]],
+                dtype=float,
+            )
+        ],
+    )
+    preview_state = state.GeometryPreviewState()
+    q_group_state = state.GeometryQGroupState()
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        image_size_factory=lambda: 32,
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+    )
+
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+    entries = bundle.build_entries_snapshot()
+
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["hkl"] == (1, 0, 1)
+    assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 1)
+    assert cached_preview_peaks[0]["q_group_nominal_hkl"] is True
+    assert len(entries) == 1
+    assert entries[0]["key"] == ("q_group", "primary", 1, 1)
 
 
 def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:

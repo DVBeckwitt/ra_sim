@@ -652,6 +652,7 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_cen
                 "a_value": 4.0,
                 "c_value": 6.0,
                 "qr_value": runtime_state.peak_records[0]["qr"],
+                "allow_nominal_hkl_indices": True,
             },
         )
     ]
@@ -665,6 +666,7 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_cen
     assert record["intensity"] == 8.0
     assert record["qz"] == 0.75
     assert record["q_group_key"] == "group-key"
+    assert record["q_group_nominal_hkl"] is True
     assert record["phi"] == 0.375
     assert np.isnan(record["two_theta_deg"])
     assert np.isnan(record["phi_deg"])
@@ -1247,6 +1249,8 @@ def test_toggle_hkl_pick_mode_handles_ready_and_unready_paths() -> None:
     scheduled = []
     pick_mode_calls = []
 
+    runtime_state.peak_positions = [(1.0, 2.0)]
+
     peak_selection.toggle_hkl_pick_mode(
         runtime_state,
         peak_state,
@@ -1259,11 +1263,12 @@ def test_toggle_hkl_pick_mode_handles_ready_and_unready_paths() -> None:
         set_status_text=status_messages.append,
     )
 
-    assert pick_mode_calls == []
-    assert status_messages[-1] == (
-        "Switch off 2D caked view before picking HKL in the image."
+    assert pick_mode_calls[-1] == (
+        True,
+        "HKL image-pick armed: click near a Bragg peak in the 2D caked view.",
     )
 
+    runtime_state.peak_positions = []
     peak_selection.toggle_hkl_pick_mode(
         runtime_state,
         peak_state,
@@ -1283,6 +1288,7 @@ def test_toggle_hkl_pick_mode_handles_ready_and_unready_paths() -> None:
     )
 
     runtime_state.peak_positions = [(1.0, 2.0)]
+    peak_state.hkl_pick_armed = False
     peak_selection.toggle_hkl_pick_mode(
         runtime_state,
         peak_state,

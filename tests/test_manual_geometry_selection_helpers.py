@@ -1405,13 +1405,13 @@ def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty(
         current_match_config=lambda: {"search_radius_px": 24.0},
     )
 
-    assert simulation_calls == [False]
+    assert simulation_calls == [True]
     assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert next_sig == ("cached",)
     assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
 
 
-def test_build_geometry_manual_pick_cache_uses_central_simulation_even_when_cache_is_preferred() -> None:
+def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cache_is_preferred() -> None:
     forwarded_prefer_cache: list[bool] = []
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
@@ -1425,17 +1425,32 @@ def test_build_geometry_manual_pick_cache_uses_central_simulation_even_when_cach
         cache_signature_fn=lambda **_kwargs: ("sig",),
         simulated_peaks_for_params=lambda _params, *, prefer_cache: (
             forwarded_prefer_cache.append(bool(prefer_cache))
-            or [
-                {
-                    "source_table_index": 1,
-                    "source_row_index": 2,
-                    "sim_col": 3.0,
-                    "sim_row": 4.0,
-                }
-            ]
+            or (
+                [
+                    {
+                        "q_group_key": ("q_group", "primary", 1, 0),
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "sim_col": 3.0,
+                        "sim_row": 4.0,
+                    }
+                ]
+                if prefer_cache
+                else [
+                    {
+                        "q_group_key": ("q_group", "primary", 2, 0),
+                        "source_table_index": 9,
+                        "source_row_index": 8,
+                        "sim_col": 30.0,
+                        "sim_row": 40.0,
+                    }
+                ]
+            )
         ),
         build_grouped_candidates=lambda entries: {
-            ("q_group", "primary", 1, 0): [dict(entry) for entry in entries or ()]
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
         },
         build_simulated_lookup=lambda entries: {
             (
@@ -1447,35 +1462,15 @@ def test_build_geometry_manual_pick_cache_uses_central_simulation_even_when_cach
         current_match_config=lambda: {"search_radius_px": 24.0},
     )
 
-    assert forwarded_prefer_cache == [False]
+    assert forwarded_prefer_cache == [True]
     assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 3.0
+    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert next_sig == ("sig",)
     assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
 
 
-def test_build_geometry_manual_pick_cache_falls_back_to_cached_preview_peaks_when_central_groups_are_empty() -> None:
+def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_cached_groups_are_empty() -> None:
     forwarded_prefer_cache: list[bool] = []
-
-    def _simulated_peaks_for_params(_params, *, prefer_cache):
-        forwarded_prefer_cache.append(bool(prefer_cache))
-        if not prefer_cache:
-            return []
-        return [
-            {
-                "q_group_key": ("q_group", "primary", 1, 0),
-                "source_table_index": 1,
-                "source_row_index": 2,
-                "sim_col": 3.0,
-                "sim_row": 4.0,
-            }
-        ]
-
-    def _build_grouped_candidates(entries):
-        return {
-            entry["q_group_key"]: [dict(entry)]
-            for entry in entries or ()
-            if isinstance(entry.get("q_group_key"), tuple)
-        }
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
         param_set={"gamma": 1.5},
@@ -1486,8 +1481,27 @@ def test_build_geometry_manual_pick_cache_falls_back_to_cached_preview_peaks_whe
         existing_cache_signature=None,
         existing_cache_data=None,
         cache_signature_fn=lambda **_kwargs: ("sig",),
-        simulated_peaks_for_params=_simulated_peaks_for_params,
-        build_grouped_candidates=_build_grouped_candidates,
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache))
+            or (
+                []
+                if prefer_cache
+                else [
+                {
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "sim_col": 3.0,
+                    "sim_row": 4.0,
+                }
+                ]
+            )
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
         build_simulated_lookup=lambda entries: {
             (
                 int(entry.get("source_table_index")),
@@ -1498,11 +1512,88 @@ def test_build_geometry_manual_pick_cache_falls_back_to_cached_preview_peaks_whe
         current_match_config=lambda: {"search_radius_px": 24.0},
     )
 
-    assert forwarded_prefer_cache == [False, True]
-    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
+    assert forwarded_prefer_cache == [True, False]
     assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 3.0
+    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert next_sig == ("sig",)
     assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
+
+
+def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_background_state_changes() -> None:
+    forwarded_prefer_cache: list[bool] = []
+    cached_entry = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 13.0,
+        "sim_row": 2.0,
+    }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            True,
+            ("old-bg",),
+            1,
+            1,
+            1,
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                True,
+                ("old-bg",),
+                1,
+                1,
+                1,
+                1,
+                ("('q_group', 'primary', 1, 0)",),
+            ),
+            "simulated_peaks": [dict(cached_entry)],
+            "simulated_lookup": {(1, 2): dict(cached_entry)},
+            "grouped_candidates": {
+                ("q_group", "primary", 1, 0): [dict(cached_entry)]
+            },
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            True,
+            ("new-bg",),
+            1,
+            1,
+            1,
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache)) or []
+        ),
+        build_grouped_candidates=lambda _entries: {},
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [True]
+    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 13.0
+    assert next_sig[3] == ("new-bg",)
+    assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0]["sim_row"] == 2.0
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None:
@@ -1912,6 +2003,63 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
 
     projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
 
+    assert simulation_calls == []
+    assert projected == [
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+        }
+    ]
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstraps_peak_overlay_cache() -> None:
+    simulation_calls: list[dict[str, object]] = []
+    ensured: list[bool] = []
+    cached_peaks: list[dict[str, object]] = []
+
+    def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
+        ensured.append(bool(force))
+        cached_peaks[:] = [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 3.0,
+                "sim_row": 4.0,
+            }
+        ]
+        return True
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((6, 6), dtype=float),
+        current_background_native=lambda: np.zeros((6, 6), dtype=float),
+        current_geometry_fit_params=lambda: {"gamma": 1.5},
+        simulate_preview_style_peaks_for_fit=lambda *_args, **_kwargs: (
+            simulation_calls.append({"called": True}) or []
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: list(cached_peaks),
+        ensure_peak_overlay_data=_ensure_peak_overlay_data,
+        miller=lambda: np.array([[1.0, 0.0, 0.0]], dtype=float),
+        intensities=lambda: np.array([2.0], dtype=float),
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        detector_pixel_to_scattering_angles=lambda *_args: (None, None),
+    )
+
+    projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+
+    assert ensured == [False]
     assert simulation_calls == []
     assert projected == [
         {

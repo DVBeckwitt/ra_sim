@@ -1468,6 +1468,9 @@ def ensure_runtime_peak_overlay_data(
         )
         return True
 
+    use_nominal_cache_grouping = _peak_overlay_has_intersection_cache(
+        simulation_runtime_state
+    )
     image_shape = tuple(int(v) for v in updated_image.shape)
     intersection_entries = _peak_overlay_intersection_entries(
         simulation_runtime_state,
@@ -1536,6 +1539,7 @@ def ensure_runtime_peak_overlay_data(
                     a_value=av_used,
                     c_value=cv_used,
                     qr_value=qr_val,
+                    allow_nominal_hkl_indices=True,
                 )
                 qz_val = float(qz_hint) if np.isfinite(qz_hint) else float(qz_meta)
                 source_table_index, source_row_index = _peak_overlay_cache_row_source_indices(
@@ -1571,6 +1575,7 @@ def ensure_runtime_peak_overlay_data(
                     "source_label": str(source_label),
                     "av": float(av_used),
                     "cv": float(cv_used),
+                    "q_group_nominal_hkl": True,
                 }
                 if source_table_index is not None:
                     record["source_table_index"] = int(source_table_index)
@@ -1691,36 +1696,42 @@ def ensure_runtime_peak_overlay_data(
                 and m_val >= 0.0
                 else float("nan")
             )
+            q_group_kwargs = {
+                "source_label": source_label,
+                "a_value": av_used,
+                "c_value": cv_used,
+                "qr_value": qr_val,
+            }
+            if use_nominal_cache_grouping:
+                q_group_kwargs["allow_nominal_hkl_indices"] = True
             q_group_key, _, qz_val = reflection_q_group_metadata(
                 hkl_raw,
-                source_label=source_label,
-                a_value=av_used,
-                c_value=cv_used,
-                qr_value=qr_val,
+                **q_group_kwargs,
             )
             simulation_runtime_state.peak_millers.append(hkl)
-            simulation_runtime_state.peak_records.append(
-                {
-                    "display_col": float(disp_cx),
-                    "display_row": float(disp_cy),
-                    "native_col": float(cx),
-                    "native_row": float(cy),
-                    "hkl": hkl,
-                    "hkl_raw": hkl_raw,
-                    "intensity": float(I),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "q_group_key": q_group_key,
-                    "phi": float(phi_val),
-                    "two_theta_deg": float(two_theta_deg),
-                    "phi_deg": float(phi_deg),
-                    "source_table_index": int(table_idx),
-                    "source_row_index": int(row_idx),
-                    "source_label": str(source_label),
-                    "av": float(av_used),
-                    "cv": float(cv_used),
-                }
-            )
+            record = {
+                "display_col": float(disp_cx),
+                "display_row": float(disp_cy),
+                "native_col": float(cx),
+                "native_row": float(cy),
+                "hkl": hkl,
+                "hkl_raw": hkl_raw,
+                "intensity": float(I),
+                "qr": float(qr_val),
+                "qz": float(qz_val),
+                "q_group_key": q_group_key,
+                "phi": float(phi_val),
+                "two_theta_deg": float(two_theta_deg),
+                "phi_deg": float(phi_deg),
+                "source_table_index": int(table_idx),
+                "source_row_index": int(row_idx),
+                "source_label": str(source_label),
+                "av": float(av_used),
+                "cv": float(cv_used),
+            }
+            if use_nominal_cache_grouping:
+                record["q_group_nominal_hkl"] = True
+            simulation_runtime_state.peak_records.append(record)
 
     simulation_runtime_state.peak_overlay_cache.update(
         {
@@ -2195,10 +2206,6 @@ def toggle_hkl_pick_mode(
         set_pick_mode(False, message="HKL image-pick canceled.")
         return
 
-    if bool(caked_view_enabled):
-        set_status_text("Switch off 2D caked view before picking HKL in the image.")
-        return
-
     if simulation_runtime_state.unscaled_image is None:
         set_status_text("Run a simulation first.")
         return
@@ -2219,7 +2226,11 @@ def toggle_hkl_pick_mode(
 
     set_pick_mode(
         True,
-        message="HKL image-pick armed: click near a Bragg peak in raw camera view.",
+        message=(
+            "HKL image-pick armed: click near a Bragg peak in the 2D caked view."
+            if bool(caked_view_enabled)
+            else "HKL image-pick armed: click near a Bragg peak in raw camera view."
+        ),
     )
 
 

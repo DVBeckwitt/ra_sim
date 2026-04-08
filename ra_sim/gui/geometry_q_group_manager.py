@@ -229,6 +229,40 @@ def geometry_reference_hit_rows(table: object) -> list[np.ndarray]:
     return rows
 
 
+def _reflection_q_group_components(
+    hkl_value: object,
+    *,
+    allow_nominal_hkl_indices: bool = False,
+) -> tuple[float, int] | None:
+    """Return the stable ``(m, l)`` components used for Qr/Qz grouping."""
+
+    if not isinstance(hkl_value, (list, tuple, np.ndarray)) or len(hkl_value) < 3:
+        return None
+    try:
+        h_raw = float(hkl_value[0])
+        k_raw = float(hkl_value[1])
+        l_raw = float(hkl_value[2])
+    except Exception:
+        return None
+
+    if allow_nominal_hkl_indices:
+        hkl_group = gui_geometry_overlay.normalize_hkl_key(hkl_value)
+        if hkl_group is None:
+            return None
+        h_group = float(hkl_group[0])
+        k_group = float(hkl_group[1])
+        l_int = int(hkl_group[2])
+    else:
+        h_group = float(h_raw)
+        k_group = float(k_raw)
+        l_int = gui_manual_geometry.integer_gz_index(l_raw)
+        if l_int is None:
+            return None
+
+    m_val = h_group * h_group + h_group * k_group + k_group * k_group
+    return float(m_val), int(l_int)
+
+
 def reflection_q_group_metadata(
     hkl_value: object,
     *,
@@ -236,23 +270,17 @@ def reflection_q_group_metadata(
     a_value: object = np.nan,
     c_value: object = np.nan,
     qr_value: object = np.nan,
+    allow_nominal_hkl_indices: bool = False,
 ) -> tuple[tuple[object, ...] | None, float, float]:
     """Return stable Qr/Qz grouping metadata for one simulated reflection."""
 
-    if isinstance(hkl_value, (list, tuple, np.ndarray)) and len(hkl_value) >= 3:
-        try:
-            h_raw = float(hkl_value[0])
-            k_raw = float(hkl_value[1])
-            l_raw = float(hkl_value[2])
-        except Exception:
-            return None, float("nan"), float("nan")
-    else:
+    components = _reflection_q_group_components(
+        hkl_value,
+        allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+    )
+    if components is None:
         return None, float("nan"), float("nan")
-
-    m_val = h_raw * h_raw + h_raw * k_raw + k_raw * k_raw
-    l_int = gui_manual_geometry.integer_gz_index(l_raw)
-    if l_int is None:
-        return None, float("nan"), float("nan")
+    m_val, l_int = components
 
     try:
         qr_val = float(qr_value)
@@ -295,13 +323,25 @@ def geometry_q_group_key_from_entry(
 
     if not isinstance(entry, Mapping):
         return None
+    allow_nominal_hkl_indices = bool(entry.get("q_group_nominal_hkl", False))
+    hkl_value = entry.get("hkl_raw", entry.get("hkl"))
     key, _, _ = reflection_q_group_metadata(
-        entry.get("hkl_raw", entry.get("hkl")),
+        hkl_value,
         source_label=entry.get("source_label", "primary"),
         a_value=entry.get("av", np.nan),
         c_value=entry.get("cv", np.nan),
         qr_value=entry.get("qr", np.nan),
+        allow_nominal_hkl_indices=allow_nominal_hkl_indices,
     )
+    if key is None:
+        key, _, _ = reflection_q_group_metadata(
+            entry.get("hkl"),
+            source_label=entry.get("source_label", "primary"),
+            a_value=entry.get("av", np.nan),
+            c_value=entry.get("cv", np.nan),
+            qr_value=entry.get("qr", np.nan),
+            allow_nominal_hkl_indices=True,
+        )
     return key
 
 
@@ -311,6 +351,7 @@ def build_geometry_q_group_entries(
     peak_table_lattice: Sequence[Sequence[object]] | None = None,
     primary_a: object = np.nan,
     primary_c: object = np.nan,
+    allow_nominal_hkl_indices: bool = False,
 ) -> list[dict[str, object]]:
     """Aggregate simulated hit tables into unique Qr/Qz selector rows."""
 
@@ -364,6 +405,7 @@ def build_geometry_q_group_entries(
                 source_label=source_label,
                 a_value=av_used,
                 c_value=cv_used,
+                allow_nominal_hkl_indices=allow_nominal_hkl_indices,
             )
             if group_key is None:
                 continue
@@ -417,6 +459,7 @@ def build_geometry_fit_simulated_peaks(
     primary_c: object = np.nan,
     default_source_label: str | None = "primary",
     round_pixel_centers: bool = False,
+    allow_nominal_hkl_indices: bool = False,
 ) -> list[dict[str, object]]:
     """Build simulated-peak records from detector hit tables for geometry workflows."""
 
@@ -485,29 +528,31 @@ def build_geometry_fit_simulated_peaks(
                 source_label=source_label,
                 a_value=av_used,
                 c_value=cv_used,
+                allow_nominal_hkl_indices=allow_nominal_hkl_indices,
             )
             if q_group_key is None:
                 continue
 
-            simulated_peaks.append(
-                {
-                    "hkl": hkl,
-                    "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
-                    "sim_col": float(display_col),
-                    "sim_row": float(display_row),
-                    "weight": max(0.0, float(abs(intensity))),
-                    "source_peak_index": int(len(simulated_peaks)),
-                    "source_label": str(source_label),
-                    "source_table_index": int(table_idx),
-                    "source_row_index": int(row_idx),
-                    "hkl_raw": hkl_raw,
-                    "av": float(av_used),
-                    "cv": float(cv_used),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "q_group_key": q_group_key,
-                }
-            )
+            peak_record = {
+                "hkl": hkl,
+                "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
+                "sim_col": float(display_col),
+                "sim_row": float(display_row),
+                "weight": max(0.0, float(abs(intensity))),
+                "source_peak_index": int(len(simulated_peaks)),
+                "source_label": str(source_label),
+                "source_table_index": int(table_idx),
+                "source_row_index": int(row_idx),
+                "hkl_raw": hkl_raw,
+                "av": float(av_used),
+                "cv": float(cv_used),
+                "qr": float(qr_val),
+                "qz": float(qz_val),
+                "q_group_key": q_group_key,
+            }
+            if allow_nominal_hkl_indices:
+                peak_record["q_group_nominal_hkl"] = True
+            simulated_peaks.append(peak_record)
 
     return simulated_peaks
 
@@ -880,12 +925,28 @@ def make_runtime_geometry_q_group_value_callbacks(
     def _primary_c() -> float:
         return _coerce_float(_resolve_runtime_value(primary_c_factory), float("nan"))
 
+    def _has_intersection_cache() -> bool:
+        for attr_name in (
+            "stored_primary_intersection_cache",
+            "stored_secondary_intersection_cache",
+            "stored_intersection_cache",
+            "last_caked_intersection_cache",
+        ):
+            cache_tables = getattr(simulation_runtime_state, attr_name, None)
+            if isinstance(cache_tables, Sequence) and not isinstance(
+                cache_tables,
+                (str, bytes),
+            ) and len(cache_tables) > 0:
+                return True
+        return False
+
     def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
         max_positions_local = simulation_runtime_state.stored_max_positions_local
         if isinstance(max_positions_local, Sequence) and not isinstance(
             max_positions_local,
             (str, bytes),
         ):
+            use_nominal_cache_grouping = _has_intersection_cache()
             stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
             if stored_sim_image is not None:
                 image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
@@ -905,6 +966,7 @@ def make_runtime_geometry_q_group_value_callbacks(
                 primary_c=_primary_c(),
                 default_source_label="primary",
                 round_pixel_centers=True,
+                allow_nominal_hkl_indices=use_nominal_cache_grouping,
             )
             if simulated_peaks:
                 return simulated_peaks
@@ -941,6 +1003,15 @@ def make_runtime_geometry_q_group_value_callbacks(
             if hkl is not None:
                 entry["hkl"] = hkl
                 entry.setdefault("label", f"{hkl[0]},{hkl[1]},{hkl[2]}")
+            if _has_intersection_cache() and "q_group_nominal_hkl" not in entry:
+                entry["q_group_nominal_hkl"] = True
+            raw_group_key = entry.get("q_group_key")
+            if isinstance(raw_group_key, list):
+                entry["q_group_key"] = tuple(raw_group_key)
+            elif not isinstance(raw_group_key, tuple):
+                group_key = geometry_q_group_key_from_entry(entry)
+                if group_key is not None:
+                    entry["q_group_key"] = group_key
             cached_peaks.append(entry)
         return cached_peaks
 
@@ -969,6 +1040,7 @@ def make_runtime_geometry_q_group_value_callbacks(
             peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
             primary_a=_primary_a(),
             primary_c=_primary_c(),
+            allow_nominal_hkl_indices=_has_intersection_cache(),
         )
 
     def _listed_entries() -> list[dict[str, object]]:

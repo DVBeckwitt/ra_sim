@@ -1224,6 +1224,23 @@ def geometry_manual_pick_cache_signature(
     )
 
 
+def _manual_pick_cache_groups_reusable(
+    existing_signature: object,
+    current_signature: object,
+) -> bool:
+    """Return whether cached candidate groups remain valid across background-only changes."""
+
+    if not isinstance(existing_signature, tuple) or not isinstance(current_signature, tuple):
+        return False
+    if len(existing_signature) < 9 or len(current_signature) < 9:
+        return False
+    reusable_indexes = (0, 2, 4, 5, 6, 7, 8)
+    return all(
+        existing_signature[index] == current_signature[index]
+        for index in reusable_indexes
+    )
+
+
 def build_geometry_manual_pick_cache(
     *,
     param_set: dict[str, object] | None = None,
@@ -1267,19 +1284,18 @@ def build_geometry_manual_pick_cache(
     ):
         return existing_cache_data, existing_cache_signature, existing_cache_data
 
-    # Manual Qr/Qz picking must stay tied to the deterministic central-ray
-    # geometry-fit simulation rather than the live full-beam preview cache.
-    simulated_peaks = [
-        dict(entry)
-        for entry in simulated_peaks_for_params(
-            param_set,
-            prefer_cache=False,
-        )
-        if isinstance(entry, dict)
-    ]
-    grouped_candidates = build_grouped_candidates(simulated_peaks)
-    simulated_lookup = build_simulated_lookup(simulated_peaks)
-    if prefer_cache and not grouped_candidates:
+    resolved_existing_signature = existing_cache_signature
+    if not isinstance(resolved_existing_signature, tuple) and isinstance(
+        existing_cache_data, dict
+    ):
+        cached_signature = existing_cache_data.get("signature")
+        if isinstance(cached_signature, tuple):
+            resolved_existing_signature = cached_signature
+
+    simulated_peaks: list[dict[str, object]] = []
+    grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    simulated_lookup: dict[tuple[object, ...], dict[str, object]] = {}
+    if prefer_cache:
         cached_simulated_peaks = [
             dict(entry)
             for entry in simulated_peaks_for_params(
@@ -1293,6 +1309,48 @@ def build_geometry_manual_pick_cache(
             simulated_peaks = cached_simulated_peaks
             grouped_candidates = cached_grouped_candidates
             simulated_lookup = build_simulated_lookup(simulated_peaks)
+    if (
+        prefer_cache
+        and not grouped_candidates
+        and isinstance(existing_cache_data, dict)
+        and _manual_pick_cache_groups_reusable(
+            resolved_existing_signature,
+            cache_sig,
+        )
+    ):
+        cached_grouped_candidates = dict(
+            existing_cache_data.get("grouped_candidates", {})
+        )
+        if cached_grouped_candidates:
+            simulated_peaks = [
+                dict(entry)
+                for entry in (existing_cache_data.get("simulated_peaks", ()) or ())
+                if isinstance(entry, dict)
+            ]
+            grouped_candidates = {
+                key: [
+                    dict(entry)
+                    for entry in (entries or ())
+                    if isinstance(entry, dict)
+                ]
+                for key, entries in cached_grouped_candidates.items()
+            }
+            simulated_lookup = dict(existing_cache_data.get("simulated_lookup", {}))
+            if not simulated_lookup and simulated_peaks:
+                simulated_lookup = build_simulated_lookup(simulated_peaks)
+    if not grouped_candidates:
+        # Fall back to the deterministic central-ray geometry-fit simulation
+        # only when no reusable cached Qr/Qz groups are available.
+        simulated_peaks = [
+            dict(entry)
+            for entry in simulated_peaks_for_params(
+                param_set,
+                prefer_cache=False,
+            )
+            if isinstance(entry, dict)
+        ]
+        grouped_candidates = build_grouped_candidates(simulated_peaks)
+        simulated_lookup = build_simulated_lookup(simulated_peaks)
     match_cfg = dict(current_match_config())
     resolved_match_cfg = dict(match_cfg)
     background_context = None
@@ -2451,6 +2509,7 @@ def make_runtime_geometry_manual_projection_callbacks(
         Callable[[], Sequence[dict[str, object]]]
         | None
     ) = None,
+    ensure_peak_overlay_data: Callable[..., object] | None = None,
     miller: Callable[[], object] | object = None,
     intensities: Callable[[], object] | object = None,
     image_size: Callable[[], object] | object = 0,
@@ -2714,15 +2773,28 @@ def make_runtime_geometry_manual_projection_callbacks(
         *,
         prefer_cache: bool = True,
     ) -> list[dict[str, object]]:
-        if prefer_cache and callable(build_live_preview_simulated_peaks_from_cache):
+        def _cached_preview_peaks() -> list[dict[str, object]]:
+            if not callable(build_live_preview_simulated_peaks_from_cache):
+                return []
             try:
-                cached_peaks = [
+                return [
                     dict(entry)
                     for entry in (build_live_preview_simulated_peaks_from_cache() or ())
                     if isinstance(entry, dict)
                 ]
             except Exception:
-                cached_peaks = []
+                return []
+
+        if prefer_cache and callable(build_live_preview_simulated_peaks_from_cache):
+            cached_peaks = _cached_preview_peaks()
+            if not cached_peaks and callable(ensure_peak_overlay_data):
+                try:
+                    ensure_peak_overlay_data(force=False)
+                except TypeError:
+                    ensure_peak_overlay_data()
+                except Exception:
+                    pass
+                cached_peaks = _cached_preview_peaks()
             if cached_peaks:
                 return _project_peaks_to_current_view(cached_peaks)
         if not callable(simulate_preview_style_peaks_for_fit):
