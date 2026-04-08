@@ -1084,6 +1084,58 @@ def test_geometry_manual_refine_preview_point_falls_back_to_local_peak_maximum()
     assert refined == (5.0, 6.0)
 
 
+def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> None:
+    peak_records = [
+        {
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "display_col": 3.0,
+            "display_row": 4.0,
+            "native_col": 5.0,
+            "native_row": 6.0,
+            "two_theta_deg": 7.0,
+            "phi_deg": 8.0,
+        },
+        {
+            "source_table_index": 9,
+            "source_row_index": 10,
+            "display_col": 30.0,
+            "display_row": 40.0,
+        },
+    ]
+    peak_positions = [(3.0, 4.0), (30.0, 40.0)]
+    peak_overlay_cache = {
+        "records": [dict(record) for record in peak_records],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=(1, 2),
+        refined_caked=(11.0, 12.0),
+        refined_native=(13.0, 14.0),
+        refined_display=(15.0, 16.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is True
+    assert peak_records[0]["two_theta_deg"] == 11.0
+    assert peak_records[0]["phi_deg"] == 12.0
+    assert peak_records[0]["native_col"] == 13.0
+    assert peak_records[0]["native_row"] == 14.0
+    assert peak_records[0]["display_col"] == 15.0
+    assert peak_records[0]["display_row"] == 16.0
+    assert peak_records[1]["display_col"] == 30.0
+    assert peak_positions[0] == (15.0, 16.0)
+    assert peak_positions[1] == (30.0, 40.0)
+    assert peak_overlay_cache["records"][0]["two_theta_deg"] == 11.0
+    assert peak_overlay_cache["records"][0]["phi_deg"] == 12.0
+    assert peak_overlay_cache["positions"][0] == (15.0, 16.0)
+    assert peak_overlay_cache["click_spatial_index"] is None
+
+
 def test_restore_geometry_manual_pick_view_resets_zoom_state() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 0),

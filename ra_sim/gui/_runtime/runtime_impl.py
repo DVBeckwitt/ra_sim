@@ -2350,6 +2350,7 @@ def _refine_current_geometry_manual_pairs() -> None:
     else:
         native_image_shape = (int(image_size), int(image_size))
 
+    placement_refine_cache: dict[str, object] = {}
     try:
         placement_refine_cache = _get_geometry_manual_pick_cache(
             param_set=dict(_current_geometry_fit_params()),
@@ -2372,17 +2373,10 @@ def _refine_current_geometry_manual_pairs() -> None:
         "background_context": sim_background_context,
     }
 
-    try:
-        simulated_peaks = _geometry_manual_simulated_peaks_for_params(
-            dict(_current_geometry_fit_params()),
-            prefer_cache=False,
-        )
-    except Exception:
-        simulated_peaks = []
-    simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
+    simulated_lookup = dict(placement_refine_cache.get("simulated_lookup", {}))
     if not simulated_lookup:
         progress_label_geometry.config(
-            text="The current central-ray simulation does not expose any Qr/Qz source peaks to refine."
+            text="The cached Qr/Qz peak map is unavailable. Run Update Simulation first."
         )
         return
 
@@ -2416,11 +2410,28 @@ def _refine_current_geometry_manual_pairs() -> None:
             continue
 
         try:
-            seed_tth = float(source_entry.get("caked_x", np.nan))
-            seed_phi = float(source_entry.get("caked_y", np.nan))
+            seed_tth = float(source_entry.get("caked_x", source_entry.get("two_theta_deg", np.nan)))
+            seed_phi = float(source_entry.get("caked_y", source_entry.get("phi_deg", np.nan)))
         except Exception:
             seed_tth = float("nan")
             seed_phi = float("nan")
+        if not (np.isfinite(seed_tth) and np.isfinite(seed_phi)):
+            try:
+                seed_tth = float(
+                    entry.get(
+                        "refined_sim_caked_x",
+                        entry.get("caked_x", entry.get("raw_caked_x", np.nan)),
+                    )
+                )
+                seed_phi = float(
+                    entry.get(
+                        "refined_sim_caked_y",
+                        entry.get("caked_y", entry.get("raw_caked_y", np.nan)),
+                    )
+                )
+            except Exception:
+                seed_tth = float("nan")
+                seed_phi = float("nan")
         if not (np.isfinite(seed_tth) and np.isfinite(seed_phi)):
             updated_entries.append(entry)
             skipped_count += 1
@@ -2503,6 +2514,29 @@ def _refine_current_geometry_manual_pairs() -> None:
                 entry["refined_sim_x"] = float(refined_display[0])
                 entry["refined_sim_y"] = float(refined_display[1])
 
+        gui_manual_geometry.update_geometry_manual_peak_record_cache(
+            simulation_runtime_state.peak_records,
+            source_key=source_key,
+            refined_caked=(float(refined_tth), float(refined_phi)),
+            refined_native=(
+                (
+                    float(entry["refined_sim_native_x"]),
+                    float(entry["refined_sim_native_y"]),
+                )
+                if "refined_sim_native_x" in entry and "refined_sim_native_y" in entry
+                else None
+            ),
+            refined_display=(
+                (
+                    float(entry["refined_sim_x"]),
+                    float(entry["refined_sim_y"]),
+                )
+                if "refined_sim_x" in entry and "refined_sim_y" in entry
+                else None
+            ),
+            peak_positions=simulation_runtime_state.peak_positions,
+            peak_overlay_cache=simulation_runtime_state.peak_overlay_cache,
+        )
         updated_entries.append(entry)
 
     if refined_count <= 0:
@@ -2512,6 +2546,8 @@ def _refine_current_geometry_manual_pairs() -> None:
         return
 
     _push_geometry_manual_undo_state()
+    geometry_runtime_state.manual_pick_cache_signature = None
+    geometry_runtime_state.manual_pick_cache_data = {}
     _set_geometry_manual_pairs_for_index(background_index, updated_entries)
     _clear_geometry_fit_dataset_cache()
     _clear_geometry_manual_preview_artists(redraw=False)

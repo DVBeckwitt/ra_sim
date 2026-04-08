@@ -1005,42 +1005,12 @@ def make_runtime_geometry_q_group_value_callbacks(
         return False
 
     def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
-        max_positions_local = simulation_runtime_state.stored_max_positions_local
-        if isinstance(max_positions_local, Sequence) and not isinstance(
-            max_positions_local,
-            (str, bytes),
-        ):
-            use_nominal_cache_grouping = _has_intersection_cache()
-            stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
-            if stored_sim_image is not None:
-                image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
-            else:
-                image_size = max(
-                    0,
-                    _coerce_int(_resolve_runtime_value(image_size_factory), 0),
-                )
-                image_shape = (image_size, image_size)
-
-            simulated_peaks = build_geometry_fit_simulated_peaks(
-                max_positions_local,
-                image_shape=image_shape,
-                native_sim_to_display_coords=native_sim_to_display_coords,
-                peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-                primary_a=_primary_a(),
-                primary_c=_primary_c(),
-                default_source_label="primary",
-                round_pixel_centers=True,
-                allow_nominal_hkl_indices=use_nominal_cache_grouping,
-            )
-            if simulated_peaks:
-                return simulated_peaks
-
         cached_records = getattr(simulation_runtime_state, "peak_records", None)
         if not isinstance(cached_records, Sequence) or isinstance(
             cached_records,
             (str, bytes),
         ):
-            return []
+            cached_records = ()
 
         cached_peaks: list[dict[str, object]] = []
         for raw_entry in cached_records:
@@ -1077,7 +1047,40 @@ def make_runtime_geometry_q_group_value_callbacks(
                 if group_key is not None:
                     entry["q_group_key"] = group_key
             cached_peaks.append(entry)
-        return cached_peaks
+        if cached_peaks:
+            return cached_peaks
+
+        max_positions_local = simulation_runtime_state.stored_max_positions_local
+        if isinstance(max_positions_local, Sequence) and not isinstance(
+            max_positions_local,
+            (str, bytes),
+        ):
+            use_nominal_cache_grouping = _has_intersection_cache()
+            stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+            if stored_sim_image is not None:
+                image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
+            else:
+                image_size = max(
+                    0,
+                    _coerce_int(_resolve_runtime_value(image_size_factory), 0),
+                )
+                image_shape = (image_size, image_size)
+
+            simulated_peaks = build_geometry_fit_simulated_peaks(
+                max_positions_local,
+                image_shape=image_shape,
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+                primary_a=_primary_a(),
+                primary_c=_primary_c(),
+                default_source_label="primary",
+                round_pixel_centers=True,
+                allow_nominal_hkl_indices=use_nominal_cache_grouping,
+            )
+            if simulated_peaks:
+                return simulated_peaks
+
+        return []
 
     def _filter_simulated_peaks(
         simulated_peaks: Sequence[dict[str, object]] | None,

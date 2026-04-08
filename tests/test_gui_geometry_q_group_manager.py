@@ -676,9 +676,9 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
 
     cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
     assert len(cached_preview_peaks) == 1
-    assert cached_preview_peaks[0]["sim_col"] == 4.0
-    assert cached_preview_peaks[0]["sim_row"] == 5.0
-    assert cached_preview_peaks[0]["weight"] == 6.0
+    assert cached_preview_peaks[0]["sim_col"] == 1.5
+    assert cached_preview_peaks[0]["sim_row"] == 2.5
+    assert cached_preview_peaks[0]["weight"] == 7.0
     assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
     assert cached_preview_peaks[0]["label"] == "1,0,0"
     assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
@@ -738,20 +738,6 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert excluded_total == 1
 
     assert (
-        "build_peaks",
-        (["maxpos"],),
-        {
-            "image_shape": (20, 30),
-            "native_sim_to_display_coords": "native-to-display",
-            "peak_table_lattice": [(3.0, 5.0, "primary")],
-            "primary_a": 7.0,
-            "primary_c": 9.0,
-            "default_source_label": "primary",
-            "round_pixel_centers": True,
-            "allow_nominal_hkl_indices": False,
-        },
-    ) in calls
-    assert (
         "filter_peaks",
         ([{"seed": True}],),
         {
@@ -810,9 +796,42 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         },
     ) in calls
 
+    runtime_state.peak_records = []
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["sim_col"] == 4.0
+    assert cached_preview_peaks[0]["sim_row"] == 5.0
+    assert cached_preview_peaks[0]["weight"] == 6.0
+    assert (
+        "build_peaks",
+        (["maxpos"],),
+        {
+            "image_shape": (20, 30),
+            "native_sim_to_display_coords": "native-to-display",
+            "peak_table_lattice": [(3.0, 5.0, "primary")],
+            "primary_a": 7.0,
+            "primary_c": 9.0,
+            "default_source_label": "primary",
+            "round_pixel_centers": True,
+            "allow_nominal_hkl_indices": False,
+        },
+    ) in calls
+
     runtime_state.stored_max_positions_local = None
     runtime_state.stored_sim_image = None
     runtime_state.stored_peak_table_lattice = None
+    runtime_state.peak_records = [
+        {
+            "display_col": 1.5,
+            "display_row": 2.5,
+            "hkl_raw": [1, 0, 0],
+            "intensity": 7.0,
+            "source_label": "primary",
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 0),
+        }
+    ]
     live["primary_a"] = 11.0
     live["primary_c"] = 13.0
     live["image_size"] = 48

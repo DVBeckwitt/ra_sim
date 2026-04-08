@@ -790,6 +790,138 @@ def geometry_manual_apply_refined_simulated_override(
     return result or None
 
 
+def update_geometry_manual_peak_record_cache(
+    peak_records: Sequence[object] | None,
+    *,
+    source_key: tuple[int, int] | None,
+    refined_caked: tuple[float, float] | None = None,
+    refined_native: tuple[float, float] | None = None,
+    refined_display: tuple[float, float] | None = None,
+    peak_positions: list[tuple[float, float]] | None = None,
+    peak_overlay_cache: dict[str, object] | None = None,
+) -> bool:
+    """Update cached simulated peak records after manual caked-space refinement."""
+
+    if not (isinstance(source_key, tuple) and len(source_key) >= 2):
+        return False
+
+    try:
+        source_table_index = int(source_key[0])
+        source_row_index = int(source_key[1])
+    except Exception:
+        return False
+
+    try:
+        refined_tth = (
+            float(refined_caked[0]) if refined_caked is not None else float("nan")
+        )
+        refined_phi = (
+            float(refined_caked[1]) if refined_caked is not None else float("nan")
+        )
+    except Exception:
+        refined_tth = float("nan")
+        refined_phi = float("nan")
+    try:
+        refined_native_col = (
+            float(refined_native[0]) if refined_native is not None else float("nan")
+        )
+        refined_native_row = (
+            float(refined_native[1]) if refined_native is not None else float("nan")
+        )
+    except Exception:
+        refined_native_col = float("nan")
+        refined_native_row = float("nan")
+    try:
+        refined_display_col = (
+            float(refined_display[0]) if refined_display is not None else float("nan")
+        )
+        refined_display_row = (
+            float(refined_display[1]) if refined_display is not None else float("nan")
+        )
+    except Exception:
+        refined_display_col = float("nan")
+        refined_display_row = float("nan")
+
+    def _entry_matches(record: object) -> bool:
+        if not isinstance(record, Mapping):
+            return False
+        try:
+            return (
+                int(record.get("source_table_index")) == source_table_index
+                and int(record.get("source_row_index")) == source_row_index
+            )
+        except Exception:
+            return False
+
+    def _apply_updates(record: dict[str, object]) -> bool:
+        updated_local = False
+        if np.isfinite(refined_tth) and np.isfinite(refined_phi):
+            record["two_theta_deg"] = float(refined_tth)
+            record["phi_deg"] = float(refined_phi)
+            updated_local = True
+        if np.isfinite(refined_native_col) and np.isfinite(refined_native_row):
+            record["native_col"] = float(refined_native_col)
+            record["native_row"] = float(refined_native_row)
+            updated_local = True
+        if np.isfinite(refined_display_col) and np.isfinite(refined_display_row):
+            record["display_col"] = float(refined_display_col)
+            record["display_row"] = float(refined_display_row)
+            updated_local = True
+        return updated_local
+
+    updated = False
+    matched_peak_indexes: list[int] = []
+    for idx, raw_record in enumerate(peak_records or ()):
+        if not isinstance(raw_record, dict) or not _entry_matches(raw_record):
+            continue
+        if _apply_updates(raw_record):
+            updated = True
+        matched_peak_indexes.append(int(idx))
+
+    if (
+        matched_peak_indexes
+        and isinstance(peak_positions, list)
+        and np.isfinite(refined_display_col)
+        and np.isfinite(refined_display_row)
+    ):
+        for idx in matched_peak_indexes:
+            if 0 <= int(idx) < len(peak_positions):
+                peak_positions[int(idx)] = (
+                    float(refined_display_col),
+                    float(refined_display_row),
+                )
+                updated = True
+
+    if isinstance(peak_overlay_cache, dict):
+        matched_overlay_indexes: list[int] = []
+        overlay_records = peak_overlay_cache.get("records")
+        if isinstance(overlay_records, list):
+            for idx, raw_record in enumerate(overlay_records):
+                if not isinstance(raw_record, dict) or not _entry_matches(raw_record):
+                    continue
+                if _apply_updates(raw_record):
+                    updated = True
+                matched_overlay_indexes.append(int(idx))
+        if (
+            matched_overlay_indexes
+            and np.isfinite(refined_display_col)
+            and np.isfinite(refined_display_row)
+        ):
+            overlay_positions = peak_overlay_cache.get("positions")
+            if isinstance(overlay_positions, list):
+                for idx in matched_overlay_indexes:
+                    if 0 <= int(idx) < len(overlay_positions):
+                        overlay_positions[int(idx)] = (
+                            float(refined_display_col),
+                            float(refined_display_row),
+                        )
+                        updated = True
+        if updated:
+            peak_overlay_cache["click_spatial_index"] = None
+
+    return bool(updated)
+
+
 def caked_axis_to_image_index(
     value: float,
     axis_values: Sequence[float] | None,
