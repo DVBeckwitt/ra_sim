@@ -261,6 +261,11 @@ def _manual_pick_click_coords(
     return float(col), float(row)
 
 
+def _manual_pick_zoom_active(bindings: CanvasInteractionBindings) -> bool:
+    session = getattr(bindings.geometry_manual_state, "pick_session", None)
+    return bool(isinstance(session, dict) and session.get("zoom_active", False))
+
+
 def _start_pan_session(
     bindings: CanvasInteractionBindings,
     event: Any,
@@ -445,10 +450,6 @@ def handle_runtime_canvas_click(
         if manual_pick_coords is None:
             return False
         if bool(bindings.manual_pick_session_active()):
-            bindings.place_geometry_manual_selection_at(
-                float(manual_pick_coords[0]),
-                float(manual_pick_coords[1]),
-            )
             return True
         bindings.toggle_geometry_manual_selection_at(
             float(manual_pick_coords[0]),
@@ -528,7 +529,25 @@ def handle_runtime_canvas_press(
     ):
         if getattr(event, "button", None) != 1:
             return False
-        return _manual_pick_click_coords(bindings, event) is not None
+        manual_pick_coords = _manual_pick_click_coords(bindings, event)
+        if manual_pick_coords is None:
+            return False
+        anchor_fraction_x, anchor_fraction_y = manual_pick_zoom_anchor_fractions(
+            bindings.axis,
+            event,
+        )
+        bindings.apply_geometry_manual_pick_zoom(
+            float(manual_pick_coords[0]),
+            float(manual_pick_coords[1]),
+            anchor_fraction_x=anchor_fraction_x,
+            anchor_fraction_y=anchor_fraction_y,
+        )
+        bindings.update_geometry_manual_pick_preview(
+            float(manual_pick_coords[0]),
+            float(manual_pick_coords[1]),
+            force=True,
+        )
+        return True
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
         if getattr(event, "button", None) != 1:
@@ -591,11 +610,15 @@ def handle_runtime_canvas_motion(
         bool(bindings.geometry_runtime_state.manual_pick_armed)
         and bool(bindings.manual_pick_session_active())
     ):
-        return bool(
-            getattr(event, "inaxes", None) is bindings.axis
-            and getattr(event, "xdata", None) is not None
-            and getattr(event, "ydata", None) is not None
-        )
+        if _manual_pick_zoom_active(bindings):
+            manual_pick_coords = _manual_pick_click_coords(bindings, event)
+            if manual_pick_coords is not None:
+                bindings.update_geometry_manual_pick_preview(
+                    float(manual_pick_coords[0]),
+                    float(manual_pick_coords[1]),
+                )
+            return True
+        return _manual_pick_click_coords(bindings, event) is not None
 
     on_motion = getattr(bindings.integration_range_drag_callbacks, "on_motion", None)
     if not callable(on_motion):
@@ -617,6 +640,23 @@ def handle_runtime_canvas_release(
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
         if bool(bindings.manual_pick_session_active()):
+            if not _manual_pick_zoom_active(bindings):
+                return True
+            manual_pick_coords = _manual_pick_click_coords(bindings, event)
+            if manual_pick_coords is not None:
+                bindings.place_geometry_manual_selection_at(
+                    float(manual_pick_coords[0]),
+                    float(manual_pick_coords[1]),
+                )
+            else:
+                bindings.clear_geometry_manual_preview_artists(redraw=False)
+                bindings.restore_geometry_manual_pick_view(redraw=False)
+                bindings.render_current_geometry_manual_pairs(update_status=False)
+                _set_status_text(
+                    bindings,
+                    "Manual point placement canceled: release inside the image.",
+                )
+                _draw_idle(bindings)
             return True
         return _manual_pick_click_coords(bindings, event) is not None
 
