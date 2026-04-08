@@ -349,14 +349,12 @@ def build_geometry_q_group_entries(
     max_positions_local: Sequence[object] | None,
     *,
     peak_table_lattice: Sequence[Sequence[object]] | None = None,
+    peak_records: Sequence[Mapping[str, object]] | None = None,
     primary_a: object = np.nan,
     primary_c: object = np.nan,
     allow_nominal_hkl_indices: bool = False,
 ) -> list[dict[str, object]]:
-    """Aggregate simulated hit tables into unique Qr/Qz selector rows."""
-
-    if max_positions_local is None:
-        return []
+    """Aggregate simulated hit tables or cached peak records into Qr/Qz rows."""
 
     try:
         default_primary_a = float(primary_a)
@@ -367,46 +365,43 @@ def build_geometry_q_group_entries(
     except Exception:
         default_primary_c = float("nan")
 
-    peak_table_lattice_local = list(peak_table_lattice or [])
-    if not peak_table_lattice_local or len(peak_table_lattice_local) != len(
-        max_positions_local
-    ):
-        peak_table_lattice_local = [
-            (default_primary_a, default_primary_c, "primary")
-            for _ in max_positions_local
-        ]
-
     entries_by_key: dict[tuple[object, ...], dict[str, object]] = {}
-    for table_idx, tbl in enumerate(max_positions_local):
-        rows = geometry_reference_hit_rows(tbl)
-        if not rows:
-            continue
-
-        av_used = default_primary_a
-        cv_used = default_primary_c
-        source_label = "primary"
-        if table_idx < len(peak_table_lattice_local):
-            try:
-                av_used = float(peak_table_lattice_local[table_idx][0])
-                cv_used = float(peak_table_lattice_local[table_idx][1])
-                source_label = str(peak_table_lattice_local[table_idx][2])
-            except Exception:
-                av_used = default_primary_a
-                cv_used = default_primary_c
-                source_label = "primary"
-
-        for row in rows:
-            intensity, _xpix, _ypix, _phi, h_val, k_val, l_val = row[:7]
-            if not np.isfinite(intensity):
+    cached_peak_records = list(peak_records or [])
+    if cached_peak_records:
+        for raw_record in cached_peak_records:
+            if not isinstance(raw_record, Mapping):
                 continue
-            hkl_key = tuple(int(np.rint(v)) for v in (h_val, k_val, l_val))
-            group_key, qr_val, qz_val = reflection_q_group_metadata(
-                (h_val, k_val, l_val),
+            source_label = str(raw_record.get("source_label", "primary"))
+            av_used = _coerce_float(raw_record.get("av", primary_a), default_primary_a)
+            cv_used = _coerce_float(raw_record.get("cv", primary_c), default_primary_c)
+            intensity = _coerce_float(
+                raw_record.get("intensity", raw_record.get("weight", 0.0)),
+                0.0,
+            )
+            hkl_raw = raw_record.get("hkl_raw", raw_record.get("hkl"))
+            hkl_key = gui_geometry_overlay.normalize_hkl_key(hkl_raw)
+            if hkl_key is None:
+                continue
+            use_nominal_hkl_indices = bool(
+                raw_record.get("q_group_nominal_hkl", allow_nominal_hkl_indices)
+            )
+            raw_group_key = raw_record.get("q_group_key")
+            if isinstance(raw_group_key, list):
+                group_key = tuple(raw_group_key)
+            elif isinstance(raw_group_key, tuple):
+                group_key = raw_group_key
+            else:
+                group_key = None
+            resolved_group_key, qr_val, qz_val = reflection_q_group_metadata(
+                hkl_raw,
                 source_label=source_label,
                 a_value=av_used,
                 c_value=cv_used,
-                allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+                qr_value=raw_record.get("qr", np.nan),
+                allow_nominal_hkl_indices=use_nominal_hkl_indices,
             )
+            if group_key is None:
+                group_key = resolved_group_key
             if group_key is None:
                 continue
 
@@ -423,6 +418,10 @@ def build_geometry_q_group_entries(
                     "hkl_preview": [],
                 }
                 entries_by_key[group_key] = entry
+            elif not np.isfinite(_coerce_float(entry.get("qr", np.nan), np.nan)) and np.isfinite(qr_val):
+                entry["qr"] = float(qr_val)
+            if not np.isfinite(_coerce_float(entry.get("qz", np.nan), np.nan)) and np.isfinite(qz_val):
+                entry["qz"] = float(qz_val)
 
             entry["total_intensity"] = float(entry["total_intensity"]) + float(
                 abs(intensity)
@@ -430,6 +429,71 @@ def build_geometry_q_group_entries(
             entry["peak_count"] = int(entry["peak_count"]) + 1
             if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
                 entry["hkl_preview"].append(hkl_key)
+    elif max_positions_local is not None:
+        peak_table_lattice_local = list(peak_table_lattice or [])
+        if not peak_table_lattice_local or len(peak_table_lattice_local) != len(
+            max_positions_local
+        ):
+            peak_table_lattice_local = [
+                (default_primary_a, default_primary_c, "primary")
+                for _ in max_positions_local
+            ]
+
+        for table_idx, tbl in enumerate(max_positions_local):
+            rows = geometry_reference_hit_rows(tbl)
+            if not rows:
+                continue
+
+            av_used = default_primary_a
+            cv_used = default_primary_c
+            source_label = "primary"
+            if table_idx < len(peak_table_lattice_local):
+                try:
+                    av_used = float(peak_table_lattice_local[table_idx][0])
+                    cv_used = float(peak_table_lattice_local[table_idx][1])
+                    source_label = str(peak_table_lattice_local[table_idx][2])
+                except Exception:
+                    av_used = default_primary_a
+                    cv_used = default_primary_c
+                    source_label = "primary"
+
+            for row in rows:
+                intensity, _xpix, _ypix, _phi, h_val, k_val, l_val = row[:7]
+                if not np.isfinite(intensity):
+                    continue
+                hkl_key = tuple(int(np.rint(v)) for v in (h_val, k_val, l_val))
+                group_key, qr_val, qz_val = reflection_q_group_metadata(
+                    (h_val, k_val, l_val),
+                    source_label=source_label,
+                    a_value=av_used,
+                    c_value=cv_used,
+                    allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+                )
+                if group_key is None:
+                    continue
+
+                entry = entries_by_key.get(group_key)
+                if entry is None:
+                    entry = {
+                        "key": group_key,
+                        "source_label": str(source_label),
+                        "qr": float(qr_val),
+                        "qz": float(qz_val),
+                        "gz_index": int(group_key[3]),
+                        "total_intensity": 0.0,
+                        "peak_count": 0,
+                        "hkl_preview": [],
+                    }
+                    entries_by_key[group_key] = entry
+
+                entry["total_intensity"] = float(entry["total_intensity"]) + float(
+                    abs(intensity)
+                )
+                entry["peak_count"] = int(entry["peak_count"]) + 1
+                if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
+                    entry["hkl_preview"].append(hkl_key)
+    else:
+        return []
 
     def _sort_value(value: object) -> float:
         numeric = _coerce_float(value, float("nan"))
@@ -1038,6 +1102,7 @@ def make_runtime_geometry_q_group_value_callbacks(
         return build_geometry_q_group_entries(
             simulation_runtime_state.stored_max_positions_local,
             peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+            peak_records=getattr(simulation_runtime_state, "peak_records", None),
             primary_a=_primary_a(),
             primary_c=_primary_c(),
             allow_nominal_hkl_indices=_has_intersection_cache(),

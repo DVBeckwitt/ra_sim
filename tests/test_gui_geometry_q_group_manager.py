@@ -173,6 +173,56 @@ def test_geometry_q_group_manager_builds_entries_from_hit_tables() -> None:
     )
 
 
+def test_geometry_q_group_manager_builds_entries_from_cached_peak_records() -> None:
+    entries = geometry_q_group_manager.build_geometry_q_group_entries(
+        None,
+        peak_records=[
+            {
+                "hkl": (1, 0, 0),
+                "hkl_raw": (1.0, 0.0, 0.0),
+                "source_label": "primary",
+                "av": 3.0,
+                "cv": 5.0,
+                "qr": 1.234,
+                "qz": 0.0,
+                "intensity": 10.0,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            },
+            {
+                "hkl": (0, 1, 0),
+                "hkl_raw": (0.0, 1.0, 0.0),
+                "source_label": "primary",
+                "av": 3.0,
+                "cv": 5.0,
+                "qr": 1.234,
+                "qz": 0.0,
+                "intensity": 5.0,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            },
+            {
+                "hkl": (1, 0, 1),
+                "hkl_raw": (1.0, 0.0, 1.29),
+                "source_label": "primary",
+                "av": 3.0,
+                "cv": 5.0,
+                "intensity": 7.0,
+                "q_group_nominal_hkl": True,
+            },
+        ],
+        allow_nominal_hkl_indices=True,
+    )
+
+    assert [entry["key"] for entry in entries] == [
+        ("q_group", "primary", 1, 0),
+        ("q_group", "primary", 1, 1),
+    ]
+    assert entries[0]["total_intensity"] == 15.0
+    assert entries[0]["peak_count"] == 2
+    assert entries[0]["hkl_preview"] == [(1, 0, 0), (0, 1, 0)]
+    assert np.isclose(entries[0]["qr"], 1.234)
+    assert np.isclose(entries[1]["qz"], 2.0 * np.pi / 5.0)
+
+
 def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> None:
     peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         [
@@ -719,6 +769,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         (["maxpos"],),
         {
             "peak_table_lattice": [(3.0, 5.0, "primary")],
+            "peak_records": runtime_state.peak_records,
             "primary_a": 7.0,
             "primary_c": 9.0,
             "allow_nominal_hkl_indices": False,
