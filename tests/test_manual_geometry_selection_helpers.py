@@ -404,6 +404,59 @@ def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_s
     ]
 
 
+def test_make_runtime_geometry_manual_callbacks_refresh_pick_session_before_delegate() -> None:
+    events: list[tuple[object, ...]] = []
+
+    def _refresh_pick_session(session: dict[str, object] | None) -> dict[str, object]:
+        events.append(("refresh", dict(session or {})))
+        refreshed = dict(session or {})
+        refreshed["mode"] = "refreshed"
+        return refreshed
+
+    def _fake_place(col: float, row: float, **kwargs):
+        events.append(("place", float(col), float(row), dict(kwargs["pick_session"])))
+        return False, {}
+
+    original_place = mg.geometry_manual_place_selection_at
+    try:
+        mg.geometry_manual_place_selection_at = _fake_place
+        callbacks = mg.make_runtime_geometry_manual_callbacks(
+            background_visible=lambda: True,
+            current_background_index=lambda: 0,
+            current_background_image=lambda: "bg-image",
+            pick_session=lambda: {"mode": "start"},
+            build_initial_pairs_display=lambda index, *, prefer_cache: ([], []),
+            session_initial_pairs_display=lambda: [],
+            clear_geometry_pick_artists=lambda *args, **kwargs: None,
+            draw_initial_geometry_pairs_overlay=lambda pairs, *, max_display_markers: None,
+            update_button_label=lambda: None,
+            set_background_file_status_text=lambda: None,
+            pair_group_count=lambda index: 0,
+            set_status_text=None,
+            get_cache_data=lambda **kwargs: {},
+            set_pairs_for_index=lambda index, entries: list(entries or []),
+            pairs_for_index=lambda index: [],
+            set_pick_session=lambda session: None,
+            restore_view=lambda **kwargs: None,
+            clear_preview_artists=lambda **kwargs: None,
+            use_caked_space=False,
+            pick_search_window_px=25.0,
+            refine_preview_point=lambda *args, **kwargs: (0.0, 0.0),
+            remaining_candidates=lambda: [],
+            preview_due=lambda col, row: False,
+            refresh_pick_session=_refresh_pick_session,
+        )
+
+        assert callbacks.place_selection_at(3.0, 4.0) is False
+    finally:
+        mg.geometry_manual_place_selection_at = original_place
+
+    assert events == [
+        ("refresh", {"mode": "start"}),
+        ("place", 3.0, 4.0, {"mode": "refreshed"}),
+    ]
+
+
 def test_make_runtime_geometry_manual_callbacks_delegate_toggle_preview_and_cancel(
     monkeypatch,
 ) -> None:
@@ -1265,6 +1318,78 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert len(entries) == 1
     assert entries[0]["sim_display"] == (5.0, 6.0)
     assert entries[0]["bg_display"] == (9.0, 10.0)
+
+
+def test_refresh_geometry_manual_pick_session_candidates_rebinds_live_group_entries() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 2),
+        "group_entries": [
+            {
+                "label": "old-left",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+            },
+            {
+                "label": "old-right",
+                "source_table_index": 1,
+                "source_row_index": 3,
+                "sim_col": 15.0,
+                "sim_row": 16.0,
+            },
+        ],
+        "pending_entries": [
+            {
+                "label": "old-right",
+                "source_table_index": 1,
+                "source_row_index": 3,
+                "x": 20.0,
+                "y": 30.0,
+            }
+        ],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source", 1, 3),
+        "tagged_candidate": {
+            "label": "old-right",
+            "source_table_index": 1,
+            "source_row_index": 3,
+            "sim_col": 15.0,
+            "sim_row": 16.0,
+        },
+    }
+
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        session,
+        grouped_candidates={
+            ("q_group", "primary", 1, 2): [
+                {
+                    "label": "new-left",
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "sim_col": 50.0,
+                    "sim_row": 60.0,
+                },
+                {
+                    "label": "new-right",
+                    "source_table_index": 1,
+                    "source_row_index": 3,
+                    "sim_col": 70.0,
+                    "sim_row": 80.0,
+                },
+            ]
+        },
+        cache_signature=("sim", 2),
+    )
+
+    assert refreshed["cache_signature"] == ("sim", 2)
+    assert refreshed["target_count"] == 2
+    assert refreshed["group_entries"][0]["label"] == "new-right"
+    assert refreshed["group_entries"][0]["sim_col"] == 70.0
+    assert refreshed["group_entries"][1]["label"] == "new-left"
+    assert refreshed["tagged_candidate"]["label"] == "new-right"
+    assert refreshed["pending_entries"][0]["source_row_index"] == 3
 
 
 def test_cancel_geometry_manual_pick_session_clears_session_and_triggers_callbacks() -> None:

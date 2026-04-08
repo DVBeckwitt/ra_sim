@@ -1035,6 +1035,100 @@ def geometry_manual_prioritize_candidate_entries(
     return reordered
 
 
+def refresh_geometry_manual_pick_session_candidates(
+    pick_session: dict[str, object] | None,
+    *,
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+    cache_signature: object = None,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+    prioritize_candidate_entries: Callable[
+        [Sequence[dict[str, object]] | None, dict[str, object] | None],
+        list[dict[str, object]],
+    ] = geometry_manual_prioritize_candidate_entries,
+    group_target_count_fn: Callable[
+        [tuple[object, ...] | None, Sequence[dict[str, object]] | None],
+        int,
+    ]
+    | None = None,
+) -> dict[str, object]:
+    """Refresh one active manual-pick session against the latest simulated group entries."""
+
+    if not isinstance(pick_session, dict):
+        return {}
+    if not geometry_manual_pick_session_active(
+        pick_session,
+        require_current_background=False,
+    ):
+        return dict(pick_session)
+
+    group_key = pick_session.get("group_key")
+    if group_key is None or not isinstance(grouped_candidates, Mapping):
+        return dict(pick_session)
+
+    live_entries_raw = grouped_candidates.get(group_key)
+    if not isinstance(live_entries_raw, Sequence):
+        return dict(pick_session)
+    live_entries = [dict(entry) for entry in live_entries_raw if isinstance(entry, dict)]
+    if not live_entries:
+        return dict(pick_session)
+    if group_target_count_fn is None:
+        group_target_count_fn = geometry_manual_group_target_count
+
+    preferred_candidate = None
+    tagged_candidate_key = pick_session.get("tagged_candidate_key")
+    if tagged_candidate_key is not None:
+        preferred_candidate = next(
+            (
+                dict(entry)
+                for entry in live_entries
+                if candidate_source_key(entry) == tagged_candidate_key
+            ),
+            None,
+        )
+    if preferred_candidate is None and isinstance(
+        pick_session.get("tagged_candidate"),
+        dict,
+    ):
+        preferred_candidate = dict(pick_session["tagged_candidate"])
+
+    try:
+        refreshed_entries = prioritize_candidate_entries(
+            live_entries,
+            preferred_candidate,
+            candidate_source_key=candidate_source_key,
+        )
+    except TypeError:
+        refreshed_entries = prioritize_candidate_entries(
+            live_entries,
+            preferred_candidate,
+        )
+    refreshed_session = dict(pick_session)
+    refreshed_session["group_entries"] = list(refreshed_entries)
+    refreshed_session["target_count"] = int(
+        group_target_count_fn(group_key, refreshed_entries)
+    )
+    if cache_signature is not None:
+        refreshed_session["cache_signature"] = cache_signature
+
+    tagged_candidate = next(
+        (
+            dict(entry)
+            for entry in refreshed_entries
+            if candidate_source_key(entry) == tagged_candidate_key
+        ),
+        None,
+    )
+    if tagged_candidate is not None:
+        refreshed_session["tagged_candidate"] = tagged_candidate
+    elif "tagged_candidate" in refreshed_session and tagged_candidate_key is None:
+        refreshed_session.pop("tagged_candidate", None)
+
+    return refreshed_session
+
+
 def geometry_manual_central_candidate(
     candidate_entries: Sequence[dict[str, object]] | None,
     *,
@@ -3075,6 +3169,8 @@ def make_runtime_geometry_manual_callbacks(
     ]
     | None = None,
     show_preview: Callable[..., None] | None = None,
+    refresh_pick_session: Callable[[dict[str, object] | None], dict[str, object] | None]
+    | None = None,
 ) -> GeometryManualRuntimeCallbacks:
     """Build live manual-geometry callbacks around the shared helper surface."""
 
@@ -3088,7 +3184,16 @@ def make_runtime_geometry_manual_callbacks(
 
     def _pick_session() -> dict[str, object] | None:
         session = _resolve_runtime_value(pick_session)
-        return session if isinstance(session, dict) else None
+        if not isinstance(session, dict):
+            return None
+        if callable(refresh_pick_session):
+            try:
+                refreshed = refresh_pick_session(session)
+            except Exception:
+                refreshed = session
+            if isinstance(refreshed, dict):
+                session = refreshed
+        return session
 
     def _use_caked_space() -> bool:
         return bool(_resolve_runtime_value(use_caked_space))

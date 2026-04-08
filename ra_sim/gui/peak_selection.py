@@ -169,6 +169,16 @@ def _runtime_draw_idle(bindings: SelectedPeakRuntimeBindings) -> None:
         bindings.draw_idle()
 
 
+def _hide_runtime_selected_peak_marker(bindings: SelectedPeakRuntimeBindings) -> None:
+    marker = bindings.selected_peak_marker
+    set_visible = getattr(marker, "set_visible", None)
+    if callable(set_visible):
+        try:
+            set_visible(False)
+        except Exception:
+            return
+
+
 def _runtime_primary_a(bindings: SelectedPeakRuntimeBindings) -> float:
     try:
         return float(_resolve_runtime_value(bindings.current_primary_a_factory))
@@ -2802,7 +2812,10 @@ def refresh_runtime_selected_peak_after_simulation_update(
         overlay_ready = False
 
     if getattr(bindings.peak_selection_state, "selected_hkl_target", None) is not None:
-        reselect_runtime_selected_peak(bindings)
+        reselection_ok = reselect_runtime_selected_peak(bindings)
+        if not reselection_ok:
+            _hide_runtime_selected_peak_marker(bindings)
+            _runtime_draw_idle(bindings)
     return overlay_ready
 
 

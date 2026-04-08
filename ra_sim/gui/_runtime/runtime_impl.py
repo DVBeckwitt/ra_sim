@@ -2980,6 +2980,7 @@ def _geometry_manual_pick_session_active(*, require_current_background: bool = T
 
 def _geometry_manual_unassigned_group_candidates() -> list[dict[str, object]]:
     """Return manual-pick group candidates that do not yet have a BG assignment."""
+    _refresh_geometry_manual_pick_session()
     return gui_manual_geometry.geometry_manual_unassigned_group_candidates(
         geometry_manual_state.pick_session,
         current_background_index=background_runtime_state.current_background_index,
@@ -2989,6 +2990,7 @@ def _geometry_manual_unassigned_group_candidates() -> list[dict[str, object]]:
 
 def _geometry_manual_current_pending_candidate() -> dict[str, object] | None:
     """Return one remaining simulated peak awaiting a manual background click."""
+    _refresh_geometry_manual_pick_session()
     return gui_manual_geometry.geometry_manual_current_pending_candidate(
         geometry_manual_state.pick_session,
         current_background_index=background_runtime_state.current_background_index,
@@ -3204,8 +3206,46 @@ def _apply_geometry_manual_pick_zoom(
     )
 
 
+def _refresh_geometry_manual_pick_session() -> dict[str, object]:
+    """Refresh the active manual Qr/Qz pick session against the latest simulation."""
+
+    current_session = geometry_manual_state.pick_session
+    if not gui_manual_geometry.geometry_manual_pick_session_active(
+        current_session,
+        current_background_index=background_runtime_state.current_background_index,
+    ):
+        return current_session
+
+    background_image = _current_geometry_manual_pick_background_image()
+    if background_image is None:
+        return current_session
+
+    try:
+        cache_data = _get_geometry_manual_pick_cache(
+            param_set=dict(_current_geometry_fit_params()),
+            prefer_cache=True,
+            background_index=int(background_runtime_state.current_background_index),
+            background_image=background_image,
+        )
+    except Exception:
+        return current_session
+    if not isinstance(cache_data, dict):
+        return current_session
+
+    refreshed_session = gui_manual_geometry.refresh_geometry_manual_pick_session_candidates(
+        current_session,
+        grouped_candidates=cache_data.get("grouped_candidates"),
+        cache_signature=cache_data.get("signature"),
+        candidate_source_key=_geometry_manual_candidate_source_key,
+    )
+    if refreshed_session != current_session:
+        return _set_geometry_manual_pick_session(refreshed_session)
+    return current_session
+
+
 def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
+    _refresh_geometry_manual_pick_session()
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
         geometry_manual_state.pick_session,
         current_background_index=background_runtime_state.current_background_index,
@@ -4177,6 +4217,7 @@ geometry_manual_workflow = (
             _background_display_to_native_detector_coords
         ),
         show_preview=_show_geometry_manual_preview,
+        refresh_pick_session=_refresh_geometry_manual_pick_session,
     )
 )
 geometry_manual_runtime = geometry_manual_workflow.runtime
