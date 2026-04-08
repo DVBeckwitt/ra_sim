@@ -327,6 +327,8 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
             "source_table_index": 3,
             "source_row_index": 8,
             "source_peak_index": 2,
+            "qr": 1.234567890123,
+            "qz": -2.345678901234,
         },
         120.0,
         240.0,
@@ -353,6 +355,8 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
     assert entry["raw_caked_x"] == 13.0
     assert entry["raw_caked_y"] == -7.0
     assert entry["source_peak_index"] == 2
+    assert entry["qr"] == 1.234567890123
+    assert entry["qz"] == -2.345678901234
 
 
 def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_state() -> None:
@@ -1295,6 +1299,8 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
                 "source_row_index": 2,
                 "sim_col": 5.0,
                 "sim_row": 6.0,
+                "qr": 1.2345678901,
+                "qz": 2.3456789012,
             }
         ],
         "pending_entries": [
@@ -1318,6 +1324,8 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert len(entries) == 1
     assert entries[0]["sim_display"] == (5.0, 6.0)
     assert entries[0]["bg_display"] == (9.0, 10.0)
+    assert entries[0]["qr"] == 1.2345678901
+    assert entries[0]["qz"] == 2.3456789012
 
 
 def test_refresh_geometry_manual_pick_session_candidates_rebinds_live_group_entries() -> None:
@@ -1802,6 +1810,8 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
                     "source_row_index": 7,
                     "sim_col": 13.5,
                     "sim_row": 15.5,
+                    "qr": 1.2345678901,
+                    "qz": -0.4567890123,
                 }
             ]
         ),
@@ -1845,6 +1855,8 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
             "hkl": (1, 0, 2),
             "bg_display": (9.0, 11.0),
             "sim_display": (13.5, 15.5),
+            "qr": 1.2345678901,
+            "qz": -0.4567890123,
         }
     ]
 

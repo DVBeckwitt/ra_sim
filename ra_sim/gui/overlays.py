@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -199,6 +199,32 @@ def _plot_pair_label_text(
     )
 
 
+def _format_pair_identity_label(
+    entry: Mapping[str, object] | None,
+    fallback_label: str,
+) -> str:
+    """Return the visible pair label, appending cached Qr/Qz when available."""
+
+    label = str(fallback_label)
+    if not isinstance(entry, Mapping):
+        return label
+
+    q_parts: list[str] = []
+    for field_name, prefix in (("qr", "Qr"), ("qz", "Qz")):
+        try:
+            value = float(entry.get(field_name, np.nan))
+        except Exception:
+            value = float("nan")
+        if np.isfinite(value):
+            q_parts.append(f"{prefix}={value:.10f}")
+    if not q_parts:
+        return label
+    q_text = "  ".join(q_parts)
+    if not label:
+        return q_text
+    return f"{label}\n{q_text}"
+
+
 def draw_geometry_fit_overlay(
     ax: Any,
     overlay_records: Sequence[dict[str, object]] | None,
@@ -361,7 +387,10 @@ def draw_geometry_fit_overlay(
             native_key="final_bg_native",
         )
 
-        label = str(entry.get("hkl", entry.get("label", "match")))
+        label = _format_pair_identity_label(
+            entry,
+            str(entry.get("hkl", entry.get("label", "match"))),
+        )
         if initial_sim_display is not None:
             _plot_marker(
                 initial_sim_display[0],
@@ -467,7 +496,10 @@ def draw_initial_geometry_pairs_overlay(
         bg_display = entry.get("bg_display")
         if sim_display is None and bg_display is None:
             continue
-        hkl_label = str(entry.get("hkl", entry.get("label", idx)))
+        hkl_label = _format_pair_identity_label(
+            entry,
+            str(entry.get("hkl", entry.get("label", idx))),
+        )
 
         if sim_display is not None:
             sim_pt, = ax.plot(
@@ -565,7 +597,10 @@ def draw_live_geometry_preview_overlay(
         bg_color = "#636e72" if excluded else "#f39c12"
         line_color = "#95a5a6" if excluded else "#636e72"
         line_alpha = 0.35 if excluded else 0.85
-        label_text = f"{hkl_key} excluded" if excluded else f"{hkl_key}"
+        label_text = _format_pair_identity_label(
+            entry,
+            f"{hkl_key} excluded" if excluded else f"{hkl_key}",
+        )
 
         sim_pt, = ax.plot(
             [float(sim_col)],

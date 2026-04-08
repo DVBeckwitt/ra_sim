@@ -1805,7 +1805,27 @@ def geometry_manual_pair_entry_from_candidate(
         entry["placement_error_px"] = max(0.0, float(placement_error_px))
     if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
         entry["sigma_px"] = float(sigma_px)
+    _copy_q_values_from_sources(entry, candidate)
     return entry
+
+
+def _copy_q_values_from_sources(
+    target: dict[str, object],
+    *sources: Mapping[str, object] | None,
+) -> None:
+    """Copy finite ``qr``/``qz`` values from the first source that exposes them."""
+
+    for field_name in ("qr", "qz"):
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            try:
+                value = float(source.get(field_name, np.nan))
+            except Exception:
+                continue
+            if np.isfinite(value):
+                target[field_name] = float(value)
+                break
 
 
 def geometry_manual_preview_due(
@@ -2340,6 +2360,7 @@ def geometry_manual_session_initial_pairs_display(
 
         source_key = candidate_source_key(raw_entry)
         measured_entry = pending_lookup.get(source_key) if source_key is not None else None
+        _copy_q_values_from_sources(entry, raw_entry, measured_entry)
         if isinstance(measured_entry, dict):
             bg_coords = entry_display_coords(measured_entry)
             if bg_coords is not None:
@@ -2410,6 +2431,7 @@ def build_geometry_manual_initial_pairs_display(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
+        _copy_q_values_from_sources(initial_entry, entry)
         bg_coords = entry_display_coords(entry)
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
@@ -2431,6 +2453,7 @@ def build_geometry_manual_initial_pairs_display(
                 sim_row = float("nan")
             if np.isfinite(sim_col) and np.isfinite(sim_row):
                 initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+            _copy_q_values_from_sources(initial_entry, sim_entry, entry)
         initial_pairs_display.append(initial_entry)
 
     return measured_display, initial_pairs_display

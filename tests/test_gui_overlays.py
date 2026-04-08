@@ -92,6 +92,8 @@ def test_draw_initial_geometry_pairs_overlay_links_sim_and_background_points() -
                     "hkl": (1, 2, 3),
                     "sim_display": np.array([8.0, 9.0]),
                     "bg_display": np.array([10.0, 11.0]),
+                    "qr": 1.234567890123,
+                    "qz": -2.345678901234,
                 }
             ],
             geometry_pick_artists=geometry_pick_artists,
@@ -103,6 +105,8 @@ def test_draw_initial_geometry_pairs_overlay_links_sim_and_background_points() -
 
         assert len(geometry_pick_artists) == 3
         assert any("(1, 2, 3)" in label for label in labels)
+        assert any("Qr=1.2345678901" in label for label in labels)
+        assert any("Qz=-2.3456789012" in label for label in labels)
         assert draws == ["draw"]
     finally:
         plt.close(fig)
