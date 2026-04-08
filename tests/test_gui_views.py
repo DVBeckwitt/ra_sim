@@ -2434,11 +2434,12 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
         "Undo Fit",
         "Redo Fit",
         None,
-        "Refine Qr Sets",
         "Undo Placement",
+        "Export Placements...",
     ]
     assert _FakeButton.created[2].kwargs["textvariable"] is view_state.geometry_manual_pick_button_var
-    assert _FakeButton.created[7].kwargs["textvariable"] is (
+    assert view_state.geometry_manual_refine_button is None
+    assert _FakeButton.created[6].kwargs["textvariable"] is (
         view_state.geometry_preview_exclude_button_var
     )
 
@@ -2465,7 +2466,6 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
         "undo-fit",
         "redo-fit",
         "toggle-pick",
-        "refine",
         "undo-placement",
         "export",
         "import",

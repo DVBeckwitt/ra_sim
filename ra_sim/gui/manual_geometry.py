@@ -3323,6 +3323,11 @@ def make_runtime_geometry_manual_callbacks(
         tuple[float, float] | None,
     ]
     | None = None,
+    refine_saved_pair_entry: Callable[
+        [dict[str, object], dict[str, object] | None],
+        dict[str, object] | None,
+    ]
+    | None = None,
     show_preview: Callable[..., None] | None = None,
     refresh_pick_session: Callable[[dict[str, object] | None], dict[str, object] | None]
     | None = None,
@@ -3427,6 +3432,7 @@ def make_runtime_geometry_manual_callbacks(
             nearest_candidate_to_point_fn=nearest_candidate_to_point,
             position_error_px=position_error_px,
             position_sigma_px=position_sigma_px,
+            refine_saved_pair_entry_fn=refine_saved_pair_entry,
         )
         return bool(handled)
 
@@ -3754,6 +3760,11 @@ def geometry_manual_place_selection_at(
     pair_entry_from_candidate_fn: Callable[..., dict[str, object] | None] = geometry_manual_pair_entry_from_candidate,
     position_error_px: Callable[[float, float, float, float], float] = geometry_manual_position_error_px,
     position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
+    refine_saved_pair_entry_fn: Callable[
+        [dict[str, object], dict[str, object] | None],
+        dict[str, object] | None,
+    ]
+    | None = None,
 ) -> tuple[bool, dict[str, object]]:
     """Record the next manual background point for the active Qr/Qz pick session."""
 
@@ -3930,6 +3941,16 @@ def geometry_manual_place_selection_at(
         if callable(set_status_text):
             set_status_text("Failed to build the manual geometry pair entry.")
         return False, current_session
+    if callable(refine_saved_pair_entry_fn):
+        try:
+            refined_pair_entry = refine_saved_pair_entry_fn(
+                dict(pair_entry),
+                dict(candidate) if isinstance(candidate, dict) else None,
+            )
+        except Exception:
+            refined_pair_entry = pair_entry
+        if isinstance(refined_pair_entry, dict):
+            pair_entry = dict(refined_pair_entry)
 
     if callable(push_undo_state_fn):
         push_undo_state_fn()

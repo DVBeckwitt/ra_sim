@@ -1052,6 +1052,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_callbacks()
         ),
         view_state="geometry-view",
         on_toggle_manual_pick=lambda: events.append("toggle-pick"),
+        on_refine_manual_pairs=lambda: events.append("refine"),
         on_undo_manual_placement=lambda: events.append("undo-placement"),
         on_export_manual_pairs=lambda: events.append("export"),
         on_import_manual_pairs=lambda: events.append("import"),
@@ -1066,6 +1067,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_callbacks()
             "parent": "parent-frame",
             "view_state": "geometry-view",
             "on_toggle_manual_pick": view_calls[0]["on_toggle_manual_pick"],
+            "on_refine_manual_pairs": view_calls[0]["on_refine_manual_pairs"],
             "on_undo_manual_placement": view_calls[0]["on_undo_manual_placement"],
             "on_export_manual_pairs": view_calls[0]["on_export_manual_pairs"],
             "on_import_manual_pairs": view_calls[0]["on_import_manual_pairs"],
@@ -1076,6 +1078,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_callbacks()
 
     for key in (
         "on_toggle_manual_pick",
+        "on_refine_manual_pairs",
         "on_undo_manual_placement",
         "on_export_manual_pairs",
         "on_import_manual_pairs",
@@ -1086,6 +1089,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_callbacks()
 
     assert events == [
         "toggle-pick",
+        "refine",
         "undo-placement",
         "export",
         "import",

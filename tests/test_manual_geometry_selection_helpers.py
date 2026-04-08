@@ -418,7 +418,15 @@ def test_make_runtime_geometry_manual_callbacks_refresh_pick_session_before_dele
         return refreshed
 
     def _fake_place(col: float, row: float, **kwargs):
-        events.append(("place", float(col), float(row), dict(kwargs["pick_session"])))
+        events.append(
+            (
+                "place",
+                float(col),
+                float(row),
+                dict(kwargs["pick_session"]),
+                callable(kwargs.get("refine_saved_pair_entry_fn")),
+            )
+        )
         return False, {}
 
     original_place = mg.geometry_manual_place_selection_at
@@ -446,6 +454,7 @@ def test_make_runtime_geometry_manual_callbacks_refresh_pick_session_before_dele
             use_caked_space=False,
             pick_search_window_px=25.0,
             refine_preview_point=lambda *args, **kwargs: (0.0, 0.0),
+            refine_saved_pair_entry=lambda entry, candidate=None: dict(entry),
             remaining_candidates=lambda: [],
             preview_due=lambda col, row: False,
             refresh_pick_session=_refresh_pick_session,
@@ -457,7 +466,7 @@ def test_make_runtime_geometry_manual_callbacks_refresh_pick_session_before_dele
 
     assert events == [
         ("refresh", {"mode": "start"}),
-        ("place", 3.0, 4.0, {"mode": "refreshed"}),
+        ("place", 3.0, 4.0, {"mode": "refreshed"}, True),
     ]
 
 
@@ -2555,6 +2564,61 @@ def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     assert saved_entry_sets[-1][1]["q_group_key"] == ("q_group", "primary", 1, 0)
     assert saved_entry_sets[-1][1]["placement_error_px"] > 0.0
     assert "Saved 1 manual background points for selected group" in status_messages[-1]
+
+
+def test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callback() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [
+                {
+                    "label": "1,0,0",
+                    "hkl": (1, 0, 0),
+                    "sim_col": 5.0,
+                    "sim_row": 6.0,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(list(entries or []))
+        or list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        refine_saved_pair_entry_fn=lambda entry, candidate=None: {
+            **dict(entry),
+            "refined_sim_caked_x": 11.0,
+            "refined_sim_caked_y": 12.0,
+            "refined_sim_x": 13.0,
+            "refined_sim_y": 14.0,
+            "source_row_index": candidate.get("source_row_index"),
+        },
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert saved_entry_sets[-1][0]["refined_sim_caked_x"] == 11.0
+    assert saved_entry_sets[-1][0]["refined_sim_caked_y"] == 12.0
+    assert saved_entry_sets[-1][0]["refined_sim_x"] == 13.0
+    assert saved_entry_sets[-1][0]["refined_sim_y"] == 14.0
 
 
 def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> None:

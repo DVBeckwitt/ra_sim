@@ -2300,6 +2300,222 @@ def _undo_last_geometry_manual_placement() -> None:
     progress_label_geometry.config(text="Undid the last manual placement change.")
 
 
+def _refine_geometry_manual_pair_entry_from_cache(
+    entry: dict[str, object] | None,
+    *,
+    source_entry: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    """Refine one saved manual-pair simulation point from the cached caked peak map."""
+
+    if not isinstance(entry, dict):
+        return None
+
+    updated_entry = dict(entry)
+    try:
+        caked_sim_image = np.asarray(
+            simulation_runtime_state.last_caked_image_unscaled,
+            dtype=float,
+        )
+        radial_axis = np.asarray(
+            simulation_runtime_state.last_caked_radial_values,
+            dtype=float,
+        )
+        azimuth_axis = np.asarray(
+            simulation_runtime_state.last_caked_azimuth_values,
+            dtype=float,
+        )
+    except Exception:
+        return updated_entry
+
+    if (
+        caked_sim_image.ndim != 2
+        or caked_sim_image.size == 0
+        or radial_axis.size <= 0
+        or azimuth_axis.size <= 0
+    ):
+        return updated_entry
+
+    stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+    if stored_sim_image is not None:
+        native_image_shape = tuple(int(v) for v in np.asarray(stored_sim_image).shape[:2])
+    else:
+        native_image_shape = (int(image_size), int(image_size))
+
+    placement_refine_cache: dict[str, object] = {}
+    try:
+        placement_refine_cache = _get_geometry_manual_pick_cache(
+            param_set=dict(_current_geometry_fit_params()),
+            prefer_cache=True,
+            background_image=_current_geometry_manual_pick_background_image(),
+        )
+        sim_match_cfg = dict(placement_refine_cache.get("match_config", {}))
+    except Exception:
+        sim_match_cfg = {}
+    try:
+        resolved_sim_match_cfg, sim_background_context = _auto_match_background_context(
+            caked_sim_image,
+            sim_match_cfg,
+        )
+    except Exception:
+        resolved_sim_match_cfg = dict(sim_match_cfg)
+        sim_background_context = None
+    sim_refine_cache = {
+        "match_config": dict(resolved_sim_match_cfg),
+        "background_context": sim_background_context,
+    }
+
+    resolved_source_entry = dict(source_entry) if isinstance(source_entry, dict) else None
+    source_key: tuple[int, int] | None
+    try:
+        source_key = (
+            int(updated_entry.get("source_table_index")),
+            int(updated_entry.get("source_row_index")),
+        )
+    except Exception:
+        source_key = None
+    if not isinstance(resolved_source_entry, dict):
+        simulated_lookup = dict(placement_refine_cache.get("simulated_lookup", {}))
+        resolved_source_entry = (
+            simulated_lookup.get(source_key) if source_key is not None else None
+        )
+    if not isinstance(resolved_source_entry, dict):
+        return updated_entry
+
+    try:
+        seed_tth = float(
+            resolved_source_entry.get(
+                "caked_x",
+                resolved_source_entry.get("two_theta_deg", np.nan),
+            )
+        )
+        seed_phi = float(
+            resolved_source_entry.get(
+                "caked_y",
+                resolved_source_entry.get("phi_deg", np.nan),
+            )
+        )
+    except Exception:
+        seed_tth = float("nan")
+        seed_phi = float("nan")
+    if not (np.isfinite(seed_tth) and np.isfinite(seed_phi)):
+        try:
+            seed_tth = float(
+                updated_entry.get(
+                    "refined_sim_caked_x",
+                    updated_entry.get("caked_x", updated_entry.get("raw_caked_x", np.nan)),
+                )
+            )
+            seed_phi = float(
+                updated_entry.get(
+                    "refined_sim_caked_y",
+                    updated_entry.get("caked_y", updated_entry.get("raw_caked_y", np.nan)),
+                )
+            )
+        except Exception:
+            seed_tth = float("nan")
+            seed_phi = float("nan")
+    if not (np.isfinite(seed_tth) and np.isfinite(seed_phi)):
+        return updated_entry
+
+    refined_tth, refined_phi = gui_manual_geometry.geometry_manual_refine_preview_point(
+        dict(resolved_source_entry),
+        float(seed_tth),
+        float(seed_phi),
+        display_background=caked_sim_image,
+        cache_data=sim_refine_cache,
+        use_caked_space=True,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        match_simulated_peaks_to_peak_context=match_simulated_peaks_to_peak_context,
+        caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+        caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+        refine_caked_peak_center_fn=_refine_caked_peak_center,
+    )
+    if not (np.isfinite(refined_tth) and np.isfinite(refined_phi)):
+        return updated_entry
+
+    updated_entry["refined_sim_caked_x"] = float(refined_tth)
+    updated_entry["refined_sim_caked_y"] = float(refined_phi)
+
+    try:
+        refined_background_display = _caked_angles_to_background_display_coords(
+            float(refined_tth),
+            float(refined_phi),
+        )
+    except Exception:
+        refined_background_display = None
+    try:
+        native_point = (
+            _background_display_to_native_detector_coords(
+                float(refined_background_display[0]),
+                float(refined_background_display[1]),
+            )
+            if (
+                isinstance(refined_background_display, tuple)
+                and len(refined_background_display) >= 2
+                and refined_background_display[0] is not None
+                and refined_background_display[1] is not None
+                and np.isfinite(float(refined_background_display[0]))
+                and np.isfinite(float(refined_background_display[1]))
+            )
+            else None
+        )
+    except Exception:
+        native_point = None
+    if (
+        isinstance(native_point, tuple)
+        and len(native_point) >= 2
+        and np.isfinite(float(native_point[0]))
+        and np.isfinite(float(native_point[1]))
+    ):
+        updated_entry["refined_sim_native_x"] = float(native_point[0])
+        updated_entry["refined_sim_native_y"] = float(native_point[1])
+        try:
+            refined_display = _native_sim_to_display_coords(
+                float(native_point[0]),
+                float(native_point[1]),
+                native_image_shape,
+            )
+        except Exception:
+            refined_display = None
+        if (
+            isinstance(refined_display, tuple)
+            and len(refined_display) >= 2
+            and np.isfinite(float(refined_display[0]))
+            and np.isfinite(float(refined_display[1]))
+        ):
+            updated_entry["refined_sim_x"] = float(refined_display[0])
+            updated_entry["refined_sim_y"] = float(refined_display[1])
+
+    gui_manual_geometry.update_geometry_manual_peak_record_cache(
+        simulation_runtime_state.peak_records,
+        source_key=source_key,
+        refined_caked=(float(refined_tth), float(refined_phi)),
+        refined_native=(
+            (
+                float(updated_entry["refined_sim_native_x"]),
+                float(updated_entry["refined_sim_native_y"]),
+            )
+            if "refined_sim_native_x" in updated_entry
+            and "refined_sim_native_y" in updated_entry
+            else None
+        ),
+        refined_display=(
+            (
+                float(updated_entry["refined_sim_x"]),
+                float(updated_entry["refined_sim_y"]),
+            )
+            if "refined_sim_x" in updated_entry and "refined_sim_y" in updated_entry
+            else None
+        ),
+        peak_positions=simulation_runtime_state.peak_positions,
+        peak_overlay_cache=simulation_runtime_state.peak_overlay_cache,
+    )
+    geometry_runtime_state.manual_pick_cache_signature = None
+    geometry_runtime_state.manual_pick_cache_data = {}
+    return updated_entry
+
+
 def _refine_current_geometry_manual_pairs() -> None:
     """Refine current saved manual-pair simulation points onto local simulation maxima."""
 
@@ -4182,6 +4398,12 @@ geometry_manual_workflow = (
         ),
         background_display_to_native_detector_coords=(
             _background_display_to_native_detector_coords
+        ),
+        refine_saved_pair_entry=(
+            lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
+                entry,
+                source_entry=candidate,
+            )
         ),
         show_preview=_show_geometry_manual_preview,
         refresh_pick_session=_refresh_geometry_manual_pick_session,
