@@ -17498,6 +17498,165 @@ for _summary_var in (
 
 _refresh_refine_section_summaries()
 
+
+def _geometry_fit_live_update_manual_peak_cache(
+    update_payload: Mapping[str, object] | None,
+) -> None:
+    """Push one geometry-fit trial's simulated Qr/Qz positions into the live cache."""
+
+    if not isinstance(update_payload, Mapping):
+        return
+    raw_records = update_payload.get("live_cache_records", ())
+    if not isinstance(raw_records, (list, tuple)):
+        return
+
+    stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+    if stored_sim_image is not None:
+        native_image_shape = tuple(int(v) for v in np.asarray(stored_sim_image).shape[:2])
+    else:
+        native_image_shape = (int(image_size), int(image_size))
+
+    def _source_key(record: Mapping[str, object]) -> tuple[int, int] | None:
+        try:
+            return (
+                int(record.get("source_table_index")),
+                int(record.get("source_row_index")),
+            )
+        except Exception:
+            return None
+
+    def _dataset_index(record: Mapping[str, object]) -> int:
+        try:
+            return int(
+                record.get(
+                    "dataset_index",
+                    getattr(background_runtime_state, "current_background_index", 0),
+                )
+            )
+        except Exception:
+            return int(getattr(background_runtime_state, "current_background_index", 0))
+
+    updated_any = False
+    dataset_entries: dict[int, list[dict[str, object]]] = {}
+    dirty_datasets: set[int] = set()
+
+    for raw_record in raw_records:
+        if not isinstance(raw_record, Mapping):
+            continue
+        source_key = _source_key(raw_record)
+        if source_key is None:
+            continue
+
+        try:
+            native_col = float(
+                raw_record.get(
+                    "simulated_detector_x",
+                    raw_record.get("simulated_x", np.nan),
+                )
+            )
+            native_row = float(
+                raw_record.get(
+                    "simulated_detector_y",
+                    raw_record.get("simulated_y", np.nan),
+                )
+            )
+        except Exception:
+            native_col = float("nan")
+            native_row = float("nan")
+        native_point = (
+            (float(native_col), float(native_row))
+            if np.isfinite(native_col) and np.isfinite(native_row)
+            else None
+        )
+
+        try:
+            refined_two_theta = float(raw_record.get("simulated_two_theta_deg", np.nan))
+            refined_phi = float(raw_record.get("simulated_phi_deg", np.nan))
+        except Exception:
+            refined_two_theta = float("nan")
+            refined_phi = float("nan")
+        refined_caked = (
+            (float(refined_two_theta), float(refined_phi))
+            if np.isfinite(refined_two_theta) and np.isfinite(refined_phi)
+            else None
+        )
+
+        refined_display = None
+        if native_point is not None:
+            try:
+                display_point = _native_sim_to_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                    native_image_shape,
+                )
+            except Exception:
+                display_point = None
+            if (
+                isinstance(display_point, tuple)
+                and len(display_point) >= 2
+                and np.isfinite(float(display_point[0]))
+                and np.isfinite(float(display_point[1]))
+            ):
+                refined_display = (
+                    float(display_point[0]),
+                    float(display_point[1]),
+                )
+
+        if gui_manual_geometry.update_geometry_manual_peak_record_cache(
+            simulation_runtime_state.peak_records,
+            source_key=source_key,
+            refined_caked=refined_caked,
+            refined_native=native_point,
+            refined_display=refined_display,
+            peak_positions=simulation_runtime_state.peak_positions,
+            peak_overlay_cache=simulation_runtime_state.peak_overlay_cache,
+        ):
+            updated_any = True
+
+        dataset_index = _dataset_index(raw_record)
+        entries = dataset_entries.get(dataset_index)
+        if entries is None:
+            entries = [
+                dict(entry)
+                for entry in (_geometry_manual_pairs_for_index(dataset_index) or ())
+                if isinstance(entry, Mapping)
+            ]
+            dataset_entries[dataset_index] = entries
+
+        for entry in entries:
+            try:
+                entry_key = (
+                    int(entry.get("source_table_index")),
+                    int(entry.get("source_row_index")),
+                )
+            except Exception:
+                entry_key = None
+            if entry_key != source_key:
+                continue
+            if refined_display is not None:
+                entry["refined_sim_x"] = float(refined_display[0])
+                entry["refined_sim_y"] = float(refined_display[1])
+            if native_point is not None:
+                entry["refined_sim_native_x"] = float(native_point[0])
+                entry["refined_sim_native_y"] = float(native_point[1])
+            if refined_caked is not None:
+                entry["refined_sim_caked_x"] = float(refined_caked[0])
+                entry["refined_sim_caked_y"] = float(refined_caked[1])
+            dirty_datasets.add(int(dataset_index))
+            updated_any = True
+            break
+
+    for dataset_index in sorted(dirty_datasets):
+        _set_geometry_manual_pairs_for_index(
+            int(dataset_index),
+            dataset_entries.get(int(dataset_index), []),
+        )
+
+    if updated_any:
+        _invalidate_geometry_manual_pick_cache()
+        _render_current_geometry_manual_pairs(update_status=False)
+        schedule_update()
+
 geometry_fit_runtime_workflow = (
     gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
         geometry_fit_module=gui_geometry_fit,
@@ -17653,6 +17812,7 @@ geometry_fit_runtime_workflow = (
             "build_overlay_records": build_geometry_fit_overlay_records,
             "compute_frame_diagnostics": _geometry_overlay_frame_diagnostics,
             "solve_fit": fit_geometry_parameters,
+            "live_update_callback": _geometry_fit_live_update_manual_peak_cache,
             "stamp_factory": (lambda: datetime.now().strftime("%Y%m%d_%H%M%S")),
             "flush_ui": root.update_idletasks,
             "before_run": (

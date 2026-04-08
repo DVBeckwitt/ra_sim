@@ -6,6 +6,7 @@ import copy
 import os
 import sys
 import inspect
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.utils.notifications import play_completion_chime
 
 
@@ -246,6 +248,7 @@ class GeometryFitRuntimeUiBindings:
     save_export_records: Callable[[Path, Sequence[dict[str, object]]], None]
     set_progress_text: Callable[[str], None]
     cmd_line: Callable[[str], None]
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +317,7 @@ class GeometryFitRuntimeActionExecutionBindings:
     aggregate_match_centers: Callable[..., tuple[object, object, object]]
     build_overlay_records: Callable[..., list[dict[str, object]]]
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]]
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -566,6 +570,7 @@ def build_runtime_geometry_fit_action_execution_bindings(
     aggregate_match_centers: Callable[..., tuple[object, object, object]],
     build_overlay_records: Callable[..., list[dict[str, object]]],
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]],
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None,
 ) -> GeometryFitRuntimeActionExecutionBindings:
     """Build the live execution-bundle for one geometry-fit action."""
 
@@ -597,6 +602,7 @@ def build_runtime_geometry_fit_action_execution_bindings(
         aggregate_match_centers=aggregate_match_centers,
         build_overlay_records=build_overlay_records,
         compute_frame_diagnostics=compute_frame_diagnostics,
+        live_update_callback=live_update_callback,
     )
 
 
@@ -644,6 +650,7 @@ def build_runtime_geometry_fit_action_bindings(
     aggregate_match_centers: Callable[..., tuple[object, object, object]],
     build_overlay_records: Callable[..., list[dict[str, object]]],
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]],
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None,
     solve_fit: Callable[..., object],
     stamp_factory: Callable[[], str],
     flush_ui: Callable[[], None] | None = None,
@@ -699,6 +706,7 @@ def build_runtime_geometry_fit_action_bindings(
             aggregate_match_centers=aggregate_match_centers,
             build_overlay_records=build_overlay_records,
             compute_frame_diagnostics=compute_frame_diagnostics,
+            live_update_callback=live_update_callback,
         ),
         solve_fit=solve_fit,
         stamp_factory=stamp_factory,
@@ -753,6 +761,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
     aggregate_match_centers: Callable[..., tuple[object, object, object]],
     build_overlay_records: Callable[..., list[dict[str, object]]],
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]],
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None,
     solve_fit: Callable[..., object],
     stamp_factory: Callable[[], str],
     flush_ui: Callable[[], None] | None = None,
@@ -806,6 +815,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
             aggregate_match_centers=aggregate_match_centers,
             build_overlay_records=build_overlay_records,
             compute_frame_diagnostics=compute_frame_diagnostics,
+            live_update_callback=live_update_callback,
             solve_fit=solve_fit,
             stamp_factory=stamp_factory,
             flush_ui=flush_ui,
@@ -2143,6 +2153,83 @@ def build_geometry_manual_fit_dataset(
     """Build one saved-manual-pair geometry dataset for the optimizer."""
 
     background_idx = int(background_index)
+
+    def _finite_float(value: object) -> float | None:
+        try:
+            out = float(value)
+        except Exception:
+            return None
+        if not np.isfinite(out):
+            return None
+        return float(out)
+
+    def _caked_angle_pair(
+        entry: Mapping[str, object] | None,
+        *,
+        x_keys: Sequence[str],
+        y_keys: Sequence[str],
+    ) -> tuple[float, float] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        two_theta_value: float | None = None
+        phi_value: float | None = None
+        for key in x_keys:
+            two_theta_value = _finite_float(entry.get(key))
+            if two_theta_value is not None:
+                break
+        for key in y_keys:
+            phi_value = _finite_float(entry.get(key))
+            if phi_value is not None:
+                break
+        if two_theta_value is None or phi_value is None:
+            return None
+        return float(two_theta_value), float(phi_value)
+
+    def _reference_two_theta_deg(
+        entry: Mapping[str, object] | None,
+        *,
+        a_lattice: float | None,
+        c_lattice: float | None,
+        wavelength: float | None,
+    ) -> float | None:
+        if not isinstance(entry, Mapping):
+            return None
+        hkl = entry.get("hkl")
+        if (
+            isinstance(hkl, (list, tuple, np.ndarray))
+            and len(hkl) >= 3
+            and a_lattice is not None
+            and c_lattice is not None
+            and wavelength is not None
+        ):
+            try:
+                spacing = d_spacing(
+                    int(hkl[0]),
+                    int(hkl[1]),
+                    int(hkl[2]),
+                    float(a_lattice),
+                    float(c_lattice),
+                )
+                if spacing is not None:
+                    value = two_theta(float(spacing), float(wavelength))
+                    finite_value = _finite_float(value)
+                    if finite_value is not None:
+                        return float(finite_value)
+            except Exception:
+                pass
+
+        qr_value = _finite_float(entry.get("qr"))
+        qz_value = _finite_float(entry.get("qz"))
+        if qr_value is None or qz_value is None or wavelength is None:
+            return None
+        q_mag = math.hypot(float(qr_value), float(qz_value))
+        if not (np.isfinite(q_mag) and q_mag > 0.0):
+            return None
+        arg = float(q_mag) * float(wavelength) / (4.0 * np.pi)
+        if not np.isfinite(arg) or abs(arg) > 1.0:
+            return None
+        return float(2.0 * np.degrees(np.arcsin(arg)))
+
     use_caked_display = False
     if callable(manual_dataset_bindings.pick_uses_caked_space):
         try:
@@ -2164,9 +2251,12 @@ def build_geometry_manual_fit_dataset(
     params_i = dict(base_fit_params or {})
     theta_offset = float(params_i.get("theta_offset", 0.0))
     params_i["theta_initial"] = float(theta_base + theta_offset)
+    reference_a = _finite_float(params_i.get("a"))
+    reference_c = _finite_float(params_i.get("c"))
+    reference_lambda = _finite_float(params_i.get("lambda"))
     simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
         params_i,
-        prefer_cache=False,
+        prefer_cache=True,
     )
     simulated_lookup = manual_dataset_bindings.geometry_manual_simulated_lookup(
         simulated_peaks
@@ -2402,6 +2492,48 @@ def build_geometry_manual_fit_dataset(
                     float(bg_coords[0]),
                     float(bg_coords[1]),
                 )
+        background_angles = _caked_angle_pair(
+            entry,
+            x_keys=(
+                "background_two_theta_deg",
+                "caked_x",
+                "raw_caked_x",
+            ),
+            y_keys=(
+                "background_phi_deg",
+                "caked_y",
+                "raw_caked_y",
+            ),
+        )
+        if background_angles is not None:
+            initial_entry["background_two_theta_deg"] = float(background_angles[0])
+            initial_entry["background_phi_deg"] = float(background_angles[1])
+        reference_two_theta = (
+            _finite_float(entry.get("background_reference_two_theta_deg"))
+            or _reference_two_theta_deg(
+                entry,
+                a_lattice=reference_a,
+                c_lattice=reference_c,
+                wavelength=reference_lambda,
+            )
+        )
+        if reference_two_theta is not None:
+            initial_entry["background_reference_two_theta_deg"] = float(
+                reference_two_theta
+            )
+        if reference_a is not None:
+            initial_entry["background_reference_a"] = float(reference_a)
+        if reference_c is not None:
+            initial_entry["background_reference_c"] = float(reference_c)
+        if reference_lambda is not None:
+            initial_entry["background_reference_lambda"] = float(reference_lambda)
+        for source_key, target_key in (
+            ("qr", "background_reference_qr"),
+            ("qz", "background_reference_qz"),
+        ):
+            value = _finite_float(entry.get(source_key))
+            if value is not None:
+                initial_entry[target_key] = float(value)
         if isinstance(resolved_source_entry, Mapping):
             for key in ("source_table_index", "source_row_index", "source_peak_index"):
                 if key in resolved_source_entry:
@@ -2419,6 +2551,14 @@ def build_geometry_manual_fit_dataset(
                         float(sim_col),
                         float(sim_row),
                     )
+            simulated_angles = _caked_angle_pair(
+                resolved_source_entry,
+                x_keys=("two_theta_deg", "caked_x"),
+                y_keys=("phi_deg", "caked_y"),
+            )
+            if simulated_angles is not None:
+                initial_entry["simulated_two_theta_deg"] = float(simulated_angles[0])
+                initial_entry["simulated_phi_deg"] = float(simulated_angles[1])
             try:
                 sim_col_raw = float(resolved_source_entry.get("sim_col_raw", sim_col))
                 sim_row_raw = float(resolved_source_entry.get("sim_row_raw", sim_row))
@@ -2561,6 +2701,26 @@ def build_geometry_manual_fit_dataset(
             measured_entry["detector_x"] = float(detector_x)
             measured_entry["detector_y"] = float(detector_y)
         measured_entry["fit_source_identity_only"] = True
+    for measured_entry, initial_entry in zip(measured_for_fit, initial_pairs_display):
+        if not isinstance(measured_entry, dict) or not isinstance(initial_entry, Mapping):
+            continue
+        for key in (
+            "overlay_match_index",
+            "q_group_key",
+            "source_table_index",
+            "source_row_index",
+            "source_peak_index",
+            "background_two_theta_deg",
+            "background_phi_deg",
+            "background_reference_two_theta_deg",
+            "background_reference_a",
+            "background_reference_c",
+            "background_reference_lambda",
+            "background_reference_qr",
+            "background_reference_qz",
+        ):
+            if key in initial_entry:
+                measured_entry[key] = initial_entry.get(key)
     backend_background = manual_dataset_bindings.apply_background_backend_orientation(
         native_background
     )
@@ -3504,6 +3664,7 @@ def solve_geometry_fit_request(
     *,
     solve_fit: Callable[..., object],
     status_callback: Callable[[str], None] | None = None,
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None,
 ) -> object:
     """Invoke the live geometry-fit solver for one prepared request."""
 
@@ -3536,6 +3697,14 @@ def solve_geometry_fit_request(
             )
             if accepts_status_callback:
                 solve_kwargs["status_callback"] = status_callback
+    if callable(live_update_callback):
+        if signature is not None:
+            accepts_live_update_callback = (
+                "live_update_callback" in signature.parameters
+                or accepts_var_kwargs
+            )
+            if accepts_live_update_callback:
+                solve_kwargs["live_update_callback"] = live_update_callback
 
     return solve_fit(
         request.miller,
@@ -5204,6 +5373,7 @@ def build_runtime_geometry_fit_execution_setup(
     aggregate_match_centers: Callable[..., tuple[object, object, object]],
     build_overlay_records: Callable[..., list[dict[str, object]]],
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]],
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None,
 ) -> GeometryFitRuntimeExecutionSetup:
     """Build the runtime execution setup for one prepared geometry-fit run."""
 
@@ -5264,6 +5434,7 @@ def build_runtime_geometry_fit_execution_setup(
         ),
         set_progress_text=set_progress_text,
         cmd_line=cmd_line,
+        live_update_callback=live_update_callback,
     )
 
     postprocess_config = GeometryFitRuntimePostprocessConfig(
@@ -5328,6 +5499,7 @@ def build_runtime_geometry_fit_execution_setup_from_bindings(
         aggregate_match_centers=bindings.aggregate_match_centers,
         build_overlay_records=bindings.build_overlay_records,
         compute_frame_diagnostics=bindings.compute_frame_diagnostics,
+        live_update_callback=bindings.live_update_callback,
     )
 
 
@@ -5477,6 +5649,7 @@ def execute_runtime_geometry_fit(
             solver_request,
             solve_fit=solve_fit,
             status_callback=_solver_status_callback,
+            live_update_callback=ui_bindings.live_update_callback,
         )
         apply_result = apply_runtime_geometry_fit_result(
             result=result,

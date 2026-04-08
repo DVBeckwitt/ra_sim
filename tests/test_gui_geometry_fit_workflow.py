@@ -577,6 +577,8 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "detector_x": 31.0,
                     "detector_y": 41.0,
                     "fit_source_identity_only": True,
+                    "overlay_match_index": 0,
+                    "q_group_key": ("q", 1),
                 }
             ],
             "experimental_image": "fit-image",
@@ -717,13 +719,15 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "detector_x": 31.0,
             "detector_y": 41.0,
             "fit_source_identity_only": True,
+            "overlay_match_index": 0,
+            "q_group_key": ("q", 1),
         }
     ]
     assert "orientation=rotate+flip" in dataset["summary_line"]
 
     sim_params, prefer_cache = calls["sim_params"]
     assert sim_params["theta_initial"] == 1.75
-    assert prefer_cache is False
+    assert prefer_cache is True
     assert calls["unrotate"][1:] == ((6, 7), 3)
     assert calls["display_to_native"] == (9.0, 8.0, (100, 100))
     assert calls["backend_image"] is native_background
@@ -1518,6 +1522,7 @@ def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
                 "aggregate_match_centers": "aggregate-centers",
                 "build_overlay_records": "build-overlay-records",
                 "compute_frame_diagnostics": "frame-diagnostics",
+                "live_update_callback": None,
             },
         ),
     ]
