@@ -2322,11 +2322,11 @@ def build_geometry_manual_fit_dataset(
     reference_a = _finite_float(params_i.get("a"))
     reference_c = _finite_float(params_i.get("c"))
     reference_lambda = _finite_float(params_i.get("lambda"))
-    # Geometry-fit prep needs the full per-hit source table for the requested
-    # dataset params, not whatever happens to be cached in the live preview.
+    # Preview-style simulated peaks are disabled for manual-fit source
+    # resolution and geometry-fit dataset prep.
     simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
         params_i,
-        prefer_cache=False,
+        prefer_cache=True,
     )
     simulation_diagnostics = (
         copy.deepcopy(
@@ -4029,13 +4029,12 @@ def build_geometry_fit_dataset_cache_metadata(
         "reused": False,
         "rebuilt": True,
         "stale_reason": (
-            "geometry-fit dataset prep rebuilds from fresh simulation rows "
-            "(prefer_cache=False)."
+            "preview-style simulated peaks are disabled; geometry-fit dataset "
+            "prep did not rebuild fresh simulated source rows."
         ),
-        "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+        "cache_source": "preview_style_simulated_peaks_disabled",
         "cache_provenance": [
-            "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-            "geometry_manual_simulated_lookup",
+            "preview_style_simulated_peaks_disabled",
             "build_geometry_manual_fit_dataset",
         ],
         "background_index": int(background_index),

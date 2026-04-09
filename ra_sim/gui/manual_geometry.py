@@ -1596,12 +1596,8 @@ def build_geometry_manual_pick_cache(
     bg_index = int(background_index)
     current_bg_index = int(current_background_index)
     cache_action = "rebuilt"
-    cache_source = "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
-    cache_provenance = [
-        "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-        "build_grouped_candidates",
-        "build_simulated_lookup",
-    ]
+    cache_source = "preview_style_simulated_peaks_disabled"
+    cache_provenance = ["preview_style_simulated_peaks_disabled"]
     stale_reason: str | None = (
         None
         if prefer_cache
@@ -1700,28 +1696,11 @@ def build_geometry_manual_pick_cache(
             )
         elif stale_reason is None:
             stale_reason = "existing grouped candidates were empty."
-    if not grouped_candidates:
-        # Fall back to the geometry-fit simulation only when no reusable
-        # cached Qr/Qz groups are available.
-        simulated_peaks = [
-            dict(entry)
-            for entry in simulated_peaks_for_params(
-                param_set,
-                prefer_cache=False,
-            )
-            if isinstance(entry, dict)
-        ]
-        grouped_candidates = build_grouped_candidates(simulated_peaks)
-        simulated_lookup = build_simulated_lookup(simulated_peaks)
-        cache_action = "rebuilt"
-        cache_source = "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
-        cache_provenance = [
-            "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-            "build_grouped_candidates",
-            "build_simulated_lookup",
-        ]
-        if stale_reason is None:
-            stale_reason = "no reusable cached grouped candidates were available."
+    if not grouped_candidates and stale_reason is None:
+        stale_reason = (
+            "preview-style simulated peaks are disabled; no reusable cached "
+            "grouped candidates were available."
+        )
     match_cfg = dict(current_match_config())
     resolved_match_cfg = dict(match_cfg)
     background_context = None
@@ -2697,11 +2676,7 @@ def build_geometry_manual_initial_pairs_display(
         )
         simulated_lookup = dict(cache_data.get("simulated_lookup", {}))
     else:
-        simulated_peaks = simulated_peaks_for_params(
-            params_local,
-            prefer_cache=False,
-        )
-        simulated_lookup = build_simulated_lookup(simulated_peaks)
+        simulated_lookup = {}
 
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
@@ -3356,13 +3331,12 @@ def make_runtime_geometry_manual_projection_callbacks(
                     projected_peak_count=int(len(projected_cached_peaks)),
                 )
                 return projected_cached_peaks
-        if not callable(simulate_preview_style_peaks_for_fit):
-            _set_last_simulation_diagnostics(
-                source="fresh",
-                requested_prefer_cache=bool(prefer_cache),
-                status="missing_simulator_callback",
-            )
-            return []
+        _set_last_simulation_diagnostics(
+            source="fresh",
+            requested_prefer_cache=bool(prefer_cache),
+            status="preview_style_simulation_disabled",
+        )
+        return []
         params_local = (
             dict(param_set)
             if isinstance(param_set, dict)
@@ -3456,12 +3430,7 @@ def make_runtime_geometry_manual_projection_callbacks(
             )
             return []
         try:
-            raw_peaks = simulate_preview_style_peaks_for_fit(
-                miller_array,
-                intensity_array,
-                image_size_value,
-                params_local,
-            )
+            raw_peaks = []
             raw_peak_entries = _mapping_entry_list(raw_peaks)
             projected_peaks = _project_peaks_to_current_view(raw_peak_entries)
             runtime_diagnostics = (

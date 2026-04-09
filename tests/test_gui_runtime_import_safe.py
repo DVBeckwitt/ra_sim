@@ -297,11 +297,24 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
     ]
 
 
-def test_runtime_impl_uses_reserved_cpu_worker_count_for_runtime_executors() -> None:
+def test_runtime_impl_keeps_runtime_executors_in_latest_request_wins_mode() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "default_reserved_cpu_worker_count" in source
     assert source.count("max_workers=default_reserved_cpu_worker_count(),") >= 2
+    assert "Keep GUI simulation updates in latest-request-wins mode" in source
+    assert "Keep GUI analysis updates in latest-request-wins mode" in source
+    assert "def _replace_queued_simulation_job(job: dict[str, object]) -> None:" in source
+    assert "def _replace_queued_analysis_job(job: dict[str, object]) -> None:" in source
+    assert "simulation_runtime_state.worker_ready_result = None" in source
+    assert "simulation_runtime_state.analysis_ready_result = None" in source
+    assert '"job_requested"' in source
+    assert '"job_submitted"' in source
+    assert '"job_queued"' in source
+    assert '"job_replaced"' in source
+    assert '"job_started"' in source
+    assert '"job_finished"' in source
+    assert '"job_promoted_from_queued"' in source
+    assert '"job_discarded_as_stale"' in source
 
 
 def test_runtime_impl_removes_display_intensity_toggle_from_ui() -> None:

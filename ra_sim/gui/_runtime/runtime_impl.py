@@ -6249,6 +6249,60 @@ def _analysis_job_key(payload: object) -> tuple[object, int, bool]:
     )
 
 
+def _job_trace_fields(
+    payload: object,
+    *,
+    prefix: str = "job",
+) -> dict[str, object]:
+    """Return one compact set of trace fields describing a runtime job payload."""
+
+    if not isinstance(payload, dict):
+        return {}
+    fields: dict[str, object] = {
+        f"{prefix}_id": payload.get("job_id"),
+        f"{prefix}_epoch": payload.get("epoch"),
+        f"{prefix}_signature": payload.get("signature"),
+    }
+    if "is_preview" in payload:
+        fields[f"{prefix}_preview"] = bool(payload.get("is_preview", False))
+    return fields
+
+
+def _append_job_queue_trace(
+    event: str,
+    *,
+    lane: str,
+    job: object = None,
+    active_job: object = None,
+    queued_job: object = None,
+    replaced_job: object = None,
+    reason: object = None,
+    outcome: object = None,
+    error: object = None,
+) -> None:
+    """Append one queue-state trace event for simulation or analysis jobs."""
+
+    fields: dict[str, object] = {
+        "lane": str(lane),
+        "update_phase": getattr(simulation_runtime_state, "update_phase", None),
+        "worker_active": bool(getattr(simulation_runtime_state, "worker_active_job", None) is not None),
+        "worker_queued": bool(getattr(simulation_runtime_state, "worker_queued_job", None) is not None),
+        "analysis_active": bool(getattr(simulation_runtime_state, "analysis_active_job", None) is not None),
+        "analysis_queued": bool(getattr(simulation_runtime_state, "analysis_queued_job", None) is not None),
+    }
+    fields.update(_job_trace_fields(job, prefix="job"))
+    fields.update(_job_trace_fields(active_job, prefix="active"))
+    fields.update(_job_trace_fields(queued_job, prefix="queued"))
+    fields.update(_job_trace_fields(replaced_job, prefix="replaced"))
+    if reason is not None:
+        fields["reason"] = str(reason)
+    if outcome is not None:
+        fields["outcome"] = str(outcome)
+    if error is not None:
+        fields["error"] = str(error)
+    _append_runtime_update_trace(event, **fields)
+
+
 def _truncate_run_status_piece(text: object, *, max_chars: int = 24) -> str:
     summary = " ".join(str(text).split())
     if len(summary) <= max_chars:
@@ -6901,6 +6955,14 @@ def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
         isinstance(ready_result, dict)
         and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
     ):
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="analysis",
+            job=ready_result,
+            active_job=simulation_runtime_state.analysis_active_job,
+            queued_job=simulation_runtime_state.analysis_queued_job,
+            reason="epoch_invalidated_ready_result",
+        )
         simulation_runtime_state.analysis_ready_result = None
 
     queued_job = simulation_runtime_state.analysis_queued_job
@@ -6908,6 +6970,14 @@ def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
         isinstance(queued_job, dict)
         and int(queued_job.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
     ):
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="analysis",
+            job=queued_job,
+            active_job=simulation_runtime_state.analysis_active_job,
+            queued_job=queued_job,
+            reason="epoch_invalidated_queued_job",
+        )
         simulation_runtime_state.analysis_queued_job = None
 
     if clear_visuals:
@@ -6927,6 +6997,14 @@ def _invalidate_simulation_cache() -> None:
         isinstance(ready_result, dict)
         and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
     ):
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="simulation",
+            job=ready_result,
+            active_job=simulation_runtime_state.worker_active_job,
+            queued_job=simulation_runtime_state.worker_queued_job,
+            reason="epoch_invalidated_ready_result",
+        )
         simulation_runtime_state.worker_ready_result = None
 
     queued_job = simulation_runtime_state.worker_queued_job
@@ -6934,6 +7012,14 @@ def _invalidate_simulation_cache() -> None:
         isinstance(queued_job, dict)
         and int(queued_job.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
     ):
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="simulation",
+            job=queued_job,
+            active_job=simulation_runtime_state.worker_active_job,
+            queued_job=queued_job,
+            reason="epoch_invalidated_queued_job",
+        )
         simulation_runtime_state.worker_queued_job = None
 
     if simulation_runtime_state.worker_active_job is None:
@@ -7018,6 +7104,10 @@ def _ensure_simulation_worker_executor():
     executor = simulation_runtime_state.worker_executor
     if executor is None:
         executor = concurrent.futures.ThreadPoolExecutor(
+            # Keep GUI simulation updates in latest-request-wins mode:
+            # one active job plus at most one replacement queued in runtime state.
+            # The executor can still expose the full reserved CPU budget because
+            # runtime state only submits one active job at a time.
             max_workers=default_reserved_cpu_worker_count(),
             thread_name_prefix="ra-sim-sim",
         )
@@ -7029,11 +7119,103 @@ def _ensure_analysis_worker_executor():
     executor = simulation_runtime_state.analysis_executor
     if executor is None:
         executor = concurrent.futures.ThreadPoolExecutor(
+            # Keep GUI analysis updates in latest-request-wins mode:
+            # one active job plus at most one replacement queued in runtime state.
+            # The executor can still expose the full reserved CPU budget because
+            # runtime state only submits one active job at a time.
             max_workers=default_reserved_cpu_worker_count(),
             thread_name_prefix="ra-sim-analysis",
         )
         simulation_runtime_state.analysis_executor = executor
     return executor
+
+
+def _replace_queued_simulation_job(job: dict[str, object]) -> None:
+    """Keep only the newest queued simulation replacement job."""
+
+    previous_job = simulation_runtime_state.worker_queued_job
+    if isinstance(previous_job, dict):
+        _append_job_queue_trace(
+            "job_replaced",
+            lane="simulation",
+            job=job,
+            active_job=simulation_runtime_state.worker_active_job,
+            queued_job=previous_job,
+            replaced_job=previous_job,
+            reason="latest_request_wins",
+        )
+    simulation_runtime_state.worker_queued_job = dict(job)
+
+
+def _replace_queued_analysis_job(job: dict[str, object]) -> None:
+    """Keep only the newest queued analysis replacement job."""
+
+    previous_job = simulation_runtime_state.analysis_queued_job
+    if isinstance(previous_job, dict):
+        _append_job_queue_trace(
+            "job_replaced",
+            lane="analysis",
+            job=job,
+            active_job=simulation_runtime_state.analysis_active_job,
+            queued_job=previous_job,
+            replaced_job=previous_job,
+            reason="latest_request_wins",
+        )
+    simulation_runtime_state.analysis_queued_job = dict(job)
+
+
+def _promote_queued_simulation_job(*, reason: str) -> bool:
+    """Promote the queued simulation replacement job into the active slot."""
+
+    queued_job = simulation_runtime_state.worker_queued_job
+    if not isinstance(queued_job, dict):
+        return False
+    simulation_runtime_state.worker_queued_job = None
+    _append_job_queue_trace(
+        "job_promoted_from_queued",
+        lane="simulation",
+        job=queued_job,
+        active_job=simulation_runtime_state.worker_active_job,
+        queued_job=None,
+        reason=reason,
+    )
+    _append_job_queue_trace(
+        "job_submitted",
+        lane="simulation",
+        job=queued_job,
+        active_job=simulation_runtime_state.worker_active_job,
+        queued_job=None,
+        reason="promoted_from_queued",
+    )
+    _submit_async_simulation_job(queued_job)
+    return True
+
+
+def _promote_queued_analysis_job(*, reason: str) -> bool:
+    """Promote the queued analysis replacement job into the active slot."""
+
+    queued_job = simulation_runtime_state.analysis_queued_job
+    if not isinstance(queued_job, dict):
+        return False
+    simulation_runtime_state.analysis_queued_job = None
+    _append_job_queue_trace(
+        "job_promoted_from_queued",
+        lane="analysis",
+        job=queued_job,
+        active_job=simulation_runtime_state.analysis_active_job,
+        queued_job=None,
+        reason=reason,
+    )
+    _append_job_queue_trace(
+        "job_submitted",
+        lane="analysis",
+        job=queued_job,
+        active_job=simulation_runtime_state.analysis_active_job,
+        queued_job=None,
+        reason="promoted_from_queued",
+    )
+    _submit_async_analysis_job(queued_job)
+    return True
 
 
 def _empty_caking_cache() -> dict[str, object]:
@@ -7518,6 +7700,13 @@ def _submit_async_simulation_job(job: dict[str, object]) -> None:
     )
     simulation_runtime_state.worker_error_text = None
     simulation_runtime_state.update_phase = "computing"
+    _append_job_queue_trace(
+        "job_started",
+        lane="simulation",
+        job=job,
+        active_job=job,
+        queued_job=simulation_runtime_state.worker_queued_job,
+    )
     _refresh_run_status_bar()
     if simulation_runtime_state.worker_poll_token is None:
         simulation_runtime_state.worker_poll_token = root.after(
@@ -7531,10 +7720,7 @@ def _poll_async_simulation_job() -> None:
     future = simulation_runtime_state.worker_future
     active_job = simulation_runtime_state.worker_active_job
     if future is None or active_job is None:
-        queued_job = simulation_runtime_state.worker_queued_job
-        if isinstance(queued_job, dict):
-            simulation_runtime_state.worker_queued_job = None
-            _submit_async_simulation_job(queued_job)
+        if _promote_queued_simulation_job(reason="active_slot_available"):
             return
         _refresh_run_status_bar()
         return
@@ -7552,25 +7738,52 @@ def _poll_async_simulation_job() -> None:
     try:
         result = future.result()
     except Exception as exc:
+        _append_job_queue_trace(
+            "job_finished",
+            lane="simulation",
+            job=active_job,
+            active_job=None,
+            queued_job=queued_job,
+            outcome="error",
+            error=exc,
+        )
         simulation_runtime_state.worker_error_text = str(exc)
         simulation_runtime_state.update_phase = "error"
         if "progress_label" in globals() and progress_label is not None:
             progress_label.config(text=f"Simulation update failed: {exc}")
         _refresh_run_status_bar()
-        if isinstance(queued_job, dict):
-            simulation_runtime_state.worker_queued_job = None
-            _submit_async_simulation_job(queued_job)
+        if _promote_queued_simulation_job(reason="previous_job_failed"):
+            return
         return
 
+    _append_job_queue_trace(
+        "job_finished",
+        lane="simulation",
+        job=result,
+        active_job=None,
+        queued_job=queued_job,
+        outcome="success",
+    )
     latest_epoch = int(simulation_runtime_state.simulation_epoch)
     result_epoch = int(result.get("epoch", -1))
     superseded = isinstance(queued_job, dict) and int(queued_job.get("job_id", -1)) > int(
         result.get("job_id", -1)
     )
     if result_epoch != latest_epoch or superseded:
-        if isinstance(queued_job, dict):
-            simulation_runtime_state.worker_queued_job = None
-            _submit_async_simulation_job(queued_job)
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="simulation",
+            job=result,
+            active_job=None,
+            queued_job=queued_job,
+            reason=(
+                "superseded_by_newer_queued_job"
+                if superseded
+                else "result_epoch_mismatch"
+            ),
+        )
+        if _promote_queued_simulation_job(reason="previous_job_stale"):
+            return
         else:
             simulation_runtime_state.update_phase = "queued"
             _refresh_run_status_bar()
@@ -7587,10 +7800,28 @@ def _poll_async_simulation_job() -> None:
 
 def _request_async_simulation_job(job: dict[str, object]) -> str:
     requested_key = _worker_job_key(job)
-    if _worker_job_key(simulation_runtime_state.worker_ready_result) == requested_key:
+    _append_job_queue_trace(
+        "job_requested",
+        lane="simulation",
+        job=job,
+        active_job=simulation_runtime_state.worker_active_job,
+        queued_job=simulation_runtime_state.worker_queued_job,
+    )
+    ready_result = simulation_runtime_state.worker_ready_result
+    if _worker_job_key(ready_result) == requested_key:
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
         return "ready"
+    if isinstance(ready_result, dict):
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="simulation",
+            job=ready_result,
+            active_job=simulation_runtime_state.worker_active_job,
+            queued_job=simulation_runtime_state.worker_queued_job,
+            reason="superseded_by_new_request",
+        )
+        simulation_runtime_state.worker_ready_result = None
 
     if _worker_job_key(simulation_runtime_state.worker_active_job) == requested_key:
         simulation_runtime_state.update_phase = "computing"
@@ -7598,6 +7829,14 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         return "running"
 
     if _worker_job_key(simulation_runtime_state.worker_queued_job) == requested_key:
+        _append_job_queue_trace(
+            "job_queued",
+            lane="simulation",
+            job=simulation_runtime_state.worker_queued_job,
+            active_job=simulation_runtime_state.worker_active_job,
+            queued_job=simulation_runtime_state.worker_queued_job,
+            reason="already_queued",
+        )
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
         return "queued"
@@ -7611,10 +7850,27 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         simulation_runtime_state.worker_active_job is None
         and simulation_runtime_state.worker_future is None
     ):
+        _append_job_queue_trace(
+            "job_submitted",
+            lane="simulation",
+            job=queued_job,
+            active_job=None,
+            queued_job=simulation_runtime_state.worker_queued_job,
+            reason="requested",
+        )
         _submit_async_simulation_job(queued_job)
         return "submitted"
 
-    simulation_runtime_state.worker_queued_job = queued_job
+    # Latest-request-wins: keep one active job and one replacement queued job.
+    _replace_queued_simulation_job(queued_job)
+    _append_job_queue_trace(
+        "job_queued",
+        lane="simulation",
+        job=queued_job,
+        active_job=simulation_runtime_state.worker_active_job,
+        queued_job=simulation_runtime_state.worker_queued_job,
+        reason="awaiting_active_job",
+    )
     simulation_runtime_state.update_phase = "queued"
     _refresh_run_status_bar()
     return "queued"
@@ -7861,6 +8117,13 @@ def _submit_async_analysis_job(job: dict[str, object]) -> None:
     simulation_runtime_state.analysis_error_text = None
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "analyzing"
+    _append_job_queue_trace(
+        "job_started",
+        lane="analysis",
+        job=job,
+        active_job=job,
+        queued_job=simulation_runtime_state.analysis_queued_job,
+    )
     _refresh_run_status_bar()
     if simulation_runtime_state.analysis_poll_token is None:
         simulation_runtime_state.analysis_poll_token = root.after(
@@ -7874,10 +8137,7 @@ def _poll_async_analysis_job() -> None:
     future = simulation_runtime_state.analysis_future
     active_job = simulation_runtime_state.analysis_active_job
     if future is None or active_job is None:
-        queued_job = simulation_runtime_state.analysis_queued_job
-        if isinstance(queued_job, dict):
-            simulation_runtime_state.analysis_queued_job = None
-            _submit_async_analysis_job(queued_job)
+        if _promote_queued_analysis_job(reason="active_slot_available"):
             return
         _refresh_run_status_bar()
         return
@@ -7895,26 +8155,53 @@ def _poll_async_analysis_job() -> None:
     try:
         result = future.result()
     except Exception as exc:
+        _append_job_queue_trace(
+            "job_finished",
+            lane="analysis",
+            job=active_job,
+            active_job=None,
+            queued_job=queued_job,
+            outcome="error",
+            error=exc,
+        )
         simulation_runtime_state.analysis_error_text = str(exc)
         if simulation_runtime_state.worker_active_job is None:
             simulation_runtime_state.update_phase = "error"
         if "progress_label" in globals() and progress_label is not None:
             progress_label.config(text=f"Analysis update failed: {exc}")
         _refresh_run_status_bar()
-        if isinstance(queued_job, dict):
-            simulation_runtime_state.analysis_queued_job = None
-            _submit_async_analysis_job(queued_job)
+        if _promote_queued_analysis_job(reason="previous_job_failed"):
+            return
         return
 
+    _append_job_queue_trace(
+        "job_finished",
+        lane="analysis",
+        job=result,
+        active_job=None,
+        queued_job=queued_job,
+        outcome="success",
+    )
     latest_epoch = int(simulation_runtime_state.analysis_epoch)
     result_epoch = int(result.get("epoch", -1))
     superseded = isinstance(queued_job, dict) and int(queued_job.get("job_id", -1)) > int(
         result.get("job_id", -1)
     )
     if result_epoch != latest_epoch or superseded:
-        if isinstance(queued_job, dict):
-            simulation_runtime_state.analysis_queued_job = None
-            _submit_async_analysis_job(queued_job)
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="analysis",
+            job=result,
+            active_job=None,
+            queued_job=queued_job,
+            reason=(
+                "superseded_by_newer_queued_job"
+                if superseded
+                else "result_epoch_mismatch"
+            ),
+        )
+        if _promote_queued_analysis_job(reason="previous_job_stale"):
+            return
         else:
             if simulation_runtime_state.worker_active_job is None:
                 simulation_runtime_state.update_phase = "ready"
@@ -7930,11 +8217,29 @@ def _poll_async_analysis_job() -> None:
 
 def _request_async_analysis_job(job: dict[str, object]) -> str:
     requested_key = _analysis_job_key(job)
-    if _analysis_job_key(simulation_runtime_state.analysis_ready_result) == requested_key:
+    _append_job_queue_trace(
+        "job_requested",
+        lane="analysis",
+        job=job,
+        active_job=simulation_runtime_state.analysis_active_job,
+        queued_job=simulation_runtime_state.analysis_queued_job,
+    )
+    ready_result = simulation_runtime_state.analysis_ready_result
+    if _analysis_job_key(ready_result) == requested_key:
         if simulation_runtime_state.worker_active_job is None:
             simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
         return "ready"
+    if isinstance(ready_result, dict):
+        _append_job_queue_trace(
+            "job_discarded_as_stale",
+            lane="analysis",
+            job=ready_result,
+            active_job=simulation_runtime_state.analysis_active_job,
+            queued_job=simulation_runtime_state.analysis_queued_job,
+            reason="superseded_by_new_request",
+        )
+        simulation_runtime_state.analysis_ready_result = None
 
     if _analysis_job_key(simulation_runtime_state.analysis_active_job) == requested_key:
         if simulation_runtime_state.worker_active_job is None:
@@ -7943,6 +8248,14 @@ def _request_async_analysis_job(job: dict[str, object]) -> str:
         return "running"
 
     if _analysis_job_key(simulation_runtime_state.analysis_queued_job) == requested_key:
+        _append_job_queue_trace(
+            "job_queued",
+            lane="analysis",
+            job=simulation_runtime_state.analysis_queued_job,
+            active_job=simulation_runtime_state.analysis_active_job,
+            queued_job=simulation_runtime_state.analysis_queued_job,
+            reason="already_queued",
+        )
         if simulation_runtime_state.worker_active_job is None:
             simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
@@ -7957,10 +8270,27 @@ def _request_async_analysis_job(job: dict[str, object]) -> str:
         simulation_runtime_state.analysis_active_job is None
         and simulation_runtime_state.analysis_future is None
     ):
+        _append_job_queue_trace(
+            "job_submitted",
+            lane="analysis",
+            job=queued_job,
+            active_job=None,
+            queued_job=simulation_runtime_state.analysis_queued_job,
+            reason="requested",
+        )
         _submit_async_analysis_job(queued_job)
         return "submitted"
 
-    simulation_runtime_state.analysis_queued_job = queued_job
+    # Latest-request-wins: keep one active job and one replacement queued job.
+    _replace_queued_analysis_job(queued_job)
+    _append_job_queue_trace(
+        "job_queued",
+        lane="analysis",
+        job=queued_job,
+        active_job=simulation_runtime_state.analysis_active_job,
+        queued_job=simulation_runtime_state.analysis_queued_job,
+        reason="awaiting_active_job",
+    )
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "queued"
     _refresh_run_status_bar()
@@ -11440,14 +11770,7 @@ geometry_q_group_workflow = (
         build_live_preview_simulated_peaks_from_cache=(
             _build_live_preview_simulated_peaks_from_cache
         ),
-        simulate_preview_style_peaks=lambda miller_values, intensity_values, image_size_value, params: (
-            _simulate_preview_style_peaks_for_fit(
-                miller_values,
-                intensity_values,
-                image_size_value,
-                params,
-            )
-        ),
+        simulate_preview_style_peaks=None,
         miller_factory=lambda: miller,
         intensities_factory=lambda: intensities,
         image_size_value_factory=lambda: image_size,
@@ -11560,9 +11883,7 @@ _simulate_hit_tables_for_fit = geometry_fit_simulation_runtime_callbacks.simulat
 _simulate_hkl_peak_centers_for_fit = (
     geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
 )
-_simulate_preview_style_peaks_for_fit = (
-    geometry_fit_simulation_runtime_callbacks.simulate_preview_style_peaks
-)
+_simulate_preview_style_peaks_for_fit = lambda *_args, **_kwargs: []
 _geometry_fit_last_simulation_diagnostics = (
     geometry_fit_simulation_runtime_callbacks.last_simulation_diagnostics
 )
@@ -11695,12 +12016,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         return
 
     try:
-        simulated_peaks = _simulate_preview_style_peaks_for_fit(
-            miller_array,
-            intensity_array,
-            image_size,
-            params,
-        )
+        simulated_peaks = []
     except Exception as exc:
         _cmd_line(f"aborted: failed to simulate peak centers ({exc})")
         progress_label_geometry.config(
@@ -12322,12 +12638,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 params_i = dict(base_fit_params)
                 params_i["theta_initial"] = float(theta_base + float(base_fit_params.get("theta_offset", 0.0)))
 
-                simulated_i = _simulate_preview_style_peaks_for_fit(
-                    miller_array,
-                    intensity_array,
-                    image_size,
-                    params_i,
-                )
+                simulated_i = []
                 if not simulated_i:
                     raise RuntimeError(
                         f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) has no simulated peaks"
@@ -12579,12 +12890,7 @@ def _legacy_auto_match_on_fit_geometry_click():
 
             try:
                 _cmd_line(f"iter {iter_idx + 1}/{fit_iterations}: rematch start")
-                sim_iter = _simulate_preview_style_peaks_for_fit(
-                    miller_array,
-                    intensity_array,
-                    image_size,
-                    current_fit_params,
-                )
+                sim_iter = []
                 if not sim_iter:
                     _cmd_line(f"iter {iter_idx + 1}/{fit_iterations}: rematch skipped (no simulated peaks)")
                     iteration_logs.append(
