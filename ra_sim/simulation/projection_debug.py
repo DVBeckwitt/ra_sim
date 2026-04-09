@@ -12,7 +12,9 @@ from typing import Any
 import numpy as np
 
 from ra_sim.config import get_dir
-from ra_sim.debug_utils import is_logging_disabled
+from ra_sim.debug_controls import (
+    projection_debug_logging_enabled as _projection_debug_logging_enabled,
+)
 
 
 EXIT_PROJECTION_INTERNAL = 0
@@ -60,17 +62,8 @@ _CURRENT_PROJECTION_DEBUG_SESSION: contextvars.ContextVar[ProjectionDebugSession
 )
 
 
-def _env_truthy(name: str) -> bool:
-    value = str(os.environ.get(name, "")).strip().lower()
-    return value not in {"", "0", "false", "off", "no"}
-
-
 def projection_debug_logging_enabled() -> bool:
-    if is_logging_disabled():
-        return False
-    if _env_truthy("RA_SIM_DISABLE_PROJECTION_DEBUG"):
-        return False
-    return True
+    return _projection_debug_logging_enabled()
 
 
 def resolve_exit_projection_mode_flag(value: str | int | None) -> int:

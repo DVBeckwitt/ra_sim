@@ -5,6 +5,11 @@ import logging
 from collections.abc import Mapping
 
 import numpy as np
+from ra_sim.debug_controls import (
+    console_debug_enabled,
+    env_flag_enabled as _env_flag_enabled,
+    is_logging_disabled as _is_logging_disabled,
+)
 
 
 def env_flag_enabled(
@@ -13,9 +18,7 @@ def env_flag_enabled(
 ) -> bool:
     """Return whether one environment-style flag is set to a truthy value."""
 
-    source = os.environ if env is None else env
-    value = str(source.get(name, "")).strip().lower()
-    return bool(value) and value not in {"0", "false", "no", "off"}
+    return _env_flag_enabled(name, env)
 
 
 def is_logging_disabled(
@@ -27,17 +30,12 @@ def is_logging_disabled(
     ``RA_SIM_DISABLE_LOGGING`` name is still honored for compatibility.
     """
 
-    return env_flag_enabled("RA_SIM_DISABLE_ALL_LOGGING", env) or env_flag_enabled(
-        "RA_SIM_DISABLE_LOGGING",
-        env,
-    )
+    return _is_logging_disabled(env)
 
 
 def is_debug_enabled() -> bool:
     """Return ``True`` if ``RA_SIM_DEBUG`` is set to a truthy value."""
-    if is_logging_disabled():
-        return False
-    return env_flag_enabled("RA_SIM_DEBUG")
+    return console_debug_enabled()
 
 
 DEBUG_ENABLED = is_debug_enabled()

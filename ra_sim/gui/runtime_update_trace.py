@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ra_sim.debug_utils import is_logging_disabled
+from ra_sim.debug_controls import runtime_update_trace_logging_enabled
 
 
 def resolve_runtime_update_trace_path(
@@ -92,7 +92,7 @@ def append_runtime_update_trace_line(
 ) -> None:
     """Append one line to the GUI runtime trace log."""
 
-    if is_logging_disabled():
+    if not runtime_update_trace_logging_enabled():
         return
     trace_path = Path(path)
     trace_path.parent.mkdir(parents=True, exist_ok=True)

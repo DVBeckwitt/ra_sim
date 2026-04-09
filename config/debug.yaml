@@ -1,0 +1,19 @@
+debug:
+  global:
+    disable_all: false
+  console:
+    enabled: false
+  runtime_update_trace:
+    enabled: true
+  geometry_fit:
+    log_files: true
+    extra_sections: true
+  mosaic_fit:
+    log_files: true
+  projection_debug:
+    enabled: true
+  diffraction_debug_csv:
+    enabled: true
+  intersection_cache:
+    enabled: true
+    log_dir:

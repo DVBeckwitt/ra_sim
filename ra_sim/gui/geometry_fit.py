@@ -15,8 +15,11 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.debug_controls import (
+    geometry_fit_extra_sections_enabled,
+    geometry_fit_log_files_enabled,
+)
 from ra_sim.gui import manual_geometry as gui_manual_geometry
-from ra_sim.debug_utils import is_logging_disabled
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.utils.notifications import play_completion_chime
 
@@ -46,7 +49,7 @@ def geometry_fit_all_logging_disabled(
 ) -> bool:
     """Return whether all geometry-fit file/debug logging is disabled."""
 
-    return is_logging_disabled(os.environ if env is None else env)
+    return not geometry_fit_log_files_enabled(os.environ if env is None else env)
 
 
 def build_geometry_fit_log_path(
@@ -4706,14 +4709,8 @@ def geometry_fit_debug_logging_enabled(
 ) -> bool:
     """Return whether extra geometry-fit logging is enabled for this run."""
 
-    if geometry_fit_all_logging_disabled():
-        return False
-    cfg = geometry_runtime_cfg if isinstance(geometry_runtime_cfg, Mapping) else {}
-    geometry_cfg = cfg.get("geometry", None)
-    if isinstance(geometry_cfg, Mapping):
-        cfg = geometry_cfg
-    return _geometry_fit_flag_enabled(
-        cfg.get("debug_logging", cfg.get("debug_mode", False))
+    return geometry_fit_extra_sections_enabled(
+        geometry_runtime_cfg=geometry_runtime_cfg,
     )
 
 

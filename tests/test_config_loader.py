@@ -17,6 +17,7 @@ def _make_config_dir(
     *,
     file_paths: dict | None = None,
     dir_paths: dict | None = None,
+    debug: dict | None = None,
     materials: dict | None = None,
     instrument: dict | None = None,
 ) -> Path:
@@ -24,6 +25,8 @@ def _make_config_dir(
     cfg.mkdir(parents=True)
     _write_yaml(cfg / "file_paths.yaml", file_paths or {})
     _write_yaml(cfg / "dir_paths.yaml", dir_paths or {})
+    if debug is not None:
+        _write_yaml(cfg / "debug.yaml", debug)
     _write_yaml(cfg / "materials.yaml", materials or {})
     _write_yaml(cfg / "instrument.yaml", instrument or {})
     return cfg
@@ -48,6 +51,7 @@ def test_loader_helpers_read_active_config_bundle(
             "legacy_key": "/tmp/legacy.osc",
         },
         dir_paths={"downloads": str(tmp_path / "downloads")},
+        debug={"debug": {"console": {"enabled": True}}},
         materials={
             "default_material": "MatA",
             "constants": {"k": 1.0},
@@ -62,12 +66,16 @@ def test_loader_helpers_read_active_config_bundle(
     assert Path(loader.get_path("cif_file")) == Path("~/materials/sample.cif").expanduser()
     assert loader.get_path_first("new_key", "legacy_key") == "/tmp/new.osc"
     assert loader.get_dir("downloads") == tmp_path / "downloads"
+    assert bundle.debug == {"debug": {"console": {"enabled": True}}}
     assert loader.list_materials() == ["MatA", "MatB"]
     assert loader.get_material_config()["material"]["density"] == 1.0
 
     instrument = loader.get_instrument_config()
     instrument["instrument"]["detector"]["image_size"] = 42
     assert loader.get_instrument_config()["instrument"]["detector"]["image_size"] == 1234
+    debug = loader.get_debug_config()
+    debug["debug"]["console"]["enabled"] = False
+    assert loader.get_debug_config()["debug"]["console"]["enabled"] is True
 
 
 def test_loader_supports_windows_paths_in_double_quoted_yaml(
@@ -153,3 +161,14 @@ def test_repo_instrument_defaults_weight_p0_fully_by_default() -> None:
         0.0,
         0.0,
     ]
+
+
+def test_repo_debug_defaults_disable_console_but_leave_outputs_enabled() -> None:
+    debug_path = Path(__file__).resolve().parents[1] / "config" / "debug.yaml"
+    debug = yaml.safe_load(debug_path.read_text(encoding="utf-8"))
+
+    assert debug["debug"]["global"]["disable_all"] is False
+    assert debug["debug"]["console"]["enabled"] is False
+    assert debug["debug"]["runtime_update_trace"]["enabled"] is True
+    assert debug["debug"]["geometry_fit"]["log_files"] is True
+    assert debug["debug"]["mosaic_fit"]["log_files"] is True

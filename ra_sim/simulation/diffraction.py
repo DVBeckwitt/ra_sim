@@ -11,7 +11,10 @@ from ra_sim.config import get_dir
 from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
-from ra_sim.debug_utils import is_logging_disabled
+from ra_sim.debug_controls import (
+    intersection_cache_logging_enabled,
+    resolve_intersection_cache_log_root,
+)
 from ra_sim.utils.calculations import (
     IndexofRefraction,
     complex_sqrt,
@@ -255,20 +258,11 @@ def _projection_debug_record_reject(
 
 
 def _should_log_intersection_cache() -> bool:
-    if is_logging_disabled():
-        return False
-    value = str(os.environ.get("RA_SIM_LOG_INTERSECTION_CACHE", "1")).strip().lower()
-    return value not in {"0", "false", "off", "no", ""}
+    return intersection_cache_logging_enabled()
 
 
 def _resolve_intersection_cache_log_root() -> Path:
-    configured_root = str(os.environ.get("RA_SIM_INTERSECTION_CACHE_LOG_DIR", "")).strip()
-    if configured_root:
-        return Path(os.path.expanduser(configured_root)).expanduser()
-    try:
-        return Path(get_dir("debug_log_dir"))
-    except Exception:
-        return Path.cwd() / "logs"
+    return resolve_intersection_cache_log_root()
 
 
 def _write_intersection_cache_log(

@@ -1,181 +1,269 @@
-# Logging README
+# Logging and Debug Controls
 
-There is not currently a single master switch that disables all logging, debug file output, and cache-related disk artifacts.
+RA-SIM now uses `config/debug.yaml` as the primary control surface for user-facing debug and logging output.
 
-This note records the current behavior in the codebase so it is clear which controls actually work, which outputs still happen even with those controls disabled, and which cache mechanisms are only in memory.
-
-## Easiest partial disable
-
-For a PowerShell session, the quickest available disable is:
-
-```powershell
-$env:RA_SIM_DEBUG = "0"
-$env:RA_SIM_LOG_INTERSECTION_CACHE = "0"
-```
-
-And in `config/instrument.yaml`:
+The main kill switch is:
 
 ```yaml
-instrument:
-  fit:
-    geometry:
-      debug_logging: false
+debug:
+  global:
+    disable_all: true
 ```
 
-That is only a partial disable. Normal geometry-fit, mosaic-fit, and projection-debug files can still be written.
+When `debug.global.disable_all` is `true`, every debug/log output path documented here is disabled, regardless of the other entries in `debug.yaml`.
 
-## Current switches that matter
+Legacy environment variables still work as compatibility overrides. They are no longer the primary interface.
 
-1. `RA_SIM_DEBUG=0/1`
-   Controls console debug output and Numba logging.
+## Primary config
 
-   Current implementation:
-   - `ra_sim/debug_utils.py`
-   - `ra_sim/gui/_runtime/runtime_impl.py`
+The repo default is `config/debug.yaml`:
 
-   Behavior:
-   - `0`, `false`, or `no` disables the debug prints.
-   - `1`, `true`, or `yes` enables them.
+```yaml
+debug:
+  global:
+    disable_all: false
+  console:
+    enabled: false
+  runtime_update_trace:
+    enabled: true
+  geometry_fit:
+    log_files: true
+    extra_sections: true
+  mosaic_fit:
+    log_files: true
+  projection_debug:
+    enabled: true
+  diffraction_debug_csv:
+    enabled: true
+  intersection_cache:
+    enabled: true
+    log_dir: null
+```
 
-2. `RA_SIM_LOG_INTERSECTION_CACHE=0/1`
-   Controls the `intersection_cache_*` dump folders written by the diffraction intersection-cache logger.
+Meaning of each key:
 
-   Current implementation:
-   - `ra_sim/simulation/diffraction.py`
+1. `debug.global.disable_all`
+   Global kill switch for all user-facing debug/log output covered by this document.
 
-   Behavior:
-   - This is effectively enabled by default because the code falls back to `"1"` when the variable is unset.
-   - Set it to `0` to stop writing those cache-dump folders.
+2. `debug.console.enabled`
+   Enables console debug printing and Numba logging.
 
-3. `RA_SIM_INTERSECTION_CACHE_LOG_DIR=/path/to/dir`
-   Redirects the intersection-cache dump root to a different directory.
+3. `debug.runtime_update_trace.enabled`
+   Enables the GUI runtime trace log.
 
-   Current implementation:
-   - `ra_sim/simulation/diffraction.py`
+4. `debug.geometry_fit.log_files`
+   Enables geometry-fit log file creation.
 
-   Behavior:
-   - If unset, intersection-cache dumps go under `debug_log_dir/intersection_cache`.
-   - This changes location only. It does not disable writing.
+5. `debug.geometry_fit.extra_sections`
+   Enables the more verbose geometry-fit diagnostic sections inside those logs.
 
-4. `instrument.fit.geometry.debug_logging: false/true`
-   Controls whether extra geometry-fit diagnostic sections are added to the geometry-fit log.
+6. `debug.mosaic_fit.log_files`
+   Enables mosaic-shape fit log file creation in both GUI and CLI paths.
 
-   Current implementation:
-   - configured in `config/instrument.yaml`
-   - checked in `ra_sim/gui/geometry_fit.py`
+7. `debug.projection_debug.enabled`
+   Enables projection-debug JSON logging.
 
-   Important limitation:
-   - Setting this to `false` does not prevent the geometry-fit log file itself from being created.
-   - It only suppresses the extra debug sections inside that file.
+8. `debug.diffraction_debug_csv.enabled`
+   Enables the explicit diffraction debug CSV dump written by `dump_debug_log()`.
 
-## Disk outputs that still happen
+9. `debug.intersection_cache.enabled`
+   Enables intersection-cache dump folders.
 
-These outputs currently do not have a single top-level off switch.
+10. `debug.intersection_cache.log_dir`
+    Optional root directory for intersection-cache dumps. `null` means use `debug_log_dir`.
 
-1. Geometry-fit text logs
-   Current implementation:
-   - `ra_sim/gui/_runtime/runtime_impl.py`
-   - `ra_sim/gui/geometry_fit.py`
-   - `ra_sim/headless_geometry_fit.py`
+## Resolution order
 
-   Behavior:
-   - Geometry-fit runs create `geometry_fit_log_<stamp>.txt` in `debug_log_dir`.
-   - Preflight failures can also create a geometry-fit log file before the solver starts.
-   - `debug_logging: false` reduces verbosity but does not stop file creation.
+Debug control resolution follows this order:
 
-2. Mosaic-fit text logs
-   Current implementation:
-   - `ra_sim/gui/_runtime/runtime_impl.py`
-   - `ra_sim/cli.py`
+1. Global disable is active if either `debug.global.disable_all` is `true` or `RA_SIM_DISABLE_ALL_LOGGING` / `RA_SIM_DISABLE_LOGGING` is truthy.
+2. If global disable is active, all subsystem debug/log outputs are disabled.
+3. Otherwise, existing environment variables override the matching `debug.yaml` entry.
+4. Otherwise, `debug.yaml` provides the value.
+5. For `debug.geometry_fit.extra_sections` only, if that key is absent, the code falls back to the legacy instrument config keys `instrument.fit.geometry.debug_logging` and then `instrument.fit.geometry.debug_mode`.
 
-   Behavior:
-   - Mosaic-shape fitting writes `mosaic_shape_fit_log_<stamp>.txt` in `debug_log_dir`.
+Important detail:
 
-3. Projection-debug JSON
-   Current implementation:
-   - `ra_sim/simulation/engine.py`
-   - `ra_sim/simulation/projection_debug.py`
+- `RA_SIM_DEBUG=1` does not bypass the global kill switch.
+- Some debug keys are config-only because there was no legacy env var for them.
 
-   Behavior:
-   - The simulation engine allocates projection-debug buffers on the normal path and finalizes a `projection_debug_<stamp>.json` file under `debug_log_dir`.
-   - There is no separate environment variable or config flag in the current code that disables this at the top level.
+## Compatibility environment variables
 
-4. Debug CSV from the explicit debug simulation path
-   Current implementation:
-   - `ra_sim/simulation/diffraction_debug.py`
-   - `ra_sim/gui/_runtime/runtime_impl.py`
+These env vars are still honored:
 
-   Behavior:
-   - `dump_debug_log()` writes `mosaic_full_debug_log.csv` under `debug_log_dir`.
-   - This is tied to the explicit debug simulation workflow rather than the normal run path.
+1. `RA_SIM_DISABLE_ALL_LOGGING=0/1`
+   Compatibility override for the global kill switch.
 
-5. Intersection-cache dump folders
-   Current implementation:
-   - `ra_sim/simulation/diffraction.py`
+2. `RA_SIM_DISABLE_LOGGING=0/1`
+   Legacy alias for the same global kill switch.
 
-   Behavior:
-   - When enabled, the code writes `intersection_cache/intersection_cache_<stamp>_<pid>/...` under the resolved log root.
-   - This is the one cache-dump output that currently has a dedicated disable flag.
+3. `RA_SIM_DEBUG=0/1`
+   Compatibility override for `debug.console.enabled`.
 
-## Directory settings that affect where things go
+4. `RA_SIM_DISABLE_PROJECTION_DEBUG=0/1`
+   Negative compatibility override for `debug.projection_debug.enabled`.
+   `1` disables projection-debug logging.
 
-The main directory locations come from `config/dir_paths.yaml`, with defaults provided in `ra_sim/config/loader.py`.
+5. `RA_SIM_LOG_INTERSECTION_CACHE=0/1`
+   Compatibility override for `debug.intersection_cache.enabled`.
 
-Relevant keys:
-- `debug_log_dir`
-- `overlay_dir`
-- `temp_root`
-- `downloads`
-- `file_dialog_dir`
+6. `RA_SIM_INTERSECTION_CACHE_LOG_DIR=/path/to/dir`
+   Compatibility override for `debug.intersection_cache.log_dir`.
 
-Important behavior from `ra_sim/config/loader.py`:
-- `get_dir(...)` creates the directory automatically if it does not already exist.
-- `get_temp_dir(...)` creates a dedicated temporary subdirectory under `temp_root` and caches that temp path per active config directory.
+Legacy geometry-fit compatibility:
 
-Practical meaning:
-- Changing these settings can redirect output.
-- They do not function as enable or disable switches.
+1. `instrument.fit.geometry.debug_logging`
+   Fallback for `debug.geometry_fit.extra_sections` when the new key is absent.
 
-## Cache behavior
+2. `instrument.fit.geometry.debug_mode`
+   Older fallback alias used only if `debug_logging` is absent.
 
-There is not currently a global cache-off switch.
+## What is covered by the global kill switch
 
-Current state:
-1. Most cache behavior in the normal runtime is in memory.
-2. The standard simulation-engine wrappers already force `enable_safe_cache=False` for the safe peak wrappers in:
-   - `ra_sim/simulation/engine.py`
-3. GUI caches such as background caches, preview caches, image buffers, and similar runtime caches are internal state caches rather than documented disk caches.
-4. `temp_root` is a location for temporary working directories, not a user-facing cache toggle.
+`debug.global.disable_all: true` disables all of these:
 
-## Potentially confusing settings
+1. Console debug output and Numba logging.
+2. GUI runtime update trace logging.
+3. Geometry-fit log file creation.
+4. Geometry-fit verbose diagnostic sections.
+5. Mosaic-shape fit log file creation in GUI and CLI flows.
+6. Projection-debug JSON output.
+7. Diffraction debug CSV output from `dump_debug_log()`.
+8. Intersection-cache dump folders.
 
-Some config entries look like output controls but are not the main switches for the current runtime behavior.
+This includes the older direct geometry-fit and mosaic-fit writers in the GUI runtime and CLI paths. They are now routed through the centralized resolver.
 
-1. `config/file_paths.yaml -> debug_log_csv`
-   The current code paths found for debug logging write through `debug_log_dir` directly. The `debug_log_csv` path does not appear to be the active control for the current debug CSV writer.
+## Output files and directories
 
-2. `config/file_paths.yaml -> overlay_output`
-   This is not the primary logging control surface for the runtime paths inspected here.
+Default output locations still come from `config/dir_paths.yaml`.
 
+Relevant directory keys:
+
+1. `downloads`
+2. `debug_log_dir`
 3. `overlay_dir`
-   This is used by the debug optimization script in `scripts/debug/optimization.py`, not as a general off switch for runtime logging.
+4. `temp_root`
+5. `file_dialog_dir`
+
+Default directory values:
+
+1. `downloads`: `~/Downloads`
+2. `debug_log_dir`: `~/.cache/ra_sim/logs`
+3. `overlay_dir`: `~/.cache/ra_sim/overlays`
+4. `temp_root`: `~/.cache/ra_sim`
+5. `file_dialog_dir`: `~/.local/share/ra_sim`
+
+Current debug/log outputs:
+
+1. GUI runtime update trace
+   File: `runtime_update_trace_<YYYYMMDD>.log`
+   Location: `downloads`
+   Controlled by: `debug.runtime_update_trace.enabled`
+
+2. Geometry-fit logs
+   File: `geometry_fit_log_<stamp>.txt`
+   Location: `debug_log_dir`
+   Controlled by: `debug.geometry_fit.log_files`
+   Verbosity controlled by: `debug.geometry_fit.extra_sections`
+
+3. Mosaic-shape fit logs
+   File: `mosaic_shape_fit_log_<stamp>.txt`
+   Location: `debug_log_dir`
+   Controlled by: `debug.mosaic_fit.log_files`
+
+4. Projection-debug JSON
+   File: `projection_debug_<stamp>.json`
+   Location: `debug_log_dir`
+   Controlled by: `debug.projection_debug.enabled`
+
+5. Diffraction debug CSV
+   File: `mosaic_full_debug_log.csv`
+   Location: `debug_log_dir`
+   Controlled by: `debug.diffraction_debug_csv.enabled`
+
+6. Intersection-cache dumps
+   Directory pattern: `intersection_cache_<stamp>_<pid>`
+   Root location: `debug.intersection_cache.log_dir` when set, otherwise `debug_log_dir`
+   Controlled by: `debug.intersection_cache.enabled`
+
+`get_dir(...)` still creates missing configured directories automatically. Changing a directory setting redirects output, but it does not enable or disable output by itself.
+
+## Practical examples
+
+Disable all debug/log output in config:
+
+```yaml
+debug:
+  global:
+    disable_all: true
+```
+
+Keep everything on except console spam:
+
+```yaml
+debug:
+  global:
+    disable_all: false
+  console:
+    enabled: false
+```
+
+Disable only projection-debug JSON and intersection-cache dumps:
+
+```yaml
+debug:
+  projection_debug:
+    enabled: false
+  intersection_cache:
+    enabled: false
+```
+
+Disable geometry-fit extra sections but keep the log files:
+
+```yaml
+debug:
+  geometry_fit:
+    log_files: true
+    extra_sections: false
+```
+
+Redirect intersection-cache dumps:
+
+```yaml
+debug:
+  intersection_cache:
+    enabled: true
+    log_dir: /tmp/ra-sim-cache-dumps
+```
+
+Temporary compatibility override from PowerShell:
+
+```powershell
+$env:RA_SIM_DISABLE_ALL_LOGGING = "1"
+```
+
+Temporary console-debug override from PowerShell:
+
+```powershell
+$env:RA_SIM_DEBUG = "1"
+```
 
 ## Bottom line
 
-The current easiest partial disable is:
+Use `config/debug.yaml` for normal project configuration.
 
-```powershell
-$env:RA_SIM_DEBUG = "0"
-$env:RA_SIM_LOG_INTERSECTION_CACHE = "0"
-```
-
-plus:
+If you need a master OFF switch, set:
 
 ```yaml
-instrument:
-  fit:
-    geometry:
-      debug_logging: false
+debug:
+  global:
+    disable_all: true
 ```
 
-That still leaves normal geometry-fit logs, mosaic-fit logs, and projection-debug JSON active. If a true all-logging or all-cache-output switch is needed, it will require a code change.
+If you need a temporary shell-level override, use:
+
+```powershell
+$env:RA_SIM_DISABLE_ALL_LOGGING = "1"
+```
+
+The config kill switch and the env kill switches both disable every debug/log output covered by this README.

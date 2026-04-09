@@ -42,6 +42,7 @@ from PIL import Image
 
 from ra_sim import launcher
 from ra_sim.config import get_dir, get_instrument_config, get_path
+from ra_sim.debug_controls import mosaic_fit_log_files_enabled
 from ra_sim.fitting.optimization import (
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
@@ -1421,7 +1422,9 @@ def run_headless_geometry_fit(
             )
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        mosaic_log_path = get_dir("debug_log_dir") / f"mosaic_shape_fit_log_{stamp}.txt"
+        mosaic_log_path = None
+        if mosaic_fit_log_files_enabled():
+            mosaic_log_path = get_dir("debug_log_dir") / f"mosaic_shape_fit_log_{stamp}.txt"
         status = (
             "accepted"
             if bool(getattr(result, "acceptance_passed", False))
@@ -1438,34 +1441,35 @@ def run_headless_geometry_fit(
             for diag in dataset_diagnostics
             if isinstance(diag, Mapping)
         )
-        with mosaic_log_path.open("w", encoding="utf-8") as handle:
-            handle.write(f"Mosaic shape fit started: {stamp}\n")
-            handle.write(f"status={status}\n")
-            handle.write(f"message={message}\n")
-            handle.write(f"sigma_mosaic_deg={sigma_deg:.6f}\n")
-            handle.write(f"gamma_mosaic_deg={gamma_deg:.6f}\n")
-            handle.write(f"eta={eta_val:.6f}\n")
-            handle.write(f"dataset_count={len(dataset_specs)}\n")
-            handle.write(f"roi_count={roi_count}\n")
-            handle.write(
-                f"cost_reduction={float(getattr(result, 'cost_reduction', 0.0) or 0.0):.6f}\n"
-            )
-            if dataset_summary:
-                handle.write(f"dataset_summary={dataset_summary}\n")
-            boundary_warning = str(getattr(result, "boundary_warning", "") or "").strip()
-            if boundary_warning:
-                handle.write(f"boundary_warning={boundary_warning}\n")
-            debug_summary = getattr(result, "mosaic_fit_debug_summary", None)
-            if isinstance(debug_summary, Mapping):
-                handle.write("\nDebug summary (JSON):\n")
-                json.dump(debug_summary, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+        if mosaic_log_path is not None:
+            with mosaic_log_path.open("w", encoding="utf-8") as handle:
+                handle.write(f"Mosaic shape fit started: {stamp}\n")
+                handle.write(f"status={status}\n")
+                handle.write(f"message={message}\n")
+                handle.write(f"sigma_mosaic_deg={sigma_deg:.6f}\n")
+                handle.write(f"gamma_mosaic_deg={gamma_deg:.6f}\n")
+                handle.write(f"eta={eta_val:.6f}\n")
+                handle.write(f"dataset_count={len(dataset_specs)}\n")
+                handle.write(f"roi_count={roi_count}\n")
+                handle.write(
+                    f"cost_reduction={float(getattr(result, 'cost_reduction', 0.0) or 0.0):.6f}\n"
+                )
+                if dataset_summary:
+                    handle.write(f"dataset_summary={dataset_summary}\n")
+                boundary_warning = str(getattr(result, "boundary_warning", "") or "").strip()
+                if boundary_warning:
+                    handle.write(f"boundary_warning={boundary_warning}\n")
+                debug_summary = getattr(result, "mosaic_fit_debug_summary", None)
+                if isinstance(debug_summary, Mapping):
+                    handle.write("\nDebug summary (JSON):\n")
+                    json.dump(debug_summary, handle, indent=2, sort_keys=True)
+                    handle.write("\n")
 
         mosaic_shape_report = {
             "accepted": bool(getattr(result, "acceptance_passed", False)),
             "success": bool(getattr(result, "success", False)),
             "message": message,
-            "log_path": str(mosaic_log_path),
+            "log_path": str(mosaic_log_path) if mosaic_log_path is not None else None,
             "sigma_mosaic_deg": float(sigma_deg),
             "gamma_mosaic_deg": float(gamma_deg),
             "eta": float(eta_val),

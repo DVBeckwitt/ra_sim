@@ -91,6 +91,10 @@ def _load_from_dir(config_dir: Path) -> ConfigBundle:
         _read_data_file(config_dir / "dir_paths.yaml"),
         name="dir_paths.yaml",
     )
+    debug = ensure_mapping(
+        _read_data_file(config_dir / "debug.yaml"),
+        name="debug.yaml",
+    )
     materials = ensure_mapping(
         _read_data_file(config_dir / "materials.yaml"),
         name="materials.yaml",
@@ -103,6 +107,7 @@ def _load_from_dir(config_dir: Path) -> ConfigBundle:
         config_dir=config_dir,
         file_paths=file_paths,
         dir_paths=dir_paths,
+        debug=debug,
         materials=materials,
         instrument=instrument,
     )
@@ -225,3 +230,9 @@ def get_instrument_config(*, config_dir: Path | None = None) -> dict[str, Any]:
     """Return a defensive copy of the instrument configuration."""
 
     return copy.deepcopy(get_config_bundle(config_dir).instrument)
+
+
+def get_debug_config(*, config_dir: Path | None = None) -> dict[str, Any]:
+    """Return a defensive copy of the debug configuration."""
+
+    return copy.deepcopy(get_config_bundle(config_dir).debug)

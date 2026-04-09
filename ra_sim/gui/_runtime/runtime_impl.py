@@ -172,7 +172,11 @@ from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
     export_algebraic_ht_txt,
 )
-from ra_sim.debug_utils import debug_print, is_debug_enabled, is_logging_disabled
+from ra_sim.debug_controls import (
+    mosaic_fit_log_files_enabled,
+    runtime_update_trace_logging_enabled as _runtime_update_trace_logging_enabled,
+)
+from ra_sim.debug_utils import debug_print, is_debug_enabled
 from ra_sim.hbn import (
     build_hbn_geometry_debug_trace,
     convert_hbn_bundle_geometry_to_simulation,
@@ -192,8 +196,6 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
-# Default to non-debug mode; set RA_SIM_DEBUG=1 to enable diagnostics.
-os.environ.setdefault("RA_SIM_DEBUG", "0")
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
@@ -225,7 +227,7 @@ _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = False
 
 
 def _all_logging_disabled() -> bool:
-    return is_logging_disabled()
+    return not _runtime_update_trace_logging_enabled()
 
 
 def _runtime_update_trace_path() -> Path:
@@ -13533,8 +13535,10 @@ def _legacy_auto_match_on_fit_geometry_click():
         stamp=stamp,
         log_dir=get_dir("debug_log_dir"),
     )
-    log_file = log_path.open("w", encoding="utf-8")
-    _cmd_line(f"log: {log_path}")
+    log_file = None
+    if gui_geometry_fit.geometry_fit_log_files_enabled():
+        log_file = log_path.open("w", encoding="utf-8")
+        _cmd_line(f"log: {log_path}")
 
     def _log_line(text: str = ""):
         try:
@@ -14861,7 +14865,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                 stamp=stamp,
                 log_dir=get_dir("debug_log_dir"),
             )
-            log_file = log_path.open("w", encoding="utf-8")
+            log_file = None
+            if gui_geometry_fit.geometry_fit_log_files_enabled():
+                log_file = log_path.open("w", encoding="utf-8")
 
             def _log_line(text: str = ""):
                 try:
@@ -16293,12 +16299,14 @@ def on_fit_mosaic_click():
     }
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    try:
-        log_dir = get_dir("debug_log_dir")
-    except Exception:
-        log_dir = Path.cwd() / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = Path(log_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
+    log_path = None
+    if mosaic_fit_log_files_enabled():
+        try:
+            log_dir = get_dir("debug_log_dir")
+        except Exception:
+            log_dir = Path.cwd() / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = Path(log_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
     log_file = None
 
     def _mosaic_log_line(text: str = "") -> None:
@@ -16339,9 +16347,10 @@ def on_fit_mosaic_click():
 
     result = None
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = log_path.open("w", encoding="utf-8")
-        _mosaic_fit_cmd_line(f"log: {log_path}")
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file = log_path.open("w", encoding="utf-8")
+            _mosaic_fit_cmd_line(f"log: {log_path}")
         _mosaic_log_line(f"Mosaic shape fit started: {stamp}")
         _mosaic_log_line()
         _mosaic_log_section(
@@ -16363,7 +16372,7 @@ def on_fit_mosaic_click():
                 f"solver_loss={solver_cfg.get('loss', 'soft_l1')}",
                 f"solver_max_nfev={solver_cfg.get('max_nfev', 80)}",
                 f"solver_restarts={solver_cfg.get('restarts', 2)}",
-                f"log_file={log_path}",
+                f"log_file={log_path if log_path is not None else 'disabled'}",
             ],
         )
         _mosaic_log_line("Launch context (JSON):")
@@ -16436,9 +16445,10 @@ def on_fit_mosaic_click():
         for trace_line in traceback.format_exception(type(exc), exc, exc.__traceback__):
             for row in str(trace_line).rstrip().splitlines():
                 _mosaic_log_line(row)
-        progress_label_mosaic.config(
-            text=f"Mosaic shape fit failed: {exc}\nFit log → {log_path}"
-        )
+        progress_text = f"Mosaic shape fit failed: {exc}"
+        if log_path is not None:
+            progress_text += f"\nFit log → {log_path}"
+        progress_label_mosaic.config(text=progress_text)
         return
     finally:
         if log_file is not None:
@@ -16451,12 +16461,10 @@ def on_fit_mosaic_click():
         root.update_idletasks()
 
     if result.x is None or not np.all(np.isfinite(result.x)):
-        progress_label_mosaic.config(
-            text=(
-                "Mosaic shape fit failed: optimizer returned invalid parameters."
-                + f"\nFit log → {log_path}"
-            )
-        )
+        progress_text = "Mosaic shape fit failed: optimizer returned invalid parameters."
+        if log_path is not None:
+            progress_text += f"\nFit log → {log_path}"
+        progress_label_mosaic.config(text=progress_text)
         return
 
     sigma_deg, gamma_deg, eta_val = map(float, result.x[:3])

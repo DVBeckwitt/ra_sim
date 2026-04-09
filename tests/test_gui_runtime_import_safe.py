@@ -12,6 +12,7 @@ RUNTIME_IMPL_MODULE_NAME = "ra_sim.gui._runtime_impl"
 RUNTIME_IMPL_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_impl.py"
 )
+CLI_SOURCE_PATH = Path(__file__).resolve().parent.parent / "ra_sim" / "cli.py"
 
 
 def test_runtime_import_is_lazy() -> None:
@@ -94,6 +95,23 @@ def test_runtime_unknown_attr_forwards_to_impl(monkeypatch) -> None:
 
 def test_runtime_impl_source_compiles() -> None:
     py_compile.compile(str(RUNTIME_IMPL_SOURCE_PATH), doraise=True)
+
+
+def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'os.environ.setdefault("RA_SIM_DEBUG", "0")' not in source
+    assert "if gui_geometry_fit.geometry_fit_log_files_enabled():" in source
+    assert "if mosaic_fit_log_files_enabled():" in source
+    assert "log_file={log_path if log_path is not None else 'disabled'}" in source
+
+
+def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:
+    source = CLI_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "from ra_sim.debug_controls import mosaic_fit_log_files_enabled" in source
+    assert "if mosaic_fit_log_files_enabled():" in source
+    assert '"log_path": str(mosaic_log_path) if mosaic_log_path is not None else None' in source
 
 
 def test_runtime_impl_attaches_background_theta_trace_after_theta_var_assignment() -> None:

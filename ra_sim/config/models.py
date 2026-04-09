@@ -14,5 +14,6 @@ class ConfigBundle:
     config_dir: Path
     file_paths: dict[str, Any]
     dir_paths: dict[str, Any]
+    debug: dict[str, Any]
     materials: dict[str, Any]
     instrument: dict[str, Any]
