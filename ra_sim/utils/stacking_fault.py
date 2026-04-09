@@ -7,6 +7,8 @@ import numpy as np
 import io
 from contextlib import redirect_stdout
 
+from ra_sim.debug_controls import retain_optional_cache
+
 # Global constants
 A_HEX   = 4.557            # Å
 P_CLAMP = 1e-6
@@ -67,6 +69,10 @@ _ALLOWED_PHASE_DELTA_NODES = (
     ast.USub,
     ast.UAdd,
 )
+
+
+def _retain_stacking_fault_base_cache() -> bool:
+    return retain_optional_cache("stacking_fault_base", feature_needed=True)
 
 
 def normalize_phase_delta_expression(
@@ -913,7 +919,10 @@ def _get_base_curves(
         bool(iodine_single_plane),
         bool(include_f_components),
     )
-    cached = _HT_BASE_CACHE.get(key)
+    retain_base_cache = _retain_stacking_fault_base_cache()
+    if not retain_base_cache:
+        _HT_BASE_CACHE.clear()
+    cached = _HT_BASE_CACHE.get(key) if retain_base_cache else None
     if cached is not None:
         return cached
 
@@ -1140,13 +1149,14 @@ def _get_base_curves(
             out_entry["F_abs"] = np.asarray(reused_curve["F_abs"], dtype=float).copy()
         out[(h, k)] = out_entry
 
-    _HT_BASE_CACHE[key] = out
-    # Bound cache growth because occupancy sliders can produce many unique keys.
-    while len(_HT_BASE_CACHE) > _HT_BASE_CACHE_MAX_ENTRIES:
-        try:
-            _HT_BASE_CACHE.pop(next(iter(_HT_BASE_CACHE)))
-        except StopIteration:
-            break
+    if retain_base_cache:
+        _HT_BASE_CACHE[key] = out
+        # Bound cache growth because occupancy sliders can produce many unique keys.
+        while len(_HT_BASE_CACHE) > _HT_BASE_CACHE_MAX_ENTRIES:
+            try:
+                _HT_BASE_CACHE.pop(next(iter(_HT_BASE_CACHE)))
+            except StopIteration:
+                break
     return out
 
 

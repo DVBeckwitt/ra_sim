@@ -1,6 +1,6 @@
-# Logging and Debug Controls
+# Logging, Debug, and Cache Controls
 
-RA-SIM now uses `config/debug.yaml` as the primary control surface for user-facing debug and logging output.
+RA-SIM now uses `config/debug.yaml` as the primary control surface for user-facing debug/logging output and optional cache retention.
 
 The main kill switch is:
 
@@ -38,6 +38,21 @@ debug:
   intersection_cache:
     enabled: true
     log_dir: null
+  cache:
+    default_retention: auto
+    families:
+      primary_contribution: auto
+      source_snapshots: auto
+      caking: auto
+      peak_overlay: auto
+      background_history: auto
+      manual_pick: auto
+      geometry_fit_dataset: auto
+      qr_cylinder_overlay: auto
+      diffraction_safe: auto
+      diffraction_last_intersection: never
+      fit_simulation: auto
+      stacking_fault_base: auto
 ```
 
 Meaning of each key:
@@ -72,6 +87,82 @@ Meaning of each key:
 10. `debug.intersection_cache.log_dir`
     Optional root directory for intersection-cache dumps. `null` means use `debug_log_dir`.
 
+11. `debug.cache.default_retention`
+    Default policy for optional retained caches. Valid values are `never`, `auto`, and `always`.
+
+12. `debug.cache.families.<name>`
+    Per-cache-family override for optional retained caches. Valid values are `never`, `auto`, and `always`.
+
+## Cache policy
+
+The cache section controls only optional retained caches. It does not control active simulation state.
+
+Three categories matter:
+
+1. Mandatory current state
+   Current simulation images, current peak tables, current active intersection caches, current integration payloads, the active background image, and the active beam/profile bundle. These are required for the current UI/runtime state and are not gated by the cache policy.
+
+2. Optional retained caches
+   Recomputable data kept only for reuse or debug convenience. These are controlled by `debug.cache`.
+
+3. Per-call scratch buffers
+   Temporary hot-loop work arrays. These are not retained caches and are not controlled here.
+
+Current optional cache families:
+
+1. `primary_contribution`
+   Per-contribution primary hit-table cache used by incremental SF-prune reuse.
+
+2. `source_snapshots`
+   Stored source-row snapshots used by manual-geometry/source-row reuse flows.
+
+3. `caking`
+   Retained caked-analysis payloads reused across repeated analysis refreshes.
+
+4. `peak_overlay`
+   Reusable peak-overlay records and click-index payloads.
+
+5. `background_history`
+   Inactive background-image history. The currently selected background image remains mandatory.
+
+6. `manual_pick`
+   Geometry manual-pick candidate/match cache.
+
+7. `geometry_fit_dataset`
+   Cached geometry-fit dataset bundle for follow-on geometry-fit workflows.
+
+8. `qr_cylinder_overlay`
+   Cached analytic Qr-cylinder overlay paths.
+
+9. `diffraction_safe`
+   Retained diffraction safe-cache internals such as Q-vector reuse state.
+
+10. `diffraction_last_intersection`
+    Retained global last-intersection snapshot. Default is `never`.
+
+11. `fit_simulation`
+    Reusable fitting simulation/image caches.
+
+12. `stacking_fault_base`
+    Retained HT base-curve cache in stacking-fault generation.
+
+Retention modes:
+
+1. `never`
+   Build on demand if needed for the current action, then discard.
+
+2. `auto`
+   Retain only when the active feature benefits from reuse. This is the default balanced mode.
+
+3. `always`
+   Retain whenever built.
+
+Important detail:
+
+- `debug.global.disable_all` disables logging/debug output only.
+- `debug.global.disable_all` does not disable optional caches.
+- Tiny infrastructure/compile caches such as config bundle loading, CIF parsing, and compiled expression helpers stay always-on and are not controlled by `debug.cache`.
+
 ## Resolution order
 
 Debug control resolution follows this order:
@@ -86,6 +177,7 @@ Important detail:
 
 - `RA_SIM_DEBUG=1` does not bypass the global kill switch.
 - Some debug keys are config-only because there was no legacy env var for them.
+- Cache retention has no environment-variable overrides in v1.
 
 ## Compatibility environment variables
 

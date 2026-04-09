@@ -174,6 +174,7 @@ from ra_sim.gui.diffuse_cif_toggle import (
 )
 from ra_sim.debug_controls import (
     mosaic_fit_log_files_enabled,
+    retain_optional_cache,
     runtime_update_trace_logging_enabled as _runtime_update_trace_logging_enabled,
 )
 from ra_sim.debug_utils import debug_print, is_debug_enabled
@@ -313,6 +314,36 @@ def _live_cache_signature_summary(
             preview += ", ..."
         return f"{type(signature).__name__}(len={len(items)}, items=[{preview}])"
     return _live_cache_short_text(signature, max_chars=96)
+
+
+def _retain_runtime_optional_cache(
+    family: str,
+    *,
+    feature_needed: bool = True,
+) -> bool:
+    try:
+        return retain_optional_cache(family, feature_needed=feature_needed)
+    except Exception:
+        return bool(feature_needed)
+
+
+def _empty_peak_overlay_cache() -> dict[str, object]:
+    return {
+        "sig": None,
+        "positions": [],
+        "millers": [],
+        "intensities": [],
+        "records": [],
+        "click_spatial_index": None,
+        "restored_from_gui_state": False,
+    }
+
+
+def _empty_qr_cylinder_overlay_cache() -> dict[str, object]:
+    return {
+        "signature": None,
+        "paths": [],
+    }
 
 
 def _live_cache_inventory_snapshot() -> dict[str, object]:
@@ -2323,10 +2354,7 @@ geometry_runtime_state.pick_artists = []
 geometry_runtime_state.preview_artists = []
 geometry_runtime_state.manual_preview_artists = []
 geometry_runtime_state.qr_cylinder_overlay_artists = []
-geometry_runtime_state.qr_cylinder_overlay_cache = {
-    "signature": None,
-    "paths": [],
-}
+geometry_runtime_state.qr_cylinder_overlay_cache = _empty_qr_cylinder_overlay_cache()
 geometry_preview_state = app_state.geometry_preview
 geometry_q_group_view_state = app_state.geometry_q_group_view
 geometry_q_group_state = app_state.geometry_q_groups
@@ -2986,6 +3014,12 @@ def _set_geometry_fit_dataset_cache(
 ) -> dict[str, object] | None:
     """Replace the cached successful geometry-fit dataset bundle."""
 
+    if not _retain_runtime_optional_cache(
+        "geometry_fit_dataset",
+        feature_needed=bool(payload),
+    ):
+        gui_controllers.clear_geometry_fit_dataset_cache(geometry_fit_dataset_cache_state)
+        return None
     return gui_controllers.replace_geometry_fit_dataset_cache(
         geometry_fit_dataset_cache_state,
         payload,
@@ -3262,6 +3296,20 @@ def _invalidate_geometry_manual_pick_cache() -> None:
     """Drop cached manual-pick simulation/background state."""
 
 
+    geometry_runtime_state.manual_pick_cache_signature = None
+    geometry_runtime_state.manual_pick_cache_data = {}
+
+
+def _set_geometry_manual_pick_cache_state(
+    signature: object,
+    cache_data: dict[str, object] | None,
+) -> None:
+    if _retain_runtime_optional_cache("manual_pick", feature_needed=True):
+        geometry_runtime_state.manual_pick_cache_signature = signature
+        geometry_runtime_state.manual_pick_cache_data = (
+            dict(cache_data) if isinstance(cache_data, dict) else {}
+        )
+        return
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
 
@@ -3935,16 +3983,7 @@ geometry_manual_cache_workflow = (
             lambda: geometry_runtime_state.manual_pick_cache_signature
         ),
         current_cache_data=(lambda: geometry_runtime_state.manual_pick_cache_data),
-        replace_cache_state=(
-            lambda signature, cache_data: (
-                setattr(geometry_runtime_state, "manual_pick_cache_signature", signature),
-                setattr(
-                    geometry_runtime_state,
-                    "manual_pick_cache_data",
-                    dict(cache_data) if isinstance(cache_data, dict) else {},
-                ),
-            )
-        ),
+        replace_cache_state=_set_geometry_manual_pick_cache_state,
         current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
         pairs_for_index=_geometry_manual_pairs_for_index,
         source_rows_for_background=(
@@ -5672,9 +5711,7 @@ simulation_runtime_state.caked_limits_user_override = False
 vmin_caked_var = tk.DoubleVar(value=0.0)
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 
-analysis_1d_toolbar_frame = None
-analysis_1d_toolbar = None
-analysis_1d_reset_view_button = None
+analysis_1d_interaction_bindings = None
 
 
 def _reset_analysis_figure_view() -> None:
@@ -5692,23 +5729,19 @@ def _reset_analysis_figure_view() -> None:
 
 def _mount_analysis_figure(parent) -> None:
     global canvas_1d
-    global analysis_1d_toolbar_frame, analysis_1d_toolbar, analysis_1d_reset_view_button
+    global analysis_1d_interaction_bindings
 
     canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
         fig_1d,
         master=parent,
     )
     canvas_1d.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-    (
-        analysis_1d_toolbar_frame,
-        analysis_1d_toolbar,
-        analysis_1d_reset_view_button,
-    ) = gui_analysis_figure_controls.create_analysis_figure_toolbar(
-        parent=parent,
-        canvas=canvas_1d,
-        ttk_module=ttk,
-        backend_tkagg_module=matplotlib.backends.backend_tkagg,
-        on_reset_view=_reset_analysis_figure_view,
+    analysis_1d_interaction_bindings = (
+        gui_analysis_figure_controls.create_analysis_figure_interactions(
+            canvas=canvas_1d,
+            axes=(ax_1d_radial, ax_1d_azim),
+            on_reset_view=_reset_analysis_figure_view,
+        )
     )
 
 
@@ -5870,6 +5903,10 @@ def _store_primary_cache_payload(
         return
 
     normalized_mode = str(source_mode or "miller")
+    retain_cache = _retain_runtime_optional_cache(
+        "primary_contribution",
+        feature_needed=bool(active_keys),
+    )
     reset_required = bool(
         cache_signature != simulation_runtime_state.primary_contribution_cache_signature
         or normalized_mode != str(simulation_runtime_state.primary_source_mode or "")
@@ -5883,19 +5920,26 @@ def _store_primary_cache_payload(
     simulation_runtime_state.primary_source_mode = normalized_mode
     simulation_runtime_state.primary_active_contribution_keys = list(active_keys or ())
 
-    copied_tables = _copy_hit_tables(raw_hit_tables)
     overwritten_count = 0
-    for key, table in zip(contribution_keys or (), copied_tables):
-        if key in simulation_runtime_state.primary_hit_table_cache:
-            overwritten_count += 1
-        simulation_runtime_state.primary_hit_table_cache[key] = np.asarray(
-            table,
-            dtype=np.float64,
-        ).copy()
+    if retain_cache:
+        copied_tables = _copy_hit_tables(raw_hit_tables)
+        for key, table in zip(contribution_keys or (), copied_tables):
+            if key in simulation_runtime_state.primary_hit_table_cache:
+                overwritten_count += 1
+            simulation_runtime_state.primary_hit_table_cache[key] = np.asarray(
+                table,
+                dtype=np.float64,
+            ).copy()
+    else:
+        simulation_runtime_state.primary_hit_table_cache = {}
     _trace_live_cache_event(
         "primary_contribution",
         "store",
-        outcome=("reset_and_store" if reset_required else "store"),
+        outcome=(
+            "discarded"
+            if not retain_cache
+            else ("reset_and_store" if reset_required else "store")
+        ),
         previous_signature_summary=_live_cache_signature_summary(previous_signature),
         signature_summary=_live_cache_signature_summary(cache_signature),
         previous_source_mode=previous_mode,
@@ -7628,6 +7672,16 @@ def _get_cached_caking_entry(kind: str, signature: object) -> dict[str, object] 
             reason="missing_signature",
         )
         return None
+    if not _retain_runtime_optional_cache("caking", feature_needed=True):
+        simulation_runtime_state.caking_cache = _empty_caking_cache()
+        _trace_live_cache_event(
+            f"caking_{str(kind)}",
+            "lookup",
+            outcome="miss",
+            reason="retention_disabled",
+            signature_summary=_live_cache_signature_summary(signature),
+        )
+        return None
     bucket = _caking_cache_bucket(kind)
     entry = bucket.get(signature)
     if not isinstance(entry, dict):
@@ -7669,6 +7723,17 @@ def _store_cached_caking_entry(
                 if signature is None
                 else "missing_result"
             ),
+        )
+        return
+    if not _retain_runtime_optional_cache("caking", feature_needed=True):
+        simulation_runtime_state.caking_cache = _empty_caking_cache()
+        _trace_live_cache_event(
+            f"caking_{str(kind)}",
+            "store",
+            outcome="discarded",
+            reason="retention_disabled",
+            signature_summary=_live_cache_signature_summary(signature),
+            payload_available=bool(payload is not None),
         )
         return
     bucket = _caking_cache_bucket(kind)
@@ -9027,13 +9092,7 @@ simulation_runtime_state.stored_secondary_intersection_cache = None
 simulation_runtime_state.stored_intersection_cache = None
 simulation_runtime_state.last_unscaled_image_signature = None
 simulation_runtime_state.normalization_scale_cache = {"sig": None, "value": 1.0}
-simulation_runtime_state.peak_overlay_cache = {
-    "sig": None,
-    "positions": [],
-    "millers": [],
-    "intensities": [],
-    "records": [],
-}
+simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
 simulation_runtime_state.caking_cache = _empty_caking_cache()
 simulation_runtime_state.analysis_executor = None
 simulation_runtime_state.analysis_future = None
@@ -11573,15 +11632,18 @@ def _replace_gui_state_peak_cache(
     simulation_runtime_state.peak_millers = restored_millers
     simulation_runtime_state.peak_intensities = restored_intensities
     simulation_runtime_state.selected_peak_record = None
-    simulation_runtime_state.peak_overlay_cache = {
-        "sig": None,
-        "positions": list(restored_positions),
-        "millers": list(restored_millers),
-        "intensities": list(restored_intensities),
-        "records": [dict(record) for record in restored_records],
-        "click_spatial_index": None,
-        "restored_from_gui_state": bool(restored_records),
-    }
+    if _retain_runtime_optional_cache("peak_overlay", feature_needed=bool(restored_records)):
+        simulation_runtime_state.peak_overlay_cache = {
+            "sig": None,
+            "positions": list(restored_positions),
+            "millers": list(restored_millers),
+            "intensities": list(restored_intensities),
+            "records": [dict(record) for record in restored_records],
+            "click_spatial_index": None,
+            "restored_from_gui_state": bool(restored_records),
+        }
+    else:
+        simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
     _invalidate_geometry_manual_pick_cache()
 
 
@@ -12853,18 +12915,26 @@ def _capture_geometry_source_snapshot() -> None:
         and simulation_runtime_state.stored_max_positions_local is not None
     ):
         created_from = "stored_max_positions_local"
-    simulation_runtime_state.source_row_snapshots[int(background_index)] = {
+    snapshot_payload = {
         "background_index": int(background_index),
         "simulation_signature": simulation_runtime_state.last_simulation_signature,
         "rows": rows,
         "row_count": int(len(rows)),
         "created_from": created_from,
     }
+    retain_snapshot_cache = _retain_runtime_optional_cache(
+        "source_snapshots",
+        feature_needed=True,
+    )
+    if retain_snapshot_cache:
+        simulation_runtime_state.source_row_snapshots[int(background_index)] = snapshot_payload
+    else:
+        simulation_runtime_state.source_row_snapshots.pop(int(background_index), None)
     _trace_live_cache_event(
         "source_snapshot",
         "store",
         background_index=int(background_index),
-        outcome="stored",
+        outcome=("stored" if retain_snapshot_cache else "discarded"),
         overwrite=bool(previous_snapshot),
         previous_row_count=int(previous_snapshot.get("row_count", 0) or 0),
         row_count=int(len(rows)),
@@ -18081,16 +18151,14 @@ def _render_analysis_plot_controls(
     range_values: Mapping[str, float] | None = None,
 ) -> None:
     global canvas_1d
-    global analysis_1d_toolbar_frame, analysis_1d_toolbar, analysis_1d_reset_view_button
+    global analysis_1d_interaction_bindings
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
 
     values = dict(range_values or _current_analysis_range_values())
     _clear_widget_children(parent)
 
-    analysis_1d_toolbar_frame = None
-    analysis_1d_toolbar = None
-    analysis_1d_reset_view_button = None
+    analysis_1d_interaction_bindings = None
     _mount_analysis_figure(parent)
 
     gui_integration_range_drag.create_runtime_integration_range_controls(

@@ -17,6 +17,7 @@ from scipy.optimize import (
 from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
+from ra_sim.debug_controls import retain_optional_cache
 from ra_sim.simulation.diffraction import (
     get_last_process_peaks_safe_stats,
     hit_tables_to_max_positions,
@@ -37,6 +38,10 @@ process_peaks_parallel = _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER
 _USE_NUMBA_PROCESS_PEAKS = True
 _NUMBA_PROCESS_PEAKS_WARMED = False
 _NUMBA_PROCESS_PEAKS_WARMUP_LOCK = Lock()
+
+
+def _retain_fit_simulation_cache() -> bool:
+    return retain_optional_cache("fit_simulation", feature_needed=True)
 
 
 def _available_parallel_thread_budget() -> int:
@@ -408,6 +413,10 @@ class SimulationCache:
         self,
         params: Dict[str, float],
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        if not _retain_fit_simulation_cache():
+            self.images.clear()
+            self.max_positions.clear()
+            return None
         key = self.key_for(params)
         if key in self.images:
             return self.images[key], self.max_positions[key]
@@ -419,6 +428,10 @@ class SimulationCache:
         image: np.ndarray,
         max_positions: np.ndarray,
     ) -> None:
+        if not _retain_fit_simulation_cache():
+            self.images.clear()
+            self.max_positions.clear()
+            return
         key = self.key_for(params)
         self.images[key] = image
         self.max_positions[key] = max_positions
@@ -8402,10 +8415,16 @@ def _fit_mosaic_shape_parameters_profiles(
             float(local["mosaic_params"]["eta"]),
             float(theta_value),
         )
-        with image_cache_lock:
-            cached = image_cache.get(key)
-        if cached is not None:
-            return cached
+        retain_image_cache = _retain_fit_simulation_cache()
+        if not retain_image_cache:
+            with image_cache_lock:
+                image_cache.clear()
+            cached = None
+        else:
+            with image_cache_lock:
+                cached = image_cache.get(key)
+            if cached is not None:
+                return cached
 
         local_mosaic = dict(local["mosaic_params"])
         wave_local = local_mosaic.get("wavelength_array")
@@ -8451,11 +8470,12 @@ def _fit_mosaic_shape_parameters_profiles(
             **_simulation_kernel_kwargs(local, local_mosaic),
         )
         cached = np.asarray(image, dtype=np.float64)
-        with image_cache_lock:
-            existing = image_cache.get(key)
-            if existing is not None:
-                return existing
-            image_cache[key] = cached
+        if retain_image_cache:
+            with image_cache_lock:
+                existing = image_cache.get(key)
+                if existing is not None:
+                    return existing
+                image_cache[key] = cached
         return cached
 
     def _evaluate_one_dataset(

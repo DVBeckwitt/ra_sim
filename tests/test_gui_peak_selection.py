@@ -1,6 +1,10 @@
 import numpy as np
+import pytest
+import yaml
+from pathlib import Path
 from types import SimpleNamespace
 
+from ra_sim.config import loader
 from ra_sim.gui import peak_selection, state
 
 
@@ -51,6 +55,29 @@ class _FakeFigure:
 
     def show(self):
         self.shown = True
+
+
+def _write_yaml(path: Path, payload: dict) -> None:
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+
+def _make_config_dir(tmp_path: Path, *, debug: dict | None = None) -> Path:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    _write_yaml(cfg / "file_paths.yaml", {})
+    _write_yaml(cfg / "dir_paths.yaml", {})
+    _write_yaml(cfg / "materials.yaml", {})
+    _write_yaml(cfg / "instrument.yaml", {})
+    if debug is not None:
+        _write_yaml(cfg / "debug.yaml", debug)
+    return cfg
+
+
+@pytest.fixture(autouse=True)
+def _reset_loader_cache() -> None:
+    loader.clear_config_cache()
+    yield
+    loader.clear_config_cache()
 
 
 def _intersection_config() -> peak_selection.SelectedPeakIntersectionConfig:
@@ -604,6 +631,70 @@ def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cach
     assert runtime_state.peak_intensities == [8.0]
     assert runtime_state.peak_records[0]["source_label"] == "primary"
     assert runtime_state.peak_overlay_cache["sig"] is not None
+
+
+def test_peak_selection_runtime_peak_overlay_cache_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "families": {
+                        "peak_overlay": "never",
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig",),
+        stored_max_positions_local=[
+            np.asarray(
+                [[8.0, 10.0, 20.0, 0.125, 1.0, 0.0, 2.0]],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+    coord_calls: list[tuple[float, float, tuple[int, int]]] = []
+
+    def _coords(col: float, row: float, image_shape: tuple[int, int]):
+        coord_calls.append((col, row, image_shape))
+        return col + 100.0, row + 200.0
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=_coords,
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 0.75),
+        max_hits_per_reflection=1,
+        min_separation_px=0.0,
+    )
+    assert ok is True
+    assert runtime_state.peak_overlay_cache["sig"] is None
+    assert runtime_state.peak_overlay_cache["positions"] == []
+
+    runtime_state.peak_positions.clear()
+    runtime_state.peak_millers.clear()
+    runtime_state.peak_intensities.clear()
+    runtime_state.peak_records.clear()
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=_coords,
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 0.75),
+        max_hits_per_reflection=1,
+        min_separation_px=0.0,
+    )
+    assert ok is True
+    assert len(coord_calls) == 2
 
 
 def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_centers() -> None:

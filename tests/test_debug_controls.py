@@ -7,6 +7,7 @@ import yaml
 
 from ra_sim.config import loader
 from ra_sim.debug_controls import (
+    cache_retention_mode,
     console_debug_enabled,
     diffraction_debug_csv_logging_enabled,
     geometry_fit_extra_sections_enabled,
@@ -15,6 +16,7 @@ from ra_sim.debug_controls import (
     is_logging_disabled,
     mosaic_fit_log_files_enabled,
     projection_debug_logging_enabled,
+    retain_optional_cache,
     resolve_intersection_cache_log_root,
     runtime_update_trace_logging_enabled,
 )
@@ -199,3 +201,56 @@ def test_geometry_fit_debug_yaml_overrides_legacy_instrument_key(
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
 
     assert geometry_fit_extra_sections_enabled() is True
+
+
+def test_cache_retention_defaults_and_family_overrides_follow_debug_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "default_retention": "never",
+                    "families": {
+                        "primary_contribution": "always",
+                        "diffraction_last_intersection": "auto",
+                    },
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    assert cache_retention_mode("primary_contribution") == "always"
+    assert cache_retention_mode("caking") == "never"
+    assert cache_retention_mode("diffraction_last_intersection") == "auto"
+    assert retain_optional_cache("primary_contribution", feature_needed=False) is True
+    assert retain_optional_cache("caking", feature_needed=True) is False
+    assert retain_optional_cache("diffraction_last_intersection", feature_needed=True) is True
+
+
+def test_cache_retention_is_separate_from_global_logging_disable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "global": {"disable_all": True},
+                "cache": {
+                    "default_retention": "always",
+                    "families": {"caking": "never"},
+                },
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    assert is_logging_disabled()
+    assert cache_retention_mode("primary_contribution") == "always"
+    assert cache_retention_mode("caking") == "never"
+    assert retain_optional_cache("primary_contribution", feature_needed=False) is True
+    assert retain_optional_cache("caking", feature_needed=True) is False

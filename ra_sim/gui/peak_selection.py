@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.debug_controls import retain_optional_cache
 from . import views as gui_views
 
 
@@ -45,6 +46,22 @@ _SPECULAR_VIEW_DEFAULT_SAMPLE_HEIGHT_M = 0.08
 _SPECULAR_VIEW_DEFAULT_DETECTOR_DISTANCE_M = 0.075
 _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M = 100e-6
 _PEAK_CLICK_INDEX_CELL_SIZE_PX = 50.0
+
+
+def _retain_peak_overlay_cache() -> bool:
+    return retain_optional_cache("peak_overlay", feature_needed=True)
+
+
+def _empty_peak_overlay_cache() -> dict[str, object]:
+    return {
+        "sig": None,
+        "positions": [],
+        "millers": [],
+        "intensities": [],
+        "records": [],
+        "click_spatial_index": None,
+        "restored_from_gui_state": False,
+    }
 
 
 @dataclass(frozen=True)
@@ -1466,8 +1483,10 @@ def ensure_runtime_peak_overlay_data(
         id(getattr(simulation_runtime_state, "last_caked_azimuth_values", None)),
         getattr(simulation_runtime_state, "last_analysis_signature", None),
     )
+    retain_cache = _retain_peak_overlay_cache()
     peak_cached = (
         not force
+        and retain_cache
         and simulation_runtime_state.peak_overlay_cache.get("sig") == peak_sig
     )
 
@@ -1604,19 +1623,22 @@ def ensure_runtime_peak_overlay_data(
                     record["source_row_index"] = int(source_row_index)
                 simulation_runtime_state.peak_records.append(record)
 
-        simulation_runtime_state.peak_overlay_cache.update(
-            {
-                "sig": peak_sig,
-                "positions": list(simulation_runtime_state.peak_positions),
-                "millers": list(simulation_runtime_state.peak_millers),
-                "intensities": list(simulation_runtime_state.peak_intensities),
-                "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
-                "click_spatial_index": _build_peak_click_spatial_index(
-                    simulation_runtime_state.peak_positions
-                ),
-                "restored_from_gui_state": False,
-            }
-        )
+        if retain_cache:
+            simulation_runtime_state.peak_overlay_cache.update(
+                {
+                    "sig": peak_sig,
+                    "positions": list(simulation_runtime_state.peak_positions),
+                    "millers": list(simulation_runtime_state.peak_millers),
+                    "intensities": list(simulation_runtime_state.peak_intensities),
+                    "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
+                    "click_spatial_index": _build_peak_click_spatial_index(
+                        simulation_runtime_state.peak_positions
+                    ),
+                    "restored_from_gui_state": False,
+                }
+            )
+        else:
+            simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
         return True
 
     if (
@@ -1755,19 +1777,22 @@ def ensure_runtime_peak_overlay_data(
                 record["q_group_nominal_hkl"] = True
             simulation_runtime_state.peak_records.append(record)
 
-    simulation_runtime_state.peak_overlay_cache.update(
-        {
-            "sig": peak_sig,
-            "positions": list(simulation_runtime_state.peak_positions),
-            "millers": list(simulation_runtime_state.peak_millers),
-            "intensities": list(simulation_runtime_state.peak_intensities),
-            "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
-            "click_spatial_index": _build_peak_click_spatial_index(
-                simulation_runtime_state.peak_positions
-            ),
-            "restored_from_gui_state": False,
-        }
-    )
+    if retain_cache:
+        simulation_runtime_state.peak_overlay_cache.update(
+            {
+                "sig": peak_sig,
+                "positions": list(simulation_runtime_state.peak_positions),
+                "millers": list(simulation_runtime_state.peak_millers),
+                "intensities": list(simulation_runtime_state.peak_intensities),
+                "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
+                "click_spatial_index": _build_peak_click_spatial_index(
+                    simulation_runtime_state.peak_positions
+                ),
+                "restored_from_gui_state": False,
+            }
+        )
+    else:
+        simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
     return True
 
 

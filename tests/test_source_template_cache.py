@@ -1,5 +1,10 @@
-import numpy as np
+from pathlib import Path
 
+import numpy as np
+import pytest
+import yaml
+
+from ra_sim.config import loader
 from ra_sim.simulation import diffraction
 from ra_sim.utils import stacking_fault
 
@@ -48,6 +53,29 @@ def _call_safe(intensities, *, save_flag=0, theta_initial=6.0):
         save_flag=save_flag,
         sample_qr_ring_once=False,
     )
+
+
+def _write_yaml(path: Path, payload: dict) -> None:
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+
+def _make_config_dir(tmp_path: Path, *, debug: dict | None = None) -> Path:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    _write_yaml(cfg / "file_paths.yaml", {})
+    _write_yaml(cfg / "dir_paths.yaml", {})
+    _write_yaml(cfg / "materials.yaml", {})
+    _write_yaml(cfg / "instrument.yaml", {})
+    if debug is not None:
+        _write_yaml(cfg / "debug.yaml", debug)
+    return cfg
+
+
+@pytest.fixture(autouse=True)
+def _reset_loader_cache() -> None:
+    loader.clear_config_cache()
+    yield
+    loader.clear_config_cache()
 
 
 def test_process_peaks_parallel_safe_reuses_source_template_cache(monkeypatch):
@@ -252,3 +280,64 @@ def test_q_vector_cache_reuses_when_theta_i_returns(monkeypatch):
     # First 5deg builds cache, 10deg is distinct, returning to 5deg reuses.
     assert solve_calls == 2
     assert stats_last["rays_reused"] >= 1
+
+
+def test_diffraction_safe_cache_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "families": {
+                        "diffraction_safe": "never",
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    diffraction._Q_VECTOR_CACHE.clear()
+    diffraction._PHASE_SPACE_CACHE.clear()
+    diffraction._SOURCE_TEMPLATE_CACHE.clear()
+    solve_calls = 0
+
+    def fake_solve_q(*_args, **_kwargs):
+        nonlocal solve_calls
+        solve_calls += 1
+        return np.zeros((0, 4), dtype=np.float64), 0
+
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
+
+    assert solve_calls == 2
+    assert diffraction._Q_VECTOR_CACHE == {}
+    assert diffraction._PHASE_SPACE_CACHE == {}
+    assert diffraction._SOURCE_TEMPLATE_CACHE == {}
+
+
+def test_last_intersection_cache_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "families": {
+                        "diffraction_last_intersection": "never",
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
+
+    assert diffraction.get_last_intersection_cache() == []

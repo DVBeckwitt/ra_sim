@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 import numpy as np
 
+from ra_sim.debug_controls import retain_optional_cache
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _rotate_point
 
 
@@ -23,6 +24,33 @@ def _read_background_image(
             f"Background '{Path(file_path).name}' is not a 2D image."
         )
     return image_array
+
+
+def _retain_background_history(*, total_count: int) -> bool:
+    return retain_optional_cache(
+        "background_history",
+        feature_needed=int(total_count) > 1,
+    )
+
+
+def _prune_background_history_entries(
+    *,
+    selected_index: int,
+    background_images: list[object | None],
+    background_images_native: list[object | None],
+    background_images_display: list[object | None],
+) -> None:
+    total_count = len(background_images_native)
+    if _retain_background_history(total_count=total_count):
+        return
+    for idx in range(total_count):
+        if idx == int(selected_index):
+            continue
+        if idx < len(background_images):
+            background_images[idx] = None
+        background_images_native[idx] = None
+        if idx < len(background_images_display):
+            background_images_display[idx] = None
 
 
 def initialize_background_cache(
@@ -50,6 +78,12 @@ def initialize_background_cache(
     background_images[0] = native_copy
     background_images_native[0] = native_copy
     background_images_display[0] = display_copy
+    _prune_background_history_entries(
+        selected_index=0,
+        background_images=background_images,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+    )
 
     return {
         "background_images": background_images,
@@ -121,6 +155,12 @@ def load_background_image_by_index(
     updated_background_images[idx] = native
     updated_background_images_native[idx] = native
     updated_background_images_display[idx] = display
+    _prune_background_history_entries(
+        selected_index=idx,
+        background_images=updated_background_images,
+        background_images_native=updated_background_images_native,
+        background_images_display=updated_background_images_display,
+    )
 
     return {
         "background_images": updated_background_images,
@@ -342,6 +382,12 @@ def load_background_files(
     index = max(0, min(int(select_index), len(background_images_native) - 1))
     current_background_image = background_images_native[index]
     current_background_display = background_images_display[index]
+    _prune_background_history_entries(
+        selected_index=index,
+        background_images=background_images,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+    )
     return {
         "osc_files": list(normalized_paths),
         "background_images": background_images,

@@ -217,6 +217,19 @@ def test_runtime_impl_supports_incremental_sf_prune_primary_cache_updates() -> N
     assert 'text="Extending primary cache in background..."' in source
 
 
+def test_runtime_impl_routes_optional_runtime_caches_through_retention_policy() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "from ra_sim.debug_controls import (" in source
+    assert "retain_optional_cache," in source
+    assert '"primary_contribution"' in source
+    assert '"source_snapshots"' in source
+    assert '"caking"' in source
+    assert '"manual_pick"' in source
+    assert '"geometry_fit_dataset"' in source
+    assert '"peak_overlay"' in source
+
+
 def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 

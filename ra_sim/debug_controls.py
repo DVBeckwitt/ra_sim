@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ra_sim.config import get_config_bundle, get_dir
 
@@ -19,10 +19,44 @@ _DEBUG_DEFAULTS: dict[str, Any] = {
     "projection_debug": {"enabled": True},
     "diffraction_debug_csv": {"enabled": True},
     "intersection_cache": {"enabled": True, "log_dir": None},
+    "cache": {
+        "default_retention": "auto",
+        "families": {
+            "primary_contribution": "auto",
+            "source_snapshots": "auto",
+            "caking": "auto",
+            "peak_overlay": "auto",
+            "background_history": "auto",
+            "manual_pick": "auto",
+            "geometry_fit_dataset": "auto",
+            "qr_cylinder_overlay": "auto",
+            "diffraction_safe": "auto",
+            "diffraction_last_intersection": "never",
+            "fit_simulation": "auto",
+            "stacking_fault_base": "auto",
+        },
+    },
 }
 
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
 _FALSY_VALUES = {"", "0", "false", "no", "off"}
+_VALID_CACHE_RETENTIONS = {"never", "auto", "always"}
+
+CacheRetention = Literal["never", "auto", "always"]
+CacheFamily = Literal[
+    "primary_contribution",
+    "source_snapshots",
+    "caking",
+    "peak_overlay",
+    "background_history",
+    "manual_pick",
+    "geometry_fit_dataset",
+    "qr_cylinder_overlay",
+    "diffraction_safe",
+    "diffraction_last_intersection",
+    "fit_simulation",
+    "stacking_fault_base",
+]
 
 
 def env_flag_enabled(
@@ -111,6 +145,21 @@ def _resolve_config_bool(
     if not present:
         return default
     return _coerce_bool(value, default)
+
+
+def _resolve_config_cache_retention(
+    path: tuple[str, ...],
+    *,
+    default: CacheRetention,
+    debug_config: Mapping[str, Any] | None = None,
+) -> CacheRetention:
+    present, value = _lookup_mapping_value(_debug_root(debug_config), path)
+    if not present or value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in _VALID_CACHE_RETENTIONS:
+        return normalized  # type: ignore[return-value]
+    return default
 
 
 def _env_override_bool(
@@ -303,7 +352,49 @@ def resolve_intersection_cache_log_root(
         return Path.cwd() / "logs"
 
 
+def cache_retention_mode(
+    family: CacheFamily | str,
+    *,
+    debug_config: Mapping[str, Any] | None = None,
+) -> CacheRetention:
+    """Return the configured retention mode for one optional cache family."""
+
+    family_name = str(family).strip()
+    families = _DEBUG_DEFAULTS["cache"]["families"]
+    if family_name not in families:
+        raise KeyError(f"Unknown cache family: {family_name}")
+    default_mode = _resolve_config_cache_retention(
+        ("cache", "default_retention"),
+        default=_DEBUG_DEFAULTS["cache"]["default_retention"],
+        debug_config=debug_config,
+    )
+    return _resolve_config_cache_retention(
+        ("cache", "families", family_name),
+        default=default_mode,
+        debug_config=debug_config,
+    )
+
+
+def retain_optional_cache(
+    family: CacheFamily | str,
+    *,
+    feature_needed: bool,
+    debug_config: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether one optional cache should retain data after it is built."""
+
+    mode = cache_retention_mode(family, debug_config=debug_config)
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return bool(feature_needed)
+
+
 __all__ = [
+    "CacheFamily",
+    "CacheRetention",
+    "cache_retention_mode",
     "console_debug_enabled",
     "diffraction_debug_csv_logging_enabled",
     "env_flag_enabled",
@@ -313,6 +404,7 @@ __all__ = [
     "is_logging_disabled",
     "mosaic_fit_log_files_enabled",
     "projection_debug_logging_enabled",
+    "retain_optional_cache",
     "resolve_intersection_cache_log_root",
     "runtime_update_trace_logging_enabled",
 ]

@@ -1,9 +1,36 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
+import yaml
 
+from ra_sim.config import loader
 from ra_sim.gui import background
+
+
+def _write_yaml(path: Path, payload: dict) -> None:
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+
+def _make_config_dir(tmp_path: Path, *, debug: dict | None = None) -> Path:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    _write_yaml(cfg / "file_paths.yaml", {})
+    _write_yaml(cfg / "dir_paths.yaml", {})
+    _write_yaml(cfg / "materials.yaml", {})
+    _write_yaml(cfg / "instrument.yaml", {})
+    if debug is not None:
+        _write_yaml(cfg / "debug.yaml", debug)
+    return cfg
+
+
+@pytest.fixture(autouse=True)
+def _reset_loader_cache() -> None:
+    loader.clear_config_cache()
+    yield
+    loader.clear_config_cache()
 
 
 def test_initialize_background_cache_loads_only_first_image(tmp_path) -> None:
@@ -140,6 +167,60 @@ def test_switch_background_cycles_and_reuses_cached_state(tmp_path) -> None:
 
     assert switched["current_background_index"] == 1
     assert np.array_equal(switched["current_background_image"], np.ones((2, 2)))
+    assert calls == [str(path_a), str(path_b)]
+
+
+def test_background_history_cache_can_be_disabled_while_current_background_still_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "families": {
+                        "background_history": "never",
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    path_a = tmp_path / "a.osc"
+    path_b = tmp_path / "b.osc"
+    path_a.write_text("", encoding="utf-8")
+    path_b.write_text("", encoding="utf-8")
+
+    calls: list[str] = []
+
+    def _fake_read_osc(path: str):
+        calls.append(path)
+        if path == str(path_a):
+            return np.zeros((2, 2))
+        return np.ones((2, 2))
+
+    initial = background.initialize_background_cache(
+        str(path_a),
+        total_count=2,
+        display_rotate_k=-1,
+        read_osc=_fake_read_osc,
+    )
+    updated = background.load_background_image_by_index(
+        1,
+        osc_files=[str(path_a), str(path_b)],
+        background_images=initial["background_images"],
+        background_images_native=initial["background_images_native"],
+        background_images_display=initial["background_images_display"],
+        display_rotate_k=-1,
+        read_osc=_fake_read_osc,
+    )
+
+    assert np.array_equal(updated["background_image"], np.ones((2, 2)))
+    assert updated["background_images_native"][0] is None
+    assert updated["background_images_native"][1] is not None
+    assert updated["background_images_display"][0] is None
+    assert updated["background_images_display"][1] is not None
     assert calls == [str(path_a), str(path_b)]
 
 

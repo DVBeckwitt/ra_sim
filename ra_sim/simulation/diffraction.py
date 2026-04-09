@@ -13,6 +13,7 @@ from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
 from ra_sim.debug_controls import (
     intersection_cache_logging_enabled,
+    retain_optional_cache,
     resolve_intersection_cache_log_root,
 )
 from ra_sim.utils.calculations import (
@@ -366,6 +367,17 @@ _SOURCE_TEMPLATE_CACHE = {}
 _Q_VECTOR_CACHE = {}
 _LAST_PROCESS_PEAKS_SAFE_STATS = dict(_EMPTY_PROCESS_PEAKS_SAFE_STATS)
 _LAST_INTERSECTION_CACHE = []
+
+
+def _retain_diffraction_safe_cache() -> bool:
+    return retain_optional_cache("diffraction_safe", feature_needed=True)
+
+
+def _retain_last_intersection_cache() -> bool:
+    return retain_optional_cache(
+        "diffraction_last_intersection",
+        feature_needed=False,
+    )
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -2536,7 +2548,10 @@ def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
         solve_q_mode,
     )
     q_cache_hits = 0
-    q_result = _Q_VECTOR_CACHE.get(q_cache_key)
+    retain_safe_cache = _retain_diffraction_safe_cache()
+    if not retain_safe_cache:
+        _Q_VECTOR_CACHE.clear()
+    q_result = _Q_VECTOR_CACHE.get(q_cache_key) if retain_safe_cache else None
     if q_result is None:
         q_result = solve_q(
             k_in_crystal,
@@ -2552,7 +2567,8 @@ def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
             rel_err_tol=solve_q_rel_tol,
             solve_q_mode=solve_q_mode,
         )
-        _Q_VECTOR_CACHE[q_cache_key] = q_result
+        if retain_safe_cache:
+            _Q_VECTOR_CACHE[q_cache_key] = q_result
     else:
         q_cache_hits = 1
 
@@ -2623,8 +2639,11 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
         "solve_q_mode": int(bound["solve_q_mode"]),
     }
     phase_entry = _build_phase_space_entry(phase_params)
-    _PHASE_SPACE_CACHE.clear()
-    _PHASE_SPACE_CACHE["last"] = phase_entry
+    if _retain_diffraction_safe_cache():
+        _PHASE_SPACE_CACHE.clear()
+        _PHASE_SPACE_CACHE["last"] = phase_entry
+    else:
+        _PHASE_SPACE_CACHE.clear()
 
     num_peaks = int(miller.shape[0])
     n_samp = _get_phase_entry_n_samp(phase_entry, beam_x_array.size)
@@ -2655,8 +2674,11 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
             L,
             forced_idx,
         )
-        _SOURCE_TEMPLATE_CACHE.clear()
-        _SOURCE_TEMPLATE_CACHE["last"] = source_template
+        if _retain_diffraction_safe_cache():
+            _SOURCE_TEMPLATE_CACHE.clear()
+            _SOURCE_TEMPLATE_CACHE["last"] = source_template
+        else:
+            _SOURCE_TEMPLATE_CACHE.clear()
         source_templates_built = 1
         rays_reused = int(source_template.get("q_cache_hits", 0))
 
@@ -5925,6 +5947,9 @@ def _set_last_intersection_cache(cache):
     """Store the latest detector intersection cache."""
 
     global _LAST_INTERSECTION_CACHE
+    if not _retain_last_intersection_cache():
+        _LAST_INTERSECTION_CACHE = []
+        return
     if cache is None:
         _LAST_INTERSECTION_CACHE = []
         return

@@ -1,7 +1,11 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+import yaml
 
+from ra_sim.config import loader
 from ra_sim.gui import qr_cylinder_overlay
 
 
@@ -26,6 +30,29 @@ def _overlay_config(*, render_in_caked_space: bool) -> qr_cylinder_overlay.QrCyl
         wavelength=1.54,
         n2=1.1 + 0.0j,
     )
+
+
+def _write_yaml(path: Path, payload: dict) -> None:
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+
+def _make_config_dir(tmp_path: Path, *, debug: dict | None = None) -> Path:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    _write_yaml(cfg / "file_paths.yaml", {})
+    _write_yaml(cfg / "dir_paths.yaml", {})
+    _write_yaml(cfg / "materials.yaml", {})
+    _write_yaml(cfg / "instrument.yaml", {})
+    if debug is not None:
+        _write_yaml(cfg / "debug.yaml", debug)
+    return cfg
+
+
+@pytest.fixture(autouse=True)
+def _reset_loader_cache() -> None:
+    loader.clear_config_cache()
+    yield
+    loader.clear_config_cache()
 
 
 def test_qr_cylinder_overlay_config_and_signature_normalize_values() -> None:
@@ -375,6 +402,62 @@ def test_refresh_runtime_qr_cylinder_overlay_builds_and_reuses_cached_paths(
     assert status_messages == [
         "Showing analytic Qr-cylinder traces for 1 active Qr groups."
     ]
+
+
+def test_refresh_runtime_qr_cylinder_overlay_can_disable_path_retention(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "families": {
+                        "qr_cylinder_overlay": "never",
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    build_calls = []
+    draw_calls = []
+    entries = [{"source": "primary", "m": 1, "qr": 0.25}]
+    fake_paths = [{"source": "primary", "qr": 0.25, "cols": [1.0], "rows": [2.0]}]
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "build_qr_cylinder_overlay_paths",
+        lambda active_entries, **kwargs: build_calls.append((active_entries, kwargs))
+        or fake_paths,
+    )
+    monkeypatch.setattr(
+        qr_cylinder_overlay.gui_overlays,
+        "draw_qr_cylinder_overlay_paths",
+        lambda ax, paths, **kwargs: draw_calls.append((ax, paths, kwargs)),
+    )
+
+    bindings = qr_cylinder_overlay.QrCylinderOverlayRuntimeBindings(
+        ax="axis",
+        overlay_artists=[],
+        overlay_cache={"signature": None, "paths": []},
+        overlay_enabled_factory=lambda: True,
+        get_active_entries=lambda: list(entries),
+        render_config_factory=lambda: _overlay_config(render_in_caked_space=False),
+        ai_factory=lambda: None,
+        get_detector_angular_maps=lambda _ai: (None, None),
+        native_sim_to_display_coords=lambda col, row, shape: (col, row),
+        draw_idle=lambda: None,
+        set_status_text=lambda _text: None,
+    )
+
+    qr_cylinder_overlay.refresh_runtime_qr_cylinder_overlay(bindings, redraw=True)
+    qr_cylinder_overlay.refresh_runtime_qr_cylinder_overlay(bindings, redraw=False)
+
+    assert len(build_calls) == 2
+    assert len(draw_calls) == 2
+    assert bindings.overlay_cache == {"signature": None, "paths": []}
 
 
 def test_refresh_runtime_qr_cylinder_overlay_passes_detector_maps_for_caked_view(

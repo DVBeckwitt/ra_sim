@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.debug_controls import retain_optional_cache
 from . import overlays as gui_overlays
 from ra_sim.simulation.intersection_analysis import (
     IntersectionGeometry,
@@ -92,6 +93,13 @@ def _runtime_render_config(
 
 def _runtime_ai(bindings: QrCylinderOverlayRuntimeBindings):
     return _resolve_runtime_value(bindings.ai_factory)
+
+
+def _retain_qr_cylinder_overlay_cache(bindings: QrCylinderOverlayRuntimeBindings) -> bool:
+    return retain_optional_cache(
+        "qr_cylinder_overlay",
+        feature_needed=_overlay_enabled(bindings),
+    )
 
 
 def build_qr_cylinder_overlay_render_config(
@@ -411,7 +419,8 @@ def refresh_runtime_qr_cylinder_overlay(
         entries,
         config=render_config,
     )
-    cached_signature = bindings.overlay_cache.get("signature")
+    retain_cache = _retain_qr_cylinder_overlay_cache(bindings)
+    cached_signature = bindings.overlay_cache.get("signature") if retain_cache else None
     if cached_signature != signature:
         two_theta_map = None
         phi_map_deg = None
@@ -426,10 +435,18 @@ def refresh_runtime_qr_cylinder_overlay(
             phi_map_deg=phi_map_deg,
             native_sim_to_display_coords=bindings.native_sim_to_display_coords,
         )
-        bindings.overlay_cache["signature"] = signature
-        bindings.overlay_cache["paths"] = paths
+        if retain_cache:
+            bindings.overlay_cache["signature"] = signature
+            bindings.overlay_cache["paths"] = paths
+        else:
+            bindings.overlay_cache["signature"] = None
+            bindings.overlay_cache["paths"] = []
 
-    paths = list(bindings.overlay_cache.get("paths", []) or [])
+    paths = (
+        list(bindings.overlay_cache.get("paths", []) or [])
+        if retain_cache
+        else list(paths)
+    )
     if not paths:
         clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=False)
         if redraw and callable(bindings.draw_idle):

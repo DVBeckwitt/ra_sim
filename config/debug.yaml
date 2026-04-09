@@ -17,3 +17,18 @@ debug:
   intersection_cache:
     enabled: true
     log_dir:
+  cache:
+    default_retention: auto
+    families:
+      primary_contribution: auto
+      source_snapshots: auto
+      caking: auto
+      peak_overlay: auto
+      background_history: auto
+      manual_pick: auto
+      geometry_fit_dataset: auto
+      qr_cylinder_overlay: auto
+      diffraction_safe: auto
+      diffraction_last_intersection: never
+      fit_simulation: auto
+      stacking_fault_base: auto
