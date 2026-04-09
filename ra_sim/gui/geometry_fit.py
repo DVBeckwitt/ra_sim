@@ -18,6 +18,11 @@ import numpy as np
 from ra_sim.debug_controls import (
     geometry_fit_extra_sections_enabled,
     geometry_fit_log_files_enabled,
+    resolve_startup_debug_log_path,
+)
+from ra_sim.fitting.background_peak_matching import (
+    build_background_peak_context,
+    match_simulated_peaks_to_peak_context,
 )
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.utils.calculations import d_spacing, two_theta
@@ -58,17 +63,59 @@ def build_geometry_fit_log_path(
     log_dir: Path | str | None = None,
     downloads_dir: Path | str | None = None,
 ) -> Path:
-    """Return the on-disk log path for one geometry-fit run."""
+    """Return the shared startup-scoped log path for geometry-fit diagnostics."""
 
-    resolved_dir: Path | str | None = log_dir
-    if resolved_dir is None or not str(resolved_dir).strip():
-        resolved_dir = downloads_dir
-    if resolved_dir is None or not str(resolved_dir).strip():
-        resolved_dir = Path.cwd() / "logs"
-    log_root = Path(resolved_dir).expanduser()
-    if not geometry_fit_all_logging_disabled():
-        log_root.mkdir(parents=True, exist_ok=True)
-    return log_root / f"geometry_fit_log_{stamp}.txt"
+    return resolve_startup_debug_log_path(
+        stamp=stamp,
+        log_dir=log_dir,
+        downloads_dir=downloads_dir,
+    )
+
+
+_GEOMETRY_FIT_LOG_SEPARATOR = "=" * 80
+
+
+def _build_geometry_fit_log_writers(
+    log_path: Path | str,
+) -> tuple[Path, Callable[[str], None], Callable[[str, Sequence[str]], None]]:
+    """Return append-only writers for one geometry-fit log entry."""
+
+    resolved_log_path = Path(log_path)
+    logging_disabled = geometry_fit_all_logging_disabled()
+    entry_started = False
+
+    def _ensure_entry_started() -> None:
+        nonlocal entry_started
+        if entry_started or logging_disabled:
+            return
+        resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
+        needs_separator = (
+            resolved_log_path.exists()
+            and resolved_log_path.stat().st_size > 0
+        )
+        with resolved_log_path.open("a", encoding="utf-8") as log_file:
+            if needs_separator:
+                log_file.write("\n")
+            log_file.write(_GEOMETRY_FIT_LOG_SEPARATOR + "\n")
+        entry_started = True
+
+    def _log_line(text: str = "") -> None:
+        if logging_disabled:
+            return
+        try:
+            _ensure_entry_started()
+            with resolved_log_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(text + "\n")
+        except Exception:
+            pass
+
+    def _log_section(title: str, lines: Sequence[str]) -> None:
+        _log_line(title)
+        for line in lines:
+            _log_line(f"  {line}")
+        _log_line()
+
+    return resolved_log_path, _log_line, _log_section
 
 
 @dataclass(frozen=True)
@@ -111,6 +158,10 @@ class GeometryFitRuntimeManualDatasetBindings:
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
     orient_image_for_fit: Callable[..., object]
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None
+    geometry_manual_rebuild_source_rows_for_background: (
+        Callable[..., object]
+        | None
+    ) = None
     geometry_manual_last_source_snapshot_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
@@ -119,6 +170,7 @@ class GeometryFitRuntimeManualDatasetBindings:
         Callable[[], Mapping[str, object]]
         | None
     ) = None
+    geometry_manual_match_config: Callable[[], Mapping[str, object]] | None = None
     pick_uses_caked_space: Callable[[], bool] | None = None
 
 
@@ -465,6 +517,10 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
+    geometry_manual_rebuild_source_rows_for_background: (
+        Callable[..., object]
+        | None
+    ) = None,
     geometry_manual_last_source_snapshot_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
@@ -473,6 +529,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         Callable[[], Mapping[str, object]]
         | None
     ) = None,
+    geometry_manual_match_config: Callable[[], Mapping[str, object]] | None = None,
     pick_uses_caked_space: Callable[[], bool] | None = None,
 ) -> GeometryFitRuntimeManualDatasetBindings:
     """Build the live manual-pair dataset bundle used during geometry-fit prep."""
@@ -492,12 +549,16 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         geometry_manual_source_rows_for_background=(
             geometry_manual_source_rows_for_background
         ),
+        geometry_manual_rebuild_source_rows_for_background=(
+            geometry_manual_rebuild_source_rows_for_background
+        ),
         geometry_manual_last_source_snapshot_diagnostics=(
             geometry_manual_last_source_snapshot_diagnostics
         ),
         geometry_manual_last_simulation_diagnostics=(
             geometry_manual_last_simulation_diagnostics
         ),
+        geometry_manual_match_config=geometry_manual_match_config,
         geometry_manual_entry_display_coords=geometry_manual_entry_display_coords,
         unrotate_display_peaks=unrotate_display_peaks,
         display_to_native_sim_coords=display_to_native_sim_coords,
@@ -529,6 +590,10 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
+    geometry_manual_rebuild_source_rows_for_background: (
+        Callable[..., object]
+        | None
+    ) = None,
     geometry_manual_last_source_snapshot_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
@@ -537,6 +602,7 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
         Callable[[], Mapping[str, object]]
         | None
     ) = None,
+    geometry_manual_match_config: Callable[[], Mapping[str, object]] | None = None,
     pick_uses_caked_space: Callable[[], bool] | None = None,
 ) -> Callable[[], GeometryFitRuntimeManualDatasetBindings]:
     """Build a factory that resolves the live manual-pair dataset bundle on demand."""
@@ -559,12 +625,16 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             geometry_manual_source_rows_for_background=(
                 geometry_manual_source_rows_for_background
             ),
+            geometry_manual_rebuild_source_rows_for_background=(
+                geometry_manual_rebuild_source_rows_for_background
+            ),
             geometry_manual_last_source_snapshot_diagnostics=(
                 geometry_manual_last_source_snapshot_diagnostics
             ),
             geometry_manual_last_simulation_diagnostics=(
                 geometry_manual_last_simulation_diagnostics
             ),
+            geometry_manual_match_config=geometry_manual_match_config,
             geometry_manual_entry_display_coords=(
                 geometry_manual_entry_display_coords
             ),
@@ -2361,6 +2431,23 @@ def build_geometry_manual_fit_dataset(
     reference_a = _finite_float(params_i.get("a"))
     reference_c = _finite_float(params_i.get("c"))
     reference_lambda = _finite_float(params_i.get("lambda"))
+
+    def _current_simulation_diagnostics() -> dict[str, object]:
+        if callable(
+            manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics
+        ):
+            raw_value = (
+                manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics()
+            )
+        elif callable(manual_dataset_bindings.geometry_manual_last_simulation_diagnostics):
+            raw_value = (
+                manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+            )
+        else:
+            raw_value = {}
+        copied = copy.deepcopy(raw_value)
+        return copied if isinstance(copied, dict) else {}
+
     if callable(manual_dataset_bindings.geometry_manual_source_rows_for_background):
         simulated_peaks = (
             manual_dataset_bindings.geometry_manual_source_rows_for_background(
@@ -2376,24 +2463,22 @@ def build_geometry_manual_fit_dataset(
                 prefer_cache=True,
             )
         )
-    simulation_diagnostics = (
-        copy.deepcopy(
-            (
-                manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics()
-                if callable(
-                    manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics
-                )
-                else manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+    simulation_diagnostics = _current_simulation_diagnostics()
+    if (
+        not simulated_peaks
+        and callable(
+            manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background
+        )
+    ):
+        simulated_peaks = (
+            manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
+                int(background_idx),
+                params_i,
+                consumer="geometry_fit_dataset",
+                prior_diagnostics=dict(simulation_diagnostics),
             )
         )
-        if callable(
-            manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics
-        )
-        or callable(
-            manual_dataset_bindings.geometry_manual_last_simulation_diagnostics
-        )
-        else {}
-    )
+        simulation_diagnostics = _current_simulation_diagnostics()
     if not simulated_peaks:
         snapshot_status = str(simulation_diagnostics.get("status", "<unknown>"))
         raise RuntimeError(
@@ -3169,6 +3254,90 @@ def build_geometry_manual_fit_dataset(
         flip_y=orientation_choice["flip_y"],
         flip_order=orientation_choice["flip_order"],
     )
+    dynamic_reanchor_callback = None
+    dynamic_reanchor_match_cfg: dict[str, object] = {}
+    dynamic_reanchor_background_context: dict[str, object] | None = None
+    dynamic_reanchor_enabled = (
+        isinstance(experimental_image_for_fit, np.ndarray)
+        and experimental_image_for_fit.ndim == 2
+        and experimental_image_for_fit.size > 0
+    )
+    if callable(manual_dataset_bindings.geometry_manual_match_config):
+        try:
+            dynamic_reanchor_match_cfg = dict(
+                manual_dataset_bindings.geometry_manual_match_config() or {}
+            )
+        except Exception:
+            dynamic_reanchor_match_cfg = {}
+    if dynamic_reanchor_enabled:
+        try:
+            built_background_context = build_background_peak_context(
+                experimental_image_for_fit,
+                dict(dynamic_reanchor_match_cfg),
+            )
+        except Exception:
+            built_background_context = None
+        if isinstance(built_background_context, Mapping):
+            dynamic_reanchor_background_context = dict(built_background_context)
+
+        dynamic_reanchor_cache_data = {
+            "match_config": dict(dynamic_reanchor_match_cfg),
+            "background_context": dynamic_reanchor_background_context,
+        }
+        dynamic_reanchor_image = np.asarray(experimental_image_for_fit, dtype=np.float64)
+
+        def _dynamic_reanchor_callback(
+            measured_entry: Mapping[str, object] | None,
+            simulated_detector_point: object,
+            local_params: Mapping[str, object] | None = None,
+            dataset_ctx: object = None,
+        ) -> dict[str, object] | None:
+            del local_params, dataset_ctx
+            if not isinstance(measured_entry, Mapping):
+                return None
+            if not isinstance(
+                simulated_detector_point,
+                (list, tuple, np.ndarray),
+            ) or len(simulated_detector_point) < 2:
+                return None
+            try:
+                sim_col = float(simulated_detector_point[0])
+                sim_row = float(simulated_detector_point[1])
+            except Exception:
+                return None
+            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+                return None
+
+            seed_entry = dict(measured_entry)
+            seed_entry["sim_col"] = float(sim_col)
+            seed_entry["sim_row"] = float(sim_row)
+            try:
+                refined_col, refined_row = (
+                    gui_manual_geometry.geometry_manual_refine_preview_point(
+                        seed_entry,
+                        float(sim_col),
+                        float(sim_row),
+                        display_background=dynamic_reanchor_image,
+                        cache_data=dynamic_reanchor_cache_data,
+                        use_caked_space=False,
+                        match_simulated_peaks_to_peak_context=(
+                            match_simulated_peaks_to_peak_context
+                        ),
+                    )
+                )
+            except Exception:
+                return None
+            if not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+                return None
+            return {
+                "x": float(refined_col),
+                "y": float(refined_row),
+                "detector_x": float(refined_col),
+                "detector_y": float(refined_row),
+                "background_two_theta_deg": float("nan"),
+                "background_phi_deg": float("nan"),
+            }
+
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)
@@ -3235,6 +3404,8 @@ def build_geometry_manual_fit_dataset(
             "theta_initial": float(theta_base),
             "measured_peaks": measured_for_fit,
             "experimental_image": experimental_image_for_fit,
+            "dynamic_reanchor_callback": dynamic_reanchor_callback,
+            "dynamic_reanchor_enabled": bool(dynamic_reanchor_enabled),
         },
     }
 
@@ -4092,6 +4263,17 @@ def build_geometry_fit_dataset_cache_metadata(
         )
     )
     snapshot_hit = snapshot_status == "snapshot_hit"
+    snapshot_cache_source = str(
+        snapshot_diag.get(
+            "cache_source",
+            snapshot_diag.get("source", "source_snapshot"),
+        )
+        or "source_snapshot"
+    )
+    snapshot_rebuild_source = str(
+        snapshot_diag.get("rebuild_source", snapshot_diag.get("created_from", ""))
+        or ""
+    )
 
     return {
         "cache_action": ("reused" if snapshot_hit else "rebuilt"),
@@ -4100,9 +4282,10 @@ def build_geometry_fit_dataset_cache_metadata(
         "stale_reason": (
             None if snapshot_hit else f"source snapshot status={snapshot_status}"
         ),
-        "cache_source": "source_snapshot",
+        "cache_source": snapshot_cache_source,
         "cache_provenance": [
             f"source_snapshot:{snapshot_status}",
+            *([f"rebuild_source:{snapshot_rebuild_source}"] if snapshot_rebuild_source else []),
             "build_geometry_manual_fit_dataset",
         ],
         "background_index": int(background_index),
@@ -5345,26 +5528,18 @@ def write_geometry_fit_preflight_failure_log(
 ) -> Path:
     """Persist one geometry-fit preflight failure log."""
 
-    resolved_log_path = Path(log_path)
+    resolved_log_path, _log_line, _log_section = _build_geometry_fit_log_writers(
+        log_path
+    )
     if geometry_fit_all_logging_disabled():
         return resolved_log_path
-    with resolved_log_path.open("w", encoding="utf-8") as log_file:
-        def _log_line(text: str = "") -> None:
-            log_file.write(text + "\n")
-
-        def _log_section(title: str, lines: Sequence[str]) -> None:
-            _log_line(title)
-            for line in lines:
-                _log_line(f"  {line}")
-            _log_line()
-
-        _log_line(f"Geometry fit aborted before solver start: {stamp}")
-        _log_line("")
-        sections = list(log_sections or ())
-        if not sections:
-            sections = [("Failure:", [str(error_text).strip(), "stage=preflight"])]
-        for title, lines in sections:
-            _log_section(str(title), [str(line) for line in (lines or ())])
+    _log_line(f"Geometry fit aborted before solver start: {stamp}")
+    _log_line("")
+    sections = list(log_sections or ())
+    if not sections:
+        sections = [("Failure:", [str(error_text).strip(), "stage=preflight"])]
+    for title, lines in sections:
+        _log_section(str(title), [str(line) for line in (lines or ())])
     return resolved_log_path
 
 
@@ -8163,23 +8338,8 @@ def execute_runtime_geometry_fit(
     ui_bindings = setup.ui_bindings
     postprocess_config = setup.postprocess_config
     log_path = Path(postprocess_config.log_path)
-    log_file = None
     logging_disabled = geometry_fit_all_logging_disabled()
-
-    def _log_line(text: str = "") -> None:
-        if log_file is None:
-            return
-        try:
-            log_file.write(text + "\n")
-            log_file.flush()
-        except Exception:
-            pass
-
-    def _log_section(title: str, lines: Sequence[str]) -> None:
-        _log_line(title)
-        for line in lines:
-            _log_line(f"  {line}")
-        _log_line()
+    _, _log_line, _log_section = _build_geometry_fit_log_writers(log_path)
 
     def _solver_status_callback(text: str) -> None:
         status_text = str(text).strip()
@@ -8192,8 +8352,6 @@ def execute_runtime_geometry_fit(
             flush_ui()
 
     try:
-        if not logging_disabled:
-            log_file = log_path.open("w", encoding="utf-8")
         write_geometry_fit_run_start_log(
             stamp=str(postprocess_config.stamp),
             prepared_run=prepared_run,
@@ -8270,9 +8428,3 @@ def execute_runtime_geometry_fit(
             log_path=log_path,
             error_text=error_text,
         )
-    finally:
-        try:
-            if log_file is not None:
-                log_file.close()
-        except Exception:
-            pass

@@ -123,6 +123,24 @@ A typical workflow looks like this:
 4. Refine mosaic, stacking, and structural parameters and save parameter
    snapshots for reproducibility.
 
+### Primary 2D Viewport
+
+The default embedded 2D surface still uses Matplotlib. An experimental Tk-native
+main viewport is also available through `RA_SIM_PRIMARY_VIEWPORT=tk_canvas`.
+
+The justification is specific to the main detector/caked image, not to plotting
+in general. Matplotlib is the better tool for full plotting workflows with
+axes, colorbars, figure layout, export, and the 1D analysis views used
+throughout RA-SIM. The primary diffraction image, however, behaves more like an
+interactive image viewport than a conventional plot: users pan, zoom, drag
+integration ranges, and click simulated features at high frequency. In that
+path, Matplotlib pays for its general artist and figure machinery on every
+interaction-driven redraw. A Tk `Canvas` can instead update one raster image
+plus lightweight overlay items directly, which reduces latency for detector and
+caked interactions while keeping the existing selection logic intact. The
+Matplotlib path remains the safer fallback and is still the reference backend
+for figure-heavy tools.
+
 ### Optics Modes
 
 RA-SIM currently exposes two optics-transport models in the GUI and headless
@@ -264,4 +282,3 @@ If RA-SIM contributes to published work, please cite the accompanying manuscript
 
 RA-SIM is distributed under the GNU General Public License v3.0. See
 [LICENSE](LICENSE) for details.
-

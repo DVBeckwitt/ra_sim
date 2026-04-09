@@ -18,6 +18,7 @@ from ra_sim.debug_controls import (
     projection_debug_logging_enabled,
     retain_optional_cache,
     resolve_intersection_cache_log_root,
+    resolve_startup_debug_log_path,
     runtime_update_trace_logging_enabled,
 )
 
@@ -114,6 +115,20 @@ def test_env_overrides_take_precedence_over_debug_yaml(
     assert not projection_debug_logging_enabled()
     assert intersection_cache_logging_enabled()
     assert resolve_intersection_cache_log_root() == tmp_path / "from-env"
+
+
+def test_startup_debug_log_path_is_reused_for_one_process(tmp_path: Path) -> None:
+    first = resolve_startup_debug_log_path(
+        stamp="20260328_120000",
+        log_dir=tmp_path / "logs",
+    )
+    second = resolve_startup_debug_log_path(
+        stamp="20260328_120500",
+        log_dir=tmp_path / "other-logs",
+    )
+
+    assert first == tmp_path / "logs" / "geometry_fit_log_20260328_120000.txt"
+    assert second == first
 
 
 def test_config_global_disable_is_a_kill_switch(

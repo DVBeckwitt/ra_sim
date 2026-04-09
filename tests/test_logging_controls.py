@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
@@ -164,3 +165,86 @@ def test_geometry_fit_debug_sections_respect_debug_yaml(
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
 
     assert not geometry_fit.geometry_fit_debug_logging_enabled({"debug_logging": True})
+
+
+def test_geometry_fit_preflight_logs_append_to_one_startup_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        geometry_fit,
+        "geometry_fit_all_logging_disabled",
+        lambda env=None: False,
+    )
+
+    first_log_path = geometry_fit.build_geometry_fit_log_path(
+        stamp="20260328_130001",
+        log_dir=tmp_path,
+    )
+    second_log_path = geometry_fit.build_geometry_fit_log_path(
+        stamp="20260328_130002",
+        log_dir=tmp_path,
+    )
+
+    geometry_fit.write_geometry_fit_preflight_failure_log(
+        stamp="20260328_130001",
+        error_text="boom-1",
+        log_path=first_log_path,
+        log_sections=[("Failure:", ["boom-1", "stage=preflight"])],
+    )
+    geometry_fit.write_geometry_fit_preflight_failure_log(
+        stamp="20260328_130002",
+        error_text="boom-2",
+        log_path=second_log_path,
+        log_sections=[("Failure:", ["boom-2", "stage=preflight"])],
+    )
+
+    assert second_log_path == first_log_path
+    log_text = first_log_path.read_text(encoding="utf-8")
+    assert log_text.count("Geometry fit aborted before solver start:") == 2
+    assert "20260328_130001" in log_text
+    assert "20260328_130002" in log_text
+
+
+def test_intersection_cache_logs_append_to_geometry_fit_startup_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        geometry_fit,
+        "geometry_fit_all_logging_disabled",
+        lambda env=None: False,
+    )
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: True)
+    monkeypatch.setattr(
+        diffraction,
+        "_resolve_intersection_cache_log_root",
+        lambda: tmp_path,
+    )
+
+    log_path = geometry_fit.build_geometry_fit_log_path(
+        stamp="20260328_140000",
+        log_dir=tmp_path,
+    )
+    geometry_fit.write_geometry_fit_preflight_failure_log(
+        stamp="20260328_140000",
+        error_text="geom",
+        log_path=log_path,
+        log_sections=[("Failure:", ["geom", "stage=preflight"])],
+    )
+
+    diffraction._write_intersection_cache_log(
+        [np.array([[1.0, 2.0, 3.0]], dtype=np.float64)],
+        av=1.0,
+        cv=2.0,
+        beam_x_center=0.0,
+        beam_y_center=0.0,
+        theta_center=0.0,
+        phi_center=0.0,
+        wavelength_center=1.0,
+    )
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "Geometry fit aborted before solver start: 20260328_140000" in log_text
+    assert "Intersection cache updated:" in log_text
+    assert '"cache_tables"' in log_text

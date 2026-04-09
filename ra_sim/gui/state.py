@@ -513,6 +513,7 @@ class IntegrationRangeControlsViewState:
 
     frame: Any = None
     range_frame: Any = None
+    tth_min_value: float = 0.0
     tth_min_container: Any = None
     tth_min_var: Any = None
     tth_min_label_var: Any = None
@@ -520,6 +521,7 @@ class IntegrationRangeControlsViewState:
     tth_min_slider: Any = None
     tth_min_entry_var: Any = None
     tth_min_entry: Any = None
+    tth_max_value: float = 80.0
     tth_max_container: Any = None
     tth_max_var: Any = None
     tth_max_label_var: Any = None
@@ -527,6 +529,7 @@ class IntegrationRangeControlsViewState:
     tth_max_slider: Any = None
     tth_max_entry_var: Any = None
     tth_max_entry: Any = None
+    phi_min_value: float = -15.0
     phi_min_container: Any = None
     phi_min_var: Any = None
     phi_min_label_var: Any = None
@@ -534,6 +537,7 @@ class IntegrationRangeControlsViewState:
     phi_min_slider: Any = None
     phi_min_entry_var: Any = None
     phi_min_entry: Any = None
+    phi_max_value: float = 15.0
     phi_max_container: Any = None
     phi_max_var: Any = None
     phi_max_label_var: Any = None

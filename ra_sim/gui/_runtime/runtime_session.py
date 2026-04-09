@@ -102,8 +102,10 @@ from ra_sim.simulation.diffraction import (
     MIN_SOLVE_Q_STEPS,
     SOLVE_Q_MODE_ADAPTIVE,
     SOLVE_Q_MODE_UNIFORM,
+    get_last_intersection_cache,
     hit_tables_to_max_positions,
     intersection_cache_to_hit_tables,
+    load_most_recent_logged_intersection_cache,
     OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
     process_peaks_parallel,
@@ -165,6 +167,7 @@ from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import fast_plot_viewer as gui_fast_plot_viewer
+from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome
 from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
 from ra_sim.gui import structure_factor_pruning as gui_structure_factor_pruning
@@ -2001,6 +2004,7 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
     master=app_shell_view_state.canvas_frame,
 )
 matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
+gui_main_figure_chrome.configure_matplotlib_canvas_widget(matplotlib_canvas_widget)
 PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
     os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
 )
@@ -2368,14 +2372,13 @@ def _current_optics_mode_flag() -> int:
         return OPTICS_MODE_EXACT
     return OPTICS_MODE_FAST
 
-colorbar_main = fig.colorbar(image_display, ax=ax, label='Intensity', shrink=0.6, pad=0.02)
-
-# Additional colorbar axis for caked 2D (not used in basic 1D, but reserved)
-caked_cbar_ax = fig.add_axes([0.92, 0.1, 0.02, 0.8])
-caked_cbar_ax.set_visible(False)
-caked_colorbar = fig.colorbar(image_display, cax=caked_cbar_ax)
-caked_colorbar.set_label('Intensity (binned)')
-caked_colorbar.ax.set_visible(False)
+colorbar_main, caked_cbar_ax, caked_colorbar = (
+    gui_main_figure_chrome.configure_main_figure_layout(
+        fig,
+        ax,
+        image_display,
+    )
+)
 
 center_marker, = ax.plot(
     center_default[1],
@@ -2387,10 +2390,9 @@ center_marker, = ax.plot(
 
 ax.set_xlim(0, image_size)
 ax.set_ylim(image_size, 0)
-fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
-ax.set_title('Simulated Diffraction Pattern')
 ax.set_xlabel('X (pixels)')
 ax.set_ylabel('Y (pixels)')
+gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
 canvas.draw()
 
 # -----------------------------------------------------------
@@ -10609,30 +10611,7 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
-        if qr_cylinder_replace_requested:
-            if showing_stale_caked_result and analysis_requested:
-                ax.set_title('2D Caked Qr Cylinder Lines (updating...)')
-            else:
-                ax.set_title('2D Caked Qr Cylinder Lines')
-        elif not accumulate_image_requested:
-            if showing_stale_caked_result and analysis_requested:
-                if show_1d_requested:
-                    ax.set_title('2D Caked Position Preview (updating, 1D paused)')
-                else:
-                    ax.set_title('2D Caked Position Preview (updating...)')
-            elif show_1d_requested:
-                ax.set_title('2D Caked Position Preview (1D paused)')
-            else:
-                ax.set_title('2D Caked Position Preview')
-        elif showing_stale_caked_result and analysis_requested:
-            if desired_analysis_preview:
-                ax.set_title('2D Caked Preview (updating...)')
-            else:
-                ax.set_title('2D Caked Integration (updating...)')
-        elif simulation_runtime_state.analysis_preview_active:
-            ax.set_title('2D Caked Preview')
-        else:
-            ax.set_title('2D Caked Integration')
+        ax.set_title("")
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_extent = None
@@ -10649,25 +10628,7 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
-        if qr_cylinder_replace_requested:
-            if show_caked_2d and analysis_requested:
-                ax.set_title('Detector Preview While 2D Caked Qr Cylinder Lines Load')
-            else:
-                ax.set_title('Qr Cylinder Lines')
-        elif not accumulate_image_requested:
-            if show_caked_2d and analysis_requested:
-                ax.set_title('Detector Preview While Caked Position Preview Loads')
-            elif show_1d_requested:
-                ax.set_title('Peak Position Preview (1D intensity paused)')
-            else:
-                ax.set_title('Peak Position Preview')
-        elif show_caked_2d and analysis_requested:
-            if desired_analysis_preview:
-                ax.set_title('Detector Preview While Caked Preview Loads')
-            else:
-                ax.set_title('Detector Preview While Caked Integration Updates')
-        else:
-            ax.set_title('Simulated Diffraction Pattern')
+        ax.set_title("")
 
         _set_image_origin(background_display, 'upper')
         background_display.set_extent([0, image_size, image_size, 0])
@@ -10680,6 +10641,8 @@ def do_update():
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
+
+    gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
         
     # 1D integration
     if (
@@ -17762,12 +17725,34 @@ def _read_analysis_range_value(var, fallback: float) -> float:
         return float(fallback)
 
 
+def _read_analysis_cached_range_value(attr_name: str, fallback: float) -> float:
+    view_state = globals().get("integration_range_controls_view_state")
+    if view_state is None:
+        return float(fallback)
+    try:
+        return float(getattr(view_state, attr_name))
+    except Exception:
+        return float(fallback)
+
+
 def _current_analysis_range_values() -> dict[str, float]:
     return {
-        "tth_min": _read_analysis_range_value(globals().get("tth_min_var"), 0.0),
-        "tth_max": _read_analysis_range_value(globals().get("tth_max_var"), 80.0),
-        "phi_min": _read_analysis_range_value(globals().get("phi_min_var"), -15.0),
-        "phi_max": _read_analysis_range_value(globals().get("phi_max_var"), 15.0),
+        "tth_min": _read_analysis_range_value(
+            globals().get("tth_min_var"),
+            _read_analysis_cached_range_value("tth_min_value", 0.0),
+        ),
+        "tth_max": _read_analysis_range_value(
+            globals().get("tth_max_var"),
+            _read_analysis_cached_range_value("tth_max_value", 80.0),
+        ),
+        "phi_min": _read_analysis_range_value(
+            globals().get("phi_min_var"),
+            _read_analysis_cached_range_value("phi_min_value", -15.0),
+        ),
+        "phi_max": _read_analysis_range_value(
+            globals().get("phi_max_var"),
+            _read_analysis_cached_range_value("phi_max_value", 15.0),
+        ),
     }
 
 

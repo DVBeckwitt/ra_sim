@@ -24,6 +24,13 @@ _SELECTED_REGION_FACE_RGBA = (1.0, 0.0, 0.66, 0.10)
 _SELECTED_REGION_OVERLAY_RGBA = (1.0, 0.0, 0.66, 0.46)
 _SELECTED_REGION_LINEWIDTH = 3.0
 
+_DEFAULT_TTH_MIN = 0.0
+_DEFAULT_TTH_MAX = 80.0
+_DEFAULT_PHI_MIN = -15.0
+_DEFAULT_PHI_MAX = 15.0
+_TTH_SLIDER_BOUNDS = (0.0, 90.0)
+_PHI_SLIDER_BOUNDS = (-180.0, 180.0)
+
 
 @dataclass
 class IntegrationRangeDragBindings:
@@ -116,6 +123,62 @@ def _safe_var_trace_add(var: object, callback: Callable[..., object]) -> None:
     trace_add = getattr(var, "trace_add", None)
     if callable(trace_add):
         trace_add("write", callback)
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _get_runtime_range_value(
+    view_state: object,
+    prefix: str,
+    fallback: float,
+) -> float:
+    value_var = getattr(view_state, f"{prefix}_var", None)
+    numeric_value = _coerce_float(_safe_var_get(value_var))
+    if numeric_value is not None:
+        setattr(view_state, f"{prefix}_value", numeric_value)
+        return numeric_value
+
+    numeric_value = _coerce_float(getattr(view_state, f"{prefix}_value", None))
+    if numeric_value is not None:
+        return numeric_value
+
+    numeric_value = float(fallback)
+    setattr(view_state, f"{prefix}_value", numeric_value)
+    return numeric_value
+
+
+def _set_runtime_range_value(
+    view_state: object,
+    prefix: str,
+    value: float,
+) -> float:
+    numeric_value = float(value)
+    setattr(view_state, f"{prefix}_value", numeric_value)
+    _safe_var_set(getattr(view_state, f"{prefix}_var", None), numeric_value)
+    return numeric_value
+
+
+def _get_runtime_slider_bounds(
+    view_state: object,
+    prefix: str,
+    fallback_lo: float,
+    fallback_hi: float,
+) -> tuple[float, float]:
+    slider = getattr(view_state, f"{prefix}_slider", None)
+    if slider is None:
+        return float(fallback_lo), float(fallback_hi)
+
+    try:
+        lower = float(slider.cget("from"))
+        upper = float(slider.cget("to"))
+    except Exception:
+        return float(fallback_lo), float(fallback_hi)
+    return lower, upper
 
 
 def _activate_runtime_1d_analysis(show_1d_var: object) -> None:
@@ -721,10 +784,16 @@ def set_runtime_integration_range_from_drag(
     else:
         phi_min, phi_max = sorted((float(y0), float(y1)))
 
-    tth_lo = float(view_state.tth_min_slider.cget("from"))
-    tth_hi = float(view_state.tth_min_slider.cget("to"))
-    phi_lo = float(view_state.phi_min_slider.cget("from"))
-    phi_hi = float(view_state.phi_min_slider.cget("to"))
+    tth_lo, tth_hi = _get_runtime_slider_bounds(
+        view_state,
+        "tth_min",
+        *_TTH_SLIDER_BOUNDS,
+    )
+    phi_lo, phi_hi = _get_runtime_slider_bounds(
+        view_state,
+        "phi_min",
+        *_PHI_SLIDER_BOUNDS,
+    )
     tth_min = min(max(tth_min, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
     tth_max = min(max(tth_max, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
     phi_min = min(max(phi_min, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
@@ -737,10 +806,10 @@ def set_runtime_integration_range_from_drag(
         eps = max(abs(phi_min) * 1e-6, 1e-3)
         phi_max = min(phi_min + eps, max(phi_lo, phi_hi))
 
-    view_state.tth_min_var.set(tth_min)
-    view_state.tth_max_var.set(tth_max)
-    view_state.phi_min_var.set(phi_min)
-    view_state.phi_max_var.set(phi_max)
+    tth_min = _set_runtime_range_value(view_state, "tth_min", tth_min)
+    tth_max = _set_runtime_range_value(view_state, "tth_max", tth_max)
+    phi_min = _set_runtime_range_value(view_state, "phi_min", phi_min)
+    phi_max = _set_runtime_range_value(view_state, "phi_max", phi_max)
     _activate_runtime_1d_analysis(bindings.show_1d_var)
 
     if callable(bindings.schedule_range_update):
@@ -791,10 +860,13 @@ def update_runtime_integration_region_visuals(
         return
 
     tth_min, tth_max = sorted(
-        (float(view_state.tth_min_var.get()), float(view_state.tth_max_var.get()))
+        (
+            _get_runtime_range_value(view_state, "tth_min", _DEFAULT_TTH_MIN),
+            _get_runtime_range_value(view_state, "tth_max", _DEFAULT_TTH_MAX),
+        )
     )
-    phi_min = float(view_state.phi_min_var.get())
-    phi_max = float(view_state.phi_max_var.get())
+    phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
+    phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
 
     if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
         _set_fast_viewer_overlay_state(
@@ -1260,21 +1332,25 @@ def _schedule_runtime_range_update(
 def _sync_runtime_range_text_vars(view_state: object) -> None:
     specs = (
         (
+            "tth_min",
             getattr(view_state, "tth_min_var", None),
             getattr(view_state, "tth_min_label_var", None),
             getattr(view_state, "tth_min_entry_var", None),
         ),
         (
+            "tth_max",
             getattr(view_state, "tth_max_var", None),
             getattr(view_state, "tth_max_label_var", None),
             getattr(view_state, "tth_max_entry_var", None),
         ),
         (
+            "phi_min",
             getattr(view_state, "phi_min_var", None),
             getattr(view_state, "phi_min_label_var", None),
             getattr(view_state, "phi_min_entry_var", None),
         ),
         (
+            "phi_max",
             getattr(view_state, "phi_max_var", None),
             getattr(view_state, "phi_max_label_var", None),
             getattr(view_state, "phi_max_entry_var", None),
@@ -1282,15 +1358,16 @@ def _sync_runtime_range_text_vars(view_state: object) -> None:
     )
     if any(
         value_var is None or label_var is None or entry_var is None
-        for value_var, label_var, entry_var in specs
+        for _prefix, value_var, label_var, entry_var in specs
     ):
         return
-    for value_var, label_var, entry_var in specs:
+    for prefix, value_var, label_var, entry_var in specs:
         value = _safe_var_get(value_var)
         try:
             numeric_value = float(value)
         except Exception:
             continue
+        setattr(view_state, f"{prefix}_value", numeric_value)
         _safe_var_set(label_var, f"{numeric_value:.1f}")
         _safe_var_set(entry_var, f"{numeric_value:.4f}")
 
@@ -1363,6 +1440,11 @@ def create_runtime_integration_range_controls(
     schedule_range_update: Callable[..., object] | None,
 ) -> None:
     """Create the 1D integration-range controls and wire runtime callbacks."""
+
+    _set_runtime_range_value(view_state, "tth_min", float(tth_min))
+    _set_runtime_range_value(view_state, "tth_max", float(tth_max))
+    _set_runtime_range_value(view_state, "phi_min", float(phi_min))
+    _set_runtime_range_value(view_state, "phi_max", float(phi_max))
 
     views_module.create_integration_range_controls(
         parent=parent,

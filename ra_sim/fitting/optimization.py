@@ -993,6 +993,8 @@ class GeometryFitDatasetContext:
     subset: ReflectionSimulationSubset
     experimental_image: Optional[np.ndarray] = None
     single_ray_indices: Optional[np.ndarray] = None
+    dynamic_reanchor_enabled: bool = False
+    dynamic_reanchor_callback: Optional[Callable[..., Mapping[str, object] | None]] = None
 
 
 @dataclass(frozen=True)
@@ -1483,6 +1485,13 @@ def _apply_discrete_mode_to_dataset_contexts(
     """Copy dataset contexts with one solver-side discrete orientation applied."""
 
     shape = (int(image_size), int(image_size))
+    mode_dict = dict(mode or {})
+    preserve_dynamic_reanchor = bool(
+        int(mode_dict.get("k", 0)) % 4 == 0
+        and not bool(mode_dict.get("flip_x", False))
+        and not bool(mode_dict.get("flip_y", False))
+        and str(mode_dict.get("indexing_mode", "xy")).lower() == "xy"
+    )
     out: List[GeometryFitDatasetContext] = []
     for dataset_ctx in dataset_contexts:
         subset = dataset_ctx.subset
@@ -1515,6 +1524,17 @@ def _apply_discrete_mode_to_dataset_contexts(
                     None
                     if dataset_ctx.single_ray_indices is None
                     else np.asarray(dataset_ctx.single_ray_indices, dtype=np.int64)
+                ),
+                dynamic_reanchor_enabled=bool(
+                    preserve_dynamic_reanchor
+                    and dataset_ctx.dynamic_reanchor_enabled
+                    and callable(dataset_ctx.dynamic_reanchor_callback)
+                ),
+                dynamic_reanchor_callback=(
+                    dataset_ctx.dynamic_reanchor_callback
+                    if preserve_dynamic_reanchor
+                    and callable(dataset_ctx.dynamic_reanchor_callback)
+                    else None
                 ),
             )
         )
@@ -2982,6 +3002,10 @@ def _build_geometry_fit_dataset_contexts(
         label = str(entry.get("label", f"dataset_{dataset_index}"))
         measured_local = entry.get("measured_peaks", measured_peaks)
         experimental_local = entry.get("experimental_image", experimental_image)
+        dynamic_reanchor_enabled = bool(entry.get("dynamic_reanchor_enabled", False))
+        dynamic_reanchor_callback = entry.get("dynamic_reanchor_callback", None)
+        if not callable(dynamic_reanchor_callback):
+            dynamic_reanchor_callback = None
         subset = _prepare_reflection_subset(miller, intensities, measured_local)
         contexts.append(
             GeometryFitDatasetContext(
@@ -2994,6 +3018,10 @@ def _build_geometry_fit_dataset_contexts(
                     if experimental_local is None
                     else np.asarray(experimental_local, dtype=np.float64)
                 ),
+                dynamic_reanchor_enabled=bool(
+                    dynamic_reanchor_enabled and callable(dynamic_reanchor_callback)
+                ),
+                dynamic_reanchor_callback=dynamic_reanchor_callback,
             )
         )
     return contexts
@@ -3097,7 +3125,11 @@ def _evaluate_geometry_fit_dataset_point_matches(
     simulation_subset = dataset_ctx.subset
     fit_miller = simulation_subset.miller
     fit_intensities = simulation_subset.intensities
-    normalized_measured = simulation_subset.measured_entries
+    normalized_measured = [
+        dict(entry)
+        for entry in (simulation_subset.measured_entries or [])
+        if isinstance(entry, Mapping)
+    ]
     single_ray_indices = dataset_ctx.single_ray_indices
     try:
         hk0_peak_priority_weight = float(
@@ -3909,6 +3941,14 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     )
     line_match_records: List[Dict[str, object]] = []
     live_cache_records: List[Dict[str, object]] = []
+    dynamic_reanchor_enabled = bool(
+        dataset_ctx.dynamic_reanchor_enabled
+        and callable(dataset_ctx.dynamic_reanchor_callback)
+    )
+    measured_anchor_reanchor_attempt_count = 0
+    measured_anchor_reanchor_count = 0
+    measured_anchor_reanchor_fail_count = 0
+    measured_anchor_motion_px: List[float] = []
 
     def _entry_diag(entry: Dict[str, object], idx: int) -> Dict[str, object]:
         return {
@@ -3932,18 +3972,79 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             hk0_peak_priority_weight=float(hk0_peak_priority_weight),
         )
         priority_weight = float(priority_fields["priority_weight"])
+        sim_point, sim_reason = _geometry_fit_correspondence_simulated_point(
+            measured_entry,
+            hit_tables=hit_tables,
+            max_positions=maxpos,
+        )
+        if sim_point is not None:
+            sim_col = float(sim_point[0])
+            sim_row = float(sim_point[1])
+            if (
+                not np.isfinite(sim_col)
+                or not np.isfinite(sim_row)
+                or sim_col < 0.0
+                or sim_row < 0.0
+                or sim_col > float(image_size - 1)
+                or sim_row > float(image_size - 1)
+            ):
+                sim_point = None
+                sim_reason = "off_detector"
+
+        reanchor_attempted = False
+        reanchor_status = "disabled"
+        reanchor_motion_px = float("nan")
+        if dynamic_reanchor_enabled and sim_point is not None:
+            reanchor_attempted = True
+            measured_anchor_reanchor_attempt_count += 1
+            reanchor_status = "callback_failed"
+            try:
+                rebuilt_entry = dataset_ctx.dynamic_reanchor_callback(
+                    dict(measured_entry),
+                    (float(sim_point[0]), float(sim_point[1])),
+                    local_params=dict(local),
+                    dataset_ctx=dataset_ctx,
+                )
+            except Exception:
+                rebuilt_entry = None
+            if isinstance(rebuilt_entry, Mapping):
+                old_detector_anchor, _old_reason = _measured_detector_anchor(
+                    measured_entry
+                )
+                updated_entry = dict(measured_entry)
+                updated_entry.update(dict(rebuilt_entry))
+                new_detector_anchor, _new_reason = _measured_detector_anchor(
+                    updated_entry
+                )
+                if old_detector_anchor is not None and new_detector_anchor is not None:
+                    reanchor_motion_px = float(
+                        math.hypot(
+                            float(new_detector_anchor[0]) - float(old_detector_anchor[0]),
+                            float(new_detector_anchor[1]) - float(old_detector_anchor[1]),
+                        )
+                    )
+                    if np.isfinite(reanchor_motion_px):
+                        measured_anchor_motion_px.append(float(reanchor_motion_px))
+                measured_entry = updated_entry
+                normalized_measured[idx] = updated_entry
+                diag = _entry_diag(measured_entry, idx)
+                measured_anchor_reanchor_count += 1
+                reanchor_status = "updated"
+            else:
+                measured_anchor_reanchor_fail_count += 1
+
         measured_fit_anchor, measured_reason, measured_anchor_metadata = (
             _measured_fit_space_anchor(
-            measured_entry,
-            center=fit_center,
-            detector_distance=detector_distance,
-            pixel_size=pixel_size,
-            gamma_deg=gamma_deg,
-            Gamma_deg=Gamma_deg,
-            a_lattice=a_lattice,
-            c_lattice=c_lattice,
-            wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
-        )
+                measured_entry,
+                center=fit_center,
+                detector_distance=detector_distance,
+                pixel_size=pixel_size,
+                gamma_deg=gamma_deg,
+                Gamma_deg=Gamma_deg,
+                a_lattice=a_lattice,
+                c_lattice=c_lattice,
+                wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
+            )
         )
         if measured_fit_anchor is not None:
             if measured_reason == "cached_fit_space_anchor":
@@ -3981,6 +4082,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_anchor_source": str(
                             measured_anchor_metadata.get("anchor_source", measured_reason)
                         ),
+                        "measured_reanchor_attempted": bool(reanchor_attempted),
+                        "measured_reanchor_status": str(reanchor_status),
+                        "measured_reanchor_motion_px": float(reanchor_motion_px),
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
@@ -4011,24 +4115,6 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
 
         measured_two_theta = float(measured_fit_anchor[0])
         measured_phi = float(measured_fit_anchor[1])
-        sim_point, sim_reason = _geometry_fit_correspondence_simulated_point(
-            measured_entry,
-            hit_tables=hit_tables,
-            max_positions=maxpos,
-        )
-        if sim_point is not None:
-            sim_col = float(sim_point[0])
-            sim_row = float(sim_point[1])
-            if (
-                not np.isfinite(sim_col)
-                or not np.isfinite(sim_row)
-                or sim_col < 0.0
-                or sim_row < 0.0
-                or sim_col > float(image_size - 1)
-                or sim_row > float(image_size - 1)
-            ):
-                sim_point = None
-                sim_reason = "off_detector"
         if sim_point is None:
             residual_components[idx, 0] = (
                 float(missing_pair_penalty_deg) * float(priority_weight)
@@ -4049,6 +4135,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_anchor_source": str(
                             measured_anchor_metadata.get("anchor_source", measured_reason)
                         ),
+                        "measured_reanchor_attempted": bool(reanchor_attempted),
+                        "measured_reanchor_status": str(reanchor_status),
+                        "measured_reanchor_motion_px": float(reanchor_motion_px),
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
@@ -4114,6 +4203,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_anchor_source": str(
                             measured_anchor_metadata.get("anchor_source", measured_reason)
                         ),
+                        "measured_reanchor_attempted": bool(reanchor_attempted),
+                        "measured_reanchor_status": str(reanchor_status),
+                        "measured_reanchor_motion_px": float(reanchor_motion_px),
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
@@ -4204,6 +4296,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_anchor_source": str(
                             measured_anchor_metadata.get("anchor_source", measured_reason)
                         ),
+                        "measured_reanchor_attempted": bool(reanchor_attempted),
+                        "measured_reanchor_status": str(reanchor_status),
+                        "measured_reanchor_motion_px": float(reanchor_motion_px),
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                     "measured_x": (
                         float(measured_detector_anchor[0])
@@ -4297,6 +4392,14 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "line_constraints_enabled": bool(
             line_summary.get("line_constraints_enabled", line_constraints_enabled)
         ),
+        "measured_anchor_reanchor_enabled": bool(dynamic_reanchor_enabled),
+        "measured_anchor_reanchor_attempt_count": int(
+            measured_anchor_reanchor_attempt_count
+        ),
+        "measured_anchor_reanchor_count": int(measured_anchor_reanchor_count),
+        "measured_anchor_reanchor_fail_count": int(
+            measured_anchor_reanchor_fail_count
+        ),
         "_live_cache_records": live_cache_records,
         **_fit_space_provenance_summary(
             local,
@@ -4339,6 +4442,23 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         summary["unweighted_peak_rms_deg"] = float("nan")
         summary["unweighted_peak_mean_deg"] = float("nan")
         summary["unweighted_peak_max_deg"] = float("nan")
+    if measured_anchor_motion_px:
+        motion_arr = np.asarray(measured_anchor_motion_px, dtype=float)
+        motion_arr = motion_arr[np.isfinite(motion_arr)]
+        if motion_arr.size:
+            summary["measured_anchor_motion_mean_px"] = float(np.mean(motion_arr))
+            summary["measured_anchor_motion_rms_px"] = float(
+                np.sqrt(np.mean(motion_arr * motion_arr))
+            )
+            summary["measured_anchor_motion_max_px"] = float(np.max(motion_arr))
+        else:
+            summary["measured_anchor_motion_mean_px"] = float("nan")
+            summary["measured_anchor_motion_rms_px"] = float("nan")
+            summary["measured_anchor_motion_max_px"] = float("nan")
+    else:
+        summary["measured_anchor_motion_mean_px"] = float("nan")
+        summary["measured_anchor_motion_rms_px"] = float("nan")
+        summary["measured_anchor_motion_max_px"] = float("nan")
     return residual_arr, diagnostics, summary
 
 

@@ -167,6 +167,16 @@ def test_runtime_impl_preserves_wrapped_phi_ranges_for_detector_drags() -> None:
     assert "if phi_max < phi_min and azimuth_sub.size:" in source
 
 
+def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome" in source
+    assert "gui_main_figure_chrome.configure_matplotlib_canvas_widget(" in source
+    assert "gui_main_figure_chrome.configure_main_figure_layout(" in source
+    assert "gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)" in source
+    assert "ax.set_title('Simulated Diffraction Pattern')" not in source
+
+
 def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -326,9 +336,9 @@ def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> No
     assert "caked_analysis_requested = bool(" in source
     assert "accumulate_image_requested" in source
     assert "or one_d_analysis_requested" in source
-    assert "ax.set_title('2D Caked Position Preview')" in source
-    assert "ax.set_title('2D Caked Position Preview (1D paused)')" in source
-    assert "Detector Preview While Caked Position Preview Loads" in source
+    assert "ax.set_title('2D Caked Position Preview')" not in source
+    assert "ax.set_title('2D Caked Position Preview (1D paused)')" not in source
+    assert 'ax.set_title("")' in source
 
 
 def test_runtime_impl_disables_preview_calculations_in_runtime_update_paths() -> None:

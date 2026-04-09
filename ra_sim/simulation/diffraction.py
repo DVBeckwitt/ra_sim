@@ -15,6 +15,7 @@ from ra_sim.debug_controls import (
     intersection_cache_logging_enabled,
     retain_optional_cache,
     resolve_intersection_cache_log_root,
+    resolve_startup_debug_log_path,
 )
 from ra_sim.utils.calculations import (
     IndexofRefraction,
@@ -284,35 +285,23 @@ def _write_intersection_cache_log(
     if cache is None:
         cache = []
 
-    cache_root = _resolve_intersection_cache_log_root() / "intersection_cache"
-    try:
-        cache_root.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return
-
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    log_dir = cache_root / f"intersection_cache_{stamp}_{os.getpid()}"
-    try:
-        log_dir.mkdir(parents=True, exist_ok=False)
-    except Exception:
-        return
-    try:
-        print(f"[intersection_cache] wrote cache to: {log_dir}")
-    except Exception:
-        pass
-
-    cache_tables = []
+    log_path = resolve_startup_debug_log_path(
+        log_dir=_resolve_intersection_cache_log_root(),
+    )
     row_counts = []
+    cache_tables = []
     for idx, table in enumerate(cache):
         table_arr = np.asarray(table, dtype=np.float64)
         if table_arr.ndim != 2:
             table_arr = np.empty((0, 14), dtype=np.float64)
         row_counts.append(int(table_arr.shape[0]))
-        try:
-            np.save(log_dir / f"table_{idx:04d}.npy", table_arr)
-            cache_tables.append(f"table_{idx:04d}.npy")
-        except Exception:
-            continue
+        cache_tables.append(
+            {
+                "index": int(idx),
+                "row_count": int(table_arr.shape[0]),
+                "rows": table_arr.tolist(),
+            }
+        )
 
     metadata = {
         "created_at": datetime.now().isoformat(),
@@ -340,17 +329,24 @@ def _write_intersection_cache_log(
         "table_count": int(len(cache)),
         "rows_per_table": row_counts,
         "total_rows": int(sum(int(v) for v in row_counts)),
-        "table_files": cache_tables,
-        "log_root": str(_resolve_intersection_cache_log_root()),
-        "log_dir": str(log_dir),
+        "cache_tables": cache_tables,
+        "log_root": str(log_path.parent),
+        "log_path": str(log_path),
     }
     if isinstance(cache_metadata, dict) and cache_metadata:
         metadata.update(cache_metadata)
 
     try:
-        with (log_dir / "meta.json").open("w", encoding="utf-8") as handle:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        needs_separator = log_path.exists() and log_path.stat().st_size > 0
+        with log_path.open("a", encoding="utf-8") as handle:
+            if needs_separator:
+                handle.write("\n")
+            handle.write("=" * 80 + "\n")
+            handle.write(f"Intersection cache updated: {metadata['created_at']}\n")
             json.dump(metadata, handle, indent=2, sort_keys=True)
             handle.write("\n")
+        print(f"[intersection_cache] appended cache to: {log_path}")
     except Exception:
         return
 
@@ -5965,6 +5961,85 @@ def get_last_intersection_cache():
     """
 
     return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
+
+
+def load_logged_intersection_cache(
+    log_dir: str | Path,
+) -> tuple[list[np.ndarray], dict[str, object]]:
+    """Load one persisted intersection-cache log directory from disk."""
+
+    resolved_dir = Path(log_dir).expanduser()
+    metadata: dict[str, object] = {}
+    try:
+        with (resolved_dir / "meta.json").open("r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            metadata = dict(loaded)
+    except Exception:
+        metadata = {}
+
+    raw_table_files = metadata.get("table_files")
+    if isinstance(raw_table_files, list) and raw_table_files:
+        table_paths = [resolved_dir / str(name) for name in raw_table_files]
+    else:
+        table_paths = sorted(resolved_dir.glob("table_*.npy"))
+
+    cache_tables: list[np.ndarray] = []
+    for table_path in table_paths:
+        try:
+            table_arr = np.asarray(np.load(table_path, allow_pickle=False), dtype=np.float64)
+        except Exception:
+            continue
+        if table_arr.ndim == 1:
+            table_arr = table_arr.reshape(1, -1)
+        if table_arr.ndim != 2:
+            continue
+        cache_tables.append(np.asarray(table_arr, dtype=np.float64).copy())
+
+    if cache_tables:
+        metadata.setdefault("log_dir", str(resolved_dir))
+        metadata.setdefault("table_count", int(len(cache_tables)))
+        metadata.setdefault(
+            "rows_per_table",
+            [int(np.asarray(table, dtype=np.float64).shape[0]) for table in cache_tables],
+        )
+        metadata.setdefault(
+            "total_rows",
+            int(
+                sum(
+                    int(np.asarray(table, dtype=np.float64).shape[0])
+                    for table in cache_tables
+                )
+            ),
+        )
+    return cache_tables, metadata
+
+
+def load_most_recent_logged_intersection_cache(
+    log_root: str | Path | None = None,
+) -> tuple[list[np.ndarray], dict[str, object]]:
+    """Load the newest persisted intersection-cache log that still has tables."""
+
+    if log_root is None:
+        root = _resolve_intersection_cache_log_root() / "intersection_cache"
+    else:
+        root = Path(log_root).expanduser()
+    try:
+        log_dirs = sorted(
+            (path for path in root.glob("intersection_cache_*") if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        return [], {}
+
+    for log_dir in log_dirs:
+        cache_tables, metadata = load_logged_intersection_cache(log_dir)
+        if cache_tables:
+            metadata = dict(metadata)
+            metadata.setdefault("log_dir", str(log_dir))
+            return cache_tables, metadata
+    return [], {}
 
 
 def _intersection_cache_target_row_count(table: np.ndarray) -> int:

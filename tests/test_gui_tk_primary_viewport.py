@@ -8,6 +8,9 @@ class _FakeWidget:
         self.bindings = {}
         self.after_calls = []
         self.after_cancelled = []
+        self.pack_calls = []
+        self.pack_forget_calls = 0
+        self.destroy_calls = 0
 
     def bind(self, sequence, callback, add=None):
         self.bindings[sequence] = (callback, add)
@@ -19,6 +22,21 @@ class _FakeWidget:
 
     def after_cancel(self, token):
         self.after_cancelled.append(token)
+
+    def pack(self, **kwargs):
+        self.pack_calls.append(dict(kwargs))
+
+    def pack_forget(self):
+        self.pack_forget_calls += 1
+
+    def destroy(self):
+        self.destroy_calls += 1
+
+    def winfo_reqwidth(self):
+        return 640
+
+    def winfo_reqheight(self):
+        return 480
 
 
 class _FakeViewport:
@@ -210,3 +228,66 @@ def test_tk_canvas_proxy_draw_idle_schedules_one_sync() -> None:
     callback()
 
     assert sync_calls == ["sync"]
+
+
+def test_build_tk_primary_viewport_backend_swaps_widgets_on_activate_and_deactivate(
+    monkeypatch,
+) -> None:
+    viewport_widget = _FakeWidget()
+    matplotlib_widget = _FakeWidget()
+    sync_calls = []
+
+    class _FakeViewportRuntime:
+        def __init__(self):
+            self.widget = viewport_widget
+
+        def sync_from_matplotlib(
+            self,
+            *,
+            image_artist,
+            background_artist,
+            overlay_artist,
+            force_view_range=False,
+        ):
+            sync_calls.append(
+                {
+                    "image_artist": image_artist,
+                    "background_artist": background_artist,
+                    "overlay_artist": overlay_artist,
+                    "force_view_range": bool(force_view_range),
+                }
+            )
+
+    monkeypatch.setattr(
+        tk_primary_viewport,
+        "_TkPrimaryViewport",
+        lambda **kwargs: _FakeViewportRuntime(),
+    )
+
+    backend = tk_primary_viewport.build_tk_primary_viewport_backend(
+        tk_module=SimpleNamespace(TOP="top", BOTH="both"),
+        canvas_frame="canvas-parent",
+        matplotlib_canvas=SimpleNamespace(get_tk_widget=lambda: matplotlib_widget),
+        ax="AX",
+        image_artist="image",
+        background_artist="background",
+        overlay_artist="overlay",
+    )
+
+    backend.activate()
+    backend.deactivate()
+    backend.shutdown()
+
+    assert matplotlib_widget.pack_forget_calls == 1
+    assert viewport_widget.pack_calls == [{"side": "top", "fill": "both", "expand": True}]
+    assert viewport_widget.pack_forget_calls == 1
+    assert matplotlib_widget.pack_calls == [{"side": "top", "fill": "both", "expand": True}]
+    assert viewport_widget.destroy_calls == 1
+    assert sync_calls == [
+        {
+            "image_artist": "image",
+            "background_artist": "background",
+            "overlay_artist": "overlay",
+            "force_view_range": True,
+        }
+    ]

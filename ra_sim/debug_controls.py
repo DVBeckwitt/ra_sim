@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -41,6 +42,7 @@ _DEBUG_DEFAULTS: dict[str, Any] = {
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
 _FALSY_VALUES = {"", "0", "false", "no", "off"}
 _VALID_CACHE_RETENTIONS = {"never", "auto", "always"}
+_STARTUP_DEBUG_LOG_PATH: Path | None = None
 
 CacheRetention = Literal["never", "auto", "always"]
 CacheFamily = Literal[
@@ -352,6 +354,51 @@ def resolve_intersection_cache_log_root(
         return Path.cwd() / "logs"
 
 
+def resolve_startup_debug_log_path(
+    *,
+    stamp: str | None = None,
+    log_dir: Path | str | None = None,
+    downloads_dir: Path | str | None = None,
+    env: Mapping[str, object] | None = None,
+    debug_config: Mapping[str, Any] | None = None,
+) -> Path:
+    """Return the shared startup-scoped debug log path for this process."""
+
+    global _STARTUP_DEBUG_LOG_PATH
+
+    if _STARTUP_DEBUG_LOG_PATH is not None:
+        return _STARTUP_DEBUG_LOG_PATH
+
+    resolved_root: Path | None = None
+    if log_dir is not None and str(log_dir).strip():
+        resolved_root = Path(log_dir).expanduser()
+    elif downloads_dir is not None and str(downloads_dir).strip():
+        resolved_root = Path(downloads_dir).expanduser()
+    else:
+        resolved_root = resolve_intersection_cache_log_root(
+            env,
+            debug_config=debug_config,
+        )
+
+    session_stamp = str(stamp).strip() if stamp is not None else ""
+    if not session_stamp:
+        session_stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+    _STARTUP_DEBUG_LOG_PATH = resolved_root / f"geometry_fit_log_{session_stamp}.txt"
+    return _STARTUP_DEBUG_LOG_PATH
+
+
+def reset_startup_debug_log_path() -> None:
+    """Clear the cached startup-scoped debug log path.
+
+    This is primarily useful in tests that simulate multiple app startups in one
+    Python process.
+    """
+
+    global _STARTUP_DEBUG_LOG_PATH
+    _STARTUP_DEBUG_LOG_PATH = None
+
+
 def cache_retention_mode(
     family: CacheFamily | str,
     *,
@@ -404,7 +451,9 @@ __all__ = [
     "is_logging_disabled",
     "mosaic_fit_log_files_enabled",
     "projection_debug_logging_enabled",
+    "reset_startup_debug_log_path",
     "retain_optional_cache",
     "resolve_intersection_cache_log_root",
+    "resolve_startup_debug_log_path",
     "runtime_update_trace_logging_enabled",
 ]

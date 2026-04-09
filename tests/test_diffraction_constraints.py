@@ -543,9 +543,10 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     )
 
     assert len(cache) == 1
-    log_dirs = list((tmp_path / "intersection_cache").iterdir())
-    assert len(log_dirs) == 1
-    metadata = json.loads((log_dirs[0] / "meta.json").read_text(encoding="utf-8"))
+    log_paths = list(tmp_path.glob("geometry_fit_log_*.txt"))
+    assert len(log_paths) == 1
+    log_text = log_paths[0].read_text(encoding="utf-8")
+    metadata = json.loads(log_text[log_text.index("{"):])
 
     assert metadata["reused"] is False
     assert metadata["rebuilt"] is True
@@ -555,6 +556,7 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     assert metadata["cache_provenance"]["grouping"] == "nominal_bragg_family"
     assert metadata["group_summary_count"] == 1
     assert metadata["table_count"] == 1
+    assert len(metadata["cache_tables"]) == 1
 
     group_summary = metadata["group_summaries"][0]
     assert group_summary["nominal_hkl"] == [0, 0, 3]

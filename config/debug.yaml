@@ -1,6 +1,6 @@
 debug:
   global:
-    disable_all: true 
+    disable_all: false
   console:
     enabled: true
   runtime_update_trace:
