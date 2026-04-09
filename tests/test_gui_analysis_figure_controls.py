@@ -6,8 +6,15 @@ from ra_sim.gui import analysis_figure_controls
 
 
 class _FakeAxis:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        xlim: tuple[float, float] = (0.0, 10.0),
+        ylim: tuple[float, float] = (0.0, 20.0),
+    ) -> None:
         self.calls: list[str] = []
+        self.xlim = tuple(float(value) for value in xlim)
+        self.ylim = tuple(float(value) for value in ylim)
 
     def relim(self) -> None:
         self.calls.append("relim")
@@ -15,49 +22,33 @@ class _FakeAxis:
     def autoscale_view(self) -> None:
         self.calls.append("autoscale_view")
 
+    def get_xlim(self) -> tuple[float, float]:
+        return self.xlim
 
-class _FakeFrame:
-    created: list["_FakeFrame"] = []
+    def get_ylim(self) -> tuple[float, float]:
+        return self.ylim
 
-    def __init__(self, parent) -> None:
-        self.parent = parent
-        self.pack_calls: list[dict[str, object]] = []
-        self.__class__.created.append(self)
+    def set_xlim(self, x0: float, x1: float) -> None:
+        self.xlim = (float(x0), float(x1))
 
-    def pack(self, **kwargs) -> None:
-        self.pack_calls.append(kwargs)
-
-
-class _FakeButton:
-    created: list["_FakeButton"] = []
-
-    def __init__(self, parent, **kwargs) -> None:
-        self.parent = parent
-        self.kwargs = kwargs
-        self.command = kwargs.get("command")
-        self.pack_calls: list[dict[str, object]] = []
-        self.__class__.created.append(self)
-
-    def pack(self, **kwargs) -> None:
-        self.pack_calls.append(kwargs)
+    def set_ylim(self, y0: float, y1: float) -> None:
+        self.ylim = (float(y0), float(y1))
 
 
-class _FakeToolbar:
-    created: list["_FakeToolbar"] = []
+class _FakeCanvas:
+    def __init__(self) -> None:
+        self.connections: dict[str, object] = {}
+        self.draw_idle_calls = 0
+        self._next_cid = 1
 
-    def __init__(self, canvas, parent, *, pack_toolbar=False) -> None:
-        self.canvas = canvas
-        self.parent = parent
-        self.pack_toolbar = pack_toolbar
-        self.updated = False
-        self.pack_calls: list[dict[str, object]] = []
-        self.__class__.created.append(self)
+    def mpl_connect(self, event_name: str, callback) -> int:
+        cid = self._next_cid
+        self._next_cid += 1
+        self.connections[event_name] = callback
+        return cid
 
-    def update(self) -> None:
-        self.updated = True
-
-    def pack(self, **kwargs) -> None:
-        self.pack_calls.append(kwargs)
+    def draw_idle(self) -> None:
+        self.draw_idle_calls += 1
 
 
 def test_reset_analysis_axes_view_autoscales_all_supported_axes() -> None:
@@ -75,44 +66,90 @@ def test_reset_analysis_axes_view_autoscales_all_supported_axes() -> None:
     assert azimuth_axis.calls == ["relim", "autoscale_view"]
 
 
-def test_create_analysis_figure_toolbar_builds_navigation_and_reset_controls() -> None:
-    _FakeFrame.created = []
-    _FakeButton.created = []
-    _FakeToolbar.created = []
+def test_create_analysis_figure_interactions_pans_only_the_active_axis() -> None:
+    radial_axis = _FakeAxis(xlim=(0.0, 10.0), ylim=(10.0, 30.0))
+    azimuth_axis = _FakeAxis(xlim=(100.0, 140.0), ylim=(-5.0, 5.0))
+    canvas = _FakeCanvas()
 
-    reset_calls: list[str] = []
-    ttk_module = SimpleNamespace(Frame=_FakeFrame, Button=_FakeButton)
-    backend_tkagg_module = SimpleNamespace(NavigationToolbar2Tk=_FakeToolbar)
-    canvas = object()
-    parent = object()
+    connections = analysis_figure_controls.create_analysis_figure_interactions(
+        canvas=canvas,
+        axes=(radial_axis, azimuth_axis),
+    )
 
-    frame, toolbar, reset_button = (
-        analysis_figure_controls.create_analysis_figure_toolbar(
-            parent=parent,
-            canvas=canvas,
-            ttk_module=ttk_module,
-            backend_tkagg_module=backend_tkagg_module,
-            on_reset_view=lambda: reset_calls.append("reset"),
+    assert set(connections) == {
+        "button_press_event",
+        "motion_notify_event",
+        "button_release_event",
+        "scroll_event",
+    }
+
+    canvas.connections["button_press_event"](
+        SimpleNamespace(
+            button=1,
+            dblclick=False,
+            inaxes=radial_axis,
+            xdata=6.0,
+            ydata=18.0,
+        )
+    )
+    canvas.connections["motion_notify_event"](
+        SimpleNamespace(
+            inaxes=radial_axis,
+            xdata=8.5,
+            ydata=23.5,
+        )
+    )
+    canvas.connections["button_release_event"](
+        SimpleNamespace(
+            button=1,
+            inaxes=radial_axis,
+            xdata=8.5,
+            ydata=23.5,
         )
     )
 
-    assert frame is _FakeFrame.created[0]
-    assert frame.parent is parent
-    assert frame.pack_calls == [{"side": "top", "fill": "x"}]
+    assert radial_axis.xlim == (-2.5, 7.5)
+    assert radial_axis.ylim == (4.5, 24.5)
+    assert azimuth_axis.xlim == (100.0, 140.0)
+    assert azimuth_axis.ylim == (-5.0, 5.0)
+    assert canvas.draw_idle_calls == 1
 
-    assert toolbar is _FakeToolbar.created[0]
-    assert toolbar.canvas is canvas
-    assert toolbar.parent is frame
-    assert toolbar.pack_toolbar is False
-    assert toolbar.updated is True
-    assert toolbar.pack_calls == [{"side": "left", "fill": "x", "expand": True}]
 
-    assert reset_button is _FakeButton.created[0]
-    assert reset_button.parent is frame
-    assert reset_button.kwargs["text"] == "Reset View"
-    assert reset_button.pack_calls == [
-        {"side": "right", "padx": (6, 0), "pady": 2}
-    ]
+def test_create_analysis_figure_interactions_scroll_zoom_and_double_click_reset() -> None:
+    radial_axis = _FakeAxis(xlim=(0.0, 12.0), ylim=(0.0, 24.0))
+    azimuth_axis = _FakeAxis(xlim=(-50.0, 50.0), ylim=(10.0, 110.0))
+    canvas = _FakeCanvas()
+    reset_calls: list[str] = []
 
-    reset_button.command()
+    analysis_figure_controls.create_analysis_figure_interactions(
+        canvas=canvas,
+        axes=(radial_axis, azimuth_axis),
+        on_reset_view=lambda: reset_calls.append("reset"),
+    )
+
+    canvas.connections["scroll_event"](
+        SimpleNamespace(
+            inaxes=azimuth_axis,
+            step=1.0,
+            button="up",
+            xdata=10.0,
+            ydata=70.0,
+        )
+    )
+
+    assert abs(azimuth_axis.xlim[1] - azimuth_axis.xlim[0]) < 100.0
+    assert abs(azimuth_axis.ylim[1] - azimuth_axis.ylim[0]) < 100.0
+    assert radial_axis.xlim == (0.0, 12.0)
+    assert radial_axis.ylim == (0.0, 24.0)
+
+    canvas.connections["button_press_event"](
+        SimpleNamespace(
+            button=1,
+            dblclick=True,
+            inaxes=radial_axis,
+            xdata=3.0,
+            ydata=5.0,
+        )
+    )
+
     assert reset_calls == ["reset"]

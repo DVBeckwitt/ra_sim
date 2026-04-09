@@ -291,7 +291,7 @@ def build_runtime_fast_viewer_workflow(
         if bool(fast_requested):
             _set_status_text("Fast viewer requested.")
             return
-        _set_status_text("Replace the plot area with a faster viewer.")
+        _set_status_text("")
 
     def _set_requested_enabled(enabled: bool) -> None:
         nonlocal fast_requested

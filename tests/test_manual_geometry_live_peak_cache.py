@@ -1,0 +1,114 @@
+import numpy as np
+
+from ra_sim.gui import manual_geometry as mg
+
+
+def _group_candidates(entries):
+    grouped = {}
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, dict):
+            continue
+        group_key = raw_entry.get("q_group_key")
+        if not isinstance(group_key, tuple):
+            continue
+        grouped.setdefault(group_key, []).append(dict(raw_entry))
+    return grouped
+
+
+def _build_lookup(entries):
+    lookup = {}
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, dict):
+            continue
+        try:
+            key = (
+                int(raw_entry.get("source_table_index")),
+                int(raw_entry.get("source_row_index")),
+            )
+        except Exception:
+            continue
+        lookup[key] = dict(raw_entry)
+    return lookup
+
+
+def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> None:
+    peak_record = {
+        "display_col": 13.5,
+        "display_row": 15.5,
+        "hkl": (1, 0, 2),
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "source_table_index": 4,
+        "source_row_index": 7,
+        "qr": 1.2345678901,
+        "qz": -0.4567890123,
+        "intensity": 9.0,
+    }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        peak_records=[peak_record],
+    )
+
+    group_entry = cache_data["grouped_candidates"][("q_group", "primary", 1, 2)][0]
+
+    assert cache_data["cache_metadata"]["cache_source"] == "peak_records"
+    assert cache_data["cache_metadata"]["stale_reason"] is None
+    assert group_entry["label"] == "1,0,2"
+    assert group_entry["sim_col"] == 13.5
+    assert np.isclose(float(group_entry["qr"]), 1.2345678901)
+    assert np.isclose(float(next_state["simulated_lookup"][(4, 7)]["qz"]), -0.4567890123)
+    assert next_sig == ("sig",)
+
+
+def test_make_runtime_geometry_manual_cache_callbacks_uses_live_peak_records() -> None:
+    cache_state = {"signature": None, "data": {}}
+    peak_record = {
+        "display_col": 21.0,
+        "display_row": 34.0,
+        "hkl_raw": (1.0, 0.0, 2.0),
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "source_table_index": 5,
+        "source_row_index": 8,
+        "qr": 1.5,
+        "qz": -0.5,
+        "intensity": 3.0,
+    }
+
+    def _replace_cache_state(signature, data) -> None:
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 3),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((4, 4), dtype=float),
+        use_caked_space=lambda: False,
+        replace_cache_state=_replace_cache_state,
+        current_geometry_fit_params=lambda: {"gamma": 1.25},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        peak_records=lambda: [peak_record],
+    )
+
+    cache_data = callbacks.get_pick_cache(param_set={"a": 2.0}, prefer_cache=True)
+
+    assert cache_data["cache_metadata"]["cache_source"] == "peak_records"
+    assert cache_state["signature"] == cache_data["signature"]
+    assert cache_state["data"]["grouped_candidates"][("q_group", "primary", 1, 2)][0][
+        "source_row_index"
+    ] == 8

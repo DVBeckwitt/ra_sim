@@ -198,10 +198,6 @@ class DisplayControlsViewState:
     scale_factor_entry: Any = None
     accumulate_intensity_var: Any = None
     accumulate_intensity_checkbutton: Any = None
-    fast_viewer_var: Any = None
-    fast_viewer_checkbutton: Any = None
-    fast_viewer_status_var: Any = None
-    fast_viewer_status_label: Any = None
 
 
 @dataclass

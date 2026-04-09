@@ -392,10 +392,7 @@ def test_fast_viewer_control_reenables_after_blocker_clears() -> None:
     workflow.refresh_runtime_mode(announce=False)
 
     assert display_view_state.fast_viewer_checkbutton.disabled is False
-    assert (
-        display_view_state.fast_viewer_status_var.get()
-        == "Replace the plot area with a faster viewer."
-    )
+    assert display_view_state.fast_viewer_status_var.get() == ""
 
 
 def test_fast_viewer_open_failure_disables_control_with_note() -> None:
@@ -463,9 +460,7 @@ def test_fast_viewer_disable_restores_embedded_matplotlib_canvas() -> None:
     assert viewer.closed is True
     assert refs.matplotlib_canvas.widget.winfo_manager() == "pack"
     assert refs.matplotlib_canvas.draw_calls == 1
-    assert display_view_state.fast_viewer_status_var.get() == (
-        "Replace the plot area with a faster viewer."
-    )
+    assert display_view_state.fast_viewer_status_var.get() == ""
 
 
 def test_reset_view_forces_fast_viewer_range_sync_when_active() -> None:

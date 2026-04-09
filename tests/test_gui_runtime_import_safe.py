@@ -324,7 +324,7 @@ def test_runtime_impl_places_qr_cylinder_mode_in_quick_controls() -> None:
 def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_controls() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert '\"key\": \"fast_viewer\"' in source
+    assert '\"key\": \"fast_viewer\"' not in source
     assert '\"key\": \"log_display\"' in source
     assert '\"key\": \"clear_integration_region\"' in source
     assert '\"key\": \"auto_match_scale\"' in source
@@ -333,7 +333,7 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
     assert "parent=None" in source
     assert 'RA_SIM_FAST_VIEWER", "1"' in source
     assert "control_locked=True" in source
-    assert "display_controls_view_state.fast_viewer_checkbutton = (" in source
+    assert "display_controls_view_state.fast_viewer_checkbutton = (" not in source
     assert "display_controls_view_state.simulation_controls_frame" not in source[
         source.index("def _auto_match_scale_factor_to_radial_peak("):
         source.index("def _update_chi_square_display(")

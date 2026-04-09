@@ -1740,9 +1740,6 @@ def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
     assert view_state.scale_factor_entry is created[5]["entry"]
     assert view_state.accumulate_intensity_var is None
     assert view_state.accumulate_intensity_checkbutton is None
-    assert view_state.fast_viewer_var.get() is False
-    assert view_state.fast_viewer_checkbutton is None
-    assert view_state.fast_viewer_status_var.get() == ""
     assert len(_FakeCheckbutton.created) == 0
     assert [item["label"] for item in created] == [
         "Background Min Intensity",

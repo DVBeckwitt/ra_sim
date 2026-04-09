@@ -2504,9 +2504,6 @@ def create_display_controls(
     scale_factor_step: float,
     on_apply_background_limits: Callable[[], None],
     on_apply_simulation_limits: Callable[[], None],
-    fast_viewer_enabled: bool = False,
-    on_toggle_fast_viewer: Callable[[], None] | None = None,
-    fast_viewer_status_text: str = "",
 ) -> None:
     """Create the background/simulation display-control panels."""
 
@@ -2573,16 +2570,6 @@ def create_display_controls(
         float(scale_factor_step),
         parent=simulation_controls,
     )
-    fast_viewer_var = tk.BooleanVar(value=bool(fast_viewer_enabled))
-    fast_viewer_checkbutton = None
-    fast_viewer_status_var = tk.StringVar(value=str(fast_viewer_status_text))
-    fast_viewer_status_label = ttk.Label(
-        simulation_controls,
-        textvariable=fast_viewer_status_var,
-        wraplength=320,
-        justify=tk.LEFT,
-    )
-    fast_viewer_status_label.pack(anchor=tk.W, padx=5, pady=(2, 4))
 
     view_state.frame = frame
     view_state.background_controls_frame = background_controls
@@ -2600,10 +2587,6 @@ def create_display_controls(
     view_state.simulation_max_slider = simulation_max_slider
     view_state.scale_factor_slider = scale_factor_slider
     view_state.scale_factor_entry = _find_slider_entry(scale_factor_slider)
-    view_state.fast_viewer_var = fast_viewer_var
-    view_state.fast_viewer_checkbutton = fast_viewer_checkbutton
-    view_state.fast_viewer_status_var = fast_viewer_status_var
-    view_state.fast_viewer_status_label = fast_viewer_status_label
 
 
 def create_structure_factor_pruning_controls(
