@@ -215,6 +215,9 @@ instrument:
       # Set to false to avoid numba JIT during fitting (useful if numba
       # compilation fails on your Python build).
       use_numba: true
+      # When enabled, add verbose preflight/source-resolution/calibration
+      # diagnostics to the per-run geometry fit log.
+      debug_logging: false
       # Optional completion chime after an accepted geometry fit.
       # - mode: alias plays one Windows system sound alias asynchronously.
       # - mode: tone plays the tone_sequence below in a short background thread.

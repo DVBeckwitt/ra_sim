@@ -66,6 +66,27 @@ def _fake_process_peaks_same_hkl_two_hits(*args, **kwargs):
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
 
+def test_estimate_pixel_size_prefers_positive_sources_in_order():
+    params = _base_params(12)
+    params["pixel_size"] = 2.5e-4
+    params["pixel_size_m"] = 1.5e-4
+    params["debye_x"] = 5.0e-5
+    assert np.isclose(opt._estimate_pixel_size(params), 2.5e-4)
+
+    params = _base_params(12)
+    params["pixel_size_m"] = 1.5e-4
+    params["debye_x"] = 5.0e-5
+    assert np.isclose(opt._estimate_pixel_size(params), 1.5e-4)
+
+    params = _base_params(12)
+    params["debye_x"] = 5.0e-5
+    assert np.isclose(opt._estimate_pixel_size(params), 5.0e-5)
+
+    params = _base_params(12)
+    params["corto_detector"] = 0.2
+    assert np.isclose(opt._estimate_pixel_size(params), 0.2 / 4096.0)
+
+
 def _fake_process_three_reflections(*args, **kwargs):
     image_size = int(args[2])
     miller_subset = np.asarray(args[0], dtype=np.float64)
@@ -1340,6 +1361,7 @@ def test_simulate_and_compare_hkl_preserves_fixed_source_row_assignments(monkeyp
             "overlay_match_index": 7,
             "source_table_index": 0,
             "source_row_index": 1,
+            "fit_source_resolution_kind": "source_row",
         },
         {
             "hkl": (1, 0, 0),
@@ -1349,6 +1371,7 @@ def test_simulate_and_compare_hkl_preserves_fixed_source_row_assignments(monkeyp
             "overlay_match_index": 3,
             "source_table_index": 0,
             "source_row_index": 0,
+            "fit_source_resolution_kind": "source_row",
         },
     ]
 
@@ -1403,6 +1426,7 @@ def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
             "overlay_match_index": 7,
             "source_table_index": 0,
             "source_row_index": 1,
+            "fit_source_resolution_kind": "source_row",
         },
         {
             "hkl": (1, 0, 0),
@@ -1412,6 +1436,7 @@ def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
             "overlay_match_index": 3,
             "source_table_index": 0,
             "source_row_index": 0,
+            "fit_source_resolution_kind": "source_row",
         },
     ]
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
@@ -1444,6 +1469,10 @@ def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
         and entry["match_status"] == "matched"
         for entry in result.point_match_diagnostics
     )
+    assert {
+        str(entry["fit_source_resolution_kind"])
+        for entry in result.point_match_diagnostics
+    } == {"source_row"}
     assert {
         int(entry["overlay_match_index"]) for entry in result.point_match_diagnostics
     } == {3, 7}
@@ -3613,5 +3642,7 @@ def test_fit_geometry_parameters_emits_normalized_multistart_status_updates(
     assert int(result.geometry_fit_debug_summary["solve_progress"]["evaluation_count"]) >= 1
     assert any("Geometry fit: setup mode=angle" in msg for msg in status_messages)
     assert any("running normalized-u multistart solve" in msg for msg in status_messages)
+    assert any("Geometry fit: mode identity prescore" in msg for msg in status_messages)
+    assert any("Geometry fit: multistart summary selected_mode=identity" in msg for msg in status_messages)
     assert any("identity seed" in msg and "cost=" in msg for msg in status_messages)
-    assert any("complete" in msg for msg in status_messages)
+    assert any("complete" in msg and "metric=angle" in msg for msg in status_messages)

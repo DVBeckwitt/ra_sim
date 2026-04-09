@@ -95,6 +95,7 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
     ):
         nonlocal call_count
         call_count += 1
@@ -168,6 +169,7 @@ def test_process_peaks_parallel_cache_respects_forced_sample_index(monkeypatch):
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
     ):
         nonlocal call_count
         call_count += 1
@@ -237,6 +239,7 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_even_with_different_sf(mo
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
     ):
         nonlocal call_count
         call_count += 1
@@ -310,6 +313,7 @@ def test_process_peaks_parallel_cache_matches_uncached_image(monkeypatch):
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
     ):
         gr = 4.0 * np.pi / av * np.sqrt((H * H + H * K + K * K) / 3.0)
         gz = 2.0 * np.pi * (L / cv)
@@ -385,6 +389,7 @@ def test_process_peaks_parallel_marks_matching_sphere_samples_for_reuse(monkeypa
         solve_q_mode=0,
         pixel_size_m=100e-6,
         forced_sample_idx=-1,
+        sample_qr_ring_once=True,
         sample_weights=None,
     ):
         observed["reps"] = np.asarray(

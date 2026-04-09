@@ -773,6 +773,8 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
                 "primary_c_factory": "overlay-primary-c",
                 "native_sim_to_display_coords": "display-coords",
                 "reflection_q_group_metadata": "q-group",
+                "caked_view_enabled_factory": "caked-flag",
+                "native_detector_coords_to_caked_display_coords": None,
                 "max_hits_per_reflection": "max-hits",
                 "min_separation_px": 2.0,
             },

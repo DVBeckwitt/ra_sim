@@ -84,6 +84,7 @@ class GeometryManualRuntimeProjectionCallbacks:
         list[dict[str, object]],
     ]
     simulated_peaks_for_params: Callable[..., list[dict[str, object]]]
+    last_simulation_diagnostics: Callable[[], dict[str, object]]
     pick_candidates: Callable[
         [Sequence[dict[str, object]] | None],
         dict[tuple[object, ...], list[dict[str, object]]],
@@ -2754,6 +2755,10 @@ def make_runtime_geometry_manual_projection_callbacks(
     display_rotate_k: int = 0,
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
     simulate_preview_style_peaks_for_fit: Callable[..., Sequence[dict[str, object]]] | None = None,
+    last_preview_style_simulation_diagnostics: (
+        Callable[[], Mapping[str, object]]
+        | None
+    ) = None,
     build_live_preview_simulated_peaks_from_cache: (
         Callable[[], Sequence[dict[str, object]]]
         | None
@@ -3017,6 +3022,148 @@ def make_runtime_geometry_manual_projection_callbacks(
             projected.append(entry)
         return projected
 
+    last_simulation_diagnostics_state: dict[str, object] = {}
+
+    def _copy_simulation_diag_value(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                str(key): _copy_simulation_diag_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, np.ndarray):
+            return _copy_simulation_diag_value(value.tolist())
+        if isinstance(value, (list, tuple)):
+            return [_copy_simulation_diag_value(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return repr(value)
+
+    def _copy_simulation_diagnostics(
+        diagnostics: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        copied = _copy_simulation_diag_value(
+            diagnostics if diagnostics is not None else {}
+        )
+        return copied if isinstance(copied, dict) else {}
+
+    def _set_last_simulation_diagnostics(
+        diagnostics: Mapping[str, object] | None = None,
+        **updates: object,
+    ) -> dict[str, object]:
+        snapshot = _copy_simulation_diagnostics(diagnostics)
+        for key, value in updates.items():
+            snapshot[str(key)] = _copy_simulation_diag_value(value)
+        last_simulation_diagnostics_state.clear()
+        last_simulation_diagnostics_state.update(snapshot)
+        return _copy_simulation_diagnostics(last_simulation_diagnostics_state)
+
+    def _last_simulation_diagnostics() -> dict[str, object]:
+        return _copy_simulation_diagnostics(last_simulation_diagnostics_state)
+
+    def _shape_list(value: object) -> list[int]:
+        try:
+            return [int(v) for v in np.asarray(value).shape]
+        except Exception:
+            return []
+
+    def _array_count(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(np.asarray(value).size)
+        except Exception:
+            try:
+                return int(len(value))  # type: ignore[arg-type]
+            except Exception:
+                return None
+
+    def _mapping_entry_list(
+        value: Sequence[dict[str, object]] | object | None,
+    ) -> list[dict[str, object]]:
+        if value is None:
+            return []
+        if isinstance(value, np.ndarray):
+            iterable = value.tolist()
+        else:
+            iterable = value
+        try:
+            return [dict(entry) for entry in iterable if isinstance(entry, Mapping)]
+        except Exception:
+            return []
+
+    def _missing_required_param_keys(
+        params_local: Mapping[str, object],
+    ) -> list[str]:
+        required_keys = (
+            "a",
+            "c",
+            "lambda",
+            "corto_detector",
+            "gamma",
+            "Gamma",
+            "chi",
+            "zs",
+            "zb",
+            "n2",
+            "debye_x",
+            "debye_y",
+            "center",
+            "theta_initial",
+        )
+        missing: list[str] = []
+        for key in required_keys:
+            value = params_local.get(key)
+            if key == "center":
+                if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+                    missing.append(key)
+                    continue
+                try:
+                    coords_ok = np.isfinite(float(value[0])) and np.isfinite(
+                        float(value[1])
+                    )
+                except Exception:
+                    coords_ok = False
+                if not coords_ok:
+                    missing.append(key)
+                continue
+            if value is None:
+                missing.append(key)
+                continue
+            try:
+                if not np.isfinite(float(value)):
+                    missing.append(key)
+            except Exception:
+                continue
+        return missing
+
+    def _mosaic_array_sizes(
+        params_local: Mapping[str, object],
+    ) -> tuple[dict[str, int | None], list[str]]:
+        mosaic = params_local.get("mosaic_params")
+        mosaic_params = dict(mosaic) if isinstance(mosaic, Mapping) else {}
+        array_sizes = {
+            "beam_x_array": _array_count(mosaic_params.get("beam_x_array")),
+            "beam_y_array": _array_count(mosaic_params.get("beam_y_array")),
+            "theta_array": _array_count(mosaic_params.get("theta_array")),
+            "phi_array": _array_count(mosaic_params.get("phi_array")),
+            "wavelength_array": _array_count(mosaic_params.get("wavelength_array")),
+            "wavelength_i_array": _array_count(
+                mosaic_params.get("wavelength_i_array")
+            ),
+            "sample_weights": _array_count(mosaic_params.get("sample_weights")),
+        }
+        missing = [
+            key
+            for key in ("beam_x_array", "beam_y_array", "theta_array", "phi_array")
+            if not int(array_sizes.get(key) or 0)
+        ]
+        if not max(
+            int(array_sizes.get("wavelength_array") or 0),
+            int(array_sizes.get("wavelength_i_array") or 0),
+        ):
+            missing.append("wavelength_array")
+        return array_sizes, missing
+
     def _simulated_peaks_for_params(
         param_set: dict[str, object] | None = None,
         *,
@@ -3045,41 +3192,157 @@ def make_runtime_geometry_manual_projection_callbacks(
                     pass
                 cached_peaks = _cached_preview_peaks()
             if cached_peaks:
-                return _project_peaks_to_current_view(cached_peaks)
+                projected_cached_peaks = _project_peaks_to_current_view(cached_peaks)
+                _set_last_simulation_diagnostics(
+                    source="cache",
+                    requested_prefer_cache=bool(prefer_cache),
+                    status="cache_hit",
+                    raw_peak_count=int(len(cached_peaks)),
+                    projected_peak_count=int(len(projected_cached_peaks)),
+                )
+                return projected_cached_peaks
         if not callable(simulate_preview_style_peaks_for_fit):
+            _set_last_simulation_diagnostics(
+                source="fresh",
+                requested_prefer_cache=bool(prefer_cache),
+                status="missing_simulator_callback",
+            )
+            return []
+        params_local = (
+            dict(param_set)
+            if isinstance(param_set, dict)
+            else (
+                dict(current_geometry_fit_params())
+                if callable(current_geometry_fit_params)
+                else {}
+            )
+        )
+        raw_miller = _resolve_runtime_value(miller)
+        raw_intensities = _resolve_runtime_value(intensities)
+        raw_image_size = _resolve_runtime_value(image_size)
+        try:
+            image_size_value = int(raw_image_size)
+        except Exception:
+            image_size_value = 0
+        param_summary = {
+            key: _copy_simulation_diag_value(params_local.get(key))
+            for key in (
+                "a",
+                "c",
+                "lambda",
+                "theta_initial",
+                "theta_offset",
+                "corto_detector",
+                "gamma",
+                "Gamma",
+                "chi",
+                "psi",
+                "psi_z",
+                "zs",
+                "zb",
+                "debye_x",
+                "debye_y",
+                "center",
+                "n2",
+                "optics_mode",
+            )
+            if key in params_local
+        }
+        mosaic_sizes, missing_mosaic_keys = _mosaic_array_sizes(params_local)
+        base_diagnostics = {
+            "source": "fresh",
+            "requested_prefer_cache": bool(prefer_cache),
+            "miller_shape": _shape_list(raw_miller),
+            "intensity_shape": _shape_list(raw_intensities),
+            "image_size": int(image_size_value),
+            "missing_param_keys": _missing_required_param_keys(params_local),
+            "missing_mosaic_keys": missing_mosaic_keys,
+            "param_summary": param_summary,
+            "mosaic_array_sizes": mosaic_sizes,
+        }
+        try:
+            miller_array = np.asarray(raw_miller, dtype=np.float64)
+        except Exception as exc:
+            _set_last_simulation_diagnostics(
+                base_diagnostics,
+                status="invalid_miller_array",
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+            )
             return []
         try:
-            params_local = (
-                dict(param_set)
-                if isinstance(param_set, dict)
-                else (
-                    dict(current_geometry_fit_params())
-                    if callable(current_geometry_fit_params)
-                    else {}
-                )
+            intensity_array = np.asarray(raw_intensities, dtype=np.float64)
+        except Exception as exc:
+            _set_last_simulation_diagnostics(
+                base_diagnostics,
+                status="invalid_intensity_array",
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
             )
-            miller_array = np.asarray(_resolve_runtime_value(miller), dtype=np.float64)
-            intensity_array = np.asarray(
-                _resolve_runtime_value(intensities),
-                dtype=np.float64,
+            return []
+        base_diagnostics["miller_shape"] = _shape_list(miller_array)
+        base_diagnostics["miller_count"] = _array_count(miller_array)
+        base_diagnostics["intensity_shape"] = _shape_list(intensity_array)
+        base_diagnostics["intensity_count"] = _array_count(intensity_array)
+        if (
+            miller_array.ndim != 2
+            or miller_array.shape[1] != 3
+            or miller_array.size == 0
+        ):
+            _set_last_simulation_diagnostics(
+                base_diagnostics,
+                status="invalid_miller_array",
             )
-            image_size_value = int(_resolve_runtime_value(image_size))
-            if (
-                miller_array.ndim != 2
-                or miller_array.shape[1] != 3
-                or miller_array.size == 0
-            ):
-                return []
-            if intensity_array.shape[0] != miller_array.shape[0]:
-                return []
+            return []
+        if intensity_array.shape[0] != miller_array.shape[0]:
+            _set_last_simulation_diagnostics(
+                base_diagnostics,
+                status="intensity_length_mismatch",
+            )
+            return []
+        try:
             raw_peaks = simulate_preview_style_peaks_for_fit(
                 miller_array,
                 intensity_array,
                 image_size_value,
                 params_local,
             )
-            return _project_peaks_to_current_view(raw_peaks)
-        except Exception:
+            raw_peak_entries = _mapping_entry_list(raw_peaks)
+            projected_peaks = _project_peaks_to_current_view(raw_peak_entries)
+            runtime_diagnostics = (
+                _copy_simulation_diagnostics(
+                    last_preview_style_simulation_diagnostics()
+                )
+                if callable(last_preview_style_simulation_diagnostics)
+                else {}
+            )
+            _set_last_simulation_diagnostics(
+                base_diagnostics,
+                status=(
+                    "success"
+                    if projected_peaks
+                    else "empty_simulated_peaks"
+                ),
+                raw_peak_count=int(len(raw_peak_entries)),
+                projected_peak_count=int(len(projected_peaks)),
+                runtime_simulation=runtime_diagnostics,
+            )
+            return projected_peaks
+        except Exception as exc:
+            runtime_diagnostics = (
+                _copy_simulation_diagnostics(
+                    last_preview_style_simulation_diagnostics()
+                )
+                if callable(last_preview_style_simulation_diagnostics)
+                else {}
+            )
+            _set_last_simulation_diagnostics(
+                base_diagnostics,
+                status="simulation_exception",
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+                runtime_simulation=runtime_diagnostics,
+            )
             return []
 
     def _pick_candidates(
@@ -3164,6 +3427,7 @@ def make_runtime_geometry_manual_projection_callbacks(
         ),
         project_peaks_to_current_view=_project_peaks_to_current_view,
         simulated_peaks_for_params=_simulated_peaks_for_params,
+        last_simulation_diagnostics=_last_simulation_diagnostics,
         pick_candidates=_pick_candidates,
         simulated_lookup=_simulated_lookup,
     )

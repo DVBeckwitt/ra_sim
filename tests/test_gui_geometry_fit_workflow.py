@@ -239,7 +239,7 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
         build_runtime_config=lambda fit_params: calls["runtime_cfg"].append(
             dict(fit_params)
         )
-        or {"bounds": {"gamma": [0.0, 1.0]}},
+        or {"bounds": {"gamma": [0.0, 1.0]}, "debug_logging": True},
     )
 
     assert result.error_text is None
@@ -260,6 +260,31 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
         "start: vars=gamma,theta_offset datasets=3 current_groups=1 current_points=2"
     )
     assert prepared.start_log_sections == [
+        (
+            "Run request:",
+            [
+                "joint_background_mode=True",
+                "selected_background_indices=[0, 1, 2]",
+                "dataset_count=3",
+                "current_dataset_index=1",
+                "current_groups=1",
+                "current_points=2",
+            ],
+        ),
+        (
+            "Runtime configuration:",
+            [
+                "use_numba=False allow_unsafe_runtime=False",
+                (
+                    "optimizer loss=linear f_scale_px=1.000000 manual_point_fit_mode=True "
+                    "weighted_matching=False q_group_line_constraints=True"
+                ),
+                (
+                    "solver parallel_mode=off workers=1 worker_numba_threads=1 "
+                    "discrete_modes_enabled=False identifiability_enabled=True"
+                ),
+            ],
+        ),
         (
             "Fitting variables (start values):",
             [
@@ -286,7 +311,7 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
     assert prepared.geometry_runtime_cfg == (
         geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
             geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
-                {"bounds": {"gamma": [0.0, 1.0]}},
+                {"bounds": {"gamma": [0.0, 1.0]}, "debug_logging": True},
                 joint_background_mode=True,
             ),
             joint_background_mode=True,
@@ -324,7 +349,7 @@ def test_prepare_geometry_fit_run_rejects_selection_without_active_background() 
         geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
         ensure_geometry_fit_caked_view=lambda: None,
         build_dataset=lambda *_args, **_kwargs: {},
-        build_runtime_config=lambda fit_params: dict(fit_params),
+        build_runtime_config=lambda fit_params: dict(dict(fit_params), debug_logging=True),
     )
 
     assert result.prepared_run is None
@@ -471,12 +496,15 @@ def test_prepare_geometry_fit_run_blocks_lattice_refinement_by_default() -> None
             "initial_pairs_display": [],
             "native_background": np.zeros((2, 2)),
         },
-        build_runtime_config=lambda fit_params: dict(fit_params),
+        build_runtime_config=lambda fit_params: dict(
+            dict(fit_params),
+            debug_logging=True,
+        ),
     )
 
     assert allowed.error_text is None
     assert allowed.prepared_run is not None
-    assert allowed.prepared_run.start_log_sections[0][1][0] == "a=4.200000"
+    assert allowed.prepared_run.start_log_sections[2][1][0] == "a=4.200000"
 
 
 def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindings() -> None:
@@ -579,6 +607,8 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "fit_source_identity_only": True,
                     "overlay_match_index": 0,
                     "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
                 }
             ],
             "experimental_image": "fit-image",
@@ -689,12 +719,15 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset["theta_effective"] == 1.75
     assert dataset["group_count"] == 1
     assert dataset["pair_count"] == 1
+    assert dataset["resolved_source_pair_count"] == 1
     assert dataset["initial_pairs_display"] == [
         {
             "overlay_match_index": 0,
             "hkl": (1, 1, 0),
             "q_group_key": ("q", 1),
             "bg_display": (50.0, 60.0),
+            "source_table_index": 1,
+            "source_row_index": 2,
             "sim_display": (9.0, 8.0),
             "bg_native": (30.0, 40.0),
             "sim_native": (1.0, 2.0),
@@ -721,13 +754,15 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "fit_source_identity_only": True,
             "overlay_match_index": 0,
             "q_group_key": ("q", 1),
+            "source_table_index": 1,
+            "source_row_index": 2,
         }
     ]
     assert "orientation=rotate+flip" in dataset["summary_line"]
 
     sim_params, prefer_cache = calls["sim_params"]
     assert sim_params["theta_initial"] == 1.75
-    assert prefer_cache is True
+    assert prefer_cache is False
     assert calls["unrotate"][1:] == ((6, 7), 3)
     assert calls["display_to_native"] == (9.0, 8.0, (100, 100))
     assert calls["backend_image"] is native_background
@@ -927,6 +962,137 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
     assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
     assert calls["display_to_native"] == (9.0, 8.0, (64, 64))
+
+
+def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_resolved() -> None:
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 7,
+                "source_row_index": 9,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        orient_image_for_fit=lambda image, **kwargs: image,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 0
+    assert "source_table_index" not in dataset["measured_for_fit"][0]
+    assert "source_row_index" not in dataset["measured_for_fit"][0]
+    assert "source_peak_index" not in dataset["measured_for_fit"][0]
+
+
+def test_build_geometry_manual_fit_dataset_rebinds_legacy_dense_source_ids() -> None:
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 7,
+                "source_row_index": 0,
+                "source_peak_index": 7,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 200,
+                "source_row_index": 0,
+                "source_peak_index": 133,
+                "hkl": (1, 1, 0),
+                "sim_col": 50.0,
+                "sim_row": 60.0,
+            }
+        ],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (48.0, 59.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        orient_image_for_fit=lambda image, **kwargs: image,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    assert dataset["measured_for_fit"][0]["source_table_index"] == 200
+    assert dataset["measured_for_fit"][0]["source_row_index"] == 0
+    assert dataset["measured_for_fit"][0]["source_peak_index"] == 133
+    assert dataset["initial_pairs_display"][0]["source_table_index"] == 200
+    assert dataset["initial_pairs_display"][0]["source_row_index"] == 0
+    assert dataset["initial_pairs_display"][0]["source_peak_index"] == 133
+    assert dataset["source_resolution_diagnostics"][0]["strict_resolved"] is False
+    assert dataset["source_resolution_diagnostics"][0]["fit_resolved"] is True
+    assert (
+        dataset["source_resolution_diagnostics"][0]["fit_resolution_kind"]
+        == "legacy_dense_q_group_rebind"
+    )
+    assert dataset["source_resolution_diagnostics"][0]["failure_reason"] is None
 
 
 def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> None:
@@ -1693,6 +1859,27 @@ def test_build_geometry_fit_action_notice_returns_error_notice() -> None:
     )
 
 
+def test_build_geometry_fit_action_notice_returns_error_notice_with_preflight_log() -> None:
+    notice = geometry_fit.build_geometry_fit_action_notice(
+        geometry_fit.GeometryFitRuntimeActionResult(
+            params={},
+            var_names=["gamma"],
+            preserve_live_theta=True,
+            prepare_result=geometry_fit.GeometryFitPreparationResult(
+                error_text="Geometry fit unavailable",
+                log_path=Path("C:/tmp/geometry_fit_log.txt"),
+            ),
+            error_text="Geometry fit unavailable",
+        )
+    )
+
+    assert notice == geometry_fit.GeometryFitActionNotice(
+        level="error",
+        title="Geometry Fit Failed",
+        message="Geometry fit unavailable\nFit log: C:\\tmp\\geometry_fit_log.txt",
+    )
+
+
 def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -> None:
     gamma_var = _DummyVar(0.0)
     a_var = _DummyVar(0.0)
@@ -1750,6 +1937,386 @@ def test_write_geometry_fit_run_start_log_emits_prepared_prelude() -> None:
         ("section", ("Section A:", ["one", "two"])),
         ("section", ("Section B:", ["three"])),
     ]
+
+
+def test_build_geometry_fit_start_log_sections_include_request_and_runtime_context() -> None:
+    sections = geometry_fit.build_geometry_fit_start_log_sections(
+        params={"gamma": 0.2, "a": 4.1},
+        var_names=["gamma", "a"],
+        dataset_infos=[{"summary_line": "bg[0] bg0"}],
+        current_dataset={
+            "dataset_index": 0,
+            "label": "bg0",
+            "group_count": 2,
+            "pair_count": 3,
+            "resolved_source_pair_count": 2,
+            "theta_base": 3.0,
+            "theta_effective": 3.1,
+            "orientation_choice": {"label": "rotate"},
+            "orientation_diag": {
+                "pairs": 3,
+                "identity_rms_px": 1.2,
+                "best_rms_px": 0.8,
+                "reason": "improved",
+            },
+        },
+        selected_background_indices=[0, 2],
+        joint_background_mode=True,
+        geometry_runtime_cfg={
+            "debug_logging": True,
+            "use_numba": False,
+            "allow_unsafe_runtime": False,
+            "optimizer": {
+                "loss": "linear",
+                "f_scale_px": 1.0,
+                "manual_point_fit_mode": True,
+                "weighted_matching": False,
+                "q_group_line_constraints": True,
+            },
+            "solver": {
+                "parallel_mode": "off",
+                "workers": 1,
+                "worker_numba_threads": 1,
+            },
+            "discrete_modes": {"enabled": False},
+            "identifiability": {"enabled": True},
+        },
+    )
+
+    assert sections[0] == (
+        "Run request:",
+        [
+            "joint_background_mode=True",
+            "selected_background_indices=[0, 2]",
+            "dataset_count=1",
+            "current_dataset_index=0",
+            "current_groups=2",
+            "current_points=3",
+            "current_label=bg0",
+            "resolved_source_pairs=2",
+            "theta_base=3.000000",
+            "theta_effective=3.100000",
+        ],
+    )
+    assert sections[1] == (
+        "Runtime configuration:",
+        [
+            "use_numba=False allow_unsafe_runtime=False",
+            (
+                "optimizer loss=linear f_scale_px=1.000000 manual_point_fit_mode=True "
+                "weighted_matching=False q_group_line_constraints=True"
+            ),
+            (
+                "solver parallel_mode=off workers=1 worker_numba_threads=1 "
+                "discrete_modes_enabled=False identifiability_enabled=True"
+            ),
+        ],
+    )
+
+
+def test_build_geometry_fit_start_log_sections_omit_debug_context_by_default() -> None:
+    sections = geometry_fit.build_geometry_fit_start_log_sections(
+        params={"gamma": 0.2, "a": 4.1},
+        var_names=["gamma", "a"],
+        dataset_infos=[{"summary_line": "bg[0] bg0"}],
+        current_dataset={
+            "dataset_index": 0,
+            "label": "bg0",
+            "group_count": 2,
+            "pair_count": 3,
+            "orientation_choice": {"label": "rotate"},
+            "orientation_diag": {
+                "pairs": 3,
+                "identity_rms_px": 1.2,
+                "best_rms_px": 0.8,
+                "reason": "improved",
+            },
+        },
+        selected_background_indices=[0, 2],
+        joint_background_mode=True,
+        geometry_runtime_cfg={},
+    )
+
+    assert [title for title, _lines in sections] == [
+        "Fitting variables (start values):",
+        "Manual geometry datasets:",
+        "Current orientation diagnostics:",
+    ]
+
+
+def test_build_geometry_fit_source_resolution_log_lines_include_unresolved_pair_details() -> None:
+    lines = geometry_fit.build_geometry_fit_source_resolution_log_lines(
+        [
+            {
+                "label": "bg0.osc",
+                "pair_count": 3,
+                "resolved_source_pair_count": 1,
+                "simulated_peak_count": 70,
+                "simulated_lookup_count": 61,
+                "source_resolution_diagnostics": [
+                    {"pair_index": 0, "strict_resolved": True},
+                    {
+                        "pair_index": 1,
+                        "strict_resolved": False,
+                        "saved_source_row_key": (2, 5),
+                        "saved_source_peak_key": None,
+                        "saved_hkl": (1, 1, 0),
+                        "saved_q_group_key": ("q", 1),
+                        "saved_display_point": (50.0, 60.0),
+                        "row_candidate_status": "missing",
+                        "peak_candidate_status": "no_saved_peak",
+                        "overlay_resolution_kind": "q_group_fallback",
+                        "overlay_source_row_key": (0, 7),
+                        "overlay_source_peak_key": None,
+                        "overlay_hkl": (1, 1, 0),
+                        "overlay_distance_px": 3.25,
+                        "failure_reason": (
+                            "saved source row is missing from the current simulated rows; "
+                            "only a q-group fallback candidate was available"
+                        ),
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert lines[0] == (
+        "bg0.osc: resolved_source_pairs=1/3 simulated_peaks=70 "
+        "simulated_source_rows=61"
+    )
+    assert "saved_row=(2, 5)" in lines[1]
+    assert "saved_hkl=[1, 1, 0]" in lines[1]
+    assert "strict_row=missing" in lines[2]
+    assert "fallback=q_group_fallback" in lines[2]
+    assert "fallback_row=(0, 7)" in lines[2]
+    assert "fallback_distance_px=3.250" in lines[2]
+    assert "reason=saved source row is missing from the current simulated rows" in lines[3]
+
+
+def test_build_geometry_fit_source_resolution_log_lines_note_fit_only_rebinds() -> None:
+    lines = geometry_fit.build_geometry_fit_source_resolution_log_lines(
+        [
+            {
+                "label": "bg0.osc",
+                "pair_count": 1,
+                "resolved_source_pair_count": 1,
+                "simulated_peak_count": 1,
+                "simulated_lookup_count": 0,
+                "source_resolution_diagnostics": [
+                    {
+                        "pair_index": 0,
+                        "strict_resolved": False,
+                        "fit_resolved": True,
+                        "fit_resolution_kind": "legacy_dense_q_group_rebind",
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert lines[1] == (
+        "bg0.osc: all saved manual pairs resolved for fit "
+        "(including legacy source-id remaps)."
+    )
+
+
+def test_build_geometry_fit_simulation_diagnostic_log_lines_include_runtime_failure_details() -> None:
+    lines = geometry_fit.build_geometry_fit_simulation_diagnostic_log_lines(
+        [
+            {
+                "label": "bg0.osc",
+                "simulated_peak_count": 0,
+                "simulation_diagnostics": {
+                    "source": "fresh",
+                    "status": "simulation_exception",
+                    "projected_peak_count": 0,
+                    "raw_peak_count": 0,
+                    "miller_shape": [96, 3],
+                    "intensity_shape": [96],
+                    "image_size": 2048,
+                    "missing_param_keys": [],
+                    "missing_mosaic_keys": ["beam_x_array"],
+                    "param_summary": {
+                        "a": 4.1,
+                        "c": 28.6,
+                        "lambda": 1.5406,
+                        "theta_initial": 5.0,
+                        "center": [1024.0, 1024.0],
+                        "n2": 1.0,
+                    },
+                    "mosaic_array_sizes": {
+                        "beam_x_array": 0,
+                        "beam_y_array": 1,
+                        "theta_array": 1,
+                        "phi_array": 1,
+                        "wavelength_array": 1,
+                        "wavelength_i_array": 0,
+                        "sample_weights": 0,
+                    },
+                    "runtime_simulation": {
+                        "stage": "simulate_preview_style_peaks",
+                        "status": "process_peaks_parallel_exception",
+                        "hit_table_count": 0,
+                        "nonempty_hit_table_count": 0,
+                        "finite_hit_row_total": 0,
+                        "hit_row_counts": [0, 0, 0],
+                        "exception_type": "RuntimeError",
+                        "exception_message": "boom",
+                    },
+                    "exception_type": "RuntimeError",
+                    "exception_message": "boom",
+                },
+            }
+        ]
+    )
+
+    assert "source=fresh status=simulation_exception" in lines[0]
+    assert "miller_shape=[96, 3]" in lines[1]
+    assert "missing_mosaic=[beam_x_array]" in lines[2]
+    assert "params a=4.100000 c=28.600000" in lines[3]
+    assert "runtime stage=simulate_preview_style_peaks" in lines[5]
+    assert "runtime hit_row_counts=[0, 0, 0]" in lines[6]
+    assert "exception=RuntimeError: boom" in lines[7]
+
+
+def test_build_geometry_fit_preflight_log_sections_include_fresh_simulation_diagnostics() -> None:
+    sections = geometry_fit.build_geometry_fit_preflight_log_sections(
+        error_text="Geometry fit unavailable",
+        params={"gamma": 0.2},
+        var_names=["gamma"],
+        dataset_infos=[
+            {
+                "dataset_index": 0,
+                "label": "bg0.osc",
+                "summary_line": "bg[0] bg0.osc",
+                "pair_count": 2,
+                "group_count": 1,
+                "resolved_source_pair_count": 0,
+                "simulation_diagnostics": {
+                    "source": "fresh",
+                    "status": "empty_simulated_peaks",
+                    "projected_peak_count": 0,
+                    "raw_peak_count": 0,
+                    "miller_shape": [2, 3],
+                    "intensity_shape": [2],
+                    "image_size": 512,
+                },
+                "source_resolution_diagnostics": [],
+            }
+        ],
+        current_dataset={
+            "dataset_index": 0,
+            "label": "bg0.osc",
+            "pair_count": 2,
+            "group_count": 1,
+            "resolved_source_pair_count": 0,
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 2, "reason": "ok"},
+        },
+        selected_background_indices=[0],
+        joint_background_mode=False,
+        geometry_runtime_cfg={"debug_logging": True},
+    )
+
+    assert any(title == "Fresh simulation diagnostics:" for title, _lines in sections)
+
+
+def test_build_geometry_fit_preflight_log_sections_omit_debug_sections_by_default() -> None:
+    sections = geometry_fit.build_geometry_fit_preflight_log_sections(
+        error_text="Geometry fit unavailable",
+        params={"gamma": 0.2},
+        var_names=["gamma"],
+        dataset_infos=[
+            {
+                "dataset_index": 0,
+                "label": "bg0.osc",
+                "summary_line": "bg[0] bg0.osc",
+                "pair_count": 2,
+                "group_count": 1,
+                "resolved_source_pair_count": 0,
+                "simulation_diagnostics": {
+                    "source": "fresh",
+                    "status": "empty_simulated_peaks",
+                },
+                "source_resolution_diagnostics": [
+                    {"pair_index": 0, "strict_resolved": False}
+                ],
+            }
+        ],
+        current_dataset={
+            "dataset_index": 0,
+            "label": "bg0.osc",
+            "pair_count": 2,
+            "group_count": 1,
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 2, "reason": "ok"},
+        },
+        selected_background_indices=[0],
+        joint_background_mode=False,
+        geometry_runtime_cfg={},
+    )
+
+    assert [title for title, _lines in sections] == [
+        "Failure:",
+        "Fitting variables (start values):",
+        "Manual geometry datasets:",
+        "Current orientation diagnostics:",
+    ]
+
+
+def test_build_geometry_fit_calibration_lines_report_pixel_size_provenance() -> None:
+    lines = geometry_fit.build_geometry_fit_calibration_lines(
+        {
+            "pixel_size_m": 1.0e-4,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+        }
+    )
+
+    assert lines[0] == "pixel_size_source=pixel_size_m value=0.000100"
+    assert lines[1] == (
+        "pixel_size=nan pixel_size_m=0.000100 debye_x=0.000000 debye_y=0.000000"
+    )
+    assert lines[2] == "warning=debye_x <= 0; using pixel_size_m instead"
+
+
+def test_build_geometry_fit_point_match_failure_reason_lines_summarize_unresolved_pairs() -> None:
+    lines = geometry_fit.build_geometry_fit_point_match_failure_reason_lines(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0.osc",
+                "overlay_match_index": 7,
+                "match_status": "missing_pair",
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "measured_x": 50.0,
+                "measured_y": 60.0,
+                "simulated_x": np.nan,
+                "simulated_y": np.nan,
+                "distance_px": np.nan,
+                "measured_two_theta_deg": 11.25,
+                "measured_phi_deg": 6.5,
+                "delta_two_theta_deg": np.nan,
+                "delta_phi_deg": np.nan,
+                "resolution_reason": "match_radius_exceeded",
+                "measured_resolution_reason": "measured_anchor_missing",
+                "detector_resolution_reason": "detector_source_missing",
+                "correspondence_resolution_reason": "source_row_out_of_range",
+                "fit_source_resolution_kind": "legacy_dense_q_group_rebind",
+            }
+        ]
+    )
+
+    assert lines[0] == "match_status: missing_pair=1"
+    assert lines[1] == "resolution_reason: match_radius_exceeded=1"
+    assert lines[2] == "measured_resolution_reason: measured_anchor_missing=1"
+    assert lines[3] == "detector_resolution_reason: detector_source_missing=1"
+    assert lines[4] == "correspondence_resolution_reason: source_row_out_of_range=1"
+    assert lines[5] == "fit_source_resolution_kind: legacy_dense_q_group_rebind=1"
+    assert lines[6] == "bg0.osc: unresolved_pairs=1"
+    assert "status=missing_pair" in lines[7]
+    assert "reason=source_row_out_of_range" in lines[8]
 
 
 def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
@@ -2238,6 +2805,49 @@ def test_prepare_geometry_fit_run_rejects_fallback_only_manual_pairs() -> None:
     )
 
 
+def test_prepare_geometry_fit_run_rejects_partially_unresolved_manual_pairs() -> None:
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda indices: len(indices) > 1,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0, 5.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, **kwargs: {
+            "dataset_index": int(background_index),
+            "label": f"bg{int(background_index)}.osc",
+            "pair_count": 2,
+            "group_count": 1,
+            "summary_line": f"bg[{int(background_index)}]",
+            "spec": {"dataset_index": int(background_index)},
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 2, "reason": "ok"},
+            "resolved_source_pair_count": 1 if int(background_index) == 0 else 2,
+            "measured_for_fit": [],
+            "experimental_image_for_fit": f"image-{int(background_index)}",
+            "initial_pairs_display": [],
+            "native_background": np.zeros((2, 2)),
+        },
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+    assert result.prepared_run is None
+    assert result.error_text == (
+        "Geometry fit unavailable: some saved manual pairs no longer resolve "
+        "to current simulated source rows: bg0.osc (1/2). Refresh the picks "
+        "before fitting."
+    )
+
+
 def test_geometry_fit_dataset_cache_helpers_copy_and_validate_dataset_bundle() -> None:
     prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=True)
 
@@ -2385,15 +2995,31 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         nfev = 17
         cost = 1.25
         robust_cost = 1.0
+        weighted_residual_rms_px = 0.5
         solver_loss = "soft_l1"
         solver_f_scale = 2.0
         optimality = 0.005
         active_mask = [0, 1]
+        optimizer_method = "trf"
+        final_metric_name = "central_point_match"
+        chosen_discrete_mode = {"rot90": 1}
+        bound_hits = ["Gamma"]
+        boundary_warning = (
+            "Possible identifiability issue: parameters finished near bounds "
+            "(Gamma=upper)."
+        )
         restart_history = [
             {"restart": 0, "cost": 2.5, "success": False, "message": "retry"}
         ]
         rms_px = 0.75
         x = [1.5, 2.5]
+        point_match_summary = {
+            "matched_pair_count": 4,
+            "fixed_source_resolved_count": 3,
+            "unweighted_peak_rms_px": 0.75,
+            "unweighted_peak_max_px": 2.0,
+        }
+        identifiability_summary = {"underconstrained": False}
         geometry_fit_debug_summary = {
             "point_match_mode": True,
             "dataset_count": 1,
@@ -2418,7 +3044,40 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
                 "worker_numba_threads": 1,
                 "numba_thread_budget": 8,
             },
+            "seed_search": {
+                "prescore_top_k": 2,
+                "n_global": 3,
+                "n_jitter": 1,
+                "jitter_sigma_u": 0.25,
+                "min_seed_separation_u": 0.2,
+                "trusted_prior_fraction_of_span": 0.15,
+            },
+            "discrete_modes": [
+                {"label": "identity"},
+                {"rot90": 1},
+            ],
+            "mode_seed_summary": [
+                {
+                    "mode": {"label": "identity"},
+                    "seed_count": 5,
+                    "selected_seed_count": 2,
+                    "selected_seeds": [
+                        {
+                            "seed_kind": "zero",
+                            "seed_label": "u=0",
+                            "cost": 1.75,
+                        }
+                    ],
+                }
+            ],
+            "selected_mode_label": "rot90=1",
+            "solve_counts": {
+                "prescored": 6,
+                "solved": 2,
+            },
             "main_solve_seed": {
+                "seed_kind": "zero",
+                "seed_label": "u=0",
                 "cost": 3.5,
                 "weighted_rms_px": 1.25,
                 "point_match_summary": {
@@ -2461,13 +3120,17 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
                 "robust_cost": 1.0,
                 "weighted_rms_px": 0.5,
                 "final_full_beam_rms_px": 0.75,
+                "metric_name": "central_point_match",
             },
             "solve_progress": {
                 "label": "main solve",
                 "evaluation_count": 12,
                 "status_emit_count": 4,
                 "best_cost_seen": 1.0,
+                "last_cost_seen": 1.1,
                 "best_weighted_rms_px": 0.5,
+                "last_weighted_rms_px": 0.55,
+                "aborted_early": False,
                 "trace": [
                     {
                         "eval": 1,
@@ -2526,17 +3189,42 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         "message=done",
         "nfev=17",
     ]
+    assert "optimizer_method=trf" in diagnostics
+    assert "weighted_residual_rms_px=0.500000" in diagnostics
+    assert "display_rms_px=0.750000" in diagnostics
+    assert "final_metric_name=central_point_match" in diagnostics
+    assert "solver_discrete_mode=rot90=1" in diagnostics
+    assert "bound_hits=[Gamma]" in diagnostics
     assert diagnostics[-1] == "restart[0] cost=2.500000 success=False msg=retry"
 
     debug_lines = geometry_fit.build_geometry_fit_debug_lines(_Result())
     assert debug_lines[0] == "point_match_mode=True datasets=1 vars=gamma,a"
+    assert any(
+        "seed_search prescore_top_k=2 n_global=3 n_jitter=1" in line
+        for line in debug_lines
+    )
+    assert any(
+        "discrete_modes count=2 selected=rot90=1 labels=[identity, rot90=1]"
+        in line
+        for line in debug_lines
+    )
+    assert any(
+        "mode_seed[0] label=identity total_seeds=5 selected_seeds=2" in line
+        for line in debug_lines
+    )
     assert any("main_seed_point_match matched=4 missing=1" in line for line in debug_lines)
+    assert any("main_seed kind=zero label=u=0 cost=3.500000" in line for line in debug_lines)
     assert any("seed_rms_px=1.500000" in line for line in debug_lines)
     assert any("dataset[0] label=bg0" in line for line in debug_lines)
     assert any("param[gamma] group=tilt start=1.000000 final=1.500000 delta=0.500000" in line for line in debug_lines)
     assert any("full_beam_polish=True full_beam_radius_px=24.000000" in line for line in debug_lines)
-    assert any("final_full_beam_rms_px=0.750000" in line for line in debug_lines)
-    assert any("solve_progress label=main solve evaluations=12" in line for line in debug_lines)
+    assert any("final metric=central_point_match cost=1.250000" in line for line in debug_lines)
+    assert any("solve_counts prescored=6 solved=2" in line for line in debug_lines)
+    assert any(
+        "solve_progress label=main solve evaluations=12" in line
+        and "last_cost=1.100000" in line
+        for line in debug_lines
+    )
     assert any("solve_progress[0] eval=1 reason=milestone" in line for line in debug_lines)
 
     stage_lines = geometry_fit.build_geometry_fit_stage_summary_lines(_Result())
@@ -2555,6 +3243,7 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         line.startswith("full_beam_polish:")
         and "seed_correspondence_count=4" in line
         and "final_rms_px=0.750000" in line
+        and "rms_delta_px=-0.750000" in line
         for line in stage_lines
     )
     assert any(
@@ -2605,12 +3294,20 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         values=_Result().x,
         rms=0.75,
         save_path="C:/tmp/matched.npy",
+        result=_Result(),
     )
-    assert summary_lines == [
+    assert summary_lines[:4] == [
         "manual_groups=4",
         "manual_points=9",
         "overlay_records=7",
         "orientation=rotate",
+    ]
+    assert "solver_discrete_mode=rot90=1" in summary_lines
+    assert "final_metric=central_point_match" in summary_lines
+    assert "matched_pairs=4" in summary_lines
+    assert "matched_peak_rms_px=0.750000" in summary_lines
+    assert "underconstrained=False" in summary_lines
+    assert summary_lines[-4:] == [
         "gamma = 1.500000",
         "a = 2.500000",
         "RMS residual = 0.750000 px",
@@ -3657,7 +4354,14 @@ def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> 
     )
 
     assert action.execution_result is None
+    assert action.prepare_result is not None
     assert action.error_text == "Geometry fit failed: boom"
+    assert action.prepare_result.log_path == (
+        tmp_path / "geometry_fit_log_20260328_130001.txt"
+    )
+    assert action.prepare_result.log_path.read_text(encoding="utf-8").startswith(
+        "Geometry fit aborted before solver start: 20260328_130001"
+    )
     assert progress_texts == ["Geometry fit failed: boom"]
     assert cmd_events == ["failed: boom"]
 
@@ -3697,8 +4401,16 @@ def test_run_runtime_geometry_fit_action_surfaces_preflight_error_text(tmp_path)
     )
 
     assert action.execution_result is None
+    assert action.prepare_result is not None
     assert action.error_text == "Geometry fit unavailable"
     assert action.preserve_live_theta is False
+    assert action.prepare_result.log_path == (
+        tmp_path / "geometry_fit_log_20260328_130002.txt"
+    )
+    log_text = action.prepare_result.log_path.read_text(encoding="utf-8")
+    assert "Geometry fit aborted before solver start: 20260328_130002" in log_text
+    assert "Geometry fit unavailable" in log_text
+    assert "stage=preflight" in log_text
     assert progress_texts == ["Geometry fit unavailable"]
     assert cmd_events == []
 
@@ -3954,6 +4666,7 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         "manual_points=3",
         "overlay_records=1",
         "orientation=rotate",
+        "fixed_source_resolved=1",
         "gamma = 1.500000",
         "a = 2.500000",
         "RMS residual = 0.750000 px",
@@ -4160,6 +4873,7 @@ def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
                 "solver_f_scale=1.000000",
                 "optimality=0.100000",
                 "active_mask=[0]",
+                "display_rms_px=0.750000",
             ],
         ),
         "sync_theta",
@@ -4290,6 +5004,7 @@ def test_apply_runtime_geometry_fit_result_rejects_absurd_manual_fit_before_upda
                 "solver_f_scale=8.000000",
                 "optimality=0.007503",
                 "active_mask=[0, 0, 0, 0]",
+                "display_rms_px=1195.373582",
             ],
         ),
         (

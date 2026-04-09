@@ -3700,7 +3700,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 eligible_line_group_ids,
                 center=local.get("center", []),
                 detector_distance=float(local.get("corto_detector", np.nan)),
-                pixel_size=float(local.get("debye_x", np.nan)),
+                pixel_size=_estimate_pixel_size(local),
                 gamma_deg=float(local.get("gamma", 0.0)),
                 Gamma_deg=float(local.get("Gamma", 0.0)),
                 angle_weight=float(q_group_line_angle_weight),
@@ -3932,7 +3932,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     matched_pair_count = 0
     missing_pairs = 0
     fixed_source_resolved_count = 0
-    pixel_size = float(local.get("debye_x", np.nan))
+    pixel_size = _estimate_pixel_size(local)
     detector_distance = float(local.get("corto_detector", np.nan))
     gamma_deg = float(local.get("gamma", 0.0))
     Gamma_deg = float(local.get("Gamma", 0.0))
@@ -3956,9 +3956,11 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "hkl": tuple(entry.get("hkl", ()))
             if isinstance(entry.get("hkl"), tuple)
             else entry.get("hkl"),
+            "q_group_key": entry.get("q_group_key"),
             "source_table_index": entry.get("source_table_index"),
             "source_row_index": entry.get("source_row_index"),
             "source_peak_index": entry.get("source_peak_index"),
+            "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
 
     for idx, measured_entry in enumerate(normalized_measured):
@@ -7283,13 +7285,23 @@ def _extract_profile_from_flat_image(
 
 
 def _estimate_pixel_size(params: Dict[str, float]) -> float:
-    pixel_size = params.get('pixel_size')
-    if pixel_size is None:
-        pixel_size = params.get('pixel_size_m')
-    if pixel_size is None:
-        # Fall back to detector distance divided by nominal pixels for 4k detector
-        pixel_size = params.get('corto_detector', 1.0) / 4096.0
-    return max(float(pixel_size), 1e-6)
+    for key in ('pixel_size', 'pixel_size_m', 'debye_x'):
+        pixel_size = params.get(key)
+        if pixel_size is not None:
+            try:
+                pixel_value = float(pixel_size)
+            except Exception:
+                pixel_value = float("nan")
+            if np.isfinite(pixel_value) and pixel_value > 0.0:
+                return float(pixel_value)
+    pixel_size = params.get('corto_detector', 1.0) / 4096.0
+    try:
+        pixel_value = float(pixel_size)
+    except Exception:
+        pixel_value = float("nan")
+    if not np.isfinite(pixel_value) or pixel_value <= 0.0:
+        pixel_value = 1.0e-6
+    return float(pixel_value)
 
 
 def _build_mosaic_profile_dataset_contexts(
@@ -10263,8 +10275,10 @@ def _resolve_fixed_source_matches(
             "overlay_match_index": int(overlay_match_index),
             "label": str(entry.get("label", "")),
             "hkl": tuple(entry.get("hkl", ())) if isinstance(entry.get("hkl"), tuple) else entry.get("hkl"),
+            "q_group_key": entry.get("q_group_key"),
             "source_table_index": entry.get("source_table_index"),
             "source_row_index": entry.get("source_row_index"),
+            "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
         source_key = _measured_source_indices(entry)
         if source_key is None:
@@ -15503,11 +15517,15 @@ def fit_geometry_parameters(
                 ),
                 "label": str(entry.get("label", "")),
                 "hkl": normalized_hkl,
+                "q_group_key": entry.get("q_group_key"),
                 "seed_match_status": str(entry.get("match_status", "")),
                 "match_status": str(entry.get("match_status", "")),
                 "match_kind": str(entry.get("match_kind", "")),
                 "resolution_kind": str(entry.get("resolution_kind", "")),
                 "resolution_reason": str(entry.get("resolution_reason", "")),
+                "fit_source_resolution_kind": entry.get(
+                    "fit_source_resolution_kind"
+                ),
                 "source_table_index": entry.get("source_table_index"),
                 "source_row_index": entry.get("source_row_index"),
                 "source_peak_index": entry.get(
@@ -15868,6 +15886,9 @@ def fit_geometry_parameters(
                         entry.get("resolved_peak_index"),
                     ),
                     "resolution_kind": str(entry.get("resolution_kind", "")),
+                    "fit_source_resolution_kind": entry.get(
+                        "fit_source_resolution_kind"
+                    ),
                     "correspondence_resolution_reason": (
                         None
                         if entry.get("resolution_reason") in ("", None)
@@ -17963,7 +17984,10 @@ def fit_geometry_parameters(
             key=lambda item: float(item[2]),
         )
     else:
-        _emit_status("Geometry fit: running normalized-u multistart solve")
+        _emit_status(
+            "Geometry fit: running normalized-u multistart solve "
+            f"(modes={len(discrete_modes)}, vars={len(active_specs)})"
+        )
         for mode_index, mode in enumerate(discrete_modes):
             mode_label = _format_discrete_mode_label(mode)
             dataset_contexts = _apply_discrete_mode_to_dataset_contexts(
@@ -18029,6 +18053,14 @@ def fit_geometry_parameters(
                         for entry in selected_seeds
                     ],
                 }
+            )
+            _emit_status(
+                "Geometry fit: mode {label} prescore total_seeds={total} "
+                "selected={selected}".format(
+                    label=str(mode_label),
+                    total=int(len(mode_seeds)),
+                    selected=int(len(selected_seeds)),
+                )
             )
 
             for seed_entry in selected_seeds:
@@ -18136,6 +18168,14 @@ def fit_geometry_parameters(
         "prescored": int(prescore_record_count),
         "solved": int(solve_record_count),
     }
+    _emit_status(
+        "Geometry fit: multistart summary selected_mode={mode} "
+        "prescored={prescored} solved={solved}".format(
+            mode=str(_format_discrete_mode_label(best_mode)),
+            prescored=int(prescore_record_count),
+            solved=int(solve_record_count),
+        )
+    )
 
     def _run_reduced_solver(
         reference_x: np.ndarray,
@@ -19337,10 +19377,22 @@ def fit_geometry_parameters(
         if result.next_stage_recommendations
         else None
     )
+    point_match_summary = getattr(result, "point_match_summary", None)
+    matched_pair_count_text = ""
+    if isinstance(point_match_summary, Mapping):
+        try:
+            matched_pair_count_text = (
+                f", matched={int(point_match_summary.get('matched_pair_count', 0))}"
+            )
+        except Exception:
+            matched_pair_count_text = ""
+    metric_name_text = str(getattr(result, "final_metric_name", "") or "").strip()
+    metric_part = f", metric={metric_name_text}" if metric_name_text else ""
     _emit_status(
         "Geometry fit: complete "
         f"(cost={float(getattr(result, 'cost', np.nan)):.6f}, "
-        f"rms={float(getattr(result, 'rms_px', np.nan)):.4f}px)"
+        f"rms={float(getattr(result, 'rms_px', np.nan)):.4f}px"
+        f"{metric_part}{matched_pair_count_text})"
     )
 
     return result

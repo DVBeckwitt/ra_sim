@@ -2750,3 +2750,66 @@ def test_geometry_manual_place_selection_at_back_projects_caked_pick_to_detector
     assert saved_entry_sets[-1][0]["raw_caked_y"] == 2.0
     assert saved_entry_sets[-1][0]["placement_error_px"] > 0.0
     assert "Saved 1 manual background points for selected group" in status_messages[-1]
+
+
+def test_runtime_projection_callbacks_capture_fresh_simulation_failure_diagnostics() -> None:
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([]),
+        last_caked_azimuth_values=lambda: np.array([]),
+        current_background_display=lambda: np.zeros((4, 4), dtype=float),
+        current_background_native=lambda: np.zeros((4, 4), dtype=float),
+        current_geometry_fit_params=lambda: {
+            "a": 4.1,
+            "c": 28.6,
+            "lambda": 1.5406,
+            "corto_detector": 0.075,
+            "gamma": 0.999,
+            "Gamma": -3.579,
+            "chi": 0.0,
+            "psi": 0.0,
+            "psi_z": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+            "n2": 1.0,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+            "center": [1024.0, 1024.0],
+            "theta_initial": 5.0,
+            "mosaic_params": {
+                "beam_x_array": np.array([0.0]),
+                "beam_y_array": np.array([0.0]),
+                "theta_array": np.array([0.0]),
+                "phi_array": np.array([0.0]),
+                "wavelength_array": np.array([1.5406]),
+            },
+        },
+        simulate_preview_style_peaks_for_fit=lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(RuntimeError("boom"))
+        ),
+        last_preview_style_simulation_diagnostics=lambda: {
+            "stage": "simulate_preview_style_peaks",
+            "status": "process_peaks_parallel_exception",
+            "hit_table_count": 0,
+            "nonempty_hit_table_count": 0,
+            "finite_hit_row_total": 0,
+            "exception_type": "RuntimeError",
+            "exception_message": "boom",
+        },
+        miller=lambda: np.array([[0.0, 0.0, 3.0]], dtype=float),
+        intensities=lambda: np.array([1.0], dtype=float),
+        image_size=2048,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+    )
+
+    assert callbacks.simulated_peaks_for_params(prefer_cache=False) == []
+    diagnostics = callbacks.last_simulation_diagnostics()
+
+    assert diagnostics["source"] == "fresh"
+    assert diagnostics["status"] == "simulation_exception"
+    assert diagnostics["miller_shape"] == [1, 3]
+    assert diagnostics["intensity_shape"] == [1]
+    assert diagnostics["missing_param_keys"] == []
+    assert diagnostics["runtime_simulation"]["status"] == "process_peaks_parallel_exception"
+    assert diagnostics["runtime_simulation"]["exception_message"] == "boom"

@@ -113,6 +113,7 @@ class GeometryFitSimulationRuntimeCallbacks:
     simulate_hit_tables: Callable[..., list[object]]
     simulate_peak_centers: Callable[..., list[dict[str, object]]]
     simulate_preview_style_peaks: Callable[..., list[dict[str, object]]]
+    last_simulation_diagnostics: Callable[[], dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,72 @@ def _coerce_int(value: object, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _copy_simulation_diag_value(value: object) -> object:
+    """Return one log-friendly deep copy of simulation diagnostics state."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _copy_simulation_diag_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, np.ndarray):
+        return _copy_simulation_diag_value(value.tolist())
+    if isinstance(value, (list, tuple)):
+        return [_copy_simulation_diag_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _array_shape_list(value: object) -> list[int]:
+    """Return one array-like object's shape as plain integers."""
+
+    try:
+        return [int(v) for v in np.asarray(value).shape]
+    except Exception:
+        return []
+
+
+def _array_size(value: object) -> int | None:
+    """Return one array-like object's flattened size when available."""
+
+    if value is None:
+        return None
+    try:
+        return int(np.asarray(value).size)
+    except Exception:
+        try:
+            return int(len(value))  # type: ignore[arg-type]
+        except Exception:
+            return None
+
+
+def _set_function_last_diagnostics(
+    callback: Callable[..., object],
+    diagnostics: Mapping[str, object] | None,
+) -> None:
+    """Attach one diagnostics snapshot to a simulation helper function."""
+
+    try:
+        setattr(
+            callback,
+            "last_diagnostics",
+            _copy_simulation_diag_value(diagnostics if diagnostics is not None else {}),
+        )
+    except Exception:
+        return
+
+
+def _function_last_diagnostics(
+    callback: Callable[..., object],
+) -> dict[str, object]:
+    """Return the last diagnostics snapshot attached to a simulation helper."""
+
+    raw_value = getattr(callback, "last_diagnostics", {})
+    copied = _copy_simulation_diag_value(raw_value)
+    return copied if isinstance(copied, dict) else {}
 
 
 def _row_var_value(row_var: object) -> bool:
@@ -702,9 +769,32 @@ def simulate_geometry_fit_hit_tables(
     """Simulate once and return raw hit tables for geometry-fit helpers."""
 
     params_local = dict(param_set)
-    params_local["mosaic_params"] = build_geometry_fit_central_mosaic_params(
-        params_local
-    )
+    diagnostics: dict[str, object] = {
+        "stage": "simulate_hit_tables",
+        "miller_shape": _array_shape_list(miller_array),
+        "miller_count": _array_size(miller_array),
+        "intensity_shape": _array_shape_list(intensity_array),
+        "intensity_count": _array_size(intensity_array),
+        "image_size": int(image_size),
+    }
+    try:
+        params_local["mosaic_params"] = build_geometry_fit_central_mosaic_params(
+            params_local
+        )
+    except Exception as exc:
+        diagnostics.update(
+            {
+                "status": "build_mosaic_params_exception",
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_hit_tables,
+            diagnostics,
+        )
+        raise
+
     mosaic = dict(params_local.get("mosaic_params", {}))
     wavelength_array = mosaic.get("wavelength_array")
     if wavelength_array is None:
@@ -716,49 +806,110 @@ def simulate_geometry_fit_hit_tables(
             dtype=np.float64,
         )
 
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    _, hit_tables, *_ = process_peaks_parallel(
-        miller_array,
-        intensity_array,
-        image_size,
-        float(params_local["a"]),
-        float(params_local["c"]),
-        wavelength_array,
-        sim_buffer,
-        float(params_local["corto_detector"]),
-        float(params_local["gamma"]),
-        float(params_local["Gamma"]),
-        float(params_local["chi"]),
-        float(params_local.get("psi", 0.0)),
-        float(params_local.get("psi_z", 0.0)),
-        float(params_local["zs"]),
-        float(params_local["zb"]),
-        params_local["n2"],
-        np.asarray(mosaic["beam_x_array"], dtype=np.float64),
-        np.asarray(mosaic["beam_y_array"], dtype=np.float64),
-        np.asarray(mosaic["theta_array"], dtype=np.float64),
-        np.asarray(mosaic["phi_array"], dtype=np.float64),
-        float(mosaic["sigma_mosaic_deg"]),
-        float(mosaic["gamma_mosaic_deg"]),
-        float(mosaic["eta"]),
-        np.asarray(wavelength_array, dtype=np.float64),
-        float(params_local["debye_x"]),
-        float(params_local["debye_y"]),
-        [float(params_local["center"][0]), float(params_local["center"][1])],
-        float(params_local["theta_initial"]),
-        float(params_local.get("cor_angle", 0.0)),
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        save_flag=0,
-        optics_mode=int(params_local.get("optics_mode", 0)),
-        solve_q_steps=int(mosaic.get("solve_q_steps", default_solve_q_steps)),
-        solve_q_rel_tol=float(
-            mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)
-        ),
-        solve_q_mode=int(mosaic.get("solve_q_mode", default_solve_q_mode)),
-        sample_weights=mosaic.get("sample_weights"),
+    diagnostics.update(
+        {
+            "status": "ready",
+            "param_summary": {
+                "a": _copy_simulation_diag_value(params_local.get("a")),
+                "c": _copy_simulation_diag_value(params_local.get("c")),
+                "lambda": _copy_simulation_diag_value(params_local.get("lambda")),
+                "theta_initial": _copy_simulation_diag_value(
+                    params_local.get("theta_initial")
+                ),
+                "center": _copy_simulation_diag_value(params_local.get("center")),
+                "n2": _copy_simulation_diag_value(params_local.get("n2")),
+                "optics_mode": _copy_simulation_diag_value(
+                    params_local.get("optics_mode", 0)
+                ),
+            },
+            "mosaic_array_sizes": {
+                "beam_x_array": _array_size(mosaic.get("beam_x_array")),
+                "beam_y_array": _array_size(mosaic.get("beam_y_array")),
+                "theta_array": _array_size(mosaic.get("theta_array")),
+                "phi_array": _array_size(mosaic.get("phi_array")),
+                "wavelength_array": _array_size(wavelength_array),
+                "sample_weights": _array_size(mosaic.get("sample_weights")),
+            },
+        }
     )
-    return list(hit_tables)
+
+    try:
+        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+        _, hit_tables, *_ = process_peaks_parallel(
+            miller_array,
+            intensity_array,
+            image_size,
+            float(params_local["a"]),
+            float(params_local["c"]),
+            wavelength_array,
+            sim_buffer,
+            float(params_local["corto_detector"]),
+            float(params_local["gamma"]),
+            float(params_local["Gamma"]),
+            float(params_local["chi"]),
+            float(params_local.get("psi", 0.0)),
+            float(params_local.get("psi_z", 0.0)),
+            float(params_local["zs"]),
+            float(params_local["zb"]),
+            params_local["n2"],
+            np.asarray(mosaic["beam_x_array"], dtype=np.float64),
+            np.asarray(mosaic["beam_y_array"], dtype=np.float64),
+            np.asarray(mosaic["theta_array"], dtype=np.float64),
+            np.asarray(mosaic["phi_array"], dtype=np.float64),
+            float(mosaic["sigma_mosaic_deg"]),
+            float(mosaic["gamma_mosaic_deg"]),
+            float(mosaic["eta"]),
+            np.asarray(wavelength_array, dtype=np.float64),
+            float(params_local["debye_x"]),
+            float(params_local["debye_y"]),
+            [float(params_local["center"][0]), float(params_local["center"][1])],
+            float(params_local["theta_initial"]),
+            float(params_local.get("cor_angle", 0.0)),
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            save_flag=0,
+            optics_mode=int(params_local.get("optics_mode", 0)),
+            solve_q_steps=int(mosaic.get("solve_q_steps", default_solve_q_steps)),
+            solve_q_rel_tol=float(
+                mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)
+            ),
+            solve_q_mode=int(mosaic.get("solve_q_mode", default_solve_q_mode)),
+            sample_weights=mosaic.get("sample_weights"),
+        )
+    except Exception as exc:
+        diagnostics.update(
+            {
+                "status": "process_peaks_parallel_exception",
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_hit_tables,
+            diagnostics,
+        )
+        raise
+
+    hit_table_list = list(hit_tables)
+    hit_row_counts = [int(len(geometry_reference_hit_rows(table))) for table in hit_table_list]
+    diagnostics.update(
+        {
+            "status": (
+                "success"
+                if int(sum(hit_row_counts)) > 0
+                else "empty_hit_tables"
+            ),
+            "hit_table_count": int(len(hit_table_list)),
+            "hit_row_counts": hit_row_counts,
+            "nonempty_hit_table_count": int(sum(1 for count in hit_row_counts if count > 0)),
+            "finite_hit_row_total": int(sum(hit_row_counts)),
+        }
+    )
+    _set_function_last_diagnostics(
+        simulate_geometry_fit_hit_tables,
+        diagnostics,
+    )
+    return hit_table_list
 
 
 def simulate_geometry_fit_peak_centers(
@@ -776,25 +927,57 @@ def simulate_geometry_fit_peak_centers(
 ) -> list[dict[str, object]]:
     """Simulate once and return one aggregated detector center per integer HKL."""
 
-    hit_tables = simulate_geometry_fit_hit_tables(
-        miller_array,
-        intensity_array,
-        image_size,
-        param_set,
-        build_geometry_fit_central_mosaic_params=(
-            build_geometry_fit_central_mosaic_params
-        ),
-        process_peaks_parallel=process_peaks_parallel,
-        default_solve_q_steps=default_solve_q_steps,
-        default_solve_q_rel_tol=default_solve_q_rel_tol,
-        default_solve_q_mode=default_solve_q_mode,
-    )
-    max_positions = hit_tables_to_max_positions(hit_tables)
-    return aggregate_geometry_fit_peak_centers_from_max_positions(
-        max_positions,
-        miller_array,
-        intensity_array,
-    )
+    try:
+        hit_tables = simulate_geometry_fit_hit_tables(
+            miller_array,
+            intensity_array,
+            image_size,
+            param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
+            process_peaks_parallel=process_peaks_parallel,
+            default_solve_q_steps=default_solve_q_steps,
+            default_solve_q_rel_tol=default_solve_q_rel_tol,
+            default_solve_q_mode=default_solve_q_mode,
+        )
+        max_positions = hit_tables_to_max_positions(hit_tables)
+        peak_centers = aggregate_geometry_fit_peak_centers_from_max_positions(
+            max_positions,
+            miller_array,
+            intensity_array,
+        )
+        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+        diagnostics.update(
+            {
+                "stage": "simulate_peak_centers",
+                "status": (
+                    "success" if peak_centers else "empty_peak_centers"
+                ),
+                "max_position_count": int(len(max_positions)),
+                "peak_center_count": int(len(peak_centers)),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_peak_centers,
+            diagnostics,
+        )
+        return peak_centers
+    except Exception as exc:
+        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+        diagnostics.update(
+            {
+                "stage": "simulate_peak_centers",
+                "status": "exception",
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_peak_centers,
+            diagnostics,
+        )
+        raise
 
 
 def simulate_geometry_fit_preview_style_peaks(
@@ -820,29 +1003,73 @@ def simulate_geometry_fit_preview_style_peaks(
 ) -> list[dict[str, object]]:
     """Simulate once and return per-hit peaks in the live preview format."""
 
-    hit_tables = simulate_geometry_fit_hit_tables(
-        miller_array,
-        intensity_array,
-        image_size,
-        param_set,
-        build_geometry_fit_central_mosaic_params=(
-            build_geometry_fit_central_mosaic_params
-        ),
-        process_peaks_parallel=process_peaks_parallel,
-        default_solve_q_steps=default_solve_q_steps,
-        default_solve_q_rel_tol=default_solve_q_rel_tol,
-        default_solve_q_mode=default_solve_q_mode,
-    )
-    return build_geometry_fit_simulated_peaks(
-        hit_tables,
-        image_shape=(int(image_size), int(image_size)),
-        native_sim_to_display_coords=native_sim_to_display_coords,
-        peak_table_lattice=peak_table_lattice,
-        primary_a=primary_a,
-        primary_c=primary_c,
-        default_source_label=default_source_label,
-        round_pixel_centers=round_pixel_centers,
-    )
+    try:
+        hit_tables = simulate_geometry_fit_hit_tables(
+            miller_array,
+            intensity_array,
+            image_size,
+            param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
+            process_peaks_parallel=process_peaks_parallel,
+            default_solve_q_steps=default_solve_q_steps,
+            default_solve_q_rel_tol=default_solve_q_rel_tol,
+            default_solve_q_mode=default_solve_q_mode,
+        )
+        simulated_peaks = build_geometry_fit_simulated_peaks(
+            hit_tables,
+            image_shape=(int(image_size), int(image_size)),
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            peak_table_lattice=peak_table_lattice,
+            primary_a=primary_a,
+            primary_c=primary_c,
+            default_source_label=default_source_label,
+            round_pixel_centers=round_pixel_centers,
+        )
+        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+        diagnostics.update(
+            {
+                "stage": "simulate_preview_style_peaks",
+                "status": (
+                    "success"
+                    if simulated_peaks
+                    else "empty_preview_style_peaks"
+                ),
+                "peak_count": int(len(simulated_peaks)),
+                "peak_table_lattice_count": (
+                    int(len(peak_table_lattice))
+                    if isinstance(peak_table_lattice, Sequence)
+                    and not isinstance(peak_table_lattice, (str, bytes))
+                    else 0
+                ),
+                "default_source_label": _copy_simulation_diag_value(
+                    default_source_label
+                ),
+                "primary_a": _copy_simulation_diag_value(primary_a),
+                "primary_c": _copy_simulation_diag_value(primary_c),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_preview_style_peaks,
+            diagnostics,
+        )
+        return simulated_peaks
+    except Exception as exc:
+        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+        diagnostics.update(
+            {
+                "stage": "simulate_preview_style_peaks",
+                "status": "exception",
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_preview_style_peaks,
+            diagnostics,
+        )
+        raise
 
 
 def make_runtime_geometry_fit_simulation_callbacks(
@@ -865,25 +1092,51 @@ def make_runtime_geometry_fit_simulation_callbacks(
 ) -> GeometryFitSimulationRuntimeCallbacks:
     """Return live geometry-fit simulation callbacks from runtime value sources."""
 
+    last_simulation_diagnostics_state: dict[str, object] = {}
+
+    def _set_last_simulation_diagnostics(
+        diagnostics: Mapping[str, object] | None,
+    ) -> None:
+        last_simulation_diagnostics_state.clear()
+        copied = _copy_simulation_diag_value(
+            diagnostics if diagnostics is not None else {}
+        )
+        if isinstance(copied, dict):
+            last_simulation_diagnostics_state.update(copied)
+
+    def _last_simulation_diagnostics() -> dict[str, object]:
+        copied = _copy_simulation_diag_value(last_simulation_diagnostics_state)
+        return copied if isinstance(copied, dict) else {}
+
     def _simulate_hit_tables(
         miller_array: np.ndarray,
         intensity_array: np.ndarray,
         image_size: int,
         param_set: Mapping[str, object] | dict[str, object],
     ) -> list[object]:
-        return simulate_geometry_fit_hit_tables(
-            miller_array,
-            intensity_array,
-            image_size,
-            param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
-            process_peaks_parallel=process_peaks_parallel,
-            default_solve_q_steps=default_solve_q_steps,
-            default_solve_q_rel_tol=default_solve_q_rel_tol,
-            default_solve_q_mode=default_solve_q_mode,
+        try:
+            result = simulate_geometry_fit_hit_tables(
+                miller_array,
+                intensity_array,
+                image_size,
+                param_set,
+                build_geometry_fit_central_mosaic_params=(
+                    build_geometry_fit_central_mosaic_params
+                ),
+                process_peaks_parallel=process_peaks_parallel,
+                default_solve_q_steps=default_solve_q_steps,
+                default_solve_q_rel_tol=default_solve_q_rel_tol,
+                default_solve_q_mode=default_solve_q_mode,
+            )
+        except Exception:
+            _set_last_simulation_diagnostics(
+                _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+            )
+            raise
+        _set_last_simulation_diagnostics(
+            _function_last_diagnostics(simulate_geometry_fit_hit_tables)
         )
+        return result
 
     def _simulate_peak_centers(
         miller_array: np.ndarray,
@@ -891,20 +1144,30 @@ def make_runtime_geometry_fit_simulation_callbacks(
         image_size: int,
         param_set: Mapping[str, object] | dict[str, object],
     ) -> list[dict[str, object]]:
-        return simulate_geometry_fit_peak_centers(
-            miller_array,
-            intensity_array,
-            image_size,
-            param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
-            process_peaks_parallel=process_peaks_parallel,
-            hit_tables_to_max_positions=hit_tables_to_max_positions,
-            default_solve_q_steps=default_solve_q_steps,
-            default_solve_q_rel_tol=default_solve_q_rel_tol,
-            default_solve_q_mode=default_solve_q_mode,
+        try:
+            result = simulate_geometry_fit_peak_centers(
+                miller_array,
+                intensity_array,
+                image_size,
+                param_set,
+                build_geometry_fit_central_mosaic_params=(
+                    build_geometry_fit_central_mosaic_params
+                ),
+                process_peaks_parallel=process_peaks_parallel,
+                hit_tables_to_max_positions=hit_tables_to_max_positions,
+                default_solve_q_steps=default_solve_q_steps,
+                default_solve_q_rel_tol=default_solve_q_rel_tol,
+                default_solve_q_mode=default_solve_q_mode,
+            )
+        except Exception:
+            _set_last_simulation_diagnostics(
+                _function_last_diagnostics(simulate_geometry_fit_peak_centers)
+            )
+            raise
+        _set_last_simulation_diagnostics(
+            _function_last_diagnostics(simulate_geometry_fit_peak_centers)
         )
+        return result
 
     def _simulate_preview_style_peaks(
         miller_array: np.ndarray,
@@ -919,36 +1182,47 @@ def make_runtime_geometry_fit_simulation_callbacks(
         ):
             peak_table_lattice = None
 
-        return simulate_geometry_fit_preview_style_peaks(
-            miller_array,
-            intensity_array,
-            image_size,
-            param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
-            process_peaks_parallel=process_peaks_parallel,
-            native_sim_to_display_coords=native_sim_to_display_coords,
-            peak_table_lattice=peak_table_lattice,
-            primary_a=_coerce_float(
-                _resolve_runtime_value(primary_a_factory),
-                float("nan"),
-            ),
-            primary_c=_coerce_float(
-                _resolve_runtime_value(primary_c_factory),
-                float("nan"),
-            ),
-            default_source_label=default_source_label,
-            round_pixel_centers=round_pixel_centers,
-            default_solve_q_steps=default_solve_q_steps,
-            default_solve_q_rel_tol=default_solve_q_rel_tol,
-            default_solve_q_mode=default_solve_q_mode,
+        try:
+            result = simulate_geometry_fit_preview_style_peaks(
+                miller_array,
+                intensity_array,
+                image_size,
+                param_set,
+                build_geometry_fit_central_mosaic_params=(
+                    build_geometry_fit_central_mosaic_params
+                ),
+                process_peaks_parallel=process_peaks_parallel,
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                peak_table_lattice=peak_table_lattice,
+                primary_a=_coerce_float(
+                    _resolve_runtime_value(primary_a_factory),
+                    float("nan"),
+                ),
+                primary_c=_coerce_float(
+                    _resolve_runtime_value(primary_c_factory),
+                    float("nan"),
+                ),
+                default_source_label=default_source_label,
+                round_pixel_centers=round_pixel_centers,
+                default_solve_q_steps=default_solve_q_steps,
+                default_solve_q_rel_tol=default_solve_q_rel_tol,
+                default_solve_q_mode=default_solve_q_mode,
+            )
+        except Exception:
+            _set_last_simulation_diagnostics(
+                _function_last_diagnostics(simulate_geometry_fit_preview_style_peaks)
+            )
+            raise
+        _set_last_simulation_diagnostics(
+            _function_last_diagnostics(simulate_geometry_fit_preview_style_peaks)
         )
+        return result
 
     return GeometryFitSimulationRuntimeCallbacks(
         simulate_hit_tables=_simulate_hit_tables,
         simulate_peak_centers=_simulate_peak_centers,
         simulate_preview_style_peaks=_simulate_preview_style_peaks,
+        last_simulation_diagnostics=_last_simulation_diagnostics,
     )
 
 

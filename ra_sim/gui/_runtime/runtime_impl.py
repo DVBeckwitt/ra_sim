@@ -3655,6 +3655,9 @@ geometry_manual_projection_workflow = (
                 **kwargs,
             )
         ),
+        last_preview_style_simulation_diagnostics=(
+            lambda: globals()["_geometry_fit_last_simulation_diagnostics"]()
+        ),
         build_live_preview_simulated_peaks_from_cache=(
             lambda: globals()["_build_live_preview_simulated_peaks_from_cache"]()
         ),
@@ -3718,6 +3721,9 @@ _project_geometry_manual_peaks_to_current_view = (
 )
 _geometry_manual_simulated_peaks_for_params = (
     geometry_manual_projection_workflow.simulated_peaks_for_params
+)
+_geometry_manual_last_simulation_diagnostics = (
+    geometry_manual_projection_workflow.last_simulation_diagnostics
 )
 _geometry_manual_pick_candidates = geometry_manual_projection_workflow.pick_candidates
 _geometry_manual_simulated_lookup = (
@@ -11351,6 +11357,9 @@ _simulate_hkl_peak_centers_for_fit = (
 _simulate_preview_style_peaks_for_fit = (
     geometry_fit_simulation_runtime_callbacks.simulate_preview_style_peaks
 )
+_geometry_fit_last_simulation_diagnostics = (
+    geometry_fit_simulation_runtime_callbacks.last_simulation_diagnostics
+)
 
 
 def _legacy_auto_match_on_fit_geometry_click():
@@ -17724,6 +17733,9 @@ geometry_fit_runtime_workflow = (
                 _geometry_manual_simulated_peaks_for_params
             ),
             "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
+            "geometry_manual_last_simulation_diagnostics": (
+                _geometry_manual_last_simulation_diagnostics
+            ),
             "geometry_manual_entry_display_coords": (
                 _geometry_manual_entry_display_coords
             ),
