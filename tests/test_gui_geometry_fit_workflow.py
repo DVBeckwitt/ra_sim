@@ -269,31 +269,6 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
     )
     assert prepared.start_log_sections == [
         (
-            "Run request:",
-            [
-                "joint_background_mode=True",
-                "selected_background_indices=[0, 1, 2]",
-                "dataset_count=3",
-                "current_dataset_index=1",
-                "current_groups=1",
-                "current_points=2",
-            ],
-        ),
-        (
-            "Runtime configuration:",
-            [
-                "use_numba=False allow_unsafe_runtime=False",
-                (
-                    "optimizer loss=linear f_scale_px=1.000000 manual_point_fit_mode=True "
-                    "weighted_matching=False q_group_line_constraints=True"
-                ),
-                (
-                    "solver parallel_mode=off workers=1 worker_numba_threads=1 "
-                    "discrete_modes_enabled=False identifiability_enabled=True"
-                ),
-            ],
-        ),
-        (
             "Fitting variables (start values):",
             [
                 "gamma=nan",
@@ -1175,6 +1150,79 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
     assert dataset["initial_pairs_display"][0]["bg_caked_display"] == (150.0, 160.0)
 
 
+def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+                "caked_x": 150.0,
+                "caked_y": 160.0,
+                "refined_sim_x": 9.0,
+                "refined_sim_y": 8.0,
+                "refined_sim_caked_x": 91.0,
+                "refined_sim_caked_y": 82.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [
+                {
+                    "q_group_key": ("other", 9),
+                    "source_table_index": 10,
+                    "source_row_index": 11,
+                    "source_peak_index": 12,
+                    "hkl": (9, 9, 9),
+                    "sim_col": 1.0,
+                    "sim_row": 2.0,
+                }
+            ]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (11.0, 12.0),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
+    assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
+    assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
+
+
 def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() -> None:
     shared_theta = {"value": True}
     background_state = {"index": 1}
@@ -1393,9 +1441,9 @@ def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_valu
     assert runtime_cfg["candidate_param_names"] == ["gamma"]
     assert runtime_cfg["solver"] == {
         "loss": "soft_l1",
-        "workers": 1,
-        "parallel_mode": "off",
-        "worker_numba_threads": 1,
+        "workers": "auto",
+        "parallel_mode": "auto",
+        "worker_numba_threads": 0,
     }
     assert runtime_cfg["optimizer"] == runtime_cfg["solver"]
     assert calls == [
@@ -1989,44 +2037,38 @@ def test_build_geometry_fit_start_log_sections_include_request_and_runtime_conte
                 "q_group_line_constraints": True,
             },
             "solver": {
-                "parallel_mode": "off",
-                "workers": 1,
-                "worker_numba_threads": 1,
+                "parallel_mode": "auto",
+                "workers": "auto",
+                "worker_numba_threads": 0,
             },
             "discrete_modes": {"enabled": False},
             "identifiability": {"enabled": True},
         },
     )
 
-    assert sections[0] == (
-        "Run request:",
-        [
-            "joint_background_mode=True",
-            "selected_background_indices=[0, 2]",
-            "dataset_count=1",
-            "current_dataset_index=0",
-            "current_groups=2",
-            "current_points=3",
-            "current_label=bg0",
-            "resolved_source_pairs=2",
-            "theta_base=3.000000",
-            "theta_effective=3.100000",
-        ],
-    )
-    assert sections[1] == (
-        "Runtime configuration:",
-        [
-            "use_numba=False allow_unsafe_runtime=False",
-            (
-                "optimizer loss=linear f_scale_px=1.000000 manual_point_fit_mode=True "
-                "weighted_matching=False q_group_line_constraints=True"
-            ),
-            (
-                "solver parallel_mode=off workers=1 worker_numba_threads=1 "
-                "discrete_modes_enabled=False identifiability_enabled=True"
-            ),
-        ],
-    )
+    assert sections == [
+        (
+            "Fitting variables (start values):",
+            [
+                "gamma=0.200000",
+                "a=4.100000",
+            ],
+        ),
+        (
+            "Manual geometry datasets:",
+            ["bg[0] bg0"],
+        ),
+        (
+            "Current orientation diagnostics:",
+            [
+                "pairs=3",
+                "chosen=rotate",
+                "identity_rms_px=1.2000",
+                "best_rms_px=0.8000",
+                "reason=improved",
+            ],
+        ),
+    ]
 
 
 def test_build_geometry_fit_start_log_sections_omit_debug_context_by_default() -> None:
@@ -2605,9 +2647,9 @@ def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() ->
     assert runtime_cfg == {
         "bounds": {"gamma": [0.0, 1.0]},
         "solver": {
-            "workers": 1,
-            "parallel_mode": "off",
-            "worker_numba_threads": 1,
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
         },
         "use_numba": False,
     }
@@ -2636,9 +2678,9 @@ def test_apply_geometry_fit_runtime_safety_overrides_updates_optimizer_alias() -
 
     assert runtime_cfg["use_numba"] is False
     assert runtime_cfg["optimizer"] == {
-        "workers": 1,
-        "parallel_mode": "off",
-        "worker_numba_threads": 1,
+        "workers": "auto",
+        "parallel_mode": "auto",
+        "worker_numba_threads": 0,
     }
     assert runtime_cfg["solver"] == runtime_cfg["optimizer"]
     assert note is not None
@@ -2757,9 +2799,9 @@ def test_solve_geometry_fit_request_forwards_status_callback_when_supported() ->
                 "bounds": {"gamma": [0.0, 1.0]},
                 "use_numba": False,
                 "solver": {
-                    "parallel_mode": "off",
-                    "workers": 1,
-                    "worker_numba_threads": 1,
+                    "parallel_mode": "auto",
+                    "workers": "auto",
+                    "worker_numba_threads": 0,
                 },
             },
         },
@@ -2794,9 +2836,9 @@ def test_apply_joint_geometry_fit_runtime_safety_overrides_only_changes_joint_ru
     assert unchanged == base_cfg
     assert changed == {
         "solver": {
-            "workers": 1,
-            "parallel_mode": "off",
-            "worker_numba_threads": 1,
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
             "restarts": 1,
             "stagnation_probe": False,
             "stagnation_probe_pairwise": False,
@@ -2835,9 +2877,9 @@ def test_apply_joint_geometry_fit_runtime_safety_overrides_honors_unsafe_runtime
 def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_path() -> None:
     base_cfg = {
         "solver": {
-            "workers": 1,
-            "parallel_mode": "off",
-            "worker_numba_threads": 1,
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
             "dynamic_point_geometry_fit": True,
             "loss": "soft_l1",
             "f_scale_px": 6.0,
@@ -2889,9 +2931,9 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert changed["solver"]["q_group_line_offset_weight"] == 1.0
     assert changed["solver"]["q_group_line_missing_penalty_scale"] == 0.35
     assert changed["solver"]["hk0_peak_priority_weight"] == 6.0
-    assert changed["solver"]["workers"] == 1
-    assert changed["solver"]["parallel_mode"] == "off"
-    assert changed["solver"]["worker_numba_threads"] == 1
+    assert changed["solver"]["workers"] == "auto"
+    assert changed["solver"]["parallel_mode"] == "auto"
+    assert changed["solver"]["worker_numba_threads"] == 0
     assert "dynamic_point_geometry_fit" not in changed["solver"]
     assert changed["solver"]["loss"] == "linear"
     assert changed["solver"]["f_scale_px"] == 1.0
@@ -5899,9 +5941,9 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                 },
                 "use_numba": False,
                 "solver": {
-                    "parallel_mode": "off",
-                    "workers": 1,
-                    "worker_numba_threads": 1,
+                    "parallel_mode": "auto",
+                    "workers": "auto",
+                    "worker_numba_threads": 0,
                 },
             },
         }
@@ -5966,7 +6008,6 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         )
     ]
     assert ("cmd", "start: vars=gamma,a datasets=1 current_groups=2 current_points=3") in events
-    assert ("cmd", f"log: {postprocess_config.log_path}") in events
     assert ("cmd", "Geometry fit: running main solve") in events
     assert ("cmd", "Geometry fit: complete (cost=1.000000, rms=0.7500px)") in events
     assert ("cmd", "done: datasets=1 groups=2 points=3 rms=0.7500px") in events
@@ -5983,12 +6024,6 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         120,
     ) in events
     assert "flush_ui" in events
-    log_text = execution.log_path.read_text(encoding="utf-8")
-    assert "Geometry fit started: 20260328_120000" in log_text
-    assert "Optimizer diagnostics:" in log_text
-    assert "Fit mechanics:" in log_text
-    assert "Solver stages:" in log_text
-    assert "Fit summary:" in log_text
 
 
 def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
@@ -6043,7 +6078,5 @@ def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
     ]
     assert events == [
         "start: vars=gamma,a datasets=1 current_groups=2 current_points=3",
-        f"log: {postprocess_config.log_path}",
         "failed: boom",
     ]
-    assert "Geometry fit failed: boom" in execution.log_path.read_text(encoding="utf-8")

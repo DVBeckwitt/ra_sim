@@ -2785,8 +2785,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.phi_max_slider is _FakeScale.created[3]
     assert view_state.tth_min_slider.cget("from") == 0.0
     assert view_state.tth_min_slider.cget("to") == 90.0
-    assert view_state.phi_min_slider.cget("from") == -90.0
-    assert view_state.phi_max_slider.cget("to") == 90.0
+    assert view_state.phi_min_slider.cget("from") == -180.0
+    assert view_state.phi_max_slider.cget("to") == 180.0
     assert "<ButtonRelease-1>" in view_state.tth_min_slider.bindings
     assert "<Return>" in view_state.tth_min_entry.bindings
     assert "<FocusOut>" in view_state.phi_max_entry.bindings
@@ -2799,7 +2799,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     view_state.phi_max_entry.bindings["<FocusOut>"](None)
     assert apply_calls == [
         ("1.5000", 1.5, 0.0, 90.0),
-        ("18.7000", 18.7, -90.0, 90.0),
+        ("18.7000", 18.7, -180.0, 180.0),
     ]
 
     view_state.tth_min_var.set(4.0)

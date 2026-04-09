@@ -142,6 +142,17 @@ In other words, the "DWBA" difference here is mainly in how the beam is
 refracted, transmitted, and attenuated on the way into and out of the sample.
 It is not a separate detector model or a different structure-factor engine.
 
+Detector placement now uses the solved outgoing direction itself rather than a
+refracted exit angle. The older fast-projection path solved an in-sample
+outgoing angle `2theta_t'`, remapped it to `2theta_t = arccos(n_real cos
+2theta_t') sign(2theta_t')`, and then intersected the detector with that
+remapped ray. Because `n_real < 1` for x-rays, that remap imposed a minimum
+projected angle near the critical angle `alpha_c = arccos(n_real)`, creating a
+forbidden strip around the sample plane and the moving horizontal empty line
+seen in some backgrounds. The current path keeps Fresnel transmission,
+attenuation, and related optics weights in the intensity, but uses the
+normalized solved outgoing vector for detector geometry.
+
 The current exact path is an air/sample/air slab model rather than a general
 multilayer stack. Use the fast mode when you need throughput, and the exact
 mode when refraction and near-critical-angle transport matter more than speed.

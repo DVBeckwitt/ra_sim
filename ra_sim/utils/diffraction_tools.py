@@ -330,18 +330,10 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
     radial = res2.radial
     azimuthal = res2.azimuthal
 
-    azimuthal_adjusted = np.where(
-        azimuthal < 0,
-        azimuthal + 180,
-        azimuthal - 180,
-    )
+    azimuthal_adjusted = ((-90.0 - np.asarray(azimuthal, dtype=float) + 180.0) % 360.0) - 180.0
     sort_indices = np.argsort(azimuthal_adjusted)
     azimuthal_adjusted_sorted = azimuthal_adjusted[sort_indices]
     intensity_sorted = intensity[sort_indices, :]
-
-    mask = (azimuthal_adjusted_sorted > -90) & (azimuthal_adjusted_sorted < 90)
-    azimuthal_adjusted_sorted = azimuthal_adjusted_sorted[mask]
-    intensity_sorted = intensity_sorted[mask, :]
 
     extent = [
         radial.min(),

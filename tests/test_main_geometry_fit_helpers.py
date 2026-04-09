@@ -31,9 +31,9 @@ def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_
     )
 
     assert runtime_cfg["solver"] == {
-        "workers": 1,
-        "parallel_mode": "off",
-        "worker_numba_threads": 1,
+        "workers": "auto",
+        "parallel_mode": "auto",
+        "worker_numba_threads": 0,
     }
     assert runtime_cfg["use_numba"] is False
     assert runtime_cfg["bounds"]["theta_initial"] == [0.0, 30.0]
@@ -55,9 +55,9 @@ def test_main_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> 
     )
 
     assert runtime_cfg["solver"] == {
-        "workers": 1,
-        "parallel_mode": "off",
-        "worker_numba_threads": 1,
+        "workers": "auto",
+        "parallel_mode": "auto",
+        "worker_numba_threads": 0,
     }
     assert runtime_cfg["use_numba"] is False
     assert runtime_cfg["bounds"]["center_x"] == [0.0, 99.0]

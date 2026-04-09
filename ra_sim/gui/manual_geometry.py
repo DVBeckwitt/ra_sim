@@ -705,6 +705,8 @@ def peak_maximum_near_in_image(
 def geometry_manual_apply_refined_simulated_override(
     entry: dict[str, object] | None,
     resolved_source_entry: dict[str, object] | None,
+    *,
+    prefer_caked_display: bool | None = None,
 ) -> dict[str, object] | None:
     """Overlay one saved refined-simulation position onto a resolved source entry."""
 
@@ -739,36 +741,39 @@ def geometry_manual_apply_refined_simulated_override(
     refined_native = _pair("refined_sim_native_x", "refined_sim_native_y")
     refined_caked = _pair("refined_sim_caked_x", "refined_sim_caked_y")
 
-    use_caked_display = False
-    try:
-        sim_col = float(result.get("sim_col", np.nan))
-        sim_row = float(result.get("sim_row", np.nan))
-        sim_col_raw = float(result.get("sim_col_raw", sim_col))
-        sim_row_raw = float(result.get("sim_row_raw", sim_row))
-        caked_x = float(result.get("caked_x", np.nan))
-        caked_y = float(result.get("caked_y", np.nan))
-        if (
-            np.isfinite(sim_col)
-            and np.isfinite(sim_row)
-            and np.isfinite(caked_x)
-            and np.isfinite(caked_y)
-        ):
-            use_caked_display = (
-                abs(float(sim_col) - float(caked_x)) <= 1.0e-9
-                and abs(float(sim_row) - float(caked_y)) <= 1.0e-9
-            )
-        elif (
-            np.isfinite(sim_col)
-            and np.isfinite(sim_row)
-            and np.isfinite(sim_col_raw)
-            and np.isfinite(sim_row_raw)
-        ):
-            use_caked_display = (
-                abs(float(sim_col) - float(sim_col_raw)) > 1.0e-9
-                or abs(float(sim_row) - float(sim_row_raw)) > 1.0e-9
-            )
-    except Exception:
+    if prefer_caked_display is None:
         use_caked_display = False
+        try:
+            sim_col = float(result.get("sim_col", np.nan))
+            sim_row = float(result.get("sim_row", np.nan))
+            sim_col_raw = float(result.get("sim_col_raw", sim_col))
+            sim_row_raw = float(result.get("sim_row_raw", sim_row))
+            caked_x = float(result.get("caked_x", np.nan))
+            caked_y = float(result.get("caked_y", np.nan))
+            if (
+                np.isfinite(sim_col)
+                and np.isfinite(sim_row)
+                and np.isfinite(caked_x)
+                and np.isfinite(caked_y)
+            ):
+                use_caked_display = (
+                    abs(float(sim_col) - float(caked_x)) <= 1.0e-9
+                    and abs(float(sim_row) - float(caked_y)) <= 1.0e-9
+                )
+            elif (
+                np.isfinite(sim_col)
+                and np.isfinite(sim_row)
+                and np.isfinite(sim_col_raw)
+                and np.isfinite(sim_row_raw)
+            ):
+                use_caked_display = (
+                    abs(float(sim_col) - float(sim_col_raw)) > 1.0e-9
+                    or abs(float(sim_row) - float(sim_row_raw)) > 1.0e-9
+                )
+        except Exception:
+            use_caked_display = False
+    else:
+        use_caked_display = bool(prefer_caked_display)
 
     if refined_raw is not None:
         result["sim_col_raw"] = float(refined_raw[0])
@@ -2801,6 +2806,7 @@ def build_geometry_manual_initial_pairs_display(
     param_set: dict[str, object] | None = None,
     current_background_index: object = None,
     prefer_cache: bool = False,
+    use_caked_display: bool | None = None,
     pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
     get_cache_data: Callable[..., dict[str, object]],
@@ -2894,7 +2900,11 @@ def build_geometry_manual_initial_pairs_display(
         except Exception:
             source_key = None
         sim_entry = simulated_lookup.get(source_key) if source_key is not None else None
-        sim_entry = geometry_manual_apply_refined_simulated_override(entry, sim_entry)
+        sim_entry = geometry_manual_apply_refined_simulated_override(
+            entry,
+            sim_entry,
+            prefer_caked_display=use_caked_display,
+        )
         if isinstance(sim_entry, dict):
             try:
                 sim_col = float(sim_entry.get("sim_col"))
@@ -3053,6 +3063,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             param_set=param_set,
             current_background_index=_background_index(),
             prefer_cache=prefer_cache,
+            use_caked_display=_manual_pick_uses_caked_space(),
             pairs_for_index=pairs_for_index,
             current_geometry_fit_params=current_geometry_fit_params,
             get_cache_data=_get_pick_cache,

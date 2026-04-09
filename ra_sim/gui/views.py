@@ -4410,16 +4410,16 @@ def create_integration_range_controls(
         prefix="phi_min",
         label_text="φ Min (°):",
         initial_value=phi_min,
-        lower_bound=-90.0,
-        upper_bound=90.0,
+        lower_bound=-180.0,
+        upper_bound=180.0,
         slider_command=on_phi_min_changed,
     )
     _create_range_row(
         prefix="phi_max",
         label_text="φ Max (°):",
         initial_value=phi_max,
-        lower_bound=-90.0,
-        upper_bound=90.0,
+        lower_bound=-180.0,
+        upper_bound=180.0,
         slider_command=on_phi_max_changed,
     )
 

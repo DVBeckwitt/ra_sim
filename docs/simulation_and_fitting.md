@@ -14,6 +14,63 @@ The scope is the current live pipeline:
 
 No new API is defined here. All names, defaults, and equations below are taken from the current code.
 
+## Read This First: The Physical Story of the Pipeline
+
+If you are new to the project, read this section first and then return to the
+reference sections below. The rest of the file stays close to the code; this
+overview explains the physical story those equations are serving. In this
+document, "best" always means "best tradeoff for RA-SIM's current goals":
+enough physics fidelity to place and weight peaks correctly in the regimes we
+study, enough determinism for fitting and debugging, and enough speed to run
+many forward evaluations inside optimizers. It does not mean universally best
+for every scattering experiment or every optics regime.
+
+1. RA-SIM models a grazing-incidence x-ray experiment. A beam arrives at a
+   shallow angle, interacts with a tilted sample, and produces scattered rays
+   that land on a finite detector. The core simulation question is: for a given
+   geometry, lattice, beam distribution, and optics model, which outgoing rays
+   are allowed and how bright are they?
+2. The code uses separate laboratory, sample, and detector frames because each
+   frame has one clean physical job. The lab frame is where hardware lives, the
+   sample frame is where reciprocal-space and in-sample optics are simplest,
+   and the detector frame is where 3D intersections become 2D pixels. Keeping
+   those jobs separated is easier to reason about than carrying one giant
+   rotated expression through the entire pipeline.
+3. The simulator does not treat the beam as one perfect ray because real data
+   are broadened by beam footprint, divergence, wavelength spread, and beam
+   position spread. RA-SIM therefore propagates a bundle of sampled beam states
+   rather than a single nominal trajectory. That is why peak shapes, split
+   maxima, and visibility changes can be captured at all.
+4. Entry and exit optics are handled separately from reciprocal-space
+   scattering because they answer different physical questions. The optics say
+   how strongly the wave enters, decays within, and exits the sample, while
+   `solve_q(...)` says which outgoing in-sample directions satisfy the
+   scattering geometry. This separation is what lets RA-SIM keep one geometric
+   scattering core while swapping between fast and exact optics transport.
+5. The reciprocal-space solve is a circle problem because the allowed `Q`
+   vectors satisfy two sphere constraints with known radii and centers. Once
+   that geometry is written down analytically, the code can integrate mosaic
+   density along a one-parameter circle instead of asking a generic nonlinear
+   solver to search 3D space from scratch. That is both faster and more stable
+   inside repeated fit evaluations.
+6. Detector hits are generated from outgoing directions and then deposited
+   bilinearly because the detector sees a continuous ray intersection, not a
+   pre-quantized pixel. The outgoing direction determines where the ray lands;
+   the optics determine how much intensity that hit carries. Bilinear
+   deposition then turns a subpixel hit into a smooth image that moves
+   continuously when geometry parameters change.
+7. The fitting workflow is staged because not all parameters are equally
+   identifiable at the same time. Geometry is anchored first from peak
+   positions, then matching logic organizes correspondences, and only after that
+   do mosaic-shape and image-space refinements spend effort on broader profile
+   details. This prevents width, background, or intensity nuisance terms from
+   compensating for basic geometry mistakes.
+8. The hBN calibrant path is separate because rings constrain detector geometry
+   differently from sparse Bragg spots. Ring distortion is a global geometric
+   signal, so ellipse fitting and projective tilt correction are the natural
+   tools there. Sparse spot fitting, by contrast, is fundamentally a
+   correspondence problem between predicted and measured peak locations.
+
 ## Code map
 
 | Area | Main files | Role |
@@ -31,6 +88,16 @@ No new API is defined here. All names, defaults, and equations below are taken f
 | Instrument defaults | [`config/instrument.yaml`](../config/instrument.yaml) | GUI defaults, solver config, and simulation defaults exposed to users. |
 
 ## Notation and units
+
+Why this choice: The first difficulty in this codebase is not one specific
+equation, but keeping several coordinate systems and unit systems straight at
+once. Writing the frames and units down explicitly is the best tradeoff for
+RA-SIM because the same event appears as a ray in the lab, a scattering
+constraint in the sample, and a residual in detector pixels. The notation here
+mirrors the code's actual data layout: lattice-scale quantities stay in
+angstrom-based units, hardware geometry stays in meters, and fitting errors stay
+in pixels. That separation keeps later formulas readable and keeps unit
+conversions from being hidden inside the algebra.
 
 ### Coordinate frames
 
@@ -68,6 +135,11 @@ with `p = pixel_size_m`.
 
 ### Lattice and reciprocal-space formulas
 
+These formulas answer two recurring questions for the simulator: which
+reciprocal vector belongs to a chosen HKL, and what nominal Bragg scale that
+reflection lives on before beam spread, optics, and mosaic broadening reshape
+it.
+
 For the hexagonal lattice used by the simulator,
 
 \[
@@ -97,6 +169,10 @@ G_z
 The radial term `Gr` and out-of-plane term `Gz` matter because source geometries are reused when `(Gr, Gz, forced_sample_idx)` match exactly.
 
 ### Refractive index
+
+This is the optics input, not the reciprocal-space input. It tells the code how
+the wave is transmitted and attenuated at interfaces, which is why the same
+`n2` value reappears in the entry and exit transport equations later on.
 
 The simulator uses the complex refractive index
 
@@ -297,6 +373,7 @@ Kernel-side hard limits from [`ra_sim/simulation/diffraction.py`](../ra_sim/simu
 | `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | If positive, overrides evanescent decay lengths with a fixed slab thickness. |
 | `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | `None` means use the kernel default `OPTICS_MODE_FAST`; otherwise force fast or exact optics. |
 | `collect_hit_tables` | bool | `True` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-reflection subpixel hit tables. |
+| `exit_projection_mode` | enum string | `"internal"` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Chooses whether detector geometry uses the normalized solved outgoing direction (`"internal"`, default) or the legacy refracted-angle reconstruction (`"refracted"`). The internal default avoids the near-critical dead band that produced the horizontal empty stripe. |
 | `single_sample_indices` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Forces selected beam samples per reflection. |
 | `best_sample_indices_out` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Optional output buffer for best-sample tracking. |
 
@@ -350,6 +427,16 @@ Those weights enter the final detector intensity linearly.
 
 ## Forward simulation: strict algorithm
 
+Why this choice: The forward model is written as a fixed pipeline because each
+stage makes one different physical decision: where a beam sample hits, which
+`Q` states are allowed, how the outgoing wave is weighted, and where it lands
+on the detector. That is the best tradeoff for RA-SIM because fitting,
+debugging, and caching all benefit from inspectable intermediate products
+instead of a single opaque black-box simulator. The beam bundle is also sampled
+deterministically, with low-discrepancy profiles and optional clustering,
+instead of with fresh Monte Carlo draws at every call. In practice that keeps
+optimization objectives, status codes, and regression tests reproducible.
+
 The live forward path is `simulate(...)` or `simulate_qr_rods(...)` through [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py), which forwards typed inputs into [`process_peaks_parallel_safe`](../ra_sim/simulation/diffraction.py). The algorithm is:
 
 1. Build detector and sample rotations from `gamma`, `Gamma`, `chi`, `psi`, `psi_z`, `theta_initial`, and `cor_angle`.
@@ -357,12 +444,22 @@ The live forward path is `simulate(...)` or `simulate_qr_rods(...)` through [`ra
 3. For each beam sample, intersect the incident ray with the sample plane, apply finite sample clipping if `sample_width_m` or `sample_length_m` are nonzero, and precompute entry optics quantities that do not depend on `(H, K, L)`.
 4. For each reflection, build `G_vec = (0, Gr, Gz)` from `(H, K, L, a, c)`.
 5. For each valid beam sample, solve the reciprocal-space circle problem `solve_q(...)`.
-6. For each accepted `Q` solution, build the outgoing wavevector, apply exit optics and attenuation, intersect the outgoing ray with the detector plane, convert to `(row_f, col_f)`, and deposit intensity bilinearly.
+6. For each accepted `Q` solution, build the solved outgoing in-sample wavevector, apply exit optics and attenuation to the intensity, project the outgoing direction to the detector using the selected exit-projection mode, convert to `(row_f, col_f)`, and deposit intensity bilinearly.
 7. Optionally emit hit tables, `Q` tables, miss tables, and per-sample status codes.
 
 The simulation is deterministic once the beam arrays are fixed. There is no Monte Carlo scattering inside the kernel itself; even the beam sampling is low-discrepancy and can be clustered into deterministic weighted representatives.
 
 ## Pedagogical view of the optics modes
+
+Why this choice: RA-SIM keeps two optics branches because there is no single
+transport model that is best for every use case the project cares about. The
+fast branch is best when the dominant constraint is throughput inside fitting
+loops, while the exact slab branch is best when near-critical-angle transport
+and complex attenuation materially affect intensities. Both branches
+deliberately reuse the same reflection list, `solve_q(...)` machinery, and
+default detector projection so that changing optics does not silently change the
+rest of the physics. In implementation terms, the mode switch changes entry and
+exit transport quantities, not the reciprocal-space search itself.
 
 The code has two optics branches:
 
@@ -376,10 +473,18 @@ Pedagogically, both modes do the same three-stage calculation:
 3. Build an outgoing wave, transmit it back out of the sample, and project it to the detector.
 
 The difference is therefore not in the reflection list, the `solve_q(...)`
-geometry, the structure-factor model, or the detector mapping. The difference
-is in how the code computes the entry and exit transport through the sample.
+geometry, or the structure-factor model. In the default
+`exit_projection_mode = "internal"` path, both optics modes also use the same
+solved outgoing direction for detector geometry. The difference is in how the
+code computes the entry and exit transport through the sample and therefore the
+intensity weights attached to each hit.
 
 ### Shared intensity skeleton
+
+The next product is the bookkeeping identity for one accepted hit. It says the
+deposited intensity is built from a reflection amplitude, a beam-sample weight,
+a reciprocal-space weight, an optics transport factor, and phenomenological
+broadening terms.
 
 For any accepted reciprocal-space solution `Q = (Q_x, Q_y, Q_z)`, both modes
 ultimately use the same detector intensity structure:
@@ -571,6 +676,16 @@ multilayer reflectivity stack. The detailed implementation-faithful formulas
 for each step appear in the next sections.
 
 ## Exact per-sample ray tracing and entry optics
+
+Why this choice: This stage traces each sampled beam state through the real
+sample geometry before any reciprocal-space solve is attempted. That is the
+best tradeoff for RA-SIM because local incidence angle, finite footprint, and
+beam-position offsets all change which parts of the sample contribute and how
+strongly they contribute. A single nominal ray would be cheaper, but it would
+erase the same visibility and shape effects the later fitting stages need to
+explain. In implementation terms, the kernel intersects each beam sample with
+the sample plane, applies finite sample clipping, and only then precomputes the
+entry-optics quantities reused across reflections.
 
 The beam-sample precompute lives in [`_precompute_sample_terms`](../ra_sim/simulation/diffraction.py). This section describes the exact formulas used there.
 
@@ -782,9 +897,23 @@ That sample is later used for the nominal visibility screen and for hit-table re
 
 ## Reciprocal-space circle solve and mosaic weighting
 
+Why this choice: Once the incoming in-sample wave is fixed, the scattering
+constraints are geometric enough that RA-SIM can solve them analytically rather
+than by launching a generic nonlinear search in 3D. That is the best tradeoff
+for this codebase because the sphere-sphere circle construction is fast, stable,
+and turns the remaining problem into a one-parameter integration of mosaic
+density. It also gives clean deterministic failure codes when the geometry is
+impossible or degenerate. The uniform and adaptive modes then choose how to
+integrate along that analytic circle, not how to discover the circle in the
+first place.
+
 The reciprocal-space solve is [`solve_q`](../ra_sim/simulation/diffraction.py). It does not solve a generic nonlinear system; it constructs the exact circle of intersection of two spheres and then integrates the mosaic density along that circle.
 
 ### Sphere-sphere intersection geometry
+
+The next equations define the exact set of allowed `Q` vectors for one
+reflection and one sampled beam state. They are the reason `solve_q(...)` can
+be both geometric and deterministic instead of a black-box numerical search.
 
 For one reflection, the kernel sets
 
@@ -917,6 +1046,16 @@ The retained output rows are `(Qx, Qy, Qz, mass_i)`.
 
 ## Outgoing ray tracing, detector projection, and deposition
 
+Why this choice: After `solve_q(...)`, the important separation is between
+direction and intensity. Detector geometry should come from the solved outgoing
+direction, while interface optics should remain in transmission and attenuation
+weights; using optics to bend the detector ray itself is what created the old
+near-critical dead band. That is the best tradeoff for RA-SIM because hit
+placement stays geometrically faithful while optics modes still change
+brightness. The final bilinear deposition is also intentional: it turns a
+continuous subpixel hit into a smooth image that can move continuously under
+fitting instead of jumping from pixel to pixel.
+
 The reflection kernel is [`_calculate_phi_from_precomputed`](../ra_sim/simulation/diffraction.py). It turns the precomputed entry terms plus one `G_vec` into detector hits.
 
 ### Nominal visibility screen
@@ -1016,13 +1155,17 @@ L_{\mathrm{out}} =
 \end{cases}
 \]
 
-The final exit angle and outgoing magnitude are
+The exact branch also constructs a refracted-angle representation
 
 \[
 2\theta_t = \arccos\left(\mathrm{clamp}(k_r/k_0, -1, 1)\right)\operatorname{sign}(2\theta_t'),
 \qquad
 |k_f| = k_0.
 \]
+
+Those quantities are still available for diagnostics and for the legacy
+`exit_projection_mode = "refracted"` path, but they are not the default
+detector-projection inputs.
 
 ### Fast exit optics
 
@@ -1042,6 +1185,51 @@ The downstream formulas are
 \qquad
 |k_f| = k_{\mathrm{scat}}.
 \]
+
+In older fast-mode detector projection, that remapped `2\theta_t` was used to
+build the outgoing detector ray. The current default keeps the LUT-derived
+`T_f^2`, `\Im(k_{z,f})`, and `L_{\mathrm{out}}` for intensity, but it does not
+use the remapped angle to place the hit on the detector.
+
+### Why the detector projection default changed
+
+Older saved states could project the detector ray from the refracted-angle
+reconstruction, especially in `OPTICS_MODE_FAST`. That path first solved the
+outgoing in-sample direction
+
+\[
+k_f' = (k_{tx}', k_{ty}', k_{tz}'),
+\qquad
+k_r = \sqrt{{k_{tx}'}^2 + {k_{ty}'}^2},
+\qquad
+2\theta_t' = \operatorname{atan}(k_{tz}' / k_r),
+\]
+
+then remapped that already-solved direction to a refracted exit angle
+
+\[
+2\theta_t
+= \arccos\left(\mathrm{clamp}(n_{\mathrm{real}}\cos 2\theta_t', -1, 1)\right)\operatorname{sign}(2\theta_t').
+\]
+
+For x-rays, `n_real < 1`. That means the remap enforces
+
+\[
+|2\theta_t| \ge \alpha_c,
+\qquad
+\alpha_c = \arccos(n_{\mathrm{real}}).
+\]
+
+So even when the solved outgoing direction had `2\theta_t' \approx 0`, the
+projected detector ray was forced away from the sample plane by at least the
+critical angle. That creates a forbidden angular strip in which no detector
+hits can ever be placed. On the detector this appears as the horizontal empty
+line that moves as the sample plane rotates with `\theta_i`.
+
+The detector intersection code itself was not the problem. The problem was that
+the old path intersected the wrong outgoing vector. The current default keeps
+the optics factors for intensity but projects the detector geometry from the
+solved internal direction.
 
 ### Propagation factor and intensity
 
@@ -1084,10 +1272,25 @@ The outgoing in-sample azimuth is
 \phi_f = \operatorname{atan2}(k_{tx}', k_{ty}').
 \]
 
-The outgoing in-sample wavevector is
+By default, `exit_projection_mode = "internal"` and the detector direction is
+the normalized solved outgoing vector
 
 \[
-k_f =
+\hat{k}_{f,\mathrm{proj}} =
+\frac{1}{\sqrt{{k_{tx}'}^2 + {k_{ty}'}^2 + {k_{tz}'}^2}}
+\begin{bmatrix}
+k_{tx}' \\
+k_{ty}' \\
+k_{tz}'
+\end{bmatrix}.
+\]
+
+If the legacy `exit_projection_mode = "refracted"` path is requested, the code
+instead rebuilds the outgoing direction from the refracted-angle
+representation:
+
+\[
+k_{f,\mathrm{proj}} =
 \begin{bmatrix}
 |k_f|\cos(2\theta_t)\sin\phi_f \\
 |k_f|\cos(2\theta_t)\cos\phi_f \\
@@ -1095,10 +1298,10 @@ k_f =
 \end{bmatrix}.
 \]
 
-It is rotated back into the laboratory frame by
+The chosen projection vector is rotated back into the laboratory frame by
 
 \[
-k_f^{\mathrm{lab}} = R_{\mathrm{sample}}\,k_f.
+k_f^{\mathrm{lab}} = R_{\mathrm{sample}}\,k_{f,\mathrm{proj}}.
 \]
 
 The detector intersection is then
@@ -1254,6 +1457,17 @@ so Qr-equivalent rods can be traced together by the same detector machinery.
 
 ## Geometry fitting from picked spots
 
+Why this choice: The first fitting stage uses peak positions rather than full
+image intensities because geometry errors move peaks more reliably than they
+change detailed local brightness. That is the best tradeoff for RA-SIM because
+it anchors detector and sample geometry before weaker nuisance effects such as
+mosaic broadening, local background, and intensity scaling are allowed to move.
+The residual vector is kept at fixed length, weighted by optional measurement
+sigma models, and solved with priors, restarts, and staged release so the
+optimizer remains stable even when picks are missing or uncertain. In practice
+this makes point matching the geometry anchor and leaves image refinement for
+later stages.
+
 The live geometry fitter is built around manual point pairs assembled in the GUI, then optimized by [`fit_geometry_parameters`](../ra_sim/fitting/optimization.py).
 
 ### Manual picking behavior in the GUI
@@ -1313,6 +1527,11 @@ If those criteria fail, the fitter falls back to the identity transform.
 The fixed-source path matters because saved manual picks can outlive changes in reflection ordering. The HKL fallback matters because source-table references can become stale after clearing or re-adding picks.
 
 ### Point-match residual construction
+
+The next equations define the geometric error for one matched peak pair. They
+are intentionally simple: the fitter first wants to know whether simulated and
+measured peak centers coincide before it worries about line shape or local
+intensity structure.
 
 The live residual is [`_evaluate_geometry_fit_dataset_point_matches`](../ra_sim/fitting/optimization.py).
 
@@ -1491,6 +1710,15 @@ The GUI then overwrites `result.rms_px` with the final unweighted point-position
 
 ## Automatic background peak matching
 
+Why this choice: Automatic matching is treated as a detection-and-assignment
+problem, not as a single nearest-neighbor shortcut. That is the best tradeoff
+for RA-SIM because real detector backgrounds can contain clutter, split maxima,
+missing peaks, and local artifacts that would make naive nearest matching
+fragile. The code therefore separates summit detection from scored one-to-one
+assignment and post-match clipping so the optimizer receives a cleaner
+correspondence set. This stage sits between forward simulation and later
+refinement because match quality matters more here than full image completeness.
+
 Automatic matching is a different workflow from manual geometry fitting. It is implemented in [`build_background_peak_context`](../ra_sim/fitting/background_peak_matching.py) and [`match_simulated_peaks_to_peak_context`](../ra_sim/fitting/background_peak_matching.py).
 
 Important live defaults from [`config/instrument.yaml`](../config/instrument.yaml) and [`ra_sim/fitting/background_peak_matching.py`](../ra_sim/fitting/background_peak_matching.py):
@@ -1621,6 +1849,16 @@ not plain nearest-neighbor snapping.
 
 ## Mosaic-shape fitting, legacy mosaic-width fitting, and image-space refinement
 
+Why this choice: Once geometry is anchored, the remaining mismatch is mostly
+about profile width, asymmetry, relative intensity, and local background, so
+the objective changes accordingly. That is the best tradeoff for RA-SIM because
+reopening the full geometry problem here would let weakly constrained nuisance
+terms absorb shape errors. The separable ROI formulation analytically solves
+local amplitude and baseline terms so the nonlinear optimizer can focus on a
+small set of physically meaningful width parameters. The broader image-refining
+stages then add robust losses and acceptance guards so bad pixels, outliers,
+and background drift do not dominate the fit.
+
 ### Geometry-fit-cached detector-shape fit
 
 The GUI action `Fit Mosaic Shapes` calls
@@ -1694,6 +1932,10 @@ The fitter first prunes the reflection list:
 Candidate peaks can come from `geometry`, `auto`, or `hybrid` sourcing, and optional stratification can enforce diversity across `L` or `2theta`.
 
 ### Separable affine ROI fit
+
+The next equations solve the local nuisance terms exactly inside each ROI. That
+lets the nonlinear optimizer spend its effort on mosaic-width parameters instead
+of repeatedly relearning a trivial local scale and offset.
 
 Inside each selected ROI, the simulated template `t` is not compared directly to the measured vector `y`. The code solves the local affine correction
 
@@ -1789,6 +2031,16 @@ The ROI/image stage is accepted only if it improves the image-space objective wi
 
 ## hBN calibrant fitting
 
+Why this choice: The hBN calibrant path is separate because rings constrain
+detector geometry through global shape distortion rather than through sparse
+one-to-one peak correspondences. That is the best tradeoff for RA-SIM because
+ellipse geometry and projective tilt correction extract detector center, tilt,
+and distance information very efficiently from ring data. The fitter therefore
+combines robust point handling, optional snap refinement, and projective
+circularization instead of reusing the Bragg-spot residual. In implementation
+terms, the final tilt solve minimizes ring circularity after projective
+reprojection, which is the geometry signal the calibrant actually provides.
+
 The hBN fitter in [`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py) is a separate calibration workflow. It is built around manually selected ring points, optional snap-to-ring refinement, robust ellipse fitting, and projective tilt correction.
 
 Important live defaults from [`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py):
@@ -1813,6 +2065,11 @@ The GUI usually works on a downsampled display image. A click therefore has an i
 This uncertainty is not the full fitting sigma, but it becomes a hard floor in the confidence score and explains why very coarse downsample factors are penalized.
 
 ### Ellipse residual used everywhere
+
+The next formula is the basic geometric error for one candidate ring point. It
+measures how far the point sits from the current ellipse in a scale-aware
+pixel-like way, which is why the same quantity can be reused in robust fitting,
+reporting, and confidence scoring.
 
 For ellipse parameters `(xc, yc, a, b, theta)`, a point is rotated into ellipse coordinates `(u, v)` and evaluated with
 

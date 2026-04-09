@@ -1536,11 +1536,10 @@ def build_geometry_fit_runtime_config(
     if not isinstance(runtime_cfg, dict):
         runtime_cfg = {}
 
-    # The live GUI fit should favor stability over throughput. Native/parallel
-    # fitting paths have triggered hard system failures on some machines, so the
-    # runtime config clamps geometry fits to a conservative execution profile by
-    # default. When the GUI unsafe-runtime opt-in is enabled, reuse the solver's
-    # configured parallel settings unless explicit gui_* overrides were provided.
+    # GUI geometry fits should preserve the configured solver parallel settings
+    # by default so the runtime keeps using the shared "all but two" worker
+    # budget. The unsafe-runtime toggle still controls whether Numba stays
+    # enabled, while explicit gui_* overrides continue to win when provided.
     optimizer_cfg_raw = runtime_cfg.get("optimizer", runtime_cfg.get("solver", {})) or {}
     optimizer_cfg = (
         dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
@@ -1558,24 +1557,24 @@ def build_geometry_fit_runtime_config(
     runtime_cfg["allow_unsafe_runtime"] = allow_unsafe_runtime
 
     gui_workers = optimizer_cfg.pop("gui_workers", None)
-    if gui_workers is None and allow_unsafe_runtime:
+    if gui_workers is None:
         gui_workers = optimizer_cfg.get("workers", "auto")
-    optimizer_cfg["workers"] = gui_workers if gui_workers is not None else 1
+    optimizer_cfg["workers"] = gui_workers if gui_workers is not None else "auto"
 
     gui_parallel_mode = optimizer_cfg.pop("gui_parallel_mode", None)
-    if gui_parallel_mode is None and allow_unsafe_runtime:
+    if gui_parallel_mode is None:
         gui_parallel_mode = optimizer_cfg.get("parallel_mode", "auto")
     optimizer_cfg["parallel_mode"] = (
         str(gui_parallel_mode).strip()
         if gui_parallel_mode is not None
-        else "off"
+        else "auto"
     )
 
     gui_worker_numba_threads = optimizer_cfg.pop("gui_worker_numba_threads", None)
-    if gui_worker_numba_threads is None and allow_unsafe_runtime:
+    if gui_worker_numba_threads is None:
         gui_worker_numba_threads = optimizer_cfg.get("worker_numba_threads", 0)
     optimizer_cfg["worker_numba_threads"] = (
-        gui_worker_numba_threads if gui_worker_numba_threads is not None else 1
+        gui_worker_numba_threads if gui_worker_numba_threads is not None else 0
     )
 
     bounds_cfg = runtime_cfg.get("bounds", {}) or {}
@@ -2724,6 +2723,7 @@ def build_geometry_manual_fit_dataset(
             dict(overlay_source_entry)
             if isinstance(overlay_source_entry, Mapping)
             else None,
+            prefer_caked_display=use_caked_display,
         )
         overlay_kind = _resolved_source_kind(entry, overlay_source_entry)
         fit_source_entry = (
@@ -3692,7 +3692,7 @@ def apply_joint_geometry_fit_runtime_safety_overrides(
     *,
     joint_background_mode: bool,
 ) -> dict[str, object]:
-    """Clamp interactive multi-background fits to a conservative solver profile."""
+    """Apply interactive multi-background runtime safeguards without serializing."""
 
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
     if not joint_background_mode:
@@ -3702,9 +3702,6 @@ def apply_joint_geometry_fit_runtime_safety_overrides(
 
     solver_cfg_raw = cfg.get("solver", {})
     solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
-    solver_cfg["workers"] = 1
-    solver_cfg["parallel_mode"] = "off"
-    solver_cfg["worker_numba_threads"] = 1
     solver_cfg["stagnation_probe"] = False
     solver_cfg["stagnation_probe_pairwise"] = False
     solver_cfg["stagnation_probe_random_directions"] = 0
@@ -3775,20 +3772,13 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     optimizer_cfg["hk0_peak_priority_weight"] = float(
         optimizer_cfg.get("hk0_peak_priority_weight", 6.0)
     )
-    optimizer_cfg["workers"] = (
-        optimizer_cfg.get("workers", "auto")
-        if unsafe_runtime_enabled
-        else 1
-    )
-    optimizer_cfg["parallel_mode"] = (
-        str(optimizer_cfg.get("parallel_mode", "auto")).strip()
-        if unsafe_runtime_enabled
-        else "off"
-    )
-    optimizer_cfg["worker_numba_threads"] = (
-        optimizer_cfg.get("worker_numba_threads", 0)
-        if unsafe_runtime_enabled
-        else 1
+    optimizer_cfg["workers"] = optimizer_cfg.get("workers", "auto")
+    optimizer_cfg["parallel_mode"] = str(
+        optimizer_cfg.get("parallel_mode", "auto")
+    ).strip()
+    optimizer_cfg["worker_numba_threads"] = optimizer_cfg.get(
+        "worker_numba_threads",
+        0,
     )
     cfg["optimizer"] = optimizer_cfg
     cfg["solver"] = optimizer_cfg
@@ -5401,7 +5391,7 @@ def should_apply_geometry_fit_runtime_safety_overrides(
     version_info: Sequence[object] | None = None,
     env: Mapping[str, object] | None = None,
 ) -> bool:
-    """Return whether GUI geometry fitting should force the safe serial runtime."""
+    """Return whether GUI geometry fitting should force the safe non-Numba runtime."""
 
     if platform_name is None:
         platform_name = os.name
@@ -5464,15 +5454,6 @@ def apply_geometry_fit_runtime_safety_overrides(
     if bool(resolved.get("use_numba", True)):
         resolved["use_numba"] = False
         changed = True
-    if solver_cfg.get("parallel_mode") != "off":
-        solver_cfg["parallel_mode"] = "off"
-        changed = True
-    if solver_cfg.get("workers") != 1:
-        solver_cfg["workers"] = 1
-        changed = True
-    if solver_cfg.get("worker_numba_threads") != 1:
-        solver_cfg["worker_numba_threads"] = 1
-        changed = True
 
     if isinstance(optimizer_cfg_raw, Mapping):
         resolved["optimizer"] = solver_cfg
@@ -5484,7 +5465,7 @@ def apply_geometry_fit_runtime_safety_overrides(
         resolved,
         (
             "Windows/Python 3.13 runtime guard enabled: "
-            "geometry fit is running serially with Numba disabled."
+            "geometry fit keeps its configured parallel workers with Numba disabled."
         ),
     )
 
@@ -5502,6 +5483,30 @@ def build_geometry_fit_solver_request(
             prepared_run.geometry_runtime_cfg,
         )
     )
+    refinement_config = (
+        copy.deepcopy(dict(refinement_config))
+        if isinstance(refinement_config, Mapping)
+        else {}
+    )
+    optimizer_cfg_raw = refinement_config.get("optimizer", None)
+    solver_cfg_raw = refinement_config.get("solver", optimizer_cfg_raw)
+    solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+    if solver_cfg.get("workers") is None:
+        solver_cfg["workers"] = "auto"
+    if solver_cfg.get("parallel_mode") is None:
+        solver_cfg["parallel_mode"] = "auto"
+    if solver_cfg.get("worker_numba_threads") is None:
+        solver_cfg["worker_numba_threads"] = 0
+    refinement_config["solver"] = solver_cfg
+    if isinstance(optimizer_cfg_raw, Mapping):
+        optimizer_cfg = dict(optimizer_cfg_raw)
+        if optimizer_cfg.get("workers") is None:
+            optimizer_cfg["workers"] = solver_cfg["workers"]
+        if optimizer_cfg.get("parallel_mode") is None:
+            optimizer_cfg["parallel_mode"] = solver_cfg["parallel_mode"]
+        if optimizer_cfg.get("worker_numba_threads") is None:
+            optimizer_cfg["worker_numba_threads"] = solver_cfg["worker_numba_threads"]
+        refinement_config["optimizer"] = optimizer_cfg
 
     return GeometryFitSolverRequest(
         miller=solver_inputs.miller,
