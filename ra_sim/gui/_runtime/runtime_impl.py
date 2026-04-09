@@ -31,7 +31,7 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LogNorm, Normalize
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 import CifFile
 
@@ -126,6 +126,7 @@ from ra_sim.simulation.types import (
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
+from ra_sim.gui import analysis_figure_controls as gui_analysis_figure_controls
 from ra_sim.gui import analysis_peak_tools as gui_analysis_peak_tools
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import canvas_interactions as gui_canvas_interactions
@@ -4561,6 +4562,13 @@ integration_range_workflow = (
                     else None
                 )
             ),
+            "refresh_display_from_controls_factory": (
+                lambda: (
+                    globals().get("_refresh_display_from_controls")
+                    if callable(globals().get("_refresh_display_from_controls"))
+                    else None
+                )
+            ),
             "schedule_update_factory": (
                 lambda: (
                     globals().get("schedule_update")
@@ -4623,8 +4631,11 @@ def toggle_caked_2d() -> None:
     _render_analysis_peak_overlays(redraw=True)
 
 
-toggle_log_radial = integration_range_workflow.toggle_log_radial
-toggle_log_azimuth = integration_range_workflow.toggle_log_azimuth
+def _refresh_display_from_controls() -> None:
+    _refresh_current_intensity_display_scaling(redraw=True)
+
+
+toggle_log_display = integration_range_workflow.toggle_log_display
 
 
 def _set_persistent_view_mode(mode: str) -> None:
@@ -4770,13 +4781,103 @@ def _apply_background_transparency():
     )
 
 
+def _log_display_enabled() -> bool:
+    log_display_var = getattr(analysis_view_controls_view_state, "log_display_var", None)
+    getter = getattr(log_display_var, "get", None)
+    if not callable(getter):
+        return False
+    try:
+        return bool(getter())
+    except Exception:
+        return False
+
+
+def _minimum_positive_finite_value(image) -> float | None:
+    if image is None:
+        return None
+    try:
+        values = np.asarray(image, dtype=float)
+    except Exception:
+        return None
+    if values.size == 0:
+        return None
+    positive = values[np.isfinite(values) & (values > 0.0)]
+    if positive.size == 0:
+        return None
+    return float(np.min(positive))
+
+
+def _build_intensity_display_norm(image, min_val, max_val):
+    min_val, max_val = _ensure_valid_range(min_val, max_val)
+    if not _log_display_enabled():
+        return Normalize(vmin=min_val, vmax=max_val)
+
+    positive_floor = _minimum_positive_finite_value(image)
+    if positive_floor is None:
+        return Normalize(vmin=min_val, vmax=max_val)
+
+    log_min = max(float(min_val), positive_floor)
+    if not math.isfinite(log_min) or log_min <= 0.0:
+        log_min = positive_floor
+
+    log_max = float(max_val)
+    if not math.isfinite(log_max) or log_max <= log_min:
+        log_max = log_min + max(abs(log_min) * 1e-6, 1e-12)
+
+    return LogNorm(vmin=log_min, vmax=log_max, clip=True)
+
+
+def _apply_intensity_display_range(image_artist, image, min_val, max_val) -> None:
+    image_artist.set_norm(_build_intensity_display_norm(image, min_val, max_val))
+
+
+def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
+    image_getter = getattr(image_display, "get_array", None)
+    if callable(image_getter):
+        image_min, image_max = image_display.get_clim()
+        _apply_intensity_display_range(
+            image_display,
+            image_getter(),
+            image_min,
+            image_max,
+        )
+
+    background_getter = getattr(background_display, "get_array", None)
+    if callable(background_getter):
+        background_min, background_max = background_display.get_clim()
+        _apply_intensity_display_range(
+            background_display,
+            background_getter(),
+            background_min,
+            background_max,
+        )
+
+    colorbar_main.update_normal(image_display)
+    caked_colorbar.update_normal(image_display)
+    if redraw:
+        canvas.draw_idle()
+
+
 def _apply_background_limits():
-    return gui_background_manager.apply_background_limits(
-        display_controls_state,
-        display_controls_view_state,
-        background_display=background_display,
-        draw_idle=canvas.draw_idle,
-    )
+    background_min_var = display_controls_view_state.background_min_var
+    background_max_var = display_controls_view_state.background_max_var
+    if background_min_var is None or background_max_var is None:
+        return False
+    min_val = background_min_var.get()
+    max_val = background_max_var.get()
+    if min_val >= max_val:
+        adjustment = max(abs(max_val) * 1.0e-6, 1.0e-6)
+        display_controls_state.suppress_background_limit_callback = True
+        try:
+            background_min_var.set(max_val - adjustment)
+        finally:
+            display_controls_state.suppress_background_limit_callback = False
+        return False
+    display_controls_state.background_limits_user_override = True
+    background_display.set_clim(min_val, max_val)
+    _apply_background_transparency()
+    _refresh_current_intensity_display_scaling(redraw=True)
+    return True
 
 
 def _apply_simulation_limits():
@@ -4844,7 +4945,12 @@ gui_views.create_display_controls(
     fast_viewer_status_text="Replace the plot area with a faster viewer.",
 )
 
-background_display.set_clim(background_vmin_default, background_vmax_default)
+_apply_intensity_display_range(
+    background_display,
+    background_runtime_state.current_background_display,
+    background_vmin_default,
+    background_vmax_default,
+)
 _apply_background_transparency()
 
 
@@ -5205,15 +5311,17 @@ def apply_scale_factor_to_existing_results(
         if chi_state.get("buffer_sig") != chi_square_sig:
             chi_state["buffer_sig"] = chi_square_sig
             _mark_chi_square_dirty()
-        background_display.set_clim(
-            background_min_var.get(),
-            background_max_var.get(),
-        )
         if not show_caked_image:
             _set_image_origin(background_display, 'upper')
             background_display.set_extent([0, image_size, image_size, 0])
             if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
                 background_display.set_data(background_runtime_state.current_background_display)
+                _apply_intensity_display_range(
+                    background_display,
+                    background_runtime_state.current_background_display,
+                    background_min_var.get(),
+                    background_max_var.get(),
+                )
                 background_display.set_visible(True)
             else:
                 background_display.set_visible(False)
@@ -5254,11 +5362,12 @@ def apply_scale_factor_to_existing_results(
         _set_image_origin(image_display, 'upper')
         image_display.set_extent([0, image_size, image_size, 0])
         image_display.set_data(global_image_buffer)
-        image_display.set_clim(
+        _apply_intensity_display_range(
+            image_display,
+            global_image_buffer,
             display_controls_view_state.simulation_min_var.get(),
             display_controls_view_state.simulation_max_var.get(),
         )
-        colorbar_main.update_normal(image_display)
     else:
         _set_image_origin(image_display, 'lower')
         scaled_caked = simulation_runtime_state.last_caked_image_unscaled * scale
@@ -5271,10 +5380,18 @@ def apply_scale_factor_to_existing_results(
         caked_min = float(display_controls_view_state.simulation_min_var.get())
         caked_max = float(display_controls_view_state.simulation_max_var.get())
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
-        image_display.set_clim(caked_min, caked_max)
+        _apply_intensity_display_range(
+            image_display,
+            scaled_caked,
+            caked_min,
+            caked_max,
+        )
         if not simulation_runtime_state.caked_limits_user_override:
             vmin_caked_var.set(caked_min)
             vmax_caked_var.set(caked_max)
+
+    colorbar_main.update_normal(image_display)
+    caked_colorbar.update_normal(image_display)
 
     if (
         update_1d
@@ -5311,7 +5428,9 @@ def apply_scale_factor_to_existing_results(
         if "canvas_1d" in globals():
             canvas_1d.draw_idle()
 
-    background_display.set_clim(
+    _apply_intensity_display_range(
+        background_display,
+        getattr(background_display, "get_array", lambda: None)(),
         display_controls_view_state.background_min_var.get(),
         display_controls_view_state.background_max_var.get(),
     )
@@ -5338,12 +5457,48 @@ simulation_runtime_state.caked_limits_user_override = False
 vmin_caked_var = tk.DoubleVar(value=0.0)
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 
+analysis_1d_toolbar_frame = None
+analysis_1d_toolbar = None
+analysis_1d_reset_view_button = None
+
+
+def _reset_analysis_figure_view() -> None:
+    if not gui_analysis_figure_controls.reset_analysis_axes_view(
+        ax_1d_radial,
+        ax_1d_azim,
+    ):
+        return
+    _render_analysis_peak_overlays(redraw=False)
+    try:
+        canvas_1d.draw_idle()
+    except Exception:
+        pass
+
+
+def _mount_analysis_figure(parent) -> None:
+    global canvas_1d
+    global analysis_1d_toolbar_frame, analysis_1d_toolbar, analysis_1d_reset_view_button
+
+    canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+        fig_1d,
+        master=parent,
+    )
+    canvas_1d.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    (
+        analysis_1d_toolbar_frame,
+        analysis_1d_toolbar,
+        analysis_1d_reset_view_button,
+    ) = gui_analysis_figure_controls.create_analysis_figure_toolbar(
+        parent=parent,
+        canvas=canvas_1d,
+        ttk_module=ttk,
+        backend_tkagg_module=matplotlib.backends.backend_tkagg,
+        on_reset_view=_reset_analysis_figure_view,
+    )
+
+
 fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
-canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
-    fig_1d,
-    master=app_shell_view_state.plot_frame_1d,
-)
-canvas_1d.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+_mount_analysis_figure(app_shell_view_state.plot_frame_1d)
 
 line_1d_rad, = ax_1d_radial.plot([], [], 'b-', label='Simulated (2θ)')
 line_1d_rad_bg, = ax_1d_radial.plot([], [], 'r--', label='Background (2θ)')
@@ -5740,8 +5895,8 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
         simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = None
         simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = None
 
-    ax_1d_radial.set_yscale('log' if analysis_view_controls_view_state.log_radial_var.get() else 'linear')
-    ax_1d_azim.set_yscale('log' if analysis_view_controls_view_state.log_azimuth_var.get() else 'linear')
+    ax_1d_radial.set_yscale('linear')
+    ax_1d_azim.set_yscale('linear')
     ax_1d_radial.relim()
     ax_1d_radial.autoscale_view()
     ax_1d_azim.relim()
@@ -10346,8 +10501,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     ensure_valid_resolution_choice()
     toggle_1d_plots()
     toggle_caked_2d()
-    toggle_log_radial()
-    toggle_log_azimuth()
+    toggle_log_display()
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -11694,7 +11848,10 @@ def _legacy_auto_match_on_fit_geometry_click():
     )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
+    log_path = gui_geometry_fit.build_geometry_fit_log_path(
+        stamp=stamp,
+        log_dir=get_dir("debug_log_dir"),
+    )
     log_file = log_path.open("w", encoding="utf-8")
     _cmd_line(f"log: {log_path}")
 
@@ -13029,7 +13186,10 @@ def _legacy_auto_match_on_fit_geometry_click():
                 return
 
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
+            log_path = gui_geometry_fit.build_geometry_fit_log_path(
+                stamp=stamp,
+                log_dir=get_dir("debug_log_dir"),
+            )
             log_file = log_path.open("w", encoding="utf-8")
 
             def _log_line(text: str = ""):
@@ -14463,10 +14623,11 @@ def on_fit_mosaic_click():
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        downloads_dir = get_dir("downloads")
+        log_dir = get_dir("debug_log_dir")
     except Exception:
-        downloads_dir = Path.home() / "Downloads"
-    log_path = Path(downloads_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
+        log_dir = Path.cwd() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = Path(log_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
     log_file = None
 
     def _mosaic_log_line(text: str = "") -> None:
@@ -16241,17 +16402,17 @@ def _render_analysis_plot_controls(
     range_values: Mapping[str, float] | None = None,
 ) -> None:
     global canvas_1d
+    global analysis_1d_toolbar_frame, analysis_1d_toolbar, analysis_1d_reset_view_button
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
 
     values = dict(range_values or _current_analysis_range_values())
     _clear_widget_children(parent)
 
-    canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
-        fig_1d,
-        master=parent,
-    )
-    canvas_1d.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    analysis_1d_toolbar_frame = None
+    analysis_1d_toolbar = None
+    analysis_1d_reset_view_button = None
+    _mount_analysis_figure(parent)
 
     gui_integration_range_drag.create_runtime_integration_range_controls(
         parent=parent,
@@ -17387,18 +17548,11 @@ gui_views.populate_app_shell_quick_controls(
             "command": _reset_primary_figure_view,
         },
         {
-            "key": "log_radial",
-            "label": "Log radial",
+            "key": "log_display",
+            "label": "Log display",
             "control_type": "check",
-            "variable": analysis_view_controls_view_state.log_radial_var,
-            "command": toggle_log_radial,
-        },
-        {
-            "key": "log_azimuth",
-            "label": "Log azimuth",
-            "control_type": "check",
-            "variable": analysis_view_controls_view_state.log_azimuth_var,
-            "command": toggle_log_azimuth,
+            "variable": analysis_view_controls_view_state.log_display_var,
+            "command": toggle_log_display,
         },
         {
             "key": "auto_match_scale",
@@ -17774,6 +17928,7 @@ geometry_fit_runtime_workflow = (
             "current_geometry_theta_offset": _current_geometry_theta_offset,
             "ensure_geometry_fit_caked_view": _ensure_geometry_fit_caked_view,
             "downloads_dir": get_dir("downloads"),
+            "log_dir": get_dir("debug_log_dir"),
             "simulation_runtime_state": simulation_runtime_state,
             "background_runtime_state": background_runtime_state,
             "theta_initial_var": theta_initial_var,

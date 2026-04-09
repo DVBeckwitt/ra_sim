@@ -86,8 +86,7 @@ def test_build_runtime_integration_range_workflow_exposes_callback_aliases() -> 
         schedule_range_update="schedule-range-update",
         toggle_1d_plots="toggle-1d-plots",
         toggle_caked_2d="toggle-caked-2d",
-        toggle_log_radial="toggle-log-radial",
-        toggle_log_azimuth="toggle-log-azimuth",
+        toggle_log_display="toggle-log-display",
     )
     update_runtime = SimpleNamespace(callbacks=callbacks)
     bootstrap_module = SimpleNamespace(
@@ -111,8 +110,7 @@ def test_build_runtime_integration_range_workflow_exposes_callback_aliases() -> 
     assert workflow.schedule_range_update == "schedule-range-update"
     assert workflow.toggle_1d_plots == "toggle-1d-plots"
     assert workflow.toggle_caked_2d == "toggle-caked-2d"
-    assert workflow.toggle_log_radial == "toggle-log-radial"
-    assert workflow.toggle_log_azimuth == "toggle-log-azimuth"
+    assert workflow.toggle_log_display == "toggle-log-display"
     assert calls == [
         (
             "update",

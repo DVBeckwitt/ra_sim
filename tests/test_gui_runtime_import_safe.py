@@ -282,8 +282,7 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert '\"key\": \"fast_viewer\"' in source
-    assert '\"key\": \"log_radial\"' in source
-    assert '\"key\": \"log_azimuth\"' in source
+    assert '\"key\": \"log_display\"' in source
     assert '\"key\": \"auto_match_scale\"' in source
     assert "control_type\": \"check\"" in source
     assert "control_type\": \"button\"" in source

@@ -2648,26 +2648,22 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
         view_state=view_state,
         on_toggle_1d_plots=lambda: calls.append("toggle-1d"),
         on_toggle_caked_2d=lambda: calls.append("toggle-2d"),
-        on_toggle_log_radial=lambda: calls.append("toggle-radial"),
-        on_toggle_log_azimuth=lambda: calls.append("toggle-azimuth"),
+        on_toggle_log_display=lambda: calls.append("toggle-display"),
     )
 
     assert view_state.show_1d_var.get() is False
     assert view_state.show_caked_2d_var.get() is False
-    assert view_state.log_radial_var.get() is False
-    assert view_state.log_azimuth_var.get() is False
+    assert view_state.log_display_var.get() is False
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
-        "Log Radial",
-        "Log Azimuth",
+        "Log display",
     ]
     assert view_state.check_1d is None
     assert view_state.check_2d is None
-    assert view_state.check_log_radial is _FakeCheckbutton.created[0]
-    assert view_state.check_log_azimuth is _FakeCheckbutton.created[1]
+    assert view_state.check_log_display is _FakeCheckbutton.created[0]
 
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
-    assert calls == ["toggle-radial", "toggle-azimuth"]
+    assert calls == ["toggle-display"]
 
 
 def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> None:
@@ -3355,8 +3351,8 @@ def test_populate_app_shell_quick_controls_supports_check_and_button_controls(
         view_state=view_state,
         controls=[
             {
-                "key": "log_radial",
-                "label": "Log radial",
+                "key": "log_display",
+                "label": "Log display",
                 "control_type": "check",
                 "variable": log_var,
                 "command": lambda: events.append(("log", log_var.get())),
@@ -3370,8 +3366,8 @@ def test_populate_app_shell_quick_controls_supports_check_and_button_controls(
         ],
     )
 
-    assert "log_radial" in view_state.quick_control_widgets
-    log_control = view_state.quick_control_widgets["log_radial"]
+    assert "log_display" in view_state.quick_control_widgets
+    log_control = view_state.quick_control_widgets["log_display"]
     assert isinstance(log_control["checkbutton"], _FakeCheckbutton)
     assert log_control["variable"] is log_var
 

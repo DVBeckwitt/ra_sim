@@ -41,7 +41,7 @@ import numpy as np
 from PIL import Image
 
 from ra_sim import launcher
-from ra_sim.config import get_instrument_config, get_path
+from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.fitting.optimization import (
     build_geometry_fit_central_mosaic_params,
     fit_geometry_parameters,
@@ -1118,6 +1118,7 @@ def run_headless_geometry_fit(
             mosaic_params=mosaic_params,
             stamp=stamp,
             downloads_dir=downloads_dir,
+            log_dir=get_dir("debug_log_dir"),
             simulation_runtime_state=simulation_runtime_state,
             background_runtime_state=background_runtime_state,
             theta_initial_var=theta_initial_var,
@@ -1333,7 +1334,7 @@ def run_headless_geometry_fit(
             )
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        mosaic_log_path = Path(downloads_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
+        mosaic_log_path = get_dir("debug_log_dir") / f"mosaic_shape_fit_log_{stamp}.txt"
         status = (
             "accepted"
             if bool(getattr(result, "acceptance_passed", False))

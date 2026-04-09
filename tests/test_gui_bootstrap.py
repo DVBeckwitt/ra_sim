@@ -1172,8 +1172,7 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 schedule_range_update="schedule-range-update",
                 toggle_1d_plots="toggle-1d",
                 toggle_caked_2d="toggle-caked",
-                toggle_log_radial="toggle-log-radial",
-                toggle_log_azimuth="toggle-log-azimuth",
+                toggle_log_display="toggle-log-display",
             )
         ),
         create_runtime_integration_range_controls=(
@@ -1232,12 +1231,10 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "view_state": "analysis-view-state",
                 "on_toggle_1d_plots": "toggle-1d",
                 "on_toggle_caked_2d": "toggle-caked",
-                "on_toggle_log_radial": "toggle-log-radial",
-                "on_toggle_log_azimuth": "toggle-log-azimuth",
+                "on_toggle_log_display": "toggle-log-display",
                 "show_1d": False,
                 "show_caked_2d": False,
-                "log_radial": False,
-                "log_azimuth": False,
+                "log_display": False,
             },
         ),
     ]

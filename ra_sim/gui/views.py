@@ -4295,48 +4295,33 @@ def create_analysis_view_controls(
     view_state: AnalysisViewControlsViewState,
     on_toggle_1d_plots: Callable[[], None],
     on_toggle_caked_2d: Callable[[], None],
-    on_toggle_log_radial: Callable[[], None],
-    on_toggle_log_azimuth: Callable[[], None],
+    on_toggle_log_display: Callable[[], None],
     show_1d: bool = False,
     show_caked_2d: bool = False,
-    log_radial: bool = False,
-    log_azimuth: bool = False,
+    log_display: bool = False,
 ) -> None:
     """Create the analysis view toggle controls and store their vars."""
 
     show_1d_var = tk.BooleanVar(value=bool(show_1d or show_caked_2d))
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
 
-    log_radial_var = tk.BooleanVar(value=bool(log_radial))
-    check_log_radial = None
+    log_display_var = tk.BooleanVar(value=bool(log_display))
+    check_log_display = None
     if parent is not None:
-        check_log_radial = ttk.Checkbutton(
+        check_log_display = ttk.Checkbutton(
             parent,
-            text="Log Radial",
-            variable=log_radial_var,
-            command=on_toggle_log_radial,
+            text="Log display",
+            variable=log_display_var,
+            command=on_toggle_log_display,
         )
-        check_log_radial.pack(side=tk.TOP, padx=5, pady=2)
-
-    log_azimuth_var = tk.BooleanVar(value=bool(log_azimuth))
-    check_log_azimuth = None
-    if parent is not None:
-        check_log_azimuth = ttk.Checkbutton(
-            parent,
-            text="Log Azimuth",
-            variable=log_azimuth_var,
-            command=on_toggle_log_azimuth,
-        )
-        check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
+        check_log_display.pack(side=tk.TOP, padx=5, pady=2)
 
     view_state.show_1d_var = show_1d_var
     view_state.check_1d = None
     view_state.show_caked_2d_var = show_caked_2d_var
     view_state.check_2d = None
-    view_state.log_radial_var = log_radial_var
-    view_state.check_log_radial = check_log_radial
-    view_state.log_azimuth_var = log_azimuth_var
-    view_state.check_log_azimuth = check_log_azimuth
+    view_state.log_display_var = log_display_var
+    view_state.check_log_display = check_log_display
 
 
 def create_integration_range_controls(

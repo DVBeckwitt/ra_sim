@@ -431,6 +431,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
 def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes() -> None:
     root = _FakeRoot()
     schedule_update_calls = []
+    refresh_display_calls = []
     hkl_pick_calls = []
     drag_reset_calls = []
     refresh_results = [False]
@@ -457,6 +458,7 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
             reset=lambda: drag_reset_calls.append(True)
         ),
         refresh_integration_from_cached_results=lambda: refresh_results[-1],
+        refresh_display_from_controls=lambda: refresh_display_calls.append(True),
         schedule_update=lambda: schedule_update_calls.append(True),
         range_update_debounce_ms=120,
     )
@@ -481,9 +483,10 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
     assert schedule_update_calls == [True]
 
     callbacks.toggle_1d_plots()
-    callbacks.toggle_log_radial()
-    assert root.after_cancel_calls == ["after-3"]
+    callbacks.toggle_log_display()
+    assert root.after_cancel_calls == []
     assert root.after_calls[-1][0] == 120
+    assert refresh_display_calls == [True]
 
     analysis_view_state.show_caked_2d_var.set(True)
     display_controls_state.simulation_limits_user_override = True

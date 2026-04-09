@@ -1148,16 +1148,19 @@ def main(argv: list[str] | None = None) -> int:
         fit_geometry_config=context.fit_geometry_config,
         points=int(args.points),
     )
+    simulation_started = time.perf_counter()
     rows, baseline_metrics = run_landscape_sweeps(
         context,
         sweep_specs,
         workers=int(args.workers),
     )
+    simulation_elapsed_s = float(time.perf_counter() - simulation_started)
 
     csv_path = outdir / "landscape_runs.csv"
     figure_path = outdir / "landscape_figure.png"
     metadata_path = outdir / "baseline_metadata.json"
     write_landscape_csv(rows, csv_path)
+    figure_started = time.perf_counter()
     render_landscape_figure(
         rows,
         sweep_specs,
@@ -1165,8 +1168,11 @@ def main(argv: list[str] | None = None) -> int:
         output_path=figure_path,
         baseline_metrics=baseline_metrics,
     )
+    figure_elapsed_s = float(time.perf_counter() - figure_started)
     write_baseline_metadata(context, sweep_specs, baseline_metrics, metadata_path)
 
+    print(f"Simulation generation took {simulation_elapsed_s:.2f} s")
+    print(f"Figure update took {figure_elapsed_s:.2f} s")
     print(f"Wrote {csv_path}")
     print(f"Wrote {figure_path}")
     print(f"Wrote {metadata_path}")

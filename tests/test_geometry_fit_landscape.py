@@ -302,3 +302,106 @@ def test_render_landscape_figure_writes_with_constant_panel_data(tmp_path: Path)
 
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+def test_main_reports_simulation_and_figure_timing(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    outdir = tmp_path / "artifacts"
+
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "_load_saved_state",
+        lambda path: {"state_path": str(path)},
+    )
+
+    context = geometry_fit_landscape.LandscapeContext(
+        state_path=state_path,
+        saved_state={"files": {}},
+        defaults=None,
+        structure_state=None,
+        baseline_params={},
+        candidate_param_names=["gamma"],
+        fit_geometry_config={},
+        solve_q_steps=1,
+        solve_q_rel_tol=1.0e-3,
+        solve_q_mode=0,
+        theta_base_current=0.0,
+        use_shared_theta_offset=False,
+        theta_param_name="theta_initial",
+        active_cif_path="test.cif",
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "_build_geometry_fit_value_state",
+        lambda saved_state, path: context,
+    )
+
+    sweep_specs = [
+        geometry_fit_landscape.SweepSpec(
+            name="gamma",
+            baseline=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            values=np.array([-1.0, 0.0, 1.0], dtype=float),
+            source="bounds:relative",
+        )
+    ]
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "build_sweep_specs",
+        lambda *args, **kwargs: sweep_specs,
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "run_landscape_sweeps",
+        lambda *args, **kwargs: (
+            [{"parameter": "gamma", "parameter_value": 0.0, "runtime_s": 0.1}],
+            {"visible_peak_count": 1.0},
+        ),
+    )
+
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "write_landscape_csv",
+        lambda rows, output_path: calls.append(("csv", output_path)),
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "render_landscape_figure",
+        lambda rows, specs, **kwargs: calls.append(("figure", kwargs["output_path"])),
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "write_baseline_metadata",
+        lambda context_arg, specs, baseline_metrics, output_path: calls.append(
+            ("metadata", output_path)
+        ),
+    )
+
+    perf_counter_values = iter([10.0, 12.5, 20.0, 20.75])
+    monkeypatch.setattr(
+        geometry_fit_landscape.time,
+        "perf_counter",
+        lambda: next(perf_counter_values),
+    )
+
+    result = geometry_fit_landscape.main(
+        ["--state", str(state_path), "--outdir", str(outdir), "--points", "3", "--workers", "1"]
+    )
+
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert calls == [
+        ("csv", outdir / "landscape_runs.csv"),
+        ("figure", outdir / "landscape_figure.png"),
+        ("metadata", outdir / "baseline_metadata.json"),
+    ]
+    assert "Simulation generation took 2.50 s" in captured.out
+    assert "Figure update took 0.75 s" in captured.out

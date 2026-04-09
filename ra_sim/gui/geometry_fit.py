@@ -40,6 +40,24 @@ GEOMETRY_FIT_ACCEPT_MAX_RMS_PX = 100.0
 GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX = 150.0
 
 
+def build_geometry_fit_log_path(
+    *,
+    stamp: str,
+    log_dir: Path | str | None = None,
+    downloads_dir: Path | str | None = None,
+) -> Path:
+    """Return the on-disk log path for one geometry-fit run."""
+
+    resolved_dir: Path | str | None = log_dir
+    if resolved_dir is None or not str(resolved_dir).strip():
+        resolved_dir = downloads_dir
+    if resolved_dir is None or not str(resolved_dir).strip():
+        resolved_dir = Path.cwd() / "logs"
+    log_root = Path(resolved_dir).expanduser()
+    log_root.mkdir(parents=True, exist_ok=True)
+    return log_root / f"geometry_fit_log_{stamp}.txt"
+
+
 @dataclass(frozen=True)
 class GeometryFitPreparedRun:
     """Prepared inputs and metadata for one manual-pair geometry-fit run."""
@@ -278,6 +296,7 @@ class GeometryFitRuntimePostprocessConfig:
     aggregate_match_centers: Callable[..., tuple[object, object, object]]
     build_overlay_records: Callable[..., list[dict[str, object]]]
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]]
+    log_dir: Path | str | None = None
 
 
 @dataclass(frozen=True)
@@ -330,6 +349,7 @@ class GeometryFitRuntimeActionExecutionBindings:
     build_overlay_records: Callable[..., list[dict[str, object]]]
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]]
     live_update_callback: Callable[[Mapping[str, object]], None] | None = None
+    log_dir: Path | str | None = None
 
 
 @dataclass(frozen=True)
@@ -570,6 +590,7 @@ def make_runtime_geometry_fit_action_prepare_bindings_factory(
 def build_runtime_geometry_fit_action_execution_bindings(
     *,
     downloads_dir: Path | str,
+    log_dir: Path | str | None = None,
     simulation_runtime_state: Any,
     background_runtime_state: Any,
     theta_initial_var: Any,
@@ -602,6 +623,7 @@ def build_runtime_geometry_fit_action_execution_bindings(
 
     return GeometryFitRuntimeActionExecutionBindings(
         downloads_dir=downloads_dir,
+        log_dir=log_dir,
         simulation_runtime_state=simulation_runtime_state,
         background_runtime_state=background_runtime_state,
         theta_initial_var=theta_initial_var,
@@ -650,6 +672,7 @@ def build_runtime_geometry_fit_action_bindings(
         dict[str, object],
     ],
     downloads_dir: Path | str,
+    log_dir: Path | str | None = None,
     simulation_runtime_state: Any,
     background_runtime_state: Any,
     theta_initial_var: Any,
@@ -683,6 +706,39 @@ def build_runtime_geometry_fit_action_bindings(
 ) -> GeometryFitRuntimeActionBindings:
     """Build the top-level live geometry-fit action bindings."""
 
+    execution_binding_kwargs: dict[str, object] = {
+        "downloads_dir": downloads_dir,
+        "simulation_runtime_state": simulation_runtime_state,
+        "background_runtime_state": background_runtime_state,
+        "theta_initial_var": theta_initial_var,
+        "geometry_theta_offset_var": geometry_theta_offset_var,
+        "current_ui_params": current_ui_params,
+        "var_map": var_map,
+        "background_theta_for_index": background_theta_for_index,
+        "refresh_status": refresh_status,
+        "update_manual_pick_button_label": update_manual_pick_button_label,
+        "capture_undo_state": capture_undo_state,
+        "push_undo_state": push_undo_state,
+        "replace_dataset_cache": replace_dataset_cache,
+        "request_preview_skip_once": request_preview_skip_once,
+        "schedule_update": schedule_update,
+        "draw_overlay_records": draw_overlay_records,
+        "draw_initial_pairs_overlay": draw_initial_pairs_overlay,
+        "set_last_overlay_state": set_last_overlay_state,
+        "set_progress_text": set_progress_text,
+        "cmd_line": cmd_line,
+        "solver_inputs": solver_inputs,
+        "sim_display_rotate_k": int(sim_display_rotate_k),
+        "background_display_rotate_k": int(background_display_rotate_k),
+        "simulate_and_compare_hkl": simulate_and_compare_hkl,
+        "aggregate_match_centers": aggregate_match_centers,
+        "build_overlay_records": build_overlay_records,
+        "compute_frame_diagnostics": compute_frame_diagnostics,
+        "live_update_callback": live_update_callback,
+    }
+    if log_dir is not None:
+        execution_binding_kwargs["log_dir"] = log_dir
+
     return GeometryFitRuntimeActionBindings(
         value_callbacks=value_callbacks,
         prepare_bindings_factory=make_runtime_geometry_fit_action_prepare_bindings_factory(
@@ -705,34 +761,7 @@ def build_runtime_geometry_fit_action_bindings(
             build_runtime_config_factory=build_runtime_config_factory,
         ),
         execution_bindings=build_runtime_geometry_fit_action_execution_bindings(
-            downloads_dir=downloads_dir,
-            simulation_runtime_state=simulation_runtime_state,
-            background_runtime_state=background_runtime_state,
-            theta_initial_var=theta_initial_var,
-            geometry_theta_offset_var=geometry_theta_offset_var,
-            current_ui_params=current_ui_params,
-            var_map=var_map,
-            background_theta_for_index=background_theta_for_index,
-            refresh_status=refresh_status,
-            update_manual_pick_button_label=update_manual_pick_button_label,
-            capture_undo_state=capture_undo_state,
-            push_undo_state=push_undo_state,
-            replace_dataset_cache=replace_dataset_cache,
-            request_preview_skip_once=request_preview_skip_once,
-            schedule_update=schedule_update,
-            draw_overlay_records=draw_overlay_records,
-            draw_initial_pairs_overlay=draw_initial_pairs_overlay,
-            set_last_overlay_state=set_last_overlay_state,
-            set_progress_text=set_progress_text,
-            cmd_line=cmd_line,
-            solver_inputs=solver_inputs,
-            sim_display_rotate_k=int(sim_display_rotate_k),
-            background_display_rotate_k=int(background_display_rotate_k),
-            simulate_and_compare_hkl=simulate_and_compare_hkl,
-            aggregate_match_centers=aggregate_match_centers,
-            build_overlay_records=build_overlay_records,
-            compute_frame_diagnostics=compute_frame_diagnostics,
-            live_update_callback=live_update_callback,
+            **execution_binding_kwargs
         ),
         solve_fit=solve_fit,
         stamp_factory=stamp_factory,
@@ -761,6 +790,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
         dict[str, object],
     ],
     downloads_dir: Path | str,
+    log_dir: Path | str | None = None,
     simulation_runtime_state: Any,
     background_runtime_state: Any,
     theta_initial_var: Any,
@@ -815,6 +845,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
             manual_dataset_bindings=manual_dataset_bindings_factory(),
             build_runtime_config_factory=build_runtime_config_factory,
             downloads_dir=downloads_dir,
+            log_dir=log_dir,
             simulation_runtime_state=simulation_runtime_state,
             background_runtime_state=background_runtime_state,
             theta_initial_var=theta_initial_var,
@@ -7467,6 +7498,7 @@ def build_runtime_geometry_fit_execution_setup(
     mosaic_params: Mapping[str, object] | None,
     stamp: str,
     downloads_dir: Path | str,
+    log_dir: Path | str | None = None,
     simulation_runtime_state: Any,
     background_runtime_state: Any,
     theta_initial_var: Any,
@@ -7563,7 +7595,11 @@ def build_runtime_geometry_fit_execution_setup(
         ),
         downloads_dir=downloads_dir,
         stamp=stamp,
-        log_path=Path(downloads_dir) / f"geometry_fit_log_{stamp}.txt",
+        log_path=build_geometry_fit_log_path(
+            stamp=stamp,
+            log_dir=log_dir,
+            downloads_dir=downloads_dir,
+        ),
         solver_inputs=solver_inputs,
         sim_display_rotate_k=int(sim_display_rotate_k),
         background_display_rotate_k=int(background_display_rotate_k),
@@ -7571,6 +7607,7 @@ def build_runtime_geometry_fit_execution_setup(
         aggregate_match_centers=aggregate_match_centers,
         build_overlay_records=build_overlay_records,
         compute_frame_diagnostics=compute_frame_diagnostics,
+        log_dir=log_dir,
     )
 
     return GeometryFitRuntimeExecutionSetup(
@@ -7593,6 +7630,7 @@ def build_runtime_geometry_fit_execution_setup_from_bindings(
         mosaic_params=mosaic_params,
         stamp=stamp,
         downloads_dir=bindings.downloads_dir,
+        log_dir=bindings.log_dir,
         simulation_runtime_state=bindings.simulation_runtime_state,
         background_runtime_state=bindings.background_runtime_state,
         theta_initial_var=bindings.theta_initial_var,
@@ -7658,9 +7696,10 @@ def run_runtime_geometry_fit_action(
     ) -> Path | None:
         try:
             stamp = str(bindings.stamp_factory())
-            log_path = (
-                Path(bindings.execution_bindings.downloads_dir)
-                / f"geometry_fit_log_{stamp}.txt"
+            log_path = build_geometry_fit_log_path(
+                stamp=stamp,
+                log_dir=bindings.execution_bindings.log_dir,
+                downloads_dir=bindings.execution_bindings.downloads_dir,
             )
             return write_geometry_fit_preflight_failure_log(
                 stamp=stamp,

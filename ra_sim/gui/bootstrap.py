@@ -1287,11 +1287,21 @@ def build_runtime_integration_range_update_bootstrap(
     normalized_analysis_defaults = {
         "show_1d": False,
         "show_caked_2d": False,
-        "log_radial": False,
-        "log_azimuth": False,
+        "log_display": False,
     }
     if analysis_defaults:
-        normalized_analysis_defaults.update(analysis_defaults)
+        normalized_analysis_defaults.update(
+            {
+                key: value
+                for key, value in analysis_defaults.items()
+                if key in normalized_analysis_defaults
+            }
+        )
+        normalized_analysis_defaults["log_display"] = bool(
+            analysis_defaults.get("log_display", False)
+            or analysis_defaults.get("log_radial", False)
+            or analysis_defaults.get("log_azimuth", False)
+        )
 
     def _create_range_controls(parent: Any) -> None:
         integration_range_drag_module.create_runtime_integration_range_controls(
@@ -1309,8 +1319,7 @@ def build_runtime_integration_range_update_bootstrap(
             view_state=analysis_view_state,
             on_toggle_1d_plots=callbacks.toggle_1d_plots,
             on_toggle_caked_2d=callbacks.toggle_caked_2d,
-            on_toggle_log_radial=callbacks.toggle_log_radial,
-            on_toggle_log_azimuth=callbacks.toggle_log_azimuth,
+            on_toggle_log_display=callbacks.toggle_log_display,
             **normalized_analysis_defaults,
         )
 

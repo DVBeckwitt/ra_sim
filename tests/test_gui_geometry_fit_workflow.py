@@ -33,8 +33,10 @@ def _make_prepared_run(
     joint_background_mode: bool,
     tmp_path=None,
     stamp: str = "20260328_120000",
+    log_dir=None,
 ):
     downloads_dir = tmp_path if tmp_path is not None else "C:/tmp"
+    resolved_log_dir = log_dir if log_dir is not None else downloads_dir
     return geometry_fit.GeometryFitPreparedRun(
         fit_params={"theta_initial": 3.0, "theta_offset": 0.0},
         selected_background_indices=[0, 1] if joint_background_mode else [0],
@@ -77,9 +79,7 @@ def _make_prepared_run(
         current_background_index=0,
         downloads_dir=downloads_dir,
         stamp=stamp,
-        log_path=(tmp_path / f"geometry_fit_log_{stamp}.txt")
-        if tmp_path is not None
-        else f"C:/tmp/geometry_fit_log_{stamp}.txt",
+        log_path=Path(resolved_log_dir) / f"geometry_fit_log_{stamp}.txt",
         solver_inputs=geometry_fit.GeometryFitRuntimeSolverInputs(
             miller="miller-data",
             intensities="intensity-data",
@@ -91,6 +91,7 @@ def _make_prepared_run(
         aggregate_match_centers=None,
         build_overlay_records=None,
         compute_frame_diagnostics=None,
+        log_dir=resolved_log_dir,
     )
 
 
@@ -130,7 +131,13 @@ def _make_runtime_action_prepare_bindings():
     )
 
 
-def _make_runtime_action_execution_bindings(tmp_path, progress_texts, cmd_events):
+def _make_runtime_action_execution_bindings(
+    tmp_path,
+    progress_texts,
+    cmd_events,
+    *,
+    log_dir=None,
+):
     class _SimulationState:
         def __init__(self):
             self.profile_cache = {}
@@ -172,6 +179,7 @@ def _make_runtime_action_execution_bindings(tmp_path, progress_texts, cmd_events
         aggregate_match_centers=lambda *args, **kwargs: ([], [], []),
         build_overlay_records=lambda *args, **kwargs: [],
         compute_frame_diagnostics=lambda records: ({}, None),
+        log_dir=log_dir,
     )
 
 
@@ -4503,6 +4511,67 @@ def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callb
     assert np.load(save_path, allow_pickle=True).tolist() == [{"source": "sim"}]
 
 
+def test_build_runtime_geometry_fit_execution_setup_uses_log_dir_when_provided(
+    tmp_path,
+) -> None:
+    downloads_dir = tmp_path / "downloads"
+    log_dir = tmp_path / "logs"
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=downloads_dir,
+        stamp="20260328_123010",
+        log_dir=log_dir,
+    )
+
+    class _SimulationState:
+        profile_cache = {}
+        last_simulation_signature = "sig"
+
+    class _BackgroundState:
+        current_background_index = 0
+
+    setup = geometry_fit.build_runtime_geometry_fit_execution_setup(
+        prepared_run=prepared_run,
+        mosaic_params={"sigma_mosaic_deg": 0.2},
+        stamp="20260328_123010",
+        downloads_dir=downloads_dir,
+        log_dir=log_dir,
+        simulation_runtime_state=_SimulationState(),
+        background_runtime_state=_BackgroundState(),
+        theta_initial_var=_DummyVar(0.0),
+        geometry_theta_offset_var=None,
+        current_ui_params=lambda: {},
+        var_map={},
+        background_theta_for_index=lambda idx, strict_count=False: 3.0,
+        refresh_status=lambda: None,
+        update_manual_pick_button_label=lambda: None,
+        capture_undo_state=lambda: {},
+        push_undo_state=lambda state: None,
+        replace_dataset_cache=lambda payload: None,
+        request_preview_skip_once=lambda: None,
+        schedule_update=lambda: None,
+        draw_overlay_records=lambda records, marker_limit: None,
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: None,
+        set_last_overlay_state=lambda state: None,
+        set_progress_text=lambda text: None,
+        cmd_line=lambda text: None,
+        solver_inputs=postprocess_config.solver_inputs,
+        sim_display_rotate_k=postprocess_config.sim_display_rotate_k,
+        background_display_rotate_k=postprocess_config.background_display_rotate_k,
+        simulate_and_compare_hkl=lambda *args, **kwargs: None,
+        aggregate_match_centers=lambda *args, **kwargs: None,
+        build_overlay_records=lambda *args, **kwargs: [],
+        compute_frame_diagnostics=lambda *args, **kwargs: ({}, None),
+    )
+
+    assert setup.postprocess_config.downloads_dir == downloads_dir
+    assert setup.postprocess_config.log_dir == log_dir
+    assert setup.postprocess_config.log_path == (
+        log_dir / "geometry_fit_log_20260328_123010.txt"
+    )
+    assert setup.postprocess_config.log_path.parent == log_dir
+
+
 def test_run_runtime_geometry_fit_action_prepares_builds_setup_and_executes(
     tmp_path,
 ) -> None:
@@ -4665,6 +4734,50 @@ def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> 
     )
     assert progress_texts == ["Geometry fit failed: boom"]
     assert cmd_events == ["failed: boom"]
+
+
+def test_run_runtime_geometry_fit_action_writes_preflight_log_to_log_dir(
+    tmp_path,
+) -> None:
+    downloads_dir = tmp_path / "downloads"
+    log_dir = tmp_path / "logs"
+    progress_texts: list[str] = []
+    cmd_events: list[str] = []
+
+    action = geometry_fit.run_runtime_geometry_fit_action(
+        bindings=geometry_fit.GeometryFitRuntimeActionBindings(
+            value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+                current_var_names=lambda: ["gamma"],
+                current_params=lambda: {"theta_initial": 3.0, "mosaic_params": {}},
+                current_ui_params=lambda: {},
+                var_map={},
+            ),
+            prepare_bindings_factory=lambda _var_names: (
+                _make_runtime_action_prepare_bindings()
+            ),
+            execution_bindings=_make_runtime_action_execution_bindings(
+                downloads_dir,
+                progress_texts,
+                cmd_events,
+                log_dir=log_dir,
+            ),
+            solve_fit=lambda *_args, **_kwargs: None,
+            stamp_factory=lambda: "20260328_130001",
+        ),
+        prepare_run=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        build_execution_setup=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_execution_setup should not be called")
+        ),
+        execute_run=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("execute_run should not be called")
+        ),
+    )
+
+    expected_log_path = log_dir / "geometry_fit_log_20260328_130001.txt"
+    assert action.prepare_result is not None
+    assert action.prepare_result.log_path == expected_log_path
+    assert expected_log_path.exists()
+    assert not (downloads_dir / "geometry_fit_log_20260328_130001.txt").exists()
 
 
 def test_run_runtime_geometry_fit_action_surfaces_preflight_error_text(tmp_path) -> None:

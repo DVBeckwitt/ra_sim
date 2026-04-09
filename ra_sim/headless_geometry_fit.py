@@ -10,7 +10,7 @@ from pathlib import Path
 import CifFile
 import numpy as np
 
-from ra_sim.config import get_instrument_config, get_path
+from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.fitting.optimization import (
     build_geometry_fit_central_mosaic_params,
     fit_geometry_parameters,
@@ -1133,6 +1133,7 @@ def run_headless_geometry_fit(
         mosaic_params=mosaic_params,
         stamp=fit_stamp,
         downloads_dir=downloads_path,
+        log_dir=get_dir("debug_log_dir"),
         simulation_runtime_state=simulation_runtime_state,
         background_runtime_state=background_state,
         theta_initial_var=theta_initial_var,

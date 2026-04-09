@@ -457,16 +457,14 @@ class GeometryOverlayActionsViewState:
 
 @dataclass
 class AnalysisViewControlsViewState:
-    """Widget references and vars for 1D/caked/log analysis view controls."""
+    """Widget references and vars for 1D/caked/display view controls."""
 
     show_1d_var: Any = None
     check_1d: Any = None
     show_caked_2d_var: Any = None
     check_2d: Any = None
-    log_radial_var: Any = None
-    check_log_radial: Any = None
-    log_azimuth_var: Any = None
-    check_log_azimuth: Any = None
+    log_display_var: Any = None
+    check_log_display: Any = None
 
 
 @dataclass

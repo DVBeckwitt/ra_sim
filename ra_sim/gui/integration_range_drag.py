@@ -72,6 +72,7 @@ class IntegrationRangeUpdateBindings:
     hkl_lookup_controls: Any = None
     integration_range_drag_callbacks: Any = None
     refresh_integration_from_cached_results: Callable[[], bool] | None = None
+    refresh_display_from_controls: Callable[[], None] | None = None
     schedule_update: Callable[[], None] | None = None
     range_update_debounce_ms: int = 120
 
@@ -83,8 +84,7 @@ class IntegrationRangeUpdateCallbacks:
     schedule_range_update: Callable[..., None]
     toggle_1d_plots: Callable[[], None]
     toggle_caked_2d: Callable[[], None]
-    toggle_log_radial: Callable[[], None]
-    toggle_log_azimuth: Callable[[], None]
+    toggle_log_display: Callable[[], None]
 
 
 def _resolve_runtime_value(value_or_callable: object) -> object:
@@ -1173,6 +1173,7 @@ def make_runtime_integration_range_update_bindings_factory(
     hkl_lookup_controls_factory: object = None,
     integration_range_drag_callbacks_factory: object = None,
     refresh_integration_from_cached_results_factory: object = None,
+    refresh_display_from_controls_factory: object = None,
     schedule_update_factory: object = None,
     range_update_debounce_ms_factory: object = 120,
 ) -> Callable[[], IntegrationRangeUpdateBindings]:
@@ -1196,6 +1197,9 @@ def make_runtime_integration_range_update_bindings_factory(
             ),
             refresh_integration_from_cached_results=_resolve_runtime_value(
                 refresh_integration_from_cached_results_factory
+            ),
+            refresh_display_from_controls=_resolve_runtime_value(
+                refresh_display_from_controls_factory
             ),
             schedule_update=_resolve_runtime_value(schedule_update_factory),
             range_update_debounce_ms=normalized_debounce_ms,
@@ -1455,6 +1459,15 @@ def _toggle_runtime_caked_2d(
         bindings.schedule_update()
 
 
+def _toggle_runtime_log_display(
+    bindings_factory: Callable[[], IntegrationRangeUpdateBindings],
+) -> None:
+    bindings = bindings_factory()
+    refresh_display = getattr(bindings, "refresh_display_from_controls", None)
+    if callable(refresh_display):
+        refresh_display()
+
+
 def make_runtime_integration_range_update_callbacks(
     bindings_factory: Callable[[], IntegrationRangeUpdateBindings],
 ) -> IntegrationRangeUpdateCallbacks:
@@ -1467,13 +1480,11 @@ def make_runtime_integration_range_update_callbacks(
         schedule_range_update=_schedule_range_update,
         toggle_1d_plots=lambda: None,
         toggle_caked_2d=lambda: _toggle_runtime_caked_2d(bindings_factory),
-        toggle_log_radial=lambda: None,
-        toggle_log_azimuth=lambda: None,
+        toggle_log_display=lambda: _toggle_runtime_log_display(bindings_factory),
     )
     return IntegrationRangeUpdateCallbacks(
         schedule_range_update=callbacks.schedule_range_update,
         toggle_1d_plots=lambda: _toggle_runtime_1d_plots(callbacks),
         toggle_caked_2d=callbacks.toggle_caked_2d,
-        toggle_log_radial=lambda: _toggle_runtime_1d_plots(callbacks),
-        toggle_log_azimuth=lambda: _toggle_runtime_1d_plots(callbacks),
+        toggle_log_display=callbacks.toggle_log_display,
     )

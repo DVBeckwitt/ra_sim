@@ -33,8 +33,7 @@ class RuntimeIntegrationRangeWorkflow:
     schedule_range_update: Callable[..., Any]
     toggle_1d_plots: Callable[..., Any]
     toggle_caked_2d: Callable[..., Any]
-    toggle_log_radial: Callable[..., Any]
-    toggle_log_azimuth: Callable[..., Any]
+    toggle_log_display: Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -153,8 +152,7 @@ def build_runtime_integration_range_workflow(
         schedule_range_update=callbacks.schedule_range_update,
         toggle_1d_plots=callbacks.toggle_1d_plots,
         toggle_caked_2d=callbacks.toggle_caked_2d,
-        toggle_log_radial=callbacks.toggle_log_radial,
-        toggle_log_azimuth=callbacks.toggle_log_azimuth,
+        toggle_log_display=callbacks.toggle_log_display,
     )
 
 
