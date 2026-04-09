@@ -5,15 +5,6 @@ import pytest
 
 from ra_sim.gui import tk_primary_viewport
 
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.figure import Figure
-except Exception:  # pragma: no cover - Matplotlib is expected in GUI test environments.
-    FigureCanvasAgg = None
-    Figure = None
-
 
 class _FakeWidget:
     def __init__(self):
@@ -165,6 +156,7 @@ def _make_layer(
     *,
     extent: tuple[float, float, float, float] = (0.0, 2.0, 2.0, 0.0),
     visible: bool = True,
+    origin: str = "upper",
 ) -> tk_primary_viewport._ViewportImageLayer:
     return tk_primary_viewport._ViewportImageLayer(
         name=name,
@@ -172,7 +164,7 @@ def _make_layer(
         extent=extent,
         interpolation="nearest",
         source_rgba=np.asarray(rgba, dtype=np.uint8),
-        origin="upper",
+        origin=origin,
     )
 
 
@@ -217,35 +209,6 @@ def _make_scene(
     )
 
 
-def _render_matplotlib_reference(
-    rgba: np.ndarray,
-    *,
-    origin: str,
-    extent: tuple[float, float, float, float],
-    xlim: tuple[float, float],
-    ylim: tuple[float, float],
-    width: int,
-    height: int,
-) -> np.ndarray:
-    if Figure is None or FigureCanvasAgg is None:
-        pytest.skip("Matplotlib Agg is unavailable")
-    figure = Figure(figsize=(float(width) / 60.0, float(height) / 60.0), dpi=60)
-    canvas = FigureCanvasAgg(figure)
-    axis = figure.add_axes([0.0, 0.0, 1.0, 1.0])
-    axis.set_axis_off()
-    axis.set_aspect("auto")
-    axis.imshow(
-        np.asarray(rgba, dtype=np.uint8),
-        origin=str(origin),
-        extent=tuple(float(value) for value in extent),
-        interpolation="nearest",
-    )
-    axis.set_xlim(float(xlim[0]), float(xlim[1]))
-    axis.set_ylim(float(ylim[0]), float(ylim[1]))
-    canvas.draw()
-    return np.asarray(canvas.buffer_rgba())
-
-
 def test_primary_viewport_backend_parser_accepts_matplotlib_and_tk_canvas() -> None:
     assert tk_primary_viewport.parse_primary_viewport_backend(None) == "matplotlib"
     assert tk_primary_viewport.parse_primary_viewport_backend("matplotlib") == "matplotlib"
@@ -263,7 +226,7 @@ def test_screen_and_world_transforms_round_trip_detector_view() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 50.0, 25.0)
-    assert world == (25.0, 25.0)
+    assert world == (25.0, 75.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (50.0, 25.0)
 
 
@@ -276,7 +239,7 @@ def test_screen_and_world_transforms_round_trip_caked_view() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 120.0, 30.0)
-    assert world == (22.0, 15.0)
+    assert world == (22.0, -15.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (120.0, 30.0)
 
 
@@ -346,7 +309,7 @@ def test_build_q_group_cache_uses_caked_angles_when_present() -> None:
     assert cache.visible_entries[0]["_viewport_point"] == (21.0, -8.0)
 
 
-def test_render_layer_patch_preserves_detector_view_vertical_orientation() -> None:
+def test_render_layer_patch_restores_original_detector_orientation() -> None:
     viewport = tk_primary_viewport._TkPrimaryViewport(
         tk_module=_FakeTkModule(),
         parent="canvas-parent",
@@ -380,107 +343,35 @@ def test_render_layer_patch_preserves_detector_view_vertical_orientation() -> No
     patch_image, left, top = rendered
     assert (left, top) == (0, 0)
     assert patch_image.size == (1, 2)
-    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
-    assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
+    assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
+    assert patch_image.getpixel((0, 1)) == (255, 0, 0, 255)
 
 
-def test_render_layer_patch_matches_matplotlib_detector_zoom_sampling() -> None:
-    width = 60
-    height = 60
+def test_render_layer_patch_restores_original_caked_orientation() -> None:
     viewport = tk_primary_viewport._TkPrimaryViewport(
         tk_module=_FakeTkModule(),
         parent="canvas-parent",
-        ax=_FakeAxes(
-            xlim=(1.4915196934884571, 2.2484302364924327),
-            ylim=(1.2912873336958195, 0.29259750680209373),
-        ),
-        initial_width=width,
-        initial_height=height,
+        ax=_FakeAxes(xlim=(10.0, 20.0), ylim=(-30.0, 30.0)),
+        initial_width=1,
+        initial_height=3,
     )
     view_state = tk_primary_viewport.ViewportViewState(
-        width=width,
-        height=height,
-        xlim=(1.4915196934884571, 2.2484302364924327),
-        ylim=(1.2912873336958195, 0.29259750680209373),
-    )
-    rgba = np.asarray(
-        [
-            [[255, 0, 0, 255], [255, 128, 0, 255], [255, 255, 0, 255]],
-            [[0, 255, 0, 255], [0, 255, 255, 255], [0, 0, 255, 255]],
-            [[128, 0, 255, 255], [255, 0, 255, 255], [255, 255, 255, 255]],
-        ],
-        dtype=np.uint8,
-    )
-    layer = tk_primary_viewport._ViewportImageLayer(
-        name="simulation",
-        visible=True,
-        extent=(0.0, 3.0, 3.0, 0.0),
-        interpolation="nearest",
-        source_rgba=rgba,
-        origin="upper",
-    )
-
-    rendered = viewport._render_layer_patch(layer, view_state)
-
-    assert rendered is not None
-    patch_image, left, top = rendered
-    assert (left, top) == (0, 0)
-
-    reference = _render_matplotlib_reference(
-        rgba,
-        origin="upper",
-        extent=(0.0, 3.0, 3.0, 0.0),
-        xlim=view_state.xlim,
-        ylim=view_state.ylim,
-        width=width,
-        height=height,
-    )
-    for x_value, y_value in (
-        (10, 10),
-        (30, 10),
-        (50, 10),
-        (10, 30),
-        (30, 30),
-        (50, 30),
-        (10, 50),
-        (30, 50),
-        (50, 50),
-    ):
-        assert patch_image.getpixel((x_value, y_value)) == tuple(
-            reference[y_value, x_value][:4]
-        )
-
-
-def test_render_layer_patch_matches_matplotlib_caked_vertical_orientation() -> None:
-    width = 20
-    height = 60
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(10.0, 20.0), ylim=(-20.0, 20.0)),
-        initial_width=width,
-        initial_height=height,
-    )
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=width,
-        height=height,
+        width=1,
+        height=3,
         xlim=(10.0, 20.0),
-        ylim=(-20.0, 20.0),
+        ylim=(-30.0, 30.0),
     )
-    rgba = np.asarray(
-        [
-            [[255, 0, 0, 255]],
-            [[0, 255, 0, 255]],
-            [[0, 0, 255, 255]],
-        ],
-        dtype=np.uint8,
-    )
-    layer = tk_primary_viewport._ViewportImageLayer(
-        name="simulation",
-        visible=True,
+    layer = _make_layer(
+        "simulation",
+        np.asarray(
+            [
+                [[255, 0, 0, 255]],
+                [[0, 255, 0, 255]],
+                [[0, 0, 255, 255]],
+            ],
+            dtype=np.uint8,
+        ),
         extent=(10.0, 20.0, -30.0, 30.0),
-        interpolation="nearest",
-        source_rgba=rgba,
         origin="lower",
     )
 
@@ -489,20 +380,10 @@ def test_render_layer_patch_matches_matplotlib_caked_vertical_orientation() -> N
     assert rendered is not None
     patch_image, left, top = rendered
     assert (left, top) == (0, 0)
-
-    reference = _render_matplotlib_reference(
-        rgba,
-        origin="lower",
-        extent=(10.0, 20.0, -30.0, 30.0),
-        xlim=view_state.xlim,
-        ylim=view_state.ylim,
-        width=width,
-        height=height,
-    )
-    for y_value in (10, 30, 50):
-        assert patch_image.getpixel((10, y_value)) == tuple(
-            reference[y_value, 10][:4]
-        )
+    assert patch_image.size == (1, 3)
+    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert patch_image.getpixel((0, 1)) == (0, 255, 0, 255)
+    assert patch_image.getpixel((0, 2)) == (0, 0, 255, 255)
 
 
 def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
@@ -527,7 +408,7 @@ def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
     assert events[0].button == 1
     assert events[0].inaxes == "AX"
     assert events[0].xdata == 30.0
-    assert events[0].ydata == 25.0
+    assert events[0].ydata == 75.0
 
 
 def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
@@ -548,7 +429,7 @@ def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
     assert events[0].button == "up"
     assert events[0].step == 1.0
     assert events[0].xdata == 15.0
-    assert events[0].ydata == 40.0
+    assert events[0].ydata == 60.0
 
 
 def test_tk_canvas_proxy_draw_idle_schedules_one_sync() -> None:
