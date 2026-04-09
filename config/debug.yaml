@@ -2,7 +2,7 @@ debug:
   global:
     disable_all: true 
   console:
-    enabled: false
+    enabled: true
   runtime_update_trace:
     enabled: true
   geometry_fit:

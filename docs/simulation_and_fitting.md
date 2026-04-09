@@ -1,9 +1,10 @@
-# Simulation and Fitting Reference
+# RA-SIM reference
 
-This document is the implementation-faithful reference for the forward simulation and fitting code in this repository. It is still the place to check what the code does today, but it now also spells out the physics assumptions, the exact geometry and ray-tracing conventions, the fitting residuals, and the statistical procedures used by the GUI workflows. If another note disagrees with this file, prefer this file and then audit the linked functions directly.
+This is the canonical RA-SIM reference for GUI workflow, forward simulation, fitting, debug/log controls, cache retention, and the detailed center of rotation derivation. It stays implementation-faithful: names, defaults, equations, and file paths are taken from the current code. If an older note, README pointer, or inline comment disagrees with this file, prefer this file and then audit the linked functions directly.
 
 The scope is the current live pipeline:
 
+- GUI work areas and the order they are usually used
 - forward HKL and rod simulation through the typed API and legacy wrapper
 - exact detector and sample geometry used by the diffraction kernel
 - reciprocal-space integration and mosaic broadening
@@ -11,8 +12,101 @@ The scope is the current live pipeline:
 - automatic background peak matching
 - geometry-fit-cached mosaic-shape fitting, legacy mosaic-width fitting, and image-space refinement
 - hBN calibrant ellipse fitting and projective tilt correction
+- debug/logging controls and optional cache-retention policy
+- the full center-of-rotation axis derivation used by the diffraction kernel
 
-No new API is defined here. All names, defaults, and equations below are taken from the current code.
+No new API is defined here. All names, defaults, equations, and file paths below are taken from the current code. The older standalone notes for GUI views, logging/debug controls, and CoR math are now folded into this file.
+
+## Index
+
+- [GUI workflow and views](#gui-workflow-and-views)
+- [Read This First: The Physical Story of the Pipeline](#read-this-first-the-physical-story-of-the-pipeline)
+- [Code map](#code-map)
+- [Notation and units](#notation-and-units)
+- [Simulation parameter inventory](#simulation-parameter-inventory)
+- [Forward simulation: strict algorithm](#forward-simulation-strict-algorithm)
+- [Pedagogical view of the optics modes](#pedagogical-view-of-the-optics-modes)
+- [Exact per-sample ray tracing and entry optics](#exact-per-sample-ray-tracing-and-entry-optics)
+- [Reciprocal-space circle solve and mosaic weighting](#reciprocal-space-circle-solve-and-mosaic-weighting)
+- [Outgoing ray tracing, detector projection, and deposition](#outgoing-ray-tracing-detector-projection-and-deposition)
+- [Implementation details that materially affect behavior](#implementation-details-that-materially-affect-behavior)
+- [Rods and stacking disorder](#rods-and-stacking-disorder)
+- [Geometry fitting from picked spots](#geometry-fitting-from-picked-spots)
+- [Automatic background peak matching](#automatic-background-peak-matching)
+- [Mosaic-shape fitting, legacy mosaic-width fitting, and image-space refinement](#mosaic-shape-fitting-legacy-mosaic-width-fitting-and-image-space-refinement)
+- [hBN calibrant fitting](#hbn-calibrant-fitting)
+- [Logging, debug, and cache controls](#logging-debug-and-cache-controls)
+- [Appendix A: Center of rotation axis math](#appendix-a-center-of-rotation-axis-math)
+- [Appendix B: equation-to-code map](#appendix-b-equation-to-code-map)
+
+## GUI workflow and views
+
+These are the main RA-SIM work areas in the order they are usually used.
+
+### Simulation view
+
+The simulation view is the main detector-space workspace. Use it to answer the
+first-order questions:
+
+- Are the main arcs, caps, and ring fragments in the right place?
+- Is the detector geometry roughly correct?
+- Are the broadening and intensity trends physically believable?
+
+This is the best place to establish global agreement before checking reduced
+coordinates.
+
+### Integration views
+
+The integration views reduce the 2D detector image into easier diagnostics:
+
+- radial intensity versus `2theta`
+- azimuthal intensity versus detector angle
+- caked maps for localized mismatch
+
+Use these views after the detector-space pattern is roughly aligned. They are
+the quickest way to see whether the model has the correct radial positions,
+azimuthal widths, and intensity balance.
+
+### Calibrant view
+
+The calibrant view is the hBN ellipse-fitting workflow used to estimate beam
+center, detector tilt, and related geometry terms from ring data.
+
+Typical use:
+
+1. Load a calibrant frame and any associated dark/background image.
+2. Mark or edit ring points.
+3. Fit ellipses and refine the geometry.
+4. Save the bundle and use it as the starting point for the main simulation.
+
+Use this view when detector geometry is uncertain or when you want a stronger
+initial geometry before refining diffraction parameters.
+
+### Parameters panel
+
+The parameters panel is the control surface for geometry, lattice, mosaic,
+beam, stacking, occupancy, and fitting controls.
+
+In practice:
+
+1. Use the geometry controls until detector-space features land correctly.
+2. Check integrations to verify widths and intensity trends.
+3. Refine mosaic and structural terms only after the geometry is stable.
+
+The `Fit Mosaic Shapes` action is geometry-locked. It reuses the exact
+multi-background dataset bundle from the last successful manual geometry fit,
+so any change to manual picks, selected backgrounds, or shared-theta metadata
+requires rerunning geometry fit before the mosaic-shape step.
+
+Within that cached bundle, the mosaic fitter keeps the selected specular
+`(00l)` family, then reduces the off-specular side to the top three current
+HKL/Qr groups so paired reflections with identical `Qr` are not both simulated.
+Specular picks contribute both `2theta` line-shape terms and relative-intensity
+constraints across the selected specular family, while the retained
+off-specular groups contribute `phi` line-shape terms only.
+
+Saving parameter snapshots regularly is the easiest way to keep iterations
+reproducible.
 
 ## Read This First: The Physical Story of the Pipeline
 
@@ -195,7 +289,7 @@ In the code this is the sample refractive index `n2`, or the wavelength-dependen
 - `psi`: in-plane sample azimuth used in `R_z(psi)`.
 - `psi_z`: azimuth used when rotating the center-of-rotation axis itself.
 - `chi`: sample tilt in `R_y(chi)` before the extra `theta_initial` rotation.
-- `zs`: sample-plane reference shift along the laboratory/sample geometry path; it enters the sample plane anchor point `P0 = (0, 0, zs)`.
+- `zs`: sample-plane reference shift along the laboratory/sample geometry path; it enters the sample plane anchor point `P0 = (0, 0, -zs)`.
 - `zb`: vertical beam-origin offset used when building the beam start point `beam_start = [beam_x, -20 mm, beam_y - zb]`.
 - `debye_x`: phenomenological damping scale applied to `Qz` through `exp(-Qz^2 debye_x^2)`.
 - `debye_y`: phenomenological damping scale applied to `Qx^2 + Qy^2` through `exp(-(Qx^2 + Qy^2) debye_y^2)`.
@@ -250,6 +344,8 @@ n_{\mathrm{surf}} = \mathrm{normalize}(R_{\mathrm{cor}}\,n_{ZY}),
 \]
 
 and the sample-plane anchor point is rotated as `P0_rot = R_sample @ P0`, then forced to `P0_rot[0] = 0`.
+
+Appendix A expands this into the exact axis construction, Rodrigues form, and reference-point convention used by the kernel.
 
 ## Simulation parameter inventory
 
@@ -2306,7 +2402,507 @@ So the hBN fitter is not just "fit an ellipse". It is:
 - confidence scoring
 - projective circularization of the corrected rings
 
-## Appendix: equation-to-code map
+## Logging, debug, and cache controls
+
+RA-SIM now uses `config/debug.yaml` as the primary control surface for user-facing debug/logging output and optional cache retention.
+
+The main kill switch is:
+
+```yaml
+debug:
+  global:
+    disable_all: true
+```
+
+When `debug.global.disable_all` is `true`, every debug/log output path documented here is disabled, regardless of the other entries in `debug.yaml`.
+
+Legacy environment variables still work as compatibility overrides. They are no longer the primary interface.
+
+### Primary config
+
+The repo default is `config/debug.yaml`:
+
+```yaml
+debug:
+  global:
+    disable_all: false
+  console:
+    enabled: false
+  runtime_update_trace:
+    enabled: true
+  geometry_fit:
+    log_files: true
+    extra_sections: true
+  mosaic_fit:
+    log_files: true
+  projection_debug:
+    enabled: true
+  diffraction_debug_csv:
+    enabled: true
+  intersection_cache:
+    enabled: true
+    log_dir: null
+  cache:
+    default_retention: auto
+    families:
+      primary_contribution: auto
+      source_snapshots: auto
+      caking: auto
+      peak_overlay: auto
+      background_history: auto
+      manual_pick: auto
+      geometry_fit_dataset: auto
+      qr_cylinder_overlay: auto
+      diffraction_safe: auto
+      diffraction_last_intersection: never
+      fit_simulation: auto
+      stacking_fault_base: auto
+```
+
+Meaning of each key:
+
+1. `debug.global.disable_all`
+   Global kill switch for all user-facing debug/log output covered by this document.
+
+2. `debug.console.enabled`
+   Enables console debug printing and Numba logging.
+
+3. `debug.runtime_update_trace.enabled`
+   Enables the GUI runtime trace log.
+
+4. `debug.geometry_fit.log_files`
+   Enables geometry-fit log file creation.
+
+5. `debug.geometry_fit.extra_sections`
+   Enables the more verbose geometry-fit diagnostic sections inside those logs.
+
+6. `debug.mosaic_fit.log_files`
+   Enables mosaic-shape fit log file creation in both GUI and CLI paths.
+
+7. `debug.projection_debug.enabled`
+   Enables projection-debug JSON logging.
+
+8. `debug.diffraction_debug_csv.enabled`
+   Enables the explicit diffraction debug CSV dump written by `dump_debug_log()`.
+
+9. `debug.intersection_cache.enabled`
+   Enables intersection-cache dump folders.
+
+10. `debug.intersection_cache.log_dir`
+    Optional root directory for intersection-cache dumps. `null` means use `debug_log_dir`.
+
+11. `debug.cache.default_retention`
+    Default policy for optional retained caches. Valid values are `never`, `auto`, and `always`.
+
+12. `debug.cache.families.<name>`
+    Per-cache-family override for optional retained caches. Valid values are `never`, `auto`, and `always`.
+
+### Cache policy
+
+The cache section controls only optional retained caches. It does not control active simulation state.
+
+Three categories matter:
+
+1. Mandatory current state
+   Current simulation images, current peak tables, current active intersection caches, current integration payloads, the active background image, and the active beam/profile bundle. These are required for the current UI/runtime state and are not gated by the cache policy.
+
+2. Optional retained caches
+   Recomputable data kept only for reuse or debug convenience. These are controlled by `debug.cache`.
+
+3. Per-call scratch buffers
+   Temporary hot-loop work arrays. These are not retained caches and are not controlled here.
+
+Current optional cache families:
+
+1. `primary_contribution`
+   Per-contribution primary hit-table cache used by incremental SF-prune reuse.
+
+2. `source_snapshots`
+   Stored source-row snapshots used by manual-geometry/source-row reuse flows.
+
+3. `caking`
+   Retained caked-analysis payloads reused across repeated analysis refreshes.
+
+4. `peak_overlay`
+   Reusable peak-overlay records and click-index payloads.
+
+5. `background_history`
+   Inactive background-image history. The currently selected background image remains mandatory.
+
+6. `manual_pick`
+   Geometry manual-pick candidate/match cache.
+
+7. `geometry_fit_dataset`
+   Cached geometry-fit dataset bundle for follow-on geometry-fit workflows.
+
+8. `qr_cylinder_overlay`
+   Cached analytic Qr-cylinder overlay paths.
+
+9. `diffraction_safe`
+   Retained diffraction safe-cache internals such as Q-vector reuse state.
+
+10. `diffraction_last_intersection`
+    Retained global last-intersection snapshot. Default is `never`.
+
+11. `fit_simulation`
+    Reusable fitting simulation/image caches.
+
+12. `stacking_fault_base`
+    Retained HT base-curve cache in stacking-fault generation.
+
+Retention modes:
+
+1. `never`
+   Build on demand if needed for the current action, then discard.
+
+2. `auto`
+   Retain only when the active feature benefits from reuse. This is the default balanced mode.
+
+3. `always`
+   Retain whenever built.
+
+Important detail:
+
+- `debug.global.disable_all` disables logging/debug output only.
+- `debug.global.disable_all` does not disable optional caches.
+- Tiny infrastructure/compile caches such as config bundle loading, CIF parsing, and compiled expression helpers stay always-on and are not controlled by `debug.cache`.
+
+### Resolution order
+
+Debug control resolution follows this order:
+
+1. Global disable is active if either `debug.global.disable_all` is `true` or `RA_SIM_DISABLE_ALL_LOGGING` / `RA_SIM_DISABLE_LOGGING` is truthy.
+2. If global disable is active, all subsystem debug/log outputs are disabled.
+3. Otherwise, existing environment variables override the matching `debug.yaml` entry.
+4. Otherwise, `debug.yaml` provides the value.
+5. For `debug.geometry_fit.extra_sections` only, if that key is absent, the code falls back to the legacy instrument config keys `instrument.fit.geometry.debug_logging` and then `instrument.fit.geometry.debug_mode`.
+
+Important detail:
+
+- `RA_SIM_DEBUG=1` does not bypass the global kill switch.
+- Some debug keys are config-only because there was no legacy env var for them.
+- Cache retention has no environment-variable overrides in v1.
+
+### Compatibility environment variables
+
+These env vars are still honored:
+
+1. `RA_SIM_DISABLE_ALL_LOGGING=0/1`
+   Compatibility override for the global kill switch.
+
+2. `RA_SIM_DISABLE_LOGGING=0/1`
+   Legacy alias for the same global kill switch.
+
+3. `RA_SIM_DEBUG=0/1`
+   Compatibility override for `debug.console.enabled`.
+
+4. `RA_SIM_DISABLE_PROJECTION_DEBUG=0/1`
+   Negative compatibility override for `debug.projection_debug.enabled`.
+   `1` disables projection-debug logging.
+
+5. `RA_SIM_LOG_INTERSECTION_CACHE=0/1`
+   Compatibility override for `debug.intersection_cache.enabled`.
+
+6. `RA_SIM_INTERSECTION_CACHE_LOG_DIR=/path/to/dir`
+   Compatibility override for `debug.intersection_cache.log_dir`.
+
+Legacy geometry-fit compatibility:
+
+1. `instrument.fit.geometry.debug_logging`
+   Fallback for `debug.geometry_fit.extra_sections` when the new key is absent.
+
+2. `instrument.fit.geometry.debug_mode`
+   Older fallback alias used only if `debug_logging` is absent.
+
+### What is covered by the global kill switch
+
+`debug.global.disable_all: true` disables all of these:
+
+1. Console debug output and Numba logging.
+2. GUI runtime update trace logging.
+3. Geometry-fit log file creation.
+4. Geometry-fit verbose diagnostic sections.
+5. Mosaic-shape fit log file creation in GUI and CLI flows.
+6. Projection-debug JSON output.
+7. Diffraction debug CSV output from `dump_debug_log()`.
+8. Intersection-cache dump folders.
+
+This includes the older direct geometry-fit and mosaic-fit writers in the GUI runtime and CLI paths. They are now routed through the centralized resolver.
+
+### Output files and directories
+
+Default output locations still come from `config/dir_paths.yaml`.
+
+Relevant directory keys:
+
+1. `downloads`
+2. `debug_log_dir`
+3. `overlay_dir`
+4. `temp_root`
+5. `file_dialog_dir`
+
+Default directory values:
+
+1. `downloads`: `~/Downloads`
+2. `debug_log_dir`: `~/.cache/ra_sim/logs`
+3. `overlay_dir`: `~/.cache/ra_sim/overlays`
+4. `temp_root`: `~/.cache/ra_sim`
+5. `file_dialog_dir`: `~/.local/share/ra_sim`
+
+Current debug/log outputs:
+
+1. GUI runtime update trace
+   File: `runtime_update_trace_<YYYYMMDD>.log`
+   Location: `downloads`
+   Controlled by: `debug.runtime_update_trace.enabled`
+
+2. Geometry-fit logs
+   File: `geometry_fit_log_<stamp>.txt`
+   Location: `debug_log_dir`
+   Controlled by: `debug.geometry_fit.log_files`
+   Verbosity controlled by: `debug.geometry_fit.extra_sections`
+
+3. Mosaic-shape fit logs
+   File: `mosaic_shape_fit_log_<stamp>.txt`
+   Location: `debug_log_dir`
+   Controlled by: `debug.mosaic_fit.log_files`
+
+4. Projection-debug JSON
+   File: `projection_debug_<stamp>.json`
+   Location: `debug_log_dir`
+   Controlled by: `debug.projection_debug.enabled`
+
+5. Diffraction debug CSV
+   File: `mosaic_full_debug_log.csv`
+   Location: `debug_log_dir`
+   Controlled by: `debug.diffraction_debug_csv.enabled`
+
+6. Intersection-cache dumps
+   Directory pattern: `intersection_cache_<stamp>_<pid>`
+   Root location: `debug.intersection_cache.log_dir` when set, otherwise `debug_log_dir`
+   Controlled by: `debug.intersection_cache.enabled`
+
+`get_dir(...)` still creates missing configured directories automatically. Changing a directory setting redirects output, but it does not enable or disable output by itself.
+
+### Practical examples
+
+Disable all debug/log output in config:
+
+```yaml
+debug:
+  global:
+    disable_all: true
+```
+
+Keep everything on except console spam:
+
+```yaml
+debug:
+  global:
+    disable_all: false
+  console:
+    enabled: false
+```
+
+Disable only projection-debug JSON and intersection-cache dumps:
+
+```yaml
+debug:
+  projection_debug:
+    enabled: false
+  intersection_cache:
+    enabled: false
+```
+
+Disable geometry-fit extra sections but keep the log files:
+
+```yaml
+debug:
+  geometry_fit:
+    log_files: true
+    extra_sections: false
+```
+
+Redirect intersection-cache dumps:
+
+```yaml
+debug:
+  intersection_cache:
+    enabled: true
+    log_dir: /tmp/ra-sim-cache-dumps
+```
+
+Temporary compatibility override from PowerShell:
+
+```powershell
+$env:RA_SIM_DISABLE_ALL_LOGGING = "1"
+```
+
+Temporary console-debug override from PowerShell:
+
+```powershell
+$env:RA_SIM_DEBUG = "1"
+```
+
+### Bottom line
+
+Use `config/debug.yaml` for normal project configuration.
+
+If you need a master OFF switch, set:
+
+```yaml
+debug:
+  global:
+    disable_all: true
+```
+
+If you need a temporary shell-level override, use:
+
+```powershell
+$env:RA_SIM_DISABLE_ALL_LOGGING = "1"
+```
+
+The config kill switch and the env kill switches both disable every debug/log output covered by this section.
+
+## Appendix A: Center of rotation axis math
+
+This appendix expands the short rotation summary in [Rotation construction used by the kernel](#rotation-construction-used-by-the-kernel).
+
+RA-SIM applies the sample tilt `theta_initial` about a configurable
+center-of-rotation axis rather than always about laboratory `+x`. The axis is
+controlled by:
+
+- `cor_angle`: pitch away from `+x` toward `+z`
+- `psi_z`: yaw of that pitched axis about laboratory `z`
+
+This note matches the exact sign convention used in
+`ra_sim/simulation/diffraction.py`.
+
+### Baseline sample rotation
+
+Before the CoR tilt is applied, the code builds
+
+\[
+R_{ZY} = R_z(\psi)\,R_y(\chi),
+\]
+
+with
+
+\[
+R_y(\chi)=
+\begin{bmatrix}
+\cos\chi & 0 & \sin\chi \\
+0 & 1 & 0 \\
+-\sin\chi & 0 & \cos\chi
+\end{bmatrix},
+\qquad
+R_z(\psi)=
+\begin{bmatrix}
+\cos\psi & \sin\psi & 0 \\
+-\sin\psi & \cos\psi & 0 \\
+0 & 0 & 1
+\end{bmatrix}.
+\]
+
+With this `R_z` convention, positive `psi` rotates `+x` toward `-y`.
+
+### CoR axis
+
+The unyawed CoR axis lives in the `x-z` plane:
+
+\[
+\mathbf{a}_0 =
+\begin{bmatrix}
+\cos\varphi \\
+0 \\
+\sin\varphi
+\end{bmatrix},
+\qquad
+\varphi = \mathrm{radians}(\text{cor\_angle}).
+\]
+
+Yawing that axis by `psi_z` gives
+
+\[
+\mathbf{a} = R_z(\psi_z)\,\mathbf{a}_0
+=
+\begin{bmatrix}
+\cos\psi_z \cos\varphi \\
+-\sin\psi_z \cos\varphi \\
+\sin\varphi
+\end{bmatrix}.
+\]
+
+So:
+
+- `cor_angle = 0`, `psi_z = 0` gives `a = +x`
+- positive `cor_angle` tips the axis toward `+z`
+- positive `psi_z` rotates the `+x` direction toward `-y`
+
+The implementation normalizes `a` before using it.
+
+### Rodrigues rotation
+
+Let
+
+\[
+\theta = \mathrm{radians}(\text{theta\_initial}).
+\]
+
+The CoR tilt is applied with Rodrigues' formula:
+
+\[
+R_{\mathrm{cor}}
+= \cos\theta\,I
++ (1-\cos\theta)\,\mathbf{a}\mathbf{a}^\top
++ \sin\theta\,[\mathbf{a}]_\times,
+\]
+
+where
+
+\[
+[\mathbf{a}]_\times =
+\begin{bmatrix}
+0 & -a_z & a_y \\
+a_z & 0 & -a_x \\
+-a_y & a_x & 0
+\end{bmatrix}.
+\]
+
+The final sample rotation used by the kernel is
+
+\[
+R_{\mathrm{sample}} = R_{\mathrm{cor}}\,R_{ZY}.
+\]
+
+The rotated sample normal is
+
+\[
+\mathbf{n}_{\mathrm{surf}} = R_{\mathrm{cor}}\,(R_{ZY}\,\hat{\mathbf{z}}).
+\]
+
+### Reference point
+
+The sample reference point starts at
+
+\[
+P_0 = (0,\,0,\,-z_s).
+\]
+
+The code rotates it with `R_sample` and then explicitly sets `P0_rot[0] = 0`.
+That keeps the reference point on the laboratory CoR plane used by the detector
+intersection geometry.
+
+### Where this appears
+
+The same construction is used in:
+
+- `_build_sample_rotation()` in `ra_sim/simulation/diffraction.py`
+- the detector-path debug helper in the same module
+
+That keeps the main simulation and the debug path on the same axis convention.
+
+## Appendix B: equation-to-code map
 
 | Topic | Main function(s) |
 | --- | --- |
@@ -2335,4 +2931,3 @@ So the hBN fitter is not just "fit an ellipse". It is:
 | hBN iterative ring refinement | [`refine_ellipse`](../ra_sim/hbn_fitter/fitter.py) |
 | hBN confidence scoring | [`compute_fit_confidence`](../ra_sim/hbn_fitter/fitter.py) |
 | hBN projective tilt optimization | [`apply_tilt_projective`](../ra_sim/hbn_fitter/fitter.py), [`optimize_tilts_projective`](../ra_sim/hbn_fitter/fitter.py) |
-

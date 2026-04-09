@@ -170,12 +170,12 @@ The GUI manual geometry-fit path uses one objective throughout the solve.
 - The GUI disables rematching, robust weighting, and post-polish stages for
   this path so the fit stays tied to the exact manual correspondences you chose.
 
-Further GUI notes: [docs/gui_views.md](docs/gui_views.md)
+Reference:
 
-Technical notes:
-
-- [docs/simulation_and_fitting.md](docs/simulation_and_fitting.md)
-- [docs/cor_rotation_math.md](docs/cor_rotation_math.md)
+- [RA-SIM reference](docs/simulation_and_fitting.md)
+- [GUI workflow and views](docs/simulation_and_fitting.md#gui-workflow-and-views)
+- [Center of rotation axis math](docs/simulation_and_fitting.md#appendix-a-center-of-rotation-axis-math)
+- [Logging, debug, and cache controls](docs/simulation_and_fitting.md#logging-debug-and-cache-controls)
 
 <details>
 <summary>Advanced CLI examples</summary>

@@ -150,6 +150,7 @@ from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
+from ra_sim.gui import tk_primary_viewport as gui_tk_primary_viewport
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import ordered_structure_fit as gui_ordered_structure_fit
@@ -1966,6 +1967,12 @@ def _shutdown_gui():
             fast_viewer_workflow.shutdown()
         except Exception:
             pass
+    primary_viewport_backend = globals().get("primary_viewport_backend")
+    if primary_viewport_backend is not None:
+        try:
+            primary_viewport_backend.shutdown()
+        except Exception:
+            pass
     try:
         gui_views.close_analysis_popout_window(analysis_popout_view_state)
     except Exception:
@@ -1994,8 +2001,13 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
     master=app_shell_view_state.canvas_frame,
 )
 matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
-matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
+    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
+)
+if PRIMARY_VIEWPORT_BACKEND == "matplotlib":
+    matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 canvas = matplotlib_canvas
+primary_viewport_backend = None
 FAST_VIEWER_DRAW_INTERVAL_S = 0.08
 FAST_VIEWER_STARTUP_ENABLED = gui_runtime_display_acceleration.parse_fast_viewer_env_flag(
     os.environ.get("RA_SIM_FAST_VIEWER", "1")
@@ -2402,6 +2414,83 @@ geometry_manual_state = app_state.manual_geometry
 geometry_runtime_state.manual_pick_armed = False
 geometry_runtime_state.manual_pick_cache_signature = None
 geometry_runtime_state.manual_pick_cache_data = {}
+if PRIMARY_VIEWPORT_BACKEND == "tk_canvas":
+    primary_viewport_backend = gui_tk_primary_viewport.build_tk_primary_viewport_backend(
+        tk_module=tk,
+        canvas_frame=app_shell_view_state.canvas_frame,
+        matplotlib_canvas=matplotlib_canvas,
+        ax=ax,
+        image_artist=image_display,
+        background_artist=background_display,
+        overlay_artist=integration_region_overlay,
+        marker_artist_factory=lambda: (
+            globals().get("center_marker"),
+            globals().get("selected_peak_marker"),
+        ),
+        overlay_model_factory=_fast_viewer_overlay_model,
+        overlay_artist_groups_factory=lambda: (
+            getattr(globals().get("geometry_runtime_state"), "pick_artists", ()),
+            getattr(globals().get("geometry_runtime_state"), "preview_artists", ()),
+            getattr(globals().get("geometry_runtime_state"), "manual_preview_artists", ()),
+            getattr(
+                globals().get("geometry_runtime_state"),
+                "qr_cylinder_overlay_artists",
+                (),
+            ),
+        ),
+        layer_versions_factory=_fast_viewer_layer_versions,
+        peak_cache_factory=lambda: getattr(
+            globals().get("simulation_runtime_state"),
+            "peak_positions",
+            (),
+        ),
+        qgroup_cache_factory=lambda: getattr(
+            globals().get("geometry_runtime_state"),
+            "manual_pick_cache_data",
+            {},
+        ).get("grouped_candidates", {}),
+        draw_interval_s=1.0 / 60.0,
+    )
+    primary_viewport_backend.activate()
+    _set_runtime_canvas(primary_viewport_backend.canvas_proxy)
+
+    def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
+        active_canvas = globals().get("canvas", matplotlib_canvas)
+        draw_name = "draw" if bool(force_matplotlib) else "draw_idle"
+        try:
+            draw_fn = getattr(active_canvas, draw_name, None)
+            if callable(draw_fn):
+                draw_fn()
+                return
+        except Exception:
+            pass
+        fallback_draw = getattr(matplotlib_canvas, draw_name, None)
+        if callable(fallback_draw):
+            try:
+                fallback_draw()
+            except Exception:
+                pass
+
+    def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
+        if not force:
+            defer_redraw = globals().get("_defer_nonessential_redraw")
+            if callable(defer_redraw):
+                try:
+                    if bool(defer_redraw()):
+                        return
+                except Exception:
+                    pass
+        _request_main_canvas_redraw(force_matplotlib=bool(force))
+
+    def _reset_fast_viewer_view() -> None:
+        backend = globals().get("primary_viewport_backend")
+        if backend is None:
+            return
+        try:
+            backend.sync_from_matplotlib(force_view_range=True)
+        except Exception:
+            pass
+
 geometry_fit_history_state = app_state.geometry_fit_history
 geometry_fit_dataset_cache_state = app_state.geometry_fit_dataset_cache
 geometry_fit_parameter_controls_view_state = (
