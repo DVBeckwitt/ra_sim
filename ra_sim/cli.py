@@ -1052,7 +1052,6 @@ def run_headless_geometry_fit(
         rotate_point_for_display=gui_geometry_overlay.rotate_point_for_display,
         display_rotate_k=HEADLESS_GEOMETRY_BACKGROUND_DISPLAY_ROTATE_K,
         current_geometry_fit_params=value_callbacks.current_params,
-        simulate_preview_style_peaks_for_fit=simulation_callbacks.simulate_preview_style_peaks,
         miller=lambda: structure_model_state.miller,
         intensities=lambda: structure_model_state.intensities,
         image_size=int(image_size),

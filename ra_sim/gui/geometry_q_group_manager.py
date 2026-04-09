@@ -45,7 +45,6 @@ class GeometryQGroupRuntimeBindings:
     update_running: object | None = None
     has_cached_hit_tables: object | None = None
     build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None
-    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None
     miller: object | None = None
     intensities: object | None = None
     image_size: object | None = None
@@ -112,7 +111,6 @@ class GeometryFitSimulationRuntimeCallbacks:
 
     simulate_hit_tables: Callable[..., list[object]]
     simulate_peak_centers: Callable[..., list[dict[str, object]]]
-    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]]
     last_simulation_diagnostics: Callable[[], dict[str, object]]
 
 
@@ -1031,94 +1029,6 @@ def simulate_geometry_fit_peak_centers(
         raise
 
 
-def simulate_geometry_fit_preview_style_peaks(
-    miller_array: np.ndarray,
-    intensity_array: np.ndarray,
-    image_size: int,
-    param_set: Mapping[str, object] | dict[str, object],
-    *,
-    process_peaks_parallel: Callable[..., object],
-    native_sim_to_display_coords: Callable[
-        [float, float, tuple[int, int]],
-        tuple[float, float],
-    ],
-    peak_table_lattice: Sequence[Sequence[object]] | None = None,
-    primary_a: object = np.nan,
-    primary_c: object = np.nan,
-    default_source_label: str | None = None,
-    round_pixel_centers: bool = False,
-    default_solve_q_steps: int = 0,
-    default_solve_q_rel_tol: float = 0.0,
-    default_solve_q_mode: int = 0,
-) -> list[dict[str, object]]:
-    """Simulate once and return per-hit peaks in the live preview format."""
-
-    try:
-        hit_tables = simulate_geometry_fit_hit_tables(
-            miller_array,
-            intensity_array,
-            image_size,
-            param_set,
-            process_peaks_parallel=process_peaks_parallel,
-            default_solve_q_steps=default_solve_q_steps,
-            default_solve_q_rel_tol=default_solve_q_rel_tol,
-            default_solve_q_mode=default_solve_q_mode,
-        )
-        simulated_peaks = build_geometry_fit_simulated_peaks(
-            hit_tables,
-            image_shape=(int(image_size), int(image_size)),
-            native_sim_to_display_coords=native_sim_to_display_coords,
-            peak_table_lattice=peak_table_lattice,
-            primary_a=primary_a,
-            primary_c=primary_c,
-            default_source_label=default_source_label,
-            round_pixel_centers=round_pixel_centers,
-        )
-        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
-        diagnostics.update(
-            {
-                "stage": "simulate_preview_style_peaks",
-                "status": (
-                    "success"
-                    if simulated_peaks
-                    else "empty_preview_style_peaks"
-                ),
-                "peak_count": int(len(simulated_peaks)),
-                "projected_peak_count": int(len(simulated_peaks)),
-                "peak_table_lattice_count": (
-                    int(len(peak_table_lattice))
-                    if isinstance(peak_table_lattice, Sequence)
-                    and not isinstance(peak_table_lattice, (str, bytes))
-                    else 0
-                ),
-                "default_source_label": _copy_simulation_diag_value(
-                    default_source_label
-                ),
-                "primary_a": _copy_simulation_diag_value(primary_a),
-                "primary_c": _copy_simulation_diag_value(primary_c),
-            }
-        )
-        _set_function_last_diagnostics(
-            simulate_geometry_fit_preview_style_peaks,
-            diagnostics,
-        )
-        return simulated_peaks
-    except Exception as exc:
-        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
-        diagnostics.update(
-            {
-                "stage": "simulate_preview_style_peaks",
-                "status": "exception",
-                **_geometry_fit_exception_diagnostics(exc),
-            }
-        )
-        _set_function_last_diagnostics(
-            simulate_geometry_fit_preview_style_peaks,
-            diagnostics,
-        )
-        raise
-
-
 def make_runtime_geometry_fit_simulation_callbacks(
     *,
     process_peaks_parallel: Callable[..., object],
@@ -1209,56 +1119,9 @@ def make_runtime_geometry_fit_simulation_callbacks(
         )
         return result
 
-    def _simulate_preview_style_peaks(
-        miller_array: np.ndarray,
-        intensity_array: np.ndarray,
-        image_size: int,
-        param_set: Mapping[str, object] | dict[str, object],
-    ) -> list[dict[str, object]]:
-        peak_table_lattice = _resolve_runtime_value(peak_table_lattice_factory)
-        if not (
-            isinstance(peak_table_lattice, Sequence)
-            and not isinstance(peak_table_lattice, (str, bytes))
-        ):
-            peak_table_lattice = None
-
-        try:
-            result = simulate_geometry_fit_preview_style_peaks(
-                miller_array,
-                intensity_array,
-                image_size,
-                param_set,
-                process_peaks_parallel=process_peaks_parallel,
-                native_sim_to_display_coords=native_sim_to_display_coords,
-                peak_table_lattice=peak_table_lattice,
-                primary_a=_coerce_float(
-                    _resolve_runtime_value(primary_a_factory),
-                    float("nan"),
-                ),
-                primary_c=_coerce_float(
-                    _resolve_runtime_value(primary_c_factory),
-                    float("nan"),
-                ),
-                default_source_label=default_source_label,
-                round_pixel_centers=round_pixel_centers,
-                default_solve_q_steps=default_solve_q_steps,
-                default_solve_q_rel_tol=default_solve_q_rel_tol,
-                default_solve_q_mode=default_solve_q_mode,
-            )
-        except Exception:
-            _set_last_simulation_diagnostics(
-                _function_last_diagnostics(simulate_geometry_fit_preview_style_peaks)
-            )
-            raise
-        _set_last_simulation_diagnostics(
-            _function_last_diagnostics(simulate_geometry_fit_preview_style_peaks)
-        )
-        return result
-
     return GeometryFitSimulationRuntimeCallbacks(
         simulate_hit_tables=_simulate_hit_tables,
         simulate_peak_centers=_simulate_peak_centers,
-        simulate_preview_style_peaks=_simulate_preview_style_peaks,
         last_simulation_diagnostics=_last_simulation_diagnostics,
     )
 
@@ -2704,50 +2567,7 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
     *,
     update_status: bool = True,
 ) -> list[dict[str, object]] | None:
-    """Return runtime live-preview peaks from cache or fallback simulation."""
-
-    if bool(_resolve_runtime_value(bindings.has_cached_hit_tables)) and callable(
-        bindings.simulate_preview_style_peaks
-    ):
-        try:
-            simulated_peaks = list(
-                bindings.simulate_preview_style_peaks(
-                    np.asarray(_resolve_runtime_value(bindings.miller), dtype=np.float64),
-                    np.asarray(
-                        _resolve_runtime_value(bindings.intensities),
-                        dtype=np.float64,
-                    ),
-                    _coerce_int(_resolve_runtime_value(bindings.image_size), 0),
-                    (
-                        dict(bindings.current_geometry_fit_params_factory() or {})
-                        if callable(bindings.current_geometry_fit_params_factory)
-                        else {}
-                    ),
-                )
-                or []
-            )
-        except Exception as exc:
-            build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
-            cached_peaks = (
-                list(build_cached_peaks() or [])
-                if callable(build_cached_peaks)
-                else []
-            )
-            if cached_peaks:
-                return cached_peaks
-            if callable(bindings.clear_geometry_preview_artists):
-                bindings.clear_geometry_preview_artists()
-            if update_status:
-                _set_status_text(
-                    bindings.set_status_text,
-                    (
-                        "Live auto-match preview unavailable: failed to simulate "
-                        f"peaks ({exc})."
-                    ),
-                )
-            return None
-        if simulated_peaks:
-            return simulated_peaks
+    """Return runtime live-preview peaks from cache only."""
 
     build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
     simulated_peaks = (
@@ -3117,7 +2937,6 @@ def make_runtime_geometry_q_group_bindings_factory(
     update_running_factory: object | None = None,
     has_cached_hit_tables_factory: object | None = None,
     build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None,
-    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None,
     miller_factory: object | None = None,
     intensities_factory: object | None = None,
     image_size_value_factory: object | None = None,
@@ -3181,7 +3000,6 @@ def make_runtime_geometry_q_group_bindings_factory(
             build_live_preview_simulated_peaks_from_cache=(
                 build_live_preview_simulated_peaks_from_cache
             ),
-            simulate_preview_style_peaks=simulate_preview_style_peaks,
             miller=_resolve_runtime_value(miller_factory),
             intensities=_resolve_runtime_value(intensities_factory),
             image_size=_resolve_runtime_value(image_size_value_factory),

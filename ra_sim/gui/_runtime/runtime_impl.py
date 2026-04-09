@@ -3655,15 +3655,6 @@ geometry_manual_projection_workflow = (
         rotate_point_for_display=_rotate_point_for_display,
         display_rotate_k=DISPLAY_ROTATE_K,
         current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
-        simulate_preview_style_peaks_for_fit=(
-            lambda *args, **kwargs: globals()["_simulate_preview_style_peaks_for_fit"](
-                *args,
-                **kwargs,
-            )
-        ),
-        last_preview_style_simulation_diagnostics=(
-            lambda: globals()["_geometry_fit_last_simulation_diagnostics"]()
-        ),
         build_live_preview_simulated_peaks_from_cache=(
             lambda: globals()["_build_live_preview_simulated_peaks_from_cache"]()
         ),
@@ -11770,7 +11761,6 @@ geometry_q_group_workflow = (
         build_live_preview_simulated_peaks_from_cache=(
             _build_live_preview_simulated_peaks_from_cache
         ),
-        simulate_preview_style_peaks=None,
         miller_factory=lambda: miller,
         intensities_factory=lambda: intensities,
         image_size_value_factory=lambda: image_size,
@@ -11882,10 +11872,6 @@ geometry_fit_simulation_runtime_callbacks = (
 _simulate_hit_tables_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_hit_tables
 _simulate_hkl_peak_centers_for_fit = (
     geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
-)
-_simulate_preview_style_peaks_for_fit = lambda *_args, **_kwargs: []
-_geometry_fit_last_simulation_diagnostics = (
-    geometry_fit_simulation_runtime_callbacks.last_simulation_diagnostics
 )
 
 

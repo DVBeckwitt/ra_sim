@@ -2322,7 +2322,7 @@ def build_geometry_manual_fit_dataset(
     reference_a = _finite_float(params_i.get("a"))
     reference_c = _finite_float(params_i.get("c"))
     reference_lambda = _finite_float(params_i.get("lambda"))
-    # Preview-style simulated peaks are disabled for manual-fit source
+    # Fresh simulated peak rebuilds are disabled for manual-fit source
     # resolution and geometry-fit dataset prep.
     simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
         params_i,
@@ -4029,12 +4029,12 @@ def build_geometry_fit_dataset_cache_metadata(
         "reused": False,
         "rebuilt": True,
         "stale_reason": (
-            "preview-style simulated peaks are disabled; geometry-fit dataset "
-            "prep did not rebuild fresh simulated source rows."
+            "fresh simulated peak rebuilds are disabled; geometry-fit dataset "
+            "prep did not rebuild fresh simulated rows."
         ),
-        "cache_source": "preview_style_simulated_peaks_disabled",
+        "cache_source": "simulated_peak_rebuild_disabled",
         "cache_provenance": [
-            "preview_style_simulated_peaks_disabled",
+            "simulated_peak_rebuild_disabled",
             "build_geometry_manual_fit_dataset",
         ],
         "background_index": int(background_index),

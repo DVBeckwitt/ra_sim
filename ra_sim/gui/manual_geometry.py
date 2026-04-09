@@ -1596,8 +1596,8 @@ def build_geometry_manual_pick_cache(
     bg_index = int(background_index)
     current_bg_index = int(current_background_index)
     cache_action = "rebuilt"
-    cache_source = "preview_style_simulated_peaks_disabled"
-    cache_provenance = ["preview_style_simulated_peaks_disabled"]
+    cache_source = "simulated_peak_rebuild_disabled"
+    cache_provenance = ["simulated_peak_rebuild_disabled"]
     stale_reason: str | None = (
         None
         if prefer_cache
@@ -1698,7 +1698,7 @@ def build_geometry_manual_pick_cache(
             stale_reason = "existing grouped candidates were empty."
     if not grouped_candidates and stale_reason is None:
         stale_reason = (
-            "preview-style simulated peaks are disabled; no reusable cached "
+            "fresh simulated peak rebuilds are disabled; no reusable cached "
             "grouped candidates were available."
         )
     match_cfg = dict(current_match_config())
@@ -2884,11 +2884,6 @@ def make_runtime_geometry_manual_projection_callbacks(
     rotate_point_for_display: Callable[[float, float, tuple[int, ...], int], tuple[float, float]] = _default_rotate_point,
     display_rotate_k: int = 0,
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
-    simulate_preview_style_peaks_for_fit: Callable[..., Sequence[dict[str, object]]] | None = None,
-    last_preview_style_simulation_diagnostics: (
-        Callable[[], Mapping[str, object]]
-        | None
-    ) = None,
     build_live_preview_simulated_peaks_from_cache: (
         Callable[[], Sequence[dict[str, object]]]
         | None
@@ -3334,140 +3329,9 @@ def make_runtime_geometry_manual_projection_callbacks(
         _set_last_simulation_diagnostics(
             source="fresh",
             requested_prefer_cache=bool(prefer_cache),
-            status="preview_style_simulation_disabled",
+            status="simulated_peak_rebuild_disabled",
         )
         return []
-        params_local = (
-            dict(param_set)
-            if isinstance(param_set, dict)
-            else (
-                dict(current_geometry_fit_params())
-                if callable(current_geometry_fit_params)
-                else {}
-            )
-        )
-        raw_miller = _resolve_runtime_value(miller)
-        raw_intensities = _resolve_runtime_value(intensities)
-        raw_image_size = _resolve_runtime_value(image_size)
-        try:
-            image_size_value = int(raw_image_size)
-        except Exception:
-            image_size_value = 0
-        param_summary = {
-            key: _copy_simulation_diag_value(params_local.get(key))
-            for key in (
-                "a",
-                "c",
-                "lambda",
-                "theta_initial",
-                "theta_offset",
-                "corto_detector",
-                "gamma",
-                "Gamma",
-                "chi",
-                "psi",
-                "psi_z",
-                "zs",
-                "zb",
-                "debye_x",
-                "debye_y",
-                "center",
-                "n2",
-                "optics_mode",
-            )
-            if key in params_local
-        }
-        mosaic_sizes, missing_mosaic_keys = _mosaic_array_sizes(params_local)
-        base_diagnostics = {
-            "source": "fresh",
-            "requested_prefer_cache": bool(prefer_cache),
-            "miller_shape": _shape_list(raw_miller),
-            "intensity_shape": _shape_list(raw_intensities),
-            "image_size": int(image_size_value),
-            "missing_param_keys": _missing_required_param_keys(params_local),
-            "missing_mosaic_keys": missing_mosaic_keys,
-            "param_summary": param_summary,
-            "mosaic_array_sizes": mosaic_sizes,
-        }
-        try:
-            miller_array = np.asarray(raw_miller, dtype=np.float64)
-        except Exception as exc:
-            _set_last_simulation_diagnostics(
-                base_diagnostics,
-                status="invalid_miller_array",
-                exception_type=type(exc).__name__,
-                exception_message=str(exc),
-            )
-            return []
-        try:
-            intensity_array = np.asarray(raw_intensities, dtype=np.float64)
-        except Exception as exc:
-            _set_last_simulation_diagnostics(
-                base_diagnostics,
-                status="invalid_intensity_array",
-                exception_type=type(exc).__name__,
-                exception_message=str(exc),
-            )
-            return []
-        base_diagnostics["miller_shape"] = _shape_list(miller_array)
-        base_diagnostics["miller_count"] = _array_count(miller_array)
-        base_diagnostics["intensity_shape"] = _shape_list(intensity_array)
-        base_diagnostics["intensity_count"] = _array_count(intensity_array)
-        if (
-            miller_array.ndim != 2
-            or miller_array.shape[1] != 3
-            or miller_array.size == 0
-        ):
-            _set_last_simulation_diagnostics(
-                base_diagnostics,
-                status="invalid_miller_array",
-            )
-            return []
-        if intensity_array.shape[0] != miller_array.shape[0]:
-            _set_last_simulation_diagnostics(
-                base_diagnostics,
-                status="intensity_length_mismatch",
-            )
-            return []
-        try:
-            raw_peaks = []
-            raw_peak_entries = _mapping_entry_list(raw_peaks)
-            projected_peaks = _project_peaks_to_current_view(raw_peak_entries)
-            runtime_diagnostics = (
-                _copy_simulation_diagnostics(
-                    last_preview_style_simulation_diagnostics()
-                )
-                if callable(last_preview_style_simulation_diagnostics)
-                else {}
-            )
-            _set_last_simulation_diagnostics(
-                base_diagnostics,
-                status=(
-                    "success"
-                    if projected_peaks
-                    else "empty_simulated_peaks"
-                ),
-                raw_peak_count=int(len(raw_peak_entries)),
-                projected_peak_count=int(len(projected_peaks)),
-                runtime_simulation=runtime_diagnostics,
-            )
-            return projected_peaks
-        except Exception as exc:
-            runtime_diagnostics = (
-                _copy_simulation_diagnostics(
-                    last_preview_style_simulation_diagnostics()
-                )
-                if callable(last_preview_style_simulation_diagnostics)
-                else {}
-            )
-            _set_last_simulation_diagnostics(
-                base_diagnostics,
-                status="simulation_exception",
-                exception_type=type(exc).__name__,
-                exception_message=str(exc),
-                runtime_simulation=runtime_diagnostics,
-            )
-            return []
 
     def _pick_candidates(
         simulated_peaks: Sequence[dict[str, object]] | None,

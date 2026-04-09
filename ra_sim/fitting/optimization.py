@@ -10251,7 +10251,7 @@ def _valid_hit_rows(hit_table: object) -> List[np.ndarray]:
 def _measured_source_indices(
     entry: Dict[str, object],
 ) -> Optional[Tuple[int, int]]:
-    """Return the preview-style hit-table indices for a measured entry when present."""
+    """Return the stored hit-table indices for a measured entry when present."""
 
     try:
         table_idx = int(entry.get("source_table_index"))  # type: ignore[arg-type]
