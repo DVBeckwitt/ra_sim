@@ -341,6 +341,11 @@ def test_apply_runtime_bragg_qr_filters_updates_status_invalidates_and_refreshes
         stored_sim_image="sim",
         stored_peak_table_lattice=["lattice"],
         selected_peak_record={"hkl": (1, 0, 2)},
+        primary_contribution_cache_signature=("cache", 1),
+        primary_active_contribution_keys=[1, 2],
+        primary_hit_table_cache={1: [1]},
+        primary_source_mode="qr",
+        primary_filter_signature=("sig",),
     )
     applied = []
     scheduled = []
@@ -383,11 +388,53 @@ def test_apply_runtime_bragg_qr_filters_updates_status_invalidates_and_refreshes
     assert simulation_runtime_state.stored_sim_image is None
     assert simulation_runtime_state.stored_peak_table_lattice is None
     assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.primary_contribution_cache_signature is None
+    assert simulation_runtime_state.primary_active_contribution_keys == []
+    assert simulation_runtime_state.primary_hit_table_cache == {}
+    assert simulation_runtime_state.primary_source_mode == "miller"
+    assert simulation_runtime_state.primary_filter_signature is None
     assert scheduled == [True]
     assert refreshed == [True]
     assert view_state.sf_prune_status_var.get() == (
         "SF pruning keeps 7/10 rod points (70.0%), bias=+0.50"
     )
+
+
+def test_apply_runtime_bragg_qr_filters_can_preserve_primary_cache_for_bias_only_changes() -> None:
+    simulation_runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig", 1),
+        stored_max_positions_local=[1],
+        stored_sim_image="sim",
+        stored_peak_table_lattice=["lattice"],
+        selected_peak_record={"hkl": (1, 0, 2)},
+        primary_contribution_cache_signature=("cache", 1),
+        primary_active_contribution_keys=[1, 2],
+        primary_hit_table_cache={1: [1]},
+        primary_source_mode="qr",
+        primary_filter_signature=("sig",),
+    )
+    bindings = _bindings(
+        simulation_runtime_state=simulation_runtime_state,
+        apply_filters=lambda *_args, **_kwargs: {},
+    )
+
+    structure_factor_pruning.apply_runtime_bragg_qr_filters(
+        bindings,
+        trigger_update=False,
+        preserve_primary_cache=True,
+    )
+
+    assert simulation_runtime_state.last_sim_signature is None
+    assert simulation_runtime_state.last_simulation_signature is None
+    assert simulation_runtime_state.stored_max_positions_local is None
+    assert simulation_runtime_state.stored_sim_image is None
+    assert simulation_runtime_state.stored_peak_table_lattice is None
+    assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.primary_contribution_cache_signature == ("cache", 1)
+    assert simulation_runtime_state.primary_active_contribution_keys == [1, 2]
+    assert simulation_runtime_state.primary_hit_table_cache == {1: [1]}
+    assert simulation_runtime_state.primary_source_mode == "qr"
+    assert simulation_runtime_state.primary_filter_signature == ("sig",)
 
 
 def test_structure_factor_pruning_runtime_binding_factory_builds_live_bindings(
@@ -601,7 +648,15 @@ def test_structure_factor_pruning_runtime_bias_change_clips_then_applies(monkeyp
     view_state.sf_prune_bias_var.set("0.25")
     changed = structure_factor_pruning.on_runtime_sf_prune_bias_change(bindings)
     assert changed is True
-    assert calls == [(bindings, {"trigger_update": True})]
+    assert calls == [
+        (
+            bindings,
+            {
+                "trigger_update": True,
+                "preserve_primary_cache": True,
+            },
+        )
+    ]
 
 
 def test_structure_factor_pruning_runtime_steps_and_rel_tol_changes_clip_and_schedule() -> None:

@@ -945,6 +945,40 @@ def test_bragg_qr_filter_controller_applies_group_and_l_disables() -> None:
         "hkl_secondary_kept": 2,
     }
     assert sim_state.sf_prune_stats == stats
+    assert sim_state.primary_requested_source_mode == "qr"
+    assert sim_state.primary_requested_contribution_keys == [(1, 0), (1, 2)]
+    assert sim_state.primary_requested_filter_signature is not None
+
+
+def test_bragg_qr_filter_controller_tracks_raw_primary_miller_indices_when_qr_is_absent() -> None:
+    sim_state = state.SimulationRuntimeState(
+        sim_primary_qr_all={},
+        sim_miller1_all=np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 0.0, 2.0],
+                [1.0, 1.0, 0.0],
+            ]
+        ),
+        sim_intens1_all=np.array([10.0, 5.0, 1.0, 8.0]),
+    )
+    bragg_state = state.BraggQrManagerState(
+        disabled_groups={("primary", 3)},
+        disabled_l_values={
+            ("primary", 1, controllers.bragg_qr_l_value_to_key(1.0)),
+        },
+    )
+
+    controllers.apply_bragg_qr_filters(
+        sim_state,
+        bragg_state,
+        prune_bias=0.0,
+    )
+
+    assert sim_state.primary_requested_source_mode == "miller"
+    assert sim_state.primary_requested_contribution_keys == [0, 2]
+    assert sim_state.primary_requested_filter_signature is not None
 
 
 def test_bragg_qr_controller_helpers_format_status_and_keys() -> None:

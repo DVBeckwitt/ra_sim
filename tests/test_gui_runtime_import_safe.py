@@ -174,7 +174,7 @@ def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_update
     assert "\"collected_hit_tables\": bool(job[\"collect_hit_tables\"])," in source
     assert "intersection_cache_to_hit_tables," in source
     assert "def _resolved_peak_table_payload(" in source
-    assert "primary_peak_tables = _resolved_peak_table_payload(cache1, maxpos1)" in source
+    assert "primary_peak_tables = _resolved_peak_table_payload(cache1, raw_hit_tables1)" in source
     assert "\"primary_max_positions\": list(primary_peak_tables)," in source
     assert "stored_primary_intersection_cache = _copy_intersection_cache_tables(" in source
     assert "stored_secondary_intersection_cache = _copy_intersection_cache_tables(" in source
@@ -185,6 +185,18 @@ def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_update
     assert "need_hit_table_refresh = bool(" in source
     assert "do_update_refresh_hit_tables_in_background" in source
     assert 'progress_label.config(text="Refreshing peak tables in background...")' in source
+
+
+def test_runtime_impl_supports_incremental_sf_prune_primary_cache_updates() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "primary_contribution_cache_signature" in source
+    assert "primary_requested_contribution_keys" in source
+    assert "resolve_incremental_sf_prune_action(" in source
+    assert 'job_kind="primary_fill"' in source
+    assert "_rematerialize_primary_cache_artifacts(" in source
+    assert "do_update_extend_primary_cache_in_background" in source
+    assert 'text="Extending primary cache in background..."' in source
 
 
 def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None:

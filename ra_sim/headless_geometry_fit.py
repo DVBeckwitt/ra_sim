@@ -1057,6 +1057,94 @@ def run_headless_geometry_fit(
         ),
     )
 
+    source_snapshot_diagnostics_state: dict[str, object] = {}
+
+    def _geometry_manual_source_rows_for_background(
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+    ) -> list[dict[str, object]]:
+        consumer_name = str(consumer or "unspecified")
+        if int(background_index) != int(background_state.current_background_index):
+            source_snapshot_diagnostics_state.clear()
+            source_snapshot_diagnostics_state.update(
+                {
+                    "source": "source_snapshot",
+                    "cache_family": "source_snapshot",
+                    "action": "lookup",
+                    "consumer": consumer_name,
+                    "status": "snapshot_missing_background",
+                    "background_index": int(background_index),
+                    "raw_peak_count": 0,
+                    "projected_peak_count": 0,
+                    "signature_match": False,
+                    "requested_signature_summary": None,
+                    "stored_signature_summary": None,
+                    "live_cache_inventory": {
+                        "preview_active": False,
+                        "preview_sample_count": None,
+                        "stored_hit_table_signature_present": False,
+                        "stored_hit_table_signature_summary": None,
+                        "last_simulation_signature_summary": None,
+                        "primary_contribution_cache_signature_summary": None,
+                        "primary_source_mode": None,
+                        "primary_active_contribution_key_count": 0,
+                        "primary_hit_table_cache_entry_count": 0,
+                        "source_snapshots": [],
+                    },
+                }
+            )
+            return []
+        rows = [
+            dict(entry)
+            for entry in projection_callbacks.simulated_peaks_for_params(
+                param_set,
+                prefer_cache=True,
+            )
+            if isinstance(entry, dict)
+        ]
+        source_snapshot_diagnostics_state.clear()
+        source_snapshot_diagnostics_state.update(
+            {
+                "source": "source_snapshot",
+                "cache_family": "source_snapshot",
+                "action": "lookup",
+                "consumer": consumer_name,
+                "status": ("snapshot_hit" if rows else "snapshot_empty"),
+                "background_index": int(background_index),
+                "raw_peak_count": int(len(rows)),
+                "projected_peak_count": int(len(rows)),
+                "created_from": "live_cache",
+                "signature_match": True,
+                "requested_signature_summary": None,
+                "stored_signature_summary": None,
+                "live_cache_inventory": {
+                    "preview_active": False,
+                    "preview_sample_count": None,
+                    "stored_hit_table_signature_present": False,
+                    "stored_hit_table_signature_summary": None,
+                    "last_simulation_signature_summary": None,
+                    "primary_contribution_cache_signature_summary": None,
+                    "primary_source_mode": None,
+                    "primary_active_contribution_key_count": 0,
+                    "primary_hit_table_cache_entry_count": 0,
+                    "source_snapshots": [
+                        {
+                            "background_index": int(background_index),
+                            "row_count": int(len(rows)),
+                            "created_from": "live_cache",
+                            "signature_summary": None,
+                        }
+                    ],
+                },
+            }
+        )
+        return rows
+
+    def _geometry_manual_last_source_snapshot_diagnostics() -> dict[str, object]:
+        return dict(source_snapshot_diagnostics_state)
+
     manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=tuple(defaults.osc_files),
         current_background_index=int(background_state.current_background_index),
@@ -1072,6 +1160,8 @@ def run_headless_geometry_fit(
         ),
         geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
         geometry_manual_simulated_lookup=projection_callbacks.simulated_lookup,
+        geometry_manual_source_rows_for_background=_geometry_manual_source_rows_for_background,
+        geometry_manual_last_source_snapshot_diagnostics=_geometry_manual_last_source_snapshot_diagnostics,
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
         unrotate_display_peaks=lambda measured, rotated_shape, *, k=None: (
             gui_geometry_overlay.unrotate_display_peaks(

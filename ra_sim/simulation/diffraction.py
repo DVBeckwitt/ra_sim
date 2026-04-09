@@ -99,6 +99,31 @@ _SAMPLE_COL_SOLVE_Q_REP = 13
 _SAMPLE_COL_SOLVE_Q_NEXT = 14
 _SAMPLE_COLS = 15
 
+EXIT_PROJECTION_INTERNAL = 0
+EXIT_PROJECTION_REFRACTED = 1
+
+_PROJECTION_DEBUG_COUNTER_TOTAL = 0
+_PROJECTION_DEBUG_COUNTER_INVALID_DET = 1
+_PROJECTION_DEBUG_COUNTER_PROP_ATT_REJECT = 2
+_PROJECTION_DEBUG_COUNTER_PROP_FAC_REJECT = 3
+_PROJECTION_DEBUG_COUNTER_NO_VALID_SAMPLE = 4
+_PROJECTION_DEBUG_COUNTER_LARGE_EXIT_REMAP = 5
+_PROJECTION_DEBUG_COUNTER_NEAR_CRITICAL_BAND = 6
+_PROJECTION_DEBUG_COUNTER_COLS = 7
+
+_PROJECTION_DEBUG_REASON_UNKNOWN = 0
+_PROJECTION_DEBUG_REASON_NO_VALID_SAMPLE = 1
+_PROJECTION_DEBUG_REASON_INVALID_DET = 2
+_PROJECTION_DEBUG_REASON_PROP_ATT = 3
+_PROJECTION_DEBUG_REASON_PROP_FAC = 4
+_PROJECTION_DEBUG_REASON_PROJECTION_NORM = 5
+_PROJECTION_DEBUG_REASON_INVALID_DET_COORD = 6
+_PROJECTION_DEBUG_REASON_OFF_DETECTOR = 7
+_PROJECTION_DEBUG_REJECT_RECORD_COLS = 10
+
+_PROJECTION_DEBUG_LARGE_EXIT_REMAP_RAD = 0.05 * (pi / 180.0)
+_PROJECTION_DEBUG_NEAR_CRITICAL_EPS_RAD = 0.01 * (pi / 180.0)
+
 _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "miller",
     "intensities",
@@ -148,6 +173,13 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "n2_sample_array_override",
     "accumulate_image",
     "sample_qr_ring_once",
+    "exit_projection_mode",
+    "projection_debug_counters",
+    "projection_debug_reject_counts",
+    "projection_debug_reject_records",
+    "projection_debug_row_hit_counts",
+    "projection_debug_row_tthp_sums",
+    "projection_debug_row_tth_sums",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -167,7 +199,58 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "n2_sample_array_override": None,
     "accumulate_image": True,
     "sample_qr_ring_once": True,
+    "exit_projection_mode": EXIT_PROJECTION_INTERNAL,
+    "projection_debug_counters": None,
+    "projection_debug_reject_counts": None,
+    "projection_debug_reject_records": None,
+    "projection_debug_row_hit_counts": None,
+    "projection_debug_row_tthp_sums": None,
+    "projection_debug_row_tth_sums": None,
 }
+
+
+@njit(fastmath=True)
+def _projection_debug_log_ray(
+    projection_debug_counters,
+    twotheta_t_prime,
+    twotheta_t,
+    n2_real,
+):
+    projection_debug_counters[_PROJECTION_DEBUG_COUNTER_TOTAL] += 1
+    if abs(twotheta_t - twotheta_t_prime) > _PROJECTION_DEBUG_LARGE_EXIT_REMAP_RAD:
+        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_LARGE_EXIT_REMAP] += 1
+    alpha_c = np.arccos(_clamp(n2_real, -1.0, 1.0))
+    if abs(twotheta_t) < (alpha_c + _PROJECTION_DEBUG_NEAR_CRITICAL_EPS_RAD):
+        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_NEAR_CRITICAL_BAND] += 1
+
+
+@njit(fastmath=True)
+def _projection_debug_record_reject(
+    projection_debug_reject_count,
+    projection_debug_reject_records,
+    H,
+    K,
+    L,
+    twotheta_t_prime,
+    twotheta_t,
+    kr,
+    k0,
+    n2_real,
+    reason_code,
+):
+    reject_idx = int(projection_debug_reject_count[0])
+    if reject_idx < projection_debug_reject_records.shape[0]:
+        projection_debug_reject_records[reject_idx, 0] = H
+        projection_debug_reject_records[reject_idx, 1] = K
+        projection_debug_reject_records[reject_idx, 2] = L
+        projection_debug_reject_records[reject_idx, 3] = reason_code
+        projection_debug_reject_records[reject_idx, 4] = twotheta_t_prime
+        projection_debug_reject_records[reject_idx, 5] = twotheta_t
+        projection_debug_reject_records[reject_idx, 6] = kr
+        projection_debug_reject_records[reject_idx, 7] = k0
+        projection_debug_reject_records[reject_idx, 8] = n2_real
+        projection_debug_reject_records[reject_idx, 9] = reason_code
+    projection_debug_reject_count[0] = reject_idx + 1
 
 
 def _should_log_intersection_cache() -> bool:
@@ -3276,6 +3359,9 @@ def _choose_nominal_sample_index(sample_terms, preferred_idx):
 
 @njit(fastmath=True)
 def _nominal_reflection_visible(
+    H,
+    K,
+    L,
     G_vec,
     image_size,
     center,
@@ -3290,12 +3376,32 @@ def _nominal_reflection_visible(
     gamma_pv,
     optics_mode,
     forced_sample_idx,
+    exit_projection_mode,
+    projection_debug_enabled,
+    projection_debug_counters,
+    projection_debug_reject_count,
+    projection_debug_reject_records,
 ):
     preferred_idx = best_idx
     if forced_sample_idx >= 0:
         preferred_idx = forced_sample_idx
     nominal_idx = _choose_nominal_sample_index(sample_terms, preferred_idx)
     if nominal_idx < 0:
+        if projection_debug_enabled:
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_NO_VALID_SAMPLE] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                _PROJECTION_DEBUG_REASON_NO_VALID_SAMPLE,
+            )
         return False, -1, True
 
     I_plane = np.empty(3, dtype=np.float64)
@@ -3336,12 +3442,47 @@ def _nominal_reflection_visible(
         )
         k_out_mag = k_scat
 
-    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+    if projection_debug_enabled:
+        _projection_debug_log_ray(
+            projection_debug_counters,
+            twotheta_t_prime,
+            twotheta_t,
+            n2_real,
+        )
+
     kf = np.empty(3, dtype=np.float64)
     kf_prime = np.empty(3, dtype=np.float64)
-    kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-    kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-    kf[2] = k_out_mag * np.sin(twotheta_t)
+    if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
+        k_norm = sqrt(
+            k_tx_prime * k_tx_prime
+            + k_ty_prime * k_ty_prime
+            + k_tz_prime * k_tz_prime
+        )
+        if k_norm <= 1.0e-30:
+            if projection_debug_enabled:
+                projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+                _projection_debug_record_reject(
+                    projection_debug_reject_count,
+                    projection_debug_reject_records,
+                    H,
+                    K,
+                    L,
+                    twotheta_t_prime,
+                    twotheta_t,
+                    kr,
+                    k0,
+                    n2_real,
+                    _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
+                )
+            return False, nominal_idx, False
+        kf[0] = k_tx_prime / k_norm
+        kf[1] = k_ty_prime / k_norm
+        kf[2] = k_tz_prime / k_norm
+    else:
+        phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+        kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+        kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+        kf[2] = k_out_mag * np.sin(twotheta_t)
     kf_prime[0] = (
         R_sample[0, 0] * kf[0]
         + R_sample[0, 1] * kf[1]
@@ -3403,6 +3544,21 @@ def _nominal_reflection_visible(
         I_plane, kf_prime, Detector_Pos, n_det_rot
     )
     if not valid_det:
+        if projection_debug_enabled:
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                twotheta_t,
+                kr,
+                k0,
+                n2_real,
+                _PROJECTION_DEBUG_REASON_INVALID_DET,
+            )
         return True, nominal_idx, False
 
     plane_to_det_x = dx - Detector_Pos[0]
@@ -3421,6 +3577,21 @@ def _nominal_reflection_visible(
     row_f = center[0] - y_det * pixel_scale
     col_f = center[1] + x_det * pixel_scale
     if not np.isfinite(row_f) or not np.isfinite(col_f):
+        if projection_debug_enabled:
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                twotheta_t,
+                kr,
+                k0,
+                n2_real,
+                _PROJECTION_DEBUG_REASON_INVALID_DET_COORD,
+            )
         return True, nominal_idx, False
 
     det_dist = sqrt(
@@ -3433,8 +3604,38 @@ def _nominal_reflection_visible(
         pixel_pad = 24.0
 
     if row_f < -pixel_pad or row_f > (float(image_size - 1) + pixel_pad):
+        if projection_debug_enabled:
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                twotheta_t,
+                kr,
+                k0,
+                n2_real,
+                _PROJECTION_DEBUG_REASON_OFF_DETECTOR,
+            )
         return False, nominal_idx, False
     if col_f < -pixel_pad or col_f > (float(image_size - 1) + pixel_pad):
+        if projection_debug_enabled:
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                twotheta_t,
+                kr,
+                k0,
+                n2_real,
+                _PROJECTION_DEBUG_REASON_OFF_DETECTOR,
+            )
         return False, nominal_idx, False
     return True, nominal_idx, False
 
@@ -3519,6 +3720,14 @@ def _calculate_phi_from_precomputed(
     forced_sample_idx=-1,
     sample_qr_ring_once=True,
     sample_weights=None,
+    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    projection_debug_enabled=False,
+    projection_debug_counters=None,
+    projection_debug_reject_count=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
 ):
     """Reflection core using precomputed sample-geometry terms."""
     gz0 = 2.0 * pi * (L / cv)
@@ -3592,6 +3801,9 @@ def _calculate_phi_from_precomputed(
         )
 
     nominal_visible, nominal_sample_idx, no_valid_samples = _nominal_reflection_visible(
+        H,
+        K,
+        L,
         G_vec,
         image_size,
         center,
@@ -3606,6 +3818,11 @@ def _calculate_phi_from_precomputed(
         gamma_pv,
         optics_mode,
         forced_sample_idx,
+        exit_projection_mode,
+        projection_debug_enabled,
+        projection_debug_counters,
+        projection_debug_reject_count,
+        projection_debug_reject_records,
     )
     if no_valid_samples:
         if record_status:
@@ -3714,6 +3931,7 @@ def _calculate_phi_from_precomputed(
                 )
         chain_idx = i_samp
         while chain_idx >= 0:
+            chain_has_valid_q = False
             sample_weight = 1.0
             if sample_weights is not None:
                 sample_weight = sample_weights[chain_idx]
@@ -3734,6 +3952,21 @@ def _calculate_phi_from_precomputed(
                     chain_idx,
                 )
                 if sampled_sol_idx < 0 or sampled_ring_mass <= 0.0:
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_NO_VALID_SAMPLE] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            np.nan,
+                            np.nan,
+                            np.nan,
+                            np.nan,
+                            np.nan,
+                            _PROJECTION_DEBUG_REASON_NO_VALID_SAMPLE,
+                        )
                     if not can_reuse_q_solutions:
                         break
                     chain_idx = int(sample_terms[chain_idx, _SAMPLE_COL_SOLVE_Q_NEXT])
@@ -3776,6 +4009,7 @@ def _calculate_phi_from_precomputed(
                 I_Q = All_Q[i_sol, 3]
                 if I_Q < _Q_RING_SAMPLE_MIN_MASS:
                     continue
+                chain_has_valid_q = True
 
                 record_this_solution = False
                 if sample_qr_ring_once:
@@ -3824,13 +4058,6 @@ def _calculate_phi_from_precomputed(
                         th_t_out,
                     )
 
-                prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
-                if not np.isfinite(prop_att) or prop_att <= 0.0:
-                    continue
-                prop_fac = Ti2 * Tf2 * prop_att
-                if not np.isfinite(prop_fac) or prop_fac <= 0.0:
-                    continue
-
                 if use_exact_optics:
                     cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
                     twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
@@ -3839,10 +4066,82 @@ def _calculate_phi_from_precomputed(
                     twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
                     k_out_mag = k_scat
 
+                if projection_debug_enabled:
+                    _projection_debug_log_ray(
+                        projection_debug_counters,
+                        twotheta_t_prime,
+                        twotheta_t,
+                        n2_real,
+                    )
+
+                prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
+                if not np.isfinite(prop_att) or prop_att <= 0.0:
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_PROP_ATT_REJECT] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            np.nan,
+                            kr,
+                            k0,
+                            n2_real,
+                            _PROJECTION_DEBUG_REASON_PROP_ATT,
+                        )
+                    continue
+                prop_fac = Ti2 * Tf2 * prop_att
+                if not np.isfinite(prop_fac) or prop_fac <= 0.0:
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_PROP_FAC_REJECT] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            np.nan,
+                            kr,
+                            k0,
+                            n2_real,
+                            _PROJECTION_DEBUG_REASON_PROP_FAC,
+                        )
+                    continue
+
                 phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-                kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-                kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-                kf[2] = k_out_mag * np.sin(twotheta_t)
+                if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
+                    k_norm = sqrt(
+                        k_tx_prime * k_tx_prime
+                        + k_ty_prime * k_ty_prime
+                        + k_tz_prime * k_tz_prime
+                    )
+                    if k_norm <= 1.0e-30:
+                        if projection_debug_enabled:
+                            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+                            _projection_debug_record_reject(
+                                projection_debug_reject_count,
+                                projection_debug_reject_records,
+                                H,
+                                K,
+                                L,
+                                twotheta_t_prime,
+                                twotheta_t,
+                                kr,
+                                k0,
+                                n2_real,
+                                _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
+                            )
+                        continue
+                    kf[0] = k_tx_prime / k_norm
+                    kf[1] = k_ty_prime / k_norm
+                    kf[2] = k_tz_prime / k_norm
+                else:
+                    kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+                    kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+                    kf[2] = k_out_mag * np.sin(twotheta_t)
 
                 kf_prime[0] = (
                     R_sample[0, 0] * kf[0]
@@ -3864,6 +4163,21 @@ def _calculate_phi_from_precomputed(
                     I_plane, kf_prime, Detector_Pos, n_det_rot
                 )
                 if not valid_det:
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            twotheta_t,
+                            kr,
+                            k0,
+                            n2_real,
+                            _PROJECTION_DEBUG_REASON_INVALID_DET,
+                        )
                     if capture_aux and n_missed < max_hits:
                         missed_kf[n_missed, 0] = kf_prime[0]
                         missed_kf[n_missed, 1] = kf_prime[1]
@@ -3885,11 +4199,41 @@ def _calculate_phi_from_precomputed(
                     + plane_to_det[2] * e2_det[2]
                 )
                 if not np.isfinite(x_det) or not np.isfinite(y_det):
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            twotheta_t,
+                            kr,
+                            k0,
+                            n2_real,
+                            _PROJECTION_DEBUG_REASON_INVALID_DET_COORD,
+                        )
                     continue
 
                 row_f = center[0] - y_det * pixel_scale
                 col_f = center[1] + x_det * pixel_scale
                 if not np.isfinite(row_f) or not np.isfinite(col_f):
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            twotheta_t,
+                            kr,
+                            k0,
+                            n2_real,
+                            _PROJECTION_DEBUG_REASON_INVALID_DET_COORD,
+                        )
                     continue
 
                 val = (
@@ -3941,7 +4285,28 @@ def _calculate_phi_from_precomputed(
                                 val,
                             )
                 if not deposited:
+                    if projection_debug_enabled:
+                        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            twotheta_t,
+                            kr,
+                            k0,
+                            n2_real,
+                            _PROJECTION_DEBUG_REASON_OFF_DETECTOR,
+                        )
                     continue
+                if projection_debug_enabled:
+                    row_idx = int(np.rint(row_f))
+                    if 0 <= row_idx < projection_debug_row_hit_counts.shape[0]:
+                        projection_debug_row_hit_counts[row_idx] += 1
+                        projection_debug_row_tthp_sums[row_idx] += twotheta_t_prime
+                        projection_debug_row_tth_sums[row_idx] += twotheta_t
 
                 if record_this_solution and val > best_candidate_val:
                     best_candidate_val = val
@@ -3976,6 +4341,21 @@ def _calculate_phi_from_precomputed(
                     q_data[i_peaks_index, idx, 3] = val
                     q_count[i_peaks_index] += 1
 
+            if (not chain_has_valid_q) and projection_debug_enabled:
+                projection_debug_counters[_PROJECTION_DEBUG_COUNTER_NO_VALID_SAMPLE] += 1
+                _projection_debug_record_reject(
+                    projection_debug_reject_count,
+                    projection_debug_reject_records,
+                    H,
+                    K,
+                    L,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    n2_real,
+                    _PROJECTION_DEBUG_REASON_NO_VALID_SAMPLE,
+                )
             if not can_reuse_q_solutions:
                 break
             chain_idx = int(sample_terms[chain_idx, _SAMPLE_COL_SOLVE_Q_NEXT])
@@ -4087,6 +4467,16 @@ def calculate_phi(
         R_ZY_n,
         P0,
     )
+    projection_debug_counters = np.zeros(_PROJECTION_DEBUG_COUNTER_COLS, dtype=np.int64)
+    projection_debug_reject_count = np.zeros(1, dtype=np.int64)
+    projection_debug_reject_records = np.full(
+        (1, _PROJECTION_DEBUG_REJECT_RECORD_COLS),
+        np.nan,
+        dtype=np.float64,
+    )
+    projection_debug_row_hit_counts = np.zeros(image_size, dtype=np.int64)
+    projection_debug_row_tthp_sums = np.zeros(image_size, dtype=np.float64)
+    projection_debug_row_tth_sums = np.zeros(image_size, dtype=np.float64)
     return _calculate_phi_from_precomputed(
         H,
         K,
@@ -4124,6 +4514,15 @@ def calculate_phi(
         pixel_size_m,
         forced_sample_idx,
         sample_qr_ring_once,
+        None,
+        EXIT_PROJECTION_INTERNAL,
+        False,
+        projection_debug_counters,
+        projection_debug_reject_count,
+        projection_debug_reject_records,
+        projection_debug_row_hit_counts,
+        projection_debug_row_tthp_sums,
+        projection_debug_row_tth_sums,
     )
 
 
@@ -4163,6 +4562,13 @@ def process_peaks_parallel(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
+    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    projection_debug_counters=None,
+    projection_debug_reject_counts=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an
@@ -4431,6 +4837,27 @@ def process_peaks_parallel(
             or not accumulate_image_flag
         )
     )
+    projection_debug_enabled = (
+        projection_debug_counters is not None
+        and projection_debug_reject_counts is not None
+        and projection_debug_reject_records is not None
+        and projection_debug_row_hit_counts is not None
+        and projection_debug_row_tthp_sums is not None
+        and projection_debug_row_tth_sums is not None
+    )
+    dummy_projection_debug_counters = np.zeros(
+        _PROJECTION_DEBUG_COUNTER_COLS,
+        dtype=np.int64,
+    )
+    dummy_projection_debug_reject_count = np.zeros(1, dtype=np.int64)
+    dummy_projection_debug_reject_records = np.full(
+        (1, _PROJECTION_DEBUG_REJECT_RECORD_COLS),
+        np.nan,
+        dtype=np.float64,
+    )
+    dummy_projection_debug_row_hit_counts = np.zeros(1, dtype=np.int64)
+    dummy_projection_debug_row_tthp_sums = np.zeros(1, dtype=np.float64)
+    dummy_projection_debug_row_tth_sums = np.zeros(1, dtype=np.float64)
 
     if parallel_sources:
         image_partials = np.empty((1, 1, 1), dtype=np.float64)
@@ -4478,6 +4905,21 @@ def process_peaks_parallel(
             tid = get_thread_id()
             if tid < 0 or tid >= image_partials.shape[0]:
                 tid = 0
+            peak_projection_debug_counters = dummy_projection_debug_counters
+            peak_projection_debug_reject_count = dummy_projection_debug_reject_count
+            peak_projection_debug_reject_records = dummy_projection_debug_reject_records
+            peak_projection_debug_row_hit_counts = dummy_projection_debug_row_hit_counts
+            peak_projection_debug_row_tthp_sums = dummy_projection_debug_row_tthp_sums
+            peak_projection_debug_row_tth_sums = dummy_projection_debug_row_tth_sums
+            if projection_debug_enabled:
+                peak_projection_debug_counters = projection_debug_counters[i_pk]
+                peak_projection_debug_reject_count = projection_debug_reject_counts[
+                    i_pk : i_pk + 1
+                ]
+                peak_projection_debug_reject_records = projection_debug_reject_records[i_pk]
+                peak_projection_debug_row_hit_counts = projection_debug_row_hit_counts[tid]
+                peak_projection_debug_row_tthp_sums = projection_debug_row_tthp_sums[tid]
+                peak_projection_debug_row_tth_sums = projection_debug_row_tth_sums[tid]
             target_image = image
             if accumulate_image_flag:
                 target_image = image_partials[tid]
@@ -4519,6 +4961,15 @@ def process_peaks_parallel(
                     pixel_size_m,
                     forced_idx,
                     sample_qr_ring_once,
+                    None,
+                    exit_projection_mode,
+                    projection_debug_enabled,
+                    peak_projection_debug_counters,
+                    peak_projection_debug_reject_count,
+                    peak_projection_debug_reject_records,
+                    peak_projection_debug_row_hit_counts,
+                    peak_projection_debug_row_tthp_sums,
+                    peak_projection_debug_row_tth_sums,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
@@ -4559,6 +5010,14 @@ def process_peaks_parallel(
                     forced_idx,
                     sample_qr_ring_once,
                     sample_weight_array,
+                    exit_projection_mode,
+                    projection_debug_enabled,
+                    peak_projection_debug_counters,
+                    peak_projection_debug_reject_count,
+                    peak_projection_debug_reject_records,
+                    peak_projection_debug_row_hit_counts,
+                    peak_projection_debug_row_tthp_sums,
+                    peak_projection_debug_row_tth_sums,
                 )
             if collect_tables:
                 nh = pixel_hits.shape[0]
@@ -4645,6 +5104,22 @@ def process_peaks_parallel(
                     q_count[i_pk] = 0
                 continue
 
+            peak_projection_debug_counters = dummy_projection_debug_counters
+            peak_projection_debug_reject_count = dummy_projection_debug_reject_count
+            peak_projection_debug_reject_records = dummy_projection_debug_reject_records
+            peak_projection_debug_row_hit_counts = dummy_projection_debug_row_hit_counts
+            peak_projection_debug_row_tthp_sums = dummy_projection_debug_row_tthp_sums
+            peak_projection_debug_row_tth_sums = dummy_projection_debug_row_tth_sums
+            if projection_debug_enabled:
+                peak_projection_debug_counters = projection_debug_counters[i_pk]
+                peak_projection_debug_reject_count = projection_debug_reject_counts[
+                    i_pk : i_pk + 1
+                ]
+                peak_projection_debug_reject_records = projection_debug_reject_records[i_pk]
+                peak_projection_debug_row_hit_counts = projection_debug_row_hit_counts[0]
+                peak_projection_debug_row_tthp_sums = projection_debug_row_tthp_sums[0]
+                peak_projection_debug_row_tth_sums = projection_debug_row_tth_sums[0]
+
             if sample_weight_array is None:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
                     H,
@@ -4683,6 +5158,15 @@ def process_peaks_parallel(
                     pixel_size_m,
                     forced_idx,
                     sample_qr_ring_once,
+                    None,
+                    exit_projection_mode,
+                    projection_debug_enabled,
+                    peak_projection_debug_counters,
+                    peak_projection_debug_reject_count,
+                    peak_projection_debug_reject_records,
+                    peak_projection_debug_row_hit_counts,
+                    peak_projection_debug_row_tthp_sums,
+                    peak_projection_debug_row_tth_sums,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
@@ -4723,6 +5207,14 @@ def process_peaks_parallel(
                     forced_idx,
                     sample_qr_ring_once,
                     sample_weight_array,
+                    exit_projection_mode,
+                    projection_debug_enabled,
+                    peak_projection_debug_counters,
+                    peak_projection_debug_reject_count,
+                    peak_projection_debug_reject_records,
+                    peak_projection_debug_row_hit_counts,
+                    peak_projection_debug_row_tthp_sums,
+                    peak_projection_debug_row_tth_sums,
                 )
 
             if record_status:
@@ -6014,6 +6506,13 @@ def process_qr_rods_parallel(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
+    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    projection_debug_counters=None,
+    projection_debug_reject_counts=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -6075,6 +6574,14 @@ def process_qr_rods_parallel(
         n2_sample_array_override=n2_sample_array_override,
         accumulate_image=accumulate_image,
         sample_qr_ring_once=sample_qr_ring_once,
+        exit_projection_mode=exit_projection_mode,
+        projection_debug_counters=projection_debug_counters,
+        projection_debug_reject_counts=projection_debug_reject_counts,
+        projection_debug_reject_records=projection_debug_reject_records,
+        projection_debug_row_hit_counts=projection_debug_row_hit_counts,
+        projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
+        projection_debug_row_tth_sums=projection_debug_row_tth_sums,
+        enable_safe_cache=False,
     )
 
     return (*result, degeneracy)

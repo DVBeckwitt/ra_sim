@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -75,6 +75,7 @@ class SimulationRequest:
     optics_mode: int | None = None
     collect_hit_tables: bool = True
     accumulate_image: bool = True
+    exit_projection_mode: Literal["internal", "refracted"] = "internal"
     single_sample_indices: np.ndarray | None = None
     best_sample_indices_out: np.ndarray | None = None
 
@@ -89,3 +90,4 @@ class SimulationResult:
     miss_tables: list[Any]
     degeneracy: np.ndarray | None = None
     intersection_cache: list[Any] | None = None
+    projection_debug: Any | None = None

@@ -131,6 +131,7 @@ def _build_legacy_request(
     sample_length_m=0.0,
     thickness=0.0,
     n2_sample_array=None,
+    exit_projection_mode="internal",
 ) -> SimulationRequest:
     """Build one typed simulation request from the legacy positional inputs."""
 
@@ -226,6 +227,7 @@ def _build_legacy_request(
         thickness=float(thickness),
         optics_mode=OPTICS_MODE_FAST if optics_mode is None else int(optics_mode),
         collect_hit_tables=True,
+        exit_projection_mode=str(exit_projection_mode).strip().lower(),
     )
 
 
@@ -268,6 +270,7 @@ def simulate_diffraction(
     sample_length_m=0.0,
     thickness=0.0,
     n2_sample_array=None,
+    exit_projection_mode="internal",
 ):
     """Run one legacy positional simulation through the typed engine API."""
 
@@ -310,5 +313,6 @@ def simulate_diffraction(
         sample_length_m=sample_length_m,
         thickness=thickness,
         n2_sample_array=n2_sample_array,
+        exit_projection_mode=exit_projection_mode,
     )
     return simulate(request, peak_runner=process_peaks_parallel_safe).image

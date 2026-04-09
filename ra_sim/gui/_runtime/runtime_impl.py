@@ -145,6 +145,7 @@ from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
+from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
 from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
@@ -244,6 +245,172 @@ def _append_runtime_update_trace(event: str, **fields: object) -> None:
         )
     except Exception:
         pass
+
+
+def _live_cache_short_text(value: object, *, max_chars: int = 80) -> str:
+    text = " ".join(str(value).split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, int(max_chars) - 3)] + "..."
+
+
+def _live_cache_shape(value: object) -> list[int]:
+    if value is None:
+        return []
+    try:
+        return [int(v) for v in np.asarray(value).shape]
+    except Exception:
+        return []
+
+
+def _live_cache_count(value: object) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(len(value))  # type: ignore[arg-type]
+    except Exception:
+        try:
+            return int(np.asarray(value).size)
+        except Exception:
+            return 0
+
+
+def _live_cache_signature_summary(
+    signature: object,
+    *,
+    max_items: int = 4,
+) -> str | None:
+    if signature is None:
+        return None
+    if isinstance(signature, np.ndarray):
+        return "ndarray(shape={shape}, dtype={dtype})".format(
+            shape=tuple(int(v) for v in signature.shape),
+            dtype=str(signature.dtype),
+        )
+    if isinstance(signature, Mapping):
+        keys = list(signature.keys())
+        preview = ", ".join(_live_cache_short_text(key, max_chars=16) for key in keys[:max_items])
+        if len(keys) > max_items:
+            preview += ", ..."
+        return f"mapping(len={len(keys)}, keys=[{preview}])"
+    if isinstance(signature, Sequence) and not isinstance(
+        signature,
+        (str, bytes, bytearray),
+    ):
+        items = list(signature)
+        preview = ", ".join(
+            _live_cache_short_text(item, max_chars=16) for item in items[:max_items]
+        )
+        if len(items) > max_items:
+            preview += ", ..."
+        return f"{type(signature).__name__}(len={len(items)}, items=[{preview}])"
+    return _live_cache_short_text(signature, max_chars=96)
+
+
+def _live_cache_inventory_snapshot() -> dict[str, object]:
+    source_snapshots_raw = getattr(
+        simulation_runtime_state,
+        "source_row_snapshots",
+        {},
+    )
+    source_snapshots: list[dict[str, object]] = []
+    if isinstance(source_snapshots_raw, Mapping):
+        for raw_background_index, raw_snapshot in sorted(
+            source_snapshots_raw.items(),
+            key=lambda item: int(item[0]),
+        ):
+            if not isinstance(raw_snapshot, Mapping):
+                continue
+            row_count = raw_snapshot.get("row_count")
+            if row_count is None:
+                row_count = _live_cache_count(raw_snapshot.get("rows", ()))
+            source_snapshots.append(
+                {
+                    "background_index": int(raw_background_index),
+                    "row_count": int(row_count),
+                    "created_from": raw_snapshot.get("created_from"),
+                    "signature_summary": _live_cache_signature_summary(
+                        raw_snapshot.get("simulation_signature")
+                    ),
+                }
+            )
+    return {
+        "preview_active": bool(getattr(simulation_runtime_state, "preview_active", False)),
+        "preview_sample_count": getattr(
+            simulation_runtime_state,
+            "preview_sample_count",
+            None,
+        ),
+        "stored_hit_table_signature_present": bool(
+            getattr(simulation_runtime_state, "stored_hit_table_signature", None) is not None
+        ),
+        "stored_hit_table_signature_summary": _live_cache_signature_summary(
+            getattr(simulation_runtime_state, "stored_hit_table_signature", None)
+        ),
+        "last_simulation_signature_summary": _live_cache_signature_summary(
+            getattr(simulation_runtime_state, "last_simulation_signature", None)
+        ),
+        "primary_contribution_cache_signature_summary": _live_cache_signature_summary(
+            getattr(simulation_runtime_state, "primary_contribution_cache_signature", None)
+        ),
+        "primary_source_mode": getattr(simulation_runtime_state, "primary_source_mode", None),
+        "primary_active_contribution_key_count": _live_cache_count(
+            getattr(simulation_runtime_state, "primary_active_contribution_keys", ())
+        ),
+        "primary_hit_table_cache_entry_count": _live_cache_count(
+            getattr(simulation_runtime_state, "primary_hit_table_cache", {})
+        ),
+        "source_snapshots": source_snapshots,
+    }
+
+
+def _trace_live_cache_event(
+    family: str,
+    action: str,
+    *,
+    background_index: object = None,
+    current_background_index: object = None,
+    **fields: object,
+) -> None:
+    event_name = f"live_cache_{str(family)}_{str(action)}"
+    try:
+        resolved_current_background_index = (
+            getattr(background_runtime_state, "current_background_index", None)
+            if current_background_index is None
+            else current_background_index
+        )
+    except Exception:
+        resolved_current_background_index = current_background_index
+    resolved_background_index = (
+        resolved_current_background_index
+        if background_index is None
+        else background_index
+    )
+    payload: dict[str, object] = {
+        "cache_family": str(family),
+        "action": str(action),
+        "update_id": getattr(simulation_runtime_state, "current_update_trace_id", None),
+        "stage": getattr(simulation_runtime_state, "current_update_trace_stage", None),
+        "update_phase": getattr(simulation_runtime_state, "update_phase", None),
+        "is_preview": bool(getattr(simulation_runtime_state, "preview_active", False)),
+        "preview_sample_count": getattr(
+            simulation_runtime_state,
+            "preview_sample_count",
+            None,
+        ),
+    }
+    try:
+        if resolved_background_index is not None:
+            payload["background_index"] = int(resolved_background_index)
+    except Exception:
+        payload["background_index"] = resolved_background_index
+    try:
+        if resolved_current_background_index is not None:
+            payload["current_background_index"] = int(resolved_current_background_index)
+    except Exception:
+        payload["current_background_index"] = resolved_current_background_index
+    payload.update(fields)
+    _append_runtime_update_trace(event_name, **payload)
 
 
 def _append_runtime_update_exception_trace(
@@ -3768,7 +3935,23 @@ geometry_manual_cache_workflow = (
         ),
         current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
         pairs_for_index=_geometry_manual_pairs_for_index,
-        simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
+        source_rows_for_background=(
+            lambda background_index, param_set=None, consumer=None: (
+                globals()["_geometry_manual_source_rows_for_background"](
+                    background_index,
+                    param_set,
+                    consumer=consumer,
+                )
+            )
+        ),
+        source_snapshot_signature_for_background=(
+            lambda background_index, param_set=None: (
+                globals()["_geometry_source_snapshot_signature_for_background"](
+                    background_index,
+                    param_set,
+                )
+            )
+        ),
         build_grouped_candidates=_geometry_manual_pick_candidates,
         build_simulated_lookup=_geometry_manual_simulated_lookup,
         entry_display_coords=_geometry_manual_entry_display_coords,
@@ -5624,6 +5807,171 @@ def _resolved_peak_table_payload(intersection_cache, legacy_hit_tables):
     return _copy_hit_tables(legacy_hit_tables)
 
 
+def _clear_primary_contribution_cache() -> None:
+    simulation_runtime_state.primary_contribution_cache_signature = None
+    simulation_runtime_state.primary_active_contribution_keys = []
+    simulation_runtime_state.primary_hit_table_cache = {}
+    simulation_runtime_state.primary_filter_signature = None
+
+
+def _reset_combined_simulation_artifacts() -> None:
+    _trace_live_cache_event(
+        "combined",
+        "clear",
+        outcome="cleared",
+        had_peak_table_count=_live_cache_count(
+            simulation_runtime_state.stored_max_positions_local
+        ),
+        had_peak_table_lattice_count=_live_cache_count(
+            simulation_runtime_state.stored_peak_table_lattice
+        ),
+        had_sim_image=bool(simulation_runtime_state.stored_sim_image is not None),
+    )
+    simulation_runtime_state.stored_max_positions_local = None
+    simulation_runtime_state.stored_peak_table_lattice = None
+    simulation_runtime_state.stored_sim_image = None
+
+
+def _store_primary_cache_payload(
+    *,
+    cache_signature: object,
+    source_mode: str,
+    active_keys: Sequence[object],
+    contribution_keys: Sequence[object],
+    raw_hit_tables: Sequence[np.ndarray],
+) -> None:
+    previous_signature = simulation_runtime_state.primary_contribution_cache_signature
+    previous_mode = str(simulation_runtime_state.primary_source_mode or "")
+    previous_entry_count = _live_cache_count(
+        simulation_runtime_state.primary_hit_table_cache
+    )
+    if cache_signature is None:
+        _trace_live_cache_event(
+            "primary_contribution",
+            "store",
+            outcome="skipped",
+            reason="missing_signature",
+            previous_signature_summary=_live_cache_signature_summary(previous_signature),
+            previous_source_mode=previous_mode,
+            previous_entry_count=int(previous_entry_count),
+        )
+        return
+
+    normalized_mode = str(source_mode or "miller")
+    reset_required = bool(
+        cache_signature != simulation_runtime_state.primary_contribution_cache_signature
+        or normalized_mode != str(simulation_runtime_state.primary_source_mode or "")
+    )
+    if (
+        reset_required
+    ):
+        simulation_runtime_state.primary_hit_table_cache = {}
+
+    simulation_runtime_state.primary_contribution_cache_signature = cache_signature
+    simulation_runtime_state.primary_source_mode = normalized_mode
+    simulation_runtime_state.primary_active_contribution_keys = list(active_keys or ())
+
+    copied_tables = _copy_hit_tables(raw_hit_tables)
+    overwritten_count = 0
+    for key, table in zip(contribution_keys or (), copied_tables):
+        if key in simulation_runtime_state.primary_hit_table_cache:
+            overwritten_count += 1
+        simulation_runtime_state.primary_hit_table_cache[key] = np.asarray(
+            table,
+            dtype=np.float64,
+        ).copy()
+    _trace_live_cache_event(
+        "primary_contribution",
+        "store",
+        outcome=("reset_and_store" if reset_required else "store"),
+        previous_signature_summary=_live_cache_signature_summary(previous_signature),
+        signature_summary=_live_cache_signature_summary(cache_signature),
+        previous_source_mode=previous_mode,
+        source_mode=normalized_mode,
+        previous_entry_count=int(previous_entry_count),
+        entry_count=_live_cache_count(simulation_runtime_state.primary_hit_table_cache),
+        active_key_count=_live_cache_count(active_keys),
+        provided_key_count=_live_cache_count(contribution_keys),
+        stored_table_count=_live_cache_count(copied_tables),
+        overwritten=int(overwritten_count),
+        reset=bool(reset_required),
+    )
+
+
+def _rematerialize_primary_cache_artifacts(
+    *,
+    image_size: int,
+    mosaic_params: dict[str, object],
+    a_primary: float,
+    c_primary: float,
+) -> dict[str, object]:
+    payload = gui_runtime_primary_cache.rematerialize_primary_artifacts(
+        primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
+        active_keys=simulation_runtime_state.primary_active_contribution_keys,
+        image_size=int(image_size),
+        a_primary=float(a_primary),
+        c_primary=float(c_primary),
+        beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
+        beam_y_array=np.asarray(mosaic_params["beam_y_array"], dtype=np.float64),
+        theta_array=np.asarray(mosaic_params["theta_array"], dtype=np.float64),
+        phi_array=np.asarray(mosaic_params["phi_array"], dtype=np.float64),
+        wavelength_array=np.asarray(
+            mosaic_params["wavelength_array"],
+            dtype=np.float64,
+        ),
+        lattice_label="primary",
+    )
+    _trace_live_cache_event(
+        "primary_contribution",
+        "rematerialize",
+        outcome="success",
+        signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.primary_contribution_cache_signature
+        ),
+        active_key_count=_live_cache_count(
+            simulation_runtime_state.primary_active_contribution_keys
+        ),
+        cache_entry_count=_live_cache_count(
+            simulation_runtime_state.primary_hit_table_cache
+        ),
+        image_shape=_live_cache_shape(payload.get("image")),
+        intersection_cache_count=_live_cache_count(payload.get("intersection_cache")),
+        peak_table_count=_live_cache_count(payload.get("peak_tables")),
+    )
+    return payload
+
+
+def _apply_primary_cache_artifacts(payload: dict[str, object]) -> None:
+    simulation_runtime_state.stored_primary_sim_image = np.asarray(
+        payload.get("image"),
+        dtype=np.float64,
+    )
+    simulation_runtime_state.stored_primary_intersection_cache = _copy_intersection_cache_tables(
+        payload.get("intersection_cache", [])
+    )
+    simulation_runtime_state.stored_primary_max_positions = _copy_hit_tables(
+        payload.get("peak_tables", [])
+    )
+    simulation_runtime_state.stored_primary_peak_table_lattice = list(
+        payload.get("peak_table_lattice", [])
+    )
+    _reset_combined_simulation_artifacts()
+    simulation_runtime_state.preview_active = False
+    simulation_runtime_state.preview_sample_count = None
+    _trace_live_cache_event(
+        "primary_contribution",
+        "apply",
+        outcome="applied",
+        signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.primary_contribution_cache_signature
+        ),
+        image_shape=_live_cache_shape(payload.get("image")),
+        intersection_cache_count=_live_cache_count(payload.get("intersection_cache")),
+        peak_table_count=_live_cache_count(payload.get("peak_tables")),
+        peak_table_lattice_count=_live_cache_count(payload.get("peak_table_lattice")),
+    )
+
+
 def _auto_caked_limits(image):
     """Return sensible display limits for a caked image."""
 
@@ -6939,6 +7287,19 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
 
 
 def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
+    _trace_live_cache_event(
+        "analysis",
+        "clear",
+        outcome="cleared",
+        clear_visuals=bool(clear_visuals),
+        last_analysis_signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.last_analysis_signature
+        ),
+        had_sim_result=bool(simulation_runtime_state.last_res2_sim is not None),
+        had_background_result=bool(
+            simulation_runtime_state.last_res2_background is not None
+        ),
+    )
     simulation_runtime_state.analysis_epoch = int(simulation_runtime_state.analysis_epoch) + 1
 
     ready_result = simulation_runtime_state.analysis_ready_result
@@ -6976,8 +7337,25 @@ def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
 
 
 def _invalidate_simulation_cache() -> None:
+    _trace_live_cache_event(
+        "simulation",
+        "clear",
+        outcome="cleared",
+        last_sim_signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.last_sim_signature
+        ),
+        last_simulation_signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.last_simulation_signature
+        ),
+        source_snapshot_count=_live_cache_count(
+            simulation_runtime_state.source_row_snapshots
+        ),
+        preview_active=bool(simulation_runtime_state.preview_active),
+        preview_sample_count=simulation_runtime_state.preview_sample_count,
+    )
     simulation_runtime_state.last_sim_signature = None
     simulation_runtime_state.last_simulation_signature = None
+    simulation_runtime_state.source_row_snapshots = {}
     simulation_runtime_state.simulation_epoch = int(simulation_runtime_state.simulation_epoch) + 1
     simulation_runtime_state.preview_active = False
     simulation_runtime_state.preview_sample_count = None
@@ -7231,13 +7609,34 @@ def _caking_cache_bucket(kind: str) -> dict[object, dict[str, object]]:
 
 def _get_cached_caking_entry(kind: str, signature: object) -> dict[str, object] | None:
     if signature is None:
+        _trace_live_cache_event(
+            f"caking_{str(kind)}",
+            "lookup",
+            outcome="skipped",
+            reason="missing_signature",
+        )
         return None
     bucket = _caking_cache_bucket(kind)
     entry = bucket.get(signature)
     if not isinstance(entry, dict):
+        _trace_live_cache_event(
+            f"caking_{str(kind)}",
+            "lookup",
+            outcome="miss",
+            signature_summary=_live_cache_signature_summary(signature),
+            bucket_size=_live_cache_count(bucket),
+        )
         return None
     bucket.pop(signature, None)
     bucket[signature] = entry
+    _trace_live_cache_event(
+        f"caking_{str(kind)}",
+        "lookup",
+        outcome="hit",
+        signature_summary=_live_cache_signature_summary(signature),
+        bucket_size=_live_cache_count(bucket),
+        payload_available=bool(entry.get("payload") is not None),
+    )
     return dict(entry)
 
 
@@ -7249,6 +7648,16 @@ def _store_cached_caking_entry(
     payload: dict[str, object] | None,
 ) -> None:
     if signature is None or res2 is None:
+        _trace_live_cache_event(
+            f"caking_{str(kind)}",
+            "store",
+            outcome="skipped",
+            reason=(
+                "missing_signature"
+                if signature is None
+                else "missing_result"
+            ),
+        )
         return
     bucket = _caking_cache_bucket(kind)
     bucket.pop(signature, None)
@@ -7256,9 +7665,20 @@ def _store_cached_caking_entry(
         "res2": res2,
         "payload": None if payload is None else dict(payload),
     }
+    evicted = False
     while len(bucket) > CAKING_CACHE_MAX_ENTRIES:
         oldest_key = next(iter(bucket))
         bucket.pop(oldest_key, None)
+        evicted = True
+    _trace_live_cache_event(
+        f"caking_{str(kind)}",
+        "store",
+        outcome="stored",
+        signature_summary=_live_cache_signature_summary(signature),
+        bucket_size=_live_cache_count(bucket),
+        evicted=bool(evicted),
+        payload_available=bool(payload is not None),
+    )
 
 
 def _live_interaction_active() -> bool:
@@ -7422,6 +7842,9 @@ def _build_preview_simulation_job(
         job.get("collect_hit_tables", False)
         and not bool(job.get("accumulate_image", True))
     )
+    preview_job["collect_primary_hit_tables"] = False
+    preview_job["collect_secondary_hit_tables"] = False
+    preview_job["capture_primary_hit_tables_raw"] = False
     preview_job["is_preview"] = True
     preview_job["preview_sample_count"] = int(preview_indices.size)
     preview_job["mosaic_params"] = {
@@ -7452,18 +7875,23 @@ def _build_preview_simulation_job(
 
 
 def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
+    from ra_sim.simulation.projection_debug import finalize_projection_debug_session
+    from ra_sim.simulation.projection_debug import start_projection_debug_session
+
     image_size = int(job["image_size"])
     pixel_size_m_job = float(job["pixel_size_m"])
     center = np.asarray(job["center"], dtype=np.float64)
     request_unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
     request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     mosaic_params_job = dict(job["mosaic_params"])
+    job_kind = str(job.get("job_kind", "full"))
     image_generation_start_time = perf_counter()
 
     if bool(job.get("qr_cylinder_replace_simulation", False)):
         blank = np.zeros((image_size, image_size), dtype=np.float64)
         return {
             "job_id": int(job["job_id"]),
+            "job_kind": job_kind,
             "signature": job["signature"],
             "epoch": int(job["epoch"]),
             "is_preview": bool(job.get("is_preview", False)),
@@ -7476,12 +7904,42 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "secondary_image": blank.copy(),
             "primary_max_positions": [],
             "secondary_max_positions": [],
+            "primary_intersection_cache": [],
+            "secondary_intersection_cache": [],
             "primary_peak_table_lattice": [],
             "secondary_peak_table_lattice": [],
+            "primary_contribution_cache_signature": job.get(
+                "primary_contribution_cache_signature"
+            ),
+            "primary_source_mode": job.get("primary_source_mode"),
+            "primary_contribution_keys": list(
+                job.get("primary_contribution_keys", [])
+            ),
+            "active_primary_contribution_keys": list(
+                job.get(
+                    "active_primary_contribution_keys",
+                    job.get("primary_contribution_keys", []),
+                )
+            ),
+            "primary_hit_tables_raw": [],
+            "projection_debug_log_path": None,
             "image_generation_elapsed_ms": (
                 perf_counter() - image_generation_start_time
             ) * 1e3,
         }
+
+    projection_debug_session = start_projection_debug_session(
+        {
+            "job_id": int(job["job_id"]),
+            "job_kind": job_kind,
+            "signature": job["signature"],
+            "is_preview": bool(job.get("is_preview", False)),
+            "theta_i_deg": float(job["theta_initial_deg"]),
+            "optics_mode": int(job["optics_mode"]),
+            "exit_projection_mode": str(job.get("exit_projection_mode", "internal")),
+        },
+        source="simulation_generation_job",
+    )
 
     def build_request(
         miller_arr,
@@ -7490,6 +7948,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         a_val,
         c_val,
         image_buffer,
+        collect_hit_tables,
     ) -> SimulationRequest:
         return SimulationRequest(
             miller=np.asarray(miller_arr, dtype=np.float64),
@@ -7559,12 +8018,22 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             save_flag=0,
             thickness=float(job["sample_depth_m"]),
             optics_mode=int(job["optics_mode"]),
-            collect_hit_tables=bool(job["collect_hit_tables"]),
+            collect_hit_tables=bool(collect_hit_tables),
             accumulate_image=bool(job.get("accumulate_image", True)),
+            exit_projection_mode=str(job.get("exit_projection_mode", "internal")),
         )
 
-    def run_one(data, intens_arr, a_val, c_val):
+    def run_one(
+        data,
+        intens_arr,
+        a_val,
+        c_val,
+        *,
+        collect_hit_tables: bool,
+        capture_raw_hit_tables: bool,
+    ):
         buf = np.zeros((image_size, image_size), dtype=np.float64)
+        request_collect_hit_tables = bool(collect_hit_tables or capture_raw_hit_tables)
         if isinstance(data, dict):
             if len(data) == 0:
                 return buf, [], []
@@ -7576,11 +8045,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                     a_val=a_val,
                     c_val=c_val,
                     image_buffer=buf,
+                    collect_hit_tables=request_collect_hit_tables,
                 ),
             )
             return (
                 result.image,
-                list(result.hit_tables),
+                _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
                 _copy_intersection_cache_tables(result.intersection_cache),
             )
 
@@ -7598,11 +8068,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 a_val=a_val,
                 c_val=c_val,
                 image_buffer=buf,
+                collect_hit_tables=request_collect_hit_tables,
             )
         )
         return (
             result.image,
-            list(result.hit_tables),
+            _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
             _copy_intersection_cache_tables(result.intersection_cache),
         )
 
@@ -7610,77 +8081,113 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     primary_intensities = job["primary_intensities"]
     secondary_data = job["secondary_data"]
     secondary_intensities = job["secondary_intensities"]
+    primary_collect_hit_tables = bool(
+        job.get("collect_primary_hit_tables", job["collect_hit_tables"])
+    )
+    secondary_collect_hit_tables = bool(
+        job.get("collect_secondary_hit_tables", job["collect_hit_tables"])
+    )
+    capture_primary_hit_tables_raw = bool(
+        job.get("capture_primary_hit_tables_raw", False)
+    )
 
     img1 = np.zeros((image_size, image_size), dtype=np.float64)
     img2 = np.zeros((image_size, image_size), dtype=np.float64)
-    maxpos1: list[object] = []
-    maxpos2: list[object] = []
+    raw_hit_tables1: list[object] = []
+    raw_hit_tables2: list[object] = []
     cache1: list[object] = []
     cache2: list[object] = []
 
-    if bool(job["run_primary"]):
-        img1, maxpos1, cache1 = run_one(
-            primary_data,
-            primary_intensities,
-            float(job["a_primary"]),
-            float(job["c_primary"]),
-        )
+    try:
+        if bool(job["run_primary"]):
+            img1, raw_hit_tables1, cache1 = run_one(
+                primary_data,
+                primary_intensities,
+                float(job["a_primary"]),
+                float(job["c_primary"]),
+                collect_hit_tables=primary_collect_hit_tables,
+                capture_raw_hit_tables=capture_primary_hit_tables_raw,
+            )
 
-    if bool(job["run_secondary"]):
-        img2, maxpos2, cache2 = run_one(
-            secondary_data,
-            secondary_intensities,
-            float(job["a_secondary"]),
-            float(job["c_secondary"]),
-        )
+        if bool(job["run_secondary"]):
+            img2, raw_hit_tables2, cache2 = run_one(
+                secondary_data,
+                secondary_intensities,
+                float(job["a_secondary"]),
+                float(job["c_secondary"]),
+                collect_hit_tables=secondary_collect_hit_tables,
+                capture_raw_hit_tables=False,
+            )
 
-    primary_peak_tables = _resolved_peak_table_payload(cache1, maxpos1)
-    secondary_peak_tables = _resolved_peak_table_payload(cache2, maxpos2)
-    primary_peak_table_count = len(primary_peak_tables)
-    secondary_peak_table_count = len(secondary_peak_tables)
+        primary_peak_tables = _resolved_peak_table_payload(cache1, raw_hit_tables1)
+        secondary_peak_tables = _resolved_peak_table_payload(cache2, raw_hit_tables2)
+        primary_peak_table_count = len(primary_peak_tables)
+        secondary_peak_table_count = len(secondary_peak_tables)
 
-    if not bool(job.get("accumulate_image", True)):
-        img1 = gui_runtime_position_preview.build_peak_position_preview_image(
-            primary_peak_tables,
-            image_size=image_size,
-            hit_tables_to_max_positions=hit_tables_to_max_positions,
-        )
-        img2 = gui_runtime_position_preview.build_peak_position_preview_image(
-            secondary_peak_tables,
-            image_size=image_size,
-            hit_tables_to_max_positions=hit_tables_to_max_positions,
-        )
+        if not bool(job.get("accumulate_image", True)):
+            img1 = gui_runtime_position_preview.build_peak_position_preview_image(
+                primary_peak_tables,
+                image_size=image_size,
+                hit_tables_to_max_positions=hit_tables_to_max_positions,
+            )
+            img2 = gui_runtime_position_preview.build_peak_position_preview_image(
+                secondary_peak_tables,
+                image_size=image_size,
+                hit_tables_to_max_positions=hit_tables_to_max_positions,
+            )
 
-    return {
-        "job_id": int(job["job_id"]),
-        "signature": job["signature"],
-        "epoch": int(job["epoch"]),
-        "is_preview": bool(job.get("is_preview", False)),
-        "preview_sample_count": (
-            int(job.get("preview_sample_count", 0))
-            if job.get("preview_sample_count") is not None
-            else None
-        ),
-        "primary_image": img1,
-        "secondary_image": img2,
-        "collected_hit_tables": bool(job["collect_hit_tables"]),
-        "hit_table_signature": job.get("hit_table_signature"),
-        "primary_max_positions": list(primary_peak_tables),
-        "secondary_max_positions": list(secondary_peak_tables),
-        "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
-        "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
-        "primary_peak_table_lattice": [
-            (float(job["a_primary"]), float(job["c_primary"]), "primary")
-            for _ in range(primary_peak_table_count)
-        ],
-        "secondary_peak_table_lattice": [
-            (float(job["a_secondary"]), float(job["c_secondary"]), "secondary")
-            for _ in range(secondary_peak_table_count)
-        ],
-        "image_generation_elapsed_ms": (
-            perf_counter() - image_generation_start_time
-        ) * 1e3,
-    }
+        projection_debug_log_path = finalize_projection_debug_session(
+            projection_debug_session
+        )
+        return {
+            "job_id": int(job["job_id"]),
+            "job_kind": job_kind,
+            "signature": job["signature"],
+            "epoch": int(job["epoch"]),
+            "is_preview": bool(job.get("is_preview", False)),
+            "preview_sample_count": (
+                int(job.get("preview_sample_count", 0))
+                if job.get("preview_sample_count") is not None
+                else None
+            ),
+            "primary_image": img1,
+            "secondary_image": img2,
+            "collected_hit_tables": bool(job["collect_hit_tables"]),
+            "hit_table_signature": job.get("hit_table_signature"),
+            "primary_contribution_cache_signature": job.get(
+                "primary_contribution_cache_signature"
+            ),
+            "primary_source_mode": job.get("primary_source_mode"),
+            "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
+            "active_primary_contribution_keys": list(
+                job.get(
+                    "active_primary_contribution_keys",
+                    job.get("primary_contribution_keys", []),
+                )
+            ),
+            "primary_hit_tables_raw": _copy_hit_tables(
+                raw_hit_tables1 if capture_primary_hit_tables_raw else []
+            ),
+            "primary_max_positions": list(primary_peak_tables),
+            "secondary_max_positions": list(secondary_peak_tables),
+            "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
+            "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
+            "primary_peak_table_lattice": [
+                (float(job["a_primary"]), float(job["c_primary"]), "primary")
+                for _ in range(primary_peak_table_count)
+            ],
+            "secondary_peak_table_lattice": [
+                (float(job["a_secondary"]), float(job["c_secondary"]), "secondary")
+                for _ in range(secondary_peak_table_count)
+            ],
+            "projection_debug_log_path": projection_debug_log_path,
+            "image_generation_elapsed_ms": (
+                perf_counter() - image_generation_start_time
+            ) * 1e3,
+        }
+    except Exception:
+        finalize_projection_debug_session(projection_debug_session)
+        raise
 
 
 def _submit_async_simulation_job(job: dict[str, object]) -> None:
@@ -7927,9 +8434,23 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_hit_table_signature = result.get(
             "hit_table_signature"
         )
-    simulation_runtime_state.stored_max_positions_local = None
-    simulation_runtime_state.stored_peak_table_lattice = None
-    simulation_runtime_state.stored_sim_image = None
+    if not bool(result.get("is_preview", False)):
+        _store_primary_cache_payload(
+            cache_signature=result.get("primary_contribution_cache_signature"),
+            source_mode=str(
+                result.get(
+                    "primary_source_mode",
+                    simulation_runtime_state.primary_source_mode,
+                )
+            ),
+            active_keys=result.get(
+                "active_primary_contribution_keys",
+                simulation_runtime_state.primary_active_contribution_keys,
+            ),
+            contribution_keys=result.get("primary_contribution_keys", []),
+            raw_hit_tables=result.get("primary_hit_tables_raw", []),
+        )
+    _reset_combined_simulation_artifacts()
     simulation_runtime_state.last_image_generation_ms = float(
         result.get("image_generation_elapsed_ms", float("nan"))
     )
@@ -7939,6 +8460,33 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         int(preview_sample_count)
         if preview_sample_count is not None
         else None
+    )
+    _trace_live_cache_event(
+        "simulation_result",
+        "apply",
+        outcome="stored",
+        is_preview=bool(result.get("is_preview", False)),
+        job_kind=str(result.get("job_kind", "full")),
+        image_generation_elapsed_ms=float(
+            result.get("image_generation_elapsed_ms", float("nan"))
+        ),
+        primary_image_shape=_live_cache_shape(result.get("primary_image")),
+        secondary_image_shape=_live_cache_shape(result.get("secondary_image")),
+        primary_intersection_cache_count=_live_cache_count(
+            simulation_runtime_state.stored_primary_intersection_cache
+        ),
+        secondary_intersection_cache_count=_live_cache_count(
+            simulation_runtime_state.stored_secondary_intersection_cache
+        ),
+        primary_peak_table_count=_live_cache_count(
+            simulation_runtime_state.stored_primary_max_positions
+        ),
+        secondary_peak_table_count=_live_cache_count(
+            simulation_runtime_state.stored_secondary_max_positions
+        ),
+        stored_hit_table_signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.stored_hit_table_signature
+        ),
     )
 
 
@@ -8447,6 +8995,7 @@ simulation_runtime_state.prev_background_visible = True
 simulation_runtime_state.last_bg_signature = None
 simulation_runtime_state.last_sim_signature = None
 simulation_runtime_state.last_simulation_signature = None
+simulation_runtime_state.source_row_snapshots = {}
 simulation_runtime_state.stored_hit_table_signature = None
 simulation_runtime_state.analysis_epoch = 0
 simulation_runtime_state.last_analysis_signature = None
@@ -8703,6 +9252,36 @@ def do_update():
         and secondary_data.shape[0] > 0
         and secondary_intensities.size > 0
     )
+    primary_requested_source_mode = str(
+        getattr(
+            simulation_runtime_state,
+            "primary_requested_source_mode",
+            "",
+        )
+        or (
+            "qr"
+            if isinstance(primary_data, dict) and len(primary_data) > 0
+            else "miller"
+        )
+    )
+    primary_requested_contribution_keys = tuple(
+        getattr(
+            simulation_runtime_state,
+            "primary_requested_contribution_keys",
+            (),
+        )
+        or ()
+    )
+    primary_requested_filter_signature = getattr(
+        simulation_runtime_state,
+        "primary_requested_filter_signature",
+        None,
+    )
+    if primary_requested_filter_signature is None:
+        primary_requested_filter_signature = (
+            primary_requested_source_mode,
+            primary_source_signature,
+        )
 
 
     def _simulation_signature_base(
@@ -8710,48 +9289,82 @@ def do_update():
         optics_mode_component: int,
         include_mosaic_shape: bool = True,
     ):
-        signature = (
-            round(gamma_updated, 6),
-            round(Gamma_updated, 6),
-            round(chi_updated, 6),
-            round(psi_z_updated, 6),
-            round(zs_updated, 9),
-            round(zb_updated, 9),
-            round(sample_width_updated, 9),
-            round(sample_length_updated, 9),
-            round(sample_depth_updated, 12),
-            round(debye_x_updated, 6),
-            round(debye_y_updated, 6),
-            round(a_updated, 6),
-            round(c_updated, 6),
-            round(theta_init_up, 6),
-            round(cor_angle_updated, 6),
-            round(center_x_up, 3),
-            round(center_y_up, 3),
-            int(mosaic_params["solve_q_steps"]),
-            round(float(mosaic_params["solve_q_rel_tol"]), 8),
-            int(mosaic_params["solve_q_mode"]),
-            tuple(mosaic_params.get("_sampling_signature", ())),
-            round(current_sf_prune_bias(), 3),
-            int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0)),
-            int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0)),
-            round(ordered_structure_scale, 6),
-            int(optics_mode_component),
-            int(qr_cylinder_replace_requested),
-            int(np.size(mosaic_params["beam_x_array"])),
-            int(np.size(mosaic_params["theta_array"])),
-            primary_source_signature,
-            secondary_source_signature,
-            round(float(secondary_a), 6),
-            round(float(secondary_c), 6),
+        return _geometry_source_snapshot_signature_from_params(
+            {
+                "gamma": gamma_updated,
+                "Gamma": Gamma_updated,
+                "chi": chi_updated,
+                "psi_z": psi_z_updated,
+                "zs": zs_updated,
+                "zb": zb_updated,
+                "sample_width": sample_width_updated,
+                "sample_length": sample_length_updated,
+                "sample_depth": sample_depth_updated,
+                "debye_x": debye_x_updated,
+                "debye_y": debye_y_updated,
+                "a": a_updated,
+                "c": c_updated,
+                "theta_initial": theta_init_up,
+                "cor": cor_angle_updated,
+                "center_x": center_x_up,
+                "center_y": center_y_up,
+                "sigma_mosaic_deg": mosaic_params.get("sigma_mosaic_deg", 0.0),
+                "gamma_mosaic_deg": mosaic_params.get("gamma_mosaic_deg", 0.0),
+                "eta": mosaic_params.get("eta", 0.0),
+            },
+            mosaic_params=mosaic_params,
+            optics_mode_component=int(optics_mode_component),
+            include_mosaic_shape=bool(include_mosaic_shape),
+            sf_prune_bias=current_sf_prune_bias(),
+            sf_prune_stats=simulation_runtime_state.sf_prune_stats,
+            ordered_structure_scale=ordered_structure_scale,
+            qr_cylinder_replace_requested=qr_cylinder_replace_requested,
+            primary_source_signature=primary_source_signature,
+            secondary_source_signature=secondary_source_signature,
+            secondary_a=secondary_a,
+            secondary_c=secondary_c,
         )
-        if include_mosaic_shape:
-            signature += (
-                round(mosaic_params["sigma_mosaic_deg"], 6),
-                round(mosaic_params["gamma_mosaic_deg"], 6),
-                round(mosaic_params["eta"], 6),
-            )
-        return signature
+
+    def _primary_contribution_cache_signature_base():
+        return _geometry_source_snapshot_signature_from_params(
+            {
+                "gamma": gamma_updated,
+                "Gamma": Gamma_updated,
+                "chi": chi_updated,
+                "psi_z": psi_z_updated,
+                "zs": zs_updated,
+                "zb": zb_updated,
+                "sample_width": sample_width_updated,
+                "sample_length": sample_length_updated,
+                "sample_depth": sample_depth_updated,
+                "debye_x": debye_x_updated,
+                "debye_y": debye_y_updated,
+                "a": a_updated,
+                "c": c_updated,
+                "theta_initial": theta_init_up,
+                "cor": cor_angle_updated,
+                "center_x": center_x_up,
+                "center_y": center_y_up,
+                "sigma_mosaic_deg": mosaic_params.get("sigma_mosaic_deg", 0.0),
+                "gamma_mosaic_deg": mosaic_params.get("gamma_mosaic_deg", 0.0),
+                "eta": mosaic_params.get("eta", 0.0),
+                "distance_m": corto_det_up,
+            },
+            mosaic_params=mosaic_params,
+            optics_mode_component=int(optics_mode_flag),
+            include_mosaic_shape=True,
+            sf_prune_bias=0.0,
+            sf_prune_stats={},
+            ordered_structure_scale=ordered_structure_scale,
+            qr_cylinder_replace_requested=qr_cylinder_replace_requested,
+            primary_source_signature=(
+                primary_requested_source_mode,
+                primary_requested_filter_signature,
+            ),
+            secondary_source_signature=secondary_source_signature,
+            secondary_a=secondary_a,
+            secondary_c=secondary_c,
+        ) + (round(float(corto_det_up), 9),)
 
     # Optics transport and mosaic-shape changes rescale intensities but do not
     # move detector hits, so a compatible cached hit-table bundle can be reused.
@@ -8759,6 +9372,7 @@ def do_update():
         optics_mode_component=0,
         include_mosaic_shape=False,
     )
+    primary_contribution_cache_signature = _primary_contribution_cache_signature_base()
     collect_hit_tables_for_job = bool(
         collect_hit_tables_requested
         and not _cached_hit_tables_reusable(
@@ -8790,13 +9404,54 @@ def do_update():
     if ready_simulation_result is not None:
         _trace_update(
             "do_update_apply_ready_simulation",
+            job_kind=str(ready_simulation_result.get("job_kind", "full")),
             image_generation_elapsed_ms=float(
                 ready_simulation_result.get("image_generation_elapsed_ms", 0.0)
             ),
         )
-        _apply_ready_simulation_result(ready_simulation_result)
+        if str(ready_simulation_result.get("job_kind", "full")) == "primary_fill":
+            _store_primary_cache_payload(
+                cache_signature=ready_simulation_result.get(
+                    "primary_contribution_cache_signature"
+                ),
+                source_mode=str(
+                    ready_simulation_result.get(
+                        "primary_source_mode",
+                        primary_requested_source_mode,
+                    )
+                ),
+                active_keys=ready_simulation_result.get(
+                    "active_primary_contribution_keys",
+                    primary_requested_contribution_keys,
+                ),
+                contribution_keys=ready_simulation_result.get(
+                    "primary_contribution_keys",
+                    [],
+                ),
+                raw_hit_tables=ready_simulation_result.get(
+                    "primary_hit_tables_raw",
+                    [],
+                ),
+            )
+            rematerialized_primary = _rematerialize_primary_cache_artifacts(
+                image_size=int(image_size),
+                mosaic_params=mosaic_params,
+                a_primary=float(a_updated),
+                c_primary=float(c_updated),
+            )
+            _apply_primary_cache_artifacts(rematerialized_primary)
+            simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
+            simulation_runtime_state.primary_filter_signature = (
+                primary_requested_filter_signature
+            )
+        else:
+            _apply_ready_simulation_result(ready_simulation_result)
+            simulation_runtime_state.primary_filter_signature = (
+                primary_requested_filter_signature
+            )
         simulation_runtime_state.last_sim_signature = new_sim_image_sig
         simulation_runtime_state.last_simulation_signature = new_sim_sig
+        _capture_geometry_source_snapshot()
         image_generation_cached = False
         image_generation_elapsed_ms = float(
             ready_simulation_result.get("image_generation_elapsed_ms", 0.0)
@@ -8812,8 +9467,49 @@ def do_update():
         and new_sim_sig != simulation_runtime_state.last_simulation_signature
     )
 
-    def _build_simulation_job(*, collect_hit_tables_enabled: bool) -> dict[str, object]:
+    def _build_simulation_job(
+        *,
+        collect_hit_tables_enabled: bool,
+        job_kind: str = "full",
+        primary_job_data: object | None = None,
+        primary_job_intensities: np.ndarray | None = None,
+        primary_job_keys: Sequence[object] | None = None,
+        run_secondary_job: bool | None = None,
+    ) -> dict[str, object]:
+        selected_primary_data = (
+            primary_data if primary_job_data is None else primary_job_data
+        )
+        if isinstance(selected_primary_data, dict):
+            selected_primary_data = gui_controllers.copy_bragg_qr_dict(
+                selected_primary_data
+            )
+
+        selected_primary_intensities = (
+            np.asarray(primary_intensities, dtype=np.float64).copy()
+            if primary_job_intensities is None
+            else np.asarray(primary_job_intensities, dtype=np.float64).reshape(-1).copy()
+        )
+        selected_primary_keys = list(
+            primary_requested_contribution_keys
+            if primary_job_keys is None
+            else primary_job_keys
+        )
+        run_primary_job = (
+            len(selected_primary_data) > 0
+            if isinstance(selected_primary_data, dict)
+            else (
+                np.asarray(selected_primary_data).ndim == 2
+                and np.asarray(selected_primary_data).shape[0] > 0
+                and selected_primary_intensities.size > 0
+            )
+        )
+        run_secondary_enabled = (
+            bool(secondary_available)
+            if run_secondary_job is None
+            else bool(run_secondary_job)
+        )
         return {
+            "job_kind": str(job_kind),
             "signature": new_sim_sig,
             "epoch": int(simulation_runtime_state.simulation_epoch),
             "image_size": int(image_size),
@@ -8872,20 +9568,65 @@ def do_update():
             "debye_y": float(debye_y_updated),
             "optics_mode": int(optics_mode_flag),
             "collect_hit_tables": bool(collect_hit_tables_enabled),
+            "collect_primary_hit_tables": bool(
+                collect_hit_tables_enabled and run_primary_job
+            ),
+            "collect_secondary_hit_tables": bool(
+                collect_hit_tables_enabled and run_secondary_enabled
+            ),
+            "capture_primary_hit_tables_raw": bool(run_primary_job),
             "hit_table_signature": requested_hit_table_sig,
+            "primary_contribution_cache_signature": primary_contribution_cache_signature,
+            "primary_source_mode": primary_requested_source_mode,
+            "primary_contribution_keys": list(selected_primary_keys),
+            "active_primary_contribution_keys": list(
+                primary_requested_contribution_keys
+            ),
             "accumulate_image": bool(accumulate_image_requested),
             "qr_cylinder_replace_simulation": bool(qr_cylinder_replace_requested),
             "n2_value": n2,
-            "primary_data": primary_data,
-            "primary_intensities": primary_intensities,
+            "primary_data": selected_primary_data,
+            "primary_intensities": selected_primary_intensities,
             "secondary_data": secondary_data,
             "secondary_intensities": secondary_intensities,
-            "run_primary": bool(primary_available),
-            "run_secondary": bool(secondary_available),
+            "run_primary": bool(run_primary_job),
+            "run_secondary": bool(run_secondary_enabled),
             "a_primary": float(a_updated),
             "c_primary": float(c_updated),
             "a_secondary": float(secondary_a),
             "c_secondary": float(secondary_c),
+        }
+
+    def _build_scaled_primary_subset_payload(
+        requested_keys: Sequence[object],
+    ) -> dict[str, object]:
+        subset_payload = gui_runtime_primary_cache.build_primary_subset_payload(
+            source_mode=primary_requested_source_mode,
+            all_primary_qr=simulation_runtime_state.sim_primary_qr_all,
+            all_miller=simulation_runtime_state.sim_miller1_all,
+            all_intensities=simulation_runtime_state.sim_intens1_all,
+            requested_keys=requested_keys,
+        )
+        subset_primary_data = subset_payload.get("primary_data")
+        subset_primary_intensities = np.asarray(
+            subset_payload.get("primary_intensities", np.empty((0,), dtype=np.float64)),
+            dtype=np.float64,
+        ).reshape(-1)
+        if isinstance(subset_primary_data, dict):
+            subset_primary_data = _scaled_bragg_qr_dict(
+                subset_primary_data,
+                ordered_structure_scale,
+            )
+        else:
+            subset_primary_intensities = (
+                subset_primary_intensities.copy() * float(ordered_structure_scale)
+            )
+        return {
+            "primary_data": subset_primary_data,
+            "primary_intensities": subset_primary_intensities,
+            "primary_contribution_keys": list(
+                subset_payload.get("primary_contribution_keys", [])
+            ),
         }
 
     if ready_simulation_result is None and image_signature_changed:
@@ -8905,85 +9646,85 @@ def do_update():
         simulation_runtime_state.peak_intensities.clear()
         simulation_runtime_state.peak_records.clear()
         simulation_runtime_state.selected_peak_record = None
-        simulation_job = _build_simulation_job(
-            collect_hit_tables_enabled=collect_hit_tables_for_job
+        incremental_sf_prune_action = gui_runtime_primary_cache.resolve_incremental_sf_prune_action(
+            cache_signature=primary_contribution_cache_signature,
+            cached_signature=simulation_runtime_state.primary_contribution_cache_signature,
+            source_mode=primary_requested_source_mode,
+            cached_source_mode=simulation_runtime_state.primary_source_mode,
+            active_keys=primary_requested_contribution_keys,
+            previous_active_keys=simulation_runtime_state.primary_active_contribution_keys,
+            primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
+            active_job=simulation_runtime_state.worker_active_job,
+            queued_job=simulation_runtime_state.worker_queued_job,
         )
-        has_cached_simulation = (
-            simulation_runtime_state.stored_primary_sim_image is not None
-            or simulation_runtime_state.stored_secondary_sim_image is not None
-        )
-        if not has_cached_simulation:
-            preview_job = _build_preview_simulation_job(
-                simulation_job,
-                max_samples=_current_preview_sample_limit(),
+        if incremental_sf_prune_action.mode == "reuse":
+            rematerialize_start_time = perf_counter()
+            simulation_runtime_state.primary_contribution_cache_signature = (
+                primary_contribution_cache_signature
             )
-            if preview_job is not None:
-                if "progress_label" in globals() and progress_label is not None:
-                    progress_label.config(text="Computing preview simulation...")
-                preview_result = _run_simulation_generation_job(
-                    {
-                        **preview_job,
-                        "job_id": 0,
-                    }
-                )
-                _apply_ready_simulation_result(preview_result)
-                simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                simulation_runtime_state.last_simulation_signature = new_sim_sig
-                image_generation_cached = False
-                image_generation_elapsed_ms = float(
-                    preview_result.get("image_generation_elapsed_ms", 0.0)
-                )
-                simulation_runtime_state.update_phase = "applying"
-                _refresh_run_status_bar()
-                _request_async_simulation_job(simulation_job)
-            else:
-                if "progress_label" in globals() and progress_label is not None:
-                    progress_label.config(text="Computing initial simulation...")
-                sync_result = _run_simulation_generation_job(
-                    {
-                        **simulation_job,
-                        "job_id": 0,
-                    }
-                )
-                _apply_ready_simulation_result(sync_result)
-                simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                simulation_runtime_state.last_simulation_signature = new_sim_sig
-                image_generation_cached = False
-                image_generation_elapsed_ms = float(
-                    sync_result.get("image_generation_elapsed_ms", 0.0)
-                )
-                simulation_runtime_state.update_phase = "applying"
-                _refresh_run_status_bar()
-        else:
-            preview_job = _build_preview_simulation_job(
-                simulation_job,
-                max_samples=_current_preview_sample_limit(),
+            simulation_runtime_state.primary_source_mode = primary_requested_source_mode
+            simulation_runtime_state.primary_filter_signature = (
+                primary_requested_filter_signature
             )
-            if preview_job is not None:
-                if "progress_label" in globals() and progress_label is not None:
-                    progress_label.config(text="Computing preview simulation...")
-                preview_result = _run_simulation_generation_job(
-                    {
-                        **preview_job,
-                        "job_id": 0,
-                    }
+            simulation_runtime_state.primary_active_contribution_keys = list(
+                primary_requested_contribution_keys
+            )
+            rematerialized_primary = _rematerialize_primary_cache_artifacts(
+                image_size=int(image_size),
+                mosaic_params=mosaic_params,
+                a_primary=float(a_updated),
+                c_primary=float(c_updated),
+            )
+            _apply_primary_cache_artifacts(rematerialized_primary)
+            simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
+            simulation_runtime_state.last_sim_signature = new_sim_image_sig
+            simulation_runtime_state.last_simulation_signature = new_sim_sig
+            _capture_geometry_source_snapshot()
+            image_generation_cached = False
+            image_generation_elapsed_ms = (
+                perf_counter() - rematerialize_start_time
+            ) * 1e3
+            simulation_runtime_state.last_image_generation_ms = float(
+                image_generation_elapsed_ms
+            )
+            simulation_runtime_state.update_phase = "applying"
+            _refresh_run_status_bar()
+        elif incremental_sf_prune_action.mode == "fill":
+            subset_payload = _build_scaled_primary_subset_payload(
+                incremental_sf_prune_action.missing_keys
+            )
+            simulation_job = _build_simulation_job(
+                collect_hit_tables_enabled=False,
+                job_kind="primary_fill",
+                primary_job_data=subset_payload["primary_data"],
+                primary_job_intensities=subset_payload["primary_intensities"],
+                primary_job_keys=subset_payload["primary_contribution_keys"],
+                run_secondary_job=False,
+            )
+            if not bool(simulation_job.get("run_primary", False)):
+                incremental_sf_prune_action = gui_runtime_primary_cache.IncrementalSfPruneAction(
+                    mode="full",
+                    added_keys=incremental_sf_prune_action.added_keys,
+                    removed_keys=incremental_sf_prune_action.removed_keys,
+                    missing_keys=incremental_sf_prune_action.missing_keys,
+                    reason="invalid_fill_subset",
                 )
-                _apply_ready_simulation_result(preview_result)
-                simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                simulation_runtime_state.last_simulation_signature = new_sim_sig
-                image_generation_cached = False
-                image_generation_elapsed_ms = float(
-                    preview_result.get("image_generation_elapsed_ms", 0.0)
-                )
-                simulation_runtime_state.update_phase = "applying"
-                _refresh_run_status_bar()
-                _request_async_simulation_job(simulation_job)
             else:
-                _request_async_simulation_job(simulation_job)
-                if "progress_label" in globals() and progress_label is not None:
-                    progress_label.config(text="Computing simulation in background...")
+                request_status = _request_async_simulation_job(simulation_job)
+                if (
+                    request_status in {"submitted", "queued", "running"}
+                    and "progress_label" in globals()
+                    and progress_label is not None
+                ):
+                    progress_label.config(
+                        text="Extending primary cache in background..."
+                    )
                 _trace_update(
-                    "do_update_return_waiting_for_simulation",
+                    "do_update_extend_primary_cache_in_background",
+                    request_status=str(request_status),
+                    missing_key_count=int(
+                        len(incremental_sf_prune_action.missing_keys)
+                    ),
                     worker_active=bool(
                         simulation_runtime_state.worker_active_job is not None
                     ),
@@ -8993,6 +9734,107 @@ def do_update():
                 )
                 simulation_runtime_state.update_running = False
                 return
+        if incremental_sf_prune_action.mode == "full":
+            simulation_job = _build_simulation_job(
+                collect_hit_tables_enabled=collect_hit_tables_for_job
+            )
+            has_cached_simulation = (
+                simulation_runtime_state.stored_primary_sim_image is not None
+                or simulation_runtime_state.stored_secondary_sim_image is not None
+            )
+            if not has_cached_simulation:
+                preview_job = _build_preview_simulation_job(
+                    simulation_job,
+                    max_samples=_current_preview_sample_limit(),
+                )
+                if preview_job is not None:
+                    if "progress_label" in globals() and progress_label is not None:
+                        progress_label.config(text="Computing preview simulation...")
+                    preview_result = _run_simulation_generation_job(
+                        {
+                            **preview_job,
+                            "job_id": 0,
+                        }
+                    )
+                    _apply_ready_simulation_result(preview_result)
+                    simulation_runtime_state.last_sim_signature = new_sim_image_sig
+                    simulation_runtime_state.last_simulation_signature = new_sim_sig
+                    simulation_runtime_state.primary_filter_signature = (
+                        primary_requested_filter_signature
+                    )
+                    _capture_geometry_source_snapshot()
+                    image_generation_cached = False
+                    image_generation_elapsed_ms = float(
+                        preview_result.get("image_generation_elapsed_ms", 0.0)
+                    )
+                    simulation_runtime_state.update_phase = "applying"
+                    _refresh_run_status_bar()
+                    _request_async_simulation_job(simulation_job)
+                else:
+                    if "progress_label" in globals() and progress_label is not None:
+                        progress_label.config(text="Computing initial simulation...")
+                    sync_result = _run_simulation_generation_job(
+                        {
+                            **simulation_job,
+                            "job_id": 0,
+                        }
+                    )
+                    _apply_ready_simulation_result(sync_result)
+                    simulation_runtime_state.last_sim_signature = new_sim_image_sig
+                    simulation_runtime_state.last_simulation_signature = new_sim_sig
+                    simulation_runtime_state.primary_filter_signature = (
+                        primary_requested_filter_signature
+                    )
+                    _capture_geometry_source_snapshot()
+                    image_generation_cached = False
+                    image_generation_elapsed_ms = float(
+                        sync_result.get("image_generation_elapsed_ms", 0.0)
+                    )
+                    simulation_runtime_state.update_phase = "applying"
+                    _refresh_run_status_bar()
+            else:
+                preview_job = _build_preview_simulation_job(
+                    simulation_job,
+                    max_samples=_current_preview_sample_limit(),
+                )
+                if preview_job is not None:
+                    if "progress_label" in globals() and progress_label is not None:
+                        progress_label.config(text="Computing preview simulation...")
+                    preview_result = _run_simulation_generation_job(
+                        {
+                            **preview_job,
+                            "job_id": 0,
+                        }
+                    )
+                    _apply_ready_simulation_result(preview_result)
+                    simulation_runtime_state.last_sim_signature = new_sim_image_sig
+                    simulation_runtime_state.last_simulation_signature = new_sim_sig
+                    simulation_runtime_state.primary_filter_signature = (
+                        primary_requested_filter_signature
+                    )
+                    _capture_geometry_source_snapshot()
+                    image_generation_cached = False
+                    image_generation_elapsed_ms = float(
+                        preview_result.get("image_generation_elapsed_ms", 0.0)
+                    )
+                    simulation_runtime_state.update_phase = "applying"
+                    _refresh_run_status_bar()
+                    _request_async_simulation_job(simulation_job)
+                else:
+                    _request_async_simulation_job(simulation_job)
+                    if "progress_label" in globals() and progress_label is not None:
+                        progress_label.config(text="Computing simulation in background...")
+                    _trace_update(
+                        "do_update_return_waiting_for_simulation",
+                        worker_active=bool(
+                            simulation_runtime_state.worker_active_job is not None
+                        ),
+                        worker_queued=bool(
+                            simulation_runtime_state.worker_queued_job is not None
+                        ),
+                    )
+                    simulation_runtime_state.update_running = False
+                    return
     elif ready_simulation_result is None and need_hit_table_refresh:
         _set_update_trace_stage("simulation_generation")
         request_status = _request_async_simulation_job(
@@ -9112,6 +9954,8 @@ def do_update():
         live_geometry_preview_enabled=_live_geometry_preview_enabled(),
     )
     normalization_scale = 1.0
+    normalization_sig = None
+    normalization_cache_outcome = "disabled"
     native_background = _get_current_background_backend()
     if native_background is not None and display_image is not None:
         normalization_sig = (
@@ -9126,14 +9970,26 @@ def do_update():
         )
         if simulation_runtime_state.normalization_scale_cache.get("sig") == normalization_sig:
             normalization_scale = float(simulation_runtime_state.normalization_scale_cache.get("value", 1.0))
+            normalization_cache_outcome = "reuse"
         else:
             normalization_scale = _suggest_scale_factor(
                 display_image, native_background
             )
             simulation_runtime_state.normalization_scale_cache["sig"] = normalization_sig
             simulation_runtime_state.normalization_scale_cache["value"] = float(normalization_scale)
+            normalization_cache_outcome = "update"
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             normalization_scale = 1.0
+    _trace_live_cache_event(
+        "normalization_scale",
+        normalization_cache_outcome,
+        signature_summary=_live_cache_signature_summary(normalization_sig),
+        scale=(
+            float(normalization_scale)
+            if np.isfinite(float(normalization_scale))
+            else None
+        ),
+    )
 
     simulation_runtime_state.unscaled_image = None
     simulation_runtime_state.last_unscaled_image_signature = None
@@ -9189,7 +10045,9 @@ def do_update():
         gamma_updated,
         wave_m,
     )
+    ai_cache_action = "reuse"
     if simulation_runtime_state.ai_cache.get("sig") != sig:
+        ai_cache_action = "rebuild"
         simulation_runtime_state.ai_cache = {
             "sig": sig,
             "ai": AzimuthalIntegrator(
@@ -9205,6 +10063,12 @@ def do_update():
                 pixel2=pixel_size_m,
             ),
         }
+    _trace_live_cache_event(
+        "ai_integrator",
+        ai_cache_action,
+        signature_summary=_live_cache_signature_summary(sig),
+        image_signature_summary=_live_cache_signature_summary(new_sim_image_sig),
+    )
     ai = simulation_runtime_state.ai_cache["ai"]
     sim_caking_sig = (
         new_sim_image_sig,
@@ -9295,8 +10159,29 @@ def do_update():
         )
     )
     if missing_caked_payload:
+        _trace_live_cache_event(
+            "analysis",
+            "restore_payload",
+            outcome="requested",
+            reason="missing_caked_payload",
+            background_visible=bool(background_runtime_state.visible),
+        )
         _restore_caked_display_payload_from_cached_results(
             background_visible=bool(background_runtime_state.visible)
+        )
+        _trace_live_cache_event(
+            "analysis",
+            "restore_payload",
+            outcome=(
+                "restored"
+                if (
+                    simulation_runtime_state.last_caked_image_unscaled is not None
+                    and simulation_runtime_state.last_caked_extent is not None
+                )
+                else "missing"
+            ),
+            reason="missing_caked_payload",
+            background_visible=bool(background_runtime_state.visible),
         )
     analysis_result_matches_target = bool(
         analysis_result_current
@@ -11713,6 +12598,438 @@ _filter_live_preview_matches = (
 _apply_live_preview_match_exclusions = (
     geometry_q_group_runtime_value_callbacks.apply_live_preview_match_exclusions
 )
+
+
+_geometry_manual_source_snapshot_diagnostics_state: dict[str, object] = {}
+
+
+def _set_geometry_manual_source_snapshot_diagnostics(**kwargs) -> None:
+    _geometry_manual_source_snapshot_diagnostics_state.clear()
+    _geometry_manual_source_snapshot_diagnostics_state.update(kwargs)
+
+
+def _geometry_manual_last_source_snapshot_diagnostics() -> dict[str, object]:
+    return dict(_geometry_manual_source_snapshot_diagnostics_state)
+
+
+def _geometry_source_signature_numeric(
+    value: object,
+    *,
+    default: float = 0.0,
+) -> float:
+    try:
+        numeric = float(value)
+    except Exception:
+        numeric = float(default)
+    if not np.isfinite(numeric):
+        numeric = float(default)
+    return float(numeric)
+
+
+def _geometry_source_snapshot_signature_from_params(
+    param_set,
+    *,
+    mosaic_params,
+    optics_mode_component: int,
+    include_mosaic_shape: bool = True,
+    sf_prune_bias: float,
+    sf_prune_stats,
+    ordered_structure_scale: float,
+    qr_cylinder_replace_requested: bool,
+    primary_source_signature,
+    secondary_source_signature,
+    secondary_a: float,
+    secondary_c: float,
+):
+    params = dict(param_set or {})
+
+    def _param_value(*keys: str, default: object = 0.0) -> object:
+        for key in keys:
+            if key in params:
+                return params.get(key)
+        return default
+
+    signature = (
+        round(_geometry_source_signature_numeric(_param_value("gamma")), 6),
+        round(_geometry_source_signature_numeric(_param_value("Gamma")), 6),
+        round(_geometry_source_signature_numeric(_param_value("chi")), 6),
+        round(_geometry_source_signature_numeric(_param_value("psi_z", "psi")), 6),
+        round(_geometry_source_signature_numeric(_param_value("zs")), 9),
+        round(_geometry_source_signature_numeric(_param_value("zb")), 9),
+        round(_geometry_source_signature_numeric(_param_value("sample_width")), 9),
+        round(_geometry_source_signature_numeric(_param_value("sample_length")), 9),
+        round(_geometry_source_signature_numeric(_param_value("sample_depth")), 12),
+        round(_geometry_source_signature_numeric(_param_value("debye_x")), 6),
+        round(_geometry_source_signature_numeric(_param_value("debye_y")), 6),
+        round(_geometry_source_signature_numeric(_param_value("a")), 6),
+        round(_geometry_source_signature_numeric(_param_value("c")), 6),
+        round(
+            _geometry_source_signature_numeric(
+                _param_value("theta_initial", "theta_init")
+            ),
+            6,
+        ),
+        round(_geometry_source_signature_numeric(_param_value("cor", "cor_angle")), 6),
+        round(_geometry_source_signature_numeric(_param_value("center_x")), 3),
+        round(_geometry_source_signature_numeric(_param_value("center_y")), 3),
+        int(mosaic_params["solve_q_steps"]),
+        round(float(mosaic_params["solve_q_rel_tol"]), 8),
+        int(mosaic_params["solve_q_mode"]),
+        tuple(mosaic_params.get("_sampling_signature", ())),
+        round(_geometry_source_signature_numeric(sf_prune_bias), 3),
+        int((sf_prune_stats or {}).get("qr_kept", 0)),
+        int((sf_prune_stats or {}).get("hkl_primary_kept", 0)),
+        round(_geometry_source_signature_numeric(ordered_structure_scale), 6),
+        int(optics_mode_component),
+        int(bool(qr_cylinder_replace_requested)),
+        int(np.size(mosaic_params["beam_x_array"])),
+        int(np.size(mosaic_params["theta_array"])),
+        primary_source_signature,
+        secondary_source_signature,
+        round(_geometry_source_signature_numeric(secondary_a), 6),
+        round(_geometry_source_signature_numeric(secondary_c), 6),
+    )
+    if include_mosaic_shape:
+        signature += (
+            round(
+                _geometry_source_signature_numeric(
+                    _param_value(
+                        "sigma_mosaic_deg",
+                        default=mosaic_params.get("sigma_mosaic_deg", 0.0),
+                    )
+                ),
+                6,
+            ),
+            round(
+                _geometry_source_signature_numeric(
+                    _param_value(
+                        "gamma_mosaic_deg",
+                        default=mosaic_params.get("gamma_mosaic_deg", 0.0),
+                    )
+                ),
+                6,
+            ),
+            round(
+                _geometry_source_signature_numeric(
+                    _param_value("eta", default=mosaic_params.get("eta", 0.0))
+                ),
+                6,
+            ),
+        )
+    return signature
+
+
+def _geometry_source_snapshot_signature_for_background(
+    background_index: int,
+    param_set: dict[str, object] | None = None,
+):
+    background_idx = int(background_index)
+    params = dict(_current_geometry_fit_params())
+    if isinstance(param_set, dict):
+        params.update(dict(param_set))
+    mosaic_params = build_mosaic_params()
+    primary_source_signature = (
+        (
+            "qr",
+            id(simulation_runtime_state.sim_primary_qr),
+            len(simulation_runtime_state.sim_primary_qr),
+        )
+        if isinstance(simulation_runtime_state.sim_primary_qr, dict)
+        and len(simulation_runtime_state.sim_primary_qr) > 0
+        else (
+            "miller",
+            id(simulation_runtime_state.sim_miller1),
+            tuple(np.asarray(simulation_runtime_state.sim_miller1).shape),
+        )
+    )
+    secondary_source_signature = (
+        "miller",
+        id(simulation_runtime_state.sim_miller2),
+        tuple(np.asarray(simulation_runtime_state.sim_miller2).shape),
+    )
+    primary_a = _geometry_source_signature_numeric(params.get("a"))
+    primary_c = _geometry_source_signature_numeric(params.get("c"))
+    secondary_a = (
+        float(av2)
+        if av2 is not None
+        else primary_a
+    )
+    secondary_c = (
+        float(cv2)
+        if cv2 is not None
+        else primary_c
+    )
+    requested_hit_table_sig = _geometry_source_snapshot_signature_from_params(
+        params,
+        mosaic_params=mosaic_params,
+        optics_mode_component=0,
+        include_mosaic_shape=False,
+        sf_prune_bias=current_sf_prune_bias(),
+        sf_prune_stats=simulation_runtime_state.sf_prune_stats,
+        ordered_structure_scale=float(_current_ordered_structure_scale()),
+        qr_cylinder_replace_requested=_qr_cylinder_replace_simulation_enabled(),
+        primary_source_signature=primary_source_signature,
+        secondary_source_signature=secondary_source_signature,
+        secondary_a=secondary_a,
+        secondary_c=secondary_c,
+    )
+    collect_hit_tables_requested = False
+    try:
+        collect_hit_tables_requested = bool(_should_collect_hit_tables_for_update())
+    except Exception:
+        collect_hit_tables_requested = False
+    hit_tables_match_request = (
+        requested_hit_table_sig == simulation_runtime_state.stored_hit_table_signature
+    )
+    collect_hit_tables_for_job = (
+        bool(collect_hit_tables_requested)
+        or not bool(hit_tables_match_request)
+    )
+    image_signature = _geometry_source_snapshot_signature_from_params(
+        params,
+        mosaic_params=mosaic_params,
+        optics_mode_component=int(_current_optics_mode_flag()),
+        include_mosaic_shape=True,
+        sf_prune_bias=current_sf_prune_bias(),
+        sf_prune_stats=simulation_runtime_state.sf_prune_stats,
+        ordered_structure_scale=float(_current_ordered_structure_scale()),
+        qr_cylinder_replace_requested=_qr_cylinder_replace_simulation_enabled(),
+        primary_source_signature=primary_source_signature,
+        secondary_source_signature=secondary_source_signature,
+        secondary_a=secondary_a,
+        secondary_c=secondary_c,
+    )
+    snapshot = simulation_runtime_state.source_row_snapshots.get(background_idx)
+    if isinstance(snapshot, dict):
+        snapshot_signature = snapshot.get("simulation_signature")
+        if (
+            isinstance(snapshot_signature, tuple)
+            and len(snapshot_signature) == int(len(image_signature)) + 1
+            and tuple(snapshot_signature[:-1]) == tuple(image_signature)
+        ):
+            return snapshot_signature
+    return image_signature + (int(collect_hit_tables_for_job),)
+
+
+def _capture_geometry_source_snapshot() -> None:
+    background_index = int(background_runtime_state.current_background_index)
+    previous_snapshot = dict(
+        simulation_runtime_state.source_row_snapshots.get(int(background_index)) or {}
+    )
+    try:
+        rows = [
+            dict(entry)
+            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
+            if isinstance(entry, dict)
+        ]
+    except Exception:
+        rows = []
+    created_from = "none"
+    for raw_record in simulation_runtime_state.peak_records or ():
+        if not isinstance(raw_record, dict):
+            continue
+        try:
+            display_col = float(raw_record.get("display_col", np.nan))
+            display_row = float(raw_record.get("display_row", np.nan))
+        except Exception:
+            continue
+        if np.isfinite(display_col) and np.isfinite(display_row):
+            created_from = "peak_records"
+            break
+    if (
+        created_from == "none"
+        and simulation_runtime_state.stored_max_positions_local is not None
+    ):
+        created_from = "stored_max_positions_local"
+    simulation_runtime_state.source_row_snapshots[int(background_index)] = {
+        "background_index": int(background_index),
+        "simulation_signature": simulation_runtime_state.last_simulation_signature,
+        "rows": rows,
+        "row_count": int(len(rows)),
+        "created_from": created_from,
+    }
+    _trace_live_cache_event(
+        "source_snapshot",
+        "store",
+        background_index=int(background_index),
+        outcome="stored",
+        overwrite=bool(previous_snapshot),
+        previous_row_count=int(previous_snapshot.get("row_count", 0) or 0),
+        row_count=int(len(rows)),
+        created_from=created_from,
+        previous_signature_summary=_live_cache_signature_summary(
+            previous_snapshot.get("simulation_signature")
+        ),
+        signature_summary=_live_cache_signature_summary(
+            simulation_runtime_state.last_simulation_signature
+        ),
+    )
+
+
+def _geometry_manual_source_rows_for_background(
+    background_index: int,
+    param_set: dict[str, object] | None = None,
+    *,
+    consumer: str | None = None,
+) -> list[dict[str, object]]:
+    background_idx = int(background_index)
+    lookup_context = str(consumer or "unspecified")
+    requested_signature = _geometry_source_snapshot_signature_for_background(
+        background_idx,
+        param_set,
+    )
+    requested_signature_summary = _live_cache_signature_summary(requested_signature)
+    snapshot = dict(
+        simulation_runtime_state.source_row_snapshots.get(background_idx) or {}
+    )
+    if not snapshot:
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status="snapshot_missing_background",
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            raw_peak_count=0,
+            projected_peak_count=0,
+            signature_match=False,
+            live_cache_inventory=live_cache_inventory,
+        )
+        _trace_live_cache_event(
+            "source_snapshot",
+            "lookup",
+            background_index=int(background_idx),
+            outcome="miss",
+            consumer=lookup_context,
+            status="snapshot_missing_background",
+            requested_signature_summary=requested_signature_summary,
+            raw_peak_count=0,
+            projected_peak_count=0,
+            signature_match=False,
+        )
+        return []
+    snapshot_signature = snapshot.get("simulation_signature")
+    stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
+    created_from = snapshot.get("created_from")
+    raw_rows = [
+        dict(entry)
+        for entry in (snapshot.get("rows", ()) or ())
+        if isinstance(entry, dict)
+    ]
+    if snapshot_signature != requested_signature:
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status="snapshot_signature_mismatch",
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=0,
+            created_from=created_from,
+            signature_match=False,
+            live_cache_inventory=live_cache_inventory,
+        )
+        _trace_live_cache_event(
+            "source_snapshot",
+            "lookup",
+            background_index=int(background_idx),
+            outcome="mismatch",
+            consumer=lookup_context,
+            status="snapshot_signature_mismatch",
+            requested_signature_summary=requested_signature_summary,
+            stored_signature_summary=stored_signature_summary,
+            created_from=created_from,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=0,
+            signature_match=False,
+        )
+        return []
+    if not raw_rows:
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status="snapshot_empty",
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=0,
+            projected_peak_count=0,
+            created_from=created_from,
+            signature_match=True,
+            live_cache_inventory=live_cache_inventory,
+        )
+        _trace_live_cache_event(
+            "source_snapshot",
+            "lookup",
+            background_index=int(background_idx),
+            outcome="empty",
+            consumer=lookup_context,
+            status="snapshot_empty",
+            requested_signature_summary=requested_signature_summary,
+            stored_signature_summary=stored_signature_summary,
+            created_from=created_from,
+            raw_peak_count=0,
+            projected_peak_count=0,
+            signature_match=True,
+        )
+        return []
+    projected_rows = (
+        _project_geometry_manual_peaks_to_current_view(raw_rows)
+        if callable(_project_geometry_manual_peaks_to_current_view)
+        else raw_rows
+    )
+    projected_rows = [
+        dict(entry)
+        for entry in (projected_rows or ())
+        if isinstance(entry, dict)
+    ]
+    live_cache_inventory = _live_cache_inventory_snapshot()
+    _set_geometry_manual_source_snapshot_diagnostics(
+        source="source_snapshot",
+        cache_family="source_snapshot",
+        action="lookup",
+        consumer=lookup_context,
+        status="snapshot_hit",
+        background_index=int(background_idx),
+        requested_signature=requested_signature,
+        requested_signature_summary=requested_signature_summary,
+        snapshot_signature=snapshot_signature,
+        stored_signature_summary=stored_signature_summary,
+        raw_peak_count=int(len(raw_rows)),
+        projected_peak_count=int(len(projected_rows)),
+        created_from=created_from,
+        signature_match=True,
+        live_cache_inventory=live_cache_inventory,
+    )
+    _trace_live_cache_event(
+        "source_snapshot",
+        "lookup",
+        background_index=int(background_idx),
+        outcome="hit",
+        consumer=lookup_context,
+        status="snapshot_hit",
+        requested_signature_summary=requested_signature_summary,
+        stored_signature_summary=stored_signature_summary,
+        created_from=created_from,
+        raw_peak_count=int(len(raw_rows)),
+        projected_peak_count=int(len(projected_rows)),
+        signature_match=True,
+    )
+    return projected_rows
 
 
 geometry_q_group_workflow = (
@@ -18248,6 +19565,12 @@ geometry_fit_runtime_workflow = (
                 _geometry_manual_simulated_peaks_for_params
             ),
             "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
+            "geometry_manual_source_rows_for_background": (
+                _geometry_manual_source_rows_for_background
+            ),
+            "geometry_manual_last_source_snapshot_diagnostics": (
+                _geometry_manual_last_source_snapshot_diagnostics
+            ),
             "geometry_manual_last_simulation_diagnostics": (
                 _geometry_manual_last_simulation_diagnostics
             ),

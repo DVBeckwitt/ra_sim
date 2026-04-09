@@ -1320,15 +1320,12 @@ def current_geometry_manual_match_config(
 
 def geometry_manual_pick_cache_signature(
     *,
-    last_simulation_signature: object,
+    source_snapshot_signature: object,
     background_index: int,
     background_image: object | None,
     use_caked_space: bool,
     geometry_preview_excluded_q_groups: Sequence[object] | None,
     geometry_q_group_cached_entries: Sequence[object] | None,
-    stored_max_positions_local: Sequence[object] | None,
-    stored_peak_table_lattice: Sequence[object] | None,
-    peak_records: Sequence[object] | None = None,
 ) -> tuple[object, ...]:
     """Return a stable cache signature for reusable manual-pick state."""
 
@@ -1353,27 +1350,11 @@ def geometry_manual_pick_cache_signature(
         listed_group_count = len(geometry_q_group_cached_entries or ())
     except Exception:
         listed_group_count = 0
-    try:
-        maxpos_count = len(stored_max_positions_local or ())
-    except Exception:
-        maxpos_count = 0
-    try:
-        peak_table_count = len(stored_peak_table_lattice or ())
-    except Exception:
-        peak_table_count = 0
-    try:
-        peak_record_count = len(peak_records or ())
-    except Exception:
-        peak_record_count = 0
-
     return (
-        last_simulation_signature,
+        source_snapshot_signature,
         int(background_index),
         bool(use_caked_space),
         bg_token,
-        int(maxpos_count),
-        int(peak_table_count),
-        int(peak_record_count),
         int(listed_group_count),
         excluded_keys,
     )
@@ -1383,17 +1364,11 @@ def _manual_pick_cache_groups_reusable(
     existing_signature: object,
     current_signature: object,
 ) -> bool:
-    """Return whether cached candidate groups remain valid across background-only changes."""
+    """Return whether cached candidate groups remain valid for one snapshot."""
 
     if not isinstance(existing_signature, tuple) or not isinstance(current_signature, tuple):
         return False
-    if len(existing_signature) < 9 or len(current_signature) < 9:
-        return False
-    reusable_indexes = (0, 2, 4, 5, 6, 7, 8)
-    return all(
-        existing_signature[index] == current_signature[index]
-        for index in reusable_indexes
-    )
+    return existing_signature == current_signature
 
 
 def _manual_pick_cache_normalized_hkl(
@@ -1575,7 +1550,10 @@ def build_geometry_manual_pick_cache(
     existing_cache_signature: object = None,
     existing_cache_data: dict[str, object] | None = None,
     cache_signature_fn: Callable[..., tuple[object, ...]],
-    simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]],
+    source_rows_for_background: Callable[
+        [int, dict[str, object] | None],
+        Sequence[dict[str, object]],
+    ],
     build_grouped_candidates: Callable[
         [Sequence[dict[str, object]] | None],
         dict[tuple[object, ...], list[dict[str, object]]],
@@ -1596,14 +1574,15 @@ def build_geometry_manual_pick_cache(
     bg_index = int(background_index)
     current_bg_index = int(current_background_index)
     cache_action = "rebuilt"
-    cache_source = "simulated_peak_rebuild_disabled"
-    cache_provenance = ["simulated_peak_rebuild_disabled"]
+    cache_source = "source_snapshot_unavailable"
+    cache_provenance = ["source_snapshot_unavailable"]
     stale_reason: str | None = (
         None
         if prefer_cache
         else "prefer_cache disabled; rebuilding manual-pick cache."
     )
     cache_sig = cache_signature_fn(
+        param_set=param_set,
         background_index=bg_index,
         background_image=background_image,
     )
@@ -1630,9 +1609,10 @@ def build_geometry_manual_pick_cache(
     if prefer_cache:
         cached_simulated_peaks = [
             dict(entry)
-            for entry in simulated_peaks_for_params(
+            for entry in source_rows_for_background(
+                bg_index,
                 param_set,
-                prefer_cache=True,
+                consumer="manual_pick_cache",
             )
             if isinstance(entry, dict)
         ]
@@ -1642,15 +1622,15 @@ def build_geometry_manual_pick_cache(
             grouped_candidates = cached_grouped_candidates
             simulated_lookup = build_simulated_lookup(simulated_peaks)
             cache_action = "reused"
-            cache_source = "geometry_manual_simulated_peaks_for_params(prefer_cache=True)"
+            cache_source = "geometry_manual_source_rows_for_background"
             cache_provenance = [
-                "geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
+                "geometry_manual_source_rows_for_background",
                 "build_grouped_candidates",
                 "build_simulated_lookup",
             ]
             stale_reason = None
         elif stale_reason is None:
-            stale_reason = "cached preview groups were empty."
+            stale_reason = "source snapshot rows were empty."
     if (
         prefer_cache
         and not grouped_candidates
@@ -1692,13 +1672,13 @@ def build_geometry_manual_pick_cache(
                 ),
             ]
             stale_reason = (
-                "background-only cache signature change; reused grouped candidates."
+                "matching source snapshot signature; reused grouped candidates."
             )
         elif stale_reason is None:
             stale_reason = "existing grouped candidates were empty."
     if not grouped_candidates and stale_reason is None:
         stale_reason = (
-            "fresh simulated peak rebuilds are disabled; no reusable cached "
+            "source snapshot rows were unavailable; no reusable cached "
             "grouped candidates were available."
         )
     match_cfg = dict(current_match_config())
@@ -2645,7 +2625,10 @@ def build_geometry_manual_initial_pairs_display(
     pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
     get_cache_data: Callable[..., dict[str, object]],
-    simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]],
+    source_rows_for_background: Callable[
+        [int, dict[str, object] | None],
+        Sequence[dict[str, object]],
+    ],
     build_simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
         dict[tuple[object, ...], dict[str, object]],
@@ -2677,6 +2660,18 @@ def build_geometry_manual_initial_pairs_display(
         simulated_lookup = dict(cache_data.get("simulated_lookup", {}))
     else:
         simulated_lookup = {}
+    if not simulated_lookup:
+        source_rows = [
+            dict(entry)
+            for entry in source_rows_for_background(
+                int(background_index),
+                params_local,
+                consumer="initial_pairs_display",
+            )
+            if isinstance(entry, dict)
+        ]
+        if source_rows:
+            simulated_lookup = build_simulated_lookup(source_rows)
 
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
@@ -2732,7 +2727,10 @@ def make_runtime_geometry_manual_cache_callbacks(
     replace_cache_state: Callable[[object, dict[str, object]], None],
     current_geometry_fit_params: Callable[[], dict[str, object]] | None,
     pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
-    simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]],
+    source_rows_for_background: Callable[
+        [int, dict[str, object] | None],
+        Sequence[dict[str, object]],
+    ],
     build_grouped_candidates: Callable[
         [Sequence[dict[str, object]] | None],
         dict[tuple[object, ...], list[dict[str, object]]],
@@ -2752,6 +2750,10 @@ def make_runtime_geometry_manual_cache_callbacks(
     peak_records: Callable[[], object] | object = (),
     current_cache_signature: Callable[[], object] | object = None,
     current_cache_data: Callable[[], dict[str, object] | None] | dict[str, object] | None = None,
+    source_snapshot_signature_for_background: (
+        Callable[[int, dict[str, object] | None], object]
+        | None
+    ) = None,
     auto_match_background_context: Callable[
         [object, dict[str, object]],
         tuple[dict[str, object], object],
@@ -2774,18 +2776,27 @@ def make_runtime_geometry_manual_cache_callbacks(
 
     def _pick_cache_signature(
         *,
+        param_set: dict[str, object] | None = None,
         background_index: int | None = None,
         background_image: object | None = None,
     ) -> tuple[object, ...]:
-        return geometry_manual_pick_cache_signature(
-            last_simulation_signature=_resolve_runtime_value(
+        resolved_background_index = (
+            _background_index()
+            if background_index is None
+            else int(background_index)
+        )
+        if callable(source_snapshot_signature_for_background):
+            source_snapshot_signature = source_snapshot_signature_for_background(
+                int(resolved_background_index),
+                param_set,
+            )
+        else:
+            source_snapshot_signature = _resolve_runtime_value(
                 last_simulation_signature
-            ),
-            background_index=(
-                _background_index()
-                if background_index is None
-                else int(background_index)
-            ),
+            )
+        return geometry_manual_pick_cache_signature(
+            source_snapshot_signature=source_snapshot_signature,
+            background_index=resolved_background_index,
             background_image=(
                 _background_image()
                 if background_image is None
@@ -2798,13 +2809,6 @@ def make_runtime_geometry_manual_cache_callbacks(
             geometry_q_group_cached_entries=_resolve_runtime_value(
                 geometry_q_group_cached_entries
             ),
-            stored_max_positions_local=_resolve_runtime_value(
-                stored_max_positions_local
-            ),
-            stored_peak_table_lattice=_resolve_runtime_value(
-                stored_peak_table_lattice
-            ),
-            peak_records=_resolve_runtime_value(peak_records),
         )
 
     def _get_pick_cache(
@@ -2829,7 +2833,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             existing_cache_signature=_resolve_runtime_value(current_cache_signature),
             existing_cache_data=_resolve_runtime_value(current_cache_data),
             cache_signature_fn=_pick_cache_signature,
-            simulated_peaks_for_params=simulated_peaks_for_params,
+            source_rows_for_background=source_rows_for_background,
             build_grouped_candidates=build_grouped_candidates,
             build_simulated_lookup=build_simulated_lookup,
             current_match_config=_current_match_config,
@@ -2855,7 +2859,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             pairs_for_index=pairs_for_index,
             current_geometry_fit_params=current_geometry_fit_params,
             get_cache_data=_get_pick_cache,
-            simulated_peaks_for_params=simulated_peaks_for_params,
+            source_rows_for_background=source_rows_for_background,
             build_simulated_lookup=build_simulated_lookup,
             entry_display_coords=entry_display_coords,
         )

@@ -743,36 +743,54 @@ def prune_l_intensity_curve(
     i_vals: np.ndarray,
     *,
     bias: object,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
+    return_indices: bool = False,
+) -> tuple[np.ndarray, np.ndarray, int, int] | tuple[
+    np.ndarray,
+    np.ndarray,
+    int,
+    int,
+    np.ndarray,
+]:
     """Prune one diffuse rod L/intensity curve using the configured SF bias."""
 
     l_arr = np.asarray(l_vals, dtype=np.float64).reshape(-1)
     i_arr = np.asarray(i_vals, dtype=np.float64).reshape(-1)
     row_count = min(l_arr.shape[0], i_arr.shape[0])
     if row_count <= 0:
-        return (
+        empty_result = (
             np.empty((0,), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
             0,
             0,
         )
+        if return_indices:
+            return (*empty_result, np.empty((0,), dtype=np.int64))
+        return empty_result
 
     l_arr = l_arr[:row_count]
     i_arr = i_arr[:row_count]
     finite_mask = np.isfinite(l_arr) & np.isfinite(i_arr) & (i_arr > 0.0)
     if not np.any(finite_mask):
-        return (
+        empty_result = (
             np.empty((0,), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
             row_count,
             0,
         )
+        if return_indices:
+            return (*empty_result, np.empty((0,), dtype=np.int64))
+        return empty_result
 
     l_valid = l_arr[finite_mask]
     i_valid = i_arr[finite_mask]
+    valid_indices = np.nonzero(finite_mask)[0]
     total_count = int(i_valid.shape[0])
     if total_count <= 8:
-        return l_valid.copy(), i_valid.copy(), total_count, total_count
+        kept_indices = valid_indices.copy()
+        base_result = (l_valid.copy(), i_valid.copy(), total_count, total_count)
+        if return_indices:
+            return (*base_result, kept_indices)
+        return base_result
 
     retain_fraction, rel_floor, min_keep, neighbor_span = (
         structure_factor_prune_profile_from_bias(bias)
@@ -807,12 +825,16 @@ def prune_l_intensity_curve(
 
     keep_idx = np.sort(keep_idx)
     kept_count = int(keep_idx.size)
-    return (
+    kept_indices = valid_indices[keep_idx].astype(np.int64, copy=False)
+    base_result = (
         l_valid[keep_idx].copy(),
         i_valid[keep_idx].copy(),
         total_count,
         kept_count,
     )
+    if return_indices:
+        return (*base_result, kept_indices.copy())
+    return base_result
 
 
 def prune_reflection_rows(
@@ -820,27 +842,40 @@ def prune_reflection_rows(
     intens_arr: np.ndarray,
     *,
     bias: object,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
+    return_indices: bool = False,
+) -> tuple[np.ndarray, np.ndarray, int, int] | tuple[
+    np.ndarray,
+    np.ndarray,
+    int,
+    int,
+    np.ndarray,
+]:
     """Prune one HKL/intensity array using the configured SF bias."""
 
     arr = np.asarray(miller_arr, dtype=np.float64)
     intens = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
     if arr.ndim != 2 or arr.shape[1] < 3:
-        return (
+        empty_result = (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
             0,
             0,
         )
+        if return_indices:
+            return (*empty_result, np.empty((0,), dtype=np.int64))
+        return empty_result
 
     row_count = min(arr.shape[0], intens.shape[0])
     if row_count <= 0:
-        return (
+        empty_result = (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
             0,
             0,
         )
+        if return_indices:
+            return (*empty_result, np.empty((0,), dtype=np.int64))
+        return empty_result
 
     arr = arr[:row_count, :]
     intens = intens[:row_count]
@@ -852,18 +887,31 @@ def prune_reflection_rows(
         & (intens > 0.0)
     )
     if not np.any(finite_mask):
-        return (
+        empty_result = (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
             row_count,
             0,
         )
+        if return_indices:
+            return (*empty_result, np.empty((0,), dtype=np.int64))
+        return empty_result
 
     arr_valid = arr[finite_mask, :]
     intens_valid = intens[finite_mask]
+    valid_indices = np.nonzero(finite_mask)[0]
     total_count = int(intens_valid.shape[0])
     if total_count <= 8:
-        return arr_valid.copy(), intens_valid.copy(), total_count, total_count
+        kept_indices = valid_indices.copy()
+        base_result = (
+            arr_valid.copy(),
+            intens_valid.copy(),
+            total_count,
+            total_count,
+        )
+        if return_indices:
+            return (*base_result, kept_indices)
+        return base_result
 
     retain_fraction, rel_floor, min_keep, _ = structure_factor_prune_profile_from_bias(
         bias
@@ -891,12 +939,16 @@ def prune_reflection_rows(
     keep_idx = np.sort(keep_idx)
     kept_count = int(keep_idx.size)
 
-    return (
+    kept_indices = valid_indices[keep_idx].astype(np.int64, copy=False)
+    base_result = (
         arr_valid[keep_idx, :].copy(),
         intens_valid[keep_idx].copy(),
         total_count,
         kept_count,
     )
+    if return_indices:
+        return (*base_result, kept_indices.copy())
+    return base_result
 
 
 def clamp_slider_value_to_bounds(
@@ -1609,17 +1661,130 @@ def prune_disabled_bragg_qr_filters(
     }
 
 
+def _stable_array_source_signature(array: np.ndarray) -> tuple[object, ...]:
+    """Return one compact deterministic signature for array-backed source data."""
+
+    arr = np.asarray(array, dtype=np.float64)
+    shape = tuple(arr.shape)
+    if arr.size <= 0:
+        return (shape, 0, 0.0, 0.0)
+
+    finite_mask = np.isfinite(arr)
+    finite_count = int(np.count_nonzero(finite_mask))
+    if finite_count <= 0:
+        return (shape, 0, "nan", "nan")
+
+    finite_vals = arr[finite_mask]
+    return (
+        shape,
+        finite_count,
+        round(float(np.sum(finite_vals)), 12),
+        round(float(np.sum(finite_vals * finite_vals)), 12),
+    )
+
+
+def _primary_disable_signature(
+    bragg_qr_manager_state: BraggQrManagerState,
+) -> tuple[tuple[int, ...], tuple[tuple[int, int], ...]]:
+    """Return the current primary-source manual-filter signature payload."""
+
+    disabled_primary_m = tuple(
+        sorted(
+            int(m_idx)
+            for src, m_idx in bragg_qr_manager_state.disabled_groups
+            if normalize_bragg_qr_source_label(src) == "primary"
+        )
+    )
+    disabled_primary_l = tuple(
+        sorted(
+            (
+                int(m_idx),
+                int(l_key),
+            )
+            for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values
+            if normalize_bragg_qr_source_label(src) == "primary"
+        )
+    )
+    return disabled_primary_m, disabled_primary_l
+
+
+def _primary_qr_source_signature(
+    simulation_runtime_state: SimulationRuntimeState,
+) -> tuple[object, ...]:
+    """Return one stable signature for the full primary QR source data."""
+
+    entries = []
+    for m_idx, entry in sorted(
+        copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr_all).items()
+    ):
+        l_vals = np.asarray(entry.get("L", []), dtype=np.float64).reshape(-1)
+        i_vals = np.asarray(entry.get("I", []), dtype=np.float64).reshape(-1)
+        row_count = min(l_vals.shape[0], i_vals.shape[0])
+        entries.append(
+            (
+                int(m_idx),
+                tuple(entry.get("hk", (0, 0))),
+                int(entry.get("deg", 1)),
+                _stable_array_source_signature(l_vals[:row_count]),
+                _stable_array_source_signature(i_vals[:row_count]),
+            )
+        )
+    return tuple(entries)
+
+
+def _primary_miller_filter_signature(
+    simulation_runtime_state: SimulationRuntimeState,
+    bragg_qr_manager_state: BraggQrManagerState,
+) -> tuple[object, ...]:
+    """Return one stable primary Miller/manual-filter signature."""
+
+    disabled_primary_m, disabled_primary_l = _primary_disable_signature(
+        bragg_qr_manager_state
+    )
+    return (
+        "miller",
+        _stable_array_source_signature(simulation_runtime_state.sim_miller1_all),
+        _stable_array_source_signature(simulation_runtime_state.sim_intens1_all),
+        disabled_primary_m,
+        disabled_primary_l,
+    )
+
+
+def _primary_qr_filter_signature(
+    simulation_runtime_state: SimulationRuntimeState,
+    bragg_qr_manager_state: BraggQrManagerState,
+) -> tuple[object, ...]:
+    """Return one stable primary QR/manual-filter signature."""
+
+    disabled_primary_m, disabled_primary_l = _primary_disable_signature(
+        bragg_qr_manager_state
+    )
+    return (
+        "qr",
+        _primary_qr_source_signature(simulation_runtime_state),
+        disabled_primary_m,
+        disabled_primary_l,
+    )
+
+
 def filtered_primary_qr_dict(
     simulation_runtime_state: SimulationRuntimeState,
     bragg_qr_manager_state: BraggQrManagerState,
     *,
     prune_bias: object,
-) -> tuple[dict[int, dict[str, object]], int, int]:
+) -> tuple[
+    dict[int, dict[str, object]],
+    int,
+    int,
+    list[tuple[int, int]],
+    object,
+]:
     """Return the filtered primary Bragg-Qr dictionary and prune counts."""
 
     out: dict[int, dict[str, object]] = {}
     total_before_prune = 0
     total_after_prune = 0
+    contribution_keys: list[tuple[int, int]] = []
     disabled_primary_m = {
         int(m_idx)
         for src, m_idx in bragg_qr_manager_state.disabled_groups
@@ -1631,7 +1796,9 @@ def filtered_primary_qr_dict(
             continue
         disabled_primary_l[int(m_idx)].add(int(l_key))
 
-    for m_idx, entry in copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr_all).items():
+    for m_idx, entry in sorted(
+        copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr_all).items()
+    ):
         m_int = int(m_idx)
         if m_int in disabled_primary_m:
             continue
@@ -1644,6 +1811,7 @@ def filtered_primary_qr_dict(
 
         l_vals = l_vals[:row_count]
         i_vals = i_vals[:row_count]
+        raw_local_indices = np.arange(row_count, dtype=np.int64)
 
         disabled_l_for_m = disabled_primary_l.get(m_int)
         if disabled_l_for_m:
@@ -1658,11 +1826,19 @@ def filtered_primary_qr_dict(
                 continue
             l_vals = l_vals[keep_mask]
             i_vals = i_vals[keep_mask]
+            raw_local_indices = raw_local_indices[keep_mask]
 
-        pruned_l, pruned_i, src_count, kept_count = prune_l_intensity_curve(
+        (
+            pruned_l,
+            pruned_i,
+            src_count,
+            kept_count,
+            kept_local_indices,
+        ) = prune_l_intensity_curve(
             l_vals,
             i_vals,
             bias=prune_bias,
+            return_indices=True,
         )
         total_before_prune += int(src_count)
         total_after_prune += int(kept_count)
@@ -1674,17 +1850,30 @@ def filtered_primary_qr_dict(
         filtered["I"] = pruned_i
         out[m_int] = filtered
 
-    return out, total_before_prune, total_after_prune
+        for local_idx in raw_local_indices[kept_local_indices]:
+            contribution_keys.append((m_int, int(local_idx)))
+
+    return (
+        out,
+        total_before_prune,
+        total_after_prune,
+        contribution_keys,
+        _primary_qr_filter_signature(
+            simulation_runtime_state,
+            bragg_qr_manager_state,
+        ),
+    )
 
 
 def filtered_miller_and_intensities(
+    simulation_runtime_state: SimulationRuntimeState,
     bragg_qr_manager_state: BraggQrManagerState,
     miller_arr: np.ndarray,
     intens_arr: np.ndarray,
     source_label: str,
     *,
     prune_bias: object,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
+) -> tuple[np.ndarray, np.ndarray, int, int, list[int], object]:
     """Return filtered Miller/intensity arrays for one Bragg-Qr source."""
 
     arr = np.asarray(miller_arr, dtype=np.float64)
@@ -1696,6 +1885,8 @@ def filtered_miller_and_intensities(
             np.empty((0,), dtype=np.float64),
             0,
             0,
+            [],
+            None,
         )
 
     row_count = min(arr.shape[0], intens.shape[0])
@@ -1705,10 +1896,13 @@ def filtered_miller_and_intensities(
             np.empty((0,), dtype=np.float64),
             0,
             0,
+            [],
+            None,
         )
 
     arr = arr[:row_count, :]
     intens = intens[:row_count]
+    raw_row_indices = np.arange(row_count, dtype=np.int64)
     source_norm = normalize_bragg_qr_source_label(source_label)
     disabled_m = {
         int(m_idx)
@@ -1722,7 +1916,21 @@ def filtered_miller_and_intensities(
     ]
     m_vals = bragg_qr_m_indices_from_miller_array(arr, unique=False)
     if m_vals.shape[0] != arr.shape[0]:
-        return arr.copy(), intens.copy(), int(arr.shape[0]), int(arr.shape[0])
+        return (
+            arr.copy(),
+            intens.copy(),
+            int(arr.shape[0]),
+            int(arr.shape[0]),
+            list(raw_row_indices.tolist()),
+            (
+                _primary_miller_filter_signature(
+                    simulation_runtime_state,
+                    bragg_qr_manager_state,
+                )
+                if source_norm == "primary"
+                else None
+            ),
+        )
 
     keep_mask = np.ones(arr.shape[0], dtype=bool)
     if disabled_m:
@@ -1736,6 +1944,7 @@ def filtered_miller_and_intensities(
 
     filtered_arr = arr[keep_mask]
     filtered_intens = intens[keep_mask]
+    filtered_raw_indices = raw_row_indices[keep_mask]
     total_after_manual = int(filtered_arr.shape[0])
     if total_after_manual <= 0:
         return (
@@ -1743,6 +1952,15 @@ def filtered_miller_and_intensities(
             np.empty((0,), dtype=np.float64),
             int(arr.shape[0]),
             0,
+            [],
+            (
+                _primary_miller_filter_signature(
+                    simulation_runtime_state,
+                    bragg_qr_manager_state,
+                )
+                if source_norm == "primary"
+                else None
+            ),
         )
 
     if source_norm != "primary":
@@ -1751,14 +1969,36 @@ def filtered_miller_and_intensities(
             filtered_intens.copy(),
             total_after_manual,
             total_after_manual,
+            [],
+            None,
         )
 
-    pruned_arr, pruned_intens, src_count, kept_count = prune_reflection_rows(
+    (
+        pruned_arr,
+        pruned_intens,
+        src_count,
+        kept_count,
+        kept_row_indices,
+    ) = prune_reflection_rows(
         filtered_arr,
         filtered_intens,
         bias=prune_bias,
+        return_indices=True,
     )
-    return pruned_arr, pruned_intens, int(src_count), int(kept_count)
+    contribution_keys = [
+        int(raw_idx) for raw_idx in filtered_raw_indices[kept_row_indices].tolist()
+    ]
+    return (
+        pruned_arr,
+        pruned_intens,
+        int(src_count),
+        int(kept_count),
+        contribution_keys,
+        _primary_miller_filter_signature(
+            simulation_runtime_state,
+            bragg_qr_manager_state,
+        ),
+    )
 
 
 def apply_bragg_qr_filters(
@@ -1778,6 +2018,8 @@ def apply_bragg_qr_filters(
         simulation_runtime_state.sim_primary_qr,
         qr_total,
         qr_kept,
+        primary_qr_keys,
+        primary_qr_filter_signature,
     ) = filtered_primary_qr_dict(
         simulation_runtime_state,
         bragg_qr_manager_state,
@@ -1788,7 +2030,10 @@ def apply_bragg_qr_filters(
         simulation_runtime_state.sim_intens1,
         hkl_primary_total,
         hkl_primary_kept,
+        primary_miller_keys,
+        primary_miller_filter_signature,
     ) = filtered_miller_and_intensities(
+        simulation_runtime_state,
         bragg_qr_manager_state,
         simulation_runtime_state.sim_miller1_all,
         simulation_runtime_state.sim_intens1_all,
@@ -1800,12 +2045,32 @@ def apply_bragg_qr_filters(
         simulation_runtime_state.sim_intens2,
         hkl_secondary_total,
         hkl_secondary_kept,
+        _secondary_keys,
+        _secondary_filter_signature,
     ) = filtered_miller_and_intensities(
+        simulation_runtime_state,
         bragg_qr_manager_state,
         simulation_runtime_state.sim_miller2_all,
         simulation_runtime_state.sim_intens2_all,
         "secondary",
         prune_bias=prune_bias,
+    )
+    primary_source_mode = (
+        "qr"
+        if isinstance(simulation_runtime_state.sim_primary_qr, dict)
+        and len(simulation_runtime_state.sim_primary_qr) > 0
+        else "miller"
+    )
+    simulation_runtime_state.primary_requested_source_mode = primary_source_mode
+    simulation_runtime_state.primary_requested_contribution_keys = (
+        list(primary_qr_keys)
+        if primary_source_mode == "qr"
+        else list(primary_miller_keys)
+    )
+    simulation_runtime_state.primary_requested_filter_signature = (
+        primary_qr_filter_signature
+        if primary_source_mode == "qr"
+        else primary_miller_filter_signature
     )
     stats = {
         "qr_total": int(qr_total),

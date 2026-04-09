@@ -97,6 +97,11 @@ class GeometryFitRuntimeManualDatasetBindings:
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]]
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
     orient_image_for_fit: Callable[..., object]
+    geometry_manual_source_rows_for_background: Callable[..., object] | None = None
+    geometry_manual_last_source_snapshot_diagnostics: (
+        Callable[[], Mapping[str, object]]
+        | None
+    ) = None
     geometry_manual_last_simulation_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
@@ -446,6 +451,11 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
+    geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
+    geometry_manual_last_source_snapshot_diagnostics: (
+        Callable[[], Mapping[str, object]]
+        | None
+    ) = None,
     geometry_manual_last_simulation_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
@@ -466,6 +476,12 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
             geometry_manual_simulated_peaks_for_params
         ),
         geometry_manual_simulated_lookup=geometry_manual_simulated_lookup,
+        geometry_manual_source_rows_for_background=(
+            geometry_manual_source_rows_for_background
+        ),
+        geometry_manual_last_source_snapshot_diagnostics=(
+            geometry_manual_last_source_snapshot_diagnostics
+        ),
         geometry_manual_last_simulation_diagnostics=(
             geometry_manual_last_simulation_diagnostics
         ),
@@ -499,6 +515,11 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
+    geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
+    geometry_manual_last_source_snapshot_diagnostics: (
+        Callable[[], Mapping[str, object]]
+        | None
+    ) = None,
     geometry_manual_last_simulation_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
@@ -522,6 +543,12 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
                 geometry_manual_simulated_peaks_for_params
             ),
             geometry_manual_simulated_lookup=geometry_manual_simulated_lookup,
+            geometry_manual_source_rows_for_background=(
+                geometry_manual_source_rows_for_background
+            ),
+            geometry_manual_last_source_snapshot_diagnostics=(
+                geometry_manual_last_source_snapshot_diagnostics
+            ),
             geometry_manual_last_simulation_diagnostics=(
                 geometry_manual_last_simulation_diagnostics
             ),
@@ -2322,21 +2349,45 @@ def build_geometry_manual_fit_dataset(
     reference_a = _finite_float(params_i.get("a"))
     reference_c = _finite_float(params_i.get("c"))
     reference_lambda = _finite_float(params_i.get("lambda"))
-    # Fresh simulated peak rebuilds are disabled for manual-fit source
-    # resolution and geometry-fit dataset prep.
-    simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
-        params_i,
-        prefer_cache=True,
-    )
+    if callable(manual_dataset_bindings.geometry_manual_source_rows_for_background):
+        simulated_peaks = (
+            manual_dataset_bindings.geometry_manual_source_rows_for_background(
+                int(background_idx),
+                params_i,
+                consumer="geometry_fit_dataset",
+            )
+        )
+    else:
+        simulated_peaks = (
+            manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
+                params_i,
+                prefer_cache=True,
+            )
+        )
     simulation_diagnostics = (
         copy.deepcopy(
-            manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+            (
+                manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics()
+                if callable(
+                    manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics
+                )
+                else manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+            )
         )
         if callable(
+            manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics
+        )
+        or callable(
             manual_dataset_bindings.geometry_manual_last_simulation_diagnostics
         )
         else {}
     )
+    if not simulated_peaks:
+        snapshot_status = str(simulation_diagnostics.get("status", "<unknown>"))
+        raise RuntimeError(
+            "Geometry-fit source snapshot unavailable for "
+            f"background {int(background_idx)} (status={snapshot_status})."
+        )
     simulated_lookup = manual_dataset_bindings.geometry_manual_simulated_lookup(
         simulated_peaks
     )
@@ -3121,6 +3172,7 @@ def build_geometry_manual_fit_dataset(
         background_index=int(background_idx),
         current_background_index=int(manual_dataset_bindings.current_background_index),
         simulated_peaks=simulated_peaks,
+        source_snapshot_diagnostics=simulation_diagnostics,
         source_resolution_diagnostics=source_resolution_diagnostics,
         pair_count=int(len(measured_display)),
         resolved_source_pair_count=int(resolved_source_pair_count),
@@ -3847,6 +3899,7 @@ def build_geometry_fit_dataset_cache_metadata(
     background_index: int,
     current_background_index: int,
     simulated_peaks: Sequence[object] | None,
+    source_snapshot_diagnostics: Mapping[str, object] | None = None,
     source_resolution_diagnostics: Sequence[object] | None,
     pair_count: int,
     resolved_source_pair_count: int,
@@ -4024,17 +4077,29 @@ def build_geometry_fit_dataset_cache_metadata(
             }
         )
 
+    snapshot_diag = (
+        dict(source_snapshot_diagnostics)
+        if isinstance(source_snapshot_diagnostics, Mapping)
+        else {}
+    )
+    snapshot_status = str(
+        snapshot_diag.get(
+            "status",
+            "snapshot_hit" if simulated_peaks else "snapshot_empty",
+        )
+    )
+    snapshot_hit = snapshot_status == "snapshot_hit"
+
     return {
-        "cache_action": "rebuilt",
-        "reused": False,
-        "rebuilt": True,
+        "cache_action": ("reused" if snapshot_hit else "rebuilt"),
+        "reused": bool(snapshot_hit),
+        "rebuilt": bool(not snapshot_hit),
         "stale_reason": (
-            "fresh simulated peak rebuilds are disabled; geometry-fit dataset "
-            "prep did not rebuild fresh simulated rows."
+            None if snapshot_hit else f"source snapshot status={snapshot_status}"
         ),
-        "cache_source": "simulated_peak_rebuild_disabled",
+        "cache_source": "source_snapshot",
         "cache_provenance": [
-            "simulated_peak_rebuild_disabled",
+            f"source_snapshot:{snapshot_status}",
             "build_geometry_manual_fit_dataset",
         ],
         "background_index": int(background_index),
@@ -4042,6 +4107,34 @@ def build_geometry_fit_dataset_cache_metadata(
         "prefer_cache": False,
         "pair_count": int(pair_count),
         "resolved_source_pair_count": int(resolved_source_pair_count),
+        "source_snapshot_status": snapshot_status,
+        "source_snapshot_created_from": snapshot_diag.get("created_from"),
+        "source_snapshot_signature_match": bool(
+            snapshot_diag.get("signature_match", snapshot_hit)
+        ),
+        "source_snapshot_consumer": snapshot_diag.get("consumer"),
+        "source_snapshot_cache_family": snapshot_diag.get("cache_family"),
+        "source_snapshot_action": snapshot_diag.get("action"),
+        "source_snapshot_requested_signature_summary": snapshot_diag.get(
+            "requested_signature_summary",
+        ),
+        "source_snapshot_stored_signature_summary": snapshot_diag.get(
+            "stored_signature_summary",
+        ),
+        "source_snapshot_raw_peak_count": int(
+            snapshot_diag.get(
+                "raw_peak_count",
+                sum(len(entries) for entries in raw_by_table.values()),
+            )
+            or 0
+        ),
+        "source_snapshot_row_count": int(
+            snapshot_diag.get(
+                "projected_peak_count",
+                sum(len(entries) for entries in raw_by_table.values()),
+            )
+            or 0
+        ),
         "simulated_peak_count": int(
             sum(len(entries) for entries in raw_by_table.values())
         ),
@@ -4102,7 +4195,7 @@ def build_geometry_fit_dataset_cache_log_lines(
         lines.append(
             (
                 "{label}: pair_count={pairs} resolved_source_pairs={resolved} "
-                "simulated_peaks={peaks} tables={tables}"
+                "source_rows={peaks} tables={tables}"
             ).format(
                 label=label,
                 pairs=_geometry_fit_debug_value_text(
@@ -4126,6 +4219,55 @@ def build_geometry_fit_dataset_cache_log_lines(
                 tables=_geometry_fit_debug_value_text(
                     cache_metadata.get("table_count", 0),
                     float_digits=0,
+                ),
+            )
+        )
+        lines.append(
+            (
+                "{label}: source_snapshot family={family} action={action} "
+                "status={status} consumer={consumer} created_from={created_from} "
+                "signature_match={match} rows={rows} raw_peaks={raw}"
+            ).format(
+                label=label,
+                family=str(
+                    cache_metadata.get("source_snapshot_cache_family", "<unknown>")
+                ),
+                action=str(
+                    cache_metadata.get("source_snapshot_action", "<unknown>")
+                ),
+                status=str(
+                    cache_metadata.get("source_snapshot_status", "<unknown>")
+                ),
+                consumer=str(
+                    cache_metadata.get("source_snapshot_consumer", "<unknown>")
+                ),
+                created_from=str(
+                    cache_metadata.get("source_snapshot_created_from", "<unknown>")
+                ),
+                match=_geometry_fit_debug_value_text(
+                    cache_metadata.get("source_snapshot_signature_match", False)
+                ),
+                rows=_geometry_fit_debug_value_text(
+                    cache_metadata.get("source_snapshot_row_count", 0),
+                    float_digits=0,
+                ),
+                raw=_geometry_fit_debug_value_text(
+                    cache_metadata.get("source_snapshot_raw_peak_count", 0),
+                    float_digits=0,
+                ),
+            )
+        )
+        lines.append(
+            (
+                "{label}: source_snapshot requested_signature={requested} "
+                "stored_signature={stored}"
+            ).format(
+                label=label,
+                requested=_geometry_fit_debug_value_text(
+                    cache_metadata.get("source_snapshot_requested_signature_summary")
+                ),
+                stored=_geometry_fit_debug_value_text(
+                    cache_metadata.get("source_snapshot_stored_signature_summary")
                 ),
             )
         )
@@ -4190,6 +4332,152 @@ def build_geometry_fit_dataset_cache_log_lines(
                     rows=_geometry_fit_debug_value_text(
                         raw_summary.get("representative_row_indices_kept"),
                         float_digits=0,
+                    ),
+                )
+            )
+    return lines
+
+
+def build_geometry_fit_live_cache_log_lines(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> list[str]:
+    """Format live-cache inventory and source-snapshot behavior for debug logs."""
+
+    lines: list[str] = []
+    inventory: Mapping[str, object] | None = None
+    for raw_dataset in dataset_infos or ():
+        if not isinstance(raw_dataset, Mapping):
+            continue
+        diagnostics_raw = raw_dataset.get("simulation_diagnostics")
+        if not isinstance(diagnostics_raw, Mapping):
+            continue
+        diagnostics = dict(diagnostics_raw)
+        label = str(
+            raw_dataset.get(
+                "label",
+                f"bg[{raw_dataset.get('dataset_index', '?')}]",
+            )
+        )
+        lines.append(
+            (
+                "{label}: source_snapshot status={status} consumer={consumer} "
+                "created_from={created_from} signature_match={match} "
+                "rows={rows} raw_peaks={raw}"
+            ).format(
+                label=label,
+                status=str(diagnostics.get("status", "<unknown>")),
+                consumer=str(diagnostics.get("consumer", "<unknown>")),
+                created_from=str(diagnostics.get("created_from", "<unknown>")),
+                match=_geometry_fit_debug_value_text(
+                    diagnostics.get("signature_match", False)
+                ),
+                rows=_geometry_fit_debug_value_text(
+                    diagnostics.get(
+                        "projected_peak_count",
+                        raw_dataset.get("simulated_peak_count", 0),
+                    ),
+                    float_digits=0,
+                ),
+                raw=_geometry_fit_debug_value_text(
+                    diagnostics.get("raw_peak_count", 0),
+                    float_digits=0,
+                ),
+            )
+        )
+        lines.append(
+            (
+                "{label}: source_snapshot requested_signature={requested} "
+                "stored_signature={stored}"
+            ).format(
+                label=label,
+                requested=_geometry_fit_debug_value_text(
+                    diagnostics.get("requested_signature_summary")
+                ),
+                stored=_geometry_fit_debug_value_text(
+                    diagnostics.get("stored_signature_summary")
+                ),
+            )
+        )
+        inventory_raw = diagnostics.get("live_cache_inventory")
+        if inventory is None and isinstance(inventory_raw, Mapping):
+            inventory = dict(inventory_raw)
+    if not isinstance(inventory, Mapping):
+        return lines
+    lines.append(
+        (
+            "inventory: preview_active={preview_active} preview_sample_count={preview_samples} "
+            "stored_hit_table_signature_present={stored_present} "
+            "stored_hit_table_signature={stored_sig}"
+        ).format(
+            preview_active=_geometry_fit_debug_value_text(
+                inventory.get("preview_active", False)
+            ),
+            preview_samples=_geometry_fit_debug_value_text(
+                inventory.get("preview_sample_count"),
+                float_digits=0,
+            ),
+            stored_present=_geometry_fit_debug_value_text(
+                inventory.get("stored_hit_table_signature_present", False)
+            ),
+            stored_sig=_geometry_fit_debug_value_text(
+                inventory.get("stored_hit_table_signature_summary")
+            ),
+        )
+    )
+    lines.append(
+        (
+            "inventory: last_simulation_signature={last_sig} "
+            "primary_contribution_signature={primary_sig} primary_source_mode={source_mode} "
+            "primary_active_keys={active_keys} primary_hit_table_entries={entries}"
+        ).format(
+            last_sig=_geometry_fit_debug_value_text(
+                inventory.get("last_simulation_signature_summary")
+            ),
+            primary_sig=_geometry_fit_debug_value_text(
+                inventory.get("primary_contribution_cache_signature_summary")
+            ),
+            source_mode=_geometry_fit_debug_value_text(
+                inventory.get("primary_source_mode")
+            ),
+            active_keys=_geometry_fit_debug_value_text(
+                inventory.get("primary_active_contribution_key_count", 0),
+                float_digits=0,
+            ),
+            entries=_geometry_fit_debug_value_text(
+                inventory.get("primary_hit_table_cache_entry_count", 0),
+                float_digits=0,
+            ),
+        )
+    )
+    source_snapshots_raw = inventory.get("source_snapshots")
+    if isinstance(source_snapshots_raw, Sequence) and not isinstance(
+        source_snapshots_raw,
+        (str, bytes, bytearray),
+    ):
+        source_snapshots = [
+            dict(item) for item in source_snapshots_raw if isinstance(item, Mapping)
+        ]
+    else:
+        source_snapshots = []
+    if not source_snapshots:
+        lines.append("inventory: source_snapshots=<none>")
+    else:
+        for snapshot in source_snapshots:
+            lines.append(
+                (
+                    "inventory: snapshot bg[{background}] rows={rows} "
+                    "created_from={created_from} signature={signature}"
+                ).format(
+                    background=int(snapshot.get("background_index", -1) or -1),
+                    rows=_geometry_fit_debug_value_text(
+                        snapshot.get("row_count", 0),
+                        float_digits=0,
+                    ),
+                    created_from=_geometry_fit_debug_value_text(
+                        snapshot.get("created_from")
+                    ),
+                    signature=_geometry_fit_debug_value_text(
+                        snapshot.get("signature_summary")
                     ),
                 )
             )
@@ -4552,6 +4840,14 @@ def build_geometry_fit_start_log_sections(
                     dataset_cache_lines,
                 )
             )
+        live_cache_lines = build_geometry_fit_live_cache_log_lines(dataset_infos)
+        if live_cache_lines:
+            sections.append(
+                (
+                    "Live simulation cache:",
+                    live_cache_lines,
+                )
+            )
     sections.extend(
         [
         (
@@ -4627,7 +4923,7 @@ def build_geometry_fit_source_resolution_log_lines(
         lines.append(
             (
                 "{label}: resolved_source_pairs={resolved}/{pairs} "
-                "simulated_peaks={peaks} simulated_source_rows={rows}"
+                "source_rows={peaks} source_lookup_rows={rows}"
             ).format(
                 label=label,
                 resolved=resolved_count,
@@ -4764,7 +5060,7 @@ def _geometry_fit_short_count_list(
 def build_geometry_fit_simulation_diagnostic_log_lines(
     dataset_infos: Sequence[Mapping[str, object]] | None,
 ) -> list[str]:
-    """Format fresh simulated-source diagnostics for geometry-fit preflight logs."""
+    """Format source-snapshot diagnostics for geometry-fit preflight logs."""
 
     lines: list[str] = []
     for raw_dataset in dataset_infos or ():
@@ -4788,12 +5084,18 @@ def build_geometry_fit_simulation_diagnostic_log_lines(
         )
         lines.append(
             (
-                "{label}: source={source} status={status} "
-                "projected_peaks={projected} raw_peaks={raw}"
+                "{label}: source={source} status={status} consumer={consumer} "
+                "created_from={created_from} signature_match={signature_match} "
+                "projected_rows={projected} raw_peaks={raw}"
             ).format(
                 label=label,
                 source=str(diagnostics.get("source", "<unknown>")),
                 status=str(diagnostics.get("status", "<unknown>")),
+                consumer=str(diagnostics.get("consumer", "<unknown>")),
+                created_from=str(diagnostics.get("created_from", "<unknown>")),
+                signature_match=_geometry_fit_debug_value_text(
+                    diagnostics.get("signature_match", False)
+                ),
                 projected=_geometry_fit_debug_value_text(
                     diagnostics.get(
                         "projected_peak_count",
@@ -4804,6 +5106,19 @@ def build_geometry_fit_simulation_diagnostic_log_lines(
                 raw=_geometry_fit_debug_value_text(
                     diagnostics.get("raw_peak_count", np.nan),
                     float_digits=0,
+                ),
+            )
+        )
+        lines.append(
+            (
+                "{label}: requested_signature={requested} stored_signature={stored}"
+            ).format(
+                label=label,
+                requested=_geometry_fit_debug_value_text(
+                    diagnostics.get("requested_signature_summary")
+                ),
+                stored=_geometry_fit_debug_value_text(
+                    diagnostics.get("stored_signature_summary")
                 ),
             )
         )
@@ -5015,7 +5330,7 @@ def build_geometry_fit_preflight_log_sections(
         )
         if simulation_diagnostic_lines:
             sections.append(
-                ("Fresh simulation diagnostics:", simulation_diagnostic_lines)
+                ("Source snapshot diagnostics:", simulation_diagnostic_lines)
             )
         if source_resolution_lines:
             sections.append(("Cached source-row diagnostics:", source_resolution_lines))

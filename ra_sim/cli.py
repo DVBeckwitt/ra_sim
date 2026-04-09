@@ -1058,6 +1058,94 @@ def run_headless_geometry_fit(
         display_to_native_sim_coords=lambda col, row, image_shape: gui_geometry_overlay.display_to_native_sim_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
     )
 
+    source_snapshot_diagnostics_state: dict[str, object] = {}
+
+    def _geometry_manual_source_rows_for_background(
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+    ) -> list[dict[str, object]]:
+        consumer_name = str(consumer or "unspecified")
+        if int(background_index) != int(background_runtime_state.current_background_index):
+            source_snapshot_diagnostics_state.clear()
+            source_snapshot_diagnostics_state.update(
+                {
+                    "source": "source_snapshot",
+                    "cache_family": "source_snapshot",
+                    "action": "lookup",
+                    "consumer": consumer_name,
+                    "status": "snapshot_missing_background",
+                    "background_index": int(background_index),
+                    "raw_peak_count": 0,
+                    "projected_peak_count": 0,
+                    "signature_match": False,
+                    "requested_signature_summary": None,
+                    "stored_signature_summary": None,
+                    "live_cache_inventory": {
+                        "preview_active": False,
+                        "preview_sample_count": None,
+                        "stored_hit_table_signature_present": False,
+                        "stored_hit_table_signature_summary": None,
+                        "last_simulation_signature_summary": None,
+                        "primary_contribution_cache_signature_summary": None,
+                        "primary_source_mode": None,
+                        "primary_active_contribution_key_count": 0,
+                        "primary_hit_table_cache_entry_count": 0,
+                        "source_snapshots": [],
+                    },
+                }
+            )
+            return []
+        rows = [
+            dict(entry)
+            for entry in projection_callbacks.simulated_peaks_for_params(
+                param_set,
+                prefer_cache=True,
+            )
+            if isinstance(entry, dict)
+        ]
+        source_snapshot_diagnostics_state.clear()
+        source_snapshot_diagnostics_state.update(
+            {
+                "source": "source_snapshot",
+                "cache_family": "source_snapshot",
+                "action": "lookup",
+                "consumer": consumer_name,
+                "status": ("snapshot_hit" if rows else "snapshot_empty"),
+                "background_index": int(background_index),
+                "raw_peak_count": int(len(rows)),
+                "projected_peak_count": int(len(rows)),
+                "created_from": "live_cache",
+                "signature_match": True,
+                "requested_signature_summary": None,
+                "stored_signature_summary": None,
+                "live_cache_inventory": {
+                    "preview_active": False,
+                    "preview_sample_count": None,
+                    "stored_hit_table_signature_present": False,
+                    "stored_hit_table_signature_summary": None,
+                    "last_simulation_signature_summary": None,
+                    "primary_contribution_cache_signature_summary": None,
+                    "primary_source_mode": None,
+                    "primary_active_contribution_key_count": 0,
+                    "primary_hit_table_cache_entry_count": 0,
+                    "source_snapshots": [
+                        {
+                            "background_index": int(background_index),
+                            "row_count": int(len(rows)),
+                            "created_from": "live_cache",
+                            "signature_summary": None,
+                        }
+                    ],
+                },
+            }
+        )
+        return rows
+
+    def _geometry_manual_last_source_snapshot_diagnostics() -> dict[str, object]:
+        return dict(source_snapshot_diagnostics_state)
+
     manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=osc_files,
         current_background_index=int(background_runtime_state.current_background_index),
@@ -1068,6 +1156,8 @@ def run_headless_geometry_fit(
         apply_background_backend_orientation=lambda image: gui_background.apply_background_backend_orientation(image, flip_x=backend_flip_x, flip_y=backend_flip_y, rotation_k=backend_rotation_k),
         geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
         geometry_manual_simulated_lookup=projection_callbacks.simulated_lookup,
+        geometry_manual_source_rows_for_background=_geometry_manual_source_rows_for_background,
+        geometry_manual_last_source_snapshot_diagnostics=_geometry_manual_last_source_snapshot_diagnostics,
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
         unrotate_display_peaks=gui_geometry_overlay.unrotate_display_peaks,
         display_to_native_sim_coords=lambda col, row, image_shape: gui_geometry_overlay.display_to_native_sim_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),

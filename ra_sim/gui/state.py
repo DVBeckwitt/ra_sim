@@ -900,6 +900,7 @@ class SimulationRuntimeState:
     last_bg_signature: object = None
     last_sim_signature: object = None
     last_simulation_signature: object = None
+    source_row_snapshots: dict[int, dict[str, object]] = field(default_factory=dict)
     stored_hit_table_signature: object = None
     stored_max_positions_local: Any = None
     stored_sim_image: np.ndarray | None = None
@@ -912,6 +913,14 @@ class SimulationRuntimeState:
     stored_secondary_peak_table_lattice: Any = None
     stored_primary_intersection_cache: list[Any] | None = None
     stored_secondary_intersection_cache: list[Any] | None = None
+    primary_contribution_cache_signature: object = None
+    primary_active_contribution_keys: list[object] = field(default_factory=list)
+    primary_hit_table_cache: dict[object, np.ndarray] = field(default_factory=dict)
+    primary_source_mode: str = "miller"
+    primary_filter_signature: object = None
+    primary_requested_contribution_keys: list[object] = field(default_factory=list)
+    primary_requested_source_mode: str = "miller"
+    primary_requested_filter_signature: object = None
     stored_intersection_cache: list[Any] | None = None
     last_unscaled_image_signature: object = None
     normalization_scale_cache: dict[str, object] = field(

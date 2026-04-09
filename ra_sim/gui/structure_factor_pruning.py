@@ -510,6 +510,8 @@ def update_runtime_structure_factor_pruning_status(
 
 def invalidate_runtime_bragg_qr_filter_results(
     bindings: StructureFactorPruningRuntimeBindings,
+    *,
+    preserve_primary_cache: bool = False,
 ) -> None:
     """Clear cached simulation artifacts invalidated by Bragg-Qr filter changes."""
 
@@ -519,12 +521,19 @@ def invalidate_runtime_bragg_qr_filter_results(
     bindings.simulation_runtime_state.stored_sim_image = None
     bindings.simulation_runtime_state.stored_peak_table_lattice = None
     bindings.simulation_runtime_state.selected_peak_record = None
+    if not preserve_primary_cache:
+        bindings.simulation_runtime_state.primary_contribution_cache_signature = None
+        bindings.simulation_runtime_state.primary_active_contribution_keys.clear()
+        bindings.simulation_runtime_state.primary_hit_table_cache.clear()
+        bindings.simulation_runtime_state.primary_source_mode = "miller"
+        bindings.simulation_runtime_state.primary_filter_signature = None
 
 
 def apply_runtime_bragg_qr_filters(
     bindings: StructureFactorPruningRuntimeBindings,
     *,
     trigger_update: bool = True,
+    preserve_primary_cache: bool = False,
 ) -> Mapping[str, object]:
     """Apply Bragg-Qr / SF-pruning filters and runtime side effects."""
 
@@ -534,7 +543,10 @@ def apply_runtime_bragg_qr_filters(
         prune_bias=current_runtime_sf_prune_bias(bindings),
     )
     update_runtime_structure_factor_pruning_status(bindings)
-    invalidate_runtime_bragg_qr_filter_results(bindings)
+    invalidate_runtime_bragg_qr_filter_results(
+        bindings,
+        preserve_primary_cache=preserve_primary_cache,
+    )
     if callable(bindings.refresh_window):
         bindings.refresh_window()
     if trigger_update and callable(bindings.schedule_update):
@@ -577,7 +589,11 @@ def on_runtime_sf_prune_bias_change(
         _safe_var_set(var, clipped_value)
         return False
 
-    apply_runtime_bragg_qr_filters(bindings, trigger_update=True)
+    apply_runtime_bragg_qr_filters(
+        bindings,
+        trigger_update=True,
+        preserve_primary_cache=True,
+    )
     return True
 
 

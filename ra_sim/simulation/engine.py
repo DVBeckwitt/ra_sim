@@ -58,6 +58,12 @@ def _capture_hit_tables_for_intersection_cache(
     rerun_kwargs = dict(runner_kwargs)
     rerun_kwargs["collect_hit_tables"] = True
     rerun_kwargs["accumulate_image"] = False
+    rerun_kwargs.pop("projection_debug_counters", None)
+    rerun_kwargs.pop("projection_debug_reject_counts", None)
+    rerun_kwargs.pop("projection_debug_reject_records", None)
+    rerun_kwargs.pop("projection_debug_row_hit_counts", None)
+    rerun_kwargs.pop("projection_debug_row_tthp_sums", None)
+    rerun_kwargs.pop("projection_debug_row_tth_sums", None)
 
     rerun_result = runner(*rerun_args, **rerun_kwargs)
     return rerun_result[1]
@@ -70,7 +76,23 @@ def simulate(
 ) -> SimulationResult:
     """Run a diffraction simulation from a typed request."""
 
+    from ra_sim.simulation.projection_debug import allocate_projection_debug_buffers
+    from ra_sim.simulation.projection_debug import append_projection_debug_background
+    from ra_sim.simulation.projection_debug import build_projection_debug_background
+    from ra_sim.simulation.projection_debug import finalize_projection_debug_session
+    from ra_sim.simulation.projection_debug import get_current_projection_debug_session
+    from ra_sim.simulation.projection_debug import projection_debug_request_settings
+    from ra_sim.simulation.projection_debug import resolve_exit_projection_mode_flag
+    from ra_sim.simulation.projection_debug import start_projection_debug_session
+
     image_buffer = _default_image_buffer(request)
+    worker_count = default_reserved_cpu_worker_count()
+    projection_debug_buffers = allocate_projection_debug_buffers(
+        request.miller.shape[0],
+        request.geometry.image_size,
+        worker_count,
+    )
+    projection_debug_settings = projection_debug_request_settings(request, source="simulation")
 
     peak_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -84,7 +106,9 @@ def simulate(
         solve_q_mode=request.mosaic.solve_q_mode,
         collect_hit_tables=request.collect_hit_tables,
         accumulate_image=request.accumulate_image,
+        exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
     )
+    peak_kwargs.update(projection_debug_buffers)
     if request.optics_mode is not None:
         peak_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
@@ -95,6 +119,8 @@ def simulate(
         peak_kwargs["single_sample_indices"] = request.single_sample_indices
     if request.best_sample_indices_out is not None:
         peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
+    if peak_runner is process_peaks_parallel_safe:
+        peak_kwargs["enable_safe_cache"] = False
 
     peak_args = (
         request.miller,
@@ -129,7 +155,7 @@ def simulate(
         request.geometry.unit_x,
         request.geometry.n_detector,
     )
-    with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+    with temporary_numba_thread_limit(worker_count):
         image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
             *peak_args,
             **peak_kwargs,
@@ -139,8 +165,33 @@ def simulate(
             collect_hit_tables_requested=bool(request.collect_hit_tables),
             runner=peak_runner,
             runner_args=peak_args,
-            runner_kwargs=peak_kwargs,
-            image_arg_index=6,
+              runner_kwargs=peak_kwargs,
+              image_arg_index=6,
+          )
+    projection_debug_background = build_projection_debug_background(
+        projection_debug_buffers,
+        request.miller,
+        None,
+        projection_debug_settings,
+    )
+    projection_debug_session = get_current_projection_debug_session()
+    projection_debug_log_path = None
+    if projection_debug_session is None:
+        projection_debug_session = start_projection_debug_session(
+            projection_debug_settings,
+            source="simulation",
+        )
+        append_projection_debug_background(
+            projection_debug_session,
+            projection_debug_background,
+        )
+        projection_debug_log_path = finalize_projection_debug_session(
+            projection_debug_session
+        )
+    else:
+        append_projection_debug_background(
+            projection_debug_session,
+            projection_debug_background,
         )
     intersection_cache = build_intersection_cache(
         cache_hit_tables,
@@ -164,6 +215,10 @@ def simulate(
         miss_tables=miss_tables,
         degeneracy=None,
         intersection_cache=intersection_cache,
+        projection_debug={
+            "log_path": projection_debug_log_path,
+            "background": projection_debug_background,
+        },
     )
 
 
@@ -175,7 +230,30 @@ def simulate_qr_rods(
 ) -> SimulationResult:
     """Run rod-based simulation through the typed request API."""
 
+    from ra_sim.simulation.projection_debug import allocate_projection_debug_buffers
+    from ra_sim.simulation.projection_debug import append_projection_debug_background
+    from ra_sim.simulation.projection_debug import build_projection_debug_background
+    from ra_sim.simulation.projection_debug import finalize_projection_debug_session
+    from ra_sim.simulation.projection_debug import get_current_projection_debug_session
+    from ra_sim.simulation.projection_debug import projection_debug_request_settings
+    from ra_sim.simulation.projection_debug import resolve_exit_projection_mode_flag
+    from ra_sim.simulation.projection_debug import start_projection_debug_session
+    from ra_sim.utils.stacking_fault import qr_dict_to_arrays
+
     image_buffer = _default_image_buffer(request)
+    worker_count = default_reserved_cpu_worker_count()
+    debug_miller = request.miller
+    if debug_miller.size == 0:
+        debug_miller, _, _, _ = qr_dict_to_arrays(qr_dict)
+    projection_debug_buffers = allocate_projection_debug_buffers(
+        debug_miller.shape[0],
+        request.geometry.image_size,
+        worker_count,
+    )
+    projection_debug_settings = projection_debug_request_settings(
+        request,
+        source="simulation_qr_rods",
+    )
 
     rod_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -189,13 +267,17 @@ def simulate_qr_rods(
         solve_q_mode=request.mosaic.solve_q_mode,
         collect_hit_tables=request.collect_hit_tables,
         accumulate_image=request.accumulate_image,
+        exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
     )
+    rod_kwargs.update(projection_debug_buffers)
     if request.optics_mode is not None:
         rod_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
         rod_kwargs["sample_weights"] = request.beam.sample_weights
     if request.beam.n2_sample_array is not None:
         rod_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
+    if peak_runner is process_qr_rods_parallel_safe:
+        rod_kwargs["enable_safe_cache"] = False
 
     rod_args = (
         qr_dict,
@@ -229,7 +311,7 @@ def simulate_qr_rods(
         request.geometry.unit_x,
         request.geometry.n_detector,
     )
-    with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+    with temporary_numba_thread_limit(worker_count):
         image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
             *rod_args,
             **rod_kwargs,
@@ -239,8 +321,33 @@ def simulate_qr_rods(
             collect_hit_tables_requested=bool(request.collect_hit_tables),
             runner=peak_runner,
             runner_args=rod_args,
-            runner_kwargs=rod_kwargs,
-            image_arg_index=5,
+              runner_kwargs=rod_kwargs,
+              image_arg_index=5,
+          )
+    projection_debug_background = build_projection_debug_background(
+        projection_debug_buffers,
+        np.asarray(debug_miller, dtype=np.float64),
+        None,
+        projection_debug_settings,
+    )
+    projection_debug_session = get_current_projection_debug_session()
+    projection_debug_log_path = None
+    if projection_debug_session is None:
+        projection_debug_session = start_projection_debug_session(
+            projection_debug_settings,
+            source="simulation_qr_rods",
+        )
+        append_projection_debug_background(
+            projection_debug_session,
+            projection_debug_background,
+        )
+        projection_debug_log_path = finalize_projection_debug_session(
+            projection_debug_session
+        )
+    else:
+        append_projection_debug_background(
+            projection_debug_session,
+            projection_debug_background,
         )
     intersection_cache = build_intersection_cache(
         cache_hit_tables,
@@ -264,4 +371,8 @@ def simulate_qr_rods(
         miss_tables=miss_tables,
         degeneracy=degeneracy,
         intersection_cache=intersection_cache,
+        projection_debug={
+            "log_path": projection_debug_log_path,
+            "background": projection_debug_background,
+        },
     )
