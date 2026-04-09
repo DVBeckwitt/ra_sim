@@ -57,7 +57,7 @@ from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.state import AtomSiteOverrideState, SimulationRuntimeState
-from ra_sim.hbn import load_tilt_hint, run_hbn_fit
+from ra_sim.hbn_geometry import load_tilt_hint
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
@@ -1976,6 +1976,8 @@ def _cmd_simulate(args: argparse.Namespace) -> None:
 
 
 def _cmd_hbn_fit(args: argparse.Namespace) -> None:
+    from ra_sim.hbn import run_hbn_fit
+
     results = run_hbn_fit(
         osc_path=args.osc,
         dark_path=args.dark,

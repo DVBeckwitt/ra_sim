@@ -311,6 +311,7 @@ class StructureModelState:
     last_atom_site_fractional_signature: tuple[float, ...] = field(default_factory=tuple)
     miller_generator: Callable[..., tuple[object, object, object, object]] | None = None
     inject_fractional_reflections: Callable[..., tuple[object, object]] | None = None
+    bootstrap_complete: bool = False
 
 
 @dataclass
@@ -1116,6 +1117,61 @@ def combine_ht_dicts(caches, weights):
     return out
 
 
+def build_lightweight_structure_model_state(
+    *,
+    cif_file: str,
+    cf,
+    blk,
+    cif_file2: str | None,
+    occupancy_site_labels,
+    occupancy_site_expanded_map,
+    occ,
+    atom_site_fractional_metadata,
+    av,
+    bv,
+    cv,
+    av2,
+    cv2,
+    defaults,
+    mx,
+    lambda_angstrom,
+    intensity_threshold,
+    two_theta_range,
+    include_rods_flag,
+    miller_generator: Callable[..., tuple[object, object, object, object]] | None = None,
+    inject_fractional_reflections: Callable[..., tuple[object, object]] | None = None,
+):
+    """Build a lightweight structure-model shell without HT cache materialization."""
+
+    return StructureModelState(
+        cif_file=str(cif_file),
+        cf=cf,
+        blk=blk,
+        cif_file2=str(cif_file2) if cif_file2 else None,
+        occupancy_site_labels=list(occupancy_site_labels),
+        occupancy_site_count=int(len(occupancy_site_labels) or max(1, len(occ))),
+        occupancy_site_expanded_map=list(occupancy_site_expanded_map),
+        occ=[float(v) for v in occ],
+        atom_site_fractional_metadata=[dict(row) for row in atom_site_fractional_metadata],
+        av=float(av),
+        bv=float(bv),
+        cv=float(cv),
+        av2=float(av2) if av2 is not None else None,
+        cv2=float(cv2) if cv2 is not None else None,
+        defaults=dict(defaults),
+        energy=6.62607e-34 * 2.99792458e8 / (float(lambda_angstrom) * 1e-10) / (1.602176634e-19),
+        mx=int(mx),
+        lambda_angstrom=float(lambda_angstrom),
+        intensity_threshold=float(intensity_threshold),
+        two_theta_range=(float(two_theta_range[0]), float(two_theta_range[1])),
+        include_rods_flag=bool(include_rods_flag),
+        has_second_cif=bool(cif_file2),
+        miller_generator=miller_generator,
+        inject_fractional_reflections=inject_fractional_reflections,
+        bootstrap_complete=False,
+    )
+
+
 def build_initial_structure_model_state(
     *,
     cif_file: str,
@@ -1144,29 +1200,26 @@ def build_initial_structure_model_state(
 ):
     """Build the initial structure-model cache and diffraction arrays."""
 
-    state = StructureModelState(
-        cif_file=str(cif_file),
+    state = build_lightweight_structure_model_state(
+        cif_file=cif_file,
         cf=cf,
         blk=blk,
-        cif_file2=str(cif_file2) if cif_file2 else None,
-        occupancy_site_labels=list(occupancy_site_labels),
-        occupancy_site_count=int(len(occupancy_site_labels) or max(1, len(occ))),
-        occupancy_site_expanded_map=list(occupancy_site_expanded_map),
-        occ=[float(v) for v in occ],
-        atom_site_fractional_metadata=[dict(row) for row in atom_site_fractional_metadata],
-        av=float(av),
-        bv=float(bv),
-        cv=float(cv),
-        av2=float(av2) if av2 is not None else None,
-        cv2=float(cv2) if cv2 is not None else None,
-        defaults=dict(defaults),
-        energy=6.62607e-34 * 2.99792458e8 / (float(lambda_angstrom) * 1e-10) / (1.602176634e-19),
-        mx=int(mx),
-        lambda_angstrom=float(lambda_angstrom),
-        intensity_threshold=float(intensity_threshold),
-        two_theta_range=(float(two_theta_range[0]), float(two_theta_range[1])),
-        include_rods_flag=bool(include_rods_flag),
-        has_second_cif=bool(cif_file2),
+        cif_file2=cif_file2,
+        occupancy_site_labels=occupancy_site_labels,
+        occupancy_site_expanded_map=occupancy_site_expanded_map,
+        occ=occ,
+        atom_site_fractional_metadata=atom_site_fractional_metadata,
+        av=av,
+        bv=bv,
+        cv=cv,
+        av2=av2,
+        cv2=cv2,
+        defaults=defaults,
+        mx=mx,
+        lambda_angstrom=lambda_angstrom,
+        intensity_threshold=intensity_threshold,
+        two_theta_range=two_theta_range,
+        include_rods_flag=include_rods_flag,
         miller_generator=miller_generator,
         inject_fractional_reflections=inject_fractional_reflections,
     )
@@ -1339,7 +1392,46 @@ def build_initial_structure_model_state(
         state.sim_intens2_all = np.empty((0,), dtype=np.float64)
         state.sim_primary_qr_all = combined_qr
 
+    state.bootstrap_complete = True
     return state
+
+
+def bootstrap_structure_model_state(
+    state: StructureModelState,
+    *,
+    combine_weighted_intensities: Callable[..., np.ndarray],
+    debug_print: Callable[..., None] | None = None,
+) -> StructureModelState:
+    """Materialize one lightweight structure-model shell into a full cache."""
+
+    bootstrapped = build_initial_structure_model_state(
+        cif_file=state.cif_file,
+        cf=state.cf,
+        blk=state.blk,
+        cif_file2=state.cif_file2,
+        occupancy_site_labels=state.occupancy_site_labels,
+        occupancy_site_expanded_map=state.occupancy_site_expanded_map,
+        occ=state.occ,
+        atom_site_fractional_metadata=state.atom_site_fractional_metadata,
+        av=state.av,
+        bv=state.bv,
+        cv=state.cv,
+        av2=state.av2,
+        cv2=state.cv2,
+        defaults=state.defaults,
+        mx=state.mx,
+        lambda_angstrom=state.lambda_angstrom,
+        intensity_threshold=state.intensity_threshold,
+        two_theta_range=state.two_theta_range,
+        include_rods_flag=state.include_rods_flag,
+        combine_weighted_intensities=combine_weighted_intensities,
+        miller_generator=state.miller_generator,
+        inject_fractional_reflections=state.inject_fractional_reflections,
+        debug_print=debug_print,
+    )
+    bootstrapped.occ_vars = list(state.occ_vars)
+    bootstrapped.atom_site_fract_vars = list(state.atom_site_fract_vars)
+    return bootstrapped
 
 
 def update_weighted_intensities(

@@ -50,6 +50,7 @@ from scipy.optimize import minimize
 from matplotlib.patches import Rectangle
 from skimage.measure import EllipseModel
 
+from ra_sim import hbn_geometry as _hbn_geometry
 from ra_sim.config import get_instrument_config
 from ra_sim.io.osc_reader import read_osc
 from ra_sim.utils import calculations
@@ -1268,6 +1269,86 @@ def load_tilt_hint(paths_file=None):
         hint["distance_m"] = distance_info.get("mean_m")
 
     return hint
+
+
+resolve_hbn_paths = _hbn_geometry.resolve_hbn_paths
+
+
+def load_bundle_npz(path, *, verbose=True):
+    """Compatibility wrapper for the lightweight bundle loader."""
+
+    return _hbn_geometry.load_bundle_npz(path, verbose=verbose)
+
+
+def convert_hbn_bundle_geometry_to_simulation(
+    *,
+    tilt_x_deg,
+    tilt_y_deg,
+    center_xy,
+    source_rotate_k,
+    target_rotate_k,
+    image_size,
+    simulation_gamma_sign_from_tilt_x=_CANONICAL_SIM_GAMMA_SIGN_FROM_TILT_X,
+    simulation_Gamma_sign_from_tilt_y=_CANONICAL_SIM_GAMMA_SIGN_FROM_TILT_Y,
+):
+    """Compatibility wrapper for hBN-to-simulation geometry conversion."""
+
+    return _hbn_geometry.convert_hbn_bundle_geometry_to_simulation(
+        tilt_x_deg=tilt_x_deg,
+        tilt_y_deg=tilt_y_deg,
+        center_xy=center_xy,
+        source_rotate_k=source_rotate_k,
+        target_rotate_k=target_rotate_k,
+        image_size=image_size,
+        simulation_gamma_sign_from_tilt_x=simulation_gamma_sign_from_tilt_x,
+        simulation_Gamma_sign_from_tilt_y=simulation_Gamma_sign_from_tilt_y,
+    )
+
+
+def build_hbn_geometry_debug_trace(
+    *,
+    npz_center_xy=None,
+    source_rotate_k=0,
+    target_rotate_k=0,
+    image_size=(1, 1),
+    tilt_x_deg=None,
+    tilt_y_deg=None,
+    simulation_gamma_sign_from_tilt_x=_CANONICAL_SIM_GAMMA_SIGN_FROM_TILT_X,
+    simulation_Gamma_sign_from_tilt_y=_CANONICAL_SIM_GAMMA_SIGN_FROM_TILT_Y,
+    simulation_center_row=None,
+    simulation_center_col=None,
+):
+    """Compatibility wrapper for the lightweight debug-trace helper."""
+
+    return _hbn_geometry.build_hbn_geometry_debug_trace(
+        npz_center_xy=npz_center_xy,
+        source_rotate_k=source_rotate_k,
+        target_rotate_k=target_rotate_k,
+        image_size=image_size,
+        tilt_x_deg=tilt_x_deg,
+        tilt_y_deg=tilt_y_deg,
+        simulation_gamma_sign_from_tilt_x=simulation_gamma_sign_from_tilt_x,
+        simulation_Gamma_sign_from_tilt_y=simulation_Gamma_sign_from_tilt_y,
+        simulation_center_row=simulation_center_row,
+        simulation_center_col=simulation_center_col,
+    )
+
+
+def format_hbn_geometry_debug_trace(trace):
+    """Compatibility wrapper for the lightweight debug formatter."""
+
+    return _hbn_geometry.format_hbn_geometry_debug_trace(trace)
+
+
+def load_tilt_hint(paths_file=None):
+    """Compatibility wrapper that keeps local monkeypatch seams intact."""
+
+    return _hbn_geometry.load_tilt_hint(
+        paths_file=paths_file,
+        resolve_hbn_paths_fn=resolve_hbn_paths,
+        load_bundle_npz_fn=load_bundle_npz,
+        convert_bundle_geometry_fn=convert_hbn_bundle_geometry_to_simulation,
+    )
 
 
 # ------------------------------------------------------------

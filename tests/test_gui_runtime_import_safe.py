@@ -9,8 +9,12 @@ import pytest
 
 RUNTIME_MODULE_NAME = "ra_sim.gui.runtime"
 RUNTIME_IMPL_MODULE_NAME = "ra_sim.gui._runtime_impl"
-RUNTIME_IMPL_SOURCE_PATH = (
+PACKAGE_RUNTIME_IMPL_MODULE_NAME = "ra_sim.gui._runtime.runtime_impl"
+RUNTIME_IMPL_WRAPPER_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_impl.py"
+)
+RUNTIME_SESSION_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_session.py"
 )
 CLI_SOURCE_PATH = Path(__file__).resolve().parent.parent / "ra_sim" / "cli.py"
 
@@ -94,11 +98,31 @@ def test_runtime_unknown_attr_forwards_to_impl(monkeypatch) -> None:
 
 
 def test_runtime_impl_source_compiles() -> None:
-    py_compile.compile(str(RUNTIME_IMPL_SOURCE_PATH), doraise=True)
+    py_compile.compile(str(RUNTIME_IMPL_WRAPPER_SOURCE_PATH), doraise=True)
+    py_compile.compile(str(RUNTIME_SESSION_SOURCE_PATH), doraise=True)
+
+
+def test_runtime_impl_wrapper_import_is_lazy() -> None:
+    previous_wrapper = sys.modules.pop(PACKAGE_RUNTIME_IMPL_MODULE_NAME, None)
+    previous_session = sys.modules.pop("ra_sim.gui._runtime.runtime_session", None)
+
+    try:
+        wrapper = importlib.import_module(PACKAGE_RUNTIME_IMPL_MODULE_NAME)
+
+        assert wrapper.__name__ == PACKAGE_RUNTIME_IMPL_MODULE_NAME
+        assert "ra_sim.gui._runtime.runtime_session" not in sys.modules
+        assert callable(wrapper.main)
+    finally:
+        sys.modules.pop(PACKAGE_RUNTIME_IMPL_MODULE_NAME, None)
+        sys.modules.pop("ra_sim.gui._runtime.runtime_session", None)
+        if previous_wrapper is not None:
+            sys.modules[PACKAGE_RUNTIME_IMPL_MODULE_NAME] = previous_wrapper
+        if previous_session is not None:
+            sys.modules["ra_sim.gui._runtime.runtime_session"] = previous_session
 
 
 def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert 'os.environ.setdefault("RA_SIM_DEBUG", "0")' not in source
     assert "if gui_geometry_fit.geometry_fit_log_files_enabled():" in source
@@ -115,7 +139,7 @@ def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:
 
 
 def test_runtime_impl_attaches_background_theta_trace_after_theta_var_assignment() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     theta_assignment = (
         "theta_initial_var = beam_mosaic_parameter_sliders_view_state.theta_initial_var"
     )
@@ -127,13 +151,13 @@ def test_runtime_impl_attaches_background_theta_trace_after_theta_var_assignment
 
 
 def test_runtime_impl_uses_cached_caking_results_for_range_refreshes() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "range_refresh_requires_pending_analysis_result(" in source
 
 
 def test_runtime_impl_preserves_wrapped_phi_ranges_for_detector_drags() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "draw_idle_factory=lambda: (" in source
     assert "_request_main_canvas_redraw" in source
@@ -144,7 +168,7 @@ def test_runtime_impl_preserves_wrapped_phi_ranges_for_detector_drags() -> None:
 
 
 def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     show_caked_image_assignment = (
         "show_caked_image = bool(show_caked_requested and caked_payload_available)"
@@ -159,7 +183,7 @@ def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing()
 
 
 def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "def _restore_caked_display_payload_from_cached_results(" in source
     assert "missing_caked_payload = bool(" in source
@@ -169,7 +193,7 @@ def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> Non
 
 
 def test_runtime_impl_preserves_primary_axis_limits_across_same_mode_redraws() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "previous_primary_view_mode = _current_primary_figure_mode()" in source
     assert "preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)" in source
@@ -179,7 +203,7 @@ def test_runtime_impl_preserves_primary_axis_limits_across_same_mode_redraws() -
 
 
 def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_updates() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "def _cached_hit_tables_reusable(" in source
     assert "include_mosaic_shape: bool = True" in source
@@ -206,7 +230,7 @@ def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_update
 
 
 def test_runtime_impl_supports_incremental_sf_prune_primary_cache_updates() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "primary_contribution_cache_signature" in source
     assert "primary_requested_contribution_keys" in source
@@ -218,7 +242,7 @@ def test_runtime_impl_supports_incremental_sf_prune_primary_cache_updates() -> N
 
 
 def test_runtime_impl_routes_optional_runtime_caches_through_retention_policy() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "from ra_sim.debug_controls import (" in source
     assert "retain_optional_cache," in source
@@ -231,14 +255,14 @@ def test_runtime_impl_routes_optional_runtime_caches_through_retention_policy() 
 
 
 def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "manual_geometry_state" not in source
     assert 'globals().get("geometry_manual_state")' in source
 
 
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "def _clear_deferred_overlays(*, clear_qr_overlay: bool = True) -> None:" in source
     assert "if _live_interaction_active():" in source
@@ -247,7 +271,7 @@ def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
 
 
 def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:" in source
     assert "gui_qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(" in source
@@ -257,7 +281,7 @@ def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
 
 
 def test_runtime_impl_uses_bound_caked_projection_callback_for_live_overlay_coords() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     helper_start = source.index("def _native_detector_coords_to_live_caked_coords(")
     helper_end = source.index("def _scattering_angles_to_detector_pixel(", helper_start)
     helper_source = source[helper_start:helper_end]
@@ -267,7 +291,7 @@ def test_runtime_impl_uses_bound_caked_projection_callback_for_live_overlay_coor
 
 
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "deactivate_conflicting_modes_factory=lambda: (" in source
     assert "_set_geometry_manual_pick_mode(False)" in source
@@ -275,7 +299,7 @@ def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> No
 
 
 def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "hkl_pick_armed_factory=lambda: getattr(" in source
     assert 'globals().get("peak_selection_state")' in source
@@ -286,7 +310,7 @@ def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
 
 
 def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "one_d_analysis_requested = bool(" in source
     assert "caked_analysis_requested = bool(" in source
@@ -298,7 +322,7 @@ def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> No
 
 
 def test_runtime_impl_disables_preview_calculations_in_runtime_update_paths() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "PREVIEW_CALCULATIONS_ENABLED = False" in source
     assert "if not PREVIEW_CALCULATIONS_ENABLED:" in source
@@ -308,13 +332,13 @@ def test_runtime_impl_disables_preview_calculations_in_runtime_update_paths() ->
 
 
 def test_runtime_impl_keeps_1d_updates_gated_on_intensity_accumulation() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "if (\n                one_d_analysis_requested" in source
 
 
 def test_runtime_impl_places_qr_cylinder_mode_in_quick_controls() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert '\"key\": \"qr_cylinder_mode\"' in source
     assert "QR_CYLINDER_DISPLAY_MODE_REPLACE" in source
@@ -322,7 +346,7 @@ def test_runtime_impl_places_qr_cylinder_mode_in_quick_controls() -> None:
 
 
 def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_controls() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert '\"key\": \"fast_viewer\"' not in source
     assert '\"key\": \"log_display\"' in source
@@ -341,7 +365,7 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
 
 
 def test_runtime_impl_keeps_runtime_executors_in_latest_request_wins_mode() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert source.count("max_workers=default_reserved_cpu_worker_count(),") >= 2
     assert "Keep GUI simulation updates in latest-request-wins mode" in source
@@ -361,13 +385,13 @@ def test_runtime_impl_keeps_runtime_executors_in_latest_request_wins_mode() -> N
 
 
 def test_runtime_impl_removes_display_intensity_toggle_from_ui() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "accumulate_intensity_enabled=True" not in source
 
 
 def test_runtime_impl_gates_1d_analysis_on_analyze_visibility() -> None:
-    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "def _analysis_integration_outputs_visible() -> bool:" in source
     assert "app_shell_view_state.control_tab_var" in source
@@ -375,3 +399,24 @@ def test_runtime_impl_gates_1d_analysis_on_analyze_visibility() -> None:
     assert "and _analysis_integration_outputs_visible()" in source
     assert "if not _analysis_integration_outputs_visible():" in source
     assert '_analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)' in source
+
+
+def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "build_lightweight_structure_model_state(" in source
+    assert "def _bootstrap_structure_model_state_for_startup() -> None:" in source
+    assert 'progress_label.config(text="Initializing structure model...")' in source
+    assert "_bootstrap_structure_model_state_for_startup()" in source
+    assert "_set_structure_bootstrap_controls_enabled(True)" in source
+    assert "root.after_idle(_run_initial_startup_work)" in source
+
+
+def test_runtime_impl_lazy_mounts_analysis_surfaces() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "analysis_surfaces_initialized = False" in source
+    assert "def ensure_analysis_surfaces_initialized() -> None:" in source
+    assert "_show_analysis_tab_lazy_placeholders()" in source
+    assert "_mount_analysis_figure(app_shell_view_state.plot_frame_1d)" not in source
+    assert "ensure_analysis_surfaces_initialized()" in source

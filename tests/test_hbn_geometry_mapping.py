@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import numpy as np
@@ -218,6 +219,7 @@ def test_packaged_gui_routes_bundle_reference_conversion_through_shared_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ra_sim.gui import app as gui_app
+    hbn_geometry = importlib.import_module("ra_sim.hbn_geometry")
 
     calls: list[dict[str, object]] = []
 
@@ -226,7 +228,7 @@ def test_packaged_gui_routes_bundle_reference_conversion_through_shared_helper(
         return {"converted": True}
 
     monkeypatch.setattr(
-        hbn,
+        hbn_geometry,
         "convert_hbn_bundle_geometry_to_simulation",
         fake_convert_hbn_bundle_geometry_to_simulation,
     )

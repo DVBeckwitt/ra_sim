@@ -473,7 +473,7 @@ def _convert_hbn_bundle_geometry_reference(
     center_xy=None,
     image_size=(0, 0),
 ):
-    from ra_sim.hbn import convert_hbn_bundle_geometry_to_simulation
+    from ra_sim.hbn_geometry import convert_hbn_bundle_geometry_to_simulation
 
     return convert_hbn_bundle_geometry_to_simulation(
         tilt_x_deg=tilt_x_deg,

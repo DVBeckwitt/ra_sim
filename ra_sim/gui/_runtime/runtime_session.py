@@ -20,6 +20,7 @@ import faulthandler
 import re
 import traceback
 from collections import defaultdict, namedtuple
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -32,7 +33,6 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, LogNorm, Normalize
-from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 import CifFile
 
 from ra_sim.io.osc_reader import read_osc
@@ -178,7 +178,7 @@ from ra_sim.debug_controls import (
     runtime_update_trace_logging_enabled as _runtime_update_trace_logging_enabled,
 )
 from ra_sim.debug_utils import debug_print, is_debug_enabled
-from ra_sim.hbn import (
+from ra_sim.hbn_geometry import (
     build_hbn_geometry_debug_trace,
     convert_hbn_bundle_geometry_to_simulation,
     format_hbn_geometry_debug_trace,
@@ -209,6 +209,18 @@ if DEBUG_ENABLED:
 BACKEND_ORIENTATION_UI_ENABLED = False
 BACKGROUND_BACKEND_DEBUG_UI_ENABLED = False
 HBN_GEOMETRY_DEBUG_ENABLED = False
+
+_AZIMUTHAL_INTEGRATOR_CLS = None
+
+
+def _get_azimuthal_integrator_cls():
+    global _AZIMUTHAL_INTEGRATOR_CLS
+
+    if _AZIMUTHAL_INTEGRATOR_CLS is None:
+        from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+
+        _AZIMUTHAL_INTEGRATOR_CLS = AzimuthalIntegrator
+    return _AZIMUTHAL_INTEGRATOR_CLS
 
 
 ###############################################################################
@@ -1085,7 +1097,7 @@ defaults = {
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-structure_model_state = gui_structure_model.build_initial_structure_model_state(
+structure_model_state = gui_structure_model.build_lightweight_structure_model_state(
     cif_file=cif_file,
     cf=cf,
     blk=blk,
@@ -1105,10 +1117,8 @@ structure_model_state = gui_structure_model.build_initial_structure_model_state(
     intensity_threshold=intensity_threshold,
     two_theta_range=two_theta_range,
     include_rods_flag=include_rods_flag,
-    combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
     miller_generator=miller_generator,
     inject_fractional_reflections=inject_fractional_reflections,
-    debug_print=debug_print,
 )
 
 
@@ -1167,6 +1177,92 @@ def _sync_structure_model_aliases() -> None:
     )
 
 
+def _reset_structure_model_runtime_arrays() -> None:
+    simulation_runtime_state.sim_miller1_all = structure_model_state.sim_miller1_all.copy()
+    simulation_runtime_state.sim_intens1_all = structure_model_state.sim_intens1_all.copy()
+    simulation_runtime_state.sim_miller2_all = structure_model_state.sim_miller2_all.copy()
+    simulation_runtime_state.sim_intens2_all = structure_model_state.sim_intens2_all.copy()
+    simulation_runtime_state.sim_primary_qr_all = dict(structure_model_state.sim_primary_qr_all)
+    simulation_runtime_state.sim_miller1 = simulation_runtime_state.sim_miller1_all.copy()
+    simulation_runtime_state.sim_intens1 = simulation_runtime_state.sim_intens1_all.copy()
+    simulation_runtime_state.sim_miller2 = simulation_runtime_state.sim_miller2_all.copy()
+    simulation_runtime_state.sim_intens2 = simulation_runtime_state.sim_intens2_all.copy()
+    simulation_runtime_state.sim_primary_qr = {}
+    simulation_runtime_state.sf_prune_stats = {
+        "qr_total": 0,
+        "qr_kept": 0,
+        "hkl_primary_total": 0,
+        "hkl_primary_kept": 0,
+        "hkl_secondary_total": 0,
+        "hkl_secondary_kept": 0,
+    }
+
+
+def _apply_structure_model_runtime_cache_state() -> None:
+    global has_second_cif, weight1, weight2
+
+    has_second_cif = bool(structure_model_state.has_second_cif)
+    weight1 = 0.5 if has_second_cif else 1.0
+    weight2 = 0.5 if has_second_cif else 0.0
+
+    _reset_structure_model_runtime_arrays()
+    if not bool(getattr(structure_model_state, "bootstrap_complete", False)):
+        return
+
+    primary_arrays = structure_model_state.ht_curves_cache.get("arrays")
+    if not isinstance(primary_arrays, tuple) or len(primary_arrays) < 2:
+        raise RuntimeError("Bootstrapped structure model did not populate HT curve arrays.")
+
+    primary_miller, primary_intens, _, _ = primary_arrays
+    if DEBUG_ENABLED:
+        from ra_sim.debug_utils import check_ht_arrays
+
+        check_ht_arrays(primary_miller, primary_intens)
+        debug_print("miller1 dtype:", primary_miller.dtype, "shape:", primary_miller.shape)
+        if primary_miller.size > 0:
+            debug_print("L range:", primary_miller[:, 2].min(), primary_miller[:, 2].max())
+        debug_print(
+            "intens1 dtype:",
+            primary_intens.dtype,
+            "min:",
+            primary_intens.min() if primary_intens.size > 0 else 0.0,
+            "max:",
+            primary_intens.max() if primary_intens.size > 0 else 0.0,
+        )
+        debug_print("miller1 contiguous:", primary_miller.flags["C_CONTIGUOUS"])
+        debug_print("intens1 contiguous:", primary_intens.flags["C_CONTIGUOUS"])
+
+    if has_second_cif:
+        debug_print("combined miller count:", structure_model_state.miller.shape[0])
+    else:
+        debug_print("single CIF miller count:", structure_model_state.miller.shape[0])
+
+    if structure_model_state.df_summary is None or structure_model_state.df_details is None:
+        df_summary, df_details = build_intensity_dataframes(
+            structure_model_state.miller,
+            structure_model_state.intensities,
+            structure_model_state.degeneracy,
+            structure_model_state.details,
+        )
+        structure_model_state.df_summary = df_summary
+        structure_model_state.df_details = df_details
+
+    _sync_structure_model_aliases()
+
+
+def _bootstrap_structure_model_state_for_startup() -> None:
+    global structure_model_state
+
+    if not bool(getattr(structure_model_state, "bootstrap_complete", False)):
+        structure_model_state = gui_structure_model.bootstrap_structure_model_state(
+            structure_model_state,
+            combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
+            debug_print=debug_print,
+        )
+        _sync_structure_model_aliases()
+    _apply_structure_model_runtime_cache_state()
+
+
 def _current_primary_cif_path() -> str:
     """Return the active primary CIF path from structure-model runtime state."""
 
@@ -1193,68 +1289,17 @@ def _atom_site_fractional_control_vars() -> list[dict[str, tk.DoubleVar]]:
 
 _sync_structure_model_aliases()
 
-primary_miller, primary_intens, _, _ = structure_model_state.ht_curves_cache["arrays"]
-if DEBUG_ENABLED:
-    from ra_sim.debug_utils import check_ht_arrays
-
-    check_ht_arrays(primary_miller, primary_intens)
-    debug_print("miller1 dtype:", primary_miller.dtype, "shape:", primary_miller.shape)
-    debug_print("L range:", primary_miller[:, 2].min(), primary_miller[:, 2].max())
-    debug_print(
-        "intens1 dtype:",
-        primary_intens.dtype,
-        "min:",
-        primary_intens.min(),
-        "max:",
-        primary_intens.max(),
-    )
-    debug_print("miller1 contiguous:", primary_miller.flags["C_CONTIGUOUS"])
-    debug_print("intens1 contiguous:", primary_intens.flags["C_CONTIGUOUS"])
-
-has_second_cif = structure_model_state.has_second_cif
-weight1 = 0.5 if has_second_cif else 1.0
-weight2 = 0.5 if has_second_cif else 0.0
-if has_second_cif:
-    debug_print("combined miller count:", structure_model_state.miller.shape[0])
-else:
-    debug_print("single CIF miller count:", structure_model_state.miller.shape[0])
-
-simulation_runtime_state.sim_miller1_all = structure_model_state.sim_miller1_all.copy()
-simulation_runtime_state.sim_intens1_all = structure_model_state.sim_intens1_all.copy()
-simulation_runtime_state.sim_miller2_all = structure_model_state.sim_miller2_all.copy()
-simulation_runtime_state.sim_intens2_all = structure_model_state.sim_intens2_all.copy()
-simulation_runtime_state.sim_primary_qr_all = dict(structure_model_state.sim_primary_qr_all)
-
-simulation_runtime_state.sim_miller1 = simulation_runtime_state.sim_miller1_all.copy()
-simulation_runtime_state.sim_intens1 = simulation_runtime_state.sim_intens1_all.copy()
-simulation_runtime_state.sim_miller2 = simulation_runtime_state.sim_miller2_all.copy()
-simulation_runtime_state.sim_intens2 = simulation_runtime_state.sim_intens2_all.copy()
-simulation_runtime_state.sim_primary_qr = {}
-
 BRAGG_QR_L_KEY_SCALE = gui_controllers.BRAGG_QR_L_KEY_SCALE
 BRAGG_QR_L_INVALID_KEY = gui_controllers.BRAGG_QR_L_INVALID_KEY
 
-simulation_runtime_state.sf_prune_stats = {
-    "qr_total": 0,
-    "qr_kept": 0,
-    "hkl_primary_total": 0,
-    "hkl_primary_kept": 0,
-    "hkl_secondary_total": 0,
-    "hkl_secondary_kept": 0,
-}
-
-# Build summary and details dataframes using the helper.
-df_summary, df_details = build_intensity_dataframes(
-    miller, intensities, degeneracy, details
-)
-structure_model_state.df_summary = df_summary
-structure_model_state.df_details = df_details
-_sync_structure_model_aliases()
+_apply_structure_model_runtime_cache_state()
 
 def export_initial_excel():
     """Write the initial intensity tables to Excel when enabled."""
 
     if not write_excel:
+        return
+    if df_summary is None or df_details is None:
         return
 
     import pandas as pd
@@ -4815,7 +4860,12 @@ integration_range_update_runtime_callbacks = integration_range_workflow.callback
 schedule_range_update = integration_range_workflow.schedule_range_update
 _toggle_1d_plots_impl = integration_range_workflow.toggle_1d_plots
 _toggle_caked_2d_impl = integration_range_workflow.toggle_caked_2d
-toggle_1d_plots = _toggle_1d_plots_impl
+
+
+def toggle_1d_plots() -> None:
+    if bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
+        ensure_analysis_surfaces_initialized()
+    _toggle_1d_plots_impl()
 
 
 def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
@@ -5702,9 +5752,12 @@ vmin_caked_var = tk.DoubleVar(value=0.0)
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 
 analysis_1d_interaction_bindings = None
+analysis_surfaces_initialized = False
 
 
 def _reset_analysis_figure_view() -> None:
+    if ax_1d_radial is None or ax_1d_azim is None:
+        return
     if not gui_analysis_figure_controls.reset_analysis_axes_view(
         ax_1d_radial,
         ax_1d_azim,
@@ -5721,6 +5774,13 @@ def _mount_analysis_figure(parent) -> None:
     global canvas_1d
     global analysis_1d_interaction_bindings
 
+    if canvas_1d is not None:
+        try:
+            canvas_1d.get_tk_widget().destroy()
+        except Exception:
+            pass
+        canvas_1d = None
+
     canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
         fig_1d,
         master=parent,
@@ -5736,7 +5796,7 @@ def _mount_analysis_figure(parent) -> None:
 
 
 fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
-_mount_analysis_figure(app_shell_view_state.plot_frame_1d)
+canvas_1d = None
 
 line_1d_rad, = ax_1d_radial.plot([], [], 'b-', label='Simulated (2θ)')
 line_1d_rad_bg, = ax_1d_radial.plot([], [], 'r--', label='Background (2θ)')
@@ -5752,32 +5812,14 @@ ax_1d_azim.set_xlabel('Azimuth (degrees)')
 ax_1d_azim.set_ylabel('Intensity')
 ax_1d_azim.set_title('Azimuthal Integration (φ)')
 
-canvas_1d.draw()
-integration_range_update_runtime.create_range_controls(
-    parent=app_shell_view_state.plot_frame_1d
-)
-tth_min_var = integration_range_controls_view_state.tth_min_var
-tth_max_var = integration_range_controls_view_state.tth_max_var
-phi_min_var = integration_range_controls_view_state.phi_min_var
-phi_max_var = integration_range_controls_view_state.phi_max_var
-tth_min_slider = integration_range_controls_view_state.tth_min_slider
-tth_max_slider = integration_range_controls_view_state.tth_max_slider
-phi_min_slider = integration_range_controls_view_state.phi_min_slider
-phi_max_slider = integration_range_controls_view_state.phi_max_slider
-if any(
-    ref is None
-    for ref in (
-        tth_min_var,
-        tth_max_var,
-        phi_min_var,
-        phi_max_var,
-        tth_min_slider,
-        tth_max_slider,
-        phi_min_slider,
-        phi_max_slider,
-    )
-):
-    raise RuntimeError("Integration-range controls did not create the expected widgets.")
+tth_min_var = None
+tth_max_var = None
+phi_min_var = None
+phi_max_var = None
+tth_min_slider = None
+tth_max_slider = None
+phi_min_slider = None
+phi_max_slider = None
 
 PHI_ZERO_OFFSET_DEGREES = -90.0
 
@@ -6258,7 +6300,8 @@ def _clear_1d_plot_cache_and_lines():
     line_1d_az_bg.set_data([], [])
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
     _render_analysis_peak_overlays(redraw=False)
-    canvas_1d.draw_idle()
+    if canvas_1d is not None:
+        canvas_1d.draw_idle()
     simulation_runtime_state.last_1d_integration_data["radials_sim"] = None
     simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = None
     simulation_runtime_state.last_1d_integration_data["azimuths_sim"] = None
@@ -6316,7 +6359,8 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
     ax_1d_azim.relim()
     ax_1d_azim.autoscale_view()
     _render_analysis_peak_overlays(redraw=False)
-    canvas_1d.draw_idle()
+    if canvas_1d is not None:
+        canvas_1d.draw_idle()
 
 
 def _refresh_integration_from_cached_results():
@@ -6775,6 +6819,7 @@ def _refresh_analysis_integration_if_visible() -> None:
         return
     if not bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
         return
+    ensure_analysis_surfaces_initialized()
     refresh_cached = globals().get("_refresh_integration_from_cached_results")
     if not callable(refresh_cached):
         return
@@ -7443,6 +7488,9 @@ def _invalidate_simulation_cache() -> None:
 
 
 def _invalidate_and_schedule_update() -> None:
+    if bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
+        simulation_runtime_state.pending_startup_refresh = True
+        return
     _invalidate_simulation_cache()
     schedule_update()
 
@@ -8557,9 +8605,9 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
     )
 
 
-def _build_analysis_integrator(job: dict[str, object]) -> AzimuthalIntegrator:
+def _build_analysis_integrator(job: dict[str, object]):
     center = np.asarray(job["center"], dtype=np.float64)
-    return AzimuthalIntegrator(
+    return _get_azimuthal_integrator_cls()(
         dist=float(job["distance_m"]),
         poni1=float(center[0]) * float(job["pixel_size_m"]),
         poni2=float(center[1]) * float(job["pixel_size_m"]),
@@ -8997,6 +9045,10 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
 
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
+
+    if bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
+        simulation_runtime_state.pending_startup_refresh = True
+        return
 
     _ensure_runtime_update_trace_hooks()
     previous_pending = simulation_runtime_state.update_pending
@@ -10111,7 +10163,7 @@ def do_update():
         ai_cache_action = "rebuild"
         simulation_runtime_state.ai_cache = {
             "sig": sig,
-            "ai": AzimuthalIntegrator(
+            "ai": _get_azimuthal_integrator_cls()(
                 dist=corto_det_up,
                 # Keep the legacy row/col mapping aligned with simulation pixels.
                 poni1=center_x_up * pixel_size_m,
@@ -18562,6 +18614,32 @@ def _fit_selected_analysis_peaks() -> None:
     _render_analysis_peak_overlays(redraw=True)
 
 
+def _show_analysis_lazy_placeholder(parent, text: str, *, wraplength: int = 360) -> None:
+    _clear_widget_children(parent)
+    ttk.Label(
+        parent,
+        text=text,
+        justify=tk.LEFT,
+        wraplength=wraplength,
+    ).pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+
+def _show_analysis_tab_lazy_placeholders() -> None:
+    _show_analysis_lazy_placeholder(
+        app_shell_view_state.analysis_exports_frame,
+        "Analysis export controls load when the Analyze tab is first opened.",
+    )
+    _show_analysis_lazy_placeholder(
+        app_shell_view_state.analysis_peak_tools_frame,
+        "Analysis peak tools load when the Analyze tab is first opened.",
+    )
+    _show_analysis_lazy_placeholder(
+        app_shell_view_state.plot_frame_1d,
+        "Analysis plots load on first use.",
+        wraplength=420,
+    )
+
+
 def _show_analysis_tab_detached_placeholders() -> None:
     _clear_widget_children(app_shell_view_state.analysis_exports_frame)
     ttk.Label(
@@ -18605,7 +18683,21 @@ def _set_analysis_popout_button_state(*, detached: bool) -> None:
         pass
 
 
+def ensure_analysis_surfaces_initialized() -> None:
+    global analysis_surfaces_initialized
+
+    if analysis_surfaces_initialized:
+        return
+    _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
+    _render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+    _render_analysis_plot_controls(parent=app_shell_view_state.plot_frame_1d)
+    analysis_surfaces_initialized = True
+    _set_analysis_popout_button_state(detached=False)
+
+
 def _dock_analysis_window(*, restore_tab: bool = True) -> None:
+    global analysis_surfaces_initialized
+
     range_values = _current_analysis_range_values()
     gui_views.close_analysis_popout_window(analysis_popout_view_state)
     if restore_tab:
@@ -18616,10 +18708,13 @@ def _dock_analysis_window(*, restore_tab: bool = True) -> None:
             range_values=range_values,
         )
         _refresh_analysis_integration_if_visible()
+        analysis_surfaces_initialized = True
     _set_analysis_popout_button_state(detached=False)
 
 
 def _pop_out_analysis_window() -> None:
+    global analysis_surfaces_initialized
+
     range_values = _current_analysis_range_values()
     opened = gui_views.open_analysis_popout_window(
         root=root,
@@ -18639,6 +18734,7 @@ def _pop_out_analysis_window() -> None:
             range_values=range_values,
         )
         _refresh_analysis_integration_if_visible()
+        analysis_surfaces_initialized = True
     except Exception:
         gui_views.close_analysis_popout_window(analysis_popout_view_state)
         _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
@@ -18647,6 +18743,7 @@ def _pop_out_analysis_window() -> None:
             parent=app_shell_view_state.plot_frame_1d,
             range_values=range_values,
         )
+        analysis_surfaces_initialized = True
         _set_analysis_popout_button_state(detached=False)
         raise
     _set_analysis_popout_button_state(detached=True)
@@ -18660,6 +18757,8 @@ def _toggle_analysis_popout() -> None:
 
 
 def _handle_analysis_integration_visibility_change(*_args) -> None:
+    if _analysis_integration_outputs_visible():
+        ensure_analysis_surfaces_initialized()
     _refresh_analysis_integration_if_visible()
 
 
@@ -18668,8 +18767,7 @@ if callable(_analysis_tab_trace_add):
     _analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)
 
 
-_render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
-_render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+_show_analysis_tab_lazy_placeholders()
 _set_analysis_popout_button_state(detached=False)
 
 def run_debug_simulation():
@@ -20390,6 +20488,39 @@ def _rebuild_structure_model_controls() -> None:
     structure_model_controls_built = True
 
 
+def _set_widget_tree_enabled(widget, *, enabled: bool) -> None:
+    if widget is None:
+        return
+
+    state_flags = ["!disabled"] if enabled else ["disabled"]
+    normal_state = tk.NORMAL if enabled else tk.DISABLED
+
+    try:
+        widget.state(state_flags)
+    except Exception:
+        try:
+            widget.configure(state=normal_state)
+        except Exception:
+            pass
+
+    try:
+        children = list(widget.winfo_children())
+    except Exception:
+        children = []
+    for child in children:
+        _set_widget_tree_enabled(child, enabled=enabled)
+
+
+def _set_structure_bootstrap_controls_enabled(enabled: bool) -> None:
+    control_roots = (
+        workspace_panels_view_state.workspace_inputs_frame,
+        app_shell_view_state.right_col,
+        app_shell_view_state.fit_body,
+    )
+    for widget in control_roots:
+        _set_widget_tree_enabled(widget, enabled=enabled)
+
+
 def _reset_structure_model_control_vars(
     occupancy_values,
     atom_site_values,
@@ -20626,6 +20757,78 @@ if cif_file_var is None:
 _maybe_refresh_run_status_bar()
 
 
+@dataclass
+class RuntimeContext:
+    state: object
+    simulation_runtime_state: object
+    background_runtime_state: object
+    app_shell_view_state: object | None = None
+    workspace_panels_view_state: object | None = None
+    root: object | None = None
+    primary_figure: object | None = None
+    primary_canvas: object | None = None
+    analysis_figure: object | None = None
+    analysis_canvas: object | None = None
+
+
+def build_runtime_state_context() -> RuntimeContext:
+    context = RuntimeContext(
+        state=app_state,
+        simulation_runtime_state=simulation_runtime_state,
+        background_runtime_state=background_runtime_state,
+    )
+    globals()["app_state"] = context.state
+    globals()["simulation_runtime_state"] = context.simulation_runtime_state
+    globals()["background_runtime_state"] = context.background_runtime_state
+    return context
+
+
+def build_runtime_window_context(context: RuntimeContext) -> RuntimeContext:
+    context.root = root
+    context.app_shell_view_state = app_shell_view_state
+    context.workspace_panels_view_state = workspace_panels_view_state
+    globals()["root"] = context.root
+    globals()["app_shell_view_state"] = context.app_shell_view_state
+    globals()["workspace_panels_view_state"] = context.workspace_panels_view_state
+    return context
+
+
+def build_runtime_plot_context(context: RuntimeContext) -> RuntimeContext:
+    context.primary_figure = fig
+    context.primary_canvas = canvas
+    context.analysis_figure = fig_1d
+    context.analysis_canvas = canvas_1d
+    globals()["fig"] = context.primary_figure
+    globals()["canvas"] = context.primary_canvas
+    globals()["fig_1d"] = context.analysis_figure
+    globals()["canvas_1d"] = context.analysis_canvas
+    return context
+
+
+def build_runtime_controls_context(context: RuntimeContext) -> RuntimeContext:
+    globals()["app_shell_view_state"] = context.app_shell_view_state
+    globals()["workspace_panels_view_state"] = context.workspace_panels_view_state
+    return context
+
+
+_STARTUP_BENCHMARK_ENABLED = str(os.environ.get("RA_SIM_STARTUP_BENCHMARK", "")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_STARTUP_BENCHMARK_AUTO_EXIT = str(
+    os.environ.get("RA_SIM_STARTUP_BENCHMARK_AUTO_EXIT", "")
+).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _emit_startup_benchmark_event(event: str, **payload: object) -> None:
+    if not _STARTUP_BENCHMARK_ENABLED:
+        return
+    message = {"event": str(event), **payload}
+    print(f"RA_SIM_STARTUP_EVENT {json.dumps(message, sort_keys=True)}", flush=True)
+
+
 def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     """Entry point for running the GUI application.
 
@@ -20673,49 +20876,64 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         package_launcher.launch_mosaic_visualizer()
         return
 
+    runtime_context = build_runtime_state_context()
+    runtime_context = build_runtime_window_context(runtime_context)
+    runtime_context = build_runtime_plot_context(runtime_context)
+    runtime_context = build_runtime_controls_context(runtime_context)
+    _ = runtime_context
+
     gui_views.apply_launch_window_context(root)
     try:
         root.deiconify()
     except tk.TclError:
         pass
+    _emit_startup_benchmark_event("window_deiconified")
+    _set_structure_bootstrap_controls_enabled(
+        bool(getattr(structure_model_state, "bootstrap_complete", False))
+    )
 
     params_file_path = get_path("parameters_file")
     profile_loaded = False
     if os.path.exists(params_file_path):
-        load_parameters(
-            params_file_path,
-            theta_initial_var,
-            cor_angle_var,
-            gamma_var,
-            Gamma_var,
-            chi_var,
-            zs_var,
-            zb_var,
-            sample_width_var,
-            sample_length_var,
-            sample_depth_var,
-            debye_x_var,
-            debye_y_var,
-            corto_detector_var,
-            sigma_mosaic_var,
-            gamma_mosaic_var,
-            eta_var,
-            a_var,
-            c_var,
-            center_x_var,
-            center_y_var,
-            resolution_var,
-            custom_samples_var,
-            rod_points_per_gz_var,
-            bandwidth_percent_var=bandwidth_percent_var,
-            optics_mode_var=optics_mode_var,
-            phase_delta_expr_var=phase_delta_expr_var,
-            phi_l_divisor_var=phi_l_divisor_var,
-            sf_prune_bias_var=sf_prune_bias_var,
-            solve_q_steps_var=solve_q_steps_var,
-            solve_q_rel_tol_var=solve_q_rel_tol_var,
-            solve_q_mode_var=solve_q_mode_var,
-        )
+        simulation_runtime_state.startup_updates_suspended = True
+        simulation_runtime_state.pending_startup_refresh = False
+        try:
+            load_parameters(
+                params_file_path,
+                theta_initial_var,
+                cor_angle_var,
+                gamma_var,
+                Gamma_var,
+                chi_var,
+                zs_var,
+                zb_var,
+                sample_width_var,
+                sample_length_var,
+                sample_depth_var,
+                debye_x_var,
+                debye_y_var,
+                corto_detector_var,
+                sigma_mosaic_var,
+                gamma_mosaic_var,
+                eta_var,
+                a_var,
+                c_var,
+                center_x_var,
+                center_y_var,
+                resolution_var,
+                custom_samples_var,
+                rod_points_per_gz_var,
+                bandwidth_percent_var=bandwidth_percent_var,
+                optics_mode_var=optics_mode_var,
+                phase_delta_expr_var=phase_delta_expr_var,
+                phi_l_divisor_var=phi_l_divisor_var,
+                sf_prune_bias_var=sf_prune_bias_var,
+                solve_q_steps_var=solve_q_steps_var,
+                solve_q_rel_tol_var=solve_q_rel_tol_var,
+                solve_q_mode_var=solve_q_mode_var,
+            )
+        finally:
+            simulation_runtime_state.startup_updates_suspended = False
         if finite_stack_controls_view_state.phase_delta_entry_var is not None:
             gui_views.set_finite_stack_phase_delta_entry_text(
                 finite_stack_controls_view_state,
@@ -20749,6 +20967,14 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
         f"cif={cif_summary}"
     )
+
+    gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
+    simulation_runtime_state.update_pending = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.integration_update_pending,
+    )
+    simulation_runtime_state.integration_update_pending = None
 
     post_startup_tasks: list[gui_runtime_startup.StartupTask] = []
     if not structure_model_controls_built:
@@ -20787,6 +21013,10 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
 
     def _run_initial_startup_work():
         try:
+            _emit_startup_benchmark_event("after_idle_startup_task")
+            progress_label.config(text="Initializing structure model...")
+            _bootstrap_structure_model_state_for_startup()
+            _set_structure_bootstrap_controls_enabled(True)
             progress_label.config(text="Initializing simulation...")
             do_update()
         except Exception as exc:
@@ -20812,8 +21042,14 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 progress_label.config(text=_analysis_progress_text())
             else:
                 progress_label.config(text="Simulation ready.")
+            _emit_startup_benchmark_event(
+                "ready_status",
+                text=str(progress_label.cget("text")),
+            )
             if post_startup_task_runner.has_tasks():
                 post_startup_task_runner.schedule()
+            if _STARTUP_BENCHMARK_AUTO_EXIT:
+                root.after(750 if post_startup_task_runner.has_tasks() else 150, _shutdown_gui)
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)
