@@ -127,6 +127,8 @@ from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import analysis_figure_controls as gui_analysis_figure_controls
+from ra_sim.gui import analysis_quick_controls as gui_analysis_quick_controls
+from ra_sim.gui import analysis_visibility as gui_analysis_visibility
 from ra_sim.gui import analysis_peak_tools as gui_analysis_peak_tools
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import canvas_interactions as gui_canvas_interactions
@@ -5208,6 +5210,29 @@ def _auto_match_scale_factor_to_radial_peak():
     )
 
 
+def _clear_analysis_integration_region() -> None:
+    def _apply_cleared_integration() -> None:
+        refresh_cached = globals().get("_refresh_integration_from_cached_results")
+        if callable(refresh_cached):
+            refresh_cached()
+            return
+        refresh_visuals = globals().get("refresh_integration_region_visuals")
+        if callable(refresh_visuals):
+            refresh_visuals()
+        request_redraw = globals().get("_request_overlay_canvas_redraw")
+        if callable(request_redraw):
+            request_redraw()
+
+    gui_analysis_quick_controls.clear_analysis_integration_region(
+        show_1d_var=analysis_view_controls_view_state.show_1d_var,
+        hide_drag_region=getattr(integration_range_drag_runtime_callbacks, "reset", None),
+        disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False),
+        clear_peak_selection=_clear_selected_analysis_peaks,
+        apply_cleared_integration=_apply_cleared_integration,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
+    )
+
+
 def _update_chi_square_display(force=False):
     state = globals().setdefault(
         "chi_square_state",
@@ -5397,6 +5422,7 @@ def apply_scale_factor_to_existing_results(
         update_1d
         and (
         analysis_view_controls_view_state.show_1d_var.get()
+        and _analysis_integration_outputs_visible()
         and "line_1d_rad" in globals()
         and "line_1d_az" in globals()
         )
@@ -5913,6 +5939,8 @@ def _refresh_integration_from_cached_results():
         refresh_integration_region_visuals()
         _request_overlay_canvas_redraw()
         return True
+    if not _analysis_integration_outputs_visible():
+        return True
 
     if simulation_runtime_state.unscaled_image is None:
         return False
@@ -6290,6 +6318,28 @@ def _current_app_shell_view_mode() -> str:
     if show_caked:
         return "caked"
     return "detector"
+
+
+def _analysis_integration_outputs_visible() -> bool:
+    return gui_analysis_visibility.analysis_outputs_visible(
+        control_tab_var=app_shell_view_state.control_tab_var,
+        popout_open=gui_views.analysis_popout_window_open(analysis_popout_view_state),
+        assume_visible_when_unknown=True,
+    )
+
+
+def _refresh_analysis_integration_if_visible() -> None:
+    if not _analysis_integration_outputs_visible():
+        return
+    if not bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
+        return
+    refresh_cached = globals().get("_refresh_integration_from_cached_results")
+    if not callable(refresh_cached):
+        return
+    try:
+        refresh_cached()
+    except Exception:
+        pass
 
 
 def _current_app_shell_view_text() -> str:
@@ -8853,6 +8903,7 @@ def do_update():
     one_d_analysis_requested = bool(
         (not qr_cylinder_replace_requested)
         and show_1d_requested
+        and _analysis_integration_outputs_visible()
     )
     caked_analysis_requested = bool(
         show_caked_2d
@@ -16878,6 +16929,7 @@ def _dock_analysis_window(*, restore_tab: bool = True) -> None:
             parent=app_shell_view_state.plot_frame_1d,
             range_values=range_values,
         )
+        _refresh_analysis_integration_if_visible()
     _set_analysis_popout_button_state(detached=False)
 
 
@@ -16900,6 +16952,7 @@ def _pop_out_analysis_window() -> None:
             parent=analysis_popout_view_state.plot_frame,
             range_values=range_values,
         )
+        _refresh_analysis_integration_if_visible()
     except Exception:
         gui_views.close_analysis_popout_window(analysis_popout_view_state)
         _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
@@ -16918,6 +16971,15 @@ def _toggle_analysis_popout() -> None:
         _dock_analysis_window()
         return
     _pop_out_analysis_window()
+
+
+def _handle_analysis_integration_visibility_change(*_args) -> None:
+    _refresh_analysis_integration_if_visible()
+
+
+_analysis_tab_trace_add = getattr(app_shell_view_state.control_tab_var, "trace_add", None)
+if callable(_analysis_tab_trace_add):
+    _analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)
 
 
 _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
@@ -17546,6 +17608,12 @@ gui_views.populate_app_shell_quick_controls(
             "label": "Reset view",
             "control_type": "button",
             "command": _reset_primary_figure_view,
+        },
+        {
+            "key": "clear_integration_region",
+            "label": "Clear integration region",
+            "control_type": "button",
+            "command": _clear_analysis_integration_region,
         },
         {
             "key": "log_display",

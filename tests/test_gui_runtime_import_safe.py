@@ -283,6 +283,7 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
 
     assert '\"key\": \"fast_viewer\"' in source
     assert '\"key\": \"log_display\"' in source
+    assert '\"key\": \"clear_integration_region\"' in source
     assert '\"key\": \"auto_match_scale\"' in source
     assert "control_type\": \"check\"" in source
     assert "control_type\": \"button\"" in source
@@ -300,3 +301,14 @@ def test_runtime_impl_removes_display_intensity_toggle_from_ui() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "accumulate_intensity_enabled=True" not in source
+
+
+def test_runtime_impl_gates_1d_analysis_on_analyze_visibility() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "def _analysis_integration_outputs_visible() -> bool:" in source
+    assert "app_shell_view_state.control_tab_var" in source
+    assert "gui_views.analysis_popout_window_open(analysis_popout_view_state)" in source
+    assert "and _analysis_integration_outputs_visible()" in source
+    assert "if not _analysis_integration_outputs_visible():" in source
+    assert '_analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)' in source
