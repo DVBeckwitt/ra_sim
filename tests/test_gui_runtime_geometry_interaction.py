@@ -137,6 +137,7 @@ def test_build_runtime_geometry_manual_cache_workflow_exposes_callbacks() -> Non
         manual_geometry_module="manual-geometry-module",
         fit_config="fit-config",
         pairs_for_index="pairs-for-index",
+        simulated_peaks_for_params="manual-simulated-peaks",
     )
 
     assert workflow.runtime is runtime_obj
@@ -152,6 +153,7 @@ def test_build_runtime_geometry_manual_cache_workflow_exposes_callbacks() -> Non
                 "manual_geometry_module": "manual-geometry-module",
                 "fit_config": "fit-config",
                 "pairs_for_index": "pairs-for-index",
+                "simulated_peaks_for_params": "manual-simulated-peaks",
             },
         )
     ]

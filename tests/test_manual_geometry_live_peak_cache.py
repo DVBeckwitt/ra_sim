@@ -112,3 +112,70 @@ def test_make_runtime_geometry_manual_cache_callbacks_uses_live_peak_records() -
     assert cache_state["data"]["grouped_candidates"][("q_group", "primary", 1, 2)][0][
         "source_row_index"
     ] == 8
+
+
+def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_preview_cache() -> None:
+    cache_state = {"signature": None, "data": {}}
+    forwarded_prefer_cache: list[bool] = []
+    peak_record = {
+        "display_col": 21.0,
+        "display_row": 34.0,
+        "hkl_raw": (1.0, 0.0, 2.0),
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "source_table_index": 5,
+        "source_row_index": 8,
+        "qr": 1.5,
+        "qz": -0.5,
+        "intensity": 3.0,
+    }
+
+    def _replace_cache_state(signature, data) -> None:
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 3),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((4, 4), dtype=float),
+        use_caked_space=lambda: False,
+        replace_cache_state=_replace_cache_state,
+        current_geometry_fit_params=lambda: {"gamma": 1.25},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache))
+            or (
+                [
+                    {
+                        "label": "cached-preview",
+                        "hkl": (3, 0, 1),
+                        "q_group_key": ("q_group", "primary", 3, 1),
+                        "source_table_index": 7,
+                        "source_row_index": 9,
+                        "sim_col": 44.0,
+                        "sim_row": 55.0,
+                        "weight": 1.0,
+                    }
+                ]
+                if prefer_cache
+                else []
+            )
+        ),
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        peak_records=lambda: [peak_record],
+    )
+
+    cache_data = callbacks.get_pick_cache(param_set={"a": 2.0}, prefer_cache=True)
+
+    assert forwarded_prefer_cache == [True]
+    assert (
+        cache_data["cache_metadata"]["cache_source"]
+        == "geometry_manual_simulated_peaks_for_params(prefer_cache=True)"
+    )
+    assert ("q_group", "primary", 3, 1) in cache_data["grouped_candidates"]
+    assert ("q_group", "primary", 1, 2) not in cache_data["grouped_candidates"]
+    assert cache_state["signature"] == cache_data["signature"]
+    assert cache_state["data"]["simulated_lookup"][(7, 9)]["sim_col"] == 44.0

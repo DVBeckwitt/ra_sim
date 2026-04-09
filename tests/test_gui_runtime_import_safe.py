@@ -309,6 +309,16 @@ def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
     assert "on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed" in source
 
 
+def test_runtime_impl_shares_pick_hkl_live_cache_with_manual_qr_picker() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "geometry_manual_cache_workflow = (" in source
+    assert (
+        "simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params"
+        in source
+    )
+
+
 def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

@@ -1713,7 +1713,27 @@ def build_geometry_manual_pick_cache(
         stale_reason = stale_reason_override
         return True
 
-    if prefer_cache:
+    if prefer_cache and bg_index == current_bg_index:
+        cached_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
+            simulated_peaks_for_params,
+            param_set=param_set,
+            prefer_cache=True,
+        )
+        if _apply_candidate_source(
+            cached_simulated_peaks,
+            action="reused",
+            source="geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
+            provenance=[
+                "geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            stale_reason_override=None,
+        ):
+            pass
+        elif stale_reason is None:
+            stale_reason = "cached preview groups were empty."
+    if prefer_cache and not grouped_candidates:
         cached_simulated_peaks = (
             [
                 dict(entry)
@@ -1741,26 +1761,6 @@ def build_geometry_manual_pick_cache(
             pass
         elif stale_reason is None and callable(source_rows_for_background):
             stale_reason = "source snapshot rows were empty."
-    if prefer_cache and not grouped_candidates and bg_index == current_bg_index:
-        cached_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
-            simulated_peaks_for_params,
-            param_set=param_set,
-            prefer_cache=True,
-        )
-        if _apply_candidate_source(
-            cached_simulated_peaks,
-            action="reused",
-            source="geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
-            provenance=[
-                "geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
-                "build_grouped_candidates",
-                "build_simulated_lookup",
-            ],
-            stale_reason_override=None,
-        ):
-            pass
-        elif stale_reason is None:
-            stale_reason = "cached preview groups were empty."
     if prefer_cache and not grouped_candidates and bg_index == current_bg_index:
         cached_simulated_peaks = geometry_manual_live_peak_candidates_from_records(
             peak_records

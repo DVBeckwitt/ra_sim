@@ -2018,6 +2018,104 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
     ]
 
 
+def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when_other_sources_are_empty() -> None:
+    cache_state = {"signature": None, "data": {}}
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    forwarded_prefer_cache: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+
+    def _replace_cache_state(signature, data) -> None:
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    def _group_candidates(entries):
+        grouped = {}
+        for entry in entries or ():
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("q_group_key")
+            if not isinstance(key, tuple):
+                continue
+            grouped.setdefault(key, []).append(dict(entry))
+        return grouped
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 3),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((8, 8), dtype=float),
+        use_caked_space=lambda: False,
+        replace_cache_state=_replace_cache_state,
+        current_geometry_fit_params=lambda: {"gamma": 1.25},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache))
+            or (
+                [
+                    {
+                        "label": "1,0,0",
+                        "hkl": (1, 0, 0),
+                        "q_group_key": group_key,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "weight": 1.0,
+                    }
+                ]
+                if prefer_cache
+                else []
+            )
+        ),
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+            if isinstance(entry, dict)
+        },
+        entry_display_coords=lambda _entry: None,
+        peak_records=lambda: [],
+    )
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **kwargs: callbacks.get_pick_cache(**kwargs),
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert forwarded_prefer_cache == [True]
+    assert next_session["group_key"] == group_key
+    assert set_sessions[-1]["group_key"] == group_key
+    assert cache_state["data"]["cache_metadata"]["cache_source"] == (
+        "geometry_manual_simulated_peaks_for_params(prefer_cache=True)"
+    )
+    assert status_messages
+    assert "No simulated Qr/Qz groups are available to pick" not in status_messages[-1]
+    assert "Selected selected group" in status_messages[-1]
+
+
 def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view() -> None:
     caked_image = np.zeros((6, 6), dtype=float)
     native_background = np.ones((6, 6), dtype=float)

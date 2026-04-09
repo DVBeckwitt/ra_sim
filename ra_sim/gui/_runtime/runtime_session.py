@@ -4035,6 +4035,7 @@ geometry_manual_cache_workflow = (
                 )
             )
         ),
+        simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
         source_snapshot_signature_for_background=(
             lambda background_index, param_set=None: (
                 globals()["_geometry_source_snapshot_signature_for_background"](
