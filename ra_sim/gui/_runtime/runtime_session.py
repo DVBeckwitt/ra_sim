@@ -148,6 +148,7 @@ from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
+from ra_sim.gui import runtime_primary_viewport as gui_runtime_primary_viewport
 from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
@@ -2006,10 +2007,8 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
 matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
 gui_main_figure_chrome.configure_matplotlib_canvas_widget(matplotlib_canvas_widget)
 PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
-    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
+    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "tk_canvas")
 )
-if PRIMARY_VIEWPORT_BACKEND == "matplotlib":
-    matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 canvas = matplotlib_canvas
 primary_viewport_backend = None
 FAST_VIEWER_DRAW_INTERVAL_S = 0.08
@@ -2387,6 +2386,7 @@ center_marker, = ax.plot(
     markersize=5,
     zorder=2
 )
+center_marker.set_visible(False)
 
 ax.set_xlim(0, image_size)
 ax.set_ylim(image_size, 0)
@@ -2416,46 +2416,49 @@ geometry_manual_state = app_state.manual_geometry
 geometry_runtime_state.manual_pick_armed = False
 geometry_runtime_state.manual_pick_cache_signature = None
 geometry_runtime_state.manual_pick_cache_data = {}
-if PRIMARY_VIEWPORT_BACKEND == "tk_canvas":
-    primary_viewport_backend = gui_tk_primary_viewport.build_tk_primary_viewport_backend(
-        tk_module=tk,
-        canvas_frame=app_shell_view_state.canvas_frame,
-        matplotlib_canvas=matplotlib_canvas,
-        ax=ax,
-        image_artist=image_display,
-        background_artist=background_display,
-        overlay_artist=integration_region_overlay,
-        marker_artist_factory=lambda: (
-            globals().get("center_marker"),
-            globals().get("selected_peak_marker"),
-        ),
-        overlay_model_factory=_fast_viewer_overlay_model,
-        overlay_artist_groups_factory=lambda: (
-            getattr(globals().get("geometry_runtime_state"), "pick_artists", ()),
-            getattr(globals().get("geometry_runtime_state"), "preview_artists", ()),
-            getattr(globals().get("geometry_runtime_state"), "manual_preview_artists", ()),
-            getattr(
-                globals().get("geometry_runtime_state"),
-                "qr_cylinder_overlay_artists",
-                (),
-            ),
-        ),
-        layer_versions_factory=_fast_viewer_layer_versions,
-        peak_cache_factory=lambda: getattr(
-            globals().get("simulation_runtime_state"),
-            "peak_positions",
+primary_viewport_selection = gui_runtime_primary_viewport.activate_runtime_primary_viewport(
+    requested_backend=PRIMARY_VIEWPORT_BACKEND,
+    tk_primary_viewport_module=gui_tk_primary_viewport,
+    tk_module=tk,
+    canvas_frame=app_shell_view_state.canvas_frame,
+    matplotlib_canvas=matplotlib_canvas,
+    ax=ax,
+    image_artist=image_display,
+    background_artist=background_display,
+    overlay_artist=integration_region_overlay,
+    marker_artist_factory=lambda: (
+        globals().get("center_marker"),
+        globals().get("selected_peak_marker"),
+    ),
+    overlay_model_factory=_fast_viewer_overlay_model,
+    overlay_artist_groups_factory=lambda: (
+        getattr(globals().get("geometry_runtime_state"), "pick_artists", ()),
+        getattr(globals().get("geometry_runtime_state"), "preview_artists", ()),
+        getattr(globals().get("geometry_runtime_state"), "manual_preview_artists", ()),
+        getattr(
+            globals().get("geometry_runtime_state"),
+            "qr_cylinder_overlay_artists",
             (),
         ),
-        qgroup_cache_factory=lambda: getattr(
-            globals().get("geometry_runtime_state"),
-            "manual_pick_cache_data",
-            {},
-        ).get("grouped_candidates", {}),
-        draw_interval_s=1.0 / 60.0,
-    )
-    primary_viewport_backend.activate()
-    _set_runtime_canvas(primary_viewport_backend.canvas_proxy)
-
+    ),
+    layer_versions_factory=_fast_viewer_layer_versions,
+    peak_cache_factory=lambda: getattr(
+        globals().get("simulation_runtime_state"),
+        "peak_positions",
+        (),
+    ),
+    qgroup_cache_factory=lambda: getattr(
+        globals().get("geometry_runtime_state"),
+        "manual_pick_cache_data",
+        {},
+    ).get("grouped_candidates", {}),
+    draw_interval_s=1.0 / 60.0,
+    set_progress_text=lambda text: progress_label.config(text=text),
+)
+PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend
+primary_viewport_backend = primary_viewport_selection.backend
+_set_runtime_canvas(primary_viewport_selection.canvas_proxy)
+if PRIMARY_VIEWPORT_BACKEND == "tk_canvas":
     def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
         active_canvas = globals().get("canvas", matplotlib_canvas)
         draw_name = "draw" if bool(force_matplotlib) else "draw_idle"
@@ -4981,6 +4984,7 @@ def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
 def toggle_caked_2d() -> None:
     _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _toggle_caked_2d_impl()
+    _sync_center_marker(redraw=False)
     if bool(analysis_peak_selection_state.pick_armed):
         show_caked_now = bool(
             getattr(
@@ -4994,6 +4998,7 @@ def toggle_caked_2d() -> None:
                 False,
                 message="Analysis peak picking requires the caked view.",
             )
+            _sync_center_marker(redraw=True)
             return
     _render_analysis_peak_overlays(redraw=True)
 
@@ -5157,6 +5162,78 @@ def _log_display_enabled() -> bool:
         return bool(getter())
     except Exception:
         return False
+
+
+def _beam_center_spot_enabled() -> bool:
+    beam_center_spot_var = getattr(
+        analysis_view_controls_view_state,
+        "show_beam_center_spot_var",
+        None,
+    )
+    getter = getattr(beam_center_spot_var, "get", None)
+    if not callable(getter):
+        return False
+    try:
+        return bool(getter())
+    except Exception:
+        return False
+
+
+def _sync_center_marker(*, redraw: bool) -> None:
+    marker = globals().get("center_marker")
+    if marker is None:
+        return
+    try:
+        center_row = float(center_x_var.get())
+        center_col = float(center_y_var.get())
+    except Exception:
+        return
+
+    marker_x = float(center_col)
+    marker_y = float(center_row)
+    visible = _beam_center_spot_enabled()
+    show_caked_var = getattr(analysis_view_controls_view_state, "show_caked_2d_var", None)
+    show_caked = bool(getattr(show_caked_var, "get", lambda: False)())
+    if visible and show_caked:
+        try:
+            projected = _native_detector_coords_to_caked_display_coords(
+                float(center_col),
+                float(center_row),
+            )
+        except Exception:
+            projected = None
+        if projected is None:
+            visible = False
+        else:
+            marker_x = float(projected[0])
+            marker_y = float(projected[1])
+
+    try:
+        marker.set_xdata([marker_x])
+        marker.set_ydata([marker_y])
+        marker.set_visible(bool(visible))
+    except Exception:
+        return
+
+    if not redraw:
+        return
+    request_overlay_redraw = globals().get("_request_overlay_canvas_redraw")
+    if callable(request_overlay_redraw):
+        try:
+            request_overlay_redraw(force=True)
+            return
+        except Exception:
+            pass
+    request_main_redraw = globals().get("_request_main_canvas_redraw")
+    if callable(request_main_redraw):
+        try:
+            request_main_redraw(force_matplotlib=True)
+        except Exception:
+            pass
+
+
+def _toggle_beam_center_spot() -> None:
+    _sync_center_marker(redraw=True)
 
 
 def _minimum_positive_finite_value(image) -> float | None:
@@ -6715,16 +6792,18 @@ line_rmax, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5
 line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
-UPDATE_DEBOUNCE_MS = 120
+FULL_UPDATE_DEBOUNCE_MS = 90
+PREVIEW_UPDATE_DEBOUNCE_MS = 24
+UPDATE_DEBOUNCE_MS = FULL_UPDATE_DEBOUNCE_MS
 RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
 SIMULATION_WORKER_POLL_MS = 40
-PREVIEW_CALCULATIONS_ENABLED = False
+PREVIEW_CALCULATIONS_ENABLED = True
 INITIAL_PREVIEW_MAX_SAMPLES = 24
 LIVE_DRAG_PREVIEW_MAX_SAMPLES = 8
 LIVE_DRAG_ANALYSIS_RADIAL_BINS = 240
 LIVE_DRAG_ANALYSIS_AZIMUTH_BINS = 180
-LIVE_DRAG_SETTLE_MS = 0
+LIVE_DRAG_SETTLE_MS = 80
 CAKING_CACHE_MAX_ENTRIES = 8
 
 simulation_runtime_state.update_pending = None
@@ -6733,12 +6812,13 @@ simulation_runtime_state.update_running = False
 simulation_runtime_state.update_trace_counter = 0
 
 
-def _worker_job_key(payload: object) -> tuple[object, int]:
+def _worker_job_key(payload: object) -> tuple[object, int, str]:
     if not isinstance(payload, dict):
-        return (None, -1)
+        return (None, -1, "full")
     return (
         payload.get("signature"),
         int(payload.get("epoch", -1)),
+        str(payload.get("job_kind", "full")),
     )
 
 
@@ -7900,6 +7980,45 @@ def _current_preview_sample_limit() -> int:
     )
 
 
+def _current_update_debounce_ms() -> int:
+    return (
+        PREVIEW_UPDATE_DEBOUNCE_MS
+        if _live_interaction_active()
+        else FULL_UPDATE_DEBOUNCE_MS
+    )
+
+
+def _simulation_result_matches_signature(
+    result: object,
+    signature: object,
+) -> bool:
+    return bool(
+        isinstance(result, dict)
+        and result.get("signature") == signature
+        and int(result.get("epoch", -1))
+        == int(simulation_runtime_state.simulation_epoch)
+    )
+
+
+def _simulation_result_superseded_by_queued_job(
+    result: object,
+    queued_job: object,
+) -> bool:
+    if not isinstance(result, dict) or not isinstance(queued_job, dict):
+        return False
+    if int(queued_job.get("job_id", -1)) <= int(result.get("job_id", -1)):
+        return False
+    queued_epoch = int(queued_job.get("epoch", -1))
+    result_epoch = int(result.get("epoch", -1))
+    if queued_epoch != result_epoch:
+        return queued_epoch > result_epoch
+    if queued_job.get("signature") != result.get("signature"):
+        return True
+    return str(queued_job.get("job_kind", "full")) == str(
+        result.get("job_kind", "full")
+    )
+
+
 def _analysis_progress_text() -> str:
     active_job = simulation_runtime_state.analysis_active_job
     if not isinstance(active_job, dict):
@@ -8052,6 +8171,7 @@ def _build_preview_simulation_job(
     preview_job["collect_primary_hit_tables"] = False
     preview_job["collect_secondary_hit_tables"] = False
     preview_job["capture_primary_hit_tables_raw"] = False
+    preview_job["job_kind"] = "preview"
     preview_job["is_preview"] = True
     preview_job["preview_sample_count"] = int(preview_indices.size)
     preview_job["mosaic_params"] = {
@@ -8471,9 +8591,7 @@ def _poll_async_simulation_job() -> None:
     )
     latest_epoch = int(simulation_runtime_state.simulation_epoch)
     result_epoch = int(result.get("epoch", -1))
-    superseded = isinstance(queued_job, dict) and int(queued_job.get("job_id", -1)) > int(
-        result.get("job_id", -1)
-    )
+    superseded = _simulation_result_superseded_by_queued_job(result, queued_job)
     if result_epoch != latest_epoch or superseded:
         _append_job_queue_trace(
             "job_discarded_as_stale",
@@ -8517,7 +8635,10 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
         return "ready"
-    if isinstance(ready_result, dict):
+    if isinstance(ready_result, dict) and not _simulation_result_matches_signature(
+        ready_result,
+        job.get("signature"),
+    ):
         _append_job_queue_trace(
             "job_discarded_as_stale",
             lane="simulation",
@@ -8583,10 +8704,7 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
 
 def _consume_ready_simulation_result(signature: object) -> dict[str, object] | None:
     ready_result = simulation_runtime_state.worker_ready_result
-    if _worker_job_key(ready_result) != (
-        signature,
-        int(simulation_runtime_state.simulation_epoch),
-    ):
+    if not _simulation_result_matches_signature(ready_result, signature):
         if (
             isinstance(ready_result, dict)
             and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
@@ -8594,8 +8712,14 @@ def _consume_ready_simulation_result(signature: object) -> dict[str, object] | N
             simulation_runtime_state.worker_ready_result = None
         return None
 
+    consumed_result = dict(ready_result)
     simulation_runtime_state.worker_ready_result = None
-    return dict(ready_result)
+    if (
+        simulation_runtime_state.worker_future is None
+        and simulation_runtime_state.worker_active_job is None
+    ):
+        _promote_queued_simulation_job(reason="previous_ready_result_consumed")
+    return consumed_result
 
 
 def _apply_ready_simulation_result(result: dict[str, object]) -> None:
@@ -9156,7 +9280,10 @@ def schedule_update():
         root,
         simulation_runtime_state.update_pending,
     )
-    simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
+    simulation_runtime_state.update_pending = root.after(
+        _current_update_debounce_ms(),
+        do_update,
+    )
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "queued"
     _append_runtime_update_trace(
@@ -9289,7 +9416,10 @@ def do_update():
 
     if simulation_runtime_state.update_running:
         # another update is in progress; try again shortly
-        simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
+        simulation_runtime_state.update_pending = root.after(
+            _current_update_debounce_ms(),
+            do_update,
+        )
         _trace_update(
             "do_update_busy_rescheduled",
             queued_token=simulation_runtime_state.update_pending,
@@ -9390,9 +9520,7 @@ def do_update():
             trigger_update=False,
         )
 
-    center_marker.set_xdata([center_y_up])
-    center_marker.set_ydata([center_x_up])
-    center_marker.set_visible(False)
+    _sync_center_marker(redraw=False)
 
     mosaic_params = build_mosaic_params()
     optics_mode_flag = _current_optics_mode_flag()
@@ -9943,101 +10071,89 @@ def do_update():
             simulation_job = _build_simulation_job(
                 collect_hit_tables_enabled=collect_hit_tables_for_job
             )
+            preview_job = _build_preview_simulation_job(
+                simulation_job,
+                max_samples=_current_preview_sample_limit(),
+            )
             has_cached_simulation = (
                 simulation_runtime_state.stored_primary_sim_image is not None
                 or simulation_runtime_state.stored_secondary_sim_image is not None
             )
-            if not has_cached_simulation:
-                preview_job = _build_preview_simulation_job(
-                    simulation_job,
-                    max_samples=_current_preview_sample_limit(),
-                )
+            if _live_interaction_active():
                 if preview_job is not None:
-                    if "progress_label" in globals() and progress_label is not None:
-                        progress_label.config(text="Computing preview simulation...")
-                    preview_result = _run_simulation_generation_job(
-                        {
-                            **preview_job,
-                            "job_id": 0,
-                        }
-                    )
-                    _apply_ready_simulation_result(preview_result)
-                    simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                    simulation_runtime_state.last_simulation_signature = new_sim_sig
-                    simulation_runtime_state.primary_filter_signature = (
-                        primary_requested_filter_signature
-                    )
-                    _capture_geometry_source_snapshot()
-                    image_generation_cached = False
-                    image_generation_elapsed_ms = float(
-                        preview_result.get("image_generation_elapsed_ms", 0.0)
-                    )
-                    simulation_runtime_state.update_phase = "applying"
-                    _refresh_run_status_bar()
-                    _request_async_simulation_job(simulation_job)
+                    request_status = _request_async_simulation_job(preview_job)
+                    if (
+                        request_status in {"submitted", "queued", "running"}
+                        and "progress_label" in globals()
+                        and progress_label is not None
+                    ):
+                        progress_label.config(
+                            text="Computing preview simulation in background..."
+                        )
                 else:
-                    if "progress_label" in globals() and progress_label is not None:
-                        progress_label.config(text="Computing initial simulation...")
-                    sync_result = _run_simulation_generation_job(
-                        {
-                            **simulation_job,
-                            "job_id": 0,
-                        }
-                    )
-                    _apply_ready_simulation_result(sync_result)
-                    simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                    simulation_runtime_state.last_simulation_signature = new_sim_sig
-                    simulation_runtime_state.primary_filter_signature = (
-                        primary_requested_filter_signature
-                    )
-                    _capture_geometry_source_snapshot()
-                    image_generation_cached = False
-                    image_generation_elapsed_ms = float(
-                        sync_result.get("image_generation_elapsed_ms", 0.0)
-                    )
-                    simulation_runtime_state.update_phase = "applying"
+                    request_status = "preview_unavailable"
+                _trace_update(
+                    "do_update_queue_live_preview",
+                    request_status=str(request_status),
+                    has_cached_simulation=bool(has_cached_simulation),
+                    worker_active=bool(
+                        simulation_runtime_state.worker_active_job is not None
+                    ),
+                    worker_queued=bool(
+                        simulation_runtime_state.worker_queued_job is not None
+                    ),
+                )
+                if not has_cached_simulation:
+                    simulation_runtime_state.update_phase = "queued"
                     _refresh_run_status_bar()
+                    simulation_runtime_state.update_running = False
+                    return
+            elif (
+                not has_cached_simulation
+                and simulation_runtime_state.worker_active_job is None
+                and simulation_runtime_state.worker_queued_job is None
+            ):
+                if "progress_label" in globals() and progress_label is not None:
+                    progress_label.config(text="Computing initial simulation...")
+                sync_result = _run_simulation_generation_job(
+                    {
+                        **simulation_job,
+                        "job_id": 0,
+                    }
+                )
+                _apply_ready_simulation_result(sync_result)
+                simulation_runtime_state.last_sim_signature = new_sim_image_sig
+                simulation_runtime_state.last_simulation_signature = new_sim_sig
+                simulation_runtime_state.primary_filter_signature = (
+                    primary_requested_filter_signature
+                )
+                _capture_geometry_source_snapshot()
+                image_generation_cached = False
+                image_generation_elapsed_ms = float(
+                    sync_result.get("image_generation_elapsed_ms", 0.0)
+                )
+                simulation_runtime_state.update_phase = "applying"
+                _refresh_run_status_bar()
             else:
-                preview_job = _build_preview_simulation_job(
-                    simulation_job,
-                    max_samples=_current_preview_sample_limit(),
+                request_status = _request_async_simulation_job(simulation_job)
+                if (
+                    request_status in {"submitted", "queued", "running"}
+                    and "progress_label" in globals()
+                    and progress_label is not None
+                ):
+                    progress_label.config(text="Computing simulation in background...")
+                _trace_update(
+                    "do_update_return_waiting_for_simulation",
+                    request_status=str(request_status),
+                    has_cached_simulation=bool(has_cached_simulation),
+                    worker_active=bool(
+                        simulation_runtime_state.worker_active_job is not None
+                    ),
+                    worker_queued=bool(
+                        simulation_runtime_state.worker_queued_job is not None
+                    ),
                 )
-                if preview_job is not None:
-                    if "progress_label" in globals() and progress_label is not None:
-                        progress_label.config(text="Computing preview simulation...")
-                    preview_result = _run_simulation_generation_job(
-                        {
-                            **preview_job,
-                            "job_id": 0,
-                        }
-                    )
-                    _apply_ready_simulation_result(preview_result)
-                    simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                    simulation_runtime_state.last_simulation_signature = new_sim_sig
-                    simulation_runtime_state.primary_filter_signature = (
-                        primary_requested_filter_signature
-                    )
-                    _capture_geometry_source_snapshot()
-                    image_generation_cached = False
-                    image_generation_elapsed_ms = float(
-                        preview_result.get("image_generation_elapsed_ms", 0.0)
-                    )
-                    simulation_runtime_state.update_phase = "applying"
-                    _refresh_run_status_bar()
-                    _request_async_simulation_job(simulation_job)
-                else:
-                    _request_async_simulation_job(simulation_job)
-                    if "progress_label" in globals() and progress_label is not None:
-                        progress_label.config(text="Computing simulation in background...")
-                    _trace_update(
-                        "do_update_return_waiting_for_simulation",
-                        worker_active=bool(
-                            simulation_runtime_state.worker_active_job is not None
-                        ),
-                        worker_queued=bool(
-                            simulation_runtime_state.worker_queued_job is not None
-                        ),
-                    )
+                if request_status != "ready":
                     simulation_runtime_state.update_running = False
                     return
     elif ready_simulation_result is None and need_hit_table_refresh:
@@ -11268,6 +11384,7 @@ gui_views.create_geometry_fit_background_controls(
         ),
         trigger_update=True,
     ),
+    use_labelframe=False,
 )
 geometry_fit_background_selection_var = (
     background_theta_controls_view_state.geometry_fit_background_selection_var
@@ -12123,6 +12240,7 @@ gui_views.create_geometry_fit_parameter_controls(
         "center_x": False,
         "center_y": False,
     },
+    use_labelframe=False,
 )
 fit_frame = geometry_fit_parameter_controls_view_state.frame
 fit_zb_var = geometry_fit_parameter_controls_view_state.fit_zb_var
@@ -13043,6 +13161,394 @@ def _capture_geometry_source_snapshot() -> None:
     )
 
 
+def _geometry_manual_set_runtime_peak_cache_from_source_rows(
+    source_rows: Sequence[object] | None,
+) -> None:
+    restored_records: list[dict[str, object]] = []
+    restored_positions: list[tuple[float, float]] = []
+    restored_millers: list[tuple[int, int, int]] = []
+    restored_intensities: list[float] = []
+
+    for raw_entry in source_rows or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        try:
+            display_col = float(entry.get("sim_col", np.nan))
+            display_row = float(entry.get("sim_row", np.nan))
+        except Exception:
+            continue
+        if not (np.isfinite(display_col) and np.isfinite(display_row)):
+            continue
+
+        hkl_value = entry.get("hkl")
+        if not isinstance(hkl_value, tuple) or len(hkl_value) < 3:
+            continue
+        try:
+            hkl_triplet = (
+                int(hkl_value[0]),
+                int(hkl_value[1]),
+                int(hkl_value[2]),
+            )
+        except Exception:
+            continue
+
+        try:
+            intensity = float(entry.get("weight", entry.get("intensity", 0.0)))
+        except Exception:
+            intensity = 0.0
+        if not np.isfinite(intensity):
+            intensity = 0.0
+
+        peak_record = dict(entry)
+        peak_record["display_col"] = float(display_col)
+        peak_record["display_row"] = float(display_row)
+        peak_record["intensity"] = float(intensity)
+        peak_record["weight"] = float(intensity)
+
+        restored_records.append(peak_record)
+        restored_positions.append((float(display_col), float(display_row)))
+        restored_millers.append(hkl_triplet)
+        restored_intensities.append(float(intensity))
+
+    simulation_runtime_state.peak_records = restored_records
+    simulation_runtime_state.peak_positions = restored_positions
+    simulation_runtime_state.peak_millers = restored_millers
+    simulation_runtime_state.peak_intensities = restored_intensities
+    simulation_runtime_state.selected_peak_record = None
+    if _retain_runtime_optional_cache(
+        "peak_overlay",
+        feature_needed=bool(restored_records),
+    ):
+        simulation_runtime_state.peak_overlay_cache = {
+            "sig": None,
+            "positions": list(restored_positions),
+            "millers": list(restored_millers),
+            "intensities": list(restored_intensities),
+            "records": [dict(record) for record in restored_records],
+            "click_spatial_index": None,
+            "restored_from_gui_state": False,
+        }
+    else:
+        simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
+    _invalidate_geometry_manual_pick_cache()
+
+
+def _geometry_manual_build_source_rows_from_hit_tables(
+    hit_tables: Sequence[object] | None,
+    *,
+    image_size_value: int,
+    params_local: Mapping[str, object],
+    allow_nominal_hkl_indices: bool,
+) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
+    copied_hit_tables = _copy_hit_tables(hit_tables)
+    if not copied_hit_tables:
+        return [], [], []
+
+    try:
+        primary_a = float(params_local.get("a", np.nan))
+    except Exception:
+        primary_a = float("nan")
+    try:
+        primary_c = float(params_local.get("c", np.nan))
+    except Exception:
+        primary_c = float("nan")
+
+    peak_table_lattice = [
+        (float(primary_a), float(primary_c), "primary")
+        for _ in copied_hit_tables
+    ]
+    raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        copied_hit_tables,
+        image_shape=(int(image_size_value), int(image_size_value)),
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        peak_table_lattice=peak_table_lattice,
+        primary_a=primary_a,
+        primary_c=primary_c,
+        default_source_label="primary",
+        round_pixel_centers=False,
+        allow_nominal_hkl_indices=bool(allow_nominal_hkl_indices),
+    )
+    raw_rows = [
+        dict(entry)
+        for entry in (raw_rows or ())
+        if isinstance(entry, Mapping)
+    ]
+    return raw_rows, peak_table_lattice, copied_hit_tables
+
+
+def _geometry_manual_logged_cache_matches_params(
+    metadata: Mapping[str, object] | None,
+    params_local: Mapping[str, object],
+) -> bool:
+    if not isinstance(metadata, Mapping):
+        return False
+
+    comparisons: list[tuple[object, float, float]] = []
+    comparisons.append((metadata.get("av"), params_local.get("a"), 1.0e-6))
+    comparisons.append((metadata.get("cv"), params_local.get("c"), 1.0e-6))
+    comparisons.append(
+        (metadata.get("wavelength_center"), params_local.get("lambda"), 1.0e-6)
+    )
+    comparisons.append(
+        (metadata.get("theta_center"), params_local.get("theta_initial"), 1.0e-6)
+    )
+
+    matched_checks = 0
+    for logged_value, requested_value, tol in comparisons:
+        try:
+            logged_float = float(logged_value)
+            requested_float = float(requested_value)
+        except Exception:
+            continue
+        if not (np.isfinite(logged_float) and np.isfinite(requested_float)):
+            continue
+        matched_checks += 1
+        if abs(float(logged_float) - float(requested_float)) > float(tol):
+            return False
+    return matched_checks > 0
+
+
+def _geometry_manual_rebuild_source_rows_for_background(
+    background_index: int,
+    param_set: dict[str, object] | None = None,
+    *,
+    consumer: str | None = None,
+    prior_diagnostics: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    background_idx = int(background_index)
+    lookup_context = str(consumer or "unspecified")
+    params_local = dict(_current_geometry_fit_params())
+    if isinstance(param_set, Mapping):
+        params_local.update(dict(param_set))
+    requested_signature = _geometry_source_snapshot_signature_for_background(
+        background_idx,
+        params_local,
+    )
+    requested_signature_summary = _live_cache_signature_summary(requested_signature)
+    can_use_live_runtime_cache = (
+        background_idx == int(background_runtime_state.current_background_index)
+    )
+
+    image_size_value = int(image_size)
+    rebuild_attempts: list[str] = []
+
+    def _project_rows(
+        raw_rows: Sequence[object] | None,
+    ) -> list[dict[str, object]]:
+        projected_rows = (
+            _project_geometry_manual_peaks_to_current_view(raw_rows)
+            if callable(_project_geometry_manual_peaks_to_current_view)
+            else raw_rows
+        )
+        return [
+            dict(entry)
+            for entry in (projected_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+
+    def _store_success(
+        raw_rows: Sequence[object] | None,
+        *,
+        rebuild_source: str,
+        peak_table_lattice: Sequence[object] | None = None,
+        hit_tables_local: Sequence[object] | None = None,
+        intersection_cache_local: Sequence[object] | None = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        stored_rows = [
+            dict(entry)
+            for entry in (raw_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+        if not stored_rows:
+            return []
+
+        if hit_tables_local is not None:
+            try:
+                max_positions_local = hit_tables_to_max_positions(hit_tables_local)
+            except Exception:
+                max_positions_local = np.empty((0, 6), dtype=np.float64)
+            simulation_runtime_state.stored_max_positions_local = list(
+                max_positions_local
+            )
+        if peak_table_lattice is not None:
+            simulation_runtime_state.stored_peak_table_lattice = list(
+                peak_table_lattice
+            )
+        simulation_runtime_state.stored_sim_image = np.zeros(
+            (int(image_size_value), int(image_size_value)),
+            dtype=np.float64,
+        )
+        if intersection_cache_local is not None:
+            simulation_runtime_state.stored_intersection_cache = (
+                _copy_intersection_cache_tables(intersection_cache_local)
+            )
+        simulation_runtime_state.last_simulation_signature = requested_signature
+        _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
+
+        snapshot_payload = {
+            "background_index": int(background_idx),
+            "simulation_signature": requested_signature,
+            "rows": [dict(entry) for entry in stored_rows],
+            "row_count": int(len(stored_rows)),
+            "created_from": str(rebuild_source),
+        }
+        if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
+            simulation_runtime_state.source_row_snapshots[int(background_idx)] = (
+                snapshot_payload
+            )
+        projected_rows = _project_rows(stored_rows)
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="rebuild",
+            consumer=lookup_context,
+            status="snapshot_hit",
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=requested_signature,
+            stored_signature_summary=requested_signature_summary,
+            raw_peak_count=int(len(stored_rows)),
+            projected_peak_count=int(len(projected_rows)),
+            created_from=str(rebuild_source),
+            cache_source="source_snapshot_rebuild",
+            rebuild_source=str(rebuild_source),
+            signature_match=True,
+            rebuild_attempts=list(rebuild_attempts),
+            cache_metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+            live_cache_inventory=live_cache_inventory,
+        )
+        _trace_live_cache_event(
+            "source_snapshot",
+            "rebuild",
+            background_index=int(background_idx),
+            outcome="success",
+            consumer=lookup_context,
+            status="snapshot_hit",
+            requested_signature_summary=requested_signature_summary,
+            raw_peak_count=int(len(stored_rows)),
+            projected_peak_count=int(len(projected_rows)),
+            rebuild_source=str(rebuild_source),
+        )
+        return projected_rows
+
+    if can_use_live_runtime_cache:
+        rebuild_attempts.append("live_runtime_cache")
+        live_rows = [
+            dict(entry)
+            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
+            if isinstance(entry, Mapping)
+        ]
+        if live_rows:
+            return _store_success(
+                live_rows,
+                rebuild_source="live_runtime_cache",
+            )
+
+    rebuild_attempts.append("last_intersection_cache_memory")
+    memory_intersection_cache = get_last_intersection_cache()
+    memory_hit_tables = intersection_cache_to_hit_tables(memory_intersection_cache)
+    memory_rows, memory_lattice, memory_hit_tables = (
+        _geometry_manual_build_source_rows_from_hit_tables(
+            memory_hit_tables,
+            image_size_value=image_size_value,
+            params_local=params_local,
+            allow_nominal_hkl_indices=True,
+        )
+    )
+    if memory_rows:
+        return _store_success(
+            memory_rows,
+            rebuild_source="last_intersection_cache_memory",
+            peak_table_lattice=memory_lattice,
+            hit_tables_local=memory_hit_tables,
+            intersection_cache_local=memory_intersection_cache,
+        )
+
+    rebuild_attempts.append("last_intersection_cache_log")
+    logged_intersection_cache, logged_metadata = (
+        load_most_recent_logged_intersection_cache()
+    )
+    if _geometry_manual_logged_cache_matches_params(logged_metadata, params_local):
+        logged_hit_tables = intersection_cache_to_hit_tables(logged_intersection_cache)
+        logged_rows, logged_lattice, logged_hit_tables = (
+            _geometry_manual_build_source_rows_from_hit_tables(
+                logged_hit_tables,
+                image_size_value=image_size_value,
+                params_local=params_local,
+                allow_nominal_hkl_indices=True,
+            )
+        )
+        if logged_rows:
+            return _store_success(
+                logged_rows,
+                rebuild_source="last_intersection_cache_log",
+                peak_table_lattice=logged_lattice,
+                hit_tables_local=logged_hit_tables,
+                intersection_cache_local=logged_intersection_cache,
+                metadata=logged_metadata,
+            )
+
+    rebuild_attempts.append("fresh_simulation")
+    try:
+        fresh_hit_tables = _simulate_hit_tables_for_fit(
+            miller,
+            intensities,
+            image_size_value,
+            params_local,
+        )
+    except Exception:
+        fresh_hit_tables = []
+    fresh_rows, fresh_lattice, fresh_hit_tables = (
+        _geometry_manual_build_source_rows_from_hit_tables(
+            fresh_hit_tables,
+            image_size_value=image_size_value,
+            params_local=params_local,
+            allow_nominal_hkl_indices=True,
+        )
+    )
+    if fresh_rows:
+        return _store_success(
+            fresh_rows,
+            rebuild_source="fresh_simulation",
+            peak_table_lattice=fresh_lattice,
+            hit_tables_local=fresh_hit_tables,
+        )
+
+    live_cache_inventory = _live_cache_inventory_snapshot()
+    _set_geometry_manual_source_snapshot_diagnostics(
+        source="source_snapshot",
+        cache_family="source_snapshot",
+        action="rebuild",
+        consumer=lookup_context,
+        status="snapshot_rebuild_failed",
+        background_index=int(background_idx),
+        requested_signature=requested_signature,
+        requested_signature_summary=requested_signature_summary,
+        raw_peak_count=0,
+        projected_peak_count=0,
+        signature_match=False,
+        rebuild_attempts=list(rebuild_attempts),
+        prior_diagnostics=(
+            dict(prior_diagnostics) if isinstance(prior_diagnostics, Mapping) else {}
+        ),
+        live_cache_inventory=live_cache_inventory,
+    )
+    _trace_live_cache_event(
+        "source_snapshot",
+        "rebuild",
+        background_index=int(background_idx),
+        outcome="failed",
+        consumer=lookup_context,
+        status="snapshot_rebuild_failed",
+        requested_signature_summary=requested_signature_summary,
+    )
+    return []
+
+
 def _geometry_manual_source_rows_for_background(
     background_index: int,
     param_set: dict[str, object] | None = None,
@@ -13051,6 +13557,9 @@ def _geometry_manual_source_rows_for_background(
 ) -> list[dict[str, object]]:
     background_idx = int(background_index)
     lookup_context = str(consumer or "unspecified")
+    # Import/manual-overlay refreshes should reuse restored peak records and
+    # avoid forcing a rebuild until geometry-fit preflight explicitly needs one.
+    allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")
     requested_signature = _geometry_source_snapshot_signature_for_background(
         background_idx,
         param_set,
@@ -13087,6 +13596,15 @@ def _geometry_manual_source_rows_for_background(
             projected_peak_count=0,
             signature_match=False,
         )
+        if allow_source_snapshot_rebuild:
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
         return []
     snapshot_signature = snapshot.get("simulation_signature")
     stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
@@ -13129,6 +13647,15 @@ def _geometry_manual_source_rows_for_background(
             projected_peak_count=0,
             signature_match=False,
         )
+        if allow_source_snapshot_rebuild:
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
         return []
     if not raw_rows:
         live_cache_inventory = _live_cache_inventory_snapshot()
@@ -13163,6 +13690,15 @@ def _geometry_manual_source_rows_for_background(
             projected_peak_count=0,
             signature_match=True,
         )
+        if allow_source_snapshot_rebuild:
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
         return []
     projected_rows = (
         _project_geometry_manual_peaks_to_current_view(raw_rows)
@@ -17816,38 +18352,20 @@ def _update_analysis_peak_pick_button_label() -> None:
 
 
 def _analysis_peak_fit_results_text() -> str:
-    lines: list[str] = []
-
-    def _append_axis_lines(title: str, entries: Sequence[dict[str, object]]) -> None:
-        if not entries:
-            return
-        lines.append(title)
-        for entry in entries:
-            model_label = str(entry.get("label", entry.get("model", "Fit")))
-            peak_index = int(entry.get("peak_index", 0))
-            axis_value = float(entry.get("selected_axis_value", np.nan))
-            if not bool(entry.get("success", False)):
-                error_text = str(entry.get("error", "fit failed"))
-                lines.append(
-                    f"P{peak_index} @ {axis_value:.4f} deg {model_label}: {error_text}"
-                )
-                continue
-            detail = (
-                f"P{peak_index} @ {axis_value:.4f} deg {model_label}: "
-                f"center={float(entry.get('center', np.nan)):.4f} deg, "
-                f"FWHM={float(entry.get('fwhm', np.nan)):.4f} deg"
-            )
-            if "eta" in entry:
-                detail += f", eta={float(entry.get('eta', np.nan)):.3f}"
-            elif "sigma" in entry:
-                detail += f", sigma={float(entry.get('sigma', np.nan)):.4f} deg"
-            elif "gamma" in entry:
-                detail += f", gamma={float(entry.get('gamma', np.nan)):.4f} deg"
-            detail += f", rmse={float(entry.get('rmse', np.nan)):.4g}"
-            lines.append(detail)
-
-    _append_axis_lines("Radial fits:", analysis_peak_selection_state.radial_fit_results)
-    _append_axis_lines("Azimuth fits:", analysis_peak_selection_state.azimuth_fit_results)
+    lines = [
+        line
+        for line in (
+            gui_analysis_peak_tools.format_peak_fit_axis_summary(
+                "Radial",
+                analysis_peak_selection_state.radial_fit_results,
+            ),
+            gui_analysis_peak_tools.format_peak_fit_axis_summary(
+                "Azimuth",
+                analysis_peak_selection_state.azimuth_fit_results,
+            ),
+        )
+        if line
+    ]
     if not lines:
         return _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT
     return "\n".join(lines)
@@ -18276,10 +18794,15 @@ def _render_analysis_plot_controls(
     _clear_widget_children(parent)
 
     analysis_1d_interaction_bindings = None
-    _mount_analysis_figure(parent)
+    plot_host = ttk.Frame(parent)
+    plot_host.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    range_host = ttk.Frame(parent, padding=(0, 10, 0, 0))
+    range_host.pack(side=tk.TOP, fill=tk.X)
+
+    _mount_analysis_figure(plot_host)
 
     gui_integration_range_drag.create_runtime_integration_range_controls(
-        parent=parent,
+        parent=range_host,
         views_module=gui_views,
         view_state=integration_range_controls_view_state,
         show_1d_var=analysis_view_controls_view_state.show_1d_var,
@@ -19468,6 +19991,13 @@ gui_views.populate_app_shell_quick_controls(
             "command": _clear_analysis_integration_region,
         },
         {
+            "key": "show_beam_center_spot",
+            "label": "Beam center spot",
+            "control_type": "check",
+            "variable": analysis_view_controls_view_state.show_beam_center_spot_var,
+            "command": _toggle_beam_center_spot,
+        },
+        {
             "key": "log_display",
             "label": "Log display",
             "control_type": "check",
@@ -19488,6 +20018,11 @@ gui_views.populate_app_shell_quick_controls(
             "step": 0.01,
         },
     ],
+)
+analysis_view_controls_view_state.check_beam_center_spot = (
+    app_shell_view_state.quick_control_widgets.get("show_beam_center_spot", {}).get(
+        "checkbutton"
+    )
 )
 geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
     app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
@@ -19805,12 +20340,16 @@ geometry_fit_runtime_workflow = (
             "geometry_manual_source_rows_for_background": (
                 _geometry_manual_source_rows_for_background
             ),
+            "geometry_manual_rebuild_source_rows_for_background": (
+                _geometry_manual_rebuild_source_rows_for_background
+            ),
             "geometry_manual_last_source_snapshot_diagnostics": (
                 _geometry_manual_last_source_snapshot_diagnostics
             ),
             "geometry_manual_last_simulation_diagnostics": (
                 _geometry_manual_last_simulation_diagnostics
             ),
+            "geometry_manual_match_config": _current_geometry_manual_match_config,
             "geometry_manual_entry_display_coords": (
                 _geometry_manual_entry_display_coords
             ),

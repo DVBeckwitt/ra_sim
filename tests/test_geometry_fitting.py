@@ -163,6 +163,106 @@ def test_build_global_point_matches_uses_global_assignment():
     )
 
 
+def test_dynamic_point_match_reanchors_measured_anchor_and_reports_motion(
+    monkeypatch,
+):
+    calls: dict[str, object] = {}
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_reanchor(
+        measured_entry,
+        simulated_detector_point,
+        *,
+        local_params=None,
+        dataset_ctx=None,
+    ):
+        calls["reanchor"] = {
+            "measured_entry": dict(measured_entry),
+            "simulated_detector_point": tuple(simulated_detector_point),
+            "dataset_index": (
+                int(dataset_ctx.dataset_index) if dataset_ctx is not None else None
+            ),
+        }
+        return {
+            "x": float(simulated_detector_point[0]),
+            "y": float(simulated_detector_point[1]),
+            "detector_x": float(simulated_detector_point[0]),
+            "detector_y": float(simulated_detector_point[1]),
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "peak-0",
+                "hkl": (1, 0, 0),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "detector_x": 6.0,
+                "detector_y": 6.0,
+                "x": 6.0,
+                "y": 6.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        dynamic_reanchor_enabled=True,
+        dynamic_reanchor_callback=fake_reanchor,
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+
+    residual, diagnostics, summary = (
+        opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+            local,
+            dataset_ctx,
+            image_size=32,
+            missing_pair_penalty_deg=5.0,
+            theta_value=0.0,
+            collect_diagnostics=True,
+        )
+    )
+
+    assert calls["reanchor"]["simulated_detector_point"] == (12.0, 12.0)
+    assert calls["reanchor"]["dataset_index"] == 0
+    assert residual.shape == (2,)
+    assert np.allclose(residual, 0.0, atol=1.0e-12)
+    assert diagnostics[0]["measured_reanchor_attempted"] is True
+    assert diagnostics[0]["measured_reanchor_status"] == "updated"
+    assert diagnostics[0]["measured_reanchor_motion_px"] > 0.0
+    assert summary["matched_pair_count"] == 1
+    assert summary["measured_anchor_reanchor_enabled"] is True
+    assert summary["measured_anchor_reanchor_attempt_count"] == 1
+    assert summary["measured_anchor_reanchor_count"] == 1
+    assert summary["measured_anchor_reanchor_fail_count"] == 0
+    assert summary["measured_anchor_motion_max_px"] > 0.0
+
+
 def test_resolve_parallel_worker_count_auto_reserves_two_threads(monkeypatch):
     monkeypatch.setattr(opt, "_available_parallel_thread_budget", lambda: 12)
 

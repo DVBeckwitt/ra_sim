@@ -10,8 +10,9 @@ The scope is the current live pipeline:
 - reciprocal-space integration and mosaic broadening
 - manual point-pick geometry fitting
 - automatic background peak matching
-- geometry-fit-cached mosaic-shape fitting, legacy mosaic-width fitting, and image-space refinement
+- geometry-fit-cached mosaic-shape fitting, legacy mosaic-width fitting, image-space refinement, and ordered-structure detector fitting
 - hBN calibrant ellipse fitting and projective tilt correction
+- stacking-disorder rod modeling, weighted HT mixtures, and Qr grouping
 - debug/logging controls and optional cache-retention policy
 - the full center-of-rotation axis derivation used by the diffraction kernel
 
@@ -20,9 +21,11 @@ No new API is defined here. All names, defaults, equations, and file paths below
 ## Index
 
 - [GUI workflow and views](#gui-workflow-and-views)
+- [Orientational limits and why full 2D fitting matters](#orientational-limits-and-why-full-2d-fitting-matters)
 - [Read This First: The Physical Story of the Pipeline](#read-this-first-the-physical-story-of-the-pipeline)
 - [Code map](#code-map)
 - [Notation and units](#notation-and-units)
+- [Ordered-structure intensity model and detector-space refinement](#ordered-structure-intensity-model-and-detector-space-refinement)
 - [Simulation parameter inventory](#simulation-parameter-inventory)
 - [Forward simulation: strict algorithm](#forward-simulation-strict-algorithm)
 - [Pedagogical view of the optics modes](#pedagogical-view-of-the-optics-modes)
@@ -108,6 +111,72 @@ off-specular groups contribute `phi` line-shape terms only.
 Saving parameter snapshots regularly is the easiest way to keep iterations
 reproducible.
 
+
+## Orientational limits and why full 2D fitting matters
+
+Why this choice: The manuscript draft frames RA-SIM around a narrow but very
+common experimental middle ground. Many layered films are neither single
+crystals nor fully isotropic powders. They are two-dimensional powders: the
+layer normal is approximately aligned to the substrate normal, while the
+crystallites remain azimuthally randomized in plane. Encoding that axial
+symmetry directly is the best tradeoff for RA-SIM because it keeps the forward
+model fast enough for repeated fitting while preserving the detector-space
+signatures that carry mosaic and stacking information.
+
+### Single crystal, 3D powder, and 2D powder
+
+For elastic scattering,
+
+\[
+|\mathbf{k}_i| = |\mathbf{k}_f| = \frac{2\pi}{\lambda},
+\qquad
+\mathbf{Q} = \mathbf{k}_f - \mathbf{k}_i,
+\qquad
+\mathbf{Q} = \mathbf{G}
+\]
+
+at a Bragg condition. The three orientational limits differ in how the weight of
+one reciprocal-lattice vector is distributed before the detector projection.
+
+For a single crystal, one reflection is localized at one reciprocal-space point.
+At a fixed incidence condition the detector therefore records sparse spots.
+
+For a 3D powder, random crystallite orientations smear each reflection over a
+full Bragg sphere. The Ewald-sphere intersection then produces Debye-Scherrer
+rings.
+
+For the 2D powder targeted by RA-SIM, random in-plane rotation about the film
+normal smears each off-specular reflection into an azimuthal ring or, in the
+language used throughout the GUI and code, a `Qr`-equivalent family about the
+`Qz` axis. Specular `(00L)` intensity does not spread around that azimuthal
+ring in the same way; it remains concentrated near the `Qz` axis. The detector
+therefore records hybrid signatures: symmetric off-specular pairs or arcs away
+from the center line, and cap-like or star-like broadening near the specular
+region.
+
+This intermediate orientational state is the physical reason the code separates
+specular and off-specular logic in later fitting stages. Off-specular arcs are
+most sensitive to the core of the mosaic kernel. Specular caps and tails near
+`Qz` are much more sensitive to long-tail probability and to diffuse rod
+intensity from stacking disorder.
+
+### Why the full detector image matters
+
+The manuscript draft also motivates why RA-SIM treats the 2D detector image as
+the primary observable instead of reducing everything to one-dimensional line
+cuts. In a layered film, the features most sensitive to alignment, mosaic tails,
+and stacking disorder are often precisely the features that standard 1D powder
+workflows deweight or remove: the specular stripe, the cap-like specular
+broadening, and the paired off-specular arcs.
+
+That is why the live workflow uses detector-space overlays first, then only uses
+azimuthal/radial integrations as diagnostics. Geometry is anchored from peak
+positions in 2D. Mosaic shape is refined from reflection-local angular ROIs in
+2D. Ordered structure and stacking disorder are assigned only after those
+geometric effects are stabilized. This staged use of the full detector image is
+a direct consequence of the 2D-powder physical picture, not a generic design
+preference.
+
 ## Read This First: The Physical Story of the Pipeline
 
 If you are new to the project, read this section first and then return to the
@@ -175,9 +244,11 @@ for every scattering experiment or every optics regime.
 | Diffraction kernel | [`ra_sim/simulation/diffraction.py`](../ra_sim/simulation/diffraction.py) | Sample/detector geometry, optics, `solve_q`, detector projection, hit-table generation. |
 | Material and optics helpers | [`ra_sim/utils/calculations.py`](../ra_sim/utils/calculations.py) | Refractive index, Fresnel transmission, Bragg-angle helper math. |
 | Geometry and image fitting | [`ra_sim/fitting/optimization.py`](../ra_sim/fitting/optimization.py) | Geometry fitting, geometry-cached mosaic-shape fitting, legacy mosaic-width fitting, image refinement, identifiability analysis. |
+| Ordered-structure detector fit | [`ra_sim/gui/ordered_structure_fit.py`](../ra_sim/gui/ordered_structure_fit.py) | Detector-space mask construction, analytic positive scale solve, and local nonlinear refinement of ordered structural parameters after geometry and mosaic are fixed. |
 | Background peak matching | [`ra_sim/fitting/background_peak_matching.py`](../ra_sim/fitting/background_peak_matching.py) | Measured-summit detection and scored one-to-one simulated/measured matching. |
 | Geometry-fit dataset preparation | [`ra_sim/gui/geometry_fit.py`](../ra_sim/gui/geometry_fit.py), [`ra_sim/gui/geometry_overlay.py`](../ra_sim/gui/geometry_overlay.py), [`ra_sim/gui/_runtime/runtime_impl.py`](../ra_sim/gui/_runtime/runtime_impl.py) | Manual picking, orientation resolution, dataset assembly, overlay bookkeeping. |
-| Rod intensity preprocessing | [`ra_sim/utils/stacking_fault.py`](../ra_sim/utils/stacking_fault.py) | Hendricks-Teller rod intensity generation and Qr grouping. |
+| Rod intensity preprocessing | [`ra_sim/utils/stacking_fault.py`](../ra_sim/utils/stacking_fault.py) | HT base-curve construction, analytical rod intensities, finite-stack correction, and Qr grouping. |
+| Stacking-disorder request assembly | [`ra_sim/gui/structure_model.py`](../ra_sim/gui/structure_model.py), [`ra_sim/gui/diffuse_cif_toggle.py`](../ra_sim/gui/diffuse_cif_toggle.py) | Builds diffuse-HT requests, cached rod mixtures, normalized weight combinations, and export/viewer utilities. |
 | hBN calibrant fitter | [`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py) | Click snapping, robust ellipse fitting, iterative ring refinement, projective tilt optimization. |
 | Instrument defaults | [`config/instrument.yaml`](../config/instrument.yaml) | GUI defaults, solver config, and simulation defaults exposed to users. |
 
@@ -346,6 +417,99 @@ n_{\mathrm{surf}} = \mathrm{normalize}(R_{\mathrm{cor}}\,n_{ZY}),
 and the sample-plane anchor point is rotated as `P0_rot = R_sample @ P0`, then forced to `P0_rot[0] = 0`.
 
 Appendix A expands this into the exact axis construction, Rodrigues form, and reference-point convention used by the kernel.
+
+
+## Ordered-structure intensity model and detector-space refinement
+
+Why this choice: Geometry and mosaic parameters move peaks and reshape line
+profiles. Ordered-structure parameters change reflection-to-reflection intensity
+ratios and, when atom coordinates are released, the detailed detector-space
+intensity inside already-placed ROIs. RA-SIM therefore keeps ordered-structure
+refinement downstream of geometry and mosaic fitting. That staged separation is
+the best tradeoff for the current workflow because it avoids using occupancies,
+Debye-Waller-like damping, or atom-position changes to compensate for basic
+alignment errors.
+
+### Structure factor used by the ordered model
+
+For each reflection with reciprocal vector
+
+\[
+\mathbf{G} = h\mathbf{a}^{*} + k\mathbf{b}^{*} + l\mathbf{c}^{*},
+\]
+
+the ordered intensity model uses the crystallographic structure factor
+
+\[
+F_{\mathbf G} =
+\sum_a
+o_a\,f_a(Q)
+\exp\!\left[2\pi i\,\mathbf G \cdot \mathbf r_a\right]
+\exp\!\left[-2\pi^{2}\,\mathbf G\cdot\mathbf U_a\cdot\mathbf G\right],
+\]
+
+with reflection intensity proportional to `|F_G|^2`. In the manuscript view,
+this is the ordered part of the problem: once a reciprocal-space intersection is
+geometrically allowed, the structure-factor model supplies the ideal reflection
+weight before mosaic redistribution and detector projection.
+
+This logic also explains why the current code does not collapse
+symmetry-equivalent reflections into one geometry-independent multiplicity
+factor. In a 2D powder, the measured strength of symmetry-related reflections is
+not set by multiplicity alone. It also depends on detector geometry, incidence
+condition, the 2D-powder orientation distribution, and whether the reflection is
+sampled in the specular or off-specular region. RA-SIM therefore keeps the
+reflection list explicit and lets effective multiplicity emerge inside the
+forward model.
+
+### Detector-space ordered refinement stage
+
+The implementation path for ordered-structure fitting lives in
+[`ra_sim/gui/ordered_structure_fit.py`](../ra_sim/gui/ordered_structure_fit.py).
+It assumes geometry and mosaic are already fixed and then works directly in
+detector space.
+
+[`build_hybrid_ordered_structure_mask`](../ra_sim/gui/ordered_structure_fit.py)
+builds a fixed detector mask from the current simulated hit tables. It keeps up
+to `max_reflections` of the strongest non-specular reflections and all currently
+available specular reflections, then converts those hit tables into disk-shaped
+ROIs. Specular ROIs are deliberately wider than non-specular ones through the
+`specular_width_scale` factor because the specular region is both broader and
+more sensitive to subtle structural intensity changes.
+
+The nonlinear solve itself is
+[`fit_ordered_structure_parameters`](../ra_sim/gui/ordered_structure_fit.py).
+For one trial parameter vector it requests two detector images from the caller:
+
+- a primary image containing the contribution from the parameters being varied
+- a fixed image containing everything held constant for this stage
+
+Given measured detector image `M`, primary model `P`, fixed component `F`, and
+mask weights `w`, the best non-negative overall scale is solved analytically by
+[`solve_positive_weighted_scale`](../ra_sim/gui/ordered_structure_fit.py):
+
+\[
+s^{*} = \max\left(0,
+\frac{\sum w\,P\,(M-F)}{\sum w\,P^2}
+\right).
+\]
+
+The detector-space residual then becomes
+
+\[
+r = \bigl(s^{*}P + F - M\bigr)\sqrt{w}
+\]
+
+restricted to valid masked pixels. The fitter runs a coarse downsampled stage
+followed by a full-resolution polish, both with `least_squares`, so ordered
+parameters are refined against the same detector-space observable used by the
+rest of the workflow rather than against a separately integrated 1D profile.
+
+In manuscript terms, this is the stage where occupancies, selected atom-site
+fractional coordinates, and related ordered-structure parameters become
+physically interpretable. Disorder is intentionally deferred until after this
+ordered model converges, because diffuse `Qz` intensity can otherwise trade off
+against average structure or broadening.
 
 ## Simulation parameter inventory
 
@@ -1005,6 +1169,48 @@ first place.
 
 The reciprocal-space solve is [`solve_q`](../ra_sim/simulation/diffraction.py). It does not solve a generic nonlinear system; it constructs the exact circle of intersection of two spheres and then integrates the mosaic density along that circle.
 
+
+### 2D-powder mosaicity as a Bragg-sphere density
+
+The manuscript derivation is useful here because it clarifies what the code is
+actually weighting. For a perfect single crystal, one reflection carries its
+full weight at one Bragg point. For a 3D powder, orientational averaging spreads
+that weight uniformly over the full Bragg sphere. For the 2D-powder case used by
+RA-SIM, the intensity is axially symmetric about the film normal but is not
+uniform in polar angle. Out-of-plane misorientation redistributes the ideal
+reflection weight `I0` along the Bragg circle in the `{Gr, Gz}` cross-section.
+
+The local misorientation kernel is the pseudo-Voigt form already used by the
+code,
+
+\[
+\omega(\Delta\theta)
+= (1-\eta)\frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{1}{2}(\Delta\theta/\sigma)^2}
++ \eta\frac{1}{\pi\gamma}\frac{1}{1+(\Delta\theta/\gamma)^2}.
+\]
+
+Physically this kernel is an angular density and should be treated as periodic.
+The supporting derivation in the manuscript writes it as a wrapped distribution
+on `(-\pi, \pi]`. The live kernel implements the same practical idea by using
+`wrap_to_pi(...)` when forming `\Delta\theta`, so equivalent orientations
+separated by `2\pi` map to the same local angular error.
+
+If `\vartheta` is the polar angle on the Bragg sphere and `\vartheta_B` is the
+Bragg position, then the corresponding Bragg-sphere surface density is
+
+\[
+\rho(\vartheta)
+= \frac{I_0}{2\pi G^2\sin\vartheta}\,\omega(\vartheta-\vartheta_B),
+\qquad
+G = |\mathbf G|.
+\]
+
+This is the manuscript-level explanation for the `1/(2\pi |G|^2)` factor that
+appears later in `solve_q(...)`. Off-specular arcs mainly constrain the core of
+`\omega`. Specular caps and off-condition specular persistence constrain the
+Lorentzian-like tails much more strongly because that intensity is not diluted
+around the full azimuthal ring.
+
 ### Sphere-sphere intersection geometry
 
 The next equations define the exact set of allowed `Q` vectors for one
@@ -1510,15 +1716,106 @@ These codes matter when diagnosing missing fits or apparently disappearing refle
 
 ## Rods and stacking disorder
 
-Rod simulations reuse the same detector physics kernel. The difference is the intensity model supplied before the detector trace.
+Why this choice: In the ordered limit, a layered 2D powder is already different
+from both a single crystal and a 3D powder because off-specular reflections are
+spread around the `Qz` axis while specular reflections remain concentrated near
+that axis. Stacking disorder adds a second redistribution: it spreads intensity
+continuously along `L` on those rods or cylinders. RA-SIM keeps that rod physics
+outside the detector kernel and then reuses the same detector trace once a rod
+intensity function `I(h, k, L)` has been prepared. That separation is the best
+tradeoff for the current codebase because geometry, optics, and detector
+projection stay identical for ordered and disordered workflows.
 
-[`analytical_ht_intensity_for_pair`](../ra_sim/utils/stacking_fault.py) implements the analytical Hendricks-Teller intensity for one `(h, k)` rod. Starting from a precomputed `F^2(L)` curve, it flips the user parameter as
+### Physical picture: reciprocal cylinders and diffuse `Qz` intensity
+
+In the manuscript picture, the 2D powder generates reciprocal-space objects that
+are neither isolated Bragg points nor full spherical shells. Random in-plane
+rotation revolves one off-specular Bragg point around the film normal, producing
+an azimuthal ring or cylinder-like family about `Qz`. Specular `(00L)` features
+remain localized near the `Qz` axis. When stacking disorder is introduced,
+coherence along the layer-stacking direction is no longer perfectly periodic, so
+intensity is redistributed along `L` on those same rods.
+
+That is why RA-SIM treats stacking disorder as a late-stage refinement problem.
+Geometry still controls where the rod intensity lands on the detector. Mosaicity
+still controls how that rod intensity is spread over nearby `Q` solutions. But
+once those are stabilized, diffuse intensity near and between specular Bragg
+peaks becomes a direct constraint on the stacking model rather than a proxy for
+alignment error.
+
+### Base ordered `F^2(L)` curves from the active CIF
+
+The public entry point is [`ht_Iinf_dict`](../ra_sim/utils/stacking_fault.py),
+which first calls [`_get_base_curves`](../ra_sim/utils/stacking_fault.py) to
+build one ordered base curve for each `(h, k)` family. For one reciprocal-space
+coordinate `(h, k, L)`, the helper uses
+
+\[
+|Q(h,k,L)| = 2\pi\sqrt{\frac{4}{3}\frac{h^2+hk+k^2}{a^2} + \frac{L^2}{c^2}}
+\]
+
+and then evaluates a complex ordered rod amplitude of the form
+
+\[
+F(h,k,L) = \sum_a
+o_a\,f_a\!\bigl(|Q|\bigr)
+\exp\!\left[i2\pi(hx_a + ky_a)\right]
+\exp\!\left[i2\pi L\,\frac{z_a}{z_{\mathrm{div}}}\right],
+\]
+
+with base intensity `F^2(L) = |F(h,k,L)|^2`.
+
+The implementation details that matter are:
+
+- `L_step`, `L_max`, and optional `two_theta_max` define the sampled rod domain.
+- `a_lattice` and `c_lattice` define the active reciprocal-space convention used
+  for detector windowing and the external `L` axis.
+- `phase_z_divisor` rescales the vertical phase term in `F(h, k, L)`.
+- `iodine_single_plane=True` by default. In that mode all iodine contributions
+  are collapsed onto one shared `iodine_z` plane, matching the legacy diffuse
+  viewer behavior.
+- [`_infer_iodine_z_like_diffuse`](../ra_sim/utils/stacking_fault.py) infers
+  the default iodine plane from the CIF, first by looking for an `I1` entry and
+  then by falling back to the first iodine site in the generated structure.
+
+A subtle but important legacy convention is preserved by
+[`_get_base_curves`](../ra_sim/utils/stacking_fault.py): two-theta clipping uses
+the active `a_lattice` and `c_lattice`, but the `|Q|` values used inside the
+form-factor evaluation remain tied to the diffuse reference axes `A_HEX` and the
+raw CIF `c` parameter. That matches the old diffuse workflow and therefore takes
+precedence over a cleaner but incompatible reinterpretation.
+
+Another implementation detail worth making explicit is occupancy handling. The
+cache key accepts an occupancy mapping and the public `ht_Iinf_dict(...)`
+signature exposes `occ`, but the current base-curve builder still constructs the
+site list with `occ_factors=1.0` in order to preserve the legacy diffuse
+behavior. The live GUI path therefore relies more on the active CIF geometry,
+active iodine plane, and HT parameters than on a truly occupancy-sensitive
+`F^2(L)` base curve. If diffuse intensity must track occupancy sliders exactly,
+audit this path directly.
+
+### Analytical Hendricks-Teller correction used by RA-SIM
+
+After `F^2(L)` is prepared, [`analytical_ht_intensity_for_pair`](../ra_sim/utils/stacking_fault.py)
+applies the analytical Hendricks-Teller correction for one `(h, k)` rod. The
+current implementation follows the diffuse viewer convention exactly.
+
+First the user parameter is flipped,
 
 \[
 p_{\mathrm{flipped}} = 1 - p_{\mathrm{user}},
 \]
 
-forms
+then the phase term `\delta(h, k, L, p)` is evaluated from the validated
+expression string. The default is
+
+\[
+\delta(h,k,L,p) = 2\pi\left(\frac{2h + k}{3}\right),
+\]
+
+implemented by `phase_delta_expression = "2*pi*((2*h + k)/3)"`.
+
+With that `\delta`, the code forms
 
 \[
 z = (1-p_{\mathrm{flipped}}) + p_{\mathrm{flipped}} e^{i\delta},
@@ -1528,28 +1825,104 @@ f = \min(|z|,\; 1 - P_{\mathrm{CLAMP}}),
 \psi = \arg(z),
 \]
 
-then uses
+and defines the HT phase as
 
 \[
-\phi = \delta + \frac{2\pi L}{\phi_{L,\mathrm{divisor}}}
+\phi = \delta + \frac{2\pi L}{\phi_{L,\mathrm{divisor}}}.
 \]
 
-inside either the infinite-layer correction
+The infinite-stack correction is
 
 \[
 R_{\infty}
-= \frac{1-f^2}{1+f^2-2f\cos(\phi-\psi)}
+= \frac{1-f^2}{1+f^2-2f\cos(\phi-\psi)}.
 \]
 
-or the finite-layer form. The returned rod intensity is `AREA * F^2 * R`.
-
-[`ht_dict_to_qr_dict`](../ra_sim/utils/stacking_fault.py) then groups rods by
+If finite stacking is requested, the code instead uses the closed-form finite
+series through [`_finite_R_from_t`](../ra_sim/utils/stacking_fault.py) with
 
 \[
-m = h^2 + hk + k^2
+t = f\,e^{i(\phi-\psi)}.
 \]
 
-so Qr-equivalent rods can be traced together by the same detector machinery.
+The final rod intensity returned by the analytical helper is
+
+\[
+I(h,k,L) = \mathrm{AREA}\,F^2(L)\,R,
+\]
+
+where `R` is either the infinite-stack or finite-stack factor.
+
+The older transfer-matrix helpers such as [`_I_inf_markov`](../ra_sim/utils/stacking_fault.py)
+and [`_R_from_transfer`](../ra_sim/utils/stacking_fault.py) remain in the file
+for backwards compatibility, but the live GUI and CLI disorder path uses the
+analytical formula above.
+
+A second convention that matters in practice is divisor handling. In
+[`ht_Iinf_dict`](../ra_sim/utils/stacking_fault.py), `phase_z_divisor` defaults
+to the normalized `phi_l_divisor` when it is omitted. So the live GUI and CLI
+normally use one shared divisor for both the ordered `F^2(L)` vertical phase and
+the HT correlation phase.
+
+### Finite stack, mixtures, and user-facing controls
+
+The live GUI and CLI do not stop at one HT curve. They usually build three
+component curves with different `p` values, then combine them by normalized raw
+weights.
+
+Default user-facing HT controls from [`config/instrument.yaml`](../config/instrument.yaml)
+and the runtime fallbacks are:
+
+| Name | Default | Role |
+| --- | --- | --- |
+| `hendricks_teller.default_p` | `[0.01, 0.99, 0.5]` | Three component stacking parameters shown in the GUI. |
+| `hendricks_teller.default_w` | `[100.0, 0.0, 0.0]` | Raw component weights before normalization. |
+| `hendricks_teller.phase_delta_expression` | `"2*pi*((2*h + k)/3)"` | Default HT slip-phase expression. |
+| `hendricks_teller.phi_l_divisor` | `1.0` | Shared divisor for `L`-phase terms unless overridden. |
+| `hendricks_teller.max_miller_index` | `19` | Maximum generated `(h, k)` range for rod caches. |
+| `hendricks_teller.include_rods` | `false` | Separate GUI flag for fractional-rod injection in the ordered structure model. |
+| runtime `finite_stack` fallback | `True` | Use finite-stack HT correction when config omits the key. |
+| runtime `stack_layers` fallback | `50` | Layer count used with `finite_stack=True` when config omits the key. |
+
+Raw weights are normalized by
+[`normalize_stacking_weight_values`](../ra_sim/gui/controllers.py), and
+[`combine_ht_dicts`](../ra_sim/gui/structure_model.py) then adds the component
+curves on a union `L` grid. That weighted sum is the actual diffuse rod model
+seen by the simulation path.
+
+Rod sampling density is exposed through `rod_points_per_gz`. The GUI converts it
+into the rod spacing
+
+\[
+L_{\mathrm{step}} = \frac{c_{\mathrm{lattice}}}{2\pi\,\mathrm{points\_per\_gz}}
+\]
+
+through
+[`rod_l_step_from_points_per_gz`](../ra_sim/gui/controllers.py). The diffuse
+viewer/export path keeps the canonical full rod domain `L in [0, 10]`, while the
+simulation caches can clip to the detector window through `two_theta_max`.
+
+### `Qr` grouping and detector reuse
+
+Once HT curves are built, [`ht_dict_to_qr_dict`](../ra_sim/utils/stacking_fault.py)
+groups them by the hexagonal radial class
+
+\[
+m = h^2 + hk + k^2.
+\]
+
+Curves with the same `m` share the same in-plane `Qr` magnitude, so their rod
+intensities can be combined before detector tracing. If their `L` grids differ,
+the implementation interpolates both curves onto the union grid and then sums the
+intensities. The grouped dictionary stores one representative `(h, k)`, the
+combined `L`/`I` arrays, and the accumulated degeneracy.
+
+[`qr_dict_to_arrays`](../ra_sim/utils/stacking_fault.py) then converts that
+representation back into `(H, K, L)` arrays, intensity arrays, and degeneracy
+arrays that the forward simulator can consume. At that point the disorder model
+is done. The detector image is still generated by the same optics, reciprocal
+solve, detector projection, and bilinear deposition used for ordinary HKL
+simulation.
 
 ## Geometry fitting from picked spots
 
@@ -1596,12 +1969,25 @@ For each selected background it:
 1. loads the saved manual pairs
 2. loads the native and display background images
 3. applies the backend orientation used by the geometry-fit path
-4. rebuilds simulated peaks for the current parameter set, including `theta_initial = theta_base + theta_offset`
+4. restores or rebuilds the source-row snapshot for the current parameter set, including `theta_initial = theta_base + theta_offset`
 5. maps any saved fixed source references through `(source_table_index, source_row_index)` into the current simulated peak list
 6. unrotates the measured display picks back to the native frame
 7. constructs paired simulated/native and measured/native coordinates
 8. runs [`select_fit_orientation`](../ra_sim/gui/geometry_overlay.py)
 9. applies the chosen orientation transform to both the measured peaks and the experimental image
+
+If the saved GUI state has `manual_pairs` but no live source snapshot or no
+restored peak records, dataset preparation now treats that as a rebuildable
+state rather than a hard failure. The rebuild order is:
+
+1. current live runtime peak/source artifacts
+2. the last retained in-memory intersection cache
+3. the most recent logged intersection cache, when its saved lattice and
+   wavelength signature matches the active request
+4. a fresh simulation
+
+Only after those paths fail does the geometry-fit preflight stop with a source
+snapshot error.
 
 The orientation search considers detector indexing mode, 90 degree rotations, and x/y flips. The default acceptance logic in [`select_fit_orientation`](../ra_sim/gui/geometry_overlay.py) is:
 
@@ -1620,7 +2006,7 @@ If those criteria fail, the fitter falls back to the identity transform.
 - reflections referenced by fixed saved source indices `(source_table_index, source_row_index)`
 - reflections needed by HKL fallback matching
 
-The fixed-source path matters because saved manual picks can outlive changes in reflection ordering. The HKL fallback matters because source-table references can become stale after clearing or re-adding picks.
+The fixed-source path matters because saved manual picks can outlive changes in reflection ordering. The HKL fallback matters because source-table references can become stale after clearing or re-adding picks. When the original saved row or peak key no longer resolves, the live path now falls back in order through q-group-backed matching, HKL-backed matching, and cache-backed row recovery, and records the chosen resolution kind in the dataset diagnostics.
 
 ### Point-match residual construction
 
@@ -1629,29 +2015,40 @@ are intentionally simple: the fitter first wants to know whether simulated and
 measured peak centers coincide before it worries about line shape or local
 intensity structure.
 
-The live residual is [`_evaluate_geometry_fit_dataset_point_matches`](../ra_sim/fitting/optimization.py).
+The saved-manual fixed-source path uses [`_evaluate_geometry_fit_dataset_dynamic_point_matches`](../ra_sim/fitting/optimization.py). The older generic point-matching helper [`_evaluate_geometry_fit_dataset_point_matches`](../ra_sim/fitting/optimization.py) still exists for non-manual workflows.
 
 For each dataset, the solver:
 
 1. simulates only the reduced reflection subset
 2. converts hit tables into up to two subpixel simulated centers per reflection with `hit_tables_to_max_positions`
 3. resolves fixed-source matches first
-4. groups remaining measured points by HKL
-5. matches fallback points against the simulated centers for that HKL
-6. writes one fixed two-component residual slot `(dx, dy)` per measured point
+4. re-anchors the measured/background point against the current detector image when dynamic manual re-anchoring is enabled
+5. groups remaining measured points by HKL
+6. matches fallback points against the simulated centers for that HKL
+7. writes one fixed two-component residual slot in fit space per measured point
 
 The fixed residual length is important. The code explicitly keeps the residual vector shape constant because SciPy finite-difference Jacobians become unstable if points appear and disappear between evaluations.
 
-For one matched point,
+Manual geometry fit therefore no longer behaves as one frozen pair list after
+the first click collection. The saved source identity is still respected, but
+the live simulated detector point is rebuilt from the current simulation and the
+measured/background anchor is re-refined from the current background image each
+time detector geometry, lattice constants, wavelength, or shared theta move.
+That iterative re-anchoring continues until the nonlinear solve converges or its
+iteration limit is reached.
+
+For one matched point in the saved-manual fixed-source path,
 
 \[
-r = \begin{bmatrix}\Delta x \\ \Delta y\end{bmatrix}
+r = \begin{bmatrix}\Delta(2\theta) \\ \Delta\phi\end{bmatrix}
 =
 \begin{bmatrix}
-x_{\mathrm{sim}} - x_{\mathrm{meas}} \\
-y_{\mathrm{sim}} - y_{\mathrm{meas}}
+(2\theta)_{\mathrm{sim}} - (2\theta)_{\mathrm{meas}} \\
+\mathrm{wrap}\!\left(\phi_{\mathrm{sim}} - \phi_{\mathrm{meas}}\right)
 \end{bmatrix}.
 \]
+
+The weighting discussion below applies to the generic point-matching path when `weighted_matching` is enabled.
 
 If `weighted_matching` is enabled, the residual first gets the distance downweight
 
@@ -2924,8 +3321,12 @@ That keeps the main simulation and the debug path on the same axis convention.
 | Geometry nonlinear solve and identifiability | [`fit_geometry_parameters`](../ra_sim/fitting/optimization.py) |
 | Background summit detection and matching | [`build_background_peak_context`](../ra_sim/fitting/background_peak_matching.py), [`match_simulated_peaks_to_peak_context`](../ra_sim/fitting/background_peak_matching.py) |
 | Geometry-cached mosaic-shape fitting | [`fit_mosaic_shape_parameters`](../ra_sim/fitting/optimization.py) |
+| Ordered-structure detector mask and scale solve | [`build_hybrid_ordered_structure_mask`](../ra_sim/gui/ordered_structure_fit.py), [`solve_positive_weighted_scale`](../ra_sim/gui/ordered_structure_fit.py), [`fit_ordered_structure_parameters`](../ra_sim/gui/ordered_structure_fit.py) |
 | Legacy mosaic-width fitting | [`fit_mosaic_widths_separable`](../ra_sim/fitting/optimization.py) |
 | Image-space refinement | [`build_tube_rois`](../ra_sim/fitting/optimization.py), [`robust_residuals`](../ra_sim/fitting/optimization.py), [`iterative_refinement`](../ra_sim/fitting/optimization.py) |
+| HT base-curve generation and iodine-plane handling | [`_get_base_curves`](../ra_sim/utils/stacking_fault.py), [`_infer_iodine_z_like_diffuse`](../ra_sim/utils/stacking_fault.py), [`_F2`](../ra_sim/utils/stacking_fault.py) |
+| HT analytical rod correction and finite-stack factor | [`analytical_ht_intensity_for_pair`](../ra_sim/utils/stacking_fault.py), [`_finite_R_from_t`](../ra_sim/utils/stacking_fault.py) |
+| HT cache assembly, weighting, and `Qr` grouping | [`build_ht_cache`](../ra_sim/gui/structure_model.py), [`combine_ht_dicts`](../ra_sim/gui/structure_model.py), [`ht_dict_to_qr_dict`](../ra_sim/utils/stacking_fault.py), [`qr_dict_to_arrays`](../ra_sim/utils/stacking_fault.py) |
 | hBN robust ellipse fitting | [`robust_fit_ellipse`](../ra_sim/hbn_fitter/fitter.py), [`weighted_refine_ellipse`](../ra_sim/hbn_fitter/fitter.py) |
 | hBN snap-to-ring and uncertainty estimate | [`snap_points_to_ring`](../ra_sim/hbn_fitter/fitter.py), `_estimate_snap_uncertainty_px` in the same file |
 | hBN iterative ring refinement | [`refine_ellipse`](../ra_sim/hbn_fitter/fitter.py) |

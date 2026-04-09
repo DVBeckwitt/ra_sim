@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -131,6 +131,36 @@ def profile_model_label(model: str) -> str:
     if normalized == PROFILE_PSEUDO_VOIGT:
         return "Pseudo-Voigt"
     return str(model)
+
+
+def format_peak_fit_axis_summary(
+    axis_label: str,
+    entries: Sequence[Mapping[str, object]] | None,
+) -> str:
+    """Return one compact fit-summary line for a radial or azimuth axis."""
+
+    normalized_entries = [entry for entry in (entries or ()) if isinstance(entry, Mapping)]
+    if not normalized_entries:
+        return ""
+
+    successful_entries = [
+        entry for entry in normalized_entries if bool(entry.get("success", False))
+    ]
+    prefix = f"{str(axis_label)}: {len(successful_entries)}/{len(normalized_entries)} fits"
+    if successful_entries:
+        best_entry = min(
+            successful_entries,
+            key=lambda entry: _fit_entry_rmse_sort_key(entry),
+        )
+        best_text = _format_peak_fit_entry_detail(best_entry)
+        if best_text:
+            return f"{prefix}; best {best_text}"
+        return prefix
+
+    failure_text = _format_peak_fit_entry_failure(normalized_entries[-1])
+    if failure_text:
+        return f"{prefix}; last failure {failure_text}"
+    return prefix
 
 
 def recommended_peak_window_half_width(
@@ -394,3 +424,80 @@ def _prepare_curve_samples(
     y_arr = y_arr[finite_mask]
     order = np.argsort(x_arr)
     return np.asarray(x_arr[order], dtype=float), np.asarray(y_arr[order], dtype=float)
+
+
+def _fit_entry_rmse_sort_key(entry: Mapping[str, object]) -> tuple[float, int]:
+    try:
+        rmse = float(entry.get("rmse", float("inf")))
+    except Exception:
+        rmse = float("inf")
+    if not np.isfinite(rmse):
+        rmse = float("inf")
+
+    try:
+        peak_index = int(entry.get("peak_index", 0))
+    except Exception:
+        peak_index = 0
+    return float(rmse), int(peak_index)
+
+
+def _fit_entry_prefix(entry: Mapping[str, object]) -> str:
+    model_label = str(
+        entry.get("label")
+        or profile_model_label(str(entry.get("model", "Fit")))
+    ).strip()
+
+    prefix_parts: list[str] = []
+    try:
+        peak_index = int(entry.get("peak_index", 0))
+    except Exception:
+        peak_index = 0
+    if peak_index > 0:
+        prefix_parts.append(f"P{peak_index}")
+    if model_label:
+        prefix_parts.append(model_label)
+    return " ".join(prefix_parts)
+
+
+def _fit_entry_axis_position_text(entry: Mapping[str, object]) -> str:
+    try:
+        axis_value = float(entry.get("selected_axis_value", np.nan))
+    except Exception:
+        axis_value = float("nan")
+    if np.isfinite(axis_value):
+        return f"@ {axis_value:.4f} deg"
+    return ""
+
+
+def _format_peak_fit_entry_detail(entry: Mapping[str, object]) -> str:
+    prefix = _fit_entry_prefix(entry)
+    axis_text = _fit_entry_axis_position_text(entry)
+
+    detail_parts: list[str] = []
+    for key, label_text, precision in (
+        ("center", "center", ".4f"),
+        ("fwhm", "FWHM", ".4f"),
+        ("rmse", "RMSE", ".4g"),
+    ):
+        try:
+            value = float(entry.get(key, np.nan))
+        except Exception:
+            value = float("nan")
+        if np.isfinite(value):
+            detail_parts.append(f"{label_text} {value:{precision}}")
+
+    detail = ", ".join(detail_parts)
+    text = " ".join(part for part in (prefix, axis_text) if part).strip()
+    if detail:
+        return f"{text}; {detail}" if text else detail
+    return text
+
+
+def _format_peak_fit_entry_failure(entry: Mapping[str, object]) -> str:
+    prefix = _fit_entry_prefix(entry)
+    axis_text = _fit_entry_axis_position_text(entry)
+    error_text = " ".join(str(entry.get("error", "fit failed") or "fit failed").split())
+    text = " ".join(part for part in (prefix, axis_text) if part).strip()
+    if text:
+        return f"{text}: {error_text}"
+    return error_text

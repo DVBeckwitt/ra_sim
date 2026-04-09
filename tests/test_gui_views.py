@@ -956,6 +956,7 @@ def test_open_analysis_popout_window_populates_and_reuses_existing_window(
         "Toplevel",
         lambda _root: created_windows.append(_FakeWindow()) or created_windows[-1],
     )
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
@@ -982,6 +983,12 @@ def test_open_analysis_popout_window_populates_and_reuses_existing_window(
     assert isinstance(view_state.exports_frame, _FakeFrame)
     assert isinstance(view_state.peak_tools_frame, _FakeFrame)
     assert isinstance(view_state.plot_frame, _FakeFrame)
+    assert isinstance(view_state.exports_frame.parent, _FakeCollapsibleFrame)
+    assert view_state.exports_frame.parent.text == "Exports"
+    assert view_state.exports_frame.parent.expanded is False
+    assert isinstance(view_state.peak_tools_frame.parent, _FakeCollapsibleFrame)
+    assert view_state.peak_tools_frame.parent.text == "Peak Picking and Fitting"
+    assert view_state.peak_tools_frame.parent.expanded is True
     assert view_state.dock_button is _FakeButton.created[0]
     assert view_state.dock_button.kwargs["text"] == "Dock Back"
 
@@ -1006,6 +1013,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     _FakeScrollbar.created = []
     _FakeCanvas.created = []
     monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
@@ -1070,8 +1078,13 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.match_canvas, _FakeCanvas)
     assert isinstance(view_state.refine_basic_canvas, _FakeCanvas)
     assert isinstance(view_state.refine_advanced_canvas, _FakeCanvas)
+    assert isinstance(view_state.match_header_frame, _FakeFrame)
+    assert isinstance(view_state.match_footer_frame, _FakeFrame)
+    assert isinstance(view_state.match_footer_left, _FakeFrame)
+    assert isinstance(view_state.match_footer_right, _FakeFrame)
     assert isinstance(view_state.fit_actions_frame, _FakeFrame)
     assert isinstance(view_state.match_backgrounds_frame, _FakeFrame)
+    assert isinstance(view_state.match_peak_tools_frame, _FakeFrame)
     assert isinstance(view_state.match_parameter_frame, _FakeFrame)
     assert isinstance(view_state.match_run_frame, _FakeFrame)
     assert isinstance(view_state.match_results_frame, _FakeFrame)
@@ -1081,6 +1094,14 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.analysis_peak_tools_frame, _FakeFrame)
     assert isinstance(view_state.analysis_popout_button, _FakeButton)
     assert view_state.analysis_popout_button.kwargs["text"] == "Pop Out Analyze Window"
+    assert isinstance(view_state.analysis_exports_frame.parent, _FakeCollapsibleFrame)
+    assert view_state.analysis_exports_frame.parent.text == "Exports"
+    assert view_state.analysis_exports_frame.parent.expanded is False
+    assert view_state.analysis_exports_frame.parent.parent is view_state.analysis_views_frame
+    assert isinstance(view_state.analysis_peak_tools_frame.parent, _FakeCollapsibleFrame)
+    assert view_state.analysis_peak_tools_frame.parent.text == "Peak Picking and Fitting"
+    assert view_state.analysis_peak_tools_frame.parent.expanded is True
+    assert view_state.analysis_peak_tools_frame.parent.parent is view_state.analysis_views_frame
     assert isinstance(view_state.status_frame, _FakeFrame)
     assert isinstance(view_state.fig_frame, _FakeFrame)
     assert isinstance(view_state.figure_workspace_frame, _FakeFrame)
@@ -1092,9 +1113,21 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert view_state.canvas_frame.parent is view_state.figure_workspace_frame
     assert view_state.figure_controls_frame.parent is view_state.fig_frame
     assert view_state.quick_controls_frame.parent is view_state.figure_workspace_frame
+    assert view_state.match_header_frame.parent is view_state.match_body
+    assert view_state.match_backgrounds_frame.parent is view_state.match_body
+    assert view_state.match_peak_tools_frame.parent is view_state.match_body
+    assert view_state.match_footer_frame.parent is view_state.match_body
+    assert view_state.match_footer_frame.columnconfigure_calls == [(0, 3), (1, 2)]
+    assert view_state.match_footer_left.parent is view_state.match_footer_frame
+    assert view_state.match_footer_right.parent is view_state.match_footer_frame
+    assert view_state.match_parameter_frame.parent is view_state.match_footer_left
+    assert view_state.match_run_frame.parent is view_state.match_footer_right
+    assert view_state.match_results_frame.parent is view_state.match_footer_right
+    assert view_state.fit_actions_frame is view_state.match_peak_tools_frame
     assert isinstance(view_state.left_col, _FakeFrame)
     assert isinstance(view_state.right_col, _FakeFrame)
     assert isinstance(view_state.plot_frame_1d, _FakeFrame)
+    assert view_state.plot_frame_1d.parent.parent is view_state.analysis_views_frame.parent
     assert view_state.control_tab_var.get() == "setup"
     assert view_state.parameter_tab_var.get() == "basic"
     assert view_state.controls_notebook.selected_tab is view_state.setup_tab
@@ -1116,6 +1149,7 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
     _FakeScrollbar.created = []
     _FakeCanvas.created = []
     monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
@@ -1175,6 +1209,7 @@ def test_create_app_shell_adds_fit2d_help_preference_when_var_is_supplied(
     _FakeCheckbutton.created = []
     _FakeLabel.created = []
     monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
@@ -1517,6 +1552,57 @@ def test_geometry_fit_parameter_controls_store_toggle_vars_and_grid_checkbuttons
         "padx": 4,
         "pady": 2,
     }
+
+
+def test_create_geometry_fit_parameter_controls_supports_unframed_mode(
+    monkeypatch,
+) -> None:
+    class _GridCheckbutton:
+        created = []
+
+        def __init__(self, parent, text: str, variable) -> None:
+            self.parent = parent
+            self.text = text
+            self.variable = variable
+            self.grid_kwargs = None
+            _GridCheckbutton.created.append(self)
+
+        def grid(self, **kwargs) -> None:
+            self.grid_kwargs = kwargs
+
+        def config(self, **kwargs) -> None:
+            self.text = kwargs.get("text", self.text)
+
+        def configure(self, **kwargs) -> None:
+            self.config(**kwargs)
+
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _GridCheckbutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    parent = object()
+    view_state = state.GeometryFitParameterControlsViewState()
+
+    views.create_geometry_fit_parameter_controls(
+        parent=parent,
+        view_state=view_state,
+        initial_values={"theta_initial": True, "center_x": True},
+        use_labelframe=False,
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.frame.parent is parent
+    assert "text" not in view_state.frame.kwargs
+    assert view_state.fit_theta_var.get() is True
+    assert view_state.fit_center_x_var.get() is True
+    assert view_state.fit_center_y_var.get() is False
+    assert view_state.fit_theta_checkbutton is _GridCheckbutton.created[2]
+    assert view_state.toggle_vars["theta_initial"] is view_state.fit_theta_var
+    assert view_state.toggle_checkbuttons["theta_initial"] is view_state.fit_theta_checkbutton
+    assert view_state.frame.columnconfigure_calls == [(0, 1), (1, 1), (2, 1), (3, 1)]
+    assert _GridCheckbutton.created[0].text == "z_b beam offset"
+    assert _GridCheckbutton.created[2].text == "θ sample tilt"
+    assert _GridCheckbutton.created[-1].text == "center col"
 
 
 def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
@@ -2646,21 +2732,25 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
         on_toggle_1d_plots=lambda: calls.append("toggle-1d"),
         on_toggle_caked_2d=lambda: calls.append("toggle-2d"),
         on_toggle_log_display=lambda: calls.append("toggle-display"),
+        on_toggle_beam_center_spot=lambda: calls.append("toggle-beam-center"),
     )
 
     assert view_state.show_1d_var.get() is False
     assert view_state.show_caked_2d_var.get() is False
+    assert view_state.show_beam_center_spot_var.get() is False
     assert view_state.log_display_var.get() is False
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
+        "Show beam center spot",
         "Log display",
     ]
     assert view_state.check_1d is None
     assert view_state.check_2d is None
-    assert view_state.check_log_display is _FakeCheckbutton.created[0]
+    assert view_state.check_beam_center_spot is _FakeCheckbutton.created[0]
+    assert view_state.check_log_display is _FakeCheckbutton.created[1]
 
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
-    assert calls == ["toggle-display"]
+    assert calls == ["toggle-beam-center", "toggle-display"]
 
 
 def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> None:
@@ -2760,7 +2850,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     )
 
     assert isinstance(view_state.frame, _FakeCollapsibleFrame)
-    assert view_state.frame.text == "Integration Ranges"
+    assert view_state.frame.text == "Integration Region"
     assert view_state.frame.expanded is True
     assert view_state.range_frame is view_state.frame.frame
     assert isinstance(view_state.tth_min_container, _FakeFrame)
@@ -3163,6 +3253,51 @@ def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(
     assert isinstance(view_state.geometry_fit_background_shortcuts_frame, _FakeFrame)
     assert isinstance(view_state.geometry_fit_background_rows_frame, _FakeFrame)
     assert view_state.geometry_fit_background_selection_var.get() == "all"
+    assert (
+        _FakeLabel.created[0].text
+        == "Choose which loaded backgrounds participate in geometry fitting. The saved selection still uses the canonical current/all/index list format."
+    )
+
+    view_state.geometry_fit_background_entry.bindings["<Return>"](None)
+    _FakeButton.created[0].command()
+    _FakeButton.created[1].command()
+    assert applied == ["apply"]
+    assert shortcut_events == ["current", "all"]
+
+
+def test_create_geometry_fit_background_controls_supports_unframed_mode(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    parent = object()
+    view_state = state.BackgroundThetaControlsViewState()
+    applied = []
+    shortcut_events = []
+
+    views.create_geometry_fit_background_controls(
+        parent=parent,
+        view_state=view_state,
+        selection_text="current",
+        on_apply=lambda: applied.append("apply"),
+        on_select_current=lambda: shortcut_events.append("current"),
+        on_select_all=lambda: shortcut_events.append("all"),
+        use_labelframe=False,
+    )
+
+    assert isinstance(view_state.geometry_fit_background_controls, _FakeFrame)
+    assert view_state.geometry_fit_background_controls.parent is parent
+    assert "text" not in view_state.geometry_fit_background_controls.kwargs
+    assert isinstance(view_state.geometry_fit_background_entry, _FakeEntry)
+    assert isinstance(view_state.geometry_fit_background_shortcuts_frame, _FakeFrame)
+    assert isinstance(view_state.geometry_fit_background_rows_frame, _FakeFrame)
+    assert view_state.geometry_fit_background_selection_var.get() == "current"
     assert (
         _FakeLabel.created[0].text
         == "Choose which loaded backgrounds participate in geometry fitting. The saved selection still uses the canonical current/all/index list format."

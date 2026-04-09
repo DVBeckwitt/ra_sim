@@ -459,6 +459,8 @@ class AnalysisViewControlsViewState:
     check_1d: Any = None
     show_caked_2d_var: Any = None
     check_2d: Any = None
+    show_beam_center_spot_var: Any = None
+    check_beam_center_spot: Any = None
     log_display_var: Any = None
     check_log_display: Any = None
 
@@ -718,6 +720,10 @@ class AppShellViewState:
     parameter_structure_canvas: Any = None
     control_tab_var: Any = None
     parameter_tab_var: Any = None
+    match_header_frame: Any = None
+    match_footer_frame: Any = None
+    match_footer_left: Any = None
+    match_footer_right: Any = None
     match_backgrounds_frame: Any = None
     match_peak_tools_frame: Any = None
     match_parameter_frame: Any = None

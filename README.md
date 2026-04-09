@@ -125,8 +125,9 @@ A typical workflow looks like this:
 
 ### Primary 2D Viewport
 
-The default embedded 2D surface still uses Matplotlib. An experimental Tk-native
-main viewport is also available through `RA_SIM_PRIMARY_VIEWPORT=tk_canvas`.
+The default main detector/caked viewport now uses the Tk-native canvas renderer.
+Set `RA_SIM_PRIMARY_VIEWPORT=matplotlib` to force the legacy embedded
+Matplotlib surface.
 
 The justification is specific to the main detector/caked image, not to plotting
 in general. Matplotlib is the better tool for full plotting workflows with
@@ -138,7 +139,7 @@ path, Matplotlib pays for its general artist and figure machinery on every
 interaction-driven redraw. A Tk `Canvas` can instead update one raster image
 plus lightweight overlay items directly, which reduces latency for detector and
 caked interactions while keeping the existing selection logic intact. The
-Matplotlib path remains the safer fallback and is still the reference backend
+Matplotlib path remains the explicit fallback and is still the reference backend
 for figure-heavy tools.
 
 ### Optics Modes
@@ -181,12 +182,22 @@ The GUI manual geometry-fit path uses one objective throughout the solve.
 
 - Manual picks keep a detector-native background anchor plus the chosen
   simulated source identity.
+- Saved/manual geometry-fit runs rebuild missing source rows automatically from
+  the live runtime cache, the last retained or logged intersection cache, or a
+  fresh simulation before failing.
+- Source identity stays pinned to the saved source row or peak when that key is
+  still valid, then falls back through q-group or HKL-based rebinding if the
+  reflection ordering changed.
 - During refinement the solver recomputes both the observed and simulated points
   in the same detector-derived angular space, using residuals in `(2theta, phi)`.
+- Geometry, lattice, wavelength, and shared-theta updates now re-anchor both the
+  simulated source rows and the measured/background peak maxima during the solve
+  until they converge.
 - Detector-geometry variables move both sides of the comparison; shared
   sample-rotation variables only move the simulated side.
 - The GUI disables rematching, robust weighting, and post-polish stages for
-  this path so the fit stays tied to the exact manual correspondences you chose.
+  this path so the solve stays on the manual correspondence workflow while still
+  refreshing those anchors as the underlying geometry changes.
 
 Reference:
 

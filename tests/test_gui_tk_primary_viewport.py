@@ -1,6 +1,18 @@
 from types import SimpleNamespace
 
+import numpy as np
+import pytest
+
 from ra_sim.gui import tk_primary_viewport
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+except Exception:  # pragma: no cover - Matplotlib is expected in GUI test environments.
+    FigureCanvasAgg = None
+    Figure = None
 
 
 class _FakeWidget:
@@ -11,6 +23,11 @@ class _FakeWidget:
         self.pack_calls = []
         self.pack_forget_calls = 0
         self.destroy_calls = 0
+        self.create_calls = []
+        self.itemconfigure_calls = []
+        self.delete_calls = []
+        self._next_item_id = 1
+        self._items = {}
 
     def bind(self, sequence, callback, add=None):
         self.bindings[sequence] = (callback, add)
@@ -32,11 +49,71 @@ class _FakeWidget:
     def destroy(self):
         self.destroy_calls += 1
 
+    def _create_item(self, kind, **kwargs):
+        item_id = self._next_item_id
+        self._next_item_id += 1
+        record = {
+            "id": item_id,
+            "kind": kind,
+            **dict(kwargs),
+        }
+        self._items[item_id] = record
+        self.create_calls.append(record)
+        return item_id
+
+    def create_image(self, x, y, **kwargs):
+        return self._create_item("image", x=x, y=y, **kwargs)
+
+    def create_rectangle(self, *coords, **kwargs):
+        return self._create_item("rectangle", coords=tuple(coords), **kwargs)
+
+    def create_line(self, *coords, **kwargs):
+        return self._create_item("line", coords=tuple(coords), **kwargs)
+
+    def create_oval(self, *coords, **kwargs):
+        return self._create_item("oval", coords=tuple(coords), **kwargs)
+
+    def create_text(self, x, y, **kwargs):
+        return self._create_item("text", x=x, y=y, **kwargs)
+
+    def itemconfigure(self, item, **kwargs):
+        self.itemconfigure_calls.append((item, dict(kwargs)))
+        if item in self._items:
+            self._items[item].update(dict(kwargs))
+
+    def delete(self, target):
+        self.delete_calls.append(target)
+        if isinstance(target, str):
+            to_delete = [
+                item_id
+                for item_id, record in self._items.items()
+                if target in tuple(record.get("tags", ()))
+            ]
+            for item_id in to_delete:
+                self._items.pop(item_id, None)
+            return
+        self._items.pop(target, None)
+
     def winfo_reqwidth(self):
         return 640
 
     def winfo_reqheight(self):
         return 480
+
+    def winfo_width(self):
+        return 640
+
+    def winfo_height(self):
+        return 480
+
+
+class _FakeTkModule:
+    CENTER = "center"
+    NW = "nw"
+
+    @staticmethod
+    def Canvas(_parent, **_kwargs):
+        return _FakeWidget()
 
 
 class _FakeViewport:
@@ -58,6 +135,117 @@ class _FakeViewport:
         )
 
 
+class _FakeAxes:
+    def __init__(self, *, xlim, ylim):
+        self._xlim = tuple(xlim)
+        self._ylim = tuple(ylim)
+
+    def get_xlim(self):
+        return self._xlim
+
+    def get_ylim(self):
+        return self._ylim
+
+
+class _FakePhotoImage:
+    instances = []
+
+    def __init__(self, image):
+        self.image = image
+        type(self).instances.append(self)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.instances = []
+
+
+def _make_layer(
+    name: str,
+    rgba: np.ndarray,
+    *,
+    extent: tuple[float, float, float, float] = (0.0, 2.0, 2.0, 0.0),
+    visible: bool = True,
+) -> tk_primary_viewport._ViewportImageLayer:
+    return tk_primary_viewport._ViewportImageLayer(
+        name=name,
+        visible=visible,
+        extent=extent,
+        interpolation="nearest",
+        source_rgba=np.asarray(rgba, dtype=np.uint8),
+        origin="upper",
+    )
+
+
+def _make_scene(
+    *,
+    view_state: tk_primary_viewport.ViewportViewState | None = None,
+    view_mode: str = "detector",
+    background_layer: tk_primary_viewport._ViewportImageLayer | None = None,
+    simulation_layer: tk_primary_viewport._ViewportImageLayer | None = None,
+    overlay_layer: tk_primary_viewport._ViewportImageLayer | None = None,
+    text_specs: tuple[tk_primary_viewport._ViewportTextSpec, ...] = (),
+) -> tk_primary_viewport.ViewportScene:
+    if view_state is None:
+        view_state = tk_primary_viewport.ViewportViewState(
+            width=4,
+            height=4,
+            xlim=(0.0, 2.0),
+            ylim=(2.0, 0.0),
+        )
+    overlay_model = tk_primary_viewport.fast_plot_viewer.FastViewerOverlayModel()
+    return tk_primary_viewport.ViewportScene(
+        view_state=view_state,
+        view_mode=view_mode,
+        background_layer=background_layer,
+        simulation_layer=simulation_layer,
+        overlay_layer=overlay_layer,
+        overlay_model=overlay_model,
+        text_specs=text_specs,
+        raster_signature=tk_primary_viewport._scene_raster_signature(
+            view_state,
+            view_mode=view_mode,
+            background_layer=background_layer,
+            simulation_layer=simulation_layer,
+        ),
+        overlay_signature=tk_primary_viewport._scene_overlay_signature(
+            view_state,
+            view_mode=view_mode,
+            overlay_layer=overlay_layer,
+            overlay_model=overlay_model,
+            text_specs=text_specs,
+        ),
+    )
+
+
+def _render_matplotlib_reference(
+    rgba: np.ndarray,
+    *,
+    origin: str,
+    extent: tuple[float, float, float, float],
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+    width: int,
+    height: int,
+) -> np.ndarray:
+    if Figure is None or FigureCanvasAgg is None:
+        pytest.skip("Matplotlib Agg is unavailable")
+    figure = Figure(figsize=(float(width) / 60.0, float(height) / 60.0), dpi=60)
+    canvas = FigureCanvasAgg(figure)
+    axis = figure.add_axes([0.0, 0.0, 1.0, 1.0])
+    axis.set_axis_off()
+    axis.set_aspect("auto")
+    axis.imshow(
+        np.asarray(rgba, dtype=np.uint8),
+        origin=str(origin),
+        extent=tuple(float(value) for value in extent),
+        interpolation="nearest",
+    )
+    axis.set_xlim(float(xlim[0]), float(xlim[1]))
+    axis.set_ylim(float(ylim[0]), float(ylim[1]))
+    canvas.draw()
+    return np.asarray(canvas.buffer_rgba())
+
+
 def test_primary_viewport_backend_parser_accepts_matplotlib_and_tk_canvas() -> None:
     assert tk_primary_viewport.parse_primary_viewport_backend(None) == "matplotlib"
     assert tk_primary_viewport.parse_primary_viewport_backend("matplotlib") == "matplotlib"
@@ -75,7 +263,7 @@ def test_screen_and_world_transforms_round_trip_detector_view() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 50.0, 25.0)
-    assert world == (25.0, 75.0)
+    assert world == (25.0, 25.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (50.0, 25.0)
 
 
@@ -88,7 +276,7 @@ def test_screen_and_world_transforms_round_trip_caked_view() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 120.0, 30.0)
-    assert world == (22.0, -15.0)
+    assert world == (22.0, 15.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (120.0, 30.0)
 
 
@@ -158,6 +346,165 @@ def test_build_q_group_cache_uses_caked_angles_when_present() -> None:
     assert cache.visible_entries[0]["_viewport_point"] == (21.0, -8.0)
 
 
+def test_render_layer_patch_preserves_detector_view_vertical_orientation() -> None:
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.0, 1.0), ylim=(2.0, 0.0)),
+        initial_width=1,
+        initial_height=2,
+    )
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=1,
+        height=2,
+        xlim=(0.0, 1.0),
+        ylim=(2.0, 0.0),
+    )
+    layer = tk_primary_viewport._ViewportImageLayer(
+        name="simulation",
+        visible=True,
+        extent=(0.0, 1.0, 2.0, 0.0),
+        interpolation="nearest",
+        source_rgba=np.asarray(
+            [
+                [[255, 0, 0, 255]],
+                [[0, 0, 255, 255]],
+            ],
+            dtype=np.uint8,
+        ),
+    )
+
+    rendered = viewport._render_layer_patch(layer, view_state)
+
+    assert rendered is not None
+    patch_image, left, top = rendered
+    assert (left, top) == (0, 0)
+    assert patch_image.size == (1, 2)
+    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
+
+
+def test_render_layer_patch_matches_matplotlib_detector_zoom_sampling() -> None:
+    width = 60
+    height = 60
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(
+            xlim=(1.4915196934884571, 2.2484302364924327),
+            ylim=(1.2912873336958195, 0.29259750680209373),
+        ),
+        initial_width=width,
+        initial_height=height,
+    )
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=width,
+        height=height,
+        xlim=(1.4915196934884571, 2.2484302364924327),
+        ylim=(1.2912873336958195, 0.29259750680209373),
+    )
+    rgba = np.asarray(
+        [
+            [[255, 0, 0, 255], [255, 128, 0, 255], [255, 255, 0, 255]],
+            [[0, 255, 0, 255], [0, 255, 255, 255], [0, 0, 255, 255]],
+            [[128, 0, 255, 255], [255, 0, 255, 255], [255, 255, 255, 255]],
+        ],
+        dtype=np.uint8,
+    )
+    layer = tk_primary_viewport._ViewportImageLayer(
+        name="simulation",
+        visible=True,
+        extent=(0.0, 3.0, 3.0, 0.0),
+        interpolation="nearest",
+        source_rgba=rgba,
+        origin="upper",
+    )
+
+    rendered = viewport._render_layer_patch(layer, view_state)
+
+    assert rendered is not None
+    patch_image, left, top = rendered
+    assert (left, top) == (0, 0)
+
+    reference = _render_matplotlib_reference(
+        rgba,
+        origin="upper",
+        extent=(0.0, 3.0, 3.0, 0.0),
+        xlim=view_state.xlim,
+        ylim=view_state.ylim,
+        width=width,
+        height=height,
+    )
+    for x_value, y_value in (
+        (10, 10),
+        (30, 10),
+        (50, 10),
+        (10, 30),
+        (30, 30),
+        (50, 30),
+        (10, 50),
+        (30, 50),
+        (50, 50),
+    ):
+        assert patch_image.getpixel((x_value, y_value)) == tuple(
+            reference[y_value, x_value][:4]
+        )
+
+
+def test_render_layer_patch_matches_matplotlib_caked_vertical_orientation() -> None:
+    width = 20
+    height = 60
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(10.0, 20.0), ylim=(-20.0, 20.0)),
+        initial_width=width,
+        initial_height=height,
+    )
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=width,
+        height=height,
+        xlim=(10.0, 20.0),
+        ylim=(-20.0, 20.0),
+    )
+    rgba = np.asarray(
+        [
+            [[255, 0, 0, 255]],
+            [[0, 255, 0, 255]],
+            [[0, 0, 255, 255]],
+        ],
+        dtype=np.uint8,
+    )
+    layer = tk_primary_viewport._ViewportImageLayer(
+        name="simulation",
+        visible=True,
+        extent=(10.0, 20.0, -30.0, 30.0),
+        interpolation="nearest",
+        source_rgba=rgba,
+        origin="lower",
+    )
+
+    rendered = viewport._render_layer_patch(layer, view_state)
+
+    assert rendered is not None
+    patch_image, left, top = rendered
+    assert (left, top) == (0, 0)
+
+    reference = _render_matplotlib_reference(
+        rgba,
+        origin="lower",
+        extent=(10.0, 20.0, -30.0, 30.0),
+        xlim=view_state.xlim,
+        ylim=view_state.ylim,
+        width=width,
+        height=height,
+    )
+    for y_value in (10, 30, 50):
+        assert patch_image.getpixel((10, y_value)) == tuple(
+            reference[y_value, 10][:4]
+        )
+
+
 def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
     view_state = tk_primary_viewport.ViewportViewState(
         width=200,
@@ -180,7 +527,7 @@ def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
     assert events[0].button == 1
     assert events[0].inaxes == "AX"
     assert events[0].xdata == 30.0
-    assert events[0].ydata == 75.0
+    assert events[0].ydata == 25.0
 
 
 def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
@@ -201,7 +548,7 @@ def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
     assert events[0].button == "up"
     assert events[0].step == 1.0
     assert events[0].xdata == 15.0
-    assert events[0].ydata == 60.0
+    assert events[0].ydata == 40.0
 
 
 def test_tk_canvas_proxy_draw_idle_schedules_one_sync() -> None:
@@ -291,3 +638,178 @@ def test_build_tk_primary_viewport_backend_swaps_widgets_on_activate_and_deactiv
             "force_view_range": True,
         }
     ]
+
+
+def test_render_scene_overlay_only_redraw_reuses_base_raster(monkeypatch) -> None:
+    if tk_primary_viewport.Image is None:
+        pytest.skip("Pillow is unavailable")
+    _FakePhotoImage.reset()
+    monkeypatch.setattr(
+        tk_primary_viewport,
+        "ImageTk",
+        SimpleNamespace(PhotoImage=_FakePhotoImage),
+    )
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.0, 2.0), ylim=(2.0, 0.0)),
+        initial_width=4,
+        initial_height=4,
+    )
+    background_layer = _make_layer(
+        "background",
+        np.full((2, 2, 4), [255, 255, 255, 255], dtype=np.uint8),
+    )
+    simulation_layer = _make_layer(
+        "simulation",
+        np.full((2, 2, 4), [255, 0, 0, 255], dtype=np.uint8),
+    )
+    scene_one = _make_scene(
+        background_layer=background_layer,
+        simulation_layer=simulation_layer,
+        text_specs=(
+            tk_primary_viewport._ViewportTextSpec(
+                x=0.5,
+                y=0.5,
+                text="A",
+                fill_rgba=(255, 255, 255, 255),
+                font_size=10,
+                zorder=5.0,
+            ),
+        ),
+    )
+    viewport.render_scene(scene_one)
+
+    base_photo = viewport._photo_image
+    base_itemconfigure_count = len(
+        [
+            call
+            for call in viewport.widget.itemconfigure_calls
+            if call[0] == viewport._photo_item
+        ]
+    )
+
+    scene_two = _make_scene(
+        background_layer=background_layer,
+        simulation_layer=simulation_layer,
+        text_specs=(
+            tk_primary_viewport._ViewportTextSpec(
+                x=1.0,
+                y=1.0,
+                text="B",
+                fill_rgba=(255, 255, 0, 255),
+                font_size=12,
+                zorder=5.0,
+            ),
+        ),
+    )
+    viewport.render_scene(scene_two)
+
+    assert viewport._photo_image is base_photo
+    assert len(
+        [
+            call
+            for call in viewport.widget.itemconfigure_calls
+            if call[0] == viewport._photo_item
+        ]
+    ) == base_itemconfigure_count
+
+
+def test_render_scene_noops_when_scene_signatures_match(monkeypatch) -> None:
+    if tk_primary_viewport.Image is None:
+        pytest.skip("Pillow is unavailable")
+    _FakePhotoImage.reset()
+    monkeypatch.setattr(
+        tk_primary_viewport,
+        "ImageTk",
+        SimpleNamespace(PhotoImage=_FakePhotoImage),
+    )
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.0, 2.0), ylim=(2.0, 0.0)),
+        initial_width=4,
+        initial_height=4,
+    )
+    scene = _make_scene(
+        background_layer=_make_layer(
+            "background",
+            np.full((2, 2, 4), [255, 255, 255, 255], dtype=np.uint8),
+        ),
+        simulation_layer=_make_layer(
+            "simulation",
+            np.full((2, 2, 4), [0, 0, 255, 255], dtype=np.uint8),
+        ),
+    )
+    viewport.render_scene(scene)
+    snapshot = (
+        len(viewport.widget.create_calls),
+        len(viewport.widget.itemconfigure_calls),
+        len(viewport.widget.delete_calls),
+        len(_FakePhotoImage.instances),
+    )
+
+    viewport.render_scene(scene)
+
+    assert (
+        len(viewport.widget.create_calls),
+        len(viewport.widget.itemconfigure_calls),
+        len(viewport.widget.delete_calls),
+        len(_FakePhotoImage.instances),
+    ) == snapshot
+
+
+def test_render_scene_rebuilds_raster_when_bounds_or_layer_change(monkeypatch) -> None:
+    if tk_primary_viewport.Image is None:
+        pytest.skip("Pillow is unavailable")
+    _FakePhotoImage.reset()
+    monkeypatch.setattr(
+        tk_primary_viewport,
+        "ImageTk",
+        SimpleNamespace(PhotoImage=_FakePhotoImage),
+    )
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.0, 2.0), ylim=(2.0, 0.0)),
+        initial_width=4,
+        initial_height=4,
+    )
+    base_scene = _make_scene(
+        background_layer=_make_layer(
+            "background",
+            np.full((2, 2, 4), [255, 255, 255, 255], dtype=np.uint8),
+        ),
+        simulation_layer=_make_layer(
+            "simulation",
+            np.full((2, 2, 4), [255, 0, 0, 255], dtype=np.uint8),
+        ),
+    )
+    viewport.render_scene(base_scene)
+
+    initial_photo = viewport._photo_image
+    updated_bounds_scene = _make_scene(
+        view_state=tk_primary_viewport.ViewportViewState(
+            width=5,
+            height=4,
+            xlim=(0.0, 2.0),
+            ylim=(2.0, 0.0),
+        ),
+        background_layer=base_scene.background_layer,
+        simulation_layer=base_scene.simulation_layer,
+    )
+    viewport.render_scene(updated_bounds_scene)
+
+    assert viewport._photo_image is not initial_photo
+
+    bounds_photo = viewport._photo_image
+    updated_layer_scene = _make_scene(
+        background_layer=base_scene.background_layer,
+        simulation_layer=_make_layer(
+            "simulation",
+            np.full((2, 2, 4), [0, 255, 0, 255], dtype=np.uint8),
+        ),
+    )
+    viewport.render_scene(updated_layer_scene)
+
+    assert viewport._photo_image is not bounds_photo

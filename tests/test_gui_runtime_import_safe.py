@@ -271,6 +271,13 @@ def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None
     assert 'globals().get("geometry_manual_state")' in source
 
 
+def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")' in source
+    assert 'if allow_source_snapshot_rebuild:' in source
+
+
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -319,6 +326,14 @@ def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
     assert "on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed" in source
 
 
+def test_runtime_impl_defaults_primary_viewport_to_tk_canvas_with_safe_activation() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'RA_SIM_PRIMARY_VIEWPORT", "tk_canvas"' in source
+    assert "activate_runtime_primary_viewport(" in source
+    assert "PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend" in source
+
+
 def test_runtime_impl_shares_pick_hkl_live_cache_with_manual_qr_picker() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -341,14 +356,37 @@ def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> No
     assert 'ax.set_title("")' in source
 
 
-def test_runtime_impl_disables_preview_calculations_in_runtime_update_paths() -> None:
+def test_runtime_impl_enables_async_preview_calculations_in_runtime_update_paths() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "PREVIEW_CALCULATIONS_ENABLED = False" in source
+    assert "FULL_UPDATE_DEBOUNCE_MS = 90" in source
+    assert "PREVIEW_UPDATE_DEBOUNCE_MS = 24" in source
+    assert "LIVE_DRAG_SETTLE_MS = 80" in source
+    assert "PREVIEW_CALCULATIONS_ENABLED = True" in source
     assert "if not PREVIEW_CALCULATIONS_ENABLED:" in source
+    assert "def _current_update_debounce_ms() -> int:" in source
+    assert "_current_update_debounce_ms()," in source
+    assert "simulation_runtime_state.interaction_drag_requires_settled_update = True" in source
+    assert "simulation_runtime_state.interaction_settle_token = root.after(" in source
+    assert 'preview_job["job_kind"] = "preview"' in source
+    assert "request_status = _request_async_simulation_job(preview_job)" in source
+    assert 'text="Computing preview simulation in background..."' in source
+    assert "do_update_queue_live_preview" in source
+    assert "preview_result = _run_simulation_generation_job" not in source
     assert "desired_analysis_preview = bool(" in source
     assert "PREVIEW_CALCULATIONS_ENABLED\n        and analysis_requested" in source
     assert "PREVIEW_CALCULATIONS_ENABLED\n                and bool(live_geometry_preview_var.get())" in source
+
+
+def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'str(payload.get("job_kind", "full")),' in source
+    assert "def _simulation_result_matches_signature(" in source
+    assert "def _simulation_result_superseded_by_queued_job(" in source
+    assert "superseded = _simulation_result_superseded_by_queued_job(result, queued_job)" in source
+    assert "if isinstance(ready_result, dict) and not _simulation_result_matches_signature(" in source
+    assert '_promote_queued_simulation_job(reason="previous_ready_result_consumed")' in source
 
 
 def test_runtime_impl_keeps_1d_updates_gated_on_intensity_accumulation() -> None:

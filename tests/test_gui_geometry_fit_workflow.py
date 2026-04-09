@@ -727,6 +727,8 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "theta_initial": 1.5,
         "measured_peaks": measured_for_fit,
         "experimental_image": "fit-image",
+        "dynamic_reanchor_callback": None,
+        "dynamic_reanchor_enabled": False,
     }
     assert dataset["measured_for_fit"] == [
         {
@@ -745,7 +747,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
 
     sim_params, prefer_cache = calls["sim_params"]
     assert sim_params["theta_initial"] == 1.75
-    assert prefer_cache is False
+    assert prefer_cache is True
     assert calls["unrotate"][1:] == ((6, 7), 3)
     assert calls["display_to_native"] == (9.0, 8.0, (100, 100))
     assert calls["backend_image"] is native_background
@@ -948,6 +950,15 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
 
 
 def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_resolved() -> None:
+    unrelated_source_row = {
+        "q_group_key": ("other", 9),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "hkl": (9, 9, 9),
+        "sim_col": 11.0,
+        "sim_row": 12.0,
+    }
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
         current_background_index=0,
@@ -968,8 +979,12 @@ def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_re
             np.zeros((4, 5), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
-        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(unrelated_source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {
+            (1, 2): dict(unrelated_source_row)
+        },
         geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -1221,6 +1236,129 @@ def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_witho
     assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
+
+
+def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables_dynamic_reanchor(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+    snapshot_diag = {"status": "snapshot_empty"}
+    valid_source_row = {
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "hkl": (1, 1, 0),
+        "sim_col": 18.0,
+        "sim_row": 19.0,
+    }
+
+    def _rebuild_source_rows(
+        background_idx,
+        params,
+        *,
+        consumer,
+        prior_diagnostics,
+    ):
+        calls["rebuild"] = {
+            "background_idx": int(background_idx),
+            "params": dict(params),
+            "consumer": consumer,
+            "prior_diagnostics": dict(prior_diagnostics),
+        }
+        snapshot_diag.clear()
+        snapshot_diag.update(
+            {
+                "status": "snapshot_hit",
+                "cache_source": "source_snapshot_rebuild",
+                "rebuild_source": "test_rebuild",
+                "consumer": consumer,
+            }
+        )
+        return [dict(valid_source_row)]
+
+    def _build_background_context(image, cfg):
+        calls["background_context"] = {
+            "shape": tuple(np.asarray(image).shape),
+            "cfg": dict(cfg),
+        }
+        return {"image_shape": tuple(np.asarray(image).shape)}
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_background_peak_context",
+        _build_background_context,
+    )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((6, 7), dtype=np.float64),
+            np.zeros((6, 7), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [],
+        geometry_manual_rebuild_source_rows_for_background=_rebuild_source_rows,
+        geometry_manual_last_source_snapshot_diagnostics=lambda: dict(snapshot_diag),
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(valid_source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda peaks: {
+            (1, 2): dict(valid_source_row)
+        },
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "xy",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: np.asarray(image, dtype=np.float64),
+        geometry_manual_match_config=lambda: {"search_radius": 4.0},
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert calls["rebuild"]["background_idx"] == 0
+    assert calls["rebuild"]["consumer"] == "geometry_fit_dataset"
+    assert calls["rebuild"]["prior_diagnostics"]["status"] == "snapshot_empty"
+    assert calls["background_context"] == {
+        "shape": (6, 7),
+        "cfg": {"search_radius": 4.0},
+    }
+    assert dataset["resolved_source_pair_count"] == 1
+    assert dataset["spec"]["dynamic_reanchor_enabled"] is True
+    assert callable(dataset["spec"]["dynamic_reanchor_callback"])
+    assert dataset["cache_metadata"]["cache_source"] == "source_snapshot_rebuild"
+    assert "rebuild_source:test_rebuild" in dataset["cache_metadata"]["cache_provenance"]
 
 
 def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() -> None:

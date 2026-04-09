@@ -3338,6 +3338,8 @@ def build_geometry_manual_fit_dataset(
                 "background_phi_deg": float("nan"),
             }
 
+        dynamic_reanchor_callback = _dynamic_reanchor_callback
+
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)

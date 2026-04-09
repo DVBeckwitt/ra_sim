@@ -1263,62 +1263,59 @@ def create_app_shell(
         },
     )
 
-    def _add_match_guidance(parent: tk.Misc, text: str) -> None:
-        ttk.Label(
-            parent,
-            text=text,
-            justify=tk.LEFT,
-            wraplength=520,
-        ).pack(fill=tk.X, padx=6, pady=(4, 6))
+    match_header_frame = ttk.Frame(match_body, padding=(8, 4, 8, 2))
+    match_header_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+    ttk.Label(
+        match_header_frame,
+        text=(
+            "Choose fit backgrounds, define peak correspondences, select the "
+            "movable parameters, then run geometry fit and review the result summary."
+        ),
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=520,
+    ).pack(fill=tk.X)
 
     match_backgrounds_frame = ttk.LabelFrame(
         match_body,
-        text="Step 1. Choose Fit Backgrounds",
+        text="Fit Backgrounds",
     )
-    match_backgrounds_frame.pack(fill=tk.X, padx=5, pady=5)
-    _add_match_guidance(
-        match_backgrounds_frame,
-        "Choose which loaded backgrounds participate in geometry fitting. "
-        "Confirm per-image theta values in Setup before running a fit.",
-    )
+    match_backgrounds_frame.pack(fill=tk.X, padx=5, pady=(5, 5))
 
     match_peak_tools_frame = ttk.LabelFrame(
         match_body,
-        text="Step 2. Choose or Place Peaks",
+        text="Peak Tools",
     )
-    match_peak_tools_frame.pack(fill=tk.X, padx=5, pady=5)
-    _add_match_guidance(
-        match_peak_tools_frame,
-        "Use image-pick, HKL lookup, and manual placement tools to define "
-        "peak correspondences before fitting geometry.",
-    )
+    match_peak_tools_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+    match_footer_frame = ttk.Frame(match_body)
+    match_footer_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+    match_footer_frame.columnconfigure(0, weight=3)
+    match_footer_frame.columnconfigure(1, weight=2)
+
+    match_footer_left = ttk.Frame(match_footer_frame)
+    match_footer_left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+    match_footer_right = ttk.Frame(match_footer_frame)
+    match_footer_right.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
 
     match_parameter_frame = ttk.LabelFrame(
-        match_body,
-        text="Step 3. Choose What Can Move",
+        match_footer_left,
+        text="Fit Parameters",
     )
-    match_parameter_frame.pack(fill=tk.X, padx=5, pady=5)
-    _add_match_guidance(
-        match_parameter_frame,
-        "Enable only the geometry parameters that should move during fitting.",
-    )
+    match_parameter_frame.pack(fill=tk.BOTH, expand=True)
 
     match_run_frame = ttk.LabelFrame(
-        match_body,
-        text="Step 4. Run Geometry Fit",
+        match_footer_right,
+        text="Run Fit",
     )
-    match_run_frame.pack(fill=tk.X, padx=5, pady=5)
-    _add_match_guidance(
-        match_run_frame,
-        "Run the least-squares geometry fit after backgrounds, peaks, and "
-        "movable parameters are set.",
-    )
+    match_run_frame.pack(fill=tk.X, pady=(0, 5))
 
     match_results_frame = ttk.LabelFrame(
-        match_body,
-        text="Step 5. Review Results",
+        match_footer_right,
+        text="Results",
     )
-    match_results_frame.pack(fill=tk.X, padx=5, pady=5)
+    match_results_frame.pack(fill=tk.X)
     match_results_var = tk.StringVar(
         value="Fit results will appear here and in the status panel after a geometry fit."
     )
@@ -1327,25 +1324,42 @@ def create_app_shell(
         textvariable=match_results_var,
         justify=tk.LEFT,
         anchor=tk.W,
-        wraplength=520,
+        wraplength=260,
     )
     match_results_label.pack(fill=tk.X, padx=6, pady=(4, 6))
 
-    analysis_controls_frame = ttk.Frame(analyze_tab, padding=(10, 10, 10, 0))
-    analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
+    analysis_shell = ttk.Frame(analyze_tab, padding=(10, 10, 10, 10))
+    analysis_shell.pack(fill=tk.BOTH, expand=True)
+    analysis_shell.columnconfigure(1, weight=1)
+    analysis_shell.rowconfigure(0, weight=1)
+
+    analysis_controls_frame = ttk.Frame(analysis_shell, padding=(0, 0, 10, 0))
+    analysis_controls_frame.grid(row=0, column=0, sticky="ns")
     analysis_views_frame = analysis_controls_frame
     analysis_popout_button = ttk.Button(
         analysis_controls_frame,
         text="Pop Out Analyze Window",
     )
-    analysis_popout_button.pack(anchor=tk.W, pady=(0, 8))
-    analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
-    analysis_exports_frame.pack(fill=tk.X)
-    analysis_peak_tools_frame = ttk.LabelFrame(
+    analysis_popout_button.pack(fill=tk.X, pady=(0, 8))
+    analysis_exports_panel = CollapsibleFrame(
+        analysis_controls_frame,
+        text="Exports",
+        expanded=False,
+    )
+    analysis_exports_panel.pack(fill=tk.X, pady=(0, 8))
+    analysis_exports_frame = analysis_exports_panel.frame
+    analysis_peak_tools_panel = CollapsibleFrame(
         analysis_controls_frame,
         text="Peak Picking and Fitting",
+        expanded=True,
     )
-    analysis_peak_tools_frame.pack(fill=tk.X, pady=(8, 0))
+    analysis_peak_tools_panel.pack(fill=tk.X)
+    analysis_peak_tools_frame = analysis_peak_tools_panel.frame
+
+    analysis_workspace_frame = ttk.Frame(analysis_shell)
+    analysis_workspace_frame.grid(row=0, column=1, sticky="nsew")
+    analysis_workspace_frame.columnconfigure(0, weight=1)
+    analysis_workspace_frame.rowconfigure(0, weight=1)
 
     app_version_text = _get_app_version_text()
     config_dir_text = str(get_config_dir())
@@ -1483,8 +1497,8 @@ def create_app_shell(
     right_col = ttk.Frame(refine_advanced_body, padding=10)
     right_col.pack(fill=tk.BOTH, expand=True)
 
-    plot_frame_1d = ttk.Frame(analyze_tab, padding=(10, 8, 10, 10))
-    plot_frame_1d.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    plot_frame_1d = ttk.Frame(analysis_workspace_frame)
+    plot_frame_1d.grid(row=0, column=0, sticky="nsew")
 
     view_state.main_pane = main_pane
     view_state.controls_panel = controls_panel
@@ -1551,6 +1565,10 @@ def create_app_shell(
     view_state.parameter_structure_canvas = refine_advanced_canvas
     view_state.control_tab_var = control_tab_var
     view_state.parameter_tab_var = parameter_tab_var
+    view_state.match_header_frame = match_header_frame
+    view_state.match_footer_frame = match_footer_frame
+    view_state.match_footer_left = match_footer_left
+    view_state.match_footer_right = match_footer_right
     view_state.match_backgrounds_frame = match_backgrounds_frame
     view_state.match_peak_tools_frame = match_peak_tools_frame
     view_state.match_parameter_frame = match_parameter_frame
@@ -2355,12 +2373,17 @@ def create_geometry_fit_parameter_controls(
     parent: tk.Misc,
     view_state: GeometryFitParameterControlsViewState,
     initial_values: dict[str, bool] | None = None,
+    use_labelframe: bool = True,
 ) -> None:
     """Create the fit-geometry parameter checklist and store its refs/vars."""
 
     values = dict(initial_values or {})
-    frame = ttk.LabelFrame(parent, text="Fit geometry parameters")
-    frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    if use_labelframe:
+        frame = ttk.LabelFrame(parent, text="Fit geometry parameters")
+        frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    else:
+        frame = ttk.Frame(parent, padding=(4, 2, 4, 2))
+        frame.pack(side=tk.TOP, fill=tk.X)
 
     specs = [
         ("zb", "fit_zb_var", "fit_zb_checkbutton", "z_b beam offset"),
@@ -4279,18 +4302,33 @@ def create_analysis_view_controls(
     on_toggle_1d_plots: Callable[[], None],
     on_toggle_caked_2d: Callable[[], None],
     on_toggle_log_display: Callable[[], None],
+    on_toggle_beam_center_spot: Callable[[], None] | None = None,
     show_1d: bool = False,
     show_caked_2d: bool = False,
+    show_beam_center_spot: bool = False,
     log_display: bool = False,
 ) -> None:
     """Create the analysis view toggle controls and store their vars."""
 
     show_1d_var = tk.BooleanVar(value=bool(show_1d or show_caked_2d))
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
+    show_beam_center_spot_var = tk.BooleanVar(value=bool(show_beam_center_spot))
 
+    check_beam_center_spot = None
     log_display_var = tk.BooleanVar(value=bool(log_display))
     check_log_display = None
     if parent is not None:
+        check_beam_center_spot = ttk.Checkbutton(
+            parent,
+            text="Show beam center spot",
+            variable=show_beam_center_spot_var,
+            command=(
+                on_toggle_beam_center_spot
+                if callable(on_toggle_beam_center_spot)
+                else None
+            ),
+        )
+        check_beam_center_spot.pack(side=tk.TOP, padx=5, pady=2)
         check_log_display = ttk.Checkbutton(
             parent,
             text="Log display",
@@ -4303,6 +4341,8 @@ def create_analysis_view_controls(
     view_state.check_1d = None
     view_state.show_caked_2d_var = show_caked_2d_var
     view_state.check_2d = None
+    view_state.show_beam_center_spot_var = show_beam_center_spot_var
+    view_state.check_beam_center_spot = check_beam_center_spot
     view_state.log_display_var = log_display_var
     view_state.check_log_display = check_log_display
 
@@ -4323,7 +4363,7 @@ def create_integration_range_controls(
 ) -> None:
     """Create the 1D integration-range controls and store their widget refs."""
 
-    frame = CollapsibleFrame(parent, text="Integration Ranges", expanded=True)
+    frame = CollapsibleFrame(parent, text="Integration Region", expanded=True)
     frame.pack(side=tk.TOP, fill=tk.X, pady=5)
     range_frame = frame.frame
 
@@ -4443,14 +4483,14 @@ def create_analysis_export_controls(
         text="Save 1D Snapshot",
         command=on_save_snapshot,
     )
-    snapshot_button.pack(side=tk.TOP, padx=5, pady=2)
+    snapshot_button.pack(fill=tk.X, padx=2, pady=(0, 4))
 
     save_q_button = ttk.Button(
         parent,
         text="Save Q-Space Snapshot",
         command=on_save_q_space,
     )
-    save_q_button.pack(side=tk.TOP, padx=5, pady=2)
+    save_q_button.pack(fill=tk.X, padx=2, pady=(0, 4))
 
     save_1d_grid_button = ttk.Button(
         parent,
@@ -4462,7 +4502,7 @@ def create_analysis_export_controls(
         command=on_save_1d_grid,
         state=(tk.NORMAL if save_1d_grid_available else tk.DISABLED),
     )
-    save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
+    save_1d_grid_button.pack(fill=tk.X, padx=2)
 
     view_state.snapshot_button = snapshot_button
     view_state.save_q_button = save_q_button
@@ -4488,90 +4528,101 @@ def create_analysis_peak_tools_controls(
     """Create analysis peak-picking controls and store their widget refs."""
 
     frame = ttk.Frame(parent)
-    frame.pack(fill=tk.X, padx=5, pady=5)
+    frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
     pick_button = ttk.Button(
         frame,
         text=("Stop Picking Peaks" if pick_enabled else "Pick Peaks in Region"),
         command=on_toggle_pick_mode,
     )
-    pick_button.pack(side=tk.TOP, anchor=tk.W, pady=(0, 4))
+    pick_button.pack(fill=tk.X, pady=(0, 6))
 
     action_row = ttk.Frame(frame)
-    action_row.pack(fill=tk.X)
+    action_row.pack(fill=tk.X, pady=(0, 6))
+    action_row.columnconfigure(0, weight=1)
+    action_row.columnconfigure(1, weight=1)
 
     clear_button = ttk.Button(
         action_row,
         text="Clear Peaks and Fits",
         command=on_clear_selection,
     )
-    clear_button.pack(side=tk.LEFT, padx=(0, 6), pady=(0, 4))
+    clear_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
     fit_button = ttk.Button(
         action_row,
         text="Fit Selected Peaks",
         command=on_fit_selected_peaks,
     )
-    fit_button.pack(side=tk.LEFT, pady=(0, 4))
+    fit_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
-    model_frame = ttk.LabelFrame(frame, text="Profiles")
-    model_frame.pack(fill=tk.X, pady=(2, 4))
+    option_row = ttk.Frame(frame)
+    option_row.pack(fill=tk.X, pady=(0, 6))
+    option_row.columnconfigure(0, weight=1)
+    option_row.columnconfigure(1, weight=1)
+
+    model_frame = ttk.LabelFrame(option_row, text="Profiles", padding=(6, 4))
+    model_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
     fit_gaussian_var = tk.BooleanVar(value=bool(fit_gaussian))
     fit_gaussian_checkbutton = ttk.Checkbutton(
         model_frame,
         text="Gaussian",
         variable=fit_gaussian_var,
     )
-    fit_gaussian_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_gaussian_checkbutton.pack(anchor=tk.W)
     fit_lorentzian_var = tk.BooleanVar(value=bool(fit_lorentzian))
     fit_lorentzian_checkbutton = ttk.Checkbutton(
         model_frame,
         text="Lorentzian",
         variable=fit_lorentzian_var,
     )
-    fit_lorentzian_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_lorentzian_checkbutton.pack(anchor=tk.W)
     fit_pseudo_voigt_var = tk.BooleanVar(value=bool(fit_pseudo_voigt))
     fit_pseudo_voigt_checkbutton = ttk.Checkbutton(
         model_frame,
         text="Pseudo-Voigt (eta)",
         variable=fit_pseudo_voigt_var,
     )
-    fit_pseudo_voigt_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_pseudo_voigt_checkbutton.pack(anchor=tk.W)
 
-    axis_frame = ttk.LabelFrame(frame, text="Fit Axes")
-    axis_frame.pack(fill=tk.X, pady=(0, 4))
+    axis_frame = ttk.LabelFrame(option_row, text="Fit Axes", padding=(6, 4))
+    axis_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
     fit_radial_var = tk.BooleanVar(value=bool(fit_radial))
     fit_radial_checkbutton = ttk.Checkbutton(
         axis_frame,
         text="Radial (2θ)",
         variable=fit_radial_var,
     )
-    fit_radial_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_radial_checkbutton.pack(anchor=tk.W)
     fit_azimuth_var = tk.BooleanVar(value=bool(fit_azimuth))
     fit_azimuth_checkbutton = ttk.Checkbutton(
         axis_frame,
         text="Azimuth (φ)",
         variable=fit_azimuth_var,
     )
-    fit_azimuth_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    fit_azimuth_checkbutton.pack(anchor=tk.W)
 
+    selection_frame = ttk.LabelFrame(frame, text="Selection", padding=(6, 4))
+    selection_frame.pack(fill=tk.X, pady=(0, 6))
     selection_status_var = tk.StringVar(value=str(selection_status_text))
     selection_status_label = ttk.Label(
-        frame,
+        selection_frame,
         textvariable=selection_status_var,
         justify=tk.LEFT,
         anchor=tk.W,
-        wraplength=520,
+        wraplength=260,
     )
-    selection_status_label.pack(fill=tk.X, pady=(0, 4))
+    selection_status_label.pack(fill=tk.X)
 
+    fit_results_frame = ttk.LabelFrame(frame, text="Fit Summary", padding=(6, 4))
+    fit_results_frame.pack(fill=tk.X)
     fit_results_var = tk.StringVar(value=str(fit_results_text))
     fit_results_label = ttk.Label(
-        frame,
+        fit_results_frame,
         textvariable=fit_results_var,
         justify=tk.LEFT,
         anchor=tk.W,
-        wraplength=520,
+        wraplength=260,
     )
     fit_results_label.pack(fill=tk.X)
 
@@ -4967,11 +5018,16 @@ def create_geometry_fit_background_controls(
     on_apply: Callable[[], None],
     on_select_current: Callable[[], None] | None = None,
     on_select_all: Callable[[], None] | None = None,
+    use_labelframe: bool = True,
 ) -> None:
     """Create the geometry-fit background selector controls and store refs."""
 
-    controls = ttk.LabelFrame(parent, text="Geometry Fit Backgrounds")
-    controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    if use_labelframe:
+        controls = ttk.LabelFrame(parent, text="Geometry Fit Backgrounds")
+        controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    else:
+        controls = ttk.Frame(parent)
+        controls.pack(side=tk.TOP, fill=tk.X)
     ttk.Label(
         controls,
         text=(
@@ -5202,12 +5258,9 @@ def open_analysis_popout_window(
     header.pack(fill=tk.X)
     ttk.Label(
         header,
-        text=(
-            "The integration figures are detached from the Analyze tab while this "
-            "window is open."
-        ),
+        text="Analyze plots are detached from the main tab while this window is open.",
         justify=tk.LEFT,
-        wraplength=620,
+        wraplength=420,
     ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
     dock_button = ttk.Button(
         header,
@@ -5216,14 +5269,32 @@ def open_analysis_popout_window(
     )
     dock_button.pack(side=tk.RIGHT)
 
-    exports_frame = ttk.LabelFrame(body, text="Exports")
-    exports_frame.pack(fill=tk.X, pady=(10, 0))
+    shell = ttk.Frame(body, padding=(0, 10, 0, 0))
+    shell.pack(fill=tk.BOTH, expand=True)
+    shell.columnconfigure(1, weight=1)
+    shell.rowconfigure(0, weight=1)
 
-    peak_tools_frame = ttk.LabelFrame(body, text="Peak Picking and Fitting")
-    peak_tools_frame.pack(fill=tk.X, pady=(10, 0))
+    controls_frame = ttk.Frame(shell, padding=(0, 0, 10, 0))
+    controls_frame.grid(row=0, column=0, sticky="ns")
 
-    plot_frame = ttk.Frame(body, padding=(0, 10, 0, 0))
-    plot_frame.pack(fill=tk.BOTH, expand=True)
+    exports_panel = CollapsibleFrame(
+        controls_frame,
+        text="Exports",
+        expanded=False,
+    )
+    exports_panel.pack(fill=tk.X, pady=(0, 8))
+    exports_frame = exports_panel.frame
+
+    peak_tools_panel = CollapsibleFrame(
+        controls_frame,
+        text="Peak Picking and Fitting",
+        expanded=True,
+    )
+    peak_tools_panel.pack(fill=tk.X)
+    peak_tools_frame = peak_tools_panel.frame
+
+    plot_frame = ttk.Frame(shell)
+    plot_frame.grid(row=0, column=1, sticky="nsew")
 
     window.protocol("WM_DELETE_WINDOW", on_close)
     window.bind("<Escape>", lambda _event: on_close())

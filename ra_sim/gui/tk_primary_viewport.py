@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from math import ceil, floor, isfinite
+from math import isfinite
 from typing import Any
 
 import time
@@ -28,8 +28,6 @@ except Exception:  # pragma: no cover - Matplotlib is always present in the GUI 
 _PIL_RESAMPLING = getattr(Image, "Resampling", Image) if Image is not None else None
 _PIL_RESAMPLE_NEAREST = getattr(_PIL_RESAMPLING, "NEAREST", 0)
 _PIL_RESAMPLE_BILINEAR = getattr(_PIL_RESAMPLING, "BILINEAR", 2)
-_PIL_TRANSPOSE_LEFT_RIGHT = getattr(Image, "FLIP_LEFT_RIGHT", 0) if Image is not None else 0
-_PIL_TRANSPOSE_TOP_BOTTOM = getattr(Image, "FLIP_TOP_BOTTOM", 1) if Image is not None else 1
 _EPSILON = 1.0e-9
 
 
@@ -42,6 +40,20 @@ def parse_primary_viewport_backend(raw_value: object) -> str:
     if normalized in {"tk", "tk_canvas", "tkcanvas", "canvas"}:
         return "tk_canvas"
     return "matplotlib"
+
+
+def primary_viewport_runtime_available() -> bool:
+    """Return whether the Tk-canvas viewport can render raster layers."""
+
+    return Image is not None and ImageTk is not None
+
+
+def primary_viewport_unavailable_reason() -> str | None:
+    """Return a short unavailability note for the Tk-canvas viewport."""
+
+    if primary_viewport_runtime_available():
+        return None
+    return "Pillow ImageTk is unavailable"
 
 
 @dataclass(frozen=True)
@@ -84,6 +96,7 @@ class _ViewportImageLayer:
     extent: tuple[float, float, float, float] | None
     interpolation: str
     source_rgba: np.ndarray | None
+    origin: str = "upper"
 
 
 @dataclass(frozen=True)
@@ -107,6 +120,8 @@ class ViewportScene:
     text_specs: tuple[_ViewportTextSpec, ...] = ()
     peak_cache: ViewportPeakCache = ViewportPeakCache()
     q_group_cache: ViewportQGroupCache = ViewportQGroupCache()
+    raster_signature: object = None
+    overlay_signature: object = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +175,11 @@ def _coerce_2d_array(array_like: object) -> np.ndarray | None:
     return np.ascontiguousarray(arr)
 
 
+def _normalize_image_origin(raw_value: object) -> str:
+    origin = str(raw_value or "upper").strip().lower()
+    return origin if origin in {"upper", "lower"} else "upper"
+
+
 def _normalize_view_mode(layer_versions: Mapping[str, object] | None) -> str:
     if not isinstance(layer_versions, Mapping):
         return "detector"
@@ -192,11 +212,12 @@ def world_to_screen(
     x0, x1 = view_state.xlim
     y0, y1 = view_state.ylim
     span_x = float(x1) - float(x0)
-    span_y = float(y1) - float(y0)
+    screen_y_top = float(y1)
+    span_y = float(y0) - screen_y_top
     if abs(span_x) <= _EPSILON or abs(span_y) <= _EPSILON:
         return None
     sx = ((float(world_x) - float(x0)) / span_x) * float(width)
-    sy = ((float(world_y) - float(y0)) / span_y) * float(height)
+    sy = ((float(world_y) - screen_y_top) / span_y) * float(height)
     if not (isfinite(sx) and isfinite(sy)):
         return None
     return (float(sx), float(sy))
@@ -212,11 +233,12 @@ def screen_to_world(
     x0, x1 = view_state.xlim
     y0, y1 = view_state.ylim
     span_x = float(x1) - float(x0)
-    span_y = float(y1) - float(y0)
+    screen_y_top = float(y1)
+    span_y = float(y0) - screen_y_top
     if abs(span_x) <= _EPSILON or abs(span_y) <= _EPSILON:
         return None
     world_x = float(x0) + (float(screen_x) / float(width)) * span_x
-    world_y = float(y0) + (float(screen_y) / float(height)) * span_y
+    world_y = screen_y_top + (float(screen_y) / float(height)) * span_y
     if not (isfinite(world_x) and isfinite(world_y)):
         return None
     return (float(world_x), float(world_y))
@@ -410,6 +432,75 @@ def _extract_text_specs(artist_groups: object) -> tuple[_ViewportTextSpec, ...]:
     return tuple(text_specs)
 
 
+def _layer_signature(layer: _ViewportImageLayer | None) -> object:
+    if layer is None:
+        return None
+    source_rgba = layer.source_rgba
+    source_signature = None
+    if source_rgba is not None:
+        source_signature = (
+            id(source_rgba),
+            tuple(int(value) for value in source_rgba.shape),
+            str(source_rgba.dtype),
+        )
+    return (
+        str(layer.name),
+        bool(layer.visible),
+        (
+            None
+            if layer.extent is None
+            else tuple(float(value) for value in layer.extent)
+        ),
+        str(layer.interpolation),
+        str(layer.origin),
+        source_signature,
+    )
+
+
+def _scene_view_signature(
+    view_state: ViewportViewState,
+    *,
+    view_mode: str,
+) -> tuple[object, ...]:
+    return (
+        int(view_state.width),
+        int(view_state.height),
+        tuple(float(value) for value in view_state.xlim),
+        tuple(float(value) for value in view_state.ylim),
+        str(view_mode),
+    )
+
+
+def _scene_raster_signature(
+    view_state: ViewportViewState,
+    *,
+    view_mode: str,
+    background_layer: _ViewportImageLayer | None,
+    simulation_layer: _ViewportImageLayer | None,
+) -> tuple[object, ...]:
+    return (
+        _scene_view_signature(view_state, view_mode=view_mode),
+        _layer_signature(background_layer),
+        _layer_signature(simulation_layer),
+    )
+
+
+def _scene_overlay_signature(
+    view_state: ViewportViewState,
+    *,
+    view_mode: str,
+    overlay_layer: _ViewportImageLayer | None,
+    overlay_model: fast_plot_viewer.FastViewerOverlayModel,
+    text_specs: tuple[_ViewportTextSpec, ...],
+) -> tuple[object, ...]:
+    return (
+        _scene_view_signature(view_state, view_mode=view_mode),
+        _layer_signature(overlay_layer),
+        overlay_model,
+        tuple(text_specs),
+    )
+
+
 class _TkPrimaryViewport:
     def __init__(
         self,
@@ -444,7 +535,11 @@ class _TkPrimaryViewport:
         )
         self._photo_image = None
         self._photo_item = None
+        self._overlay_photo_image = None
+        self._overlay_photo_item = None
         self._last_scene: ViewportScene | None = None
+        self._last_raster_signature = None
+        self._last_overlay_signature = None
         self._layer_rgba_cache: dict[str, tuple[object, np.ndarray]] = {}
         self._widget.bind("<Configure>", self._on_configure, add="+")
 
@@ -462,8 +557,9 @@ class _TkPrimaryViewport:
         scene = self._last_scene
         if scene is None:
             return
+        view_state = self._current_view_state()
         refreshed_scene = ViewportScene(
-            view_state=self._current_view_state(),
+            view_state=view_state,
             view_mode=scene.view_mode,
             background_layer=scene.background_layer,
             simulation_layer=scene.simulation_layer,
@@ -472,6 +568,19 @@ class _TkPrimaryViewport:
             text_specs=scene.text_specs,
             peak_cache=scene.peak_cache,
             q_group_cache=scene.q_group_cache,
+            raster_signature=_scene_raster_signature(
+                view_state,
+                view_mode=scene.view_mode,
+                background_layer=scene.background_layer,
+                simulation_layer=scene.simulation_layer,
+            ),
+            overlay_signature=_scene_overlay_signature(
+                view_state,
+                view_mode=scene.view_mode,
+                overlay_layer=scene.overlay_layer,
+                overlay_model=scene.overlay_model,
+                text_specs=scene.text_specs,
+            ),
         )
         self.render_scene(refreshed_scene)
 
@@ -576,6 +685,19 @@ class _TkPrimaryViewport:
             text_specs=text_specs,
             peak_cache=peak_cache,
             q_group_cache=qgroup_cache,
+            raster_signature=_scene_raster_signature(
+                view_state,
+                view_mode=view_mode,
+                background_layer=background_layer,
+                simulation_layer=simulation_layer,
+            ),
+            overlay_signature=_scene_overlay_signature(
+                view_state,
+                view_mode=view_mode,
+                overlay_layer=overlay_layer,
+                overlay_model=combined_overlay_model,
+                text_specs=text_specs,
+            ),
         )
         self.render_scene(scene)
 
@@ -602,6 +724,9 @@ class _TkPrimaryViewport:
             extent = tuple(float(value) for value in getattr(artist, "get_extent")())
         except Exception:
             extent = None
+        origin = _normalize_image_origin(
+            getattr(artist, "get_origin", lambda: "upper")()
+        )
         interpolation = str(
             getattr(artist, "get_interpolation", lambda: "nearest")() or "nearest"
         )
@@ -612,6 +737,7 @@ class _TkPrimaryViewport:
                 extent=extent,
                 interpolation=interpolation,
                 source_rgba=None,
+                origin=origin,
             )
         try:
             cmap = getattr(getattr(artist, "get_cmap", lambda: None)(), "name", None)
@@ -659,11 +785,83 @@ class _TkPrimaryViewport:
             ),
             interpolation=interpolation,
             source_rgba=rgba,
+            origin=origin,
         )
 
     def render_scene(self, scene: ViewportScene) -> None:
         if Image is None or ImageTk is None:
             return
+        raster_signature = (
+            scene.raster_signature
+            if scene.raster_signature is not None
+            else _scene_raster_signature(
+                scene.view_state,
+                view_mode=scene.view_mode,
+                background_layer=scene.background_layer,
+                simulation_layer=scene.simulation_layer,
+            )
+        )
+        overlay_signature = (
+            scene.overlay_signature
+            if scene.overlay_signature is not None
+            else _scene_overlay_signature(
+                scene.view_state,
+                view_mode=scene.view_mode,
+                overlay_layer=scene.overlay_layer,
+                overlay_model=scene.overlay_model,
+                text_specs=scene.text_specs,
+            )
+        )
+        if (
+            self._last_scene is not None
+            and self._photo_item is not None
+            and raster_signature == self._last_raster_signature
+            and overlay_signature == self._last_overlay_signature
+        ):
+            self._last_scene = scene
+            return
+        if raster_signature != self._last_raster_signature:
+            photo = self._render_raster_photo(scene)
+            if self._photo_item is None:
+                self._photo_item = self._widget.create_image(
+                    0,
+                    0,
+                    anchor=self._tk.NW,
+                    image=photo,
+                    tags=("viewport_base",),
+                )
+            else:
+                self._widget.itemconfigure(self._photo_item, image=photo)
+            self._photo_image = photo
+            self._last_raster_signature = raster_signature
+        if overlay_signature != self._last_overlay_signature:
+            overlay_photo = self._render_overlay_photo(scene)
+            if overlay_photo is None:
+                if self._overlay_photo_item is not None:
+                    self._widget.delete(self._overlay_photo_item)
+                    self._overlay_photo_item = None
+                self._overlay_photo_image = None
+            else:
+                if self._overlay_photo_item is None:
+                    self._overlay_photo_item = self._widget.create_image(
+                        0,
+                        0,
+                        anchor=self._tk.NW,
+                        image=overlay_photo,
+                        tags=("viewport_overlay_image",),
+                    )
+                else:
+                    self._widget.itemconfigure(
+                        self._overlay_photo_item,
+                        image=overlay_photo,
+                    )
+                self._overlay_photo_image = overlay_photo
+            self._widget.delete("viewport_overlay")
+            self._render_overlay_items(scene)
+            self._last_overlay_signature = overlay_signature
+        self._last_scene = scene
+
+    def _render_raster_photo(self, scene: ViewportScene):
         base_image = Image.new(
             "RGBA",
             (max(int(scene.view_state.width), 1), max(int(scene.view_state.height), 1)),
@@ -672,24 +870,22 @@ class _TkPrimaryViewport:
         for layer in (
             scene.background_layer,
             scene.simulation_layer,
-            scene.overlay_layer,
         ):
             base_image = self._composite_layer(base_image, layer, scene.view_state)
-        photo = ImageTk.PhotoImage(base_image)
-        if self._photo_item is None:
-            self._photo_item = self._widget.create_image(
-                0,
-                0,
-                anchor=self._tk.NW,
-                image=photo,
-                tags=("viewport_base",),
-            )
-        else:
-            self._widget.itemconfigure(self._photo_item, image=photo)
-        self._photo_image = photo
-        self._widget.delete("viewport_overlay")
-        self._render_overlay_items(scene)
-        self._last_scene = scene
+        return ImageTk.PhotoImage(base_image)
+
+    def _render_overlay_photo(self, scene: ViewportScene):
+        patch = self._render_layer_patch(scene.overlay_layer, scene.view_state)
+        if patch is None:
+            return None
+        overlay_image = Image.new(
+            "RGBA",
+            (max(int(scene.view_state.width), 1), max(int(scene.view_state.height), 1)),
+            (0, 0, 0, 0),
+        )
+        layer_image, left, top = patch
+        overlay_image.paste(layer_image, (int(left), int(top)))
+        return ImageTk.PhotoImage(overlay_image)
 
     def _composite_layer(
         self,
@@ -730,23 +926,6 @@ class _TkPrimaryViewport:
         overlap_y1 = min(view_y_max, extent_y_max)
         if overlap_x1 - overlap_x0 <= _EPSILON or overlap_y1 - overlap_y0 <= _EPSILON:
             return None
-        src_edge_x0 = self._world_to_source_edge(overlap_x0, extent_x0, extent_x1, src_width)
-        src_edge_x1 = self._world_to_source_edge(overlap_x1, extent_x0, extent_x1, src_width)
-        src_edge_y0 = self._world_to_source_edge(overlap_y0, extent_y0, extent_y1, src_height)
-        src_edge_y1 = self._world_to_source_edge(overlap_y1, extent_y0, extent_y1, src_height)
-        if None in {src_edge_x0, src_edge_x1, src_edge_y0, src_edge_y1}:
-            return None
-        flip_x = bool(src_edge_x1 < src_edge_x0)
-        flip_y = bool(src_edge_y1 < src_edge_y0)
-        src_left = max(0, int(floor(min(src_edge_x0, src_edge_x1))))
-        src_right = min(src_width, int(ceil(max(src_edge_x0, src_edge_x1))))
-        src_top = max(0, int(floor(min(src_edge_y0, src_edge_y1))))
-        src_bottom = min(src_height, int(ceil(max(src_edge_y0, src_edge_y1))))
-        if src_right <= src_left or src_bottom <= src_top:
-            return None
-        patch_rgba = src_rgba[src_top:src_bottom, src_left:src_right]
-        if patch_rgba.size == 0:
-            return None
         top_left = world_to_screen(view_state, overlap_x0, overlap_y0)
         bottom_right = world_to_screen(view_state, overlap_x1, overlap_y1)
         if top_left is None or bottom_right is None:
@@ -761,29 +940,110 @@ class _TkPrimaryViewport:
             dst_bottom = min(view_state.height, dst_top + 1)
         if dst_right <= dst_left or dst_bottom <= dst_top:
             return None
-        patch_image = Image.fromarray(np.ascontiguousarray(patch_rgba), mode="RGBA")
-        if flip_x:
-            patch_image = patch_image.transpose(_PIL_TRANSPOSE_LEFT_RIGHT)
-        if flip_y:
-            patch_image = patch_image.transpose(_PIL_TRANSPOSE_TOP_BOTTOM)
-        patch_image = patch_image.resize(
-            (int(max(1, dst_right - dst_left)), int(max(1, dst_bottom - dst_top))),
-            resample=_interpolation_to_resample(layer.interpolation),
+        patch_width = int(max(1, dst_right - dst_left))
+        patch_height = int(max(1, dst_bottom - dst_top))
+        affine = self._screen_patch_to_source_affine(
+            layer=layer,
+            view_state=view_state,
+            dst_left=dst_left,
+            dst_top=dst_top,
+            src_width=src_width,
+            src_height=src_height,
         )
+        if affine is None:
+            return None
+        patch_image = Image.fromarray(np.ascontiguousarray(src_rgba))
+        transform_args = {
+            "size": (patch_width, patch_height),
+            "method": getattr(Image, "Transform", Image).AFFINE,
+            "data": affine,
+            "resample": _interpolation_to_resample(layer.interpolation),
+        }
+        try:
+            patch_image = patch_image.transform(
+                fillcolor=(0, 0, 0, 0),
+                **transform_args,
+            )
+        except TypeError:
+            patch_image = patch_image.transform(**transform_args)
         return patch_image, dst_left, dst_top
 
-    def _world_to_source_edge(
+    def _screen_patch_to_source_affine(
         self,
-        world_value: float,
-        extent_start: float,
-        extent_end: float,
-        size: int,
-    ) -> float | None:
-        span = float(extent_end) - float(extent_start)
-        if abs(span) <= _EPSILON or int(size) <= 0:
+        *,
+        layer: _ViewportImageLayer,
+        view_state: ViewportViewState,
+        dst_left: int,
+        dst_top: int,
+        src_width: int,
+        src_height: int,
+    ) -> tuple[float, float, float, float, float, float] | None:
+        p00 = self._screen_to_source_coord(
+            layer=layer,
+            view_state=view_state,
+            screen_x=float(dst_left),
+            screen_y=float(dst_top),
+            src_width=src_width,
+            src_height=src_height,
+        )
+        p10 = self._screen_to_source_coord(
+            layer=layer,
+            view_state=view_state,
+            screen_x=float(dst_left) + 1.0,
+            screen_y=float(dst_top),
+            src_width=src_width,
+            src_height=src_height,
+        )
+        p01 = self._screen_to_source_coord(
+            layer=layer,
+            view_state=view_state,
+            screen_x=float(dst_left),
+            screen_y=float(dst_top) + 1.0,
+            src_width=src_width,
+            src_height=src_height,
+        )
+        if p00 is None or p10 is None or p01 is None:
             return None
-        src_edge = ((float(world_value) - float(extent_start)) / span) * float(size)
-        return float(src_edge) if isfinite(src_edge) else None
+        return (
+            float(p10[0] - p00[0]),
+            float(p01[0] - p00[0]),
+            float(p00[0]),
+            float(p10[1] - p00[1]),
+            float(p01[1] - p00[1]),
+            float(p00[1]),
+        )
+
+    def _screen_to_source_coord(
+        self,
+        *,
+        layer: _ViewportImageLayer,
+        view_state: ViewportViewState,
+        screen_x: float,
+        screen_y: float,
+        src_width: int,
+        src_height: int,
+    ) -> tuple[float, float] | None:
+        world = screen_to_world(view_state, float(screen_x), float(screen_y))
+        if world is None:
+            return None
+        extent = layer.extent
+        if extent is None:
+            return None
+        extent_x0, extent_x1, extent_y0, extent_y1 = (float(value) for value in extent)
+        span_x = float(extent_x1) - float(extent_x0)
+        if abs(span_x) <= _EPSILON or int(src_width) <= 0:
+            return None
+        world_x, world_y = world
+        src_x = ((float(world_x) - float(extent_x0)) / span_x) * float(src_width)
+        if str(layer.origin) == "upper":
+            span_y = float(extent_y0) - float(extent_y1)
+            src_y = ((float(world_y) - float(extent_y1)) / span_y) * float(src_height)
+        else:
+            span_y = float(extent_y1) - float(extent_y0)
+            src_y = ((float(world_y) - float(extent_y0)) / span_y) * float(src_height)
+        if not (isfinite(src_x) and isfinite(src_y) and abs(span_y) > _EPSILON):
+            return None
+        return (float(src_x), float(src_y))
 
     def _render_overlay_items(self, scene: ViewportScene) -> None:
         draw_records: list[tuple[float, str, object]] = []
