@@ -7139,6 +7139,11 @@ def run_runtime_geometry_fit_action(
         "theta_initial" not in var_names and "theta_offset" not in var_names
     )
     prepare_bindings = bindings.prepare_bindings_factory(var_names)
+    preflight_runtime_cfg = (
+        prepare_bindings.fit_config
+        if isinstance(getattr(prepare_bindings, "fit_config", None), Mapping)
+        else None
+    )
 
     def _persist_preflight_failure_log(
         error_text: str,
@@ -7176,6 +7181,7 @@ def run_runtime_geometry_fit_action(
             current_dataset=None,
             selected_background_indices=(),
             joint_background_mode=False,
+            geometry_runtime_cfg=preflight_runtime_cfg,
         )
         log_path = _persist_preflight_failure_log(error_text, failure_log_sections)
         prepare_result = GeometryFitPreparationResult(
@@ -7194,21 +7200,29 @@ def run_runtime_geometry_fit_action(
         )
 
     if prepare_result.prepared_run is None:
-        if prepare_result.error_text:
+        should_force_preflight_log = bool(prepare_result.error_text) or bool(
+            geometry_fit_debug_logging_enabled(preflight_runtime_cfg)
+        )
+        if should_force_preflight_log:
+            preflight_error_text = str(
+                prepare_result.error_text
+                or "Geometry fit aborted before solver start."
+            )
             failure_log_sections = (
                 list(prepare_result.failure_log_sections or ())
                 or build_geometry_fit_preflight_log_sections(
-                    error_text=str(prepare_result.error_text),
+                    error_text=preflight_error_text,
                     params=params,
                     var_names=var_names,
                     dataset_infos=None,
                     current_dataset=None,
                     selected_background_indices=(),
                     joint_background_mode=False,
+                    geometry_runtime_cfg=preflight_runtime_cfg,
                 )
             )
             log_path = _persist_preflight_failure_log(
-                str(prepare_result.error_text),
+                preflight_error_text,
                 failure_log_sections,
             )
             prepare_result = GeometryFitPreparationResult(
@@ -7220,7 +7234,10 @@ def run_runtime_geometry_fit_action(
                 ],
                 log_path=log_path,
             )
-            bindings.execution_bindings.set_progress_text(str(prepare_result.error_text))
+            if prepare_result.error_text:
+                bindings.execution_bindings.set_progress_text(
+                    str(prepare_result.error_text)
+                )
         return GeometryFitRuntimeActionResult(
             params=params,
             var_names=var_names,

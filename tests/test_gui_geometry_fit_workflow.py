@@ -4415,6 +4415,59 @@ def test_run_runtime_geometry_fit_action_surfaces_preflight_error_text(tmp_path)
     assert cmd_events == []
 
 
+def test_run_runtime_geometry_fit_action_persists_debug_preflight_log_without_error_text(
+    tmp_path,
+) -> None:
+    progress_texts: list[str] = []
+    cmd_events: list[str] = []
+
+    def _prepare_bindings_factory(_var_names):
+        return replace(
+            _make_runtime_action_prepare_bindings(),
+            fit_config={"geometry": {"debug_logging": True}},
+        )
+
+    action = geometry_fit.run_runtime_geometry_fit_action(
+        bindings=geometry_fit.GeometryFitRuntimeActionBindings(
+            value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+                current_var_names=lambda: ["gamma"],
+                current_params=lambda: {"theta_initial": 3.0, "mosaic_params": {}},
+                current_ui_params=lambda: {},
+                var_map={},
+            ),
+            prepare_bindings_factory=_prepare_bindings_factory,
+            execution_bindings=_make_runtime_action_execution_bindings(
+                tmp_path,
+                progress_texts,
+                cmd_events,
+            ),
+            solve_fit=lambda *_args, **_kwargs: None,
+            stamp_factory=lambda: "20260328_130003",
+        ),
+        prepare_run=lambda **kwargs: geometry_fit.GeometryFitPreparationResult(),
+        build_execution_setup=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_execution_setup should not be called")
+        ),
+        execute_run=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("execute_run should not be called")
+        ),
+    )
+
+    assert action.execution_result is None
+    assert action.prepare_result is not None
+    assert action.error_text is None
+    assert action.prepare_result.log_path == (
+        tmp_path / "geometry_fit_log_20260328_130003.txt"
+    )
+    log_text = action.prepare_result.log_path.read_text(encoding="utf-8")
+    assert "Geometry fit aborted before solver start: 20260328_130003" in log_text
+    assert "Geometry fit aborted before solver start." in log_text
+    assert "stage=preflight" in log_text
+    assert "Run request:" in log_text
+    assert progress_texts == []
+    assert cmd_events == []
+
+
 def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloads(
     tmp_path,
 ) -> None:
