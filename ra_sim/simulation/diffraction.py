@@ -196,6 +196,7 @@ def _write_intersection_cache_log(
     phi_center: float,
     wavelength_center: float,
     source_label: str | None = None,
+    cache_metadata: dict[str, object] | None = None,
 ) -> None:
     if not _should_log_intersection_cache():
         return
@@ -236,6 +237,18 @@ def _write_intersection_cache_log(
         "created_at": datetime.now().isoformat(),
         "created_at_unix": float(time.time()),
         "source": source_label or "build_intersection_cache",
+        "reused": False,
+        "rebuilt": True,
+        "cache_action": "rebuilt",
+        "stale_reason": None,
+        "cache_source": source_label or "build_intersection_cache",
+        "cache_provenance": {
+            "grouping": "nominal_bragg_family",
+            "collapse": "detector_branch_representative_rows",
+            "beam_context": (
+                "best_sample_indices_out_then_single_sample_indices_then_central_mean"
+            ),
+        },
         "av": float(av) if isinstance(av, (int, float, np.floating)) else None,
         "cv": float(cv) if isinstance(cv, (int, float, np.floating)) else None,
         "beam_x_center": beam_x_center,
@@ -250,6 +263,8 @@ def _write_intersection_cache_log(
         "log_root": str(_resolve_intersection_cache_log_root()),
         "log_dir": str(log_dir),
     }
+    if isinstance(cache_metadata, dict) and cache_metadata:
+        metadata.update(cache_metadata)
 
     try:
         with (log_dir / "meta.json").open("w", encoding="utf-8") as handle:
@@ -5504,23 +5519,40 @@ def _collapse_intersection_cache_table(cache_table: np.ndarray) -> np.ndarray:
     """Keep one central row per expected detector branch inside one Qr/Qz table."""
 
     table = np.asarray(cache_table, dtype=np.float64)
-    if table.ndim != 2 or table.shape[0] <= 1:
+    if table.ndim != 2 or table.shape[0] <= 0:
         return table
 
+    selected_indices = _intersection_cache_selected_row_indices(table)
+    if not selected_indices:
+        return np.empty((0, table.shape[1]), dtype=np.float64)
+    return table[np.asarray(selected_indices, dtype=np.int64), :].copy()
+
+
+def _intersection_cache_selected_row_indices(cache_table: np.ndarray) -> list[int]:
+    """Return the representative combined-table row indices kept by cache collapse."""
+
+    table = np.asarray(cache_table, dtype=np.float64)
+    if table.ndim != 2 or table.shape[0] <= 0:
+        return []
+    if table.shape[0] == 1:
+        return [0]
+
     target_count = _intersection_cache_target_row_count(table)
-    if target_count <= 0 or table.shape[0] <= target_count:
-        return table
+    if target_count <= 0:
+        return []
+    if table.shape[0] <= target_count:
+        return list(range(int(table.shape[0])))
 
     coords = np.asarray(table[:, 2:4], dtype=np.float64)
     finite_mask = np.isfinite(coords[:, 0]) & np.isfinite(coords[:, 1])
     valid_indices = np.flatnonzero(finite_mask)
     if valid_indices.size <= 0:
-        return table[:target_count, :].copy()
+        return [int(idx) for idx in range(min(target_count, int(table.shape[0])))]
 
     valid_coords = coords[valid_indices, :]
     if target_count == 1 or valid_indices.size == 1:
         rep_local_idx = _intersection_cache_representative_local_index(valid_coords)
-        return table[[int(valid_indices[rep_local_idx])], :].copy()
+        return [int(valid_indices[rep_local_idx])]
 
     selected_indices: list[int] = []
     for cluster_local_indices in _intersection_cache_two_row_clusters(valid_coords):
@@ -5534,18 +5566,22 @@ def _collapse_intersection_cache_table(cache_table: np.ndarray) -> np.ndarray:
 
     if not selected_indices:
         rep_local_idx = _intersection_cache_representative_local_index(valid_coords)
-        return table[[int(valid_indices[rep_local_idx])], :].copy()
+        return [int(valid_indices[rep_local_idx])]
 
     if len(selected_indices) < target_count:
-        remaining = [idx for idx in valid_indices.tolist() if int(idx) not in selected_indices]
+        remaining = [
+            idx for idx in valid_indices.tolist() if int(idx) not in selected_indices
+        ]
         remaining_coords = coords[np.asarray(remaining, dtype=np.int64), :]
         while remaining and len(selected_indices) < target_count:
-            rep_local_idx = _intersection_cache_representative_local_index(remaining_coords)
+            rep_local_idx = _intersection_cache_representative_local_index(
+                remaining_coords
+            )
             selected_indices.append(int(remaining.pop(rep_local_idx)))
             if remaining:
                 remaining_coords = coords[np.asarray(remaining, dtype=np.int64), :]
 
-    selected_indices = sorted(
+    ordered_indices = sorted(
         {int(idx) for idx in selected_indices},
         key=lambda idx: (
             float(table[idx, 2]) if np.isfinite(table[idx, 2]) else float("inf"),
@@ -5553,7 +5589,7 @@ def _collapse_intersection_cache_table(cache_table: np.ndarray) -> np.ndarray:
             int(idx),
         ),
     )
-    return table[np.asarray(selected_indices[:target_count], dtype=np.int64), :].copy()
+    return ordered_indices[:target_count]
 
 
 def _intersection_cache_nominal_integer(values: np.ndarray) -> int | None:
@@ -5596,6 +5632,41 @@ def _intersection_cache_group_key(cache_table: np.ndarray) -> tuple[object, ...]
 def _expand_intersection_cache_group(cache_tables: list[np.ndarray]) -> list[np.ndarray]:
     """Reduce one nominal Bragg family to final one-row cache tables."""
 
+    expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(
+        cache_tables
+    )
+    return expanded_tables
+
+
+def _intersection_cache_nominal_hkl_triplet(table: np.ndarray) -> tuple[int, int, int] | None:
+    """Return the nominal integer HKL triplet represented by one cache table."""
+
+    h_key = _intersection_cache_nominal_integer(table[:, 6])
+    k_key = _intersection_cache_nominal_integer(table[:, 7])
+    l_key = _intersection_cache_nominal_integer(table[:, 8])
+    if h_key is None or k_key is None or l_key is None:
+        return None
+    return int(h_key), int(k_key), int(l_key)
+
+
+def _intersection_cache_summary_q_value(values: np.ndarray) -> float | None:
+    """Return one representative finite cache Q value when present."""
+
+    try:
+        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    finite = arr[np.isfinite(arr)]
+    if finite.size <= 0:
+        return None
+    return float(np.mean(finite))
+
+
+def _expand_intersection_cache_group_with_metadata(
+    cache_tables: list[np.ndarray],
+) -> tuple[list[np.ndarray], dict[str, object]]:
+    """Reduce one nominal Bragg family and return cache-table provenance metadata."""
+
     valid_tables = []
     for cache_table in cache_tables:
         table = np.asarray(cache_table, dtype=np.float64)
@@ -5603,20 +5674,83 @@ def _expand_intersection_cache_group(cache_tables: list[np.ndarray]) -> list[np.
             continue
         valid_tables.append(table)
     if not valid_tables:
-        return []
+        return [], {}
 
     combined_table = (
         np.vstack(valid_tables)
         if len(valid_tables) > 1
         else np.asarray(valid_tables[0], dtype=np.float64)
     )
-    collapsed_table = _collapse_intersection_cache_table(combined_table)
+    selected_indices = _intersection_cache_selected_row_indices(combined_table)
+    collapsed_table = (
+        combined_table[np.asarray(selected_indices, dtype=np.int64), :].copy()
+        if selected_indices
+        else np.empty((0, combined_table.shape[1]), dtype=np.float64)
+    )
     if collapsed_table.ndim != 2 or collapsed_table.shape[0] <= 0:
-        return []
-    return [
+        return [], {}
+
+    group_key = _intersection_cache_group_key(combined_table)
+    group_kind = str(group_key[0]) if isinstance(group_key, tuple) and group_key else "unknown"
+    final_tables = [
         np.asarray(collapsed_table[row_idx : row_idx + 1, :], dtype=np.float64).copy()
         for row_idx in range(collapsed_table.shape[0])
     ]
+    selected_index_set = {int(idx) for idx in selected_indices}
+    coords = np.asarray(combined_table[:, 2:4], dtype=np.float64)
+    finite_mask = np.isfinite(coords[:, 0]) & np.isfinite(coords[:, 1])
+    nonfinite_indices = [
+        int(idx)
+        for idx in np.flatnonzero(~finite_mask)
+        if int(idx) not in selected_index_set
+    ]
+    row_count_before = int(combined_table.shape[0])
+    row_count_after = int(len(selected_indices))
+    merged_group_count = max(0, int(len(valid_tables)) - 1)
+    nominal_hkl_recovery_count = (
+        int(row_count_before) if group_kind == "non_specular_hkl" else 0
+    )
+    table_summaries = []
+    nominal_hkl = _intersection_cache_nominal_hkl_triplet(combined_table)
+    group_qr = _intersection_cache_summary_q_value(combined_table[:, 0])
+    group_qz = _intersection_cache_summary_q_value(combined_table[:, 1])
+    for summary_index, row_idx in enumerate(selected_indices):
+        row_table = combined_table[int(row_idx) : int(row_idx) + 1, :]
+        row_hkl = _intersection_cache_nominal_hkl_triplet(row_table) or nominal_hkl
+        table_summaries.append(
+            {
+                "table_index": int(summary_index),
+                "group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+                "q_group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+                "nominal_hkl": list(row_hkl) if isinstance(row_hkl, tuple) else None,
+                "qr": _intersection_cache_summary_q_value(row_table[:, 0]),
+                "qz": _intersection_cache_summary_q_value(row_table[:, 1]),
+                "group_qr": group_qr,
+                "group_qz": group_qz,
+                "row_count_before_grouping": int(row_count_before),
+                "row_count_after_grouping": 1,
+                "dropped_nonfinite_row_count": int(len(nonfinite_indices)),
+                "nominal_hkl_recovery_count": int(nominal_hkl_recovery_count),
+                "merged_group_count": int(merged_group_count),
+                "representative_row_indices_kept": [int(row_idx)],
+            }
+        )
+    metadata = {
+        "group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+        "q_group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+        "group_kind": group_kind,
+        "nominal_hkl": list(nominal_hkl) if isinstance(nominal_hkl, tuple) else None,
+        "qr": group_qr,
+        "qz": group_qz,
+        "row_count_before_grouping": int(row_count_before),
+        "row_count_after_grouping": int(row_count_after),
+        "dropped_nonfinite_row_count": int(len(nonfinite_indices)),
+        "nominal_hkl_recovery_count": int(nominal_hkl_recovery_count),
+        "merged_group_count": int(merged_group_count),
+        "representative_row_indices_kept": [int(idx) for idx in selected_indices],
+        "table_summaries": table_summaries,
+    }
+    return final_tables, metadata
 
 
 def build_intersection_cache(
@@ -5680,6 +5814,8 @@ def build_intersection_cache(
         qz_scale = 2.0 * np.pi / cv_val
 
     grouped_cache_tables: dict[tuple[object, ...], list[np.ndarray]] = {}
+    cache_group_summaries: list[dict[str, object]] = []
+    cache_table_summaries: list[dict[str, object]] = []
     beam_x_center = float("nan")
     beam_y_center = float("nan")
     theta_center = float("nan")
@@ -5761,8 +5897,17 @@ def build_intersection_cache(
         grouped_cache_tables.setdefault(group_key, []).append(cache_table)
 
     cache = []
+    cache_table_summaries = []
     for group_tables in grouped_cache_tables.values():
-        cache.extend(_expand_intersection_cache_group(group_tables))
+        expanded_tables, group_metadata = _expand_intersection_cache_group_with_metadata(
+            group_tables
+        )
+        cache.extend(expanded_tables)
+        if isinstance(group_metadata, dict) and group_metadata:
+            cache_group_summaries.append(group_metadata)
+            for item in group_metadata.get("table_summaries", []) or []:
+                if isinstance(item, dict):
+                    cache_table_summaries.append(dict(item))
 
     if _should_log_intersection_cache():
         _write_intersection_cache_log(
@@ -5774,6 +5919,11 @@ def build_intersection_cache(
             theta_center=theta_center,
             phi_center=phi_center,
             wavelength_center=wavelength_center,
+            cache_metadata={
+                "group_summary_count": int(len(cache_group_summaries)),
+                "group_summaries": cache_group_summaries,
+                "table_summaries": cache_table_summaries,
+            },
         )
 
     return cache

@@ -935,6 +935,153 @@ def test_fit_geometry_parameters_dynamic_point_path_uses_angular_missing_penalty
     assert bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit"]) is True
 
 
+def test_fit_geometry_parameters_dynamic_point_path_records_fit_space_provenance(
+    monkeypatch,
+):
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            ),
+            np.array(
+                [[1.0, 14.0, 10.0, 0.0, 0.0, 1.0, 0.0]],
+                dtype=np.float64,
+            ),
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        captured["residual"] = np.asarray(residual_fn(x), dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=captured["residual"],
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 24
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["pixel_size_m"] = 1.0e-4
+    params["lambda"] = 1.1
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 12.0,
+            "y": 12.0,
+            "detector_x": 12.0,
+            "detector_y": 12.0,
+            "background_two_theta_deg": 20.0,
+            "background_phi_deg": 5.0,
+            "background_reference_a": 4.0,
+            "background_reference_c": 7.0,
+            "background_reference_lambda": 1.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+        },
+        {
+            "hkl": (0, 1, 0),
+            "label": "0,1,0",
+            "x": 14.0,
+            "y": 10.0,
+            "detector_x": 14.0,
+            "detector_y": 10.0,
+            "source_table_index": 1,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+        },
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "dynamic_point_geometry_fit": True,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "missing_pair_penalty_deg": 7.0,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert captured["residual"].shape == (4,)
+    assert isinstance(result.point_match_summary, dict)
+    assert result.point_match_summary["fit_space_pixel_size_source"] == "pixel_size_m"
+    assert np.isclose(
+        float(result.point_match_summary["fit_space_pixel_size_value"]),
+        1.0e-4,
+    )
+    assert np.isclose(
+        float(result.point_match_summary["fit_space_pixel_size_m_raw"]),
+        1.0e-4,
+    )
+    assert np.isclose(
+        float(result.point_match_summary["fit_space_debye_x_raw"]),
+        0.0,
+    )
+    assert np.isclose(
+        float(result.point_match_summary["fit_space_debye_y_raw"]),
+        0.0,
+    )
+    assert int(result.point_match_summary["fit_space_anchor_count_cached"]) == 1
+    assert int(result.point_match_summary["fit_space_anchor_count_detector"]) == 1
+    assert result.point_match_summary["fit_space_anchor_source_counts"] == {
+        "cached_fit_space_anchor": 1,
+        "detector_fit_space_anchor": 1,
+    }
+    assert int(result.point_match_summary["fit_space_two_theta_adjustment_count"]) == 1
+    assert float(
+        result.point_match_summary["fit_space_two_theta_adjustment_total_abs_deg"]
+    ) > 0.0
+    assert float(
+        result.point_match_summary["fit_space_two_theta_adjustment_mean_abs_deg"]
+    ) > 0.0
+    assert float(
+        result.point_match_summary["fit_space_two_theta_adjustment_max_abs_deg"]
+    ) > 0.0
+    assert len(result.point_match_summary["per_dataset"]) == 1
+    assert int(
+        result.point_match_summary["per_dataset"][0]["fit_space_anchor_count_cached"]
+    ) == 1
+    assert int(
+        result.point_match_summary["per_dataset"][0]["fit_space_anchor_count_detector"]
+    ) == 1
+
+
 def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
     optics_seen = []
 

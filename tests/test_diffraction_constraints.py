@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 
 from ra_sim.simulation import diffraction
@@ -517,6 +519,56 @@ def test_build_intersection_cache_skips_empty_tables(monkeypatch):
     table = np.asarray(cache[0], dtype=np.float64)
     assert table.shape == (1, 14)
     np.testing.assert_allclose(table[0, 2:4], np.array([20.0, 21.0]))
+
+
+def test_build_intersection_cache_log_records_extended_cache_metadata(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: True)
+    monkeypatch.setattr(
+        diffraction,
+        "_resolve_intersection_cache_log_root",
+        lambda: tmp_path,
+    )
+
+    cache = diffraction.build_intersection_cache(
+        [
+            np.array([[1.0, 10.0, 10.0, 0.0, 0.0, 0.0, 2.99]], dtype=np.float64),
+            np.array([[1.0, 20.0, 20.0, 0.0, 0.0, 0.0, 3.00]], dtype=np.float64),
+            np.array([[1.0, 21.0, 21.0, 0.0, 0.0, 0.0, 3.01]], dtype=np.float64),
+        ],
+        4.0,
+        7.0,
+    )
+
+    assert len(cache) == 1
+    log_dirs = list((tmp_path / "intersection_cache").iterdir())
+    assert len(log_dirs) == 1
+    metadata = json.loads((log_dirs[0] / "meta.json").read_text(encoding="utf-8"))
+
+    assert metadata["reused"] is False
+    assert metadata["rebuilt"] is True
+    assert metadata["cache_action"] == "rebuilt"
+    assert metadata["stale_reason"] is None
+    assert metadata["cache_source"] == "build_intersection_cache"
+    assert metadata["cache_provenance"]["grouping"] == "nominal_bragg_family"
+    assert metadata["group_summary_count"] == 1
+    assert metadata["table_count"] == 1
+
+    group_summary = metadata["group_summaries"][0]
+    assert group_summary["nominal_hkl"] == [0, 0, 3]
+    assert "q_group_key" in group_summary
+    assert group_summary["row_count_before_grouping"] == 3
+    assert group_summary["row_count_after_grouping"] == 1
+    assert isinstance(group_summary["representative_row_indices_kept"], list)
+
+    table_summary = metadata["table_summaries"][0]
+    assert table_summary["nominal_hkl"] == [0, 0, 3]
+    assert "q_group_key" in table_summary
+    assert table_summary["row_count_before_grouping"] == 3
+    assert table_summary["row_count_after_grouping"] == 1
+    assert isinstance(table_summary["representative_row_indices_kept"], list)
 
 
 def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monkeypatch):

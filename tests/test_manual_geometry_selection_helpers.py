@@ -1661,6 +1661,39 @@ def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cac
     assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert next_sig == ("sig",)
     assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
+    assert cache_data["cache_metadata"] == {
+        "cache_action": "reused",
+        "reused": True,
+        "rebuilt": False,
+        "stale_reason": None,
+        "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
+        "cache_provenance": [
+            "geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
+            "build_grouped_candidates",
+            "build_simulated_lookup",
+        ],
+        "prefer_cache": True,
+        "background_index": 0,
+        "current_background_index": 0,
+        "simulated_peak_count": 1,
+        "group_count": 1,
+        "table_count": 1,
+        "table_summaries": [
+            {
+                "source_table_index": 1,
+                "nominal_hkl": None,
+                "q_group_key": ["q_group", "primary", 1, 0],
+                "qr": None,
+                "qz": None,
+                "row_count_before_grouping": 1,
+                "row_count_after_grouping": 1,
+                "dropped_nonfinite_row_count": 0,
+                "nominal_hkl_recovery_count": 0,
+                "merged_group_count": 0,
+                "representative_row_indices_kept": [2],
+            }
+        ],
+    }
 
 
 def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_cached_groups_are_empty() -> None:
@@ -1711,6 +1744,16 @@ def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_
     assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert next_sig == ("sig",)
     assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
+    assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
+    )
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "cached preview groups were empty."
+    )
+    assert cache_data["cache_metadata"]["table_summaries"][0][
+        "representative_row_indices_kept"
+    ] == [2]
 
 
 def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_background_state_changes() -> None:
@@ -1788,6 +1831,16 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
     assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 13.0
     assert next_sig[3] == ("new-bg",)
     assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0]["sim_row"] == 2.0
+    assert cache_data["cache_metadata"]["cache_action"] == "reused"
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "existing_cache_data.grouped_candidates"
+    )
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "background-only cache signature change; reused grouped candidates."
+    )
+    assert cache_data["cache_metadata"]["table_summaries"][0][
+        "representative_row_indices_kept"
+    ] == [2]
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None:

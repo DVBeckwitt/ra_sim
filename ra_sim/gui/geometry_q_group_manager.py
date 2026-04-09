@@ -230,6 +230,87 @@ def _array_size(value: object) -> int | None:
             return None
 
 
+def _array_row_count(value: object) -> int | None:
+    """Return one array-like object's leading-dimension count when available."""
+
+    if value is None:
+        return None
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        arr = None
+    if arr is not None:
+        if arr.ndim == 0:
+            return int(arr.size)
+        return int(arr.shape[0])
+    try:
+        return int(len(value))  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
+def _geometry_fit_param_summary(
+    params_local: Mapping[str, object],
+) -> dict[str, object]:
+    """Return one concise geometry-fit parameter summary for diagnostics."""
+
+    return {
+        "a": _copy_simulation_diag_value(params_local.get("a")),
+        "c": _copy_simulation_diag_value(params_local.get("c")),
+        "lambda": _copy_simulation_diag_value(params_local.get("lambda")),
+        "theta_initial": _copy_simulation_diag_value(
+            params_local.get("theta_initial")
+        ),
+        "center": _copy_simulation_diag_value(params_local.get("center")),
+        "n2": _copy_simulation_diag_value(params_local.get("n2")),
+        "optics_mode": _copy_simulation_diag_value(
+            params_local.get("optics_mode", 0)
+        ),
+    }
+
+
+def _geometry_fit_mosaic_array_sizes(
+    mosaic: Mapping[str, object],
+    *,
+    wavelength_array: object,
+) -> dict[str, object]:
+    """Return one concise geometry-fit mosaic array-size summary."""
+
+    return {
+        "beam_x_array": _array_size(mosaic.get("beam_x_array")),
+        "beam_y_array": _array_size(mosaic.get("beam_y_array")),
+        "theta_array": _array_size(mosaic.get("theta_array")),
+        "phi_array": _array_size(mosaic.get("phi_array")),
+        "wavelength_array": _array_size(wavelength_array),
+        "sample_weights": _array_size(mosaic.get("sample_weights")),
+    }
+
+
+def _geometry_fit_exception_diagnostics(exc: Exception) -> dict[str, object]:
+    """Return one stable exception payload for simulation diagnostics."""
+
+    exception = {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
+    return {
+        "exception_type": str(exception["type"]),
+        "exception_message": str(exception["message"]),
+        "exception": dict(exception),
+        "exceptions": [dict(exception)],
+    }
+
+
+def _geometry_fit_row_count_preview(
+    hit_row_counts: Sequence[int],
+    *,
+    limit: int = 16,
+) -> list[int]:
+    """Return one short row-count preview for per-table hit diagnostics."""
+
+    return [int(count) for count in list(hit_row_counts)[: max(0, int(limit))]]
+
+
 def _set_function_last_diagnostics(
     callback: Callable[..., object],
     diagnostics: Mapping[str, object] | None,
@@ -772,9 +853,9 @@ def simulate_geometry_fit_hit_tables(
     diagnostics: dict[str, object] = {
         "stage": "simulate_hit_tables",
         "miller_shape": _array_shape_list(miller_array),
-        "miller_count": _array_size(miller_array),
+        "miller_count": _array_row_count(miller_array),
         "intensity_shape": _array_shape_list(intensity_array),
-        "intensity_count": _array_size(intensity_array),
+        "intensity_count": _array_row_count(intensity_array),
         "image_size": int(image_size),
     }
     try:
@@ -785,8 +866,7 @@ def simulate_geometry_fit_hit_tables(
         diagnostics.update(
             {
                 "status": "build_mosaic_params_exception",
-                "exception_type": type(exc).__name__,
-                "exception_message": str(exc),
+                **_geometry_fit_exception_diagnostics(exc),
             }
         )
         _set_function_last_diagnostics(
@@ -806,30 +886,17 @@ def simulate_geometry_fit_hit_tables(
             dtype=np.float64,
         )
 
+    param_summary = _geometry_fit_param_summary(params_local)
+    mosaic_array_sizes = _geometry_fit_mosaic_array_sizes(
+        mosaic,
+        wavelength_array=wavelength_array,
+    )
     diagnostics.update(
         {
             "status": "ready",
-            "param_summary": {
-                "a": _copy_simulation_diag_value(params_local.get("a")),
-                "c": _copy_simulation_diag_value(params_local.get("c")),
-                "lambda": _copy_simulation_diag_value(params_local.get("lambda")),
-                "theta_initial": _copy_simulation_diag_value(
-                    params_local.get("theta_initial")
-                ),
-                "center": _copy_simulation_diag_value(params_local.get("center")),
-                "n2": _copy_simulation_diag_value(params_local.get("n2")),
-                "optics_mode": _copy_simulation_diag_value(
-                    params_local.get("optics_mode", 0)
-                ),
-            },
-            "mosaic_array_sizes": {
-                "beam_x_array": _array_size(mosaic.get("beam_x_array")),
-                "beam_y_array": _array_size(mosaic.get("beam_y_array")),
-                "theta_array": _array_size(mosaic.get("theta_array")),
-                "phi_array": _array_size(mosaic.get("phi_array")),
-                "wavelength_array": _array_size(wavelength_array),
-                "sample_weights": _array_size(mosaic.get("sample_weights")),
-            },
+            "param_summary": param_summary,
+            "parameter_summary": _copy_simulation_diag_value(param_summary),
+            "mosaic_array_sizes": mosaic_array_sizes,
         }
     )
 
@@ -880,8 +947,7 @@ def simulate_geometry_fit_hit_tables(
         diagnostics.update(
             {
                 "status": "process_peaks_parallel_exception",
-                "exception_type": type(exc).__name__,
-                "exception_message": str(exc),
+                **_geometry_fit_exception_diagnostics(exc),
             }
         )
         _set_function_last_diagnostics(
@@ -892,6 +958,7 @@ def simulate_geometry_fit_hit_tables(
 
     hit_table_list = list(hit_tables)
     hit_row_counts = [int(len(geometry_reference_hit_rows(table))) for table in hit_table_list]
+    row_count_preview = _geometry_fit_row_count_preview(hit_row_counts)
     diagnostics.update(
         {
             "status": (
@@ -903,6 +970,11 @@ def simulate_geometry_fit_hit_tables(
             "hit_row_counts": hit_row_counts,
             "nonempty_hit_table_count": int(sum(1 for count in hit_row_counts if count > 0)),
             "finite_hit_row_total": int(sum(hit_row_counts)),
+            "row_count_preview_per_table": row_count_preview,
+            "row_count_preview_truncated": bool(
+                len(hit_row_counts) > len(row_count_preview)
+            ),
+            "projected_peak_count": int(sum(hit_row_counts)),
         }
     )
     _set_function_last_diagnostics(
@@ -956,6 +1028,7 @@ def simulate_geometry_fit_peak_centers(
                 ),
                 "max_position_count": int(len(max_positions)),
                 "peak_center_count": int(len(peak_centers)),
+                "projected_peak_count": int(len(peak_centers)),
             }
         )
         _set_function_last_diagnostics(
@@ -969,8 +1042,7 @@ def simulate_geometry_fit_peak_centers(
             {
                 "stage": "simulate_peak_centers",
                 "status": "exception",
-                "exception_type": type(exc).__name__,
-                "exception_message": str(exc),
+                **_geometry_fit_exception_diagnostics(exc),
             }
         )
         _set_function_last_diagnostics(
@@ -1037,6 +1109,7 @@ def simulate_geometry_fit_preview_style_peaks(
                     else "empty_preview_style_peaks"
                 ),
                 "peak_count": int(len(simulated_peaks)),
+                "projected_peak_count": int(len(simulated_peaks)),
                 "peak_table_lattice_count": (
                     int(len(peak_table_lattice))
                     if isinstance(peak_table_lattice, Sequence)
@@ -1061,8 +1134,7 @@ def simulate_geometry_fit_preview_style_peaks(
             {
                 "stage": "simulate_preview_style_peaks",
                 "status": "exception",
-                "exception_type": type(exc).__name__,
-                "exception_message": str(exc),
+                **_geometry_fit_exception_diagnostics(exc),
             }
         )
         _set_function_last_diagnostics(

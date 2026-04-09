@@ -7,7 +7,7 @@ import os
 import sys
 import inspect
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -2746,6 +2746,9 @@ def build_geometry_manual_fit_dataset(
         source_resolution_diagnostics.append(
             {
                 "pair_index": int(pair_idx),
+                "saved_source_table_index": entry.get("source_table_index"),
+                "saved_source_row_index": entry.get("source_row_index"),
+                "saved_source_peak_index": entry.get("source_peak_index"),
                 "saved_source_row_key": _source_row_key(entry),
                 "saved_source_peak_key": _source_peak_key(entry),
                 "saved_hkl": _normalized_hkl(entry.get("hkl")),
@@ -2754,6 +2757,10 @@ def build_geometry_manual_fit_dataset(
                 "strict_resolved": isinstance(strict_source_entry, Mapping),
                 "fit_resolved": isinstance(fit_source_entry, Mapping),
                 "fit_resolution_kind": str(
+                    record.get("fit_resolution_kind", "") or ""
+                )
+                or None,
+                "resolution_kind": str(
                     record.get("fit_resolution_kind", "") or ""
                 )
                 or None,
@@ -3079,6 +3086,14 @@ def build_geometry_manual_fit_dataset(
             if entry.get("q_group_key") is not None
         }
     )
+    cache_metadata = build_geometry_fit_dataset_cache_metadata(
+        background_index=int(background_idx),
+        current_background_index=int(manual_dataset_bindings.current_background_index),
+        simulated_peaks=simulated_peaks,
+        source_resolution_diagnostics=source_resolution_diagnostics,
+        pair_count=int(len(measured_display)),
+        resolved_source_pair_count=int(resolved_source_pair_count),
+    )
 
     return {
         "dataset_index": int(background_idx),
@@ -3097,6 +3112,7 @@ def build_geometry_manual_fit_dataset(
             if isinstance(simulation_diagnostics, Mapping)
             else {}
         ),
+        "cache_metadata": cache_metadata,
         "source_resolution_diagnostics": source_resolution_diagnostics,
         "measured_display": measured_display,
         "measured_native": measured_native,
@@ -3747,6 +3763,409 @@ def apply_dynamic_point_geometry_fit_runtime_overrides(
     )
 
 
+def _geometry_fit_cache_normalized_hkl(
+    value: object,
+) -> tuple[int, int, int] | None:
+    """Return one normalized HKL triplet when the value is usable."""
+
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 3:
+        return None
+    try:
+        return int(value[0]), int(value[1]), int(value[2])
+    except Exception:
+        return None
+
+
+def _geometry_fit_cache_jsonable(value: object) -> object:
+    """Convert one cache metadata value into a stable JSON-safe shape."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _geometry_fit_cache_jsonable(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_geometry_fit_cache_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [_geometry_fit_cache_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_geometry_fit_cache_jsonable(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _geometry_fit_cache_finite_float(
+    value: object,
+) -> float | None:
+    """Return one finite float cache metadata value when possible."""
+
+    try:
+        numeric = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return float(numeric)
+
+
+def build_geometry_fit_dataset_cache_metadata(
+    *,
+    background_index: int,
+    current_background_index: int,
+    simulated_peaks: Sequence[object] | None,
+    source_resolution_diagnostics: Sequence[object] | None,
+    pair_count: int,
+    resolved_source_pair_count: int,
+) -> dict[str, object]:
+    """Build structured cache metadata for one geometry-fit dataset payload."""
+
+    raw_by_table: dict[int, list[dict[str, object]]] = defaultdict(list)
+    diag_by_table: dict[int, list[dict[str, object]]] = defaultdict(list)
+    raw_by_row: dict[tuple[int, int], dict[str, object]] = {}
+    raw_by_peak: dict[tuple[int, int], dict[str, object]] = {}
+
+    for raw_entry in simulated_peaks or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        try:
+            table_idx = int(raw_entry.get("source_table_index"))
+        except Exception:
+            continue
+        entry = dict(raw_entry)
+        raw_by_table[table_idx].append(entry)
+        try:
+            row_idx = int(entry.get("source_row_index"))
+        except Exception:
+            row_idx = -1
+        if row_idx >= 0:
+            raw_by_row[(int(table_idx), int(row_idx))] = entry
+        try:
+            peak_idx = int(entry.get("source_peak_index"))
+        except Exception:
+            peak_idx = -1
+        if peak_idx >= 0:
+            raw_by_peak[(int(table_idx), int(peak_idx))] = entry
+
+    for raw_diag in source_resolution_diagnostics or ():
+        if not isinstance(raw_diag, Mapping):
+            continue
+        diag = dict(raw_diag)
+        table_idx = None
+        for key_name in (
+            "fit_source_row_key",
+            "fit_source_peak_key",
+            "overlay_source_row_key",
+            "overlay_source_peak_key",
+            "saved_source_row_key",
+            "saved_source_peak_key",
+        ):
+            key_value = diag.get(key_name)
+            if isinstance(key_value, (list, tuple, np.ndarray)) and len(key_value) >= 2:
+                try:
+                    table_idx = int(key_value[0])
+                    break
+                except Exception:
+                    continue
+        if table_idx is None:
+            raw_table_idx = diag.get("saved_source_table_index")
+            try:
+                table_idx = int(raw_table_idx)
+            except Exception:
+                continue
+        diag_by_table[int(table_idx)].append(diag)
+
+    table_summaries: list[dict[str, object]] = []
+    for table_idx in sorted(set(raw_by_table) | set(diag_by_table)):
+        raw_entries = list(raw_by_table.get(table_idx, ()))
+        table_diags = list(diag_by_table.get(table_idx, ()))
+        reference_entry: dict[str, object] | None = None
+        representative_row_indices: set[int] = set()
+        kept_keys: set[tuple[str, int]] = set()
+        nominal_hkl_recovery_count = 0
+
+        for diag in table_diags:
+            fit_kind = str(diag.get("fit_resolution_kind", "") or "")
+            if fit_kind in {"legacy_dense_hkl_rebind", "hkl_fallback"}:
+                nominal_hkl_recovery_count += 1
+            if not bool(diag.get("fit_resolved", False)):
+                continue
+            row_key_added = False
+            fit_row_key = diag.get("fit_source_row_key")
+            if (
+                isinstance(fit_row_key, (list, tuple, np.ndarray))
+                and len(fit_row_key) >= 2
+            ):
+                try:
+                    row_idx = int(fit_row_key[1])
+                except Exception:
+                    row_idx = -1
+                if row_idx >= 0:
+                    representative_row_indices.add(int(row_idx))
+                    kept_keys.add(("row", int(row_idx)))
+                    row_key_added = True
+                    reference_entry = (
+                        raw_by_row.get((int(table_idx), int(row_idx)))
+                        or reference_entry
+                    )
+            fit_peak_key = diag.get("fit_source_peak_key")
+            if (
+                isinstance(fit_peak_key, (list, tuple, np.ndarray))
+                and len(fit_peak_key) >= 2
+            ):
+                try:
+                    peak_idx = int(fit_peak_key[1])
+                except Exception:
+                    peak_idx = -1
+                if peak_idx >= 0 and not row_key_added:
+                    kept_keys.add(("peak", int(peak_idx)))
+                    if reference_entry is None:
+                        reference_entry = raw_by_peak.get(
+                            (int(table_idx), int(peak_idx))
+                        )
+            if reference_entry is None:
+                overlay_row_key = diag.get("overlay_source_row_key")
+                if (
+                    isinstance(overlay_row_key, (list, tuple, np.ndarray))
+                    and len(overlay_row_key) >= 2
+                ):
+                    try:
+                        overlay_row_idx = int(overlay_row_key[1])
+                    except Exception:
+                        overlay_row_idx = -1
+                    if overlay_row_idx >= 0:
+                        reference_entry = raw_by_row.get(
+                            (int(table_idx), int(overlay_row_idx))
+                        )
+            if reference_entry is None:
+                overlay_peak_key = diag.get("overlay_source_peak_key")
+                if (
+                    isinstance(overlay_peak_key, (list, tuple, np.ndarray))
+                    and len(overlay_peak_key) >= 2
+                ):
+                    try:
+                        overlay_peak_idx = int(overlay_peak_key[1])
+                    except Exception:
+                        overlay_peak_idx = -1
+                    if overlay_peak_idx >= 0:
+                        reference_entry = raw_by_peak.get(
+                            (int(table_idx), int(overlay_peak_idx))
+                        )
+
+        if reference_entry is None and raw_entries:
+            reference_entry = dict(raw_entries[0])
+
+        dropped_nonfinite = 0
+        for entry in raw_entries:
+            sim_col = _geometry_fit_cache_finite_float(entry.get("sim_col"))
+            sim_row = _geometry_fit_cache_finite_float(entry.get("sim_row"))
+            if sim_col is None or sim_row is None:
+                dropped_nonfinite += 1
+        row_count_before = int(len(raw_entries))
+        row_count_after = int(len(kept_keys))
+        merged_group_count = max(
+            0,
+            int(row_count_before) - int(row_count_after) - int(dropped_nonfinite),
+        )
+        reference = dict(reference_entry or {})
+        nominal_hkl = _geometry_fit_cache_normalized_hkl(reference.get("hkl"))
+        table_summaries.append(
+            {
+                "source_table_index": int(table_idx),
+                "nominal_hkl": (
+                    list(nominal_hkl) if isinstance(nominal_hkl, tuple) else None
+                ),
+                "q_group_key": _geometry_fit_cache_jsonable(
+                    reference.get("q_group_key")
+                ),
+                "qr": _geometry_fit_cache_finite_float(reference.get("qr")),
+                "qz": _geometry_fit_cache_finite_float(reference.get("qz")),
+                "row_count_before_grouping": int(row_count_before),
+                "row_count_after_grouping": int(row_count_after),
+                "dropped_nonfinite_row_count": int(dropped_nonfinite),
+                "nominal_hkl_recovery_count": int(nominal_hkl_recovery_count),
+                "merged_group_count": int(merged_group_count),
+                "representative_row_indices_kept": [
+                    int(idx) for idx in sorted(representative_row_indices)
+                ],
+            }
+        )
+
+    return {
+        "cache_action": "rebuilt",
+        "reused": False,
+        "rebuilt": True,
+        "stale_reason": (
+            "geometry-fit dataset prep rebuilds from fresh simulation rows "
+            "(prefer_cache=False)."
+        ),
+        "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+        "cache_provenance": [
+            "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+            "geometry_manual_simulated_lookup",
+            "build_geometry_manual_fit_dataset",
+        ],
+        "background_index": int(background_index),
+        "current_background_index": int(current_background_index),
+        "prefer_cache": False,
+        "pair_count": int(pair_count),
+        "resolved_source_pair_count": int(resolved_source_pair_count),
+        "simulated_peak_count": int(
+            sum(len(entries) for entries in raw_by_table.values())
+        ),
+        "table_count": int(len(table_summaries)),
+        "table_summaries": table_summaries,
+    }
+
+
+def build_geometry_fit_dataset_cache_log_lines(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> list[str]:
+    """Format geometry-fit dataset cache metadata for one debug log section."""
+
+    lines: list[str] = []
+    for raw_dataset in dataset_infos or ():
+        if not isinstance(raw_dataset, Mapping):
+            continue
+        cache_metadata = raw_dataset.get("cache_metadata")
+        if not isinstance(cache_metadata, Mapping):
+            continue
+        label = str(
+            raw_dataset.get(
+                "label",
+                f"bg[{raw_dataset.get('dataset_index', '?')}]",
+            )
+        )
+        lines.append(
+            (
+                "{label}: cache_action={action} reused={reused} rebuilt={rebuilt} "
+                "stale_reason={stale} source={source}"
+            ).format(
+                label=label,
+                action=str(cache_metadata.get("cache_action", "<unknown>")),
+                reused=_geometry_fit_debug_value_text(
+                    cache_metadata.get("reused", False)
+                ),
+                rebuilt=_geometry_fit_debug_value_text(
+                    cache_metadata.get("rebuilt", True)
+                ),
+                stale=str(cache_metadata.get("stale_reason", "<none>") or "<none>"),
+                source=str(cache_metadata.get("cache_source", "<unknown>")),
+            )
+        )
+        provenance = cache_metadata.get("cache_provenance")
+        if isinstance(provenance, Sequence) and not isinstance(
+            provenance,
+            (str, bytes, bytearray),
+        ):
+            lines.append(
+                "{label}: provenance={provenance}".format(
+                    label=label,
+                    provenance=_geometry_fit_debug_value_text(
+                        list(provenance),
+                        float_digits=3,
+                    ),
+                )
+            )
+        lines.append(
+            (
+                "{label}: pair_count={pairs} resolved_source_pairs={resolved} "
+                "simulated_peaks={peaks} tables={tables}"
+            ).format(
+                label=label,
+                pairs=_geometry_fit_debug_value_text(
+                    cache_metadata.get("pair_count", raw_dataset.get("pair_count", 0)),
+                    float_digits=0,
+                ),
+                resolved=_geometry_fit_debug_value_text(
+                    cache_metadata.get(
+                        "resolved_source_pair_count",
+                        raw_dataset.get("resolved_source_pair_count", 0),
+                    ),
+                    float_digits=0,
+                ),
+                peaks=_geometry_fit_debug_value_text(
+                    cache_metadata.get(
+                        "simulated_peak_count",
+                        raw_dataset.get("simulated_peak_count", 0),
+                    ),
+                    float_digits=0,
+                ),
+                tables=_geometry_fit_debug_value_text(
+                    cache_metadata.get("table_count", 0),
+                    float_digits=0,
+                ),
+            )
+        )
+        table_summaries = cache_metadata.get("table_summaries")
+        if not isinstance(table_summaries, Sequence) or isinstance(
+            table_summaries,
+            (str, bytes, bytearray),
+        ):
+            continue
+        for raw_summary in table_summaries:
+            if not isinstance(raw_summary, Mapping):
+                continue
+            table_index = raw_summary.get(
+                "source_table_index",
+                raw_summary.get("table_index", 0),
+            )
+            lines.append(
+                (
+                    "{label}: table[{table}] nominal_hkl={hkl} q_group_key={q_group} "
+                    "qr={qr} qz={qz} rows_before={before} rows_after={after} "
+                    "dropped_nonfinite={dropped} nominal_hkl_recovery={recovery} "
+                    "merged_groups={merged} representative_rows={rows}"
+                ).format(
+                    label=label,
+                    table=_geometry_fit_debug_value_text(table_index, float_digits=0),
+                    hkl=_geometry_fit_debug_value_text(
+                        raw_summary.get("nominal_hkl"),
+                        float_digits=3,
+                    ),
+                    q_group=_geometry_fit_debug_value_text(
+                        raw_summary.get("q_group_key"),
+                        float_digits=3,
+                    ),
+                    qr=_geometry_fit_debug_value_text(
+                        raw_summary.get("qr"),
+                        float_digits=6,
+                    ),
+                    qz=_geometry_fit_debug_value_text(
+                        raw_summary.get("qz"),
+                        float_digits=6,
+                    ),
+                    before=_geometry_fit_debug_value_text(
+                        raw_summary.get("row_count_before_grouping", 0),
+                        float_digits=0,
+                    ),
+                    after=_geometry_fit_debug_value_text(
+                        raw_summary.get("row_count_after_grouping", 0),
+                        float_digits=0,
+                    ),
+                    dropped=_geometry_fit_debug_value_text(
+                        raw_summary.get("dropped_nonfinite_row_count", 0),
+                        float_digits=0,
+                    ),
+                    recovery=_geometry_fit_debug_value_text(
+                        raw_summary.get("nominal_hkl_recovery_count", 0),
+                        float_digits=0,
+                    ),
+                    merged=_geometry_fit_debug_value_text(
+                        raw_summary.get("merged_group_count", 0),
+                        float_digits=0,
+                    ),
+                    rows=_geometry_fit_debug_value_text(
+                        raw_summary.get("representative_row_indices_kept"),
+                        float_digits=0,
+                    ),
+                )
+            )
+    return lines
+
+
 def build_geometry_fit_dataset_cache_payload(
     prepared_run: GeometryFitPreparedRun,
     *,
@@ -3766,6 +4185,25 @@ def build_geometry_fit_dataset_cache_payload(
         except Exception:
             dataset_index = 0
 
+    dataset_cache_metadata: list[dict[str, object]] = []
+    for info in prepared_run.dataset_infos or []:
+        if not isinstance(info, Mapping):
+            continue
+        raw_metadata = info.get("cache_metadata")
+        if not isinstance(raw_metadata, Mapping):
+            continue
+        copied_metadata = copy_geometry_fit_state_value(dict(raw_metadata))
+        if isinstance(copied_metadata, Mapping):
+            copied_metadata = dict(copied_metadata)
+            copied_metadata.setdefault(
+                "dataset_index",
+                int(info.get("dataset_index", copied_metadata.get("dataset_index", 0)) or 0),
+            )
+            label = str(info.get("label", "") or "").strip()
+            if label:
+                copied_metadata.setdefault("label", label)
+            dataset_cache_metadata.append(copied_metadata)
+
     return {
         "selected_background_indices": [
             int(idx) for idx in prepared_run.selected_background_indices
@@ -3780,6 +4218,19 @@ def build_geometry_fit_dataset_cache_payload(
             for spec in (prepared_run.dataset_specs or [])
             if isinstance(spec, Mapping)
         ],
+        "cache_metadata": {
+            "cache_action": "rebuilt",
+            "reused": False,
+            "rebuilt": True,
+            "stale_reason": None,
+            "cache_source": "build_geometry_fit_dataset_cache_payload",
+            "cache_provenance": [
+                "build_geometry_manual_fit_dataset",
+                "build_geometry_fit_dataset_cache_payload",
+            ],
+            "dataset_count": int(len(prepared_run.dataset_infos or [])),
+            "dataset_cache_metadata": dataset_cache_metadata,
+        },
     }
 
 
@@ -4059,6 +4510,16 @@ def build_geometry_fit_start_log_sections(
                 (
                     "Runtime configuration:",
                     runtime_cfg_lines,
+                )
+            )
+        dataset_cache_lines = build_geometry_fit_dataset_cache_log_lines(
+            dataset_infos
+        )
+        if dataset_cache_lines:
+            sections.append(
+                (
+                    "Geometry-fit dataset cache diagnostics:",
+                    dataset_cache_lines,
                 )
             )
     sections.extend(
@@ -6088,12 +6549,49 @@ def _geometry_fit_preferred_failure_reason(
     return "unknown"
 
 
+def _geometry_fit_overlay_match_index(
+    entry: Mapping[str, object],
+) -> int:
+    """Return one stable overlay-match index for diagnostics output."""
+
+    for key in ("overlay_match_index", "match_input_index"):
+        try:
+            return int(entry.get(key, -1))
+        except Exception:
+            continue
+    return -1
+
+
+def _geometry_fit_point_text(
+    x_value: object,
+    y_value: object,
+    *,
+    float_digits: int = 3,
+) -> str:
+    """Format one detector or fit-space point for debug logs."""
+
+    try:
+        x_numeric = float(x_value)
+    except Exception:
+        x_numeric = float("nan")
+    try:
+        y_numeric = float(y_value)
+    except Exception:
+        y_numeric = float("nan")
+    if not np.isfinite(x_numeric) and not np.isfinite(y_numeric):
+        return "<none>"
+    return _geometry_fit_debug_value_text(
+        [x_numeric, y_numeric],
+        float_digits=float_digits,
+    )
+
+
 def build_geometry_fit_point_match_failure_reason_lines(
     point_match_diagnostics: Sequence[object] | None,
     *,
     max_unresolved_pairs_per_dataset: int = 5,
 ) -> list[str]:
-    """Format counts plus representative unresolved point matches for debug logs."""
+    """Format one post-solve point-match diagnostics summary for debug logs."""
 
     diagnostics = [
         dict(entry)
@@ -6114,43 +6612,45 @@ def build_geometry_fit_point_match_failure_reason_lines(
     ):
         lines.extend(_geometry_fit_reason_counter_lines(diagnostics, key=key))
 
-    unresolved_by_dataset: dict[str, list[dict[str, object]]] = {}
-    dataset_order: list[str] = []
+    unresolved_by_dataset: dict[tuple[int, str], list[dict[str, object]]] = {}
+    dataset_order: list[tuple[int, str]] = []
     for entry in diagnostics:
         if str(entry.get("match_status", "")).strip().lower() == "matched":
             continue
+        try:
+            dataset_index = int(entry.get("dataset_index", 0))
+        except Exception:
+            dataset_index = 0
         label = str(
             entry.get(
                 "dataset_label",
-                f"bg[{int(entry.get('dataset_index', 0) or 0)}]",
+                f"bg[{dataset_index}]",
             )
         )
-        if label not in unresolved_by_dataset:
-            dataset_order.append(label)
-        unresolved_by_dataset.setdefault(label, []).append(entry)
+        dataset_key = (int(dataset_index), label)
+        if dataset_key not in unresolved_by_dataset:
+            dataset_order.append(dataset_key)
+        unresolved_by_dataset.setdefault(dataset_key, []).append(entry)
 
     max_pairs = max(1, int(max_unresolved_pairs_per_dataset))
-    for label in dataset_order:
-        unresolved = unresolved_by_dataset.get(label, [])
+    for dataset_index, label in dataset_order:
+        unresolved = unresolved_by_dataset.get((dataset_index, label), [])
         if not unresolved:
             continue
-        lines.append(f"{label}: unresolved_pairs={len(unresolved)}")
+        lines.append(
+            f"dataset[{dataset_index}] {label}: unresolved_pairs={len(unresolved)}"
+        )
         for entry in unresolved[:max_pairs]:
-            pair_index = int(
-                entry.get(
-                    "overlay_match_index",
-                    entry.get("match_input_index", -1),
-                )
-                or -1
-            )
+            pair_index = _geometry_fit_overlay_match_index(entry)
             lines.append(
                 (
-                    "{label} pair#{pair}: status={status} hkl={hkl} q_group={q_group} "
-                    "measured={measured} simulated={simulated} distance_px={distance}"
+                    "dataset[{dataset_index}] {label} overlay_index={pair} "
+                    "hkl={hkl} q_group={q_group} measured_detector={measured_detector} "
+                    "measured_angles={measured_angles}"
                 ).format(
+                    dataset_index=dataset_index,
                     label=label,
                     pair=pair_index,
-                    status=str(entry.get("match_status", "<unknown>") or "<unknown>"),
                     hkl=_geometry_fit_debug_value_text(
                         entry.get("hkl"),
                         float_digits=3,
@@ -6159,33 +6659,35 @@ def build_geometry_fit_point_match_failure_reason_lines(
                         entry.get("q_group_key"),
                         float_digits=3,
                     ),
-                    measured=_geometry_fit_debug_value_text(
-                        [entry.get("measured_x"), entry.get("measured_y")],
+                    measured_detector=_geometry_fit_point_text(
+                        entry.get("measured_x"),
+                        entry.get("measured_y"),
                         float_digits=3,
                     ),
-                    simulated=_geometry_fit_debug_value_text(
-                        [entry.get("simulated_x"), entry.get("simulated_y")],
-                        float_digits=3,
-                    ),
-                    distance=_geometry_fit_debug_value_text(
-                        entry.get("distance_px"),
+                    measured_angles=_geometry_fit_point_text(
+                        entry.get("measured_two_theta_deg"),
+                        entry.get("measured_phi_deg"),
                         float_digits=3,
                     ),
                 )
             )
             lines.append(
                 (
-                    "{label} pair#{pair}: measured_angles={angles} "
+                    "dataset[{dataset_index}] {label} overlay_index={pair} "
+                    "simulated={simulated} distance_px={distance} "
                     "delta_two_theta_deg={delta_tth} delta_phi_deg={delta_phi} "
-                    "reason={reason}"
+                    "resolution_reason={reason}"
                 ).format(
+                    dataset_index=dataset_index,
                     label=label,
                     pair=pair_index,
-                    angles=_geometry_fit_debug_value_text(
-                        [
-                            entry.get("measured_two_theta_deg"),
-                            entry.get("measured_phi_deg"),
-                        ],
+                    simulated=_geometry_fit_point_text(
+                        entry.get("simulated_x"),
+                        entry.get("simulated_y"),
+                        float_digits=3,
+                    ),
+                    distance=_geometry_fit_debug_value_text(
+                        entry.get("distance_px"),
                         float_digits=3,
                     ),
                     delta_tth=_geometry_fit_debug_value_text(
@@ -6202,7 +6704,12 @@ def build_geometry_fit_point_match_failure_reason_lines(
         extra_count = len(unresolved) - max_pairs
         if extra_count > 0:
             lines.append(
-                f"{label}: ... {int(extra_count)} more unresolved pair(s) not shown"
+                "dataset[{dataset_index}] {label}: ... {extra_count} more unresolved "
+                "pair(s) not shown".format(
+                    dataset_index=dataset_index,
+                    label=label,
+                    extra_count=int(extra_count),
+                )
             )
 
     return lines
@@ -6650,13 +7157,13 @@ def apply_runtime_geometry_fit_result(
                 point_match_summary_lines,
             )
         if debug_logging:
-            failure_reason_lines = build_geometry_fit_point_match_failure_reason_lines(
+            diagnostic_lines = build_geometry_fit_point_match_failure_reason_lines(
                 getattr(result, "point_match_diagnostics", None)
             )
-            if failure_reason_lines:
+            if diagnostic_lines:
                 bindings.log_section(
-                    "Point-match failure reasons:",
-                    failure_reason_lines,
+                    "Point-match diagnostics:",
+                    diagnostic_lines,
                 )
             calibration_lines = build_geometry_fit_calibration_lines(
                 preview_fitted_params
@@ -6734,13 +7241,13 @@ def apply_runtime_geometry_fit_result(
                 "Fit-space calibration:",
                 calibration_lines,
             )
-        failure_reason_lines = build_geometry_fit_point_match_failure_reason_lines(
+        diagnostic_lines = build_geometry_fit_point_match_failure_reason_lines(
             getattr(result, "point_match_diagnostics", None)
         )
-        if failure_reason_lines:
+        if diagnostic_lines:
             bindings.log_section(
-                "Point-match failure reasons:",
-                failure_reason_lines,
+                "Point-match diagnostics:",
+                diagnostic_lines,
             )
 
     bindings.log_section(

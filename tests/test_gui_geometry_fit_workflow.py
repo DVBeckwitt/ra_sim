@@ -1088,8 +1088,15 @@ def test_build_geometry_manual_fit_dataset_rebinds_legacy_dense_source_ids() -> 
     assert dataset["initial_pairs_display"][0]["source_peak_index"] == 133
     assert dataset["source_resolution_diagnostics"][0]["strict_resolved"] is False
     assert dataset["source_resolution_diagnostics"][0]["fit_resolved"] is True
+    assert dataset["source_resolution_diagnostics"][0]["saved_source_table_index"] == 7
+    assert dataset["source_resolution_diagnostics"][0]["saved_source_row_index"] == 0
+    assert dataset["source_resolution_diagnostics"][0]["saved_source_peak_index"] == 7
     assert (
         dataset["source_resolution_diagnostics"][0]["fit_resolution_kind"]
+        == "legacy_dense_q_group_rebind"
+    )
+    assert (
+        dataset["source_resolution_diagnostics"][0]["resolution_kind"]
         == "legacy_dense_q_group_rebind"
     )
     assert dataset["source_resolution_diagnostics"][0]["failure_reason"] is None
@@ -2044,6 +2051,224 @@ def test_build_geometry_fit_start_log_sections_omit_debug_context_by_default() -
     ]
 
 
+def test_build_geometry_fit_dataset_cache_metadata_summarizes_source_tables() -> None:
+    metadata = geometry_fit.build_geometry_fit_dataset_cache_metadata(
+        background_index=2,
+        current_background_index=1,
+        simulated_peaks=[
+            {
+                "source_table_index": 0,
+                "source_row_index": 2,
+                "source_peak_index": 5,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "qr": 1.25,
+                "qz": -0.5,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            },
+            {
+                "source_table_index": 0,
+                "source_row_index": 4,
+                "source_peak_index": 7,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "qr": 1.25,
+                "qz": -0.5,
+                "sim_col": 11.0,
+                "sim_row": 21.0,
+            },
+            {
+                "source_table_index": 1,
+                "source_row_index": 1,
+                "source_peak_index": 2,
+                "hkl": (0, 0, 3),
+                "q_group_key": ("q", 2),
+                "qr": 0.0,
+                "qz": 1.5,
+                "sim_col": np.nan,
+                "sim_row": 30.0,
+            },
+        ],
+        source_resolution_diagnostics=[
+            {
+                "saved_source_table_index": 0,
+                "fit_resolved": True,
+                "fit_source_row_key": (0, 4),
+                "fit_source_peak_key": (0, 7),
+                "fit_resolution_kind": "legacy_dense_hkl_rebind",
+            },
+            {
+                "saved_source_table_index": 1,
+                "fit_resolved": False,
+                "fit_resolution_kind": None,
+            },
+        ],
+        pair_count=2,
+        resolved_source_pair_count=1,
+    )
+
+    assert metadata["cache_action"] == "rebuilt"
+    assert metadata["reused"] is False
+    assert metadata["rebuilt"] is True
+    assert metadata["background_index"] == 2
+    assert metadata["current_background_index"] == 1
+    assert metadata["pair_count"] == 2
+    assert metadata["resolved_source_pair_count"] == 1
+    assert metadata["simulated_peak_count"] == 3
+    assert metadata["table_count"] == 2
+    assert metadata["table_summaries"] == [
+        {
+            "source_table_index": 0,
+            "nominal_hkl": [1, 1, 0],
+            "q_group_key": ["q", 1],
+            "qr": 1.25,
+            "qz": -0.5,
+            "row_count_before_grouping": 2,
+            "row_count_after_grouping": 1,
+            "dropped_nonfinite_row_count": 0,
+            "nominal_hkl_recovery_count": 1,
+            "merged_group_count": 1,
+            "representative_row_indices_kept": [4],
+        },
+        {
+            "source_table_index": 1,
+            "nominal_hkl": [0, 0, 3],
+            "q_group_key": ["q", 2],
+            "qr": 0.0,
+            "qz": 1.5,
+            "row_count_before_grouping": 1,
+            "row_count_after_grouping": 0,
+            "dropped_nonfinite_row_count": 1,
+            "nominal_hkl_recovery_count": 0,
+            "merged_group_count": 0,
+            "representative_row_indices_kept": [],
+        },
+    ]
+
+
+def test_build_geometry_fit_dataset_cache_log_lines_include_per_table_metadata() -> None:
+    lines = geometry_fit.build_geometry_fit_dataset_cache_log_lines(
+        [
+            {
+                "dataset_index": 0,
+                "label": "bg0.osc",
+                "cache_metadata": {
+                    "cache_action": "rebuilt",
+                    "reused": False,
+                    "rebuilt": True,
+                    "stale_reason": "geometry-fit dataset prep rebuilds from fresh simulation rows (prefer_cache=False).",
+                    "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                    "cache_provenance": [
+                        "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                        "geometry_manual_simulated_lookup",
+                        "build_geometry_manual_fit_dataset",
+                    ],
+                    "pair_count": 3,
+                    "resolved_source_pair_count": 2,
+                    "simulated_peak_count": 9,
+                    "table_count": 1,
+                    "table_summaries": [
+                        {
+                            "source_table_index": 4,
+                            "nominal_hkl": [1, 1, 0],
+                            "q_group_key": ["q", 1],
+                            "qr": 1.25,
+                            "qz": -0.5,
+                            "row_count_before_grouping": 6,
+                            "row_count_after_grouping": 2,
+                            "dropped_nonfinite_row_count": 1,
+                            "nominal_hkl_recovery_count": 1,
+                            "merged_group_count": 3,
+                            "representative_row_indices_kept": [3, 7],
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    assert lines[0] == (
+        "bg0.osc: cache_action=rebuilt reused=False rebuilt=True "
+        "stale_reason=geometry-fit dataset prep rebuilds from fresh simulation rows "
+        "(prefer_cache=False). "
+        "source=geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
+    )
+    assert "geometry_manual_simulated_lookup" in lines[1]
+    assert lines[2] == (
+        "bg0.osc: pair_count=3 resolved_source_pairs=2 simulated_peaks=9 tables=1"
+    )
+    assert lines[3] == (
+        "bg0.osc: table[4] nominal_hkl=[1, 1, 0] q_group_key=[q, 1] "
+        "qr=1.250000 qz=-0.500000 rows_before=6 rows_after=2 "
+        "dropped_nonfinite=1 nominal_hkl_recovery=1 merged_groups=3 "
+        "representative_rows=[3, 7]"
+    )
+
+
+def test_build_geometry_fit_start_log_sections_include_dataset_cache_diagnostics() -> None:
+    sections = geometry_fit.build_geometry_fit_start_log_sections(
+        params={"gamma": 0.2},
+        var_names=["gamma"],
+        dataset_infos=[
+            {
+                "dataset_index": 0,
+                "label": "bg0.osc",
+                "summary_line": "bg[0] bg0.osc",
+                "cache_metadata": {
+                    "cache_action": "rebuilt",
+                    "reused": False,
+                    "rebuilt": True,
+                    "stale_reason": "geometry-fit dataset prep rebuilds from fresh simulation rows (prefer_cache=False).",
+                    "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                    "cache_provenance": ["build_geometry_manual_fit_dataset"],
+                    "pair_count": 2,
+                    "resolved_source_pair_count": 1,
+                    "simulated_peak_count": 5,
+                    "table_count": 1,
+                    "table_summaries": [
+                        {
+                            "source_table_index": 2,
+                            "nominal_hkl": [1, 0, 2],
+                            "q_group_key": ["q", 2],
+                            "qr": 1.0,
+                            "qz": 2.0,
+                            "row_count_before_grouping": 3,
+                            "row_count_after_grouping": 1,
+                            "dropped_nonfinite_row_count": 0,
+                            "nominal_hkl_recovery_count": 0,
+                            "merged_group_count": 2,
+                            "representative_row_indices_kept": [4],
+                        }
+                    ],
+                },
+            }
+        ],
+        current_dataset={
+            "dataset_index": 0,
+            "label": "bg0.osc",
+            "group_count": 1,
+            "pair_count": 2,
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {
+                "pairs": 2,
+                "identity_rms_px": 1.0,
+                "best_rms_px": 1.0,
+                "reason": "ok",
+            },
+        },
+        selected_background_indices=[0],
+        joint_background_mode=False,
+        geometry_runtime_cfg={"debug_logging": True},
+    )
+
+    assert any(
+        title == "Geometry-fit dataset cache diagnostics:"
+        and "bg0.osc: cache_action=rebuilt" in lines[0]
+        for title, lines in sections
+    )
+
+
 def test_build_geometry_fit_source_resolution_log_lines_include_unresolved_pair_details() -> None:
     lines = geometry_fit.build_geometry_fit_source_resolution_log_lines(
         [
@@ -2314,9 +2539,12 @@ def test_build_geometry_fit_point_match_failure_reason_lines_summarize_unresolve
     assert lines[3] == "detector_resolution_reason: detector_source_missing=1"
     assert lines[4] == "correspondence_resolution_reason: source_row_out_of_range=1"
     assert lines[5] == "fit_source_resolution_kind: legacy_dense_q_group_rebind=1"
-    assert lines[6] == "bg0.osc: unresolved_pairs=1"
-    assert "status=missing_pair" in lines[7]
-    assert "reason=source_row_out_of_range" in lines[8]
+    assert lines[6] == "dataset[0] bg0.osc: unresolved_pairs=1"
+    assert "overlay_index=7" in lines[7]
+    assert "measured_detector=[50.000, 60.000]" in lines[7]
+    assert "measured_angles=[11.250, 6.500]" in lines[7]
+    assert "simulated=<none>" in lines[8]
+    assert "resolution_reason=source_row_out_of_range" in lines[8]
 
 
 def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
@@ -2850,20 +3078,93 @@ def test_prepare_geometry_fit_run_rejects_partially_unresolved_manual_pairs() ->
 
 def test_geometry_fit_dataset_cache_helpers_copy_and_validate_dataset_bundle() -> None:
     prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=True)
+    prepared_run = replace(
+        prepared_run,
+        dataset_infos=[
+            {
+                "dataset_index": 0,
+                "label": "bg0.osc",
+                "summary_line": "bg[0]",
+                "cache_metadata": {
+                    "cache_action": "rebuilt",
+                    "reused": False,
+                    "rebuilt": True,
+                    "stale_reason": None,
+                    "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                    "cache_provenance": ["build_geometry_manual_fit_dataset"],
+                    "table_count": 1,
+                    "table_summaries": [
+                        {
+                            "source_table_index": 0,
+                            "nominal_hkl": [1, 1, 0],
+                            "q_group_key": ["q", 1],
+                            "qr": 1.25,
+                            "qz": -0.5,
+                            "row_count_before_grouping": 2,
+                            "row_count_after_grouping": 1,
+                            "dropped_nonfinite_row_count": 0,
+                            "nominal_hkl_recovery_count": 1,
+                            "merged_group_count": 1,
+                            "representative_row_indices_kept": [4],
+                        }
+                    ],
+                },
+            },
+            {"dataset_index": 1, "label": "bg1.osc", "summary_line": "bg[1]"},
+        ],
+    )
 
     payload = geometry_fit.build_geometry_fit_dataset_cache_payload(
         prepared_run,
         current_background_index=1,
     )
 
-    assert payload == {
-        "selected_background_indices": [0, 1],
-        "current_background_index": 1,
-        "joint_background_mode": True,
-        "background_theta_values": [3.0, 4.0],
-        "dataset_specs": [
-            {"dataset_index": 0, "theta_initial": 3.0},
-            {"dataset_index": 1, "theta_initial": 4.0},
+    assert payload["selected_background_indices"] == [0, 1]
+    assert payload["current_background_index"] == 1
+    assert payload["joint_background_mode"] is True
+    assert payload["background_theta_values"] == [3.0, 4.0]
+    assert payload["dataset_specs"] == [
+        {"dataset_index": 0, "theta_initial": 3.0},
+        {"dataset_index": 1, "theta_initial": 4.0},
+    ]
+    assert payload["cache_metadata"] == {
+        "cache_action": "rebuilt",
+        "reused": False,
+        "rebuilt": True,
+        "stale_reason": None,
+        "cache_source": "build_geometry_fit_dataset_cache_payload",
+        "cache_provenance": [
+            "build_geometry_manual_fit_dataset",
+            "build_geometry_fit_dataset_cache_payload",
+        ],
+        "dataset_count": 2,
+        "dataset_cache_metadata": [
+            {
+                "cache_action": "rebuilt",
+                "reused": False,
+                "rebuilt": True,
+                "stale_reason": None,
+                "cache_source": "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                "cache_provenance": ["build_geometry_manual_fit_dataset"],
+                "table_count": 1,
+                "table_summaries": [
+                    {
+                        "source_table_index": 0,
+                        "nominal_hkl": [1, 1, 0],
+                        "q_group_key": ["q", 1],
+                        "qr": 1.25,
+                        "qz": -0.5,
+                        "row_count_before_grouping": 2,
+                        "row_count_after_grouping": 1,
+                        "dropped_nonfinite_row_count": 0,
+                        "nominal_hkl_recovery_count": 1,
+                        "merged_group_count": 1,
+                        "representative_row_indices_kept": [4],
+                    }
+                ],
+                "dataset_index": 0,
+                "label": "bg0.osc",
+            }
         ],
     }
     assert (
@@ -4957,6 +5258,132 @@ def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
     ]
 
 
+def test_apply_runtime_geometry_fit_result_logs_point_match_diagnostics_when_debug_enabled(
+    tmp_path,
+) -> None:
+    events: list[object] = []
+
+    postprocess = geometry_fit.GeometryFitPostprocessResult(
+        fitted_params={
+            "theta_initial": 3.0,
+            "gamma": 1.5,
+            "pixel_size_m": 1.0e-4,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+        },
+        point_match_summary_lines=["claimed=4"],
+        pixel_offsets=[],
+        overlay_records=[],
+        overlay_state={},
+        overlay_diagnostic_lines=["overlay=ok"],
+        frame_warning=None,
+        export_records=[],
+        save_path=tmp_path / "matched.npy",
+        fit_summary_lines=["summary=ok"],
+        progress_text="fit complete",
+    )
+
+    class _Result:
+        x = np.array([1.5, 2.5], dtype=float)
+        rms_px = 0.75
+        success = True
+        status = 2
+        message = "ok"
+        nfev = 5
+        cost = 1.0
+        robust_cost = 1.0
+        solver_loss = "soft_l1"
+        solver_f_scale = 1.0
+        optimality = 0.1
+        active_mask = [0]
+        restart_history = []
+        point_match_diagnostics = [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0.osc",
+                "overlay_match_index": 7,
+                "match_status": "missing_pair",
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "measured_x": 50.0,
+                "measured_y": 60.0,
+                "simulated_x": np.nan,
+                "simulated_y": np.nan,
+                "distance_px": np.nan,
+                "measured_two_theta_deg": 11.25,
+                "measured_phi_deg": 6.5,
+                "delta_two_theta_deg": np.nan,
+                "delta_phi_deg": np.nan,
+                "resolution_reason": "match_radius_exceeded",
+                "measured_resolution_reason": "measured_anchor_missing",
+                "detector_resolution_reason": "detector_source_missing",
+                "correspondence_resolution_reason": "source_row_out_of_range",
+            }
+        ]
+
+    outcome = geometry_fit.apply_runtime_geometry_fit_result(
+        result=_Result(),
+        var_names=["gamma", "a"],
+        current_dataset={
+            "initial_pairs_display": [{"pair": 1}],
+            "group_count": 2,
+            "pair_count": 3,
+        },
+        dataset_count=1,
+        joint_background_mode=False,
+        preserve_live_theta=False,
+        max_display_markers=120,
+        bindings=geometry_fit.GeometryFitRuntimeResultBindings(
+            log_section=lambda title, lines: events.append((title, list(lines))),
+            capture_undo_state=lambda: {"undo": True},
+            apply_result_values=lambda _names, _values: None,
+            sync_joint_background_theta=None,
+            refresh_status=lambda: None,
+            update_manual_pick_button_label=lambda: None,
+            build_profile_cache=lambda: {},
+            replace_profile_cache=lambda _cache: None,
+            push_undo_state=lambda _state: None,
+            request_preview_skip_once=lambda: None,
+            mark_last_simulation_dirty=lambda: None,
+            schedule_update=lambda: None,
+            build_fitted_params=lambda: {
+                "theta_initial": 3.0,
+                "gamma": 1.5,
+                "pixel_size_m": 1.0e-4,
+                "debye_x": 0.0,
+                "debye_y": 0.0,
+            },
+            postprocess_result=lambda _fitted_params, _rms: postprocess,
+            draw_overlay_records=lambda _records, _marker_limit: None,
+            draw_initial_pairs_overlay=lambda _pairs, _marker_limit: None,
+            set_last_overlay_state=lambda _state: None,
+            save_export_records=lambda _save_path, _export_records: None,
+            set_progress_text=lambda _text: None,
+            cmd_line=lambda text: events.append(("cmd", text)),
+            geometry_runtime_cfg={"debug_logging": True},
+        ),
+    )
+
+    assert outcome.accepted is True
+    assert ("Point-match summary:", ["claimed=4"]) in events
+    diagnostic_sections = [
+        lines
+        for title, lines in events
+        if title == "Point-match diagnostics:"
+    ]
+    assert len(diagnostic_sections) == 1
+    assert diagnostic_sections[0][0] == "match_status: missing_pair=1"
+    assert "dataset[0] bg0.osc: unresolved_pairs=1" in diagnostic_sections[0]
+    assert any(
+        "overlay_index=7" in line and "measured_detector=[50.000, 60.000]" in line
+        for line in diagnostic_sections[0]
+    )
+    assert any(
+        "resolution_reason=source_row_out_of_range" in line
+        for line in diagnostic_sections[0]
+    )
+
+
 def test_apply_runtime_geometry_fit_result_rejects_absurd_manual_fit_before_update() -> None:
     events: list[object] = []
     applied_values: list[tuple[list[object], list[object]]] = []
@@ -5409,6 +5836,19 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                 "joint_background_mode": False,
                 "background_theta_values": [3.0],
                 "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+                "cache_metadata": {
+                    "cache_action": "rebuilt",
+                    "reused": False,
+                    "rebuilt": True,
+                    "stale_reason": None,
+                    "cache_source": "build_geometry_fit_dataset_cache_payload",
+                    "cache_provenance": [
+                        "build_geometry_manual_fit_dataset",
+                        "build_geometry_fit_dataset_cache_payload",
+                    ],
+                    "dataset_count": 1,
+                    "dataset_cache_metadata": [],
+                },
             },
         )
     ]

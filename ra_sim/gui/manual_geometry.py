@@ -1468,6 +1468,175 @@ def _manual_pick_cache_groups_reusable(
     )
 
 
+def _manual_pick_cache_normalized_hkl(
+    value: object,
+) -> tuple[int, int, int] | None:
+    """Return one normalized HKL triplet when the value is usable."""
+
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 3:
+        return None
+    try:
+        return int(value[0]), int(value[1]), int(value[2])
+    except Exception:
+        return None
+
+
+def _manual_pick_cache_jsonable(value: object) -> object:
+    """Convert one cache metadata value into a stable JSON-safe shape."""
+
+    if isinstance(value, tuple):
+        return [_manual_pick_cache_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [_manual_pick_cache_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_manual_pick_cache_jsonable(item) for item in value.tolist()]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _manual_pick_cache_finite_float(
+    value: object,
+) -> float | None:
+    """Return one finite float cache metadata value when possible."""
+
+    try:
+        numeric = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return float(numeric)
+
+
+def _manual_pick_cache_table_summaries(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+) -> list[dict[str, object]]:
+    """Summarize raw-to-grouped manual-pick cache rows per source table."""
+
+    raw_by_table: dict[int, list[dict[str, object]]] = defaultdict(list)
+    grouped_by_table: dict[int, list[dict[str, object]]] = defaultdict(list)
+
+    for raw_entry in simulated_peaks or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        try:
+            table_idx = int(raw_entry.get("source_table_index"))
+        except Exception:
+            continue
+        raw_by_table[int(table_idx)].append(dict(raw_entry))
+
+    for entries in (grouped_candidates or {}).values():
+        if not isinstance(entries, Sequence):
+            continue
+        for raw_entry in entries or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            try:
+                table_idx = int(raw_entry.get("source_table_index"))
+            except Exception:
+                continue
+            grouped_by_table[int(table_idx)].append(dict(raw_entry))
+
+    summaries: list[dict[str, object]] = []
+    for table_idx in sorted(raw_by_table):
+        raw_entries = list(raw_by_table.get(table_idx, ()))
+        grouped_entries = list(grouped_by_table.get(table_idx, ()))
+        representative_entries = grouped_entries or raw_entries
+        representative = (
+            dict(representative_entries[0])
+            if representative_entries and isinstance(representative_entries[0], Mapping)
+            else {}
+        )
+        representative_rows: list[int] = []
+        for entry in grouped_entries:
+            try:
+                representative_rows.append(int(entry.get("source_row_index")))
+            except Exception:
+                continue
+        representative_rows = sorted(set(representative_rows))
+        dropped_nonfinite = 0
+        for entry in raw_entries:
+            try:
+                sim_col = float(entry.get("sim_col", np.nan))
+                sim_row = float(entry.get("sim_row", np.nan))
+            except Exception:
+                dropped_nonfinite += 1
+                continue
+            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+                dropped_nonfinite += 1
+        nominal_hkl_recovery_count = sum(
+            1 for entry in raw_entries if bool(entry.get("q_group_nominal_hkl", False))
+        )
+        row_count_before = int(len(raw_entries))
+        row_count_after = int(len(grouped_entries))
+        merged_group_count = max(
+            0,
+            row_count_before - row_count_after - int(dropped_nonfinite),
+        )
+        nominal_hkl = _manual_pick_cache_normalized_hkl(representative.get("hkl"))
+        summaries.append(
+            {
+                "source_table_index": int(table_idx),
+                "nominal_hkl": (
+                    list(nominal_hkl) if isinstance(nominal_hkl, tuple) else None
+                ),
+                "q_group_key": _manual_pick_cache_jsonable(
+                    representative.get("q_group_key")
+                ),
+                "qr": _manual_pick_cache_finite_float(representative.get("qr")),
+                "qz": _manual_pick_cache_finite_float(representative.get("qz")),
+                "row_count_before_grouping": int(row_count_before),
+                "row_count_after_grouping": int(row_count_after),
+                "dropped_nonfinite_row_count": int(dropped_nonfinite),
+                "nominal_hkl_recovery_count": int(nominal_hkl_recovery_count),
+                "merged_group_count": int(merged_group_count),
+                "representative_row_indices_kept": [
+                    int(idx) for idx in representative_rows
+                ],
+            }
+        )
+    return summaries
+
+
+def _manual_pick_cache_metadata(
+    *,
+    cache_action: str,
+    stale_reason: str | None,
+    cache_source: str,
+    cache_provenance: Sequence[str] | None,
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+    background_index: int,
+    current_background_index: int,
+    prefer_cache: bool,
+) -> dict[str, object]:
+    """Build the structured cache metadata attached to manual-pick cache payloads."""
+
+    table_summaries = _manual_pick_cache_table_summaries(
+        simulated_peaks,
+        grouped_candidates,
+    )
+    return {
+        "cache_action": str(cache_action),
+        "reused": bool(str(cache_action).lower() == "reused"),
+        "rebuilt": bool(str(cache_action).lower() == "rebuilt"),
+        "stale_reason": None if stale_reason is None else str(stale_reason),
+        "cache_source": str(cache_source),
+        "cache_provenance": [str(step) for step in (cache_provenance or ())],
+        "prefer_cache": bool(prefer_cache),
+        "background_index": int(background_index),
+        "current_background_index": int(current_background_index),
+        "simulated_peak_count": int(
+            len([entry for entry in simulated_peaks or () if isinstance(entry, Mapping)])
+        ),
+        "group_count": int(len(grouped_candidates or {})),
+        "table_count": int(len(table_summaries)),
+        "table_summaries": table_summaries,
+    }
+
+
 def build_geometry_manual_pick_cache(
     *,
     param_set: dict[str, object] | None = None,
@@ -1498,6 +1667,18 @@ def build_geometry_manual_pick_cache(
 
     bg_index = int(background_index)
     current_bg_index = int(current_background_index)
+    cache_action = "rebuilt"
+    cache_source = "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
+    cache_provenance = [
+        "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+        "build_grouped_candidates",
+        "build_simulated_lookup",
+    ]
+    stale_reason: str | None = (
+        None
+        if prefer_cache
+        else "prefer_cache disabled; rebuilding manual-pick cache."
+    )
     cache_sig = cache_signature_fn(
         background_index=bg_index,
         background_image=background_image,
@@ -1536,6 +1717,16 @@ def build_geometry_manual_pick_cache(
             simulated_peaks = cached_simulated_peaks
             grouped_candidates = cached_grouped_candidates
             simulated_lookup = build_simulated_lookup(simulated_peaks)
+            cache_action = "reused"
+            cache_source = "geometry_manual_simulated_peaks_for_params(prefer_cache=True)"
+            cache_provenance = [
+                "geometry_manual_simulated_peaks_for_params(prefer_cache=True)",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ]
+            stale_reason = None
+        elif stale_reason is None:
+            stale_reason = "cached preview groups were empty."
     if (
         prefer_cache
         and not grouped_candidates
@@ -1565,6 +1756,22 @@ def build_geometry_manual_pick_cache(
             simulated_lookup = dict(existing_cache_data.get("simulated_lookup", {}))
             if not simulated_lookup and simulated_peaks:
                 simulated_lookup = build_simulated_lookup(simulated_peaks)
+            cache_action = "reused"
+            cache_source = "existing_cache_data.grouped_candidates"
+            cache_provenance = [
+                "existing_cache_data.grouped_candidates",
+                "existing_cache_data.simulated_peaks",
+                (
+                    "existing_cache_data.simulated_lookup"
+                    if simulated_lookup
+                    else "build_simulated_lookup"
+                ),
+            ]
+            stale_reason = (
+                "background-only cache signature change; reused grouped candidates."
+            )
+        elif stale_reason is None:
+            stale_reason = "existing grouped candidates were empty."
     if not grouped_candidates:
         # Fall back to the deterministic central-ray geometry-fit simulation
         # only when no reusable cached Qr/Qz groups are available.
@@ -1578,6 +1785,15 @@ def build_geometry_manual_pick_cache(
         ]
         grouped_candidates = build_grouped_candidates(simulated_peaks)
         simulated_lookup = build_simulated_lookup(simulated_peaks)
+        cache_action = "rebuilt"
+        cache_source = "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
+        cache_provenance = [
+            "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+            "build_grouped_candidates",
+            "build_simulated_lookup",
+        ]
+        if stale_reason is None:
+            stale_reason = "no reusable cached grouped candidates were available."
     match_cfg = dict(current_match_config())
     resolved_match_cfg = dict(match_cfg)
     background_context = None
@@ -1601,6 +1817,17 @@ def build_geometry_manual_pick_cache(
         },
         "match_config": dict(resolved_match_cfg),
         "background_context": background_context,
+        "cache_metadata": _manual_pick_cache_metadata(
+            cache_action=cache_action,
+            stale_reason=stale_reason,
+            cache_source=cache_source,
+            cache_provenance=cache_provenance,
+            simulated_peaks=simulated_peaks,
+            grouped_candidates=grouped_candidates,
+            background_index=bg_index,
+            current_background_index=current_bg_index,
+            prefer_cache=prefer_cache,
+        ),
     }
 
     next_cache_signature = existing_cache_signature

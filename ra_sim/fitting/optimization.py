@@ -3844,6 +3844,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     ):
         q_group_line_missing_penalty_scale = 0.35
 
+    fit_space_summary_defaults = _fit_space_provenance_summary(local)
+
     if not normalized_measured:
         return np.array([], dtype=float), [], {
             "dataset_index": int(dataset_ctx.dataset_index),
@@ -3870,6 +3872,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "line_fit_space_span_deg_mean": float("nan"),
             "line_constraints_enabled": bool(line_constraints_enabled),
             "_live_cache_records": [],
+            **fit_space_summary_defaults,
         }
 
     mosaic = local["mosaic_params"]
@@ -3932,7 +3935,11 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     matched_pair_count = 0
     missing_pairs = 0
     fixed_source_resolved_count = 0
-    pixel_size = _estimate_pixel_size(local)
+    fit_space_anchor_count_cached = 0
+    fit_space_anchor_count_detector = 0
+    fit_space_two_theta_adjustments: List[float] = []
+    pixel_size_provenance = _fit_space_pixel_size_provenance(local)
+    pixel_size = float(pixel_size_provenance.get("value", np.nan))
     detector_distance = float(local.get("corto_detector", np.nan))
     gamma_deg = float(local.get("gamma", 0.0))
     Gamma_deg = float(local.get("Gamma", 0.0))
@@ -3970,7 +3977,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             hk0_peak_priority_weight=float(hk0_peak_priority_weight),
         )
         priority_weight = float(priority_fields["priority_weight"])
-        measured_fit_anchor, measured_reason = _measured_fit_space_anchor(
+        measured_fit_anchor, measured_reason, measured_anchor_metadata = (
+            _measured_fit_space_anchor(
             measured_entry,
             center=fit_center,
             detector_distance=detector_distance,
@@ -3981,6 +3989,20 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             c_lattice=c_lattice,
             wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
         )
+        )
+        if measured_fit_anchor is not None:
+            if measured_reason == "cached_fit_space_anchor":
+                fit_space_anchor_count_cached += 1
+            elif measured_reason == "detector_fit_space_anchor":
+                fit_space_anchor_count_detector += 1
+        try:
+            two_theta_adjustment_deg = float(
+                measured_anchor_metadata.get("two_theta_adjustment_deg", np.nan)
+            )
+        except Exception:
+            two_theta_adjustment_deg = float("nan")
+        if np.isfinite(two_theta_adjustment_deg) and abs(two_theta_adjustment_deg) > 1.0e-12:
+            fit_space_two_theta_adjustments.append(float(two_theta_adjustment_deg))
         measured_detector_anchor, detector_reason = _measured_detector_anchor(
             measured_entry
         )
@@ -4001,6 +4023,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "match_status": "missing_pair",
                         "resolution_kind": "measured_fit_anchor",
                         "resolution_reason": str(measured_reason),
+                        "measured_anchor_source": str(
+                            measured_anchor_metadata.get("anchor_source", measured_reason)
+                        ),
+                        "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
                             if measured_detector_anchor is not None
@@ -4065,6 +4091,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "match_status": "missing_pair",
                         "resolution_kind": "fixed_source",
                         "resolution_reason": str(sim_reason),
+                        "measured_anchor_source": str(
+                            measured_anchor_metadata.get("anchor_source", measured_reason)
+                        ),
+                        "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
                             if measured_detector_anchor is not None
@@ -4126,6 +4156,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "match_status": "missing_pair",
                         "resolution_kind": "fit_space",
                         "resolution_reason": "invalid_fit_space",
+                        "measured_anchor_source": str(
+                            measured_anchor_metadata.get("anchor_source", measured_reason)
+                        ),
+                        "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
                             if measured_detector_anchor is not None
@@ -4212,6 +4246,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "resolution_reason": str(sim_reason),
                         "measured_resolution_reason": str(measured_reason),
                         "detector_resolution_reason": str(detector_reason),
+                        "measured_anchor_source": str(
+                            measured_anchor_metadata.get("anchor_source", measured_reason)
+                        ),
+                        "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                     "measured_x": (
                         float(measured_detector_anchor[0])
                         if measured_detector_anchor is not None
@@ -4306,6 +4344,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             line_summary.get("line_constraints_enabled", line_constraints_enabled)
         ),
         "_live_cache_records": live_cache_records,
+        **_fit_space_provenance_summary(
+            local,
+            cached_anchor_count=fit_space_anchor_count_cached,
+            detector_anchor_count=fit_space_anchor_count_detector,
+            two_theta_adjustments_deg=fit_space_two_theta_adjustments,
+        ),
     }
     if pixel_distances:
         pixel_dist_arr = np.asarray(pixel_distances, dtype=float)
@@ -7285,23 +7329,62 @@ def _extract_profile_from_flat_image(
 
 
 def _estimate_pixel_size(params: Dict[str, float]) -> float:
-    for key in ('pixel_size', 'pixel_size_m', 'debye_x'):
-        pixel_size = params.get(key)
-        if pixel_size is not None:
-            try:
-                pixel_value = float(pixel_size)
-            except Exception:
-                pixel_value = float("nan")
-            if np.isfinite(pixel_value) and pixel_value > 0.0:
-                return float(pixel_value)
-    pixel_size = params.get('corto_detector', 1.0) / 4096.0
+    provenance = _fit_space_pixel_size_provenance(params)
     try:
-        pixel_value = float(pixel_size)
+        return float(provenance.get("value", np.nan))
+    except Exception:
+        return float("nan")
+
+
+def _fit_space_pixel_size_provenance(
+    params: Mapping[str, object],
+) -> Dict[str, float | str]:
+    """Return the chosen fit-space pixel size together with its raw candidates."""
+
+    def _raw_value(key: str) -> float:
+        try:
+            return float(params.get(key, np.nan))
+        except Exception:
+            return float("nan")
+
+    raw_pixel_size = _raw_value("pixel_size")
+    raw_pixel_size_m = _raw_value("pixel_size_m")
+    raw_debye_x = _raw_value("debye_x")
+    raw_debye_y = _raw_value("debye_y")
+
+    for key, value in (
+        ("pixel_size", raw_pixel_size),
+        ("pixel_size_m", raw_pixel_size_m),
+        ("debye_x", raw_debye_x),
+    ):
+        if np.isfinite(value) and value > 0.0:
+            return {
+                "source": str(key),
+                "value": float(value),
+                "raw_pixel_size": float(raw_pixel_size),
+                "raw_pixel_size_m": float(raw_pixel_size_m),
+                "raw_debye_x": float(raw_debye_x),
+                "raw_debye_y": float(raw_debye_y),
+            }
+
+    try:
+        fallback = float(params.get("corto_detector", 1.0)) / 4096.0
+    except Exception:
+        fallback = float("nan")
+    try:
+        pixel_value = float(fallback)
     except Exception:
         pixel_value = float("nan")
     if not np.isfinite(pixel_value) or pixel_value <= 0.0:
         pixel_value = 1.0e-6
-    return float(pixel_value)
+    return {
+        "source": "fallback",
+        "value": float(pixel_value),
+        "raw_pixel_size": float(raw_pixel_size),
+        "raw_pixel_size_m": float(raw_pixel_size_m),
+        "raw_debye_x": float(raw_debye_x),
+        "raw_debye_y": float(raw_debye_y),
+    }
 
 
 def _build_mosaic_profile_dataset_contexts(
@@ -10704,6 +10787,66 @@ def _entry_theoretical_two_theta_deg(
     return float(2.0 * np.degrees(np.arcsin(bragg_arg)))
 
 
+def _fit_space_provenance_summary(
+    params: Mapping[str, object],
+    *,
+    cached_anchor_count: int = 0,
+    detector_anchor_count: int = 0,
+    two_theta_adjustments_deg: Sequence[float] | None = None,
+) -> Dict[str, object]:
+    """Return one public fit-space provenance summary payload."""
+
+    provenance = _fit_space_pixel_size_provenance(params)
+    adjustment_values = np.asarray(
+        list(two_theta_adjustments_deg or ()),
+        dtype=np.float64,
+    ).reshape(-1)
+    adjustment_values = adjustment_values[np.isfinite(adjustment_values)]
+    abs_adjustments = np.abs(adjustment_values)
+    adjustment_count = int(abs_adjustments.size)
+    total_abs_deg = (
+        float(np.sum(abs_adjustments))
+        if adjustment_count > 0
+        else 0.0
+    )
+    max_abs_deg = (
+        float(np.max(abs_adjustments))
+        if adjustment_count > 0
+        else float("nan")
+    )
+    mean_abs_deg = (
+        float(total_abs_deg / float(adjustment_count))
+        if adjustment_count > 0
+        else float("nan")
+    )
+    return {
+        "fit_space_pixel_size_source": str(provenance.get("source", "fallback")),
+        "fit_space_pixel_size_value": float(provenance.get("value", np.nan)),
+        "fit_space_pixel_size_raw": float(
+            provenance.get("raw_pixel_size", np.nan)
+        ),
+        "fit_space_pixel_size_m_raw": float(
+            provenance.get("raw_pixel_size_m", np.nan)
+        ),
+        "fit_space_debye_x_raw": float(
+            provenance.get("raw_debye_x", np.nan)
+        ),
+        "fit_space_debye_y_raw": float(
+            provenance.get("raw_debye_y", np.nan)
+        ),
+        "fit_space_anchor_count_cached": int(cached_anchor_count),
+        "fit_space_anchor_count_detector": int(detector_anchor_count),
+        "fit_space_anchor_source_counts": {
+            "cached_fit_space_anchor": int(cached_anchor_count),
+            "detector_fit_space_anchor": int(detector_anchor_count),
+        },
+        "fit_space_two_theta_adjustment_count": int(adjustment_count),
+        "fit_space_two_theta_adjustment_total_abs_deg": float(total_abs_deg),
+        "fit_space_two_theta_adjustment_mean_abs_deg": float(mean_abs_deg),
+        "fit_space_two_theta_adjustment_max_abs_deg": float(max_abs_deg),
+    }
+
+
 def _measured_fit_space_anchor(
     entry: Mapping[str, object],
     *,
@@ -10715,8 +10858,17 @@ def _measured_fit_space_anchor(
     a_lattice: float | None = None,
     c_lattice: float | None = None,
     wavelength: float | None = None,
-) -> Tuple[Optional[Tuple[float, float]], str]:
-    """Return one measured `(2theta, phi)` anchor, preferring cached caked values."""
+) -> Tuple[Optional[Tuple[float, float]], str, Dict[str, object]]:
+    """Return one measured `(2theta, phi)` anchor plus fit-space provenance."""
+
+    metadata: Dict[str, object] = {
+        "anchor_source": "missing",
+        "two_theta_adjustment_deg": float("nan"),
+        "cached_two_theta_deg": float("nan"),
+        "cached_phi_deg": float("nan"),
+        "reference_two_theta_deg": float("nan"),
+        "current_theoretical_two_theta_deg": float("nan"),
+    }
 
     try:
         base_two_theta = float(
@@ -10736,6 +10888,9 @@ def _measured_fit_space_anchor(
         base_phi = float("nan")
 
     if np.isfinite(base_two_theta) and np.isfinite(base_phi):
+        metadata["anchor_source"] = "cached_fit_space_anchor"
+        metadata["cached_two_theta_deg"] = float(base_two_theta)
+        metadata["cached_phi_deg"] = float(base_phi)
         adjusted_two_theta = float(base_two_theta)
         try:
             reference_two_theta = float(
@@ -10764,6 +10919,8 @@ def _measured_fit_space_anchor(
             )
             if theoretical_ref is not None:
                 reference_two_theta = float(theoretical_ref)
+        if np.isfinite(reference_two_theta):
+            metadata["reference_two_theta_deg"] = float(reference_two_theta)
         if (
             np.isfinite(reference_two_theta)
             and a_lattice is not None
@@ -10777,14 +10934,25 @@ def _measured_fit_space_anchor(
                 wavelength=float(wavelength),
             )
             if current_theoretical is not None and np.isfinite(current_theoretical):
+                metadata["current_theoretical_two_theta_deg"] = float(
+                    current_theoretical
+                )
                 adjusted_two_theta = float(
                     base_two_theta + (float(current_theoretical) - float(reference_two_theta))
                 )
-        return (float(adjusted_two_theta), float(base_phi)), "cached_fit_space_anchor"
+        metadata["two_theta_adjustment_deg"] = float(
+            adjusted_two_theta - float(base_two_theta)
+        )
+        return (
+            (float(adjusted_two_theta), float(base_phi)),
+            "cached_fit_space_anchor",
+            metadata,
+        )
 
     measured_anchor, measured_reason = _measured_detector_anchor(entry)
     if measured_anchor is None:
-        return None, measured_reason
+        metadata["anchor_source"] = str(measured_reason)
+        return None, measured_reason, metadata
     two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
         np.array([measured_anchor[0]], dtype=np.float64),
         np.array([measured_anchor[1]], dtype=np.float64),
@@ -10800,8 +10968,14 @@ def _measured_fit_space_anchor(
         or not np.isfinite(two_theta_arr[0])
         or not np.isfinite(phi_arr[0])
     ):
-        return None, "invalid_fit_space_anchor"
-    return (float(two_theta_arr[0]), float(phi_arr[0])), "detector_fit_space_anchor"
+        metadata["anchor_source"] = "invalid_fit_space_anchor"
+        return None, "invalid_fit_space_anchor", metadata
+    metadata["anchor_source"] = "detector_fit_space_anchor"
+    return (
+        (float(two_theta_arr[0]), float(phi_arr[0])),
+        "detector_fit_space_anchor",
+        metadata,
+    )
 
 
 def _pixel_to_angles(
@@ -12755,6 +12929,7 @@ def fit_geometry_parameters(
         *,
         collect_diagnostics: bool = False,
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+        fit_space_summary_defaults = _fit_space_provenance_summary(local)
         if not dataset_contexts:
             return np.array([], dtype=float), [], {
                 "dataset_count": 0,
@@ -12782,6 +12957,7 @@ def fit_geometry_parameters(
                 "line_fit_space_span_deg_mean": float("nan"),
                 "line_constraints_enabled": bool(q_group_line_constraints_enabled),
                 "_live_cache_records": [],
+                **fit_space_summary_defaults,
             }
 
         residual_blocks: List[np.ndarray] = []
@@ -12816,6 +12992,7 @@ def fit_geometry_parameters(
             "line_offset_rms_deg": float("nan"),
             "line_fit_space_span_deg_mean": float("nan"),
             "line_constraints_enabled": bool(q_group_line_constraints_enabled),
+            **fit_space_summary_defaults,
         }
         live_cache_records: List[Dict[str, object]] = []
 
@@ -12996,6 +13173,70 @@ def fit_geometry_parameters(
             )
         else:
             summary["line_fit_space_span_deg_mean"] = float("nan")
+        fit_space_anchor_count_cached = int(
+            sum(
+                int(summary_i.get("fit_space_anchor_count_cached", 0))
+                for summary_i in per_dataset_summaries
+            )
+        )
+        fit_space_anchor_count_detector = int(
+            sum(
+                int(summary_i.get("fit_space_anchor_count_detector", 0))
+                for summary_i in per_dataset_summaries
+            )
+        )
+        fit_space_two_theta_adjustment_count = int(
+            sum(
+                int(summary_i.get("fit_space_two_theta_adjustment_count", 0))
+                for summary_i in per_dataset_summaries
+            )
+        )
+        fit_space_two_theta_adjustment_total_abs_deg = float(
+            sum(
+                float(summary_i.get("fit_space_two_theta_adjustment_total_abs_deg", 0.0))
+                for summary_i in per_dataset_summaries
+            )
+        )
+        fit_space_two_theta_adjustment_max_abs_deg = float("nan")
+        for summary_i in per_dataset_summaries:
+            try:
+                dataset_max = float(
+                    summary_i.get("fit_space_two_theta_adjustment_max_abs_deg", np.nan)
+                )
+            except Exception:
+                dataset_max = float("nan")
+            if not np.isfinite(dataset_max):
+                continue
+            if (
+                not np.isfinite(fit_space_two_theta_adjustment_max_abs_deg)
+                or dataset_max > fit_space_two_theta_adjustment_max_abs_deg
+            ):
+                fit_space_two_theta_adjustment_max_abs_deg = float(dataset_max)
+        summary["fit_space_anchor_count_cached"] = int(fit_space_anchor_count_cached)
+        summary["fit_space_anchor_count_detector"] = int(
+            fit_space_anchor_count_detector
+        )
+        summary["fit_space_anchor_source_counts"] = {
+            "cached_fit_space_anchor": int(fit_space_anchor_count_cached),
+            "detector_fit_space_anchor": int(fit_space_anchor_count_detector),
+        }
+        summary["fit_space_two_theta_adjustment_count"] = int(
+            fit_space_two_theta_adjustment_count
+        )
+        summary["fit_space_two_theta_adjustment_total_abs_deg"] = float(
+            fit_space_two_theta_adjustment_total_abs_deg
+        )
+        summary["fit_space_two_theta_adjustment_mean_abs_deg"] = (
+            float(
+                fit_space_two_theta_adjustment_total_abs_deg
+                / float(fit_space_two_theta_adjustment_count)
+            )
+            if fit_space_two_theta_adjustment_count > 0
+            else float("nan")
+        )
+        summary["fit_space_two_theta_adjustment_max_abs_deg"] = float(
+            fit_space_two_theta_adjustment_max_abs_deg
+        )
         summary["_live_cache_records"] = live_cache_records
         return residual_arr, diagnostics, summary
 

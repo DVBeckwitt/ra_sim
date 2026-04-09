@@ -1,6 +1,7 @@
 from datetime import datetime
 
 import numpy as np
+import pytest
 
 from ra_sim.gui import geometry_q_group_manager, state
 
@@ -562,6 +563,200 @@ def test_geometry_q_group_manager_runtime_simulation_callback_bundle_uses_live_v
             "default_solve_q_mode": 1,
         },
     )
+
+
+def test_geometry_q_group_manager_runtime_simulation_callback_bundle_captures_diagnostics() -> None:
+    def _build_mosaic(_params):
+        return {
+            "beam_x_array": np.asarray([1.0, 2.0], dtype=float),
+            "beam_y_array": np.asarray([3.0, 4.0], dtype=float),
+            "theta_array": np.asarray([5.0, 6.0], dtype=float),
+            "phi_array": np.asarray([7.0, 8.0], dtype=float),
+            "wavelength_array": np.asarray([1.54, 1.55], dtype=float),
+            "sample_weights": np.asarray([0.25, 0.75], dtype=float),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*_args, **_kwargs):
+        return (
+            np.zeros((32, 32), dtype=float),
+            [
+                np.asarray(
+                    [
+                        [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
+                    ],
+                    dtype=float,
+                ),
+                np.asarray(
+                    [
+                        [7.0, 3.0, 4.0, 0.0, 1.0, 0.0, 1.0],
+                    ],
+                    dtype=float,
+                ),
+            ],
+        )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        hit_tables_to_max_positions=lambda _tables: [
+            [9.0, 1.0, 2.0, 4.0, 6.0, 7.0],
+            [8.0, 3.0, 4.0, 2.0, 7.0, 8.0],
+        ],
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+        peak_table_lattice_factory=lambda: [(3.0, 5.0, "primary"), (3.0, 5.0, "primary")],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        default_source_label="primary",
+        round_pixel_centers=False,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    miller_array = np.asarray(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    intensity_array = np.asarray([5.0, 7.0], dtype=float)
+    param_set = {
+        "a": 3.0,
+        "c": 5.0,
+        "lambda": 1.54,
+        "corto_detector": 100.0,
+        "gamma": 1.0,
+        "Gamma": 2.0,
+        "chi": 3.0,
+        "psi": 4.0,
+        "psi_z": 5.0,
+        "zs": 6.0,
+        "zb": 7.0,
+        "n2": "n2",
+        "debye_x": 0.1,
+        "debye_y": 0.2,
+        "center": (11.0, 12.0),
+        "theta_initial": 8.0,
+        "cor_angle": 9.0,
+        "optics_mode": 2,
+    }
+
+    bundle.simulate_hit_tables(miller_array, intensity_array, 32, param_set)
+    diagnostics = bundle.last_simulation_diagnostics()
+    assert diagnostics["stage"] == "simulate_hit_tables"
+    assert diagnostics["miller_shape"] == [2, 3]
+    assert diagnostics["miller_count"] == 2
+    assert diagnostics["intensity_shape"] == [2]
+    assert diagnostics["intensity_count"] == 2
+    assert diagnostics["image_size"] == 32
+    assert diagnostics["parameter_summary"] == diagnostics["param_summary"]
+    assert diagnostics["param_summary"]["optics_mode"] == 2
+    assert diagnostics["mosaic_array_sizes"] == {
+        "beam_x_array": 2,
+        "beam_y_array": 2,
+        "theta_array": 2,
+        "phi_array": 2,
+        "wavelength_array": 2,
+        "sample_weights": 2,
+    }
+    assert diagnostics["hit_table_count"] == 2
+    assert diagnostics["nonempty_hit_table_count"] == 2
+    assert diagnostics["finite_hit_row_total"] == 2
+    assert diagnostics["row_count_preview_per_table"] == [1, 1]
+    assert diagnostics["projected_peak_count"] == 2
+
+    bundle.simulate_peak_centers(miller_array, intensity_array, 32, param_set)
+    diagnostics = bundle.last_simulation_diagnostics()
+    assert diagnostics["stage"] == "simulate_peak_centers"
+    assert diagnostics["peak_center_count"] == 2
+    assert diagnostics["projected_peak_count"] == 2
+
+    bundle.simulate_preview_style_peaks(miller_array, intensity_array, 32, param_set)
+    diagnostics = bundle.last_simulation_diagnostics()
+    assert diagnostics["stage"] == "simulate_preview_style_peaks"
+    assert diagnostics["peak_count"] == 2
+    assert diagnostics["projected_peak_count"] == 2
+    assert diagnostics["row_count_preview_per_table"] == [1, 1]
+
+
+def test_geometry_q_group_manager_runtime_simulation_callback_bundle_captures_exceptions() -> None:
+    def _build_mosaic(_params):
+        return {
+            "beam_x_array": np.asarray([1.0], dtype=float),
+            "beam_y_array": np.asarray([2.0], dtype=float),
+            "theta_array": np.asarray([3.0], dtype=float),
+            "phi_array": np.asarray([4.0], dtype=float),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        hit_tables_to_max_positions=lambda _tables: [],
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+        peak_table_lattice_factory=lambda: None,
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        default_source_label="primary",
+        round_pixel_centers=False,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    miller_array = np.asarray([[1.0, 0.0, 0.0]], dtype=float)
+    intensity_array = np.asarray([5.0], dtype=float)
+    param_set = {
+        "a": 3.0,
+        "c": 5.0,
+        "lambda": 1.54,
+        "corto_detector": 100.0,
+        "gamma": 1.0,
+        "Gamma": 2.0,
+        "chi": 3.0,
+        "psi": 4.0,
+        "psi_z": 5.0,
+        "zs": 6.0,
+        "zb": 7.0,
+        "n2": "n2",
+        "debye_x": 0.1,
+        "debye_y": 0.2,
+        "center": (11.0, 12.0),
+        "theta_initial": 8.0,
+        "cor_angle": 9.0,
+        "optics_mode": 2,
+    }
+
+    with pytest.raises(RuntimeError, match="boom"):
+        bundle.simulate_preview_style_peaks(miller_array, intensity_array, 32, param_set)
+
+    diagnostics = bundle.last_simulation_diagnostics()
+    assert diagnostics["stage"] == "simulate_preview_style_peaks"
+    assert diagnostics["status"] == "exception"
+    assert diagnostics["miller_shape"] == [1, 3]
+    assert diagnostics["miller_count"] == 1
+    assert diagnostics["intensity_count"] == 1
+    assert diagnostics["exception_type"] == "RuntimeError"
+    assert diagnostics["exception_message"] == "boom"
+    assert diagnostics["exception"] == {
+        "type": "RuntimeError",
+        "message": "boom",
+    }
+    assert diagnostics["exceptions"] == [
+        {
+            "type": "RuntimeError",
+            "message": "boom",
+        }
+    ]
 
 
 def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values(
