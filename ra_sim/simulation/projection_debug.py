@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import math
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from ra_sim.config import get_dir
+from ra_sim.debug_utils import is_logging_disabled
 
 
 EXIT_PROJECTION_INTERNAL = 0
@@ -56,6 +58,19 @@ class ProjectionDebugSession:
 _CURRENT_PROJECTION_DEBUG_SESSION: contextvars.ContextVar[ProjectionDebugSession | None] = (
     contextvars.ContextVar("projection_debug_session", default=None)
 )
+
+
+def _env_truthy(name: str) -> bool:
+    value = str(os.environ.get(name, "")).strip().lower()
+    return value not in {"", "0", "false", "off", "no"}
+
+
+def projection_debug_logging_enabled() -> bool:
+    if is_logging_disabled():
+        return False
+    if _env_truthy("RA_SIM_DISABLE_PROJECTION_DEBUG"):
+        return False
+    return True
 
 
 def resolve_exit_projection_mode_flag(value: str | int | None) -> int:
@@ -194,6 +209,8 @@ def start_projection_debug_session(
     *,
     source: str = "simulation",
 ) -> ProjectionDebugSession:
+    if not projection_debug_logging_enabled():
+        return None
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     session = ProjectionDebugSession(
         stamp=stamp,
@@ -244,6 +261,8 @@ def allocate_projection_debug_buffers(
     *,
     reject_capacity: int = PROJECTION_DEBUG_REJECT_RECORD_CAPACITY,
 ) -> dict[str, np.ndarray]:
+    if not projection_debug_logging_enabled():
+        return {}
     peak_count = max(int(peak_capacity), 1)
     row_count = max(int(thread_count), 1)
     row_bins = max(int(image_size), 1)
@@ -305,6 +324,8 @@ def build_projection_debug_background(
     background_index: int | None = None,
     background_label: str | None = None,
 ) -> dict[str, Any]:
+    if not raw_buffers:
+        return {}
     counters = np.asarray(raw_buffers["projection_debug_counters"], dtype=np.int64)
     reject_counts = np.asarray(raw_buffers["projection_debug_reject_counts"], dtype=np.int64)
     reject_records = np.asarray(raw_buffers["projection_debug_reject_records"], dtype=np.float64)

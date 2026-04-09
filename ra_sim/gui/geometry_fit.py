@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.debug_utils import is_logging_disabled
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.utils.notifications import play_completion_chime
 
@@ -40,6 +41,14 @@ GEOMETRY_FIT_ACCEPT_MAX_RMS_PX = 100.0
 GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX = 150.0
 
 
+def geometry_fit_all_logging_disabled(
+    env: Mapping[str, object] | None = None,
+) -> bool:
+    """Return whether all geometry-fit file/debug logging is disabled."""
+
+    return is_logging_disabled(os.environ if env is None else env)
+
+
 def build_geometry_fit_log_path(
     *,
     stamp: str,
@@ -54,7 +63,8 @@ def build_geometry_fit_log_path(
     if resolved_dir is None or not str(resolved_dir).strip():
         resolved_dir = Path.cwd() / "logs"
     log_root = Path(resolved_dir).expanduser()
-    log_root.mkdir(parents=True, exist_ok=True)
+    if not geometry_fit_all_logging_disabled():
+        log_root.mkdir(parents=True, exist_ok=True)
     return log_root / f"geometry_fit_log_{stamp}.txt"
 
 
@@ -4696,6 +4706,8 @@ def geometry_fit_debug_logging_enabled(
 ) -> bool:
     """Return whether extra geometry-fit logging is enabled for this run."""
 
+    if geometry_fit_all_logging_disabled():
+        return False
     cfg = geometry_runtime_cfg if isinstance(geometry_runtime_cfg, Mapping) else {}
     geometry_cfg = cfg.get("geometry", None)
     if isinstance(geometry_cfg, Mapping):
@@ -5347,6 +5359,8 @@ def write_geometry_fit_preflight_failure_log(
     """Persist one geometry-fit preflight failure log."""
 
     resolved_log_path = Path(log_path)
+    if geometry_fit_all_logging_disabled():
+        return resolved_log_path
     with resolved_log_path.open("w", encoding="utf-8") as log_file:
         def _log_line(text: str = "") -> None:
             log_file.write(text + "\n")
@@ -8008,6 +8022,8 @@ def run_runtime_geometry_fit_action(
         error_text: str,
         failure_log_sections: Sequence[tuple[str, Sequence[str]]] | None,
     ) -> Path | None:
+        if geometry_fit_all_logging_disabled():
+            return None
         try:
             stamp = str(bindings.stamp_factory())
             log_path = build_geometry_fit_log_path(
@@ -8146,6 +8162,7 @@ def execute_runtime_geometry_fit(
     postprocess_config = setup.postprocess_config
     log_path = Path(postprocess_config.log_path)
     log_file = None
+    logging_disabled = geometry_fit_all_logging_disabled()
 
     def _log_line(text: str = "") -> None:
         if log_file is None:
@@ -8173,7 +8190,8 @@ def execute_runtime_geometry_fit(
             flush_ui()
 
     try:
-        log_file = log_path.open("w", encoding="utf-8")
+        if not logging_disabled:
+            log_file = log_path.open("w", encoding="utf-8")
         write_geometry_fit_run_start_log(
             stamp=str(postprocess_config.stamp),
             prepared_run=prepared_run,
@@ -8181,7 +8199,8 @@ def execute_runtime_geometry_fit(
             log_line=_log_line,
             log_section=_log_section,
         )
-        ui_bindings.cmd_line(f"log: {log_path}")
+        if not logging_disabled:
+            ui_bindings.cmd_line(f"log: {log_path}")
 
         ui_bindings.set_progress_text(str(start_progress_text))
         if callable(flush_ui):

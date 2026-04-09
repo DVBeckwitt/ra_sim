@@ -11,6 +11,7 @@ from ra_sim.config import get_dir
 from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
+from ra_sim.debug_utils import is_logging_disabled
 from ra_sim.utils.calculations import (
     IndexofRefraction,
     complex_sqrt,
@@ -254,6 +255,8 @@ def _projection_debug_record_reject(
 
 
 def _should_log_intersection_cache() -> bool:
+    if is_logging_disabled():
+        return False
     value = str(os.environ.get("RA_SIM_LOG_INTERSECTION_CACHE", "1")).strip().lower()
     return value not in {"0", "false", "off", "no", ""}
 
@@ -6506,6 +6509,7 @@ def process_qr_rods_parallel(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
+    enable_safe_cache=None,
     exit_projection_mode=EXIT_PROJECTION_INTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
@@ -6574,6 +6578,7 @@ def process_qr_rods_parallel(
         n2_sample_array_override=n2_sample_array_override,
         accumulate_image=accumulate_image,
         sample_qr_ring_once=sample_qr_ring_once,
+        enable_safe_cache=enable_safe_cache,
         exit_projection_mode=exit_projection_mode,
         projection_debug_counters=projection_debug_counters,
         projection_debug_reject_counts=projection_debug_reject_counts,
@@ -6581,7 +6586,6 @@ def process_qr_rods_parallel(
         projection_debug_row_hit_counts=projection_debug_row_hit_counts,
         projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
         projection_debug_row_tth_sums=projection_debug_row_tth_sums,
-        enable_safe_cache=False,
     )
 
     return (*result, degeneracy)

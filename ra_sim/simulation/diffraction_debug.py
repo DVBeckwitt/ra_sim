@@ -3,6 +3,7 @@ import csv
 import datetime
 from pathlib import Path
 from ra_sim.config import get_dir
+from ra_sim.debug_utils import is_logging_disabled
 import numpy as np
 from math import sin, cos, sqrt, pi, exp, acos
 
@@ -13,6 +14,9 @@ DEBUG_LOG = []
 
 def dump_debug_log():
     """Write the global debug log to ``debug_log_dir`` as ``mosaic_full_debug_log.csv``."""
+    if is_logging_disabled():
+        DEBUG_LOG.clear()
+        return
     log_dir = get_dir("debug_log_dir")
     filename = Path(log_dir) / "mosaic_full_debug_log.csv"
     now_str = datetime.datetime.now().isoformat()

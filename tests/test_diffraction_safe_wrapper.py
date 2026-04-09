@@ -190,3 +190,74 @@ def test_process_peaks_parallel_safe_keeps_raw_beams_for_q_ring_sampling(monkeyp
     assert observed["sample_count"] == int(np.asarray(args[16]).shape[0])
     assert observed["has_sample_weights"] is False
     assert observed["sample_qr_ring_once"] is True
+
+
+def test_process_qr_rods_parallel_safe_accepts_enable_safe_cache(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_qr_dict_to_arrays(_qr_dict):
+        return (
+            np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
+            np.array([1.0], dtype=np.float64),
+            np.array([1], dtype=np.int32),
+            None,
+        )
+
+    def fake_process_peaks_parallel_safe(*args, **kwargs):
+        observed["enable_safe_cache"] = kwargs.get("enable_safe_cache")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, 1), dtype=np.int64),
+            [],
+        )
+
+    monkeypatch.setattr(
+        "ra_sim.utils.stacking_fault.qr_dict_to_arrays",
+        fake_qr_dict_to_arrays,
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "process_peaks_parallel_safe",
+        fake_process_peaks_parallel_safe,
+    )
+
+    result = diffraction.process_qr_rods_parallel_safe(
+        {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}},
+        8,
+        4.0,
+        7.0,
+        1.54,
+        np.zeros((8, 8), dtype=np.float64),
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        0.5,
+        0.4,
+        0.2,
+        np.ones(1, dtype=np.float64),
+        0.0,
+        0.0,
+        np.array([4.0, 4.0], dtype=np.float64),
+        0.0,
+        0.0,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        0,
+        enable_safe_cache=True,
+    )
+
+    assert observed["enable_safe_cache"] is True
+    assert np.array_equal(result[-1], np.array([1], dtype=np.int32))

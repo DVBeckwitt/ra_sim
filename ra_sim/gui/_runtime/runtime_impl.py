@@ -172,7 +172,7 @@ from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
     export_algebraic_ht_txt,
 )
-from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.debug_utils import debug_print, is_debug_enabled, is_logging_disabled
 from ra_sim.hbn import (
     build_hbn_geometry_debug_trace,
     convert_hbn_bundle_geometry_to_simulation,
@@ -224,6 +224,10 @@ _RUNTIME_UPDATE_TRACE_HANDLE = None
 _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = False
 
 
+def _all_logging_disabled() -> bool:
+    return is_logging_disabled()
+
+
 def _runtime_update_trace_path() -> Path:
     """Return the daily GUI runtime trace path."""
 
@@ -237,6 +241,8 @@ def _runtime_update_trace_path() -> Path:
 def _append_runtime_update_trace(event: str, **fields: object) -> None:
     """Append one GUI runtime trace line, ignoring logging failures."""
 
+    if _all_logging_disabled():
+        return
     try:
         gui_runtime_update_trace.append_runtime_update_trace_line(
             _runtime_update_trace_path(),
@@ -422,6 +428,8 @@ def _append_runtime_update_exception_trace(
 ) -> None:
     """Append one exception event plus traceback text to the runtime trace."""
 
+    if _all_logging_disabled():
+        return
     header_fields = dict(fields)
     header_fields.update(
         {
@@ -445,6 +453,8 @@ def _ensure_runtime_update_trace_hooks() -> None:
     """Install persistent crash/exception hooks for GUI runtime tracing."""
 
     global _RUNTIME_UPDATE_TRACE_HANDLE, _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED
+    if _all_logging_disabled():
+        return
     if _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED:
         return
 

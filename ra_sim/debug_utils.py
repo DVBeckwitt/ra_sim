@@ -2,13 +2,42 @@
 
 import os
 import logging
+from collections.abc import Mapping
+
 import numpy as np
+
+
+def env_flag_enabled(
+    name: str,
+    env: Mapping[str, object] | None = None,
+) -> bool:
+    """Return whether one environment-style flag is set to a truthy value."""
+
+    source = os.environ if env is None else env
+    value = str(source.get(name, "")).strip().lower()
+    return bool(value) and value not in {"0", "false", "no", "off"}
+
+
+def is_logging_disabled(
+    env: Mapping[str, object] | None = None,
+) -> bool:
+    """Return whether the global logging kill-switch is enabled.
+
+    ``RA_SIM_DISABLE_ALL_LOGGING`` is the preferred switch. The older
+    ``RA_SIM_DISABLE_LOGGING`` name is still honored for compatibility.
+    """
+
+    return env_flag_enabled("RA_SIM_DISABLE_ALL_LOGGING", env) or env_flag_enabled(
+        "RA_SIM_DISABLE_LOGGING",
+        env,
+    )
 
 
 def is_debug_enabled() -> bool:
     """Return ``True`` if ``RA_SIM_DEBUG`` is set to a truthy value."""
-    val = os.environ.get("RA_SIM_DEBUG", "")
-    return bool(val) and val.lower() not in {"0", "false", "no"}
+    if is_logging_disabled():
+        return False
+    return env_flag_enabled("RA_SIM_DEBUG")
 
 
 DEBUG_ENABLED = is_debug_enabled()

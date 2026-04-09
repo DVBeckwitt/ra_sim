@@ -81,18 +81,28 @@ def simulate(
     from ra_sim.simulation.projection_debug import build_projection_debug_background
     from ra_sim.simulation.projection_debug import finalize_projection_debug_session
     from ra_sim.simulation.projection_debug import get_current_projection_debug_session
+    from ra_sim.simulation.projection_debug import projection_debug_logging_enabled
     from ra_sim.simulation.projection_debug import projection_debug_request_settings
     from ra_sim.simulation.projection_debug import resolve_exit_projection_mode_flag
     from ra_sim.simulation.projection_debug import start_projection_debug_session
 
     image_buffer = _default_image_buffer(request)
     worker_count = default_reserved_cpu_worker_count()
-    projection_debug_buffers = allocate_projection_debug_buffers(
-        request.miller.shape[0],
-        request.geometry.image_size,
-        worker_count,
+    projection_debug_active = projection_debug_logging_enabled()
+    projection_debug_buffers = (
+        allocate_projection_debug_buffers(
+            request.miller.shape[0],
+            request.geometry.image_size,
+            worker_count,
+        )
+        if projection_debug_active
+        else {}
     )
-    projection_debug_settings = projection_debug_request_settings(request, source="simulation")
+    projection_debug_settings = (
+        projection_debug_request_settings(request, source="simulation")
+        if projection_debug_active
+        else None
+    )
 
     peak_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -108,7 +118,8 @@ def simulate(
         accumulate_image=request.accumulate_image,
         exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
     )
-    peak_kwargs.update(projection_debug_buffers)
+    if projection_debug_active:
+        peak_kwargs.update(projection_debug_buffers)
     if request.optics_mode is not None:
         peak_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
@@ -119,7 +130,7 @@ def simulate(
         peak_kwargs["single_sample_indices"] = request.single_sample_indices
     if request.best_sample_indices_out is not None:
         peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
-    if peak_runner is process_peaks_parallel_safe:
+    if peak_runner is process_peaks_parallel_safe and projection_debug_active:
         peak_kwargs["enable_safe_cache"] = False
 
     peak_args = (
@@ -168,31 +179,33 @@ def simulate(
               runner_kwargs=peak_kwargs,
               image_arg_index=6,
           )
-    projection_debug_background = build_projection_debug_background(
-        projection_debug_buffers,
-        request.miller,
-        None,
-        projection_debug_settings,
-    )
-    projection_debug_session = get_current_projection_debug_session()
+    projection_debug_background = None
     projection_debug_log_path = None
-    if projection_debug_session is None:
-        projection_debug_session = start_projection_debug_session(
+    if projection_debug_active:
+        projection_debug_background = build_projection_debug_background(
+            projection_debug_buffers,
+            request.miller,
+            None,
             projection_debug_settings,
-            source="simulation",
         )
-        append_projection_debug_background(
-            projection_debug_session,
-            projection_debug_background,
-        )
-        projection_debug_log_path = finalize_projection_debug_session(
-            projection_debug_session
-        )
-    else:
-        append_projection_debug_background(
-            projection_debug_session,
-            projection_debug_background,
-        )
+        projection_debug_session = get_current_projection_debug_session()
+        if projection_debug_session is None:
+            projection_debug_session = start_projection_debug_session(
+                projection_debug_settings,
+                source="simulation",
+            )
+            append_projection_debug_background(
+                projection_debug_session,
+                projection_debug_background,
+            )
+            projection_debug_log_path = finalize_projection_debug_session(
+                projection_debug_session
+            )
+        else:
+            append_projection_debug_background(
+                projection_debug_session,
+                projection_debug_background,
+            )
     intersection_cache = build_intersection_cache(
         cache_hit_tables,
         request.geometry.av,
@@ -235,6 +248,7 @@ def simulate_qr_rods(
     from ra_sim.simulation.projection_debug import build_projection_debug_background
     from ra_sim.simulation.projection_debug import finalize_projection_debug_session
     from ra_sim.simulation.projection_debug import get_current_projection_debug_session
+    from ra_sim.simulation.projection_debug import projection_debug_logging_enabled
     from ra_sim.simulation.projection_debug import projection_debug_request_settings
     from ra_sim.simulation.projection_debug import resolve_exit_projection_mode_flag
     from ra_sim.simulation.projection_debug import start_projection_debug_session
@@ -245,14 +259,23 @@ def simulate_qr_rods(
     debug_miller = request.miller
     if debug_miller.size == 0:
         debug_miller, _, _, _ = qr_dict_to_arrays(qr_dict)
-    projection_debug_buffers = allocate_projection_debug_buffers(
-        debug_miller.shape[0],
-        request.geometry.image_size,
-        worker_count,
+    projection_debug_active = projection_debug_logging_enabled()
+    projection_debug_buffers = (
+        allocate_projection_debug_buffers(
+            debug_miller.shape[0],
+            request.geometry.image_size,
+            worker_count,
+        )
+        if projection_debug_active
+        else {}
     )
-    projection_debug_settings = projection_debug_request_settings(
-        request,
-        source="simulation_qr_rods",
+    projection_debug_settings = (
+        projection_debug_request_settings(
+            request,
+            source="simulation_qr_rods",
+        )
+        if projection_debug_active
+        else None
     )
 
     rod_kwargs: dict[str, Any] = dict(
@@ -269,14 +292,15 @@ def simulate_qr_rods(
         accumulate_image=request.accumulate_image,
         exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
     )
-    rod_kwargs.update(projection_debug_buffers)
+    if projection_debug_active:
+        rod_kwargs.update(projection_debug_buffers)
     if request.optics_mode is not None:
         rod_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
         rod_kwargs["sample_weights"] = request.beam.sample_weights
     if request.beam.n2_sample_array is not None:
         rod_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
-    if peak_runner is process_qr_rods_parallel_safe:
+    if peak_runner is process_qr_rods_parallel_safe and projection_debug_active:
         rod_kwargs["enable_safe_cache"] = False
 
     rod_args = (
@@ -324,31 +348,33 @@ def simulate_qr_rods(
               runner_kwargs=rod_kwargs,
               image_arg_index=5,
           )
-    projection_debug_background = build_projection_debug_background(
-        projection_debug_buffers,
-        np.asarray(debug_miller, dtype=np.float64),
-        None,
-        projection_debug_settings,
-    )
-    projection_debug_session = get_current_projection_debug_session()
+    projection_debug_background = None
     projection_debug_log_path = None
-    if projection_debug_session is None:
-        projection_debug_session = start_projection_debug_session(
+    if projection_debug_active:
+        projection_debug_background = build_projection_debug_background(
+            projection_debug_buffers,
+            np.asarray(debug_miller, dtype=np.float64),
+            None,
             projection_debug_settings,
-            source="simulation_qr_rods",
         )
-        append_projection_debug_background(
-            projection_debug_session,
-            projection_debug_background,
-        )
-        projection_debug_log_path = finalize_projection_debug_session(
-            projection_debug_session
-        )
-    else:
-        append_projection_debug_background(
-            projection_debug_session,
-            projection_debug_background,
-        )
+        projection_debug_session = get_current_projection_debug_session()
+        if projection_debug_session is None:
+            projection_debug_session = start_projection_debug_session(
+                projection_debug_settings,
+                source="simulation_qr_rods",
+            )
+            append_projection_debug_background(
+                projection_debug_session,
+                projection_debug_background,
+            )
+            projection_debug_log_path = finalize_projection_debug_session(
+                projection_debug_session
+            )
+        else:
+            append_projection_debug_background(
+                projection_debug_session,
+                projection_debug_background,
+            )
     intersection_cache = build_intersection_cache(
         cache_hit_tables,
         request.geometry.av,

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ra_sim.debug_utils import is_logging_disabled
+
 
 def resolve_runtime_update_trace_path(
     downloads_dir: Path | str | None,
@@ -90,6 +92,8 @@ def append_runtime_update_trace_line(
 ) -> None:
     """Append one line to the GUI runtime trace log."""
 
+    if is_logging_disabled():
+        return
     trace_path = Path(path)
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     with trace_path.open("a", encoding="utf-8") as handle:
