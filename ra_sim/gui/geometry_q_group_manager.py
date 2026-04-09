@@ -841,7 +841,6 @@ def simulate_geometry_fit_hit_tables(
     image_size: int,
     param_set: Mapping[str, object] | dict[str, object],
     *,
-    build_geometry_fit_central_mosaic_params: Callable[[dict[str, object]], object],
     process_peaks_parallel: Callable[..., object],
     default_solve_q_steps: int,
     default_solve_q_rel_tol: float,
@@ -858,22 +857,6 @@ def simulate_geometry_fit_hit_tables(
         "intensity_count": _array_row_count(intensity_array),
         "image_size": int(image_size),
     }
-    try:
-        params_local["mosaic_params"] = build_geometry_fit_central_mosaic_params(
-            params_local
-        )
-    except Exception as exc:
-        diagnostics.update(
-            {
-                "status": "build_mosaic_params_exception",
-                **_geometry_fit_exception_diagnostics(exc),
-            }
-        )
-        _set_function_last_diagnostics(
-            simulate_geometry_fit_hit_tables,
-            diagnostics,
-        )
-        raise
 
     mosaic = dict(params_local.get("mosaic_params", {}))
     wavelength_array = mosaic.get("wavelength_array")
@@ -990,7 +973,6 @@ def simulate_geometry_fit_peak_centers(
     image_size: int,
     param_set: Mapping[str, object] | dict[str, object],
     *,
-    build_geometry_fit_central_mosaic_params: Callable[[dict[str, object]], object],
     process_peaks_parallel: Callable[..., object],
     hit_tables_to_max_positions: Callable[[Sequence[object]], Sequence[Sequence[float]]],
     default_solve_q_steps: int,
@@ -1005,9 +987,6 @@ def simulate_geometry_fit_peak_centers(
             intensity_array,
             image_size,
             param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
             process_peaks_parallel=process_peaks_parallel,
             default_solve_q_steps=default_solve_q_steps,
             default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1058,7 +1037,6 @@ def simulate_geometry_fit_preview_style_peaks(
     image_size: int,
     param_set: Mapping[str, object] | dict[str, object],
     *,
-    build_geometry_fit_central_mosaic_params: Callable[[dict[str, object]], object],
     process_peaks_parallel: Callable[..., object],
     native_sim_to_display_coords: Callable[
         [float, float, tuple[int, int]],
@@ -1081,9 +1059,6 @@ def simulate_geometry_fit_preview_style_peaks(
             intensity_array,
             image_size,
             param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
             process_peaks_parallel=process_peaks_parallel,
             default_solve_q_steps=default_solve_q_steps,
             default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1146,7 +1121,6 @@ def simulate_geometry_fit_preview_style_peaks(
 
 def make_runtime_geometry_fit_simulation_callbacks(
     *,
-    build_geometry_fit_central_mosaic_params: Callable[[dict[str, object]], object],
     process_peaks_parallel: Callable[..., object],
     hit_tables_to_max_positions: Callable[[Sequence[object]], Sequence[Sequence[float]]],
     native_sim_to_display_coords: Callable[
@@ -1192,9 +1166,6 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(
-                    build_geometry_fit_central_mosaic_params
-                ),
                 process_peaks_parallel=process_peaks_parallel,
                 default_solve_q_steps=default_solve_q_steps,
                 default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1222,9 +1193,6 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(
-                    build_geometry_fit_central_mosaic_params
-                ),
                 process_peaks_parallel=process_peaks_parallel,
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
                 default_solve_q_steps=default_solve_q_steps,
@@ -1260,9 +1228,6 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(
-                    build_geometry_fit_central_mosaic_params
-                ),
                 process_peaks_parallel=process_peaks_parallel,
                 native_sim_to_display_coords=native_sim_to_display_coords,
                 peak_table_lattice=peak_table_lattice,
@@ -3910,3 +3875,4 @@ def load_geometry_q_group_selection_with_dialog(
         ),
     )
     return True
+

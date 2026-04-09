@@ -12,7 +12,6 @@ import numpy as np
 
 from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.fitting.optimization import (
-    build_geometry_fit_central_mosaic_params,
     fit_geometry_parameters,
     simulate_and_compare_hkl,
 )
@@ -1008,7 +1007,6 @@ def run_headless_geometry_fit(
     )
 
     simulation_callbacks = gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-        build_geometry_fit_central_mosaic_params=build_geometry_fit_central_mosaic_params,
         process_peaks_parallel=process_peaks_parallel,
         hit_tables_to_max_positions=hit_tables_to_max_positions,
         native_sim_to_display_coords=lambda col, row, image_shape: (
@@ -1196,3 +1194,4 @@ def run_headless_geometry_fit(
             else None
         ),
     )
+

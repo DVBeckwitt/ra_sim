@@ -297,6 +297,13 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
     ]
 
 
+def test_runtime_impl_uses_reserved_cpu_worker_count_for_runtime_executors() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "default_reserved_cpu_worker_count" in source
+    assert source.count("max_workers=default_reserved_cpu_worker_count(),") >= 2
+
+
 def test_runtime_impl_removes_display_intensity_toggle_from_ui() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 

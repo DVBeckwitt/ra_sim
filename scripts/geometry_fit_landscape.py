@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import math
-import os
 from pathlib import Path
 import sys
 import time
@@ -31,7 +30,6 @@ import numpy as np
 from scipy.stats import spearmanr
 
 from ra_sim.fitting.optimization import (
-    build_geometry_fit_central_mosaic_params,
     process_peaks_parallel,
 )
 from ra_sim.gui import background_theta as gui_background_theta
@@ -49,6 +47,11 @@ from ra_sim.headless_geometry_fit import (
     _resolve_solve_q_mode,
 )
 from ra_sim.simulation.diffraction import hit_tables_to_max_positions
+from ra_sim.utils.parallel import (
+    default_reserved_cpu_worker_count,
+    numba_threads_per_worker as _shared_numba_threads_per_worker,
+    system_cpu_worker_count,
+)
 
 
 DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "init.json"
@@ -75,9 +78,6 @@ PANEL_METRIC_COLORS = {
     "radius_gyration_px": "#1f5aa6",
     "anisotropy_ratio": "#9c6644",
 }
-DEFAULT_WORKER_FRACTION = 0.9
-
-
 @dataclass(frozen=True)
 class SweepSpec:
     """Resolved one-at-a-time sweep for one geometry-fit parameter."""
@@ -134,10 +134,9 @@ def _positive_int(raw_value: str) -> int:
 
 
 def _default_worker_count() -> int:
-    """Return floor(90% of available CPU threads), with a minimum of one worker."""
+    """Return the default sweep worker count: available CPU threads minus two."""
 
-    cpu_count = os.cpu_count() or 1
-    return max(int(math.floor(float(cpu_count) * DEFAULT_WORKER_FRACTION)), 1)
+    return int(default_reserved_cpu_worker_count())
 
 
 def _load_saved_state(path: Path) -> dict[str, object]:
@@ -316,10 +315,10 @@ def _resolve_worker_count(requested_workers: int | None, task_count: int) -> int
 def _numba_threads_per_worker(worker_count: int) -> int:
     """Return a conservative per-process Numba thread budget."""
 
-    cpu_count = os.cpu_count() or 1
-    if worker_count <= 1:
-        return max(int(cpu_count), 1)
-    return max(int(cpu_count // worker_count), 1)
+    return _shared_numba_threads_per_worker(
+        worker_count,
+        thread_budget=system_cpu_worker_count(),
+    )
 
 
 def compute_peak_metrics(
@@ -767,7 +766,6 @@ def simulate_geometry_fit_metrics(
         np.asarray(context.structure_state.intensities, dtype=float),
         int(context.defaults.image_size),
         param_set,
-        build_geometry_fit_central_mosaic_params=build_geometry_fit_central_mosaic_params,
         process_peaks_parallel=process_peaks_parallel,
         hit_tables_to_max_positions=hit_tables_to_max_positions,
         default_solve_q_steps=int(context.solve_q_steps),
@@ -1113,7 +1111,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=_default_worker_count(),
         help=(
             "CPU worker processes for independent sweep points "
-            f"(default: floor(0.9 * available cores) = {_default_worker_count()})."
+            f"(default: available cores minus 2 = {_default_worker_count()})."
         ),
     )
     parser.add_argument(
@@ -1181,3 +1179,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

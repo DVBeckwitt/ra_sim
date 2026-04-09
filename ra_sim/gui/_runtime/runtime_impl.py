@@ -53,6 +53,10 @@ from ra_sim.utils.calculations import (
     resolve_index_of_refraction,
     resolve_index_of_refraction_array,
 )
+from ra_sim.utils.parallel import (
+    default_reserved_cpu_worker_count,
+    temporary_numba_thread_limit,
+)
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
 from ra_sim.utils.tools import (
     miller_generator,
@@ -73,7 +77,6 @@ from ra_sim.io.data_loading import (
     save_gui_state_file,
 )
 from ra_sim.fitting.optimization import (
-    build_geometry_fit_central_mosaic_params,
     build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
@@ -7015,7 +7018,7 @@ def _ensure_simulation_worker_executor():
     executor = simulation_runtime_state.worker_executor
     if executor is None:
         executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
+            max_workers=default_reserved_cpu_worker_count(),
             thread_name_prefix="ra-sim-sim",
         )
         simulation_runtime_state.worker_executor = executor
@@ -7026,7 +7029,7 @@ def _ensure_analysis_worker_executor():
     executor = simulation_runtime_state.analysis_executor
     if executor is None:
         executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
+            max_workers=default_reserved_cpu_worker_count(),
             thread_name_prefix="ra-sim-analysis",
         )
         simulation_runtime_state.analysis_executor = executor
@@ -7810,13 +7813,14 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     intersection_cache = _copy_intersection_cache_tables(job.get("intersection_cache"))
 
     analysis_start_time = perf_counter()
-    sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
-    if cached_bg_res2 is not None:
-        bg_res2 = cached_bg_res2
-    elif bg_array is not None:
-        bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
-    else:
-        bg_res2 = None
+    with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+        sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+        if cached_bg_res2 is not None:
+            bg_res2 = cached_bg_res2
+        elif bg_array is not None:
+            bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+        else:
+            bg_res2 = None
     sim_caked = _prepare_caked_display_payload(sim_res2)
     if isinstance(cached_bg_caked, dict):
         bg_caked = dict(cached_bg_caked)
@@ -11531,9 +11535,6 @@ def _on_live_geometry_preview_toggle(*args, **kwargs):
     return result
 geometry_fit_simulation_runtime_callbacks = (
     gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-        build_geometry_fit_central_mosaic_params=(
-            build_geometry_fit_central_mosaic_params
-        ),
         process_peaks_parallel=process_peaks_parallel,
         hit_tables_to_max_positions=hit_tables_to_max_positions,
         native_sim_to_display_coords=_native_sim_to_display_coords,
@@ -19160,6 +19161,7 @@ if __name__ == "__main__":
         print("Unhandled exception during startup:", exc)
         import traceback
         traceback.print_exc()
+
 
 
 

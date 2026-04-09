@@ -210,8 +210,6 @@ instrument:
       #   clamp that would otherwise force serial/no-numba execution.
       gui_use_numba: true
       gui_allow_unsafe_runtime: true
-      # Geometry fitting always evaluates a deterministic center-beam,
-      # zero-divergence ray rather than the full sampled beam cloud.
       # Set to false to avoid numba JIT during fitting (useful if numba
       # compilation fails on your Python build).
       use_numba: true
@@ -284,3 +282,4 @@ instrument:
         equal_peak_weights: true
       defaults:
         coord_window: 0.02
+

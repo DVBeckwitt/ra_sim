@@ -4,7 +4,6 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import math
-import os
 from threading import Lock
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -24,6 +23,12 @@ from ra_sim.simulation.diffraction import (
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
 )
 from ra_sim.utils.calculations import d_spacing, two_theta
+from ra_sim.utils.parallel import (
+    call_with_numba_thread_limit as _shared_call_with_numba_thread_limit,
+    current_parallel_thread_budget,
+    numba_threads_per_worker as _shared_numba_threads_per_worker,
+    reserved_worker_count,
+)
 
 RNG = np.random.default_rng(42)
 
@@ -33,26 +38,11 @@ _USE_NUMBA_PROCESS_PEAKS = True
 _NUMBA_PROCESS_PEAKS_WARMED = False
 _NUMBA_PROCESS_PEAKS_WARMUP_LOCK = Lock()
 
-try:
-    from numba import get_num_threads as _numba_get_num_threads
-    from numba import set_num_threads as _numba_set_num_threads
-except Exception:  # pragma: no cover - numba is an optional runtime dependency here
-    _numba_get_num_threads = None
-    _numba_set_num_threads = None
-
 
 def _available_parallel_thread_budget() -> int:
     """Return the CPU thread budget available to outer geometry-fit workers."""
 
-    if callable(_numba_get_num_threads):
-        try:
-            count = int(_numba_get_num_threads())
-        except Exception:
-            count = 0
-        if count > 0:
-            return count
-    cpu_count = os.cpu_count() or 1
-    return max(int(cpu_count), 1)
+    return int(current_parallel_thread_budget())
 
 
 def _coerce_sequence_items(values: Optional[Sequence[object]]) -> List[object]:
@@ -95,7 +85,9 @@ def _resolve_parallel_worker_count(
             requested = 1
 
     if requested <= 0:
-        requested = _available_parallel_thread_budget()
+        requested = reserved_worker_count(
+            thread_budget=_available_parallel_thread_budget(),
+        )
     return max(1, min(int(requested), int(max_tasks)))
 
 
@@ -125,8 +117,10 @@ def _resolve_numba_threads_per_worker(
     if requested > 0:
         return max(int(requested), 1)
 
-    thread_budget = _available_parallel_thread_budget()
-    return max(int(thread_budget // worker_count), 1)
+    return _shared_numba_threads_per_worker(
+        worker_count,
+        thread_budget=_available_parallel_thread_budget(),
+    )
 
 
 def _call_with_numba_thread_limit(
@@ -137,25 +131,12 @@ def _call_with_numba_thread_limit(
 ):
     """Run *fn* while temporarily masking Numba's worker thread count."""
 
-    if numba_threads is None or not callable(_numba_set_num_threads):
-        return fn(*args, **kwargs)
-
-    original_threads: Optional[int] = None
-    if callable(_numba_get_num_threads):
-        try:
-            original_threads = int(_numba_get_num_threads())
-        except Exception:
-            original_threads = None
-
-    try:
-        _numba_set_num_threads(max(int(numba_threads), 1))
-        return fn(*args, **kwargs)
-    finally:
-        if original_threads is not None and callable(_numba_set_num_threads):
-            try:
-                _numba_set_num_threads(max(int(original_threads), 1))
-            except Exception:
-                pass
+    return _shared_call_with_numba_thread_limit(
+        fn,
+        *args,
+        numba_threads=numba_threads,
+        **kwargs,
+    )
 
 
 def _threaded_map(
@@ -1840,42 +1821,6 @@ def recommend_next_stage(
     return recommendations
 
 
-def build_geometry_fit_central_mosaic_params(
-    params: Dict[str, object],
-) -> Dict[str, object]:
-    """Return a deterministic one-ray beam model for geometry fitting."""
-
-    mosaic_in = dict(params.get("mosaic_params", {}))
-    wavelength_array = mosaic_in.get("wavelength_array")
-    if wavelength_array is None:
-        wavelength_array = mosaic_in.get("wavelength_i_array")
-
-    nominal_lambda = float("nan")
-    try:
-        nominal_lambda = float(params.get("lambda", float("nan")))
-    except Exception:
-        nominal_lambda = float("nan")
-
-    if not (np.isfinite(nominal_lambda) and nominal_lambda > 0.0):
-        wave_arr = np.asarray(wavelength_array, dtype=np.float64).ravel()
-        wave_arr = wave_arr[np.isfinite(wave_arr) & (wave_arr > 0.0)]
-        if wave_arr.size:
-            nominal_lambda = float(np.mean(wave_arr))
-        else:
-            nominal_lambda = 1.0
-
-    central = dict(mosaic_in)
-    zero_arr = np.zeros(1, dtype=np.float64)
-    wave_single = np.array([float(nominal_lambda)], dtype=np.float64)
-    central["beam_x_array"] = zero_arr.copy()
-    central["beam_y_array"] = zero_arr.copy()
-    central["theta_array"] = zero_arr.copy()
-    central["phi_array"] = zero_arr.copy()
-    central["wavelength_array"] = wave_single
-    central["wavelength_i_array"] = wave_single.copy()
-    return central
-
-
 def _miller_key_from_row(row: Sequence[float]) -> Optional[Tuple[int, int, int]]:
     """Return an integer HKL tuple from a Miller-array row."""
 
@@ -3199,7 +3144,6 @@ def _evaluate_geometry_fit_dataset_point_matches(
             "simulated_reflection_count": int(fit_miller.shape[0]),
             "total_reflection_count": int(simulation_subset.total_reflection_count),
             "subset_reduced": bool(simulation_subset.reduced),
-            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": bool(use_single_ray),
             "single_ray_forced_count": 0,
             "line_group_count": 0,
@@ -3726,7 +3670,6 @@ def _evaluate_geometry_fit_dataset_point_matches(
         "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
         "subset_reduced": bool(simulation_subset.reduced),
-        "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
         "single_ray_enabled": bool(use_single_ray),
         "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
         if isinstance(single_ray_indices, np.ndarray)
@@ -3858,7 +3801,6 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "simulated_reflection_count": int(fit_miller.shape[0]),
             "total_reflection_count": int(simulation_subset.total_reflection_count),
             "subset_reduced": bool(simulation_subset.reduced),
-            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
             "peak_weighting_mode": "uniform",
@@ -4316,7 +4258,6 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
         "subset_reduced": bool(simulation_subset.reduced),
-        "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
         "single_ray_enabled": False,
         "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
         if isinstance(single_ray_indices, np.ndarray)
@@ -4421,7 +4362,6 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             "simulated_reflection_count": int(dataset_ctx.subset.miller.shape[0]),
             "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
             "subset_reduced": bool(dataset_ctx.subset.reduced),
-            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
             "match_radius_px": float(match_radius_px),
@@ -4732,7 +4672,6 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         "fixed_source_reflection_count": int(dataset_ctx.subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(dataset_ctx.subset.fallback_hkl_count),
         "subset_reduced": bool(dataset_ctx.subset.reduced),
-        "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
         "single_ray_enabled": False,
         "single_ray_forced_count": 0,
         "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
@@ -11353,8 +11292,6 @@ def fit_geometry_parameters(
     dataset_spec_entries = _coerce_sequence_items(dataset_specs)
     point_match_mode = experimental_image is not None or bool(dataset_spec_entries)
 
-    # Geometry fitting compares peak positions against a deterministic
-    # center-beam / zero-divergence ray rather than the sampled beam cloud.
     use_single_ray = False
 
     optimizer_cfg: Dict[str, float] = {}
@@ -11986,9 +11923,6 @@ def fit_geometry_parameters(
     full_beam_mosaic_params = copy.deepcopy(
         dict(params.get("mosaic_params", {}) or {})
     )
-    if point_match_mode:
-        params["mosaic_params"] = build_geometry_fit_central_mosaic_params(params)
-        params["_geometry_central_ray_mode"] = True
     params["center"] = [center_row_default, center_col_default]
     params.setdefault("center_x", center_row_default)
     params.setdefault("center_y", center_col_default)
@@ -12688,7 +12622,6 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
-            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": bool(use_single_ray),
             "single_ray_forced_count": 0,
             "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
@@ -12975,7 +12908,6 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
-            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
             "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
@@ -13281,7 +13213,6 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
-            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
             "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
@@ -13491,7 +13422,6 @@ def fit_geometry_parameters(
     def _apply_full_beam_trial_params(x_trial: Sequence[float]) -> Dict[str, object]:
         local = _apply_trial_params(x_trial)
         local["mosaic_params"] = copy.deepcopy(full_beam_mosaic_params)
-        local["_geometry_central_ray_mode"] = False
         return local
 
     def full_beam_cost_fn(x):
@@ -15873,7 +15803,6 @@ def fit_geometry_parameters(
 
             local_full = dict(local_item)
             local_full["mosaic_params"] = full_beam_mosaic_params
-            local_full["_geometry_central_ray_mode"] = False
             try:
                 hk0_peak_priority_weight = float(
                     local_full.get("_hk0_peak_priority_weight", 1.0)
@@ -19666,3 +19595,4 @@ def run_optimization_positions_geometry_local(
         ))
     res = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
     return res
+

@@ -6,6 +6,11 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ra_sim.utils.parallel import (
+    default_reserved_cpu_worker_count,
+    temporary_numba_thread_limit,
+)
+
 from .diffraction import (
     build_intersection_cache,
     process_peaks_parallel_safe,
@@ -124,18 +129,19 @@ def simulate(
         request.geometry.unit_x,
         request.geometry.n_detector,
     )
-    image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
-        *peak_args,
-        **peak_kwargs,
-    )
-    cache_hit_tables = _capture_hit_tables_for_intersection_cache(
-        hit_tables=hit_tables,
-        collect_hit_tables_requested=bool(request.collect_hit_tables),
-        runner=peak_runner,
-        runner_args=peak_args,
-        runner_kwargs=peak_kwargs,
-        image_arg_index=6,
-    )
+    with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+        image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
+            *peak_args,
+            **peak_kwargs,
+        )
+        cache_hit_tables = _capture_hit_tables_for_intersection_cache(
+            hit_tables=hit_tables,
+            collect_hit_tables_requested=bool(request.collect_hit_tables),
+            runner=peak_runner,
+            runner_args=peak_args,
+            runner_kwargs=peak_kwargs,
+            image_arg_index=6,
+        )
     intersection_cache = build_intersection_cache(
         cache_hit_tables,
         request.geometry.av,
@@ -223,18 +229,19 @@ def simulate_qr_rods(
         request.geometry.unit_x,
         request.geometry.n_detector,
     )
-    image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
-        *rod_args,
-        **rod_kwargs,
-    )
-    cache_hit_tables = _capture_hit_tables_for_intersection_cache(
-        hit_tables=hit_tables,
-        collect_hit_tables_requested=bool(request.collect_hit_tables),
-        runner=peak_runner,
-        runner_args=rod_args,
-        runner_kwargs=rod_kwargs,
-        image_arg_index=5,
-    )
+    with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+        image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
+            *rod_args,
+            **rod_kwargs,
+        )
+        cache_hit_tables = _capture_hit_tables_for_intersection_cache(
+            hit_tables=hit_tables,
+            collect_hit_tables_requested=bool(request.collect_hit_tables),
+            runner=peak_runner,
+            runner_args=rod_args,
+            runner_kwargs=rod_kwargs,
+            image_arg_index=5,
+        )
     intersection_cache = build_intersection_cache(
         cache_hit_tables,
         request.geometry.av,

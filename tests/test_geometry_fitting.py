@@ -163,11 +163,17 @@ def test_build_global_point_matches_uses_global_assignment():
     )
 
 
-def test_resolve_parallel_worker_count_auto_uses_full_thread_budget(monkeypatch):
+def test_resolve_parallel_worker_count_auto_reserves_two_threads(monkeypatch):
     monkeypatch.setattr(opt, "_available_parallel_thread_budget", lambda: 12)
 
-    assert opt._resolve_parallel_worker_count("auto", max_tasks=32) == 12
+    assert opt._resolve_parallel_worker_count("auto", max_tasks=32) == 10
     assert opt._resolve_parallel_worker_count(None, max_tasks=8) == 8
+
+
+def test_resolve_parallel_worker_count_auto_keeps_one_worker_minimum(monkeypatch):
+    monkeypatch.setattr(opt, "_available_parallel_thread_budget", lambda: 2)
+
+    assert opt._resolve_parallel_worker_count("auto", max_tasks=32) == 1
 
 
 def test_fit_geometry_parameters_cost_fn_uses_updated_psi_z(monkeypatch):

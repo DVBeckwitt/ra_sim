@@ -1262,78 +1262,6 @@ def refresh_geometry_manual_pick_session_candidates(
     return refreshed_session
 
 
-def geometry_manual_central_candidate(
-    candidate_entries: Sequence[dict[str, object]] | None,
-    *,
-    candidate_source_key: Callable[
-        [dict[str, object] | None],
-        tuple[object, ...] | None,
-    ] = geometry_manual_candidate_source_key,
-) -> dict[str, object] | None:
-    """Return one deterministic central-ray representative for a Qr/Qz group."""
-
-    entries = [dict(entry) for entry in candidate_entries or [] if isinstance(entry, dict)]
-    if not entries:
-        return None
-
-    finite_entries: list[dict[str, object]] = []
-    weights: list[float] = []
-    cols: list[float] = []
-    rows: list[float] = []
-    for entry in entries:
-        try:
-            sim_col = float(entry.get("sim_col", np.nan))
-            sim_row = float(entry.get("sim_row", np.nan))
-        except Exception:
-            continue
-        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-            continue
-        try:
-            weight = float(entry.get("weight", 1.0))
-        except Exception:
-            weight = 1.0
-        if not np.isfinite(weight) or weight <= 0.0:
-            weight = 1.0
-        finite_entries.append(entry)
-        cols.append(float(sim_col))
-        rows.append(float(sim_row))
-        weights.append(float(weight))
-
-    if not finite_entries:
-        return dict(entries[0])
-
-    weight_arr = np.asarray(weights, dtype=float)
-    col_arr = np.asarray(cols, dtype=float)
-    row_arr = np.asarray(rows, dtype=float)
-    center_col = float(np.average(col_arr, weights=weight_arr))
-    center_row = float(np.average(row_arr, weights=weight_arr))
-
-    def _sort_key(entry: dict[str, object]) -> tuple[object, ...]:
-        try:
-            sim_col = float(entry.get("sim_col", np.nan))
-            sim_row = float(entry.get("sim_row", np.nan))
-        except Exception:
-            sim_col = float("nan")
-            sim_row = float("nan")
-        if np.isfinite(sim_col) and np.isfinite(sim_row):
-            d2 = (sim_col - center_col) ** 2 + (sim_row - center_row) ** 2
-        else:
-            d2 = float("inf")
-        try:
-            weight = float(entry.get("weight", 0.0))
-        except Exception:
-            weight = 0.0
-        source_key = candidate_source_key(entry)
-        return (
-            float(d2),
-            -float(weight) if np.isfinite(weight) else 0.0,
-            repr(source_key) if source_key is not None else "",
-            str(entry.get("label", "")),
-        )
-
-    return dict(min(finite_entries, key=_sort_key))
-
-
 def geometry_manual_tagged_candidate_from_session(
     pick_session: dict[str, object] | None,
     candidate_entries: Sequence[dict[str, object]] | None,
@@ -1773,8 +1701,8 @@ def build_geometry_manual_pick_cache(
         elif stale_reason is None:
             stale_reason = "existing grouped candidates were empty."
     if not grouped_candidates:
-        # Fall back to the deterministic central-ray geometry-fit simulation
-        # only when no reusable cached Qr/Qz groups are available.
+        # Fall back to the geometry-fit simulation only when no reusable
+        # cached Qr/Qz groups are available.
         simulated_peaks = [
             dict(entry)
             for entry in simulated_peaks_for_params(
@@ -5447,3 +5375,4 @@ def import_geometry_manual_pairs(
     if callable(set_status_text):
         set_status_text(message)
     return message
+

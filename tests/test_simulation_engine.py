@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 
+from ra_sim.simulation import engine
 from ra_sim.simulation.engine import simulate, simulate_qr_rods
 from ra_sim.simulation.types import (
     BeamSamples,
@@ -159,6 +162,34 @@ def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped
     assert np.isclose(float(table[0, 3]), 5.0)
 
 
+def test_simulate_uses_reserved_cpu_worker_count_for_numba_thread_limit(monkeypatch) -> None:
+    request = _build_request()
+    seen: list[int] = []
+
+    @contextmanager
+    def fake_thread_limit(num_threads):
+        seen.append(int(num_threads))
+        yield
+
+    monkeypatch.setattr(engine, "default_reserved_cpu_worker_count", lambda: 10)
+    monkeypatch.setattr(engine, "temporary_numba_thread_limit", fake_thread_limit)
+
+    def fake_runner(*args, **kwargs):
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    simulate(request, peak_runner=fake_runner)
+
+    assert seen == [10]
+
+
 def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:
     request = _build_request()
     qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
@@ -263,3 +294,35 @@ def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are
     assert np.isclose(float(table[0, 2]), 7.0)
     assert np.isclose(float(table[0, 3]), 8.0)
     assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
+
+
+def test_simulate_qr_rods_uses_reserved_cpu_worker_count_for_numba_thread_limit(
+    monkeypatch,
+) -> None:
+    request = _build_request()
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    seen: list[int] = []
+
+    @contextmanager
+    def fake_thread_limit(num_threads):
+        seen.append(int(num_threads))
+        yield
+
+    monkeypatch.setattr(engine, "default_reserved_cpu_worker_count", lambda: 10)
+    monkeypatch.setattr(engine, "temporary_numba_thread_limit", fake_thread_limit)
+
+    def fake_runner(*args, **kwargs):
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert seen == [10]

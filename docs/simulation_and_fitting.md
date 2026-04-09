@@ -297,7 +297,7 @@ Kernel-side hard limits from [`ra_sim/simulation/diffraction.py`](../ra_sim/simu
 | `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | If positive, overrides evanescent decay lengths with a fixed slab thickness. |
 | `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | `None` means use the kernel default `OPTICS_MODE_FAST`; otherwise force fast or exact optics. |
 | `collect_hit_tables` | bool | `True` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-reflection subpixel hit tables. |
-| `single_sample_indices` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Forces selected beam samples per reflection; used by geometry-fit central-ray and single-ray paths. |
+| `single_sample_indices` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Forces selected beam samples per reflection. |
 | `best_sample_indices_out` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Optional output buffer for best-sample tracking. |
 
 ### Legacy `simulate_diffraction(...)` wrapper
@@ -1254,7 +1254,7 @@ so Qr-equivalent rods can be traced together by the same detector machinery.
 
 ## Geometry fitting from picked spots
 
-The live geometry fitter is built around manual point pairs assembled in the GUI, then optimized by [`fit_geometry_parameters`](../ra_sim/fitting/optimization.py). The key design choice is that the live point-match fit uses a deterministic central ray, not the full sampled beam cloud.
+The live geometry fitter is built around manual point pairs assembled in the GUI, then optimized by [`fit_geometry_parameters`](../ra_sim/fitting/optimization.py).
 
 ### Manual picking behavior in the GUI
 
@@ -1302,20 +1302,6 @@ The orientation search considers detector indexing mode, 90 degree rotations, an
 - reject if the RMS improvement is less than `min_improvement_px`, default `0.25`
 
 If those criteria fail, the fitter falls back to the identity transform.
-
-### Central-ray geometry fit mode
-
-When `fit_geometry_parameters(...)` sees point-match data, it replaces the beam cloud with [`build_geometry_fit_central_mosaic_params`](../ra_sim/fitting/optimization.py), which forces
-
-- `beam_x_array = [0]`
-- `beam_y_array = [0]`
-- `theta_array = [0]`
-- `phi_array = [0]`
-- one nominal wavelength sample
-
-and marks `_geometry_central_ray_mode = True`.
-
-This is deliberate. The geometry fit is solving for peak positions, not for beam-spread blur. Using the full sampled beam cloud would make the objective less stable and less identifiable.
 
 ### Reflection subsetting before each simulation
 
@@ -2092,3 +2078,4 @@ So the hBN fitter is not just "fit an ellipse". It is:
 | hBN iterative ring refinement | [`refine_ellipse`](../ra_sim/hbn_fitter/fitter.py) |
 | hBN confidence scoring | [`compute_fit_confidence`](../ra_sim/hbn_fitter/fitter.py) |
 | hBN projective tilt optimization | [`apply_tilt_projective`](../ra_sim/hbn_fitter/fitter.py), [`optimize_tilts_projective`](../ra_sim/hbn_fitter/fitter.py) |
+

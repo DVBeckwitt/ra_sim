@@ -43,7 +43,6 @@ from PIL import Image
 from ra_sim import launcher
 from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.fitting.optimization import (
-    build_geometry_fit_central_mosaic_params,
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
     simulate_and_compare_hkl,
@@ -1027,7 +1026,6 @@ def run_headless_geometry_fit(
     backend_flip_y = _saved_state_bool(flags_state, "background_backend_flip_y", False)
 
     simulation_callbacks = gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-        build_geometry_fit_central_mosaic_params=build_geometry_fit_central_mosaic_params,
         process_peaks_parallel=process_peaks_parallel,
         hit_tables_to_max_positions=hit_tables_to_max_positions,
         native_sim_to_display_coords=lambda col, row, image_shape: gui_geometry_overlay.native_sim_to_display_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
@@ -2297,3 +2295,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+

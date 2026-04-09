@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from scripts import geometry_fit_landscape
+from ra_sim.utils import parallel as parallel_utils
 
 
 def test_resolve_candidate_parameter_names_excludes_lattice_params_when_disabled() -> None:
@@ -53,19 +54,19 @@ def test_build_argument_parser_exposes_workers_flag() -> None:
     assert args.workers == 4
 
 
-def test_default_worker_count_uses_ninety_percent_of_available_cores(monkeypatch) -> None:
-    monkeypatch.setattr(geometry_fit_landscape.os, "cpu_count", lambda: 32)
+def test_default_worker_count_uses_available_cores_minus_two(monkeypatch) -> None:
+    monkeypatch.setattr(parallel_utils.os, "cpu_count", lambda: 32)
 
-    assert geometry_fit_landscape._default_worker_count() == 28
+    assert geometry_fit_landscape._default_worker_count() == 30
 
 
 def test_build_argument_parser_defaults_workers_from_available_cores(monkeypatch) -> None:
-    monkeypatch.setattr(geometry_fit_landscape.os, "cpu_count", lambda: 10)
+    monkeypatch.setattr(parallel_utils.os, "cpu_count", lambda: 10)
 
     parser = geometry_fit_landscape.build_argument_parser()
     args = parser.parse_args([])
 
-    assert args.workers == 9
+    assert args.workers == 8
 
 
 def test_resolve_geometry_sweep_range_supports_bounds_modes() -> None:
@@ -166,7 +167,7 @@ def test_resolve_worker_count_clamps_to_task_count() -> None:
 
 
 def test_resolve_worker_count_uses_default_when_unspecified(monkeypatch) -> None:
-    monkeypatch.setattr(geometry_fit_landscape.os, "cpu_count", lambda: 20)
+    monkeypatch.setattr(parallel_utils.os, "cpu_count", lambda: 20)
 
     assert geometry_fit_landscape._resolve_worker_count(None, 100) == 18
 

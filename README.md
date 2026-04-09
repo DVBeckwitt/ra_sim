@@ -148,8 +148,7 @@ mode when refraction and near-critical-angle transport matter more than speed.
 
 ### Manual Geometry Fit
 
-The GUI manual geometry-fit path now uses one deterministic central-ray preview
-model and one objective throughout the solve.
+The GUI manual geometry-fit path uses one objective throughout the solve.
 
 - Manual picks keep a detector-native background anchor plus the chosen
   simulated source identity.
@@ -254,3 +253,4 @@ If RA-SIM contributes to published work, please cite the accompanying manuscript
 
 RA-SIM is distributed under the GNU General Public License v3.0. See
 [LICENSE](LICENSE) for details.
+
