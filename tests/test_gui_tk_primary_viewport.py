@@ -457,11 +457,114 @@ def test_render_layer_patch_matches_matplotlib_caked_zoom_crop() -> None:
 
     assert rendered is not None
     patch_image, left, top = rendered
-    assert (left, top) == (0, 0)
-    assert patch_image.size == (1, 3)
+    assert (left, top) == (0, -1)
+    assert patch_image.size == (1, 4)
     assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
-    assert patch_image.getpixel((0, 1)) == (0, 255, 0, 255)
+    assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
     assert patch_image.getpixel((0, 2)) == (0, 255, 0, 255)
+    assert patch_image.getpixel((0, 3)) == (0, 255, 0, 255)
+
+
+def test_render_scene_preserves_horizontal_alignment_for_fractional_detector_zoom(
+    monkeypatch,
+) -> None:
+    if tk_primary_viewport.Image is None:
+        pytest.skip("Pillow is unavailable")
+    _FakePhotoImage.reset()
+    monkeypatch.setattr(
+        tk_primary_viewport,
+        "ImageTk",
+        SimpleNamespace(PhotoImage=_FakePhotoImage),
+    )
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.25, 3.25), ylim=(1.0, 0.0)),
+        initial_width=12,
+        initial_height=1,
+    )
+    scene = _make_scene(
+        view_state=tk_primary_viewport.ViewportViewState(
+            width=12,
+            height=1,
+            xlim=(0.25, 3.25),
+            ylim=(1.0, 0.0),
+        ),
+        simulation_layer=_make_layer(
+            "simulation",
+            np.asarray(
+                [[
+                    [255, 0, 0, 255],
+                    [0, 255, 0, 255],
+                    [0, 0, 255, 255],
+                    [255, 255, 0, 255],
+                ]],
+                dtype=np.uint8,
+            ),
+            extent=(0.0, 4.0, 1.0, 0.0),
+            origin="upper",
+        ),
+    )
+
+    viewport.render_scene(scene)
+    rendered = viewport._photo_image.image
+
+    assert rendered.size == (12, 1)
+    assert rendered.getpixel((1, 0)) == (255, 0, 0, 255)
+    assert rendered.getpixel((6, 0)) == (0, 255, 0, 255)
+    assert rendered.getpixel((10, 0)) == (0, 0, 255, 255)
+    assert rendered.getpixel((11, 0)) == (255, 255, 0, 255)
+
+
+def test_render_scene_preserves_vertical_alignment_for_fractional_detector_zoom(
+    monkeypatch,
+) -> None:
+    if tk_primary_viewport.Image is None:
+        pytest.skip("Pillow is unavailable")
+    _FakePhotoImage.reset()
+    monkeypatch.setattr(
+        tk_primary_viewport,
+        "ImageTk",
+        SimpleNamespace(PhotoImage=_FakePhotoImage),
+    )
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.0, 1.0), ylim=(3.25, 0.25)),
+        initial_width=1,
+        initial_height=12,
+    )
+    scene = _make_scene(
+        view_state=tk_primary_viewport.ViewportViewState(
+            width=1,
+            height=12,
+            xlim=(0.0, 1.0),
+            ylim=(3.25, 0.25),
+        ),
+        simulation_layer=_make_layer(
+            "simulation",
+            np.asarray(
+                [
+                    [[255, 0, 0, 255]],
+                    [[0, 255, 0, 255]],
+                    [[0, 0, 255, 255]],
+                    [[255, 255, 0, 255]],
+                ],
+                dtype=np.uint8,
+            ),
+            extent=(0.0, 1.0, 4.0, 0.0),
+            origin="upper",
+        ),
+    )
+
+    viewport.render_scene(scene)
+    rendered = viewport._photo_image.image
+
+    assert rendered.size == (1, 12)
+    assert rendered.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert rendered.getpixel((0, 1)) == (0, 255, 0, 255)
+    assert rendered.getpixel((0, 6)) == (0, 0, 255, 255)
+    assert rendered.getpixel((0, 10)) == (255, 255, 0, 255)
 
 
 def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:

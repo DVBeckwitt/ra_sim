@@ -947,20 +947,44 @@ class _TkPrimaryViewport:
         patch_rgba = src_rgba[src_top:src_bottom, src_left:src_right]
         if patch_rgba.size == 0:
             return None
-        top_left = world_to_screen(view_state, overlap_x0, overlap_y0)
-        bottom_right = world_to_screen(view_state, overlap_x1, overlap_y1)
+        world_x_a = self._source_edge_to_world(
+            float(src_left),
+            extent_x0,
+            extent_x1,
+            src_width,
+        )
+        world_x_b = self._source_edge_to_world(
+            float(src_right),
+            extent_x0,
+            extent_x1,
+            src_width,
+        )
+        world_y_a = self._source_edge_to_world(
+            float(src_top),
+            source_y_start,
+            source_y_end,
+            src_height,
+        )
+        world_y_b = self._source_edge_to_world(
+            float(src_bottom),
+            source_y_start,
+            source_y_end,
+            src_height,
+        )
+        if None in {world_x_a, world_x_b, world_y_a, world_y_b}:
+            return None
+        top_left = world_to_screen(view_state, float(world_x_a), float(world_y_a))
+        bottom_right = world_to_screen(view_state, float(world_x_b), float(world_y_b))
         if top_left is None or bottom_right is None:
             return None
-        dst_left = max(0, int(round(min(top_left[0], bottom_right[0]))))
-        dst_right = min(view_state.width, int(round(max(top_left[0], bottom_right[0]))))
-        dst_top = max(0, int(round(min(top_left[1], bottom_right[1]))))
-        dst_bottom = min(view_state.height, int(round(max(top_left[1], bottom_right[1]))))
+        dst_left = int(round(min(top_left[0], bottom_right[0])))
+        dst_right = int(round(max(top_left[0], bottom_right[0])))
+        dst_top = int(round(min(top_left[1], bottom_right[1])))
+        dst_bottom = int(round(max(top_left[1], bottom_right[1])))
         if dst_right <= dst_left:
-            dst_right = min(view_state.width, dst_left + 1)
+            dst_right = dst_left + 1
         if dst_bottom <= dst_top:
-            dst_bottom = min(view_state.height, dst_top + 1)
-        if dst_right <= dst_left or dst_bottom <= dst_top:
-            return None
+            dst_bottom = dst_top + 1
         patch_image = Image.fromarray(np.ascontiguousarray(patch_rgba))
         if flip_x:
             patch_image = patch_image.transpose(_PIL_TRANSPOSE_LEFT_RIGHT)
@@ -984,6 +1008,19 @@ class _TkPrimaryViewport:
             return None
         src_edge = ((float(world_value) - float(extent_start)) / span) * float(size)
         return float(src_edge) if isfinite(src_edge) else None
+
+    def _source_edge_to_world(
+        self,
+        source_edge: float,
+        extent_start: float,
+        extent_end: float,
+        size: int,
+    ) -> float | None:
+        span = float(extent_end) - float(extent_start)
+        if abs(span) <= _EPSILON or int(size) <= 0:
+            return None
+        world_value = float(extent_start) + (float(source_edge) / float(size)) * span
+        return float(world_value) if isfinite(world_value) else None
 
     def _render_overlay_items(self, scene: ViewportScene) -> None:
         draw_records: list[tuple[float, str, object]] = []
