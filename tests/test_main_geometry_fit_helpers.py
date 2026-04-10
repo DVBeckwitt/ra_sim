@@ -64,7 +64,7 @@ def test_main_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> 
     assert runtime_cfg["priors"] == {}
 
 
-def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_overrides() -> None:
+def test_main_build_geometry_fit_runtime_config_ignores_unsafe_numba_opt_ins() -> None:
     runtime_cfg = build_geometry_fit_runtime_config(
         {
             "solver": {
@@ -87,11 +87,11 @@ def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_over
         "parallel_mode": "datasets",
         "worker_numba_threads": 3,
     }
-    assert runtime_cfg["use_numba"] is True
-    assert runtime_cfg["allow_unsafe_runtime"] is True
+    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["allow_unsafe_runtime"] is False
 
 
-def test_main_build_geometry_fit_runtime_config_reuses_solver_parallel_settings_when_unsafe_runtime_enabled() -> None:
+def test_main_build_geometry_fit_runtime_config_keeps_parallel_settings_while_forcing_safe_runtime() -> None:
     runtime_cfg = build_geometry_fit_runtime_config(
         {
             "solver": {
@@ -114,5 +114,5 @@ def test_main_build_geometry_fit_runtime_config_reuses_solver_parallel_settings_
         "parallel_mode": "auto",
         "worker_numba_threads": 0,
     }
-    assert runtime_cfg["use_numba"] is True
-    assert runtime_cfg["allow_unsafe_runtime"] is True
+    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["allow_unsafe_runtime"] is False

@@ -56,6 +56,7 @@ class IntegrationRangeDragBindings:
     last_sim_res2_factory: object = None
     draw_idle: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
+    set_integration_overlay_image: Callable[[object], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,17 @@ def _set_status_text(
 def _sync_peak_selection_state(bindings: IntegrationRangeDragBindings) -> None:
     if callable(bindings.sync_peak_selection_state):
         bindings.sync_peak_selection_state()
+
+
+def _set_integration_overlay_image(
+    bindings: IntegrationRangeDragBindings,
+    image: object,
+) -> None:
+    if callable(bindings.set_integration_overlay_image):
+        bindings.set_integration_overlay_image(image)
+        return
+    bindings.integration_region_overlay.set_data(image)
+    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
 
 
 def _runtime_caked_view_enabled(bindings: IntegrationRangeDragBindings) -> bool:
@@ -460,11 +472,18 @@ def _display_polar_angle_degrees(
 def _detector_display_extent(
     bindings: IntegrationRangeDragBindings,
 ) -> tuple[float, float, float, float] | None:
-    getter = getattr(getattr(bindings, "image_display", None), "get_extent", None)
-    if not callable(getter):
-        return None
+    image_display = getattr(bindings, "image_display", None)
+    extent = getattr(image_display, "_ra_sim_source_extent", None)
+    if extent is None:
+        getter = getattr(image_display, "get_extent", None)
+        if not callable(getter):
+            return None
+        try:
+            extent = getter()
+        except Exception:
+            return None
     try:
-        extent = np.asarray(getter(), dtype=float).reshape(-1)
+        extent = np.asarray(extent, dtype=float).reshape(-1)
     except Exception:
         return None
     if extent.size < 4 or not np.all(np.isfinite(extent[:4])):
@@ -806,8 +825,7 @@ def _update_detector_drag_arc_preview(
         ),
         suppress_overlay_image=True,
     )
-    bindings.integration_region_overlay.set_data(preview)
-    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+    _set_integration_overlay_image(bindings, preview)
     bindings.integration_region_overlay.set_visible(True)
     return True
 
@@ -845,8 +863,7 @@ def _update_detector_integration_overlay(
         bindings.integration_region_overlay.set_visible(False)
         return False
 
-    bindings.integration_region_overlay.set_data(mask.astype(float))
-    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+    _set_integration_overlay_image(bindings, mask.astype(float))
     bindings.integration_region_overlay.set_visible(True)
     return True
 
@@ -1319,6 +1336,7 @@ def make_runtime_integration_range_drag_bindings_factory(
     last_sim_res2_factory: object = None,
     draw_idle_factory: object = None,
     set_status_text_factory: object = None,
+    set_integration_overlay_image_factory: object = None,
 ):
     """Build a factory that resolves the live integration-range drag bindings."""
 
@@ -1343,6 +1361,9 @@ def make_runtime_integration_range_drag_bindings_factory(
             last_sim_res2_factory=last_sim_res2_factory,
             draw_idle=_resolve_runtime_value(draw_idle_factory),
             set_status_text=_resolve_runtime_value(set_status_text_factory),
+            set_integration_overlay_image=_resolve_runtime_value(
+                set_integration_overlay_image_factory
+            ),
         )
 
     return _build

@@ -2,8 +2,11 @@ import math
 
 import numpy as np
 
+import ra_sim.fitting.background_peak_matching as bpm
 from ra_sim.fitting.background_peak_matching import (
     _refine_peak_center,
+    build_background_peak_context,
+    match_simulated_peaks_to_peak_context,
     match_simulated_peaks_to_background,
 )
 
@@ -217,3 +220,53 @@ def test_refine_peak_center_recovers_quadratic_subpixel_summit():
 
     assert abs(refined_col - true_col) < 1.0e-3
     assert abs(refined_row - true_row) < 1.0e-3
+
+
+def test_match_simulated_peaks_to_peak_context_reuses_refined_candidates(
+    monkeypatch,
+):
+    background = _synthetic_background(
+        (64, 64),
+        [
+            (16.0, 18.0, 8.0, 1.0),
+            (24.0, 18.0, 7.0, 1.0),
+        ],
+        noise_sigma=0.0,
+    )
+    cfg = _match_config(search_radius_px=5.0)
+    peak_context = build_background_peak_context(background, cfg)
+    simulated = [
+        {"hkl": (1, 0, 0), "label": "1,0,0", "sim_col": 15.8, "sim_row": 18.1, "weight": 5.0},
+    ]
+
+    refine_calls: list[tuple[int, int]] = []
+    original_refine_peak_center = bpm._refine_peak_center
+
+    def _counting_refine_peak_center(
+        peakness: np.ndarray,
+        fine_image: np.ndarray,
+        row_idx: int,
+        col_idx: int,
+    ) -> tuple[float, float]:
+        refine_calls.append((int(row_idx), int(col_idx)))
+        return original_refine_peak_center(peakness, fine_image, row_idx, col_idx)
+
+    monkeypatch.setattr(bpm, "_refine_peak_center", _counting_refine_peak_center)
+
+    first_matches, _, = match_simulated_peaks_to_peak_context(
+        simulated,
+        peak_context,
+        cfg,
+    )
+    first_call_count = len(refine_calls)
+
+    second_matches, _, = match_simulated_peaks_to_peak_context(
+        simulated,
+        peak_context,
+        cfg,
+    )
+
+    assert len(first_matches) == 1
+    assert len(second_matches) == 1
+    assert first_call_count > 0
+    assert len(refine_calls) == first_call_count

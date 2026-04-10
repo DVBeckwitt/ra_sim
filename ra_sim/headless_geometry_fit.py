@@ -1339,6 +1339,7 @@ def run_headless_geometry_fit(
         default_solve_q_steps=solve_q_steps,
         default_solve_q_rel_tol=solve_q_rel_tol,
         default_solve_q_mode=_resolve_solve_q_mode(var_store["solve_q_mode_var"].get()),
+        prefer_safe_python_runner=True,
     )
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=False,

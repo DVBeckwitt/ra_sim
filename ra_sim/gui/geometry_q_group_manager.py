@@ -12,6 +12,13 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.simulation.diffraction import (
+    process_peaks_parallel as diffraction_process_peaks_parallel,
+)
+from ra_sim.simulation.diffraction import (
+    process_peaks_parallel_safe as diffraction_process_peaks_parallel_safe,
+)
+
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
 from . import geometry_overlay as gui_geometry_overlay
@@ -1045,10 +1052,50 @@ def make_runtime_geometry_fit_simulation_callbacks(
     default_solve_q_steps: int,
     default_solve_q_rel_tol: float,
     default_solve_q_mode: int,
+    prefer_safe_python_runner: bool = False,
 ) -> GeometryFitSimulationRuntimeCallbacks:
     """Return live geometry-fit simulation callbacks from runtime value sources."""
 
     last_simulation_diagnostics_state: dict[str, object] = {}
+    process_peaks_parallel_runner = process_peaks_parallel
+
+    if prefer_safe_python_runner:
+        use_diffraction_safe_runner = (
+            process_peaks_parallel is diffraction_process_peaks_parallel
+        )
+
+        def _keyword_mismatch(exc: TypeError) -> bool:
+            message = str(exc)
+            return (
+                "unexpected keyword" in message
+                or "some keyword arguments unexpected" in message
+            )
+
+        def _process_peaks_parallel_runner(*args, **kwargs):
+            call_kwargs = dict(kwargs)
+            call_kwargs["prefer_python_runner"] = True
+            try:
+                return process_peaks_parallel(*args, **call_kwargs)
+            except TypeError as exc:
+                if not _keyword_mismatch(exc):
+                    raise
+                call_kwargs.pop("prefer_python_runner", None)
+                try:
+                    return process_peaks_parallel(*args, **call_kwargs)
+                except TypeError as retry_exc:
+                    if (
+                        use_diffraction_safe_runner
+                        and _keyword_mismatch(retry_exc)
+                    ):
+                        safe_kwargs = dict(call_kwargs)
+                        safe_kwargs["prefer_python_runner"] = True
+                        return diffraction_process_peaks_parallel_safe(
+                            *args,
+                            **safe_kwargs,
+                        )
+                    raise
+
+        process_peaks_parallel_runner = _process_peaks_parallel_runner
 
     def _set_last_simulation_diagnostics(
         diagnostics: Mapping[str, object] | None,
@@ -1076,7 +1123,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                process_peaks_parallel=process_peaks_parallel,
+                process_peaks_parallel=process_peaks_parallel_runner,
                 default_solve_q_steps=default_solve_q_steps,
                 default_solve_q_rel_tol=default_solve_q_rel_tol,
                 default_solve_q_mode=default_solve_q_mode,
@@ -1103,7 +1150,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                process_peaks_parallel=process_peaks_parallel,
+                process_peaks_parallel=process_peaks_parallel_runner,
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
                 default_solve_q_steps=default_solve_q_steps,
                 default_solve_q_rel_tol=default_solve_q_rel_tol,

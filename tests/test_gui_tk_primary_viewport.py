@@ -128,10 +128,22 @@ class _FakeViewport:
 
 
 class _FakeAxes:
-    def __init__(self, *, xlim, ylim, position=None):
+    def __init__(self, *, xlim, ylim, position=None, bbox=None):
         self._xlim = tuple(xlim)
         self._ylim = tuple(ylim)
         self._position = None if position is None else tuple(position)
+        if bbox is None:
+            self.bbox = None
+        else:
+            x0, y0, width, height = (float(value) for value in bbox)
+            self.bbox = SimpleNamespace(
+                x0=x0,
+                y0=y0,
+                width=width,
+                height=height,
+                x1=x0 + width,
+                y1=y0 + height,
+            )
 
     def get_xlim(self):
         return self._xlim
@@ -280,6 +292,25 @@ def test_current_view_state_uses_axes_position_for_plot_bounds() -> None:
     view_state = viewport._current_view_state()
 
     assert view_state.plot_bounds == pytest.approx((41.6, 12.0, 540.8, 432.0))
+
+
+def test_current_view_state_prefers_axes_bbox_for_plot_bounds() -> None:
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(
+            xlim=(0.0, 100.0),
+            ylim=(100.0, 0.0),
+            position=(0.0, 0.0, 1.0, 1.0),
+            bbox=(50.0, 36.0, 540.0, 432.0),
+        ),
+        initial_width=1,
+        initial_height=1,
+    )
+
+    view_state = viewport._current_view_state()
+
+    assert view_state.plot_bounds == pytest.approx((50.0, 12.0, 540.0, 432.0))
 
 
 def test_build_peak_cache_filters_visible_points_in_current_view() -> None:

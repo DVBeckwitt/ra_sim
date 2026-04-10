@@ -1,6 +1,7 @@
 from dataclasses import replace
 import numpy as np
 from pathlib import Path
+import pytest
 from types import SimpleNamespace
 
 from ra_sim.gui import geometry_fit, geometry_overlay
@@ -1359,6 +1360,133 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
     assert callable(dataset["spec"]["dynamic_reanchor_callback"])
     assert dataset["cache_metadata"]["cache_source"] == "source_snapshot_rebuild"
     assert "rebuild_source:test_rebuild" in dataset["cache_metadata"]["cache_provenance"]
+
+
+def test_rebuild_geometry_fit_source_rows_preserves_runtime_failure_status() -> None:
+    runtime_diag = {
+        "stage": "simulate_hit_tables",
+        "status": "empty_hit_tables",
+        "miller_shape": [96, 3],
+        "intensity_shape": [96],
+        "image_size": 2048,
+        "param_summary": {
+            "a": 4.143,
+            "c": 28.64,
+            "lambda": 1.54,
+            "theta_initial": 5.0,
+        },
+        "mosaic_array_sizes": {
+            "beam_x_array": 489,
+            "beam_y_array": 489,
+            "theta_array": 489,
+            "phi_array": 489,
+            "wavelength_array": 489,
+        },
+        "hit_table_count": 0,
+        "nonempty_hit_table_count": 0,
+        "finite_hit_row_total": 0,
+        "hit_row_counts": [],
+    }
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=1,
+        background_label="bg1.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 1),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=None,
+        load_logged_intersection_cache=None,
+        logged_cache_matches_params=None,
+        build_source_rows_from_hit_tables=lambda _tables: ([], [], []),
+        simulate_hit_tables=lambda _params: [],
+        last_runtime_simulation_diagnostics=lambda: dict(runtime_diag),
+        project_rows=None,
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert result.stored_rows == []
+    assert result.diagnostics["status"] == "empty_hit_tables"
+    assert result.diagnostics["runtime_simulation"]["status"] == "empty_hit_tables"
+    assert result.diagnostics["miller_shape"] == [96, 3]
+    assert result.diagnostics["intensity_shape"] == [96]
+    assert result.diagnostics["image_size"] == 2048
+
+
+def test_build_geometry_manual_fit_dataset_includes_runtime_exception_details_in_failure() -> None:
+    snapshot_diag = {
+        "status": "process_peaks_parallel_exception",
+        "exception_type": "RuntimeError",
+        "exception_message": "boom",
+    }
+
+    def _rebuild_source_rows(
+        background_idx,
+        params,
+        *,
+        consumer,
+        prior_diagnostics,
+    ):
+        return []
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((6, 7), dtype=np.float64),
+            np.zeros((6, 7), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [],
+        geometry_manual_rebuild_source_rows_for_background=_rebuild_source_rows,
+        geometry_manual_last_source_snapshot_diagnostics=lambda: dict(snapshot_diag),
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: []
+        ),
+        geometry_manual_simulated_lookup=lambda peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "xy",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: np.asarray(image, dtype=np.float64),
+        geometry_manual_match_config=lambda: {"search_radius": 4.0},
+    )
+
+    with pytest.raises(RuntimeError, match=r"Runtime=RuntimeError: boom"):
+        geometry_fit.build_geometry_manual_fit_dataset(
+            0,
+            theta_base=1.5,
+            base_fit_params={"theta_offset": 0.0},
+            manual_dataset_bindings=manual_dataset_bindings,
+            orientation_cfg={},
+        )
 
 
 def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() -> None:

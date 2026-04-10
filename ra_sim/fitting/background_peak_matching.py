@@ -430,6 +430,107 @@ def _build_match_stats(
     }
 
 
+def _prepare_peak_context_candidates(
+    peak_context: dict[str, object],
+    *,
+    min_match_prominence_sigma: float,
+    max_candidate_peaks: int,
+) -> tuple[list[dict[str, object]], np.ndarray, cKDTree | None, int]:
+    """Prepare and cache refined summit candidates for one peak context."""
+
+    summit_records_raw = peak_context.get("summit_records", [])
+    if not isinstance(summit_records_raw, list) or not summit_records_raw:
+        return [], np.empty((0, 2), dtype=float), None, 0
+
+    cache_key = (float(min_match_prominence_sigma), int(max_candidate_peaks))
+    candidate_cache = peak_context.get("_candidate_cache")
+    if not isinstance(candidate_cache, dict):
+        candidate_cache = {}
+        peak_context["_candidate_cache"] = candidate_cache
+
+    cached = candidate_cache.get(cache_key)
+    if isinstance(cached, dict):
+        cached_summits = cached.get("qualified_summits")
+        cached_coords = cached.get("candidate_coords")
+        cached_tree = cached.get("candidate_tree")
+        cached_count = cached.get("candidate_count")
+        if (
+            isinstance(cached_summits, list)
+            and isinstance(cached_coords, np.ndarray)
+            and cached_coords.ndim == 2
+            and cached_coords.shape[1] == 2
+        ):
+            return (
+                cached_summits,
+                cached_coords,
+                cached_tree if isinstance(cached_tree, cKDTree) else None,
+                int(cached_count) if cached_count is not None else len(summit_records_raw),
+            )
+
+    peakness = np.asarray(peak_context.get("peakness", []), dtype=float)
+    fine = np.asarray(peak_context.get("fine", []), dtype=float)
+
+    qualified_summits: list[dict[str, object]] = []
+    for record in summit_records_raw:
+        if not isinstance(record, dict):
+            continue
+        try:
+            prom_sigma = float(record.get("prominence_sigma", -np.inf))
+        except Exception:
+            prom_sigma = float("-inf")
+        if prom_sigma < float(min_match_prominence_sigma):
+            continue
+
+        if not bool(record.get("center_refined", False)):
+            peak_row = int(round(float(record.get("row", 0.0))))
+            peak_col = int(round(float(record.get("col", 0.0))))
+            center_col, center_row = _refine_peak_center(
+                peakness,
+                fine,
+                peak_row,
+                peak_col,
+            )
+            record["center_col"] = float(center_col)
+            record["center_row"] = float(center_row)
+            record["center_refined"] = True
+
+        qualified_summits.append(record)
+        if len(qualified_summits) >= int(max_candidate_peaks):
+            break
+
+    if not qualified_summits:
+        candidate_coords = np.empty((0, 2), dtype=float)
+        candidate_tree = None
+    else:
+        candidate_coords = np.asarray(
+            [
+                [
+                    float(info.get("center_col", info.get("col", np.nan))),
+                    float(info.get("center_row", info.get("row", np.nan))),
+                ]
+                for info in qualified_summits
+            ],
+            dtype=float,
+        )
+        finite_candidate_mask = np.all(np.isfinite(candidate_coords), axis=1)
+        if not np.all(finite_candidate_mask):
+            qualified_summits = [
+                info
+                for keep, info in zip(finite_candidate_mask.tolist(), qualified_summits)
+                if keep
+            ]
+            candidate_coords = candidate_coords[finite_candidate_mask]
+        candidate_tree = cKDTree(candidate_coords) if candidate_coords.size > 0 else None
+
+    candidate_cache[cache_key] = {
+        "qualified_summits": qualified_summits,
+        "candidate_coords": candidate_coords,
+        "candidate_tree": candidate_tree,
+        "candidate_count": len(summit_records_raw),
+    }
+    return qualified_summits, candidate_coords, candidate_tree, len(summit_records_raw)
+
+
 def match_simulated_peaks_to_peak_context(
     simulated_peaks: Sequence[dict[str, object]],
     peak_context: dict[str, object],
@@ -469,7 +570,6 @@ def match_simulated_peaks_to_peak_context(
         )
 
     work = np.asarray(peak_context.get("work", []), dtype=float)
-    fine = np.asarray(peak_context.get("fine", []), dtype=float)
     peakness = np.asarray(peak_context.get("peakness", []), dtype=float)
     candidate_labels = np.asarray(peak_context.get("candidate_labels", []), dtype=np.int32)
     sigma_est = float(peak_context.get("sigma_est", np.nan))
@@ -479,8 +579,17 @@ def match_simulated_peaks_to_peak_context(
     walk_max_steps = max(0, int(config.get("walk_max_steps", 24)))
     walk_step_min_gain_sigma = max(0.0, float(config.get("walk_step_min_gain_sigma", 0.0)))
 
-    summit_records = list(peak_context.get("summit_records", []))
-    if not summit_records:
+    (
+        qualified_summits,
+        candidate_coords,
+        tree,
+        candidate_count,
+    ) = _prepare_peak_context_candidates(
+        peak_context,
+        min_match_prominence_sigma=float(min_match_prominence_sigma),
+        max_candidate_peaks=int(max_candidate_peaks),
+    )
+    if candidate_count <= 0:
         return [], _build_match_stats(
             simulated_count=len(simulated_peaks),
             search_radius_px=search_radius,
@@ -488,24 +597,9 @@ def match_simulated_peaks_to_peak_context(
             sigma_est=sigma_est,
             prominence_center=prom_center,
         )
-
-    qualified_summits = [
-        dict(record)
-        for record in summit_records
-        if float(record.get("prominence_sigma", -np.inf)) >= min_match_prominence_sigma
-    ]
-    if len(qualified_summits) > max_candidate_peaks:
-        qualified_summits.sort(
-            key=lambda info: (
-                float(info.get("prominence_sigma", -np.inf)),
-                float(info.get("background_intensity", -np.inf)),
-            ),
-            reverse=True,
-        )
-        qualified_summits = qualified_summits[:max_candidate_peaks]
     _log(
         logger,
-        f"candidate peaks total={len(summit_records)} qualified={len(qualified_summits)} radius={match_radius:.2f}",
+        f"candidate peaks total={candidate_count} qualified={len(qualified_summits)} radius={match_radius:.2f}",
     )
     if not qualified_summits:
         return [], _build_match_stats(
@@ -514,44 +608,27 @@ def match_simulated_peaks_to_peak_context(
             distance_sigma_clip=distance_sigma_clip,
             sigma_est=sigma_est,
             prominence_center=prom_center,
-            candidate_count=len(summit_records),
+            candidate_count=candidate_count,
         )
-
-    for info in qualified_summits:
-        if bool(info.get("center_refined", False)):
-            continue
-        peak_row = int(round(float(info.get("row", 0.0))))
-        peak_col = int(round(float(info.get("col", 0.0))))
-        center_col, center_row = _refine_peak_center(peakness, fine, peak_row, peak_col)
-        info["center_col"] = float(center_col)
-        info["center_row"] = float(center_row)
-        info["center_refined"] = True
-
-    candidate_coords = np.asarray(
-        [
-            [float(info.get("center_col", info.get("col", np.nan))), float(info.get("center_row", info.get("row", np.nan)))]
-            for info in qualified_summits
-        ],
-        dtype=float,
-    )
-    finite_candidate_mask = np.all(np.isfinite(candidate_coords), axis=1)
-    if not np.all(finite_candidate_mask):
-        filtered = []
-        filtered_coords = []
-        for keep, info, coord in zip(finite_candidate_mask, qualified_summits, candidate_coords):
-            if keep:
-                filtered.append(info)
-                filtered_coords.append(coord)
-        qualified_summits = filtered
-        candidate_coords = np.asarray(filtered_coords, dtype=float)
-    if candidate_coords.size == 0:
+    if candidate_coords.size == 0 or tree is None:
         return [], _build_match_stats(
             simulated_count=len(simulated_peaks),
             search_radius_px=search_radius,
             distance_sigma_clip=distance_sigma_clip,
             sigma_est=sigma_est,
             prominence_center=prom_center,
-            candidate_count=len(summit_records),
+            candidate_count=candidate_count,
+        )
+    finite_candidate_mask = np.all(np.isfinite(candidate_coords), axis=1)
+    if not np.all(finite_candidate_mask):
+        return [], _build_match_stats(
+            simulated_count=len(simulated_peaks),
+            search_radius_px=search_radius,
+            distance_sigma_clip=distance_sigma_clip,
+            sigma_est=sigma_est,
+            prominence_center=prom_center,
+            candidate_count=candidate_count,
+            qualified_summit_count=len(qualified_summits),
         )
 
     ordered_simulated = [
@@ -562,7 +639,6 @@ def match_simulated_peaks_to_peak_context(
             reverse=True,
         )
     ]
-    tree = cKDTree(candidate_coords)
 
     owner_seed_by_candidate = np.full(candidate_coords.shape[0], -1, dtype=np.int64)
     owner_dist_by_candidate = np.full(candidate_coords.shape[0], np.inf, dtype=float)
@@ -784,7 +860,7 @@ def match_simulated_peaks_to_peak_context(
             distance_sigma_clip=distance_sigma_clip,
             sigma_est=sigma_est,
             prominence_center=prom_center,
-            candidate_count=len(summit_records),
+            candidate_count=candidate_count,
             qualified_summit_count=len(qualified_summits),
             within_radius_count=within_radius_count,
             unambiguous_count=unambiguous_count,
@@ -862,7 +938,7 @@ def match_simulated_peaks_to_peak_context(
         distance_sigma_clip=distance_sigma_clip,
         sigma_est=sigma_est,
         prominence_center=prom_center,
-        candidate_count=len(summit_records),
+        candidate_count=candidate_count,
         qualified_summit_count=len(qualified_summits),
         within_radius_count=within_radius_count,
         unambiguous_count=unambiguous_count,

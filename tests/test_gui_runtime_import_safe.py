@@ -196,7 +196,7 @@ def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing()
     assert "caked_payload_available = (" in source
     assert show_caked_image_assignment in source
     assert "if not show_caked_image:" in source
-    assert "image_display.set_data(_display_raster_for_primary_figure(global_image_buffer))" in source
+    assert "_store_primary_raster_source(image_display, global_image_buffer)" in source
     assert "_sync_primary_raster_geometry(show_caked_image=False)" in source
 
 
@@ -284,6 +284,18 @@ def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
 
     assert 'allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")' in source
     assert 'if allow_source_snapshot_rebuild:' in source
+
+
+def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _prebuild_required_background_caches() -> None:")
+    helper_end = source.index("worker_manual_dataset_bindings =", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert "def _rebuild_source_rows_for_background_worker(" in source
+    assert "geometry_manual_rebuild_source_rows_for_background=(" in source
+    assert "_rebuild_source_rows_for_background_worker" in source
+    assert "raise RuntimeError(" not in helper_source
 
 
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:

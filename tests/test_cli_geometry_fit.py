@@ -170,6 +170,60 @@ def test_cmd_fit_geometry_supports_in_place_saves(monkeypatch, tmp_path) -> None
     assert save_calls == [(str(input_path), loaded_payload["state"])]
 
 
+def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    payload = {
+        "type": "ra_sim.gui_state",
+        "state": {
+            "files": {"background_files": ["bg0.osc"]},
+            "geometry": {"manual_pairs": [{"background_index": 0, "entries": []}]},
+        },
+    }
+    calls: list[tuple[object, object, object]] = []
+
+    def _fake_shared_runner(state_arg, *, state_path, downloads_dir):
+        calls.append((state_arg, state_path, downloads_dir))
+        return SimpleNamespace(
+            state={
+                "files": {"background_files": ["bg0.osc"]},
+                "geometry": {"fit_result": "shared"},
+            },
+            log_path=tmp_path / "shared_geometry_fit.log",
+            accepted=True,
+            rejection_reason=None,
+            rms_px=1.25,
+        )
+
+    monkeypatch.setattr(
+        cli.shared_headless_geometry_fit,
+        "run_headless_geometry_fit",
+        _fake_shared_runner,
+    )
+
+    state_result, report = cli.run_headless_geometry_fit(
+        payload,
+        source_path=tmp_path / "state.json",
+        output_dir=tmp_path / "artifacts",
+    )
+
+    assert calls == [
+        (
+            payload["state"],
+            tmp_path / "state.json",
+            tmp_path / "artifacts",
+        )
+    ]
+    assert state_result["geometry"]["fit_result"] == "shared"
+    assert report == {
+        "accepted": True,
+        "log_path": str(tmp_path / "shared_geometry_fit.log"),
+        "matched_peaks_path": None,
+        "rms_px": 1.25,
+    }
+
+
 def test_run_headless_mosaic_shape_fit_forwards_to_geometry_runner(monkeypatch) -> None:
     if getattr(cli, "run_headless_mosaic_shape_fit", None) is None:
         pytest.skip("headless mosaic-shape runner is not available in this checkout")

@@ -41,6 +41,7 @@ import numpy as np
 from PIL import Image
 
 from ra_sim import launcher
+from ra_sim import headless_geometry_fit as shared_headless_geometry_fit
 from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.debug_controls import mosaic_fit_log_files_enabled
 from ra_sim.fitting.optimization import (
@@ -558,6 +559,26 @@ def run_headless_geometry_fit(
     state = payload.get("state") if isinstance(payload, Mapping) else None
     if not isinstance(state, Mapping):
         raise ValueError("GUI state payload is missing a valid 'state' object.")
+    if not run_mosaic_shape_fit:
+        shared_result = shared_headless_geometry_fit.run_headless_geometry_fit(
+            copy.deepcopy(dict(state)),
+            state_path=source_path,
+            downloads_dir=output_dir,
+        )
+        report: dict[str, object] = {
+            "accepted": bool(shared_result.accepted),
+            "log_path": (
+                str(shared_result.log_path)
+                if shared_result.log_path is not None
+                else None
+            ),
+            "matched_peaks_path": None,
+        }
+        if shared_result.rejection_reason:
+            report["rejection_reason"] = str(shared_result.rejection_reason)
+        if shared_result.rms_px is not None:
+            report["rms_px"] = float(shared_result.rms_px)
+        return dict(shared_result.state), report
     updated_state = copy.deepcopy(dict(state))
     saved_variables = _saved_state_section(updated_state, "variables")
     saved_lists = _saved_state_section(updated_state, "dynamic_lists")
@@ -1038,6 +1059,7 @@ def run_headless_geometry_fit(
         default_solve_q_steps=int(mosaic_params["solve_q_steps"]),
         default_solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
         default_solve_q_mode=int(mosaic_params["solve_q_mode"]),
+        prefer_safe_python_runner=True,
     )
 
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(

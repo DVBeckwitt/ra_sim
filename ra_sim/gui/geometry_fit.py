@@ -579,6 +579,10 @@ def rebuild_geometry_fit_source_rows(
         tuple[Sequence[object], Sequence[object] | None, Sequence[object] | None],
     ],
     simulate_hit_tables: Callable[[Mapping[str, object]], Sequence[object]] | None,
+    last_runtime_simulation_diagnostics: (
+        Callable[[], Mapping[str, object]]
+        | None
+    ) = None,
     project_rows: Callable[[Sequence[object] | None], Sequence[object]] | None = None,
     live_cache_inventory: Mapping[str, object]
     | Callable[[], Mapping[str, object]]
@@ -624,6 +628,38 @@ def rebuild_geometry_fit_source_rows(
         copied = copy.deepcopy(resolved)
         return copied if isinstance(copied, dict) else {}
 
+    def _resolve_runtime_simulation_diagnostics() -> dict[str, object]:
+        if not callable(last_runtime_simulation_diagnostics):
+            return {}
+        try:
+            resolved = last_runtime_simulation_diagnostics()
+        except Exception:
+            resolved = {}
+        copied = copy.deepcopy(resolved)
+        return copied if isinstance(copied, dict) else {}
+
+    def _merge_runtime_simulation_diagnostics(
+        diagnostics_local: Mapping[str, object] | None,
+        runtime_diag_local: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        merged = dict(diagnostics_local or {})
+        runtime_diag = copy.deepcopy(runtime_diag_local)
+        if not isinstance(runtime_diag, dict) or not runtime_diag:
+            return merged
+        merged["runtime_simulation"] = runtime_diag
+        for key in (
+            "miller_shape",
+            "intensity_shape",
+            "image_size",
+            "missing_param_keys",
+            "missing_mosaic_keys",
+            "param_summary",
+            "mosaic_array_sizes",
+        ):
+            if key in runtime_diag and key not in merged:
+                merged[key] = copy.deepcopy(runtime_diag.get(key))
+        return merged
+
     def _project_copied_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         projected_rows = raw_rows
         if callable(project_rows):
@@ -641,11 +677,13 @@ def rebuild_geometry_fit_source_rows(
         hit_tables_local: Sequence[object] | None = None,
         intersection_cache_local: Sequence[object] | None = None,
         metadata: Mapping[str, object] | None = None,
+        runtime_simulation_diagnostics: Mapping[str, object] | None = None,
     ) -> GeometryFitSourceRowRebuildResult:
         stored_rows = _copy_rows(raw_rows)
         projected_rows = _project_copied_rows(stored_rows)
         cache_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
-        diagnostics = {
+        diagnostics = _merge_runtime_simulation_diagnostics(
+            {
             "source": "source_snapshot",
             "cache_family": "source_snapshot",
             "action": "rebuild",
@@ -666,7 +704,9 @@ def rebuild_geometry_fit_source_rows(
             "rebuild_attempts": list(rebuild_attempts),
             "cache_metadata": cache_metadata,
             "live_cache_inventory": _resolve_live_cache_inventory(),
-        }
+            },
+            runtime_simulation_diagnostics,
+        )
         return GeometryFitSourceRowRebuildResult(
             background_index=int(background_idx),
             requested_signature=requested_signature,
@@ -749,11 +789,14 @@ def rebuild_geometry_fit_source_rows(
 
     rebuild_attempts.append("fresh_simulation")
     fresh_hit_tables: Sequence[object] = []
+    fresh_simulation_exception: Exception | None = None
     if callable(simulate_hit_tables):
         try:
             fresh_hit_tables = simulate_hit_tables(normalized_params)
-        except Exception:
+        except Exception as exc:
+            fresh_simulation_exception = exc
             fresh_hit_tables = []
+    runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
     fresh_rows, fresh_lattice, fresh_hit_tables = build_source_rows_from_hit_tables(
         fresh_hit_tables
     )
@@ -763,14 +806,26 @@ def rebuild_geometry_fit_source_rows(
             rebuild_source="fresh_simulation",
             peak_table_lattice=fresh_lattice,
             hit_tables_local=fresh_hit_tables,
+            runtime_simulation_diagnostics=runtime_simulation_diagnostics,
         )
 
-    diagnostics = {
+    runtime_status = str(runtime_simulation_diagnostics.get("status", "")).strip()
+    if fresh_simulation_exception is not None:
+        failure_status = runtime_status or "fresh_simulation_exception"
+    elif fresh_hit_tables:
+        failure_status = "empty_source_rows"
+    elif runtime_status:
+        failure_status = runtime_status
+    else:
+        failure_status = "snapshot_rebuild_failed"
+
+    diagnostics = _merge_runtime_simulation_diagnostics(
+        {
         "source": "source_snapshot",
         "cache_family": "source_snapshot",
         "action": "rebuild",
         "consumer": lookup_context,
-        "status": "snapshot_rebuild_failed",
+        "status": failure_status,
         "background_index": int(background_idx),
         "background_label": resolved_background_label,
         "requested_signature": requested_signature,
@@ -783,7 +838,18 @@ def rebuild_geometry_fit_source_rows(
             dict(prior_diagnostics) if isinstance(prior_diagnostics, Mapping) else {}
         ),
         "live_cache_inventory": _resolve_live_cache_inventory(),
-    }
+        },
+        runtime_simulation_diagnostics,
+    )
+    if fresh_simulation_exception is not None:
+        diagnostics.setdefault(
+            "exception_type",
+            type(fresh_simulation_exception).__name__,
+        )
+        diagnostics.setdefault(
+            "exception_message",
+            str(fresh_simulation_exception),
+        )
     return GeometryFitSourceRowRebuildResult(
         background_index=int(background_idx),
         requested_signature=requested_signature,
@@ -1906,10 +1972,10 @@ def build_geometry_fit_runtime_config(
     if not isinstance(runtime_cfg, dict):
         runtime_cfg = {}
 
-    # GUI geometry fits should preserve the configured solver parallel settings
-    # by default so the runtime keeps using the shared "all but two" worker
-    # budget. The unsafe-runtime toggle still controls whether Numba stays
-    # enabled, while explicit gui_* overrides continue to win when provided.
+    # GUI/headless geometry-fit runs must stay on the safe Python-backed
+    # simulation path. The solver still keeps its configured parallel worker
+    # settings, but geometry-fit no longer honors gui_* opt-ins that would
+    # re-enable the unsafe Numba runtime for this workflow.
     optimizer_cfg_raw = runtime_cfg.get("optimizer", runtime_cfg.get("solver", {})) or {}
     optimizer_cfg = (
         dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
@@ -1917,14 +1983,10 @@ def build_geometry_fit_runtime_config(
     runtime_cfg["optimizer"] = optimizer_cfg
     runtime_cfg["solver"] = optimizer_cfg
 
-    gui_use_numba = runtime_cfg.pop("gui_use_numba", None)
-    runtime_cfg["use_numba"] = (
-        bool(gui_use_numba) if gui_use_numba is not None else False
-    )
-
-    gui_allow_unsafe_runtime = runtime_cfg.pop("gui_allow_unsafe_runtime", None)
-    allow_unsafe_runtime = bool(gui_allow_unsafe_runtime)
-    runtime_cfg["allow_unsafe_runtime"] = allow_unsafe_runtime
+    runtime_cfg.pop("gui_use_numba", None)
+    runtime_cfg.pop("gui_allow_unsafe_runtime", None)
+    runtime_cfg["use_numba"] = False
+    runtime_cfg["allow_unsafe_runtime"] = False
 
     gui_workers = optimizer_cfg.pop("gui_workers", None)
     if gui_workers is None:
@@ -2797,6 +2859,22 @@ def build_geometry_manual_fit_dataset(
         simulation_diagnostics = _current_simulation_diagnostics()
     if not simulated_peaks:
         snapshot_status = str(simulation_diagnostics.get("status", "<unknown>"))
+        exception_type = str(
+            simulation_diagnostics.get("exception_type", "")
+        ).strip()
+        exception_message = str(
+            simulation_diagnostics.get("exception_message", "")
+        ).strip()
+        error_text = (
+            "Geometry-fit source snapshot unavailable for "
+            f"background {int(background_idx) + 1} (status={snapshot_status})."
+        )
+        if exception_type or exception_message:
+            error_text = (
+                f"{error_text[:-1]} "
+                f"Runtime={exception_type or '<unknown>'}: "
+                f"{exception_message or '<no message>'}."
+            )
         _emit_geometry_fit_stage_event(
             stage_callback,
             "dataset_failed",
@@ -2807,10 +2885,7 @@ def build_geometry_manual_fit_dataset(
                 f"background {int(background_idx) + 1}"
             ),
         )
-        raise RuntimeError(
-            "Geometry-fit source snapshot unavailable for "
-            f"background {int(background_idx)} (status={snapshot_status})."
-        )
+        raise RuntimeError(error_text)
     simulated_lookup = manual_dataset_bindings.geometry_manual_simulated_lookup(
         simulated_peaks
     )
@@ -3758,6 +3833,8 @@ def _manual_geometry_fit_preflight_error(
     if not dataset_infos:
         return None
 
+    min_resolved_pairs_per_background = 3
+    min_resolved_fraction_per_background = 0.9
     orientation_failures: list[str] = []
     partially_unresolved_sources: list[str] = []
     resolved_source_total = 0
@@ -3791,6 +3868,13 @@ def _manual_geometry_fit_preflight_error(
                 )
                 resolved_source_total += int(resolved_count)
                 if pair_count > 0 and int(resolved_count) < int(pair_count):
+                    resolved_fraction = float(resolved_count) / float(pair_count)
+                    if (
+                        int(resolved_count) >= int(min_resolved_pairs_per_background)
+                        and resolved_fraction
+                        >= float(min_resolved_fraction_per_background)
+                    ):
+                        continue
                     partially_unresolved_sources.append(
                         "{label} ({resolved}/{total})".format(
                             label=label,

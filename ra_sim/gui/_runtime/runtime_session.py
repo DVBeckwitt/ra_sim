@@ -2119,6 +2119,13 @@ def _sync_primary_raster_geometry(*, show_caked_image: bool) -> None:
         if artist is None:
             continue
         origin, extent = geometry
+        store_geometry = globals().get("_store_primary_raster_geometry")
+        apply_projection = globals().get("_apply_projected_primary_raster_to_artist")
+        if callable(store_geometry):
+            store_geometry(artist, origin=origin, extent=extent)
+        if callable(apply_projection):
+            apply_projection(artist)
+            continue
         _apply_axes_image_origin(artist, origin)
         setter = getattr(artist, "set_extent", None)
         if callable(setter):
@@ -2579,6 +2586,9 @@ def _legacy_main_matplotlib_preview_controller():
 def _draw_legacy_main_matplotlib_canvas_now() -> bool:
     if not _legacy_main_matplotlib_interaction_active():
         return False
+    projection_refresh = globals().get("_apply_current_primary_raster_projection")
+    if callable(projection_refresh):
+        projection_refresh()
     active_canvas = globals().get("canvas", matplotlib_canvas)
     draw_fn = getattr(active_canvas, "draw", None)
     if not callable(draw_fn):
@@ -2696,6 +2706,9 @@ def _configure_primary_viewport_redraw_helpers() -> None:
         def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
             active_canvas = globals().get("canvas", matplotlib_canvas)
             draw_name = "draw" if bool(force_matplotlib) else "draw_idle"
+            projection_refresh = globals().get("_apply_current_primary_raster_projection")
+            if callable(projection_refresh):
+                projection_refresh()
             try:
                 draw_fn = getattr(active_canvas, draw_name, None)
                 if callable(draw_fn):
@@ -5368,6 +5381,9 @@ integration_range_drag_runtime = (
             if callable(globals().get("_request_main_canvas_redraw"))
             else None
         ),
+        set_integration_overlay_image_factory=lambda: (
+            _set_primary_integration_overlay_image
+        ),
         set_status_text_factory=lambda: (
             (lambda text: progress_label_positions.config(text=text))
             if "progress_label_positions" in globals()
@@ -5581,22 +5597,26 @@ def _apply_intensity_display_range(image_artist, image, min_val, max_val) -> Non
 
 
 def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
-    image_getter = getattr(image_display, "get_array", None)
-    if callable(image_getter):
+    image_source, _image_extent, _image_origin = _primary_raster_source_payload(
+        image_display
+    )
+    if image_source is not None:
         image_min, image_max = image_display.get_clim()
         _apply_intensity_display_range(
             image_display,
-            image_getter(),
+            image_source,
             image_min,
             image_max,
         )
 
-    background_getter = getattr(background_display, "get_array", None)
-    if callable(background_getter):
+    background_source, _background_extent, _background_origin = (
+        _primary_raster_source_payload(background_display)
+    )
+    if background_source is not None:
         background_min, background_max = background_display.get_clim()
         _apply_intensity_display_range(
             background_display,
-            background_getter(),
+            background_source,
             background_min,
             background_max,
         )
@@ -5713,6 +5733,9 @@ def _get_scale_factor_value(default=1.0):
 
 MAIN_DISPLAY_RASTER_MIN_SIZE = gui_display_projection.MIN_DISPLAY_RASTER_SIZE
 MAIN_DISPLAY_RASTER_MAX_SIZE = gui_display_projection.MAX_DISPLAY_RASTER_SIZE
+_MAIN_RASTER_SOURCE_ARRAY_ATTR = "_ra_sim_source_image"
+_MAIN_RASTER_SOURCE_EXTENT_ATTR = "_ra_sim_source_extent"
+_MAIN_RASTER_SOURCE_ORIGIN_ATTR = "_ra_sim_source_origin"
 
 
 def _default_main_display_raster_size_limit() -> int:
@@ -5775,25 +5798,193 @@ def _current_main_display_raster_size_limit() -> int:
     return int(_normalize_main_display_raster_size_limit())
 
 
-def _display_raster_for_primary_figure(image: np.ndarray | None) -> np.ndarray | None:
-    if image is None:
+def _store_primary_raster_source(
+    artist: object | None,
+    image: np.ndarray | None,
+) -> np.ndarray | None:
+    if artist is None:
         return None
-    return gui_display_projection.downsample_raster_for_display(
-        image,
-        max_size=_current_main_display_raster_size_limit(),
+    source = None if image is None else np.asarray(image)
+    setattr(artist, _MAIN_RASTER_SOURCE_ARRAY_ATTR, source)
+    return source
+
+
+def _store_primary_raster_geometry(
+    artist: object | None,
+    *,
+    origin: str,
+    extent: tuple[float, float, float, float] | list[float],
+) -> None:
+    if artist is None:
+        return
+    try:
+        normalized_extent = tuple(float(value) for value in extent)
+    except Exception:
+        return
+    if len(normalized_extent) != 4:
+        return
+    setattr(artist, _MAIN_RASTER_SOURCE_EXTENT_ATTR, normalized_extent)
+    setattr(artist, _MAIN_RASTER_SOURCE_ORIGIN_ATTR, str(origin))
+
+
+def _primary_raster_source_payload(
+    artist: object | None,
+) -> tuple[np.ndarray | None, tuple[float, float, float, float] | None, str]:
+    if artist is None:
+        return (None, None, "upper")
+
+    source = getattr(artist, _MAIN_RASTER_SOURCE_ARRAY_ATTR, None)
+    if source is None:
+        getter = getattr(artist, "get_array", None)
+        if callable(getter):
+            try:
+                current = getter()
+            except Exception:
+                current = None
+            if current is not None:
+                source = np.asarray(current)
+
+    extent = getattr(artist, _MAIN_RASTER_SOURCE_EXTENT_ATTR, None)
+    if not isinstance(extent, tuple) or len(extent) != 4:
+        get_extent = getattr(artist, "get_extent", None)
+        if callable(get_extent):
+            try:
+                live_extent = tuple(float(value) for value in get_extent())
+            except Exception:
+                live_extent = None
+            if isinstance(live_extent, tuple) and len(live_extent) == 4:
+                extent = live_extent
+    origin = str(getattr(artist, _MAIN_RASTER_SOURCE_ORIGIN_ATTR, "upper") or "upper")
+    return (None if source is None else np.asarray(source), extent, origin)
+
+
+def _current_primary_axis_limits() -> tuple[tuple[float, float], tuple[float, float]] | None:
+    getter_x = getattr(ax, "get_xlim", None)
+    getter_y = getattr(ax, "get_ylim", None)
+    if not callable(getter_x) or not callable(getter_y):
+        return None
+    try:
+        xlim = tuple(float(value) for value in getter_x())
+        ylim = tuple(float(value) for value in getter_y())
+    except Exception:
+        return None
+    if len(xlim) != 2 or len(ylim) != 2:
+        return None
+    if not all(np.isfinite(value) for value in (*xlim, *ylim)):
+        return None
+    return (xlim, ylim)
+
+
+def _current_primary_axis_bbox_pixels() -> tuple[float | None, float | None]:
+    bbox = getattr(ax, "bbox", None)
+    width = getattr(bbox, "width", None)
+    height = getattr(bbox, "height", None)
+    try:
+        width_value = float(width)
+    except Exception:
+        width_value = math.nan
+    try:
+        height_value = float(height)
+    except Exception:
+        height_value = math.nan
+    return (
+        width_value if math.isfinite(width_value) and width_value > 0.0 else None,
+        height_value if math.isfinite(height_value) and height_value > 0.0 else None,
     )
+
+
+def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
+    source, extent, origin = _primary_raster_source_payload(artist)
+    if artist is None or source is None or extent is None:
+        return False
+    if _legacy_main_matplotlib_interaction_active():
+        axis_limits = _current_primary_axis_limits()
+        if axis_limits is None:
+            axis_xlim = None
+            axis_ylim = None
+        else:
+            axis_xlim, axis_ylim = axis_limits
+        bbox_width, bbox_height = _current_primary_axis_bbox_pixels()
+    else:
+        axis_xlim = None
+        axis_ylim = None
+        bbox_width = None
+        bbox_height = None
+    projection = gui_display_projection.project_raster_to_view(
+        source,
+        extent=extent,
+        axis_xlim=axis_xlim,
+        axis_ylim=axis_ylim,
+        max_size=_current_main_display_raster_size_limit(),
+        bbox_width_px=bbox_width,
+        bbox_height_px=bbox_height,
+    )
+    if projection is None:
+        return False
+    _apply_axes_image_origin(artist, origin)
+    set_extent = getattr(artist, "set_extent", None)
+    if callable(set_extent):
+        try:
+            set_extent(list(projection.extent))
+        except Exception:
+            pass
+    set_data = getattr(artist, "set_data", None)
+    if callable(set_data):
+        try:
+            set_data(projection.image)
+        except Exception:
+            return False
+    return True
+
+
+def _apply_current_primary_raster_projection() -> None:
+    for artist in (
+        globals().get("image_display"),
+        globals().get("background_display"),
+        globals().get("integration_region_overlay"),
+    ):
+        _apply_projected_primary_raster_to_artist(artist)
+
+
+def _set_primary_integration_overlay_image(image: object) -> None:
+    overlay_artist = globals().get("integration_region_overlay")
+    if overlay_artist is None:
+        return
+    image_artist = globals().get("image_display")
+    _store_primary_raster_source(
+        overlay_artist,
+        None if image is None else np.asarray(image, dtype=float),
+    )
+    _image_source, image_extent, image_origin = _primary_raster_source_payload(
+        image_artist
+    )
+    if image_extent is not None:
+        _store_primary_raster_geometry(
+            overlay_artist,
+            origin=image_origin,
+            extent=image_extent,
+        )
+    _apply_projected_primary_raster_to_artist(overlay_artist)
 
 
 def _refresh_main_display_raster_projection() -> None:
     _normalize_main_display_raster_size_limit()
     if _legacy_main_matplotlib_interaction_active():
         _clear_legacy_main_matplotlib_preview_view(redraw=False)
-    apply_scale_factor_to_existing_results(
-        update_limits=False,
-        update_1d=False,
-        update_canvas=True,
-        update_chi_square=False,
-    )
+    _apply_current_primary_raster_projection()
+    _request_main_canvas_redraw(force_matplotlib=False)
+
+
+_store_primary_raster_source(image_display, global_image_buffer)
+_store_primary_raster_source(
+    background_display,
+    background_runtime_state.current_background_display,
+)
+_store_primary_raster_source(
+    integration_region_overlay,
+    np.zeros_like(global_image_buffer),
+)
+_sync_primary_raster_geometry(show_caked_image=False)
 
 
 def _on_scale_factor_change(*args):
@@ -6165,10 +6356,9 @@ def apply_scale_factor_to_existing_results(
         if not show_caked_image:
             _sync_primary_raster_geometry(show_caked_image=False)
             if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
-                background_display.set_data(
-                    _display_raster_for_primary_figure(
-                        background_runtime_state.current_background_display
-                    )
+                _store_primary_raster_source(
+                    background_display,
+                    background_runtime_state.current_background_display,
                 )
                 _apply_intensity_display_range(
                     background_display,
@@ -6216,7 +6406,7 @@ def apply_scale_factor_to_existing_results(
     )
 
     if not show_caked_image:
-        image_display.set_data(_display_raster_for_primary_figure(global_image_buffer))
+        _store_primary_raster_source(image_display, global_image_buffer)
         _apply_intensity_display_range(
             image_display,
             global_image_buffer,
@@ -6224,7 +6414,7 @@ def apply_scale_factor_to_existing_results(
             display_controls_view_state.simulation_max_var.get(),
         )
     else:
-        image_display.set_data(_display_raster_for_primary_figure(scaled_caked))
+        _store_primary_raster_source(image_display, scaled_caked)
     _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
 
     if show_caked_image:
@@ -6282,17 +6472,16 @@ def apply_scale_factor_to_existing_results(
 
     _apply_intensity_display_range(
         background_display,
-        getattr(background_display, "get_array", lambda: None)(),
+        _primary_raster_source_payload(background_display)[0],
         display_controls_view_state.background_min_var.get(),
         display_controls_view_state.background_max_var.get(),
     )
 
     if not show_caked_image:
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
-            background_display.set_data(
-                _display_raster_for_primary_figure(
-                    background_runtime_state.current_background_display
-                )
+            _store_primary_raster_source(
+                background_display,
+                background_runtime_state.current_background_display,
             )
             background_display.set_visible(True)
         else:
@@ -6306,9 +6495,7 @@ def apply_scale_factor_to_existing_results(
                 simulation_runtime_state.last_caked_background_image_unscaled,
                 dtype=float,
             )
-            background_display.set_data(
-                _display_raster_for_primary_figure(caked_background)
-            )
+            _store_primary_raster_source(background_display, caked_background)
             _apply_intensity_display_range(
                 background_display,
                 caked_background,
@@ -11063,6 +11250,7 @@ def do_update():
 
         current_scale = _get_scale_factor_value(default=1.0)
         scaled_caked_for_limits = caked_img * current_scale
+        _store_primary_raster_source(image_display, scaled_caked_for_limits)
         auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
 
         if not display_controls_state.simulation_limits_user_override:
@@ -11095,6 +11283,12 @@ def do_update():
                 display_vmax = fallback_vmax
             else:
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
+        _apply_intensity_display_range(
+            image_display,
+            scaled_caked_for_limits,
+            vmin_val,
+            display_vmax,
+        )
 
         background_caked_available = False
         if background_runtime_state.visible and simulation_runtime_state.last_caked_background_image_unscaled is not None:
@@ -11102,7 +11296,7 @@ def do_update():
                 simulation_runtime_state.last_caked_background_image_unscaled,
                 dtype=float,
             )
-            background_display.set_data(_display_raster_for_primary_figure(bg_caked))
+            _store_primary_raster_source(background_display, bg_caked)
             bg_display_vmax = vmax_val
             if not math.isfinite(bg_display_vmax):
                 bg_display_vmax = auto_vmax
@@ -11161,6 +11355,7 @@ def do_update():
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        _store_primary_raster_source(image_display, global_image_buffer)
         gui_canvas_interactions.restore_axis_view(
             ax,
             preserved_limits=preserved_primary_limits,
@@ -11173,10 +11368,9 @@ def do_update():
         ax.set_ylabel('Y (pixels)')
         ax.set_title("")
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
-            background_display.set_data(
-                _display_raster_for_primary_figure(
-                    background_runtime_state.current_background_display
-                )
+            _store_primary_raster_source(
+                background_display,
+                background_runtime_state.current_background_display,
             )
             background_display.set_clim(
                 display_controls_view_state.background_min_var.get(),
@@ -13939,6 +14133,9 @@ def _geometry_manual_rebuild_source_rows_for_background(
                 normalized_params,
             )
         ),
+        last_runtime_simulation_diagnostics=(
+            _geometry_manual_last_simulation_diagnostics
+        ),
         project_rows=(
             _project_geometry_manual_peaks_to_current_view
             if callable(_project_geometry_manual_peaks_to_current_view)
@@ -14300,6 +14497,7 @@ geometry_fit_simulation_runtime_callbacks = (
         default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
         default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
         default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+        prefer_safe_python_runner=True,
     )
 )
 _simulate_hit_tables_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_hit_tables
@@ -15703,6 +15901,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             fitted_params,
             measured_for_fit,
             pixel_tol=float('inf'),
+            prefer_python_runner=True,
         )
 
         (
@@ -16387,6 +16586,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                             param_set,
                             measured_for_fit,
                             pixel_tol=float('inf'),
+                            prefer_python_runner=True,
                         )
                         (
                             pre_sim_centers,
@@ -16619,6 +16819,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     fitted_params,
                     measured_for_fit,
                     pixel_tol=float('inf'),
+                    prefer_python_runner=True,
                 )
             except Exception as exc:
                 _log_line(f"Geometry fit failed: {exc}")
@@ -21358,12 +21559,17 @@ def _run_async_geometry_fit_worker_job(
         background_index: int,
         *,
         theta_base: float,
+        param_set: Mapping[str, object] | None = None,
+        consumer: str = "geometry_fit_preflight_cache",
+        prior_diagnostics: Mapping[str, object] | None = None,
     ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle | None:
         background_idx = int(background_index)
         params_local = dict(job_data.get("params", {}) or {})
         params_local["theta_initial"] = float(
             _theta_initial_for_background_worker(int(background_idx))
         )
+        if isinstance(param_set, Mapping):
+            params_local.update(dict(param_set))
 
         requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
             int(background_idx)
@@ -21441,8 +21647,12 @@ def _run_async_geometry_fit_worker_job(
             background_index=int(background_idx),
             background_label=str(background_label),
             params_local=params_local,
-            consumer="geometry_fit_preflight_cache",
-            prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
+            consumer=str(consumer or "geometry_fit_preflight_cache"),
+            prior_diagnostics=(
+                dict(prior_diagnostics)
+                if isinstance(prior_diagnostics, Mapping)
+                else _last_worker_source_snapshot_diagnostics()
+            ),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
             can_use_live_runtime_cache=(
@@ -21482,6 +21692,7 @@ def _run_async_geometry_fit_worker_job(
                     normalized_params,
                 )
             ),
+            last_runtime_simulation_diagnostics=_last_worker_simulation_diagnostics,
             project_rows=_project_source_rows,
             live_cache_inventory=job_data.get("live_cache_inventory", {}),
         )
@@ -21513,6 +21724,27 @@ def _run_async_geometry_fit_worker_job(
             _store_worker_background_cache_bundle(bundle)
             return bundle
         return None
+
+    def _rebuild_source_rows_for_background_worker(
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+        prior_diagnostics: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        background_idx = int(background_index)
+        bundle = _prebuild_background_cache_bundle_worker(
+            background_idx,
+            theta_base=float(
+                _theta_base_for_background_worker(int(background_idx))
+            ),
+            param_set=param_set,
+            consumer=str(consumer or "geometry_fit_dataset"),
+            prior_diagnostics=prior_diagnostics,
+        )
+        if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
+            return []
+        return _bundle_rows(bundle)
 
     def _source_rows_for_background_worker(
         background_index: int,
@@ -21672,11 +21904,7 @@ def _run_async_geometry_fit_worker_job(
                         ),
                     },
                 )
-                raise RuntimeError(
-                    "Geometry-fit background cache unavailable for "
-                    f"background {int(background_idx) + 1} "
-                    f"(status={failure_status})."
-                )
+                continue
             _emit_worker_event(
                 "source_cache_build_ready",
                 {
@@ -21720,7 +21948,9 @@ def _run_async_geometry_fit_worker_job(
             "geometry_manual_simulated_lookup"
         ),
         geometry_manual_source_rows_for_background=_source_rows_for_background_worker,
-        geometry_manual_rebuild_source_rows_for_background=None,
+        geometry_manual_rebuild_source_rows_for_background=(
+            _rebuild_source_rows_for_background_worker
+        ),
         geometry_manual_last_source_snapshot_diagnostics=(
             _last_worker_source_snapshot_diagnostics
         ),

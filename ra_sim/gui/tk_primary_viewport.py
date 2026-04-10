@@ -468,6 +468,23 @@ def _axes_plot_bounds(
     width: int,
     height: int,
 ) -> tuple[float, float, float, float] | None:
+    bbox = getattr(ax, "bbox", None)
+    if bbox is not None:
+        left = _safe_float(getattr(bbox, "x0", None))
+        bottom = _safe_float(getattr(bbox, "y0", None))
+        plot_width = _safe_float(getattr(bbox, "width", None))
+        plot_height = _safe_float(getattr(bbox, "height", None))
+        if None not in {left, bottom, plot_width, plot_height}:
+            if plot_width > _EPSILON and plot_height > _EPSILON:
+                top = float(height) - float(bottom) - float(plot_height)
+                if isfinite(top):
+                    return (
+                        float(left),
+                        float(top),
+                        float(plot_width),
+                        float(plot_height),
+                    )
+
     get_position = getattr(ax, "get_position", None)
     if not callable(get_position):
         return None

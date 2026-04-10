@@ -11122,6 +11122,8 @@ def simulate_and_compare_hkl(
     params,
     measured_peaks,
     pixel_tol=np.inf,
+    *,
+    prefer_python_runner: bool = False,
 ):
     """Simulate reflections and pair them with measured peak positions.
 
@@ -11192,6 +11194,7 @@ def simulate_and_compare_hkl(
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
+        prefer_python_runner=bool(prefer_python_runner),
         **_simulation_kernel_kwargs(params, mosaic),
     )
     maxpos = hit_tables_to_max_positions(hit_tables)

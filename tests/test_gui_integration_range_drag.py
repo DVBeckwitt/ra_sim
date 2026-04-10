@@ -673,6 +673,67 @@ def test_update_runtime_integration_region_visuals_updates_raw_overlay() -> None
     assert int(np.sum(overlay.data)) == 6
 
 
+def test_update_runtime_integration_region_visuals_uses_overlay_projection_callback() -> None:
+    view_state = _range_view_state()
+    view_state.tth_min_var.set(10.0)
+    view_state.tth_max_var.set(22.0)
+    view_state.phi_min_var.set(-10.0)
+    view_state.phi_max_var.set(2.0)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    ai = object()
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [-10.0, -9.0, -8.0],
+            [0.0, 1.0, 2.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+    projected = []
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai_arg: (
+            (two_theta, phi_vals) if ai_arg is ai else (None, None)
+        ),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: ai,
+        set_integration_overlay_image=lambda image: projected.append(
+            np.asarray(image, dtype=float)
+        ),
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=ai,
+        sim_res2=None,
+    )
+
+    assert overlay_rect.visible is False
+    assert overlay.visible is True
+    assert len(projected) == 1
+    assert int(np.sum(projected[0])) == 6
+    assert overlay.data is None
+
+
 def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     overlay = _FakeOverlay()
     drag_rect = _FakeRect()

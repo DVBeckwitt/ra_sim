@@ -1215,6 +1215,34 @@ def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
     assert optics_seen == [2]
 
 
+def test_simulate_and_compare_hkl_can_force_python_runner(monkeypatch):
+    prefer_python_runner_seen = []
+
+    def fake_process(*args, **kwargs):
+        prefer_python_runner_seen.append(kwargs.get("prefer_python_runner"))
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+
+    distances, *_ = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+        prefer_python_runner=True,
+    )
+
+    assert distances.size == 2
+    assert prefer_python_runner_seen == [True]
+
+
 def test_simulate_and_compare_hkl_restricts_to_measured_hkl_subset(monkeypatch):
     process_millers = []
 

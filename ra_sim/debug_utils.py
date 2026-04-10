@@ -47,12 +47,14 @@ def debug_print(*args, **kwargs) -> None:
         print(*args, **kwargs)
 
 
-def enable_numba_logging(default_level: str = "DEBUG") -> None:
+def enable_numba_logging(default_level: str = "WARNING") -> None:
     """Configure the ``numba`` logger when debug mode is active.
 
     If ``RA_SIM_DEBUG`` is enabled this sets up the ``numba`` logger to emit
     messages to ``stdout`` using the log level from ``NUMBA_LOG_LEVEL`` if
-    defined or ``default_level`` otherwise.
+    defined or ``default_level`` otherwise. The default stays at
+    ``WARNING`` so general RA_SIM debug sessions do not dump Numba's
+    internal compiler trace unless the user explicitly opts in.
     """
     if not is_debug_enabled():
         return
