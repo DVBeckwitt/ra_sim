@@ -30,6 +30,7 @@ _DEFAULT_PHI_MIN = -15.0
 _DEFAULT_PHI_MAX = 15.0
 _TTH_SLIDER_BOUNDS = (0.0, 90.0)
 _PHI_SLIDER_BOUNDS = (-180.0, 180.0)
+_DISPLAY_COORD_EPSILON = 1.0e-9
 
 
 @dataclass
@@ -456,7 +457,117 @@ def _display_polar_angle_degrees(
     )
 
 
-def _detector_preview_center(two_theta: object) -> tuple[float, float] | None:
+def _detector_display_extent(
+    bindings: IntegrationRangeDragBindings,
+) -> tuple[float, float, float, float] | None:
+    getter = getattr(getattr(bindings, "image_display", None), "get_extent", None)
+    if not callable(getter):
+        return None
+    try:
+        extent = np.asarray(getter(), dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if extent.size < 4 or not np.all(np.isfinite(extent[:4])):
+        return None
+    return tuple(float(value) for value in extent[:4])
+
+
+def _display_axis_values_to_detector_indices(
+    values: object,
+    *,
+    axis_start: float,
+    axis_end: float,
+    size: int,
+) -> np.ndarray:
+    array = np.asarray(values, dtype=float)
+    if int(size) <= 0:
+        return array
+    span = float(axis_end) - float(axis_start)
+    if not np.isfinite(span) or abs(span) <= _DISPLAY_COORD_EPSILON:
+        return array
+    indices = ((array - float(axis_start)) / span) * float(size) - 0.5
+    return np.clip(indices, 0.0, float(size - 1))
+
+
+def _display_coords_to_detector_indices(
+    bindings: IntegrationRangeDragBindings,
+    *,
+    x_values: object,
+    y_values: object,
+    detector_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    x_array = np.asarray(x_values, dtype=float)
+    y_array = np.asarray(y_values, dtype=float)
+    extent = _detector_display_extent(bindings)
+    if extent is None:
+        return x_array, y_array
+    height, width = (int(detector_shape[0]), int(detector_shape[1]))
+    return (
+        _display_axis_values_to_detector_indices(
+            x_array,
+            axis_start=float(extent[0]),
+            axis_end=float(extent[1]),
+            size=width,
+        ),
+        _display_axis_values_to_detector_indices(
+            y_array,
+            axis_start=float(extent[2]),
+            axis_end=float(extent[3]),
+            size=height,
+        ),
+    )
+
+
+def _detector_index_to_display_axis_value(
+    index_value: float,
+    *,
+    axis_start: float,
+    axis_end: float,
+    size: int,
+) -> float | None:
+    if int(size) <= 0 or not np.isfinite(index_value):
+        return None
+    span = float(axis_end) - float(axis_start)
+    if not np.isfinite(span) or abs(span) <= _DISPLAY_COORD_EPSILON:
+        return None
+    world_value = float(axis_start) + ((float(index_value) + 0.5) / float(size)) * span
+    return float(world_value) if np.isfinite(world_value) else None
+
+
+def _detector_indices_to_display_coords(
+    bindings: IntegrationRangeDragBindings,
+    *,
+    col_idx: float,
+    row_idx: float,
+    detector_shape: tuple[int, int],
+) -> tuple[float, float] | None:
+    extent = _detector_display_extent(bindings)
+    if extent is None:
+        if not (np.isfinite(col_idx) and np.isfinite(row_idx)):
+            return None
+        return float(col_idx), float(row_idx)
+    height, width = (int(detector_shape[0]), int(detector_shape[1]))
+    col_value = _detector_index_to_display_axis_value(
+        float(col_idx),
+        axis_start=float(extent[0]),
+        axis_end=float(extent[1]),
+        size=width,
+    )
+    row_value = _detector_index_to_display_axis_value(
+        float(row_idx),
+        axis_start=float(extent[2]),
+        axis_end=float(extent[3]),
+        size=height,
+    )
+    if col_value is None or row_value is None:
+        return None
+    return float(col_value), float(row_value)
+
+
+def _detector_preview_center(
+    bindings: IntegrationRangeDragBindings,
+    two_theta: object,
+) -> tuple[float, float] | None:
     try:
         array = np.asarray(two_theta, dtype=float)
     except Exception:
@@ -469,7 +580,15 @@ def _detector_preview_center(two_theta: object) -> tuple[float, float] | None:
     masked = np.where(finite_mask, array, np.inf)
     flat_index = int(np.argmin(masked))
     row_idx, col_idx = np.unravel_index(flat_index, array.shape[:2])
-    return (float(col_idx), float(row_idx))
+    display_coords = _detector_indices_to_display_coords(
+        bindings,
+        col_idx=float(col_idx),
+        row_idx=float(row_idx),
+        detector_shape=tuple(int(value) for value in array.shape[:2]),
+    )
+    if display_coords is None:
+        return None
+    return float(display_coords[0]), float(display_coords[1])
 
 
 def _preview_buffer(
@@ -501,8 +620,13 @@ def _stamp_preview_points(
     point_count = min(int(x_array.size), int(y_array.size))
     if point_count <= 0:
         return
-    x_clipped = np.clip(x_array[:point_count], 0, int(preview.shape[1]) - 1)
-    y_clipped = np.clip(y_array[:point_count], 0, int(preview.shape[0]) - 1)
+    x_array = x_array[:point_count]
+    y_array = y_array[:point_count]
+    finite_mask = np.isfinite(x_array) & np.isfinite(y_array)
+    if not np.any(finite_mask):
+        return
+    x_clipped = np.clip(x_array[finite_mask], 0, int(preview.shape[1]) - 1)
+    y_clipped = np.clip(y_array[finite_mask], 0, int(preview.shape[0]) - 1)
     for row_offset, col_offset in (
         (0, 0),
         (1, 0),
@@ -526,7 +650,7 @@ def _update_detector_drag_arc_preview(
 
     center = getattr(drag_state, "_raw_drag_preview_center", None)
     if center is None:
-        center = _detector_preview_center(two_theta)
+        center = _detector_preview_center(bindings, two_theta)
         setattr(drag_state, "_raw_drag_preview_center", center)
     if center is None:
         return False
@@ -585,17 +709,46 @@ def _update_detector_drag_arc_preview(
     start_radians = float(np.deg2rad(angle_start))
     end_radians = float(np.deg2rad(angle_start + span_degrees))
 
-    _stamp_preview_points(preview, x_values=outer_x, y_values=outer_y)
-    _stamp_preview_points(preview, x_values=inner_x, y_values=inner_y)
+    outer_col_idx, outer_row_idx = _display_coords_to_detector_indices(
+        bindings,
+        x_values=outer_x,
+        y_values=outer_y,
+        detector_shape=detector_shape,
+    )
+    inner_col_idx, inner_row_idx = _display_coords_to_detector_indices(
+        bindings,
+        x_values=inner_x,
+        y_values=inner_y,
+        detector_shape=detector_shape,
+    )
+    start_x = float(center_x) + radial_values * np.cos(start_radians)
+    start_y = float(center_y) + radial_values * np.sin(start_radians)
+    end_x = float(center_x) + radial_values * np.cos(end_radians)
+    end_y = float(center_y) + radial_values * np.sin(end_radians)
+    start_col_idx, start_row_idx = _display_coords_to_detector_indices(
+        bindings,
+        x_values=start_x,
+        y_values=start_y,
+        detector_shape=detector_shape,
+    )
+    end_col_idx, end_row_idx = _display_coords_to_detector_indices(
+        bindings,
+        x_values=end_x,
+        y_values=end_y,
+        detector_shape=detector_shape,
+    )
+
+    _stamp_preview_points(preview, x_values=outer_col_idx, y_values=outer_row_idx)
+    _stamp_preview_points(preview, x_values=inner_col_idx, y_values=inner_row_idx)
     _stamp_preview_points(
         preview,
-        x_values=float(center_x) + radial_values * np.cos(start_radians),
-        y_values=float(center_y) + radial_values * np.sin(start_radians),
+        x_values=start_col_idx,
+        y_values=start_row_idx,
     )
     _stamp_preview_points(
         preview,
-        x_values=float(center_x) + radial_values * np.cos(end_radians),
-        y_values=float(center_y) + radial_values * np.sin(end_radians),
+        x_values=end_col_idx,
+        y_values=end_row_idx,
     )
 
     if not np.any(preview):
@@ -625,11 +778,11 @@ def _update_detector_drag_arc_preview(
             {
                 "x_values": tuple(
                     float(value)
-                    for value in (float(center_x) + radial_values * np.cos(start_radians))
+                    for value in start_x
                 ),
                 "y_values": tuple(
                     float(value)
-                    for value in (float(center_y) + radial_values * np.sin(start_radians))
+                    for value in start_y
                 ),
                 "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
                 "linewidth": 1.6,
@@ -639,11 +792,11 @@ def _update_detector_drag_arc_preview(
             {
                 "x_values": tuple(
                     float(value)
-                    for value in (float(center_x) + radial_values * np.cos(end_radians))
+                    for value in end_x
                 ),
                 "y_values": tuple(
                     float(value)
-                    for value in (float(center_y) + radial_values * np.sin(end_radians))
+                    for value in end_y
                 ),
                 "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
                 "linewidth": 1.6,
@@ -714,8 +867,17 @@ def display_to_detector_angles(
     if int(height) <= 0 or int(width) <= 0:
         return None
 
-    col_idx = min(max(int(round(float(col))), 0), int(width) - 1)
-    row_idx = min(max(int(round(float(row))), 0), int(height) - 1)
+    col_idx_array, row_idx_array = _display_coords_to_detector_indices(
+        bindings,
+        x_values=(float(col),),
+        y_values=(float(row),),
+        detector_shape=(int(height), int(width)),
+    )
+    if col_idx_array.size <= 0 or row_idx_array.size <= 0:
+        return None
+
+    col_idx = min(max(int(round(float(col_idx_array.reshape(-1)[0]))), 0), int(width) - 1)
+    row_idx = min(max(int(round(float(row_idx_array.reshape(-1)[0]))), 0), int(height) - 1)
     tth = float(two_theta[row_idx, col_idx])
     phi = float(phi_vals[row_idx, col_idx])
     if not (np.isfinite(tth) and np.isfinite(phi)):

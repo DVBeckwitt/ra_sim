@@ -740,6 +740,86 @@ def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     assert drag_state._fast_viewer_overlay_version >= 1
 
 
+def test_display_to_detector_angles_respects_inverted_detector_extent() -> None:
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [170.0, 175.0, -179.0],
+            [160.0, 165.0, -175.0],
+            [150.0, 155.0, -170.0],
+        ],
+        dtype=float,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0)),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(extent=(0.0, 3.0, 3.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (two_theta, phi_vals),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+    )
+
+    top_angles = integration_range_drag.display_to_detector_angles(
+        bindings,
+        0.2,
+        2.8,
+        object(),
+    )
+    bottom_angles = integration_range_drag.display_to_detector_angles(
+        bindings,
+        0.2,
+        0.2,
+        object(),
+    )
+
+    assert top_angles == (10.0, 170.0)
+    assert bottom_angles == (30.0, 150.0)
+
+
+def test_detector_preview_center_respects_inverted_detector_extent() -> None:
+    two_theta = np.asarray(
+        [
+            [5.0, 1.0, 6.0],
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0)),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(extent=(0.0, 3.0, 3.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (two_theta, two_theta),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+    )
+
+    center = integration_range_drag._detector_preview_center(bindings, two_theta)
+
+    assert center == (1.5, 2.5)
+
+
 def test_runtime_integration_region_visuals_callback_uses_live_bindings(
     monkeypatch,
 ) -> None:
@@ -950,7 +1030,7 @@ def test_reset_runtime_integration_drag_hides_raw_preview_overlay() -> None:
 def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bundle(
     monkeypatch,
 ) -> None:
-    axis = _FakeAxis(xlim=(0.0, 2.0), ylim=(0.0, 2.0))
+    axis = _FakeAxis(xlim=(0.0, 2.0), ylim=(2.0, 0.0))
     drag_state = state.IntegrationRangeDragState()
     peak_state = state.PeakSelectionState()
     view_state = _range_view_state()
@@ -1018,7 +1098,7 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
 
     moved = integration_range_drag.handle_runtime_integration_drag_motion(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=2.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=0.2),
     )
     assert moved is True
     assert np.isclose(drag_state.tth1, 32.0)
@@ -1029,7 +1109,7 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
 
     released = integration_range_drag.handle_runtime_integration_drag_release(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=2.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=0.2),
     )
     assert released is True
     assert view_state.tth_min_var.get() == 20.0
@@ -1213,7 +1293,7 @@ def test_update_detector_integration_overlay_uses_wrapped_phi_interval() -> None
 
 
 def test_raw_drag_release_preserves_wrapped_short_arc_interval() -> None:
-    axis = _FakeAxis(xlim=(0.0, 2.0), ylim=(0.0, 2.0))
+    axis = _FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0))
     drag_state = state.IntegrationRangeDragState()
     view_state = state.IntegrationRangeControlsViewState(
         tth_min_var=_FakeVar(0.0),
@@ -1252,7 +1332,7 @@ def test_raw_drag_release_preserves_wrapped_short_arc_interval() -> None:
         drag_select_rect=_FakeRect(),
         integration_region_overlay=overlay,
         integration_region_rect=_FakeRect(),
-        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        image_display=_FakeImageDisplay(extent=(0.0, 3.0, 3.0, 0.0)),
         get_detector_angular_maps=lambda ai_arg: (
             (two_theta, phi_vals) if ai_arg is ai else (None, None)
         ),
@@ -1268,15 +1348,15 @@ def test_raw_drag_release_preserves_wrapped_short_arc_interval() -> None:
 
     started = integration_range_drag.handle_runtime_integration_drag_press(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=0.0, ydata=0.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=0.2, ydata=2.8),
     )
     moved = integration_range_drag.handle_runtime_integration_drag_motion(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=2.0, ydata=0.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=2.8, ydata=2.8),
     )
     released = integration_range_drag.handle_runtime_integration_drag_release(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=2.0, ydata=0.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=2.8, ydata=2.8),
     )
 
     assert started is True
@@ -1336,7 +1416,7 @@ def test_set_runtime_integration_range_from_drag_without_controls_uses_cached_st
 
 
 def test_raw_drag_release_without_controls_caches_range_values() -> None:
-    axis = _FakeAxis(xlim=(0.0, 2.0), ylim=(0.0, 2.0))
+    axis = _FakeAxis(xlim=(0.0, 2.0), ylim=(2.0, 0.0))
     drag_state = state.IntegrationRangeDragState()
     view_state = state.IntegrationRangeControlsViewState()
     overlay = _FakeOverlay()
@@ -1392,11 +1472,11 @@ def test_raw_drag_release_without_controls_caches_range_values() -> None:
     )
     assert integration_range_drag.handle_runtime_integration_drag_motion(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=2.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=0.2),
     )
     assert integration_range_drag.handle_runtime_integration_drag_release(
         bindings,
-        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=2.0),
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=0.2),
     )
 
     assert view_state.tth_min_value == 20.0
