@@ -96,6 +96,21 @@ def test_loader_supports_windows_paths_in_double_quoted_yaml(
     assert loader.get_path("osc_file") == "C:\\Users\\Kenpo\\data\\sample.osc"
 
 
+def test_loader_falls_back_to_example_file_paths_when_primary_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    _write_yaml(cfg / "file_paths.example.yaml", {"cif_file": "/tmp/example.cif"})
+    _write_yaml(cfg / "dir_paths.yaml", {})
+    _write_yaml(cfg / "materials.yaml", {})
+    _write_yaml(cfg / "instrument.yaml", {})
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    assert loader.get_path("cif_file") == "/tmp/example.cif"
+
+
 def test_loader_cache_can_be_cleared_after_file_change(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -16,6 +16,8 @@ from .validation import ensure_mapping
 
 ENV_CONFIG_DIR = "RA_SIM_CONFIG_DIR"
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+FILE_PATHS_FILENAME = "file_paths.yaml"
+FILE_PATHS_EXAMPLE_FILENAME = "file_paths.example.yaml"
 DEFAULT_DIRS: dict[str, str] = {
     "downloads": str(Path.home() / "Downloads"),
     "overlay_dir": str(Path.home() / ".cache" / "ra_sim" / "overlays"),
@@ -82,10 +84,32 @@ def _read_data_file(path: Path) -> dict[str, Any]:
     raise TypeError(f"{path} must contain a mapping at top level")
 
 
+def _read_primary_or_example_file(
+    config_dir: Path,
+    *,
+    primary_name: str,
+    example_name: str | None = None,
+) -> dict[str, Any]:
+    """Load a config mapping from *primary_name* or fall back to *example_name*."""
+
+    primary_path = config_dir / primary_name
+    if primary_path.exists():
+        return _read_data_file(primary_path)
+    if example_name:
+        example_path = config_dir / example_name
+        if example_path.exists():
+            return _read_data_file(example_path)
+    return {}
+
+
 def _load_from_dir(config_dir: Path) -> ConfigBundle:
     file_paths = ensure_mapping(
-        _read_data_file(config_dir / "file_paths.yaml"),
-        name="file_paths.yaml",
+        _read_primary_or_example_file(
+            config_dir,
+            primary_name=FILE_PATHS_FILENAME,
+            example_name=FILE_PATHS_EXAMPLE_FILENAME,
+        ),
+        name=FILE_PATHS_FILENAME,
     )
     dir_paths = ensure_mapping(
         _read_data_file(config_dir / "dir_paths.yaml"),

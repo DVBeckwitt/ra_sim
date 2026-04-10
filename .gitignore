@@ -2,6 +2,19 @@
 __pycache__/
 *.py[cod]
 
+# Local machine config
+config/file_paths.yaml
+config/hbn_paths.yaml
+config/*local*.yaml
+
+# Secrets and credentials
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+
 # Distribution metadata
 *.egg-info/
 

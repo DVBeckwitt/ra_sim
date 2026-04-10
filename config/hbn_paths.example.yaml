@@ -1,0 +1,15 @@
+# Example hBN calibrant + dark frame paths for the CLI workflow.
+# Copy this to `config/hbn_paths.yaml` and update values for your environment.
+
+calibrant: "./data/hbn_calibrant.osc"
+dark: "./data/dark.osc"
+
+# Optional beam center (pixels, origin at top-left).
+beam_center:
+  - 1500
+  - 1500
+
+# Optional convenience defaults for reloading/saving artifacts.
+bundle: "./artifacts/hbn_ellipse_bundle.npz"
+click_profile: "./artifacts/hbn_click_profile.json"
+fit_profile: "./artifacts/hbn_ellipse_fit_profile.json"

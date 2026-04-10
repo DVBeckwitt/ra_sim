@@ -92,15 +92,22 @@ python -m pip install -e ".[dev]"
 
 RA-SIM reads project settings from `config/`.
 
-1. Create a local paths file from the example.
+1. Create local machine-specific path files from the examples.
 2. Update the file so it points at your experiment-specific data.
 3. Optionally move your config out of the repository and set `RA_SIM_CONFIG_DIR`
    to that folder.
 
 ```bash
 cp config/file_paths.example.yaml config/file_paths.yaml
+cp config/hbn_paths.example.yaml config/hbn_paths.yaml
 # Windows PowerShell: Copy-Item config/file_paths.example.yaml config/file_paths.yaml
+# Windows PowerShell: Copy-Item config/hbn_paths.example.yaml config/hbn_paths.yaml
 ```
+
+The local override files `config/file_paths.yaml` and `config/hbn_paths.yaml`
+are intended to stay untracked. The repository keeps only example templates so
+machine-specific paths, downloads, and local experiment bundles do not get
+committed accidentally.
 
 At minimum, review these files:
 
@@ -296,6 +303,12 @@ python -m mypy ra_sim/config ra_sim/simulation ra_sim/fitting ra_sim/gui
 ```
 
 Set `RA_SIM_DEBUG=1` to enable verbose debug output and extra diagnostics.
+
+Security/governance automation:
+
+- Dependabot updates Python dependencies and GitHub Actions weekly.
+- The security workflow scans for committed secrets, vulnerable Python packages,
+  and tracked machine-local paths before merge.
 
 ## Citation
 

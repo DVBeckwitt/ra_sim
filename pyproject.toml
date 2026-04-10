@@ -50,8 +50,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/kenpo/ra_sim"
-Repository = "https://github.com/kenpo/ra_sim"
+Homepage = "https://github.com/DVBeckwitt/ra_sim"
+Repository = "https://github.com/DVBeckwitt/ra_sim"
 
 [project.scripts]
 ra-sim = "ra_sim.cli:main"
