@@ -64,6 +64,7 @@ class ViewportViewState:
     height: int
     xlim: tuple[float, float]
     ylim: tuple[float, float]
+    plot_bounds: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -204,21 +205,42 @@ def _view_bounds(view_state: ViewportViewState) -> tuple[float, float, float, fl
     )
 
 
+def _plot_bounds(view_state: ViewportViewState) -> tuple[float, float, float, float]:
+    width = float(max(int(view_state.width), 1))
+    height = float(max(int(view_state.height), 1))
+    bounds = getattr(view_state, "plot_bounds", None)
+    if bounds is None or len(bounds) != 4:
+        return (0.0, 0.0, width, height)
+    left = _safe_float(bounds[0])
+    top = _safe_float(bounds[1])
+    plot_width = _safe_float(bounds[2])
+    plot_height = _safe_float(bounds[3])
+    if None in {left, top, plot_width, plot_height}:
+        return (0.0, 0.0, width, height)
+    if plot_width <= _EPSILON or plot_height <= _EPSILON:
+        return (0.0, 0.0, width, height)
+    return (
+        float(left),
+        float(top),
+        float(plot_width),
+        float(plot_height),
+    )
+
+
 def world_to_screen(
     view_state: ViewportViewState,
     world_x: float,
     world_y: float,
 ) -> tuple[float, float] | None:
-    width = max(int(view_state.width), 1)
-    height = max(int(view_state.height), 1)
+    left, top, width, height = _plot_bounds(view_state)
     x0, x1 = view_state.xlim
     y0, y1 = view_state.ylim
     span_x = float(x1) - float(x0)
     span_y = float(y1) - float(y0)
     if abs(span_x) <= _EPSILON or abs(span_y) <= _EPSILON:
         return None
-    sx = ((float(world_x) - float(x0)) / span_x) * float(width)
-    sy = ((float(world_y) - float(y0)) / span_y) * float(height)
+    sx = float(left) + ((float(world_x) - float(x0)) / span_x) * float(width)
+    sy = float(top) + ((float(world_y) - float(y0)) / span_y) * float(height)
     if not (isfinite(sx) and isfinite(sy)):
         return None
     return (float(sx), float(sy))
@@ -229,16 +251,15 @@ def screen_to_world(
     screen_x: float,
     screen_y: float,
 ) -> tuple[float, float] | None:
-    width = max(int(view_state.width), 1)
-    height = max(int(view_state.height), 1)
+    left, top, width, height = _plot_bounds(view_state)
     x0, x1 = view_state.xlim
     y0, y1 = view_state.ylim
     span_x = float(x1) - float(x0)
     span_y = float(y1) - float(y0)
     if abs(span_x) <= _EPSILON or abs(span_y) <= _EPSILON:
         return None
-    world_x = float(x0) + (float(screen_x) / float(width)) * span_x
-    world_y = float(y0) + (float(screen_y) / float(height)) * span_y
+    world_x = float(x0) + ((float(screen_x) - float(left)) / float(width)) * span_x
+    world_y = float(y0) + ((float(screen_y) - float(top)) / float(height)) * span_y
     if not (isfinite(world_x) and isfinite(world_y)):
         return None
     return (float(world_x), float(world_y))
@@ -432,6 +453,42 @@ def _extract_text_specs(artist_groups: object) -> tuple[_ViewportTextSpec, ...]:
     return tuple(text_specs)
 
 
+def _axes_plot_bounds(
+    ax: object,
+    width: int,
+    height: int,
+) -> tuple[float, float, float, float] | None:
+    get_position = getattr(ax, "get_position", None)
+    if not callable(get_position):
+        return None
+    try:
+        bounds = tuple(float(value) for value in get_position().bounds)
+    except Exception:
+        return None
+    if len(bounds) != 4:
+        return None
+    left_frac = _safe_float(bounds[0])
+    bottom_frac = _safe_float(bounds[1])
+    plot_width_frac = _safe_float(bounds[2])
+    plot_height_frac = _safe_float(bounds[3])
+    if None in {left_frac, bottom_frac, plot_width_frac, plot_height_frac}:
+        return None
+    if plot_width_frac <= _EPSILON or plot_height_frac <= _EPSILON:
+        return None
+    plot_width = float(width) * float(plot_width_frac)
+    plot_height = float(height) * float(plot_height_frac)
+    top = float(height) * (1.0 - float(bottom_frac) - float(plot_height_frac))
+    left = float(width) * float(left_frac)
+    if plot_width <= _EPSILON or plot_height <= _EPSILON:
+        return None
+    return (
+        float(left),
+        float(top),
+        float(plot_width),
+        float(plot_height),
+    )
+
+
 def _layer_signature(layer: _ViewportImageLayer | None) -> object:
     if layer is None:
         return None
@@ -467,6 +524,11 @@ def _scene_view_signature(
         int(view_state.height),
         tuple(float(value) for value in view_state.xlim),
         tuple(float(value) for value in view_state.ylim),
+        (
+            None
+            if view_state.plot_bounds is None
+            else tuple(float(value) for value in view_state.plot_bounds)
+        ),
         str(view_mode),
     )
 
@@ -589,20 +651,23 @@ class _TkPrimaryViewport:
         height = _safe_widget_dimension(self._widget, "winfo_height", 1)
         xlim = tuple(float(value) for value in self._ax.get_xlim())
         ylim = tuple(float(value) for value in self._ax.get_ylim())
+        plot_bounds = _axes_plot_bounds(self._ax, width, height)
         return ViewportViewState(
             width=width,
             height=height,
             xlim=(float(xlim[0]), float(xlim[1])),
             ylim=(float(ylim[0]), float(ylim[1])),
+            plot_bounds=plot_bounds,
         )
 
     def contains_screen_point(self, x_pixel: float, y_pixel: float) -> bool:
         view_state = self.view_state
         if view_state is None:
             return False
+        left, top, width, height = _plot_bounds(view_state)
         return (
-            0.0 <= float(x_pixel) <= float(view_state.width)
-            and 0.0 <= float(y_pixel) <= float(view_state.height)
+            float(left) <= float(x_pixel) <= float(left) + float(width)
+            and float(top) <= float(y_pixel) <= float(top) + float(height)
         )
 
     def screen_to_world(self, x_pixel: float, y_pixel: float) -> tuple[float, float] | None:

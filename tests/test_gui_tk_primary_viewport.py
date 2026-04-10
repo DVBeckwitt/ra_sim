@@ -113,9 +113,10 @@ class _FakeViewport:
         self._view_state = view_state
 
     def contains_screen_point(self, x_pixel, y_pixel):
+        left, top, width, height = tk_primary_viewport._plot_bounds(self._view_state)
         return (
-            0.0 <= float(x_pixel) <= float(self._view_state.width)
-            and 0.0 <= float(y_pixel) <= float(self._view_state.height)
+            left <= float(x_pixel) <= left + width
+            and top <= float(y_pixel) <= top + height
         )
 
     def screen_to_world(self, x_pixel, y_pixel):
@@ -127,15 +128,21 @@ class _FakeViewport:
 
 
 class _FakeAxes:
-    def __init__(self, *, xlim, ylim):
+    def __init__(self, *, xlim, ylim, position=None):
         self._xlim = tuple(xlim)
         self._ylim = tuple(ylim)
+        self._position = None if position is None else tuple(position)
 
     def get_xlim(self):
         return self._xlim
 
     def get_ylim(self):
         return self._ylim
+
+    def get_position(self):
+        if self._position is None:
+            raise AttributeError("position unavailable")
+        return SimpleNamespace(bounds=self._position)
 
 
 class _FakePhotoImage:
@@ -230,6 +237,20 @@ def test_screen_and_world_transforms_round_trip_detector_view() -> None:
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (50.0, 25.0)
 
 
+def test_screen_and_world_transforms_use_plot_bounds_when_present() -> None:
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=200,
+        height=100,
+        xlim=(0.0, 100.0),
+        ylim=(100.0, 0.0),
+        plot_bounds=(20.0, 10.0, 160.0, 80.0),
+    )
+
+    world = tk_primary_viewport.screen_to_world(view_state, 60.0, 30.0)
+    assert world == (25.0, 75.0)
+    assert tk_primary_viewport.world_to_screen(view_state, *world) == (60.0, 30.0)
+
+
 def test_screen_and_world_transforms_round_trip_caked_view() -> None:
     view_state = tk_primary_viewport.ViewportViewState(
         width=240,
@@ -241,6 +262,24 @@ def test_screen_and_world_transforms_round_trip_caked_view() -> None:
     world = tk_primary_viewport.screen_to_world(view_state, 120.0, 30.0)
     assert world == (22.0, -15.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (120.0, 30.0)
+
+
+def test_current_view_state_uses_axes_position_for_plot_bounds() -> None:
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(
+            xlim=(0.0, 100.0),
+            ylim=(100.0, 0.0),
+            position=(0.065, 0.075, 0.845, 0.90),
+        ),
+        initial_width=1,
+        initial_height=1,
+    )
+
+    view_state = viewport._current_view_state()
+
+    assert view_state.plot_bounds == pytest.approx((41.6, 12.0, 540.8, 432.0))
 
 
 def test_build_peak_cache_filters_visible_points_in_current_view() -> None:
@@ -611,6 +650,31 @@ def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
     assert events[0].step == 1.0
     assert events[0].xdata == 15.0
     assert events[0].ydata == 60.0
+
+
+def test_tk_canvas_proxy_ignores_points_outside_plot_bounds() -> None:
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=200,
+        height=100,
+        xlim=(0.0, 100.0),
+        ylim=(100.0, 0.0),
+        plot_bounds=(20.0, 10.0, 160.0, 80.0),
+    )
+    viewport = _FakeViewport(view_state)
+    proxy = tk_primary_viewport.TkCanvasViewportProxy(viewport, event_axes="AX", draw_interval_s=0.0)
+    events = []
+    proxy.mpl_connect("button_press_event", lambda event: events.append(event))
+
+    proxy.dispatch_tk_event(
+        "button_press_event",
+        SimpleNamespace(x=10.0, y=30.0),
+        button=1,
+    )
+
+    assert len(events) == 1
+    assert events[0].inaxes is None
+    assert events[0].xdata is None
+    assert events[0].ydata is None
 
 
 def test_tk_canvas_proxy_draw_idle_schedules_one_sync() -> None:
