@@ -156,6 +156,14 @@ def test_runtime_impl_uses_cached_caking_results_for_range_refreshes() -> None:
     assert "range_refresh_requires_pending_analysis_result(" in source
 
 
+def test_runtime_impl_disables_live_drag_preview_degradation() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "LIVE_DRAG_PREVIEW_ENABLED = False" in source
+    assert "if _live_interaction_active() and LIVE_DRAG_PREVIEW_ENABLED:" in source
+    assert "LIVE_DRAG_PREVIEW_ENABLED\n        and PREVIEW_CALCULATIONS_ENABLED" in source
+
+
 def test_runtime_impl_preserves_wrapped_phi_ranges_for_detector_drags() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

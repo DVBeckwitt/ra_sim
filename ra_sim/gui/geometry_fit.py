@@ -28,6 +28,8 @@ from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.utils.notifications import play_completion_chime
 
+GeometryFitStageCallback = Callable[[str, Mapping[str, object]], None]
+
 
 GEOMETRY_FIT_PARAM_ORDER = [
     "zb",
@@ -275,6 +277,24 @@ class GeometryFitPreparationResult:
 
 
 @dataclass(frozen=True)
+class GeometryFitSourceRowRebuildResult:
+    """Pure source-row rebuild payload returned before any runtime-state commit."""
+
+    background_index: int
+    requested_signature: object
+    requested_signature_summary: object
+    projected_rows: list[dict[str, object]]
+    stored_rows: list[dict[str, object]]
+    rebuild_source: str | None
+    rebuild_attempts: list[str]
+    diagnostics: dict[str, object]
+    peak_table_lattice: list[object] | None = None
+    hit_tables: list[object] | None = None
+    intersection_cache: list[object] | None = None
+    metadata: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
 class GeometryFitPostprocessResult:
     """Pure post-solver geometry-fit analysis results."""
 
@@ -494,6 +514,257 @@ class GeometryFitRuntimeHistoryCallbacks:
 
     undo: Callable[[], bool]
     redo: Callable[[], bool]
+
+
+def _emit_geometry_fit_stage_event(
+    stage_callback: GeometryFitStageCallback | None,
+    stage: str,
+    **payload: object,
+) -> None:
+    """Best-effort helper for optional geometry-fit preflight progress callbacks."""
+
+    if not callable(stage_callback):
+        return
+    try:
+        stage_callback(str(stage), dict(payload))
+    except Exception:
+        return
+
+
+def rebuild_geometry_fit_source_rows(
+    *,
+    background_index: int,
+    background_label: str | None = None,
+    params_local: Mapping[str, object],
+    consumer: str,
+    prior_diagnostics: Mapping[str, object] | None,
+    requested_signature: object,
+    requested_signature_summary: object,
+    can_use_live_runtime_cache: bool,
+    build_live_rows: Callable[[], Sequence[object]] | None,
+    get_memory_intersection_cache: Callable[[], Sequence[object]] | None,
+    load_logged_intersection_cache: Callable[
+        [],
+        tuple[Sequence[object], Mapping[str, object] | None],
+    ]
+    | None,
+    logged_cache_matches_params: Callable[
+        [Mapping[str, object] | None, Mapping[str, object]],
+        bool,
+    ]
+    | None,
+    build_source_rows_from_hit_tables: Callable[
+        [Sequence[object]],
+        tuple[Sequence[object], Sequence[object] | None, Sequence[object] | None],
+    ],
+    simulate_hit_tables: Callable[[Mapping[str, object]], Sequence[object]] | None,
+    project_rows: Callable[[Sequence[object] | None], Sequence[object]] | None = None,
+    live_cache_inventory: Mapping[str, object]
+    | Callable[[], Mapping[str, object]]
+    | None = None,
+) -> GeometryFitSourceRowRebuildResult:
+    """Rebuild source rows without mutating runtime state."""
+
+    background_idx = int(background_index)
+    lookup_context = str(consumer or "unspecified")
+    resolved_background_label = (
+        str(background_label).strip()
+        if background_label is not None and str(background_label).strip()
+        else f"background {int(background_idx) + 1}"
+    )
+    normalized_params = dict(params_local or {})
+    rebuild_attempts: list[str] = []
+
+    def _copy_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
+        return [
+            dict(entry)
+            for entry in (raw_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+
+    def _copy_optional_sequence(
+        raw_values: Sequence[object] | None,
+    ) -> list[object] | None:
+        if raw_values is None:
+            return None
+        return [
+            copy.deepcopy(entry)
+            for entry in raw_values
+        ]
+
+    def _resolve_live_cache_inventory() -> dict[str, object]:
+        if callable(live_cache_inventory):
+            try:
+                resolved = live_cache_inventory()
+            except Exception:
+                resolved = {}
+        else:
+            resolved = live_cache_inventory or {}
+        copied = copy.deepcopy(resolved)
+        return copied if isinstance(copied, dict) else {}
+
+    def _project_copied_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
+        projected_rows = raw_rows
+        if callable(project_rows):
+            try:
+                projected_rows = project_rows(raw_rows)
+            except Exception:
+                projected_rows = raw_rows
+        return _copy_rows(projected_rows)
+
+    def _success_result(
+        raw_rows: Sequence[object] | None,
+        *,
+        rebuild_source: str,
+        peak_table_lattice: Sequence[object] | None = None,
+        hit_tables_local: Sequence[object] | None = None,
+        intersection_cache_local: Sequence[object] | None = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> GeometryFitSourceRowRebuildResult:
+        stored_rows = _copy_rows(raw_rows)
+        projected_rows = _project_copied_rows(stored_rows)
+        cache_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        diagnostics = {
+            "source": "source_snapshot",
+            "cache_family": "source_snapshot",
+            "action": "rebuild",
+            "consumer": lookup_context,
+            "status": "snapshot_hit",
+            "background_index": int(background_idx),
+            "background_label": resolved_background_label,
+            "requested_signature": requested_signature,
+            "requested_signature_summary": requested_signature_summary,
+            "snapshot_signature": requested_signature,
+            "stored_signature_summary": requested_signature_summary,
+            "raw_peak_count": int(len(stored_rows)),
+            "projected_peak_count": int(len(projected_rows)),
+            "created_from": str(rebuild_source),
+            "cache_source": "source_snapshot_rebuild",
+            "rebuild_source": str(rebuild_source),
+            "signature_match": True,
+            "rebuild_attempts": list(rebuild_attempts),
+            "cache_metadata": cache_metadata,
+            "live_cache_inventory": _resolve_live_cache_inventory(),
+        }
+        return GeometryFitSourceRowRebuildResult(
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            projected_rows=projected_rows,
+            stored_rows=stored_rows,
+            rebuild_source=str(rebuild_source),
+            rebuild_attempts=list(rebuild_attempts),
+            diagnostics=diagnostics,
+            peak_table_lattice=_copy_optional_sequence(peak_table_lattice),
+            hit_tables=_copy_optional_sequence(hit_tables_local),
+            intersection_cache=_copy_optional_sequence(intersection_cache_local),
+            metadata=cache_metadata,
+        )
+
+    if can_use_live_runtime_cache and callable(build_live_rows):
+        rebuild_attempts.append("live_runtime_cache")
+        live_rows = _copy_rows(build_live_rows())
+        if live_rows:
+            return _success_result(
+                live_rows,
+                rebuild_source="live_runtime_cache",
+            )
+
+    rebuild_attempts.append("last_intersection_cache_memory")
+    memory_intersection_cache = (
+        list(get_memory_intersection_cache() or ())
+        if callable(get_memory_intersection_cache)
+        else []
+    )
+    memory_rows: list[dict[str, object]] = []
+    memory_lattice: Sequence[object] | None = None
+    memory_hit_tables: Sequence[object] | None = None
+    if memory_intersection_cache:
+        memory_rows, memory_lattice, memory_hit_tables = build_source_rows_from_hit_tables(
+            memory_intersection_cache
+        )
+    if memory_rows:
+        return _success_result(
+            memory_rows,
+            rebuild_source="last_intersection_cache_memory",
+            peak_table_lattice=memory_lattice,
+            hit_tables_local=memory_hit_tables,
+            intersection_cache_local=memory_intersection_cache,
+        )
+
+    rebuild_attempts.append("last_intersection_cache_log")
+    logged_intersection_cache: Sequence[object] = []
+    logged_metadata: Mapping[str, object] | None = None
+    if callable(load_logged_intersection_cache):
+        try:
+            logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
+        except Exception:
+            logged_intersection_cache, logged_metadata = [], None
+    if (
+        logged_intersection_cache
+        and callable(logged_cache_matches_params)
+        and logged_cache_matches_params(logged_metadata, normalized_params)
+    ):
+        logged_rows, logged_lattice, logged_hit_tables = build_source_rows_from_hit_tables(
+            logged_intersection_cache
+        )
+        if logged_rows:
+            return _success_result(
+                logged_rows,
+                rebuild_source="last_intersection_cache_log",
+                peak_table_lattice=logged_lattice,
+                hit_tables_local=logged_hit_tables,
+                intersection_cache_local=logged_intersection_cache,
+                metadata=logged_metadata,
+            )
+
+    rebuild_attempts.append("fresh_simulation")
+    fresh_hit_tables: Sequence[object] = []
+    if callable(simulate_hit_tables):
+        try:
+            fresh_hit_tables = simulate_hit_tables(normalized_params)
+        except Exception:
+            fresh_hit_tables = []
+    fresh_rows, fresh_lattice, fresh_hit_tables = build_source_rows_from_hit_tables(
+        fresh_hit_tables
+    )
+    if fresh_rows:
+        return _success_result(
+            fresh_rows,
+            rebuild_source="fresh_simulation",
+            peak_table_lattice=fresh_lattice,
+            hit_tables_local=fresh_hit_tables,
+        )
+
+    diagnostics = {
+        "source": "source_snapshot",
+        "cache_family": "source_snapshot",
+        "action": "rebuild",
+        "consumer": lookup_context,
+        "status": "snapshot_rebuild_failed",
+        "background_index": int(background_idx),
+        "background_label": resolved_background_label,
+        "requested_signature": requested_signature,
+        "requested_signature_summary": requested_signature_summary,
+        "raw_peak_count": 0,
+        "projected_peak_count": 0,
+        "signature_match": False,
+        "rebuild_attempts": list(rebuild_attempts),
+        "prior_diagnostics": (
+            dict(prior_diagnostics) if isinstance(prior_diagnostics, Mapping) else {}
+        ),
+        "live_cache_inventory": _resolve_live_cache_inventory(),
+    }
+    return GeometryFitSourceRowRebuildResult(
+        background_index=int(background_idx),
+        requested_signature=requested_signature,
+        requested_signature_summary=requested_signature_summary,
+        projected_rows=[],
+        stored_rows=[],
+        rebuild_source=None,
+        rebuild_attempts=list(rebuild_attempts),
+        diagnostics=diagnostics,
+    )
 
 
 def build_runtime_geometry_fit_manual_dataset_bindings(
@@ -2326,10 +2597,17 @@ def build_geometry_manual_fit_dataset(
     base_fit_params: Mapping[str, object] | None,
     manual_dataset_bindings: GeometryFitRuntimeManualDatasetBindings,
     orientation_cfg: Mapping[str, object] | None = None,
+    stage_callback: GeometryFitStageCallback | None = None,
 ) -> dict[str, object]:
     """Build one saved-manual-pair geometry dataset for the optimizer."""
 
     background_idx = int(background_index)
+    _emit_geometry_fit_stage_event(
+        stage_callback,
+        "dataset_start",
+        background_index=int(background_idx),
+        message=f"preflight: building dataset for background {int(background_idx) + 1}",
+    )
 
     def _finite_float(value: object) -> float | None:
         try:
@@ -2470,6 +2748,15 @@ def build_geometry_manual_fit_dataset(
             manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background
         )
     ):
+        _emit_geometry_fit_stage_event(
+            stage_callback,
+            "source_snapshot_rebuild",
+            background_index=int(background_idx),
+            message=(
+                "preflight: rebuilding simulated source rows for "
+                f"background {int(background_idx) + 1}"
+            ),
+        )
         simulated_peaks = (
             manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
                 int(background_idx),
@@ -2481,6 +2768,16 @@ def build_geometry_manual_fit_dataset(
         simulation_diagnostics = _current_simulation_diagnostics()
     if not simulated_peaks:
         snapshot_status = str(simulation_diagnostics.get("status", "<unknown>"))
+        _emit_geometry_fit_stage_event(
+            stage_callback,
+            "dataset_failed",
+            background_index=int(background_idx),
+            status=snapshot_status,
+            message=(
+                "preflight: source snapshot unavailable for "
+                f"background {int(background_idx) + 1}"
+            ),
+        )
         raise RuntimeError(
             "Geometry-fit source snapshot unavailable for "
             f"background {int(background_idx)} (status={snapshot_status})."
@@ -3361,6 +3658,18 @@ def build_geometry_manual_fit_dataset(
         pair_count=int(len(measured_display)),
         resolved_source_pair_count=int(resolved_source_pair_count),
     )
+    _emit_geometry_fit_stage_event(
+        stage_callback,
+        "dataset_ready",
+        background_index=int(background_idx),
+        pair_count=int(len(measured_display)),
+        resolved_source_pair_count=int(resolved_source_pair_count),
+        message=(
+            "preflight: dataset ready for "
+            f"background {int(background_idx) + 1} "
+            f"({int(resolved_source_pair_count)}/{int(len(selected_entries))} source pairs resolved)"
+        ),
+    )
 
     return {
         "dataset_index": int(background_idx),
@@ -3509,6 +3818,7 @@ def prepare_geometry_fit_run(
     require_selected_var_names: bool = True,
     require_active_background_in_selection: bool = True,
     include_all_selected_backgrounds: bool | None = None,
+    stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitPreparationResult:
     """Validate and assemble the manual-pair geometry-fit runtime inputs."""
 
@@ -3519,6 +3829,13 @@ def prepare_geometry_fit_run(
         geometry_refine_cfg = {}
 
     current_index = int(current_background_index)
+    _emit_geometry_fit_stage_event(
+        stage_callback,
+        "prepare_start",
+        message="preflight: collecting geometry-fit datasets",
+        selected_var_names=list(selected_var_names),
+        current_background_index=int(current_index),
+    )
 
     def _failure_result(
         error_text: str,
@@ -3533,6 +3850,16 @@ def prepare_geometry_fit_run(
             geometry_runtime_cfg
             if isinstance(geometry_runtime_cfg, Mapping)
             else geometry_refine_cfg
+        )
+        _emit_geometry_fit_stage_event(
+            stage_callback,
+            "preflight_failure",
+            error_text=str(error_text),
+            selected_background_indices=[
+                int(idx) for idx in (selected_background_indices or ())
+            ],
+            joint_background_mode=bool(joint_background_mode),
+            message=str(error_text),
         )
         return GeometryFitPreparationResult(
             error_text=str(error_text),
@@ -3719,14 +4046,50 @@ def prepare_geometry_fit_run(
             return float(background_theta_values[int(dataset_index)])
         return float(fit_params.get("theta_initial", theta_initial))
 
+    def _build_dataset_entry(
+        dataset_index: int,
+        *,
+        theta_base_value: float,
+    ) -> dict[str, object]:
+        build_kwargs = {
+            "theta_base": float(theta_base_value),
+            "base_fit_params": fit_params,
+            "orientation_cfg": dict(orientation_cfg),
+        }
+        if callable(stage_callback):
+            try:
+                signature = inspect.signature(build_dataset)
+            except (TypeError, ValueError):
+                signature = None
+            accepts_var_kwargs = bool(
+                signature is not None
+                and any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+            )
+            if signature is None or "stage_callback" in signature.parameters or accepts_var_kwargs:
+                build_kwargs["stage_callback"] = stage_callback
+        return build_dataset(
+            int(dataset_index),
+            **build_kwargs,
+        )
+
     current_theta_base = (
         _theta_base_for_index(primary_index)
     )
-    current_dataset = build_dataset(
+    _emit_geometry_fit_stage_event(
+        stage_callback,
+        "current_dataset_start",
+        background_index=int(primary_index),
+        message=(
+            "preflight: building active dataset for "
+            f"background {int(primary_index) + 1}"
+        ),
+    )
+    current_dataset = _build_dataset_entry(
         int(primary_index),
-        theta_base=float(current_theta_base),
-        base_fit_params=fit_params,
-        orientation_cfg=dict(orientation_cfg),
+        theta_base_value=float(current_theta_base),
     )
     dataset_infos = [current_dataset]
     if build_all_selected_backgrounds:
@@ -3734,12 +4097,19 @@ def prepare_geometry_fit_run(
             idx = int(bg_idx)
             if idx == primary_index:
                 continue
+            _emit_geometry_fit_stage_event(
+                stage_callback,
+                "additional_dataset_start",
+                background_index=int(idx),
+                message=(
+                    "preflight: building additional dataset for "
+                    f"background {int(idx) + 1}"
+                ),
+            )
             dataset_infos.append(
-                build_dataset(
+                _build_dataset_entry(
                     idx,
-                    theta_base=float(_theta_base_for_index(idx)),
-                    base_fit_params=fit_params,
-                    orientation_cfg=dict(orientation_cfg),
+                    theta_base_value=float(_theta_base_for_index(idx)),
                 )
             )
 
@@ -3760,6 +4130,16 @@ def prepare_geometry_fit_run(
             joint_background_mode=joint_background_mode,
         ),
         joint_background_mode=joint_background_mode,
+    )
+    _emit_geometry_fit_stage_event(
+        stage_callback,
+        "prepare_ready",
+        dataset_count=int(len(dataset_infos)),
+        joint_background_mode=bool(joint_background_mode),
+        message=(
+            "preflight: ready to solve geometry fit "
+            f"({int(len(dataset_infos))} dataset{'s' if len(dataset_infos) != 1 else ''})"
+        ),
     )
     return GeometryFitPreparationResult(
         prepared_run=GeometryFitPreparedRun(
@@ -3796,6 +4176,7 @@ def prepare_runtime_geometry_fit_run(
     var_names: Sequence[object] | None,
     preserve_live_theta: bool,
     bindings: GeometryFitRuntimePreparationBindings,
+    stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitPreparationResult:
     """Prepare one geometry fit from the live runtime value/callback sources."""
 
@@ -3827,13 +4208,14 @@ def prepare_runtime_geometry_fit_run(
         ),
         ensure_geometry_fit_caked_view=bindings.ensure_geometry_fit_caked_view,
         build_dataset=(
-            lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+            lambda background_index, *, theta_base, base_fit_params, orientation_cfg, stage_callback=None: (
                 build_geometry_manual_fit_dataset(
                     background_index,
                     theta_base=theta_base,
                     base_fit_params=base_fit_params,
                     manual_dataset_bindings=manual_dataset_bindings,
                     orientation_cfg=orientation_cfg,
+                    stage_callback=stage_callback,
                 )
             )
         ),
@@ -3842,6 +4224,7 @@ def prepare_runtime_geometry_fit_run(
                 dict(fit_params or {})
             )
         ),
+        stage_callback=stage_callback,
     )
 
 
@@ -8168,6 +8551,156 @@ def build_runtime_geometry_fit_execution_setup_from_bindings(
     )
 
 
+def execute_runtime_geometry_fit_solver_phase(
+    *,
+    prepared_run: GeometryFitPreparedRun,
+    var_names: Sequence[object],
+    solve_fit: Callable[..., object],
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+    stamp: str,
+    log_path: Path | str,
+    start_progress_text: str = "Running geometry fit from saved manual Qr/Qz pairs...",
+    event_callback: GeometryFitStageCallback | None = None,
+    live_update_callback: Callable[[Mapping[str, object]], None] | None = None,
+) -> GeometryFitRuntimeExecutionResult:
+    """Run the worker-safe logging and solver phase before any UI-state apply."""
+
+    resolved_log_path = Path(log_path)
+    logging_disabled = geometry_fit_all_logging_disabled()
+    _, _log_line, _log_section = _build_geometry_fit_log_writers(resolved_log_path)
+
+    def _emit_execution_event(kind: str, **payload: object) -> None:
+        _emit_geometry_fit_stage_event(event_callback, kind, **payload)
+
+    def _emit_cmd_line(text: str) -> None:
+        text_value = str(text).strip()
+        if text_value:
+            _emit_execution_event("cmd_line", text=text_value)
+
+    def _emit_progress_text(text: str) -> None:
+        text_value = str(text)
+        if text_value:
+            _emit_execution_event("progress_text", text=text_value)
+
+    def _solver_status_callback(text: str) -> None:
+        status_text = str(text).strip()
+        if not status_text:
+            return
+        _log_line(status_text)
+        _emit_cmd_line(status_text)
+        _emit_progress_text(status_text)
+
+    try:
+        write_geometry_fit_run_start_log(
+            stamp=str(stamp),
+            prepared_run=prepared_run,
+            cmd_line=_emit_cmd_line,
+            log_line=_log_line,
+            log_section=_log_section,
+        )
+        if not logging_disabled:
+            _emit_cmd_line(f"log: {resolved_log_path}")
+
+        _emit_progress_text(str(start_progress_text))
+
+        solver_request = build_geometry_fit_solver_request(
+            prepared_run=prepared_run,
+            var_names=var_names,
+            solver_inputs=solver_inputs,
+        )
+        if solver_request.runtime_safety_note:
+            _log_line(f"Runtime safety: {solver_request.runtime_safety_note}")
+            _log_line()
+        result = solve_geometry_fit_request(
+            solver_request,
+            solve_fit=solve_fit,
+            status_callback=_solver_status_callback,
+            live_update_callback=live_update_callback,
+        )
+        _emit_execution_event(
+            "solver_finished",
+            status="success",
+            log_path=str(resolved_log_path),
+        )
+        return GeometryFitRuntimeExecutionResult(
+            log_path=resolved_log_path,
+            solver_request=solver_request,
+            solver_result=result,
+        )
+    except Exception as exc:
+        error_text = f"Geometry fit failed: {exc}"
+        _emit_cmd_line(f"failed: {exc}")
+        _log_line(error_text)
+        _emit_progress_text(error_text)
+        _emit_execution_event(
+            "solver_finished",
+            status="error",
+            error_text=error_text,
+            log_path=str(resolved_log_path),
+        )
+        return GeometryFitRuntimeExecutionResult(
+            log_path=resolved_log_path,
+            error_text=error_text,
+        )
+
+
+def finalize_runtime_geometry_fit_execution(
+    *,
+    execution_result: GeometryFitRuntimeExecutionResult,
+    prepared_run: GeometryFitPreparedRun,
+    var_names: Sequence[object],
+    preserve_live_theta: bool,
+    setup: GeometryFitRuntimeExecutionSetup,
+) -> GeometryFitRuntimeExecutionResult:
+    """Apply one completed geometry-fit solver result on the runtime/UI thread."""
+
+    if execution_result.error_text or execution_result.solver_result is None:
+        return execution_result
+
+    ui_bindings = setup.ui_bindings
+    postprocess_config = setup.postprocess_config
+    resolved_log_path = Path(execution_result.log_path)
+    _, _, _log_section = _build_geometry_fit_log_writers(resolved_log_path)
+    result = execution_result.solver_result
+    apply_result = apply_runtime_geometry_fit_result(
+        result=result,
+        var_names=var_names,
+        current_dataset=prepared_run.current_dataset,
+        dataset_count=len(prepared_run.dataset_infos),
+        joint_background_mode=prepared_run.joint_background_mode,
+        preserve_live_theta=preserve_live_theta,
+        max_display_markers=prepared_run.max_display_markers,
+        bindings=build_runtime_geometry_fit_execution_result_bindings(
+            result=result,
+            prepared_run=prepared_run,
+            var_names=var_names,
+            ui_bindings=ui_bindings,
+            postprocess_config=postprocess_config,
+            log_section=_log_section,
+        ),
+    )
+    replace_dataset_cache = ui_bindings.replace_dataset_cache
+    if apply_result.accepted:
+        if callable(replace_dataset_cache):
+            replace_dataset_cache(
+                build_geometry_fit_dataset_cache_payload(
+                    prepared_run,
+                    current_background_index=int(postprocess_config.current_background_index),
+                )
+            )
+        play_completion_chime(
+            prepared_run.geometry_runtime_cfg.get("completion_chime")
+            if isinstance(prepared_run.geometry_runtime_cfg, Mapping)
+            else None
+        )
+    return GeometryFitRuntimeExecutionResult(
+        log_path=resolved_log_path,
+        solver_request=execution_result.solver_request,
+        solver_result=result,
+        apply_result=apply_result,
+    )
+
+
 def run_runtime_geometry_fit_action(
     *,
     bindings: GeometryFitRuntimeActionBindings,
@@ -8339,94 +8872,32 @@ def execute_runtime_geometry_fit(
 
     ui_bindings = setup.ui_bindings
     postprocess_config = setup.postprocess_config
-    log_path = Path(postprocess_config.log_path)
-    logging_disabled = geometry_fit_all_logging_disabled()
-    _, _log_line, _log_section = _build_geometry_fit_log_writers(log_path)
-
-    def _solver_status_callback(text: str) -> None:
-        status_text = str(text).strip()
-        if not status_text:
-            return
-        _log_line(status_text)
-        ui_bindings.cmd_line(status_text)
-        ui_bindings.set_progress_text(status_text)
-        if callable(flush_ui):
-            flush_ui()
-
-    try:
-        write_geometry_fit_run_start_log(
-            stamp=str(postprocess_config.stamp),
-            prepared_run=prepared_run,
-            cmd_line=ui_bindings.cmd_line,
-            log_line=_log_line,
-            log_section=_log_section,
-        )
-        if not logging_disabled:
-            ui_bindings.cmd_line(f"log: {log_path}")
-
-        ui_bindings.set_progress_text(str(start_progress_text))
-        if callable(flush_ui):
-            flush_ui()
-
-        solver_request = build_geometry_fit_solver_request(
-            prepared_run=prepared_run,
-            var_names=var_names,
-            solver_inputs=postprocess_config.solver_inputs,
-        )
-        if solver_request.runtime_safety_note:
-            _log_line(f"Runtime safety: {solver_request.runtime_safety_note}")
-            _log_line()
-        result = solve_geometry_fit_request(
-            solver_request,
-            solve_fit=solve_fit,
-            status_callback=_solver_status_callback,
-            live_update_callback=ui_bindings.live_update_callback,
-        )
-        apply_result = apply_runtime_geometry_fit_result(
-            result=result,
-            var_names=var_names,
-            current_dataset=prepared_run.current_dataset,
-            dataset_count=len(prepared_run.dataset_infos),
-            joint_background_mode=prepared_run.joint_background_mode,
-            preserve_live_theta=preserve_live_theta,
-            max_display_markers=prepared_run.max_display_markers,
-            bindings=build_runtime_geometry_fit_execution_result_bindings(
-                result=result,
-                prepared_run=prepared_run,
-                var_names=var_names,
-                ui_bindings=ui_bindings,
-                postprocess_config=postprocess_config,
-                log_section=_log_section,
-            ),
-        )
-        replace_dataset_cache = ui_bindings.replace_dataset_cache
-        if apply_result.accepted:
-            if callable(replace_dataset_cache):
-                replace_dataset_cache(
-                    build_geometry_fit_dataset_cache_payload(
-                        prepared_run,
-                        current_background_index=int(
-                            postprocess_config.current_background_index
-                        ),
-                    )
-                )
-            play_completion_chime(
-                prepared_run.geometry_runtime_cfg.get("completion_chime")
-                if isinstance(prepared_run.geometry_runtime_cfg, Mapping)
-                else None
+    execution_phase = execute_runtime_geometry_fit_solver_phase(
+        prepared_run=prepared_run,
+        var_names=var_names,
+        solve_fit=solve_fit,
+        solver_inputs=postprocess_config.solver_inputs,
+        stamp=str(postprocess_config.stamp),
+        log_path=postprocess_config.log_path,
+        start_progress_text=str(start_progress_text),
+        event_callback=(
+            lambda kind, payload: (
+                ui_bindings.cmd_line(str(payload.get("text", "")))
+                if str(kind) == "cmd_line"
+                else (
+                    ui_bindings.set_progress_text(str(payload.get("text", "")))
+                    if str(kind) == "progress_text"
+                    else None
+                ),
+                flush_ui() if callable(flush_ui) and str(kind) in {"cmd_line", "progress_text"} else None,
             )
-        return GeometryFitRuntimeExecutionResult(
-            log_path=log_path,
-            solver_request=solver_request,
-            solver_result=result,
-            apply_result=apply_result,
-        )
-    except Exception as exc:
-        error_text = f"Geometry fit failed: {exc}"
-        ui_bindings.cmd_line(f"failed: {exc}")
-        _log_line(error_text)
-        ui_bindings.set_progress_text(error_text)
-        return GeometryFitRuntimeExecutionResult(
-            log_path=log_path,
-            error_text=error_text,
-        )
+        ),
+        live_update_callback=ui_bindings.live_update_callback,
+    )
+    return finalize_runtime_geometry_fit_execution(
+        execution_result=execution_phase,
+        prepared_run=prepared_run,
+        var_names=var_names,
+        preserve_live_theta=preserve_live_theta,
+        setup=setup,
+    )

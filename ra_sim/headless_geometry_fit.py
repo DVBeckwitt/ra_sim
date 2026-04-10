@@ -1537,6 +1537,92 @@ def run_headless_geometry_fit(
             dict(params_local),
         )
 
+    def _background_label_for_index(background_index: int) -> str:
+        try:
+            osc_path = background_state.osc_files[int(background_index)]
+        except Exception:
+            osc_path = None
+        if osc_path is not None:
+            try:
+                label = Path(str(osc_path)).name
+            except Exception:
+                label = ""
+            if str(label).strip():
+                return str(label)
+        return f"background {int(background_index) + 1}"
+
+    def _commit_source_row_rebuild_result(
+        rebuild_result: gui_geometry_fit.GeometryFitSourceRowRebuildResult,
+        *,
+        consumer: str | None = None,
+    ) -> list[dict[str, object]]:
+        if not isinstance(rebuild_result, gui_geometry_fit.GeometryFitSourceRowRebuildResult):
+            return []
+
+        background_idx = int(rebuild_result.background_index)
+        stored_rows = [
+            dict(entry)
+            for entry in (rebuild_result.stored_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+        diagnostics = (
+            dict(rebuild_result.diagnostics)
+            if isinstance(rebuild_result.diagnostics, Mapping)
+            else {}
+        )
+        if stored_rows:
+            if rebuild_result.hit_tables is not None:
+                try:
+                    max_positions_local = hit_tables_to_max_positions(
+                        rebuild_result.hit_tables
+                    )
+                except Exception:
+                    max_positions_local = np.empty((0, 6), dtype=np.float64)
+                simulation_runtime_state.stored_max_positions_local = list(
+                    max_positions_local
+                )
+            if rebuild_result.peak_table_lattice is not None:
+                simulation_runtime_state.stored_peak_table_lattice = list(
+                    rebuild_result.peak_table_lattice
+                )
+            simulation_runtime_state.stored_sim_image = np.zeros(
+                (int(defaults.image_size), int(defaults.image_size)),
+                dtype=np.float64,
+            )
+            if rebuild_result.intersection_cache is not None:
+                simulation_runtime_state.stored_intersection_cache = (
+                    _copy_intersection_cache_tables(rebuild_result.intersection_cache)
+                )
+                simulation_runtime_state.stored_hit_table_signature = (
+                    rebuild_result.requested_signature
+                )
+            simulation_runtime_state.last_simulation_signature = (
+                rebuild_result.requested_signature
+            )
+            _set_runtime_peak_cache_from_source_rows(
+                simulation_runtime_state,
+                stored_rows,
+            )
+            simulation_runtime_state.source_row_snapshots[int(background_idx)] = {
+                "background_index": int(background_idx),
+                "simulation_signature": rebuild_result.requested_signature,
+                "rows": [dict(entry) for entry in stored_rows],
+                "row_count": int(len(stored_rows)),
+                "created_from": str(rebuild_result.rebuild_source or "unknown"),
+            }
+
+        if diagnostics:
+            _set_source_snapshot_diagnostics(**diagnostics)
+        return [
+            dict(entry)
+            for entry in (
+                rebuild_result.projected_rows
+                if rebuild_result.projected_rows
+                else stored_rows
+            )
+            if isinstance(entry, Mapping)
+        ]
+
     def _geometry_manual_rebuild_source_rows_for_background(
         background_index: int,
         param_set: dict[str, object] | None = None,
@@ -1554,129 +1640,20 @@ def run_headless_geometry_fit(
             params_local,
         )
         requested_signature_summary = _signature_summary(requested_signature)
-        image_size_value = int(defaults.image_size)
-        rebuild_attempts: list[str] = []
-
-        def _store_success(
-            raw_rows: Sequence[object] | None,
-            *,
-            rebuild_source: str,
-            peak_table_lattice: Sequence[object] | None = None,
-            hit_tables_local: Sequence[object] | None = None,
-            intersection_cache_local: Sequence[object] | None = None,
-            metadata: Mapping[str, object] | None = None,
-        ) -> list[dict[str, object]]:
-            stored_rows = [
-                dict(entry)
-                for entry in (raw_rows or ())
-                if isinstance(entry, Mapping)
-            ]
-            if not stored_rows:
-                return []
-
-            if hit_tables_local is not None:
-                try:
-                    max_positions_local = hit_tables_to_max_positions(hit_tables_local)
-                except Exception:
-                    max_positions_local = np.empty((0, 6), dtype=np.float64)
-                simulation_runtime_state.stored_max_positions_local = list(
-                    max_positions_local
-                )
-            if peak_table_lattice is not None:
-                simulation_runtime_state.stored_peak_table_lattice = list(
-                    peak_table_lattice
-                )
-            simulation_runtime_state.stored_sim_image = np.zeros(
-                (int(image_size_value), int(image_size_value)),
-                dtype=np.float64,
-            )
-            if intersection_cache_local is not None:
-                simulation_runtime_state.stored_intersection_cache = (
-                    _copy_intersection_cache_tables(intersection_cache_local)
-                )
-                simulation_runtime_state.stored_hit_table_signature = requested_signature
-            simulation_runtime_state.last_simulation_signature = requested_signature
-            _set_runtime_peak_cache_from_source_rows(
-                simulation_runtime_state,
-                stored_rows,
-            )
-
-            simulation_runtime_state.source_row_snapshots[int(background_idx)] = {
-                "background_index": int(background_idx),
-                "simulation_signature": requested_signature,
-                "rows": [dict(entry) for entry in stored_rows],
-                "row_count": int(len(stored_rows)),
-                "created_from": str(rebuild_source),
-            }
-            _set_source_snapshot_diagnostics(
-                source="source_snapshot",
-                cache_family="source_snapshot",
-                action="rebuild",
-                consumer=consumer_name,
-                status="snapshot_hit",
-                background_index=int(background_idx),
-                requested_signature=requested_signature,
-                requested_signature_summary=requested_signature_summary,
-                snapshot_signature=requested_signature,
-                stored_signature_summary=requested_signature_summary,
-                raw_peak_count=int(len(stored_rows)),
-                projected_peak_count=int(len(stored_rows)),
-                created_from=str(rebuild_source),
-                cache_source="source_snapshot_rebuild",
-                rebuild_source=str(rebuild_source),
-                signature_match=True,
-                rebuild_attempts=list(rebuild_attempts),
-                cache_metadata=(
-                    dict(metadata) if isinstance(metadata, Mapping) else {}
-                ),
-                live_cache_inventory=_live_cache_inventory_snapshot(),
-            )
-            return stored_rows
-
-        if background_idx == int(background_state.current_background_index):
-            rebuild_attempts.append("live_runtime_cache")
-            live_rows = _build_live_preview_simulated_peaks_from_cache()
-            if live_rows:
-                return _store_success(
-                    live_rows,
-                    rebuild_source="live_runtime_cache",
-                )
-
-        rebuild_attempts.append("last_intersection_cache_memory")
-        memory_intersection_cache = get_last_intersection_cache()
-        memory_hit_tables = intersection_cache_to_hit_tables(memory_intersection_cache)
-        memory_rows, memory_lattice, memory_hit_tables = _build_source_rows_from_hit_tables(
-            memory_hit_tables,
-            image_size_value=image_size_value,
-            params_local=params_local,
-            native_sim_to_display_coords=lambda col, row, image_shape_local: (
-                gui_geometry_overlay.native_sim_to_display_coords(
-                    col,
-                    row,
-                    image_shape_local,
-                    sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-                )
-            ),
-            allow_nominal_hkl_indices=True,
-        )
-        if memory_rows:
-            return _store_success(
-                memory_rows,
-                rebuild_source="last_intersection_cache_memory",
-                peak_table_lattice=memory_lattice,
-                hit_tables_local=memory_hit_tables,
-                intersection_cache_local=memory_intersection_cache,
-            )
-
-        rebuild_attempts.append("last_intersection_cache_log")
-        logged_intersection_cache, logged_metadata = (
-            load_most_recent_logged_intersection_cache()
-        )
-        if _logged_cache_matches_params(logged_metadata, params_local):
-            logged_hit_tables = intersection_cache_to_hit_tables(logged_intersection_cache)
-            logged_rows, logged_lattice, logged_hit_tables = _build_source_rows_from_hit_tables(
-                logged_hit_tables,
-                image_size_value=image_size_value,
+        def _build_source_rows_for_rebuild(
+            source_tables: Sequence[object] | None,
+        ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
+            table_list = list(source_tables or ())
+            if not table_list:
+                return [], [], []
+            first_table = np.asarray(table_list[0], dtype=np.float64)
+            if first_table.ndim == 2 and first_table.shape[1] >= 14:
+                hit_tables_local = intersection_cache_to_hit_tables(table_list)
+            else:
+                hit_tables_local = _copy_hit_tables(table_list)
+            return _build_source_rows_from_hit_tables(
+                hit_tables_local,
+                image_size_value=int(defaults.image_size),
                 params_local=params_local,
                 native_sim_to_display_coords=lambda col, row, image_shape_local: (
                     gui_geometry_overlay.native_sim_to_display_coords(
@@ -1688,69 +1665,37 @@ def run_headless_geometry_fit(
                 ),
                 allow_nominal_hkl_indices=True,
             )
-            if logged_rows:
-                return _store_success(
-                    logged_rows,
-                    rebuild_source="last_intersection_cache_log",
-                    peak_table_lattice=logged_lattice,
-                    hit_tables_local=logged_hit_tables,
-                    intersection_cache_local=logged_intersection_cache,
-                    metadata=logged_metadata,
-                )
 
-        rebuild_attempts.append("fresh_simulation")
-        try:
-            fresh_hit_tables = _simulate_hit_tables_for_fit(
-                structure_state.miller,
-                structure_state.intensities,
-                image_size_value,
-                params_local,
-            )
-        except Exception:
-            fresh_hit_tables = []
-        fresh_rows, fresh_lattice, fresh_hit_tables = _build_source_rows_from_hit_tables(
-            fresh_hit_tables,
-            image_size_value=image_size_value,
-            params_local=params_local,
-            native_sim_to_display_coords=lambda col, row, image_shape_local: (
-                gui_geometry_overlay.native_sim_to_display_coords(
-                    col,
-                    row,
-                    image_shape_local,
-                    sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-                )
-            ),
-            allow_nominal_hkl_indices=True,
-        )
-        if fresh_rows:
-            return _store_success(
-                fresh_rows,
-                rebuild_source="fresh_simulation",
-                peak_table_lattice=fresh_lattice,
-                hit_tables_local=fresh_hit_tables,
-            )
-
-        _set_source_snapshot_diagnostics(
-            source="source_snapshot",
-            cache_family="source_snapshot",
-            action="rebuild",
-            consumer=consumer_name,
-            status="snapshot_rebuild_failed",
+        rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
+            background_label=_background_label_for_index(background_idx),
+            params_local=params_local,
+            consumer=consumer_name,
+            prior_diagnostics=prior_diagnostics,
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
-            raw_peak_count=0,
-            projected_peak_count=0,
-            signature_match=False,
-            rebuild_attempts=list(rebuild_attempts),
-            prior_diagnostics=(
-                dict(prior_diagnostics)
-                if isinstance(prior_diagnostics, Mapping)
-                else {}
+            can_use_live_runtime_cache=(
+                background_idx == int(background_state.current_background_index)
+            ),
+            build_live_rows=_build_live_preview_simulated_peaks_from_cache,
+            get_memory_intersection_cache=get_last_intersection_cache,
+            load_logged_intersection_cache=load_most_recent_logged_intersection_cache,
+            logged_cache_matches_params=_logged_cache_matches_params,
+            build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
+            simulate_hit_tables=(
+                lambda normalized_params: _simulate_hit_tables_for_fit(
+                    structure_state.miller,
+                    structure_state.intensities,
+                    int(defaults.image_size),
+                    normalized_params,
+                )
             ),
             live_cache_inventory=_live_cache_inventory_snapshot(),
         )
-        return []
+        return _commit_source_row_rebuild_result(
+            rebuild_result,
+            consumer=consumer_name,
+        )
 
     def _geometry_manual_source_rows_for_background(
         background_index: int,

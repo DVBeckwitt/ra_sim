@@ -63,7 +63,7 @@ def activate_runtime_primary_viewport(
     layer_versions_factory: object = None,
     peak_cache_factory: object = None,
     qgroup_cache_factory: object = None,
-    draw_interval_s: float = 1.0 / 60.0,
+    draw_interval_s: float = 0.0,
     set_progress_text: Callable[[str], None] | None = None,
 ) -> RuntimePrimaryViewportSelection:
     """Activate the requested main viewport, falling back to Matplotlib when needed."""

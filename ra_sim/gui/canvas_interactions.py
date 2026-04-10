@@ -38,6 +38,9 @@ class CanvasInteractionBindings:
     analysis_peak_callbacks: Any = None
     set_geometry_status_text: Callable[[str], None] | None = None
     draw_idle: Callable[[], None] | None = None
+    begin_live_interaction: Callable[[], None] | None = None
+    touch_live_interaction: Callable[[], None] | None = None
+    end_live_interaction: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,21 @@ def _draw_idle(bindings: CanvasInteractionBindings) -> None:
 def _set_status_text(bindings: CanvasInteractionBindings, text: str) -> None:
     if callable(bindings.set_geometry_status_text):
         bindings.set_geometry_status_text(str(text))
+
+
+def _begin_live_interaction(bindings: CanvasInteractionBindings) -> None:
+    if callable(bindings.begin_live_interaction):
+        bindings.begin_live_interaction()
+
+
+def _touch_live_interaction(bindings: CanvasInteractionBindings) -> None:
+    if callable(bindings.touch_live_interaction):
+        bindings.touch_live_interaction()
+
+
+def _end_live_interaction(bindings: CanvasInteractionBindings) -> None:
+    if callable(bindings.end_live_interaction):
+        bindings.end_live_interaction()
 
 
 def _set_mode(
@@ -587,7 +605,10 @@ def handle_runtime_canvas_press(
         return True
 
     if getattr(event, "button", None) == 3:
-        return _start_pan_session(bindings, event)
+        started = _start_pan_session(bindings, event)
+        if started:
+            _begin_live_interaction(bindings)
+        return started
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
@@ -667,6 +688,7 @@ def handle_runtime_canvas_motion(
     """Handle one runtime canvas motion event."""
 
     if _pan_session(bindings) is not None:
+        _touch_live_interaction(bindings)
         return _update_pan_session(bindings, event)
     if getattr(event, "button", None) == 3:
         return False
@@ -698,7 +720,10 @@ def handle_runtime_canvas_release(
     """Handle one runtime canvas button-release."""
 
     if getattr(event, "button", None) == 3 or _pan_session(bindings) is not None:
-        return _finish_pan_session(bindings)
+        finished = _finish_pan_session(bindings)
+        if finished:
+            _end_live_interaction(bindings)
+        return finished
 
     if getattr(event, "button", None) != 1:
         return False
@@ -782,7 +807,9 @@ def handle_runtime_canvas_scroll(
         return False
     if not _set_axis_limits(bindings.axis, xlim=next_xlim, ylim=next_ylim):
         return False
+    _touch_live_interaction(bindings)
     _draw_idle(bindings)
+    _end_live_interaction(bindings)
     return True
 
 
@@ -812,6 +839,9 @@ def make_runtime_canvas_interaction_bindings_factory(
     analysis_peak_callbacks: Any = None,
     set_geometry_status_text_factory: object | None = None,
     draw_idle_factory: object | None = None,
+    begin_live_interaction_factory: object | None = None,
+    touch_live_interaction_factory: object | None = None,
+    end_live_interaction_factory: object | None = None,
 ) -> Callable[[], CanvasInteractionBindings]:
     """Return a zero-arg factory for live runtime canvas-interaction bindings."""
 
@@ -843,6 +873,15 @@ def make_runtime_canvas_interaction_bindings_factory(
                 set_geometry_status_text_factory
             ),
             draw_idle=_resolve_runtime_value(draw_idle_factory),
+            begin_live_interaction=_resolve_runtime_value(
+                begin_live_interaction_factory
+            ),
+            touch_live_interaction=_resolve_runtime_value(
+                touch_live_interaction_factory
+            ),
+            end_live_interaction=_resolve_runtime_value(
+                end_live_interaction_factory
+            ),
         )
 
     return _build_bindings

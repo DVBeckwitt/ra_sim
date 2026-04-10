@@ -123,6 +123,7 @@ def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch, tmp_pa
 
     monkeypatch.setenv("RA_SIM_MOSAIC_REPO", str(repo_path))
     monkeypatch.setattr(launcher.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(launcher, "_pick_available_local_port", lambda: 8123)
 
     launcher.launch_mosaic_specular_visualizer(
         {"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}
@@ -135,6 +136,8 @@ def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch, tmp_pa
                 str(script_path),
                 "--mode",
                 "specular-view",
+                "--port",
+                "8123",
                 "--state-json",
                 '{"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}',
             ],

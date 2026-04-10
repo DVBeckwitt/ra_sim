@@ -16,6 +16,7 @@ import math
 import json
 import copy
 import concurrent.futures
+import queue
 import faulthandler
 import re
 import traceback
@@ -168,6 +169,7 @@ from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import fast_plot_viewer as gui_fast_plot_viewer
+from ra_sim.gui import main_matplotlib_interaction as gui_main_matplotlib_interaction
 from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome
 from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
@@ -2007,7 +2009,7 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
 matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
 gui_main_figure_chrome.configure_matplotlib_canvas_widget(matplotlib_canvas_widget)
 PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
-    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "tk_canvas")
+    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
 )
 canvas = matplotlib_canvas
 primary_viewport_backend = None
@@ -2050,6 +2052,67 @@ integration_region_overlay = ax.imshow(
     interpolation='nearest'
 )
 integration_region_overlay.set_visible(False)
+
+
+def _apply_axes_image_origin(image_display, origin):
+    """Set the origin for an AxesImage while tolerating older Matplotlib APIs."""
+
+    setter = getattr(image_display, "set_origin", None)
+    if callable(setter):
+        try:
+            setter(origin)
+            return
+        except AttributeError:
+            pass
+    try:
+        image_display.origin = origin
+    except AttributeError:
+        return
+
+
+def _resolve_primary_caked_extent() -> list[float]:
+    raw_extent = getattr(simulation_runtime_state, "last_caked_extent", None)
+    if isinstance(raw_extent, Sequence) and len(raw_extent) >= 4:
+        try:
+            extent = [float(raw_extent[index]) for index in range(4)]
+        except Exception:
+            extent = []
+        if (
+            len(extent) == 4
+            and all(math.isfinite(value) for value in extent)
+            and abs(extent[1] - extent[0]) > 1.0e-12
+            and abs(extent[3] - extent[2]) > 1.0e-12
+        ):
+            return extent
+    return [0.0, 90.0, -180.0, 180.0]
+
+
+def _sync_primary_raster_geometry(*, show_caked_image: bool) -> None:
+    detector_extent = [0.0, float(image_size), float(image_size), 0.0]
+    caked_extent = _resolve_primary_caked_extent()
+    if bool(show_caked_image):
+        image_geometry = ("lower", caked_extent)
+        background_geometry = ("lower", caked_extent)
+        overlay_geometry = ("lower", caked_extent)
+    else:
+        image_geometry = ("upper", detector_extent)
+        background_geometry = ("upper", detector_extent)
+        overlay_geometry = ("upper", detector_extent)
+    for artist, geometry in (
+        (image_display, image_geometry),
+        (background_display, background_geometry),
+        (integration_region_overlay, overlay_geometry),
+    ):
+        if artist is None:
+            continue
+        origin, extent = geometry
+        _apply_axes_image_origin(artist, origin)
+        setter = getattr(artist, "set_extent", None)
+        if callable(setter):
+            setter(list(extent))
+
+
+_sync_primary_raster_geometry(show_caked_image=False)
 
 def _maybe_refresh_run_status_bar() -> None:
     refresh_fn = globals().get("_refresh_run_status_bar")
@@ -2462,6 +2525,76 @@ primary_canvas_interaction_canvas = None
 primary_canvas_interaction_cids: tuple[object, ...] = ()
 
 
+def _legacy_main_matplotlib_interaction_active() -> bool:
+    return bool(
+        str(globals().get("PRIMARY_VIEWPORT_BACKEND", "matplotlib")) == "matplotlib"
+        and not _fast_viewer_active()
+    )
+
+
+def _main_matplotlib_redraw_widget():
+    try:
+        return matplotlib_canvas.get_tk_widget()
+    except Exception:
+        return root
+
+
+def _draw_legacy_main_matplotlib_canvas_now() -> bool:
+    if not _legacy_main_matplotlib_interaction_active():
+        return False
+    active_canvas = globals().get("canvas", matplotlib_canvas)
+    draw_fn = getattr(active_canvas, "draw", None)
+    if not callable(draw_fn):
+        draw_fn = getattr(matplotlib_canvas, "draw", None)
+    if not callable(draw_fn):
+        return False
+    try:
+        draw_fn()
+    except Exception:
+        return False
+    return True
+
+
+def _cancel_legacy_main_matplotlib_redraw() -> None:
+    gui_main_matplotlib_interaction.cancel_pending_main_matplotlib_redraw(
+        _main_matplotlib_redraw_widget(),
+        simulation_runtime_state,
+    )
+
+
+def _request_legacy_main_matplotlib_redraw(*, force: bool = False) -> None:
+    gui_main_matplotlib_interaction.request_main_matplotlib_redraw(
+        widget=_main_matplotlib_redraw_widget(),
+        runtime_state=simulation_runtime_state,
+        interval_s=float(MAIN_MATPLOTLIB_INTERACTION_REDRAW_INTERVAL_S),
+        perf_counter_fn=perf_counter,
+        draw_now=_draw_legacy_main_matplotlib_canvas_now,
+        force=bool(force),
+    )
+
+
+def _suspend_legacy_main_matplotlib_overlays() -> None:
+    if not _legacy_main_matplotlib_interaction_active():
+        return
+    gui_main_matplotlib_interaction.suspend_main_matplotlib_overlays(
+        simulation_runtime_state,
+        suspend_callback=(lambda: _clear_deferred_overlays(clear_qr_overlay=True)),
+    )
+
+
+def _restore_legacy_main_matplotlib_overlays() -> None:
+    if not _legacy_main_matplotlib_interaction_active():
+        simulation_runtime_state.main_matplotlib_overlays_suspended = False
+        return
+    gui_main_matplotlib_interaction.restore_main_matplotlib_overlays(
+        simulation_runtime_state,
+        restore_callback=lambda: (
+            _refresh_settled_overlays(),
+            _request_legacy_main_matplotlib_redraw(force=True),
+        ),
+    )
+
+
 def _configure_primary_viewport_redraw_helpers() -> None:
     global _request_main_canvas_redraw
     global _request_overlay_canvas_redraw
@@ -2508,8 +2641,30 @@ def _configure_primary_viewport_redraw_helpers() -> None:
 
         return
 
-    _request_main_canvas_redraw = fast_viewer_workflow.request_main_canvas_redraw
-    _request_overlay_canvas_redraw = fast_viewer_workflow.request_overlay_canvas_redraw
+    def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
+        if _fast_viewer_active():
+            _cancel_legacy_main_matplotlib_redraw()
+            fast_viewer_workflow.request_main_canvas_redraw(
+                force_matplotlib=bool(force_matplotlib)
+            )
+            return
+        _request_legacy_main_matplotlib_redraw(force=bool(force_matplotlib))
+
+    def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
+        if _fast_viewer_active():
+            _cancel_legacy_main_matplotlib_redraw()
+            fast_viewer_workflow.request_overlay_canvas_redraw(force=bool(force))
+            return
+        if not force:
+            defer_redraw = globals().get("_defer_nonessential_redraw")
+            if callable(defer_redraw):
+                try:
+                    if bool(defer_redraw()):
+                        return
+                except Exception:
+                    pass
+        _request_legacy_main_matplotlib_redraw(force=bool(force))
+
     _reset_fast_viewer_view = fast_viewer_workflow.reset_view
 
 
@@ -5174,6 +5329,9 @@ canvas_interaction_workflow = (
             if callable(globals().get("_request_overlay_canvas_redraw"))
             else None
         ),
+        begin_live_interaction_factory=lambda: _begin_main_figure_live_interaction,
+        touch_live_interaction_factory=lambda: _touch_main_figure_live_interaction,
+        end_live_interaction_factory=lambda: _end_main_figure_live_interaction,
     )
 )
 canvas_interaction_runtime = canvas_interaction_workflow.runtime
@@ -5348,7 +5506,7 @@ def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
     colorbar_main.update_normal(image_display)
     caked_colorbar.update_normal(image_display)
     if redraw:
-        canvas.draw_idle()
+        _request_main_canvas_redraw(force_matplotlib=False)
 
 
 def _apply_background_limits():
@@ -5491,13 +5649,12 @@ def _update_simulation_sliders_from_image(image, reset_override=False):
     finite_pixels = finite_pixels[np.isfinite(finite_pixels)]
     if finite_pixels.size == 0:
         return
-    sim_min = float(np.min(finite_pixels))
-    sim_max = float(np.max(finite_pixels))
-    sim_min, sim_max = _ensure_valid_range(sim_min, sim_max)
-    margin = 0.05 * max(abs(sim_max), 1.0)
     lower_bound = 0.0
-    upper_bound = max(sim_max + margin, 1.0)
-    slider_to = max(float(simulation_max_slider.cget("to")), upper_bound)
+    upper_bound = gui_controllers.resolve_simulation_display_upper_bound(
+        finite_pixels,
+        percentile=99.0,
+    )
+    slider_to = upper_bound
     simulation_min_slider.configure(from_=lower_bound, to=slider_to)
     simulation_max_slider.configure(from_=lower_bound, to=slider_to)
     slider_from = lower_bound
@@ -5823,8 +5980,7 @@ def apply_scale_factor_to_existing_results(
             chi_state["buffer_sig"] = chi_square_sig
             _mark_chi_square_dirty()
         if not show_caked_image:
-            _set_image_origin(background_display, 'upper')
-            background_display.set_extent([0, image_size, image_size, 0])
+            _sync_primary_raster_geometry(show_caked_image=False)
             if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
                 background_display.set_data(background_runtime_state.current_background_display)
                 _apply_intensity_display_range(
@@ -5837,7 +5993,7 @@ def apply_scale_factor_to_existing_results(
             else:
                 background_display.set_visible(False)
         if update_canvas:
-            canvas.draw_idle()
+            _request_main_canvas_redraw(force_matplotlib=False)
         if update_chi_square:
             _update_chi_square_display()
         return
@@ -5862,16 +6018,17 @@ def apply_scale_factor_to_existing_results(
         chi_state["buffer_sig"] = chi_square_sig
         _mark_chi_square_dirty()
 
-    # Keep display limits stable during reruns/parameter changes unless an
-    # explicit reset path requests recomputing limits.
-    if update_limits:
-        _update_simulation_sliders_from_image(
-            scaled_image, reset_override=update_limits
-        )
+    scaled_caked = None
+    display_image_for_limits = scaled_image
+    if show_caked_image:
+        scaled_caked = simulation_runtime_state.last_caked_image_unscaled * scale
+        display_image_for_limits = scaled_caked
+    _update_simulation_sliders_from_image(
+        display_image_for_limits,
+        reset_override=update_limits,
+    )
 
     if not show_caked_image:
-        _set_image_origin(image_display, 'upper')
-        image_display.set_extent([0, image_size, image_size, 0])
         image_display.set_data(global_image_buffer)
         _apply_intensity_display_range(
             image_display,
@@ -5880,12 +6037,8 @@ def apply_scale_factor_to_existing_results(
             display_controls_view_state.simulation_max_var.get(),
         )
     else:
-        _set_image_origin(image_display, 'lower')
-        scaled_caked = simulation_runtime_state.last_caked_image_unscaled * scale
-        if not display_controls_state.simulation_limits_user_override:
-            _update_simulation_sliders_from_image(scaled_caked, reset_override=True)
         image_display.set_data(scaled_caked)
-        image_display.set_extent(simulation_runtime_state.last_caked_extent)
+    _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
 
     if show_caked_image:
         caked_min = float(display_controls_view_state.simulation_min_var.get())
@@ -5948,16 +6101,15 @@ def apply_scale_factor_to_existing_results(
     )
 
     if not show_caked_image:
-        _set_image_origin(background_display, 'upper')
-        background_display.set_extent([0, image_size, image_size, 0])
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
             background_display.set_data(background_runtime_state.current_background_display)
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
+    _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
 
     if update_canvas:
-        canvas.draw_idle()
+        _request_main_canvas_redraw(force_matplotlib=False)
     if update_chi_square:
         _update_chi_square_display()
 _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
@@ -6307,26 +6459,7 @@ def _auto_caked_limits(image):
 
 
 def _set_image_origin(image_display, origin):
-    """Set the origin for an AxesImage while tolerating older Matplotlib APIs."""
-
-    setter = getattr(image_display, "set_origin", None)
-    if callable(setter):
-        try:
-            setter(origin)
-            return
-        except AttributeError:
-            # Older Matplotlib builds may expose ``set_origin`` but still raise
-            # AttributeError when called; fall back to setting the attribute
-            # directly below.
-            pass
-
-    # Some Matplotlib releases exposed the origin as a simple attribute.
-    try:
-        image_display.origin = origin
-    except AttributeError:
-        # If the fallback attribute assignment also fails, there's not much
-        # else we can do; let the caller continue without crashing.
-        return
+    _apply_axes_image_origin(image_display, origin)
 
 
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
@@ -6848,11 +6981,13 @@ RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
 SIMULATION_WORKER_POLL_MS = 40
 PREVIEW_CALCULATIONS_ENABLED = True
+LIVE_DRAG_PREVIEW_ENABLED = False
 INITIAL_PREVIEW_MAX_SAMPLES = 24
 LIVE_DRAG_PREVIEW_MAX_SAMPLES = 8
 LIVE_DRAG_ANALYSIS_RADIAL_BINS = 240
 LIVE_DRAG_ANALYSIS_AZIMUTH_BINS = 180
 LIVE_DRAG_SETTLE_MS = 80
+MAIN_MATPLOTLIB_INTERACTION_REDRAW_INTERVAL_S = 1.0 / 30.0
 CAKING_CACHE_MAX_ENTRIES = 8
 
 simulation_runtime_state.update_pending = None
@@ -8112,6 +8247,7 @@ def _refresh_settled_overlays() -> None:
 
 
 def _clear_deferred_overlays(*, clear_qr_overlay: bool = True) -> None:
+    _clear_geometry_pick_artists(redraw=False)
     if clear_qr_overlay:
         try:
             gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
@@ -8135,8 +8271,30 @@ def _finish_live_interaction() -> None:
     simulation_runtime_state.interaction_drag_requires_settled_update = False
     _refresh_run_status_bar()
     if should_schedule:
+        simulation_runtime_state.main_matplotlib_overlays_suspended = False
         schedule_update()
+        return
+    _restore_legacy_main_matplotlib_overlays()
 
+
+def _begin_main_figure_live_interaction() -> None:
+    if not _legacy_main_matplotlib_interaction_active():
+        return
+    _mark_live_interaction_start()
+    _suspend_legacy_main_matplotlib_overlays()
+
+
+def _touch_main_figure_live_interaction() -> None:
+    if not _legacy_main_matplotlib_interaction_active():
+        return
+    _mark_live_interaction_start()
+    _suspend_legacy_main_matplotlib_overlays()
+
+
+def _end_main_figure_live_interaction() -> None:
+    if not _legacy_main_matplotlib_interaction_active():
+        return
+    _mark_live_interaction_release()
 
 def _mark_live_interaction_start(_event=None) -> None:
     gui_controllers.clear_tk_after_token(
@@ -9412,6 +9570,14 @@ simulation_runtime_state.analysis_active_job = None
 simulation_runtime_state.analysis_queued_job = None
 simulation_runtime_state.analysis_ready_result = None
 simulation_runtime_state.analysis_error_text = None
+simulation_runtime_state.geometry_fit_executor = None
+simulation_runtime_state.geometry_fit_future = None
+simulation_runtime_state.geometry_fit_poll_token = None
+simulation_runtime_state.geometry_fit_job_counter = 0
+simulation_runtime_state.geometry_fit_active_job = None
+simulation_runtime_state.geometry_fit_ready_result = None
+simulation_runtime_state.geometry_fit_error_text = None
+simulation_runtime_state.geometry_fit_event_queue = queue.SimpleQueue()
 simulation_runtime_state.interaction_drag_active = False
 simulation_runtime_state.interaction_settle_token = None
 simulation_runtime_state.interaction_drag_requires_settled_update = False
@@ -10120,15 +10286,19 @@ def do_update():
             simulation_job = _build_simulation_job(
                 collect_hit_tables_enabled=collect_hit_tables_for_job
             )
-            preview_job = _build_preview_simulation_job(
-                simulation_job,
-                max_samples=_current_preview_sample_limit(),
+            preview_job = (
+                _build_preview_simulation_job(
+                    simulation_job,
+                    max_samples=_current_preview_sample_limit(),
+                )
+                if LIVE_DRAG_PREVIEW_ENABLED
+                else None
             )
             has_cached_simulation = (
                 simulation_runtime_state.stored_primary_sim_image is not None
                 or simulation_runtime_state.stored_secondary_sim_image is not None
             )
-            if _live_interaction_active():
+            if _live_interaction_active() and LIVE_DRAG_PREVIEW_ENABLED:
                 if preview_job is not None:
                     request_status = _request_async_simulation_job(preview_job)
                     if (
@@ -10477,7 +10647,8 @@ def do_update():
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
     desired_analysis_preview = bool(
-        PREVIEW_CALCULATIONS_ENABLED
+        LIVE_DRAG_PREVIEW_ENABLED
+        and PREVIEW_CALCULATIONS_ENABLED
         and analysis_requested
         and (
             simulation_runtime_state.preview_active
@@ -10717,7 +10888,6 @@ def do_update():
                 simulation_runtime_state.last_caked_background_image_unscaled,
                 dtype=float,
             )
-            _set_image_origin(background_display, 'lower')
             background_display.set_data(bg_caked)
             bg_display_vmax = vmax_val
             if not math.isfinite(bg_display_vmax):
@@ -10744,14 +10914,7 @@ def do_update():
             if simulation_runtime_state.last_caked_extent is not None
             else [0.0, 90.0, -180.0, 180.0]
         )
-        if background_caked_available:
-            background_display.set_extent([
-                radial_min,
-                radial_max,
-                azimuth_min,
-                azimuth_max,
-            ])
-        else:
+        if not background_caked_available:
             background_display.set_visible(False)
         if not (
             math.isfinite(radial_min)
@@ -10777,6 +10940,7 @@ def do_update():
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
         ax.set_title("")
+        _sync_primary_raster_geometry(show_caked_image=True)
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_extent = None
@@ -10794,9 +10958,6 @@ def do_update():
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
         ax.set_title("")
-
-        _set_image_origin(background_display, 'upper')
-        background_display.set_extent([0, image_size, image_size, 0])
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
             background_display.set_data(background_runtime_state.current_background_display)
             background_display.set_clim(
@@ -10806,6 +10967,7 @@ def do_update():
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
+        _sync_primary_raster_geometry(show_caked_image=False)
 
     gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
         
@@ -10823,8 +10985,8 @@ def do_update():
         simulation_runtime_state.last_res2_sim = sim_res2
         simulation_runtime_state.last_res2_background = bg_res2
 
-    # Keep simulation display limits sticky across regenerated simulations.
-    # Users can still change limits manually or reset defaults explicitly.
+    # Recompute the slider bounds from the current simulation on every refresh.
+    # Manual overrides are preserved unless they exceed the refreshed bounds.
     apply_scale_factor_to_existing_results(
         update_limits=False,
         update_1d=False,
@@ -11091,6 +11253,11 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     ),
     render_current_geometry_manual_pairs=(
         lambda: _render_current_geometry_manual_pairs(update_status=False)
+    ),
+    caked_view_active=lambda: (
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        if analysis_view_controls_view_state.show_caked_2d_var is not None
+        else False
     ),
     mark_chi_square_dirty=_mark_chi_square_dirty,
     refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
@@ -12098,6 +12265,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     toggle_1d_plots()
     toggle_caked_2d()
     toggle_log_display()
+    _sync_primary_raster_geometry(
+        show_caked_image=bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+    )
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -13358,6 +13528,126 @@ def _geometry_manual_logged_cache_matches_params(
     return matched_checks > 0
 
 
+def _geometry_fit_background_label(background_index: int) -> str:
+    """Return a short human-readable label for one background index."""
+
+    try:
+        osc_path = background_runtime_state.osc_files[int(background_index)]
+    except Exception:
+        osc_path = None
+    if osc_path is not None:
+        try:
+            name = Path(str(osc_path)).name
+        except Exception:
+            name = ""
+        if str(name).strip():
+            return str(name)
+    return f"background {int(background_index) + 1}"
+
+
+def _commit_geometry_manual_source_row_rebuild_result(
+    rebuild_result: gui_geometry_fit.GeometryFitSourceRowRebuildResult,
+    *,
+    consumer: str | None = None,
+) -> list[dict[str, object]]:
+    """Commit one pure source-row rebuild payload onto the live runtime state."""
+
+    if not isinstance(rebuild_result, gui_geometry_fit.GeometryFitSourceRowRebuildResult):
+        return []
+
+    background_idx = int(rebuild_result.background_index)
+    stored_rows = [
+        dict(entry)
+        for entry in (rebuild_result.stored_rows or ())
+        if isinstance(entry, Mapping)
+    ]
+    projected_rows = [
+        dict(entry)
+        for entry in (rebuild_result.projected_rows or ())
+        if isinstance(entry, Mapping)
+    ]
+    diagnostics = (
+        dict(rebuild_result.diagnostics)
+        if isinstance(rebuild_result.diagnostics, Mapping)
+        else {}
+    )
+    lookup_context = str(
+        diagnostics.get("consumer")
+        or consumer
+        or "unspecified"
+    )
+
+    if stored_rows:
+        hit_tables_local = rebuild_result.hit_tables
+        if hit_tables_local is not None:
+            try:
+                max_positions_local = hit_tables_to_max_positions(hit_tables_local)
+            except Exception:
+                max_positions_local = np.empty((0, 6), dtype=np.float64)
+            simulation_runtime_state.stored_max_positions_local = list(
+                max_positions_local
+            )
+        if rebuild_result.peak_table_lattice is not None:
+            simulation_runtime_state.stored_peak_table_lattice = list(
+                rebuild_result.peak_table_lattice
+            )
+        simulation_runtime_state.stored_sim_image = np.zeros(
+            (int(image_size), int(image_size)),
+            dtype=np.float64,
+        )
+        if rebuild_result.intersection_cache is not None:
+            simulation_runtime_state.stored_intersection_cache = (
+                _copy_intersection_cache_tables(rebuild_result.intersection_cache)
+            )
+        simulation_runtime_state.last_simulation_signature = (
+            rebuild_result.requested_signature
+        )
+        _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
+
+        snapshot_payload = {
+            "background_index": int(background_idx),
+            "simulation_signature": rebuild_result.requested_signature,
+            "rows": [dict(entry) for entry in stored_rows],
+            "row_count": int(len(stored_rows)),
+            "created_from": str(rebuild_result.rebuild_source or "unknown"),
+        }
+        if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
+            simulation_runtime_state.source_row_snapshots[int(background_idx)] = (
+                snapshot_payload
+            )
+
+        if diagnostics:
+            _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
+        _trace_live_cache_event(
+            "source_snapshot",
+            "rebuild",
+            background_index=int(background_idx),
+            outcome="success",
+            consumer=lookup_context,
+            status=str(diagnostics.get("status", "snapshot_hit")),
+            requested_signature_summary=diagnostics.get(
+                "requested_signature_summary"
+            ),
+            raw_peak_count=int(len(stored_rows)),
+            projected_peak_count=int(len(projected_rows)),
+            rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
+        )
+        return projected_rows
+
+    if diagnostics:
+        _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
+    _trace_live_cache_event(
+        "source_snapshot",
+        "rebuild",
+        background_index=int(background_idx),
+        outcome="failed",
+        consumer=lookup_context,
+        status=str(diagnostics.get("status", "snapshot_rebuild_failed")),
+        requested_signature_summary=diagnostics.get("requested_signature_summary"),
+    )
+    return []
+
+
 def _geometry_manual_rebuild_source_rows_for_background(
     background_index: int,
     param_set: dict[str, object] | None = None,
@@ -13370,6 +13660,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
     params_local = dict(_current_geometry_fit_params())
     if isinstance(param_set, Mapping):
         params_local.update(dict(param_set))
+
     requested_signature = _geometry_source_snapshot_signature_for_background(
         background_idx,
         params_local,
@@ -13378,224 +13669,68 @@ def _geometry_manual_rebuild_source_rows_for_background(
     can_use_live_runtime_cache = (
         background_idx == int(background_runtime_state.current_background_index)
     )
-
-    image_size_value = int(image_size)
-    rebuild_attempts: list[str] = []
-
-    def _project_rows(
-        raw_rows: Sequence[object] | None,
-    ) -> list[dict[str, object]]:
-        projected_rows = (
-            _project_geometry_manual_peaks_to_current_view(raw_rows)
-            if callable(_project_geometry_manual_peaks_to_current_view)
-            else raw_rows
-        )
-        return [
-            dict(entry)
-            for entry in (projected_rows or ())
-            if isinstance(entry, Mapping)
-        ]
-
-    def _store_success(
-        raw_rows: Sequence[object] | None,
-        *,
-        rebuild_source: str,
-        peak_table_lattice: Sequence[object] | None = None,
-        hit_tables_local: Sequence[object] | None = None,
-        intersection_cache_local: Sequence[object] | None = None,
-        metadata: Mapping[str, object] | None = None,
-    ) -> list[dict[str, object]]:
-        stored_rows = [
-            dict(entry)
-            for entry in (raw_rows or ())
-            if isinstance(entry, Mapping)
-        ]
-        if not stored_rows:
-            return []
-
-        if hit_tables_local is not None:
-            try:
-                max_positions_local = hit_tables_to_max_positions(hit_tables_local)
-            except Exception:
-                max_positions_local = np.empty((0, 6), dtype=np.float64)
-            simulation_runtime_state.stored_max_positions_local = list(
-                max_positions_local
-            )
-        if peak_table_lattice is not None:
-            simulation_runtime_state.stored_peak_table_lattice = list(
-                peak_table_lattice
-            )
-        simulation_runtime_state.stored_sim_image = np.zeros(
-            (int(image_size_value), int(image_size_value)),
-            dtype=np.float64,
-        )
-        if intersection_cache_local is not None:
-            simulation_runtime_state.stored_intersection_cache = (
-                _copy_intersection_cache_tables(intersection_cache_local)
-            )
-        simulation_runtime_state.last_simulation_signature = requested_signature
-        _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
-
-        snapshot_payload = {
-            "background_index": int(background_idx),
-            "simulation_signature": requested_signature,
-            "rows": [dict(entry) for entry in stored_rows],
-            "row_count": int(len(stored_rows)),
-            "created_from": str(rebuild_source),
-        }
-        if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
-            simulation_runtime_state.source_row_snapshots[int(background_idx)] = (
-                snapshot_payload
-            )
-        projected_rows = _project_rows(stored_rows)
-        live_cache_inventory = _live_cache_inventory_snapshot()
-        _set_geometry_manual_source_snapshot_diagnostics(
-            source="source_snapshot",
-            cache_family="source_snapshot",
-            action="rebuild",
-            consumer=lookup_context,
-            status="snapshot_hit",
-            background_index=int(background_idx),
-            requested_signature=requested_signature,
-            requested_signature_summary=requested_signature_summary,
-            snapshot_signature=requested_signature,
-            stored_signature_summary=requested_signature_summary,
-            raw_peak_count=int(len(stored_rows)),
-            projected_peak_count=int(len(projected_rows)),
-            created_from=str(rebuild_source),
-            cache_source="source_snapshot_rebuild",
-            rebuild_source=str(rebuild_source),
-            signature_match=True,
-            rebuild_attempts=list(rebuild_attempts),
-            cache_metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
-            live_cache_inventory=live_cache_inventory,
-        )
-        _trace_live_cache_event(
-            "source_snapshot",
-            "rebuild",
-            background_index=int(background_idx),
-            outcome="success",
-            consumer=lookup_context,
-            status="snapshot_hit",
-            requested_signature_summary=requested_signature_summary,
-            raw_peak_count=int(len(stored_rows)),
-            projected_peak_count=int(len(projected_rows)),
-            rebuild_source=str(rebuild_source),
-        )
-        return projected_rows
-
-    if can_use_live_runtime_cache:
-        rebuild_attempts.append("live_runtime_cache")
-        live_rows = [
-            dict(entry)
-            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
-            if isinstance(entry, Mapping)
-        ]
-        if live_rows:
-            return _store_success(
-                live_rows,
-                rebuild_source="live_runtime_cache",
-            )
-
-    rebuild_attempts.append("last_intersection_cache_memory")
-    memory_intersection_cache = get_last_intersection_cache()
-    memory_hit_tables = intersection_cache_to_hit_tables(memory_intersection_cache)
-    memory_rows, memory_lattice, memory_hit_tables = (
-        _geometry_manual_build_source_rows_from_hit_tables(
-            memory_hit_tables,
-            image_size_value=image_size_value,
-            params_local=params_local,
-            allow_nominal_hkl_indices=True,
-        )
-    )
-    if memory_rows:
-        return _store_success(
-            memory_rows,
-            rebuild_source="last_intersection_cache_memory",
-            peak_table_lattice=memory_lattice,
-            hit_tables_local=memory_hit_tables,
-            intersection_cache_local=memory_intersection_cache,
-        )
-
-    rebuild_attempts.append("last_intersection_cache_log")
-    logged_intersection_cache, logged_metadata = (
-        load_most_recent_logged_intersection_cache()
-    )
-    if _geometry_manual_logged_cache_matches_params(logged_metadata, params_local):
-        logged_hit_tables = intersection_cache_to_hit_tables(logged_intersection_cache)
-        logged_rows, logged_lattice, logged_hit_tables = (
-            _geometry_manual_build_source_rows_from_hit_tables(
-                logged_hit_tables,
-                image_size_value=image_size_value,
-                params_local=params_local,
-                allow_nominal_hkl_indices=True,
-            )
-        )
-        if logged_rows:
-            return _store_success(
-                logged_rows,
-                rebuild_source="last_intersection_cache_log",
-                peak_table_lattice=logged_lattice,
-                hit_tables_local=logged_hit_tables,
-                intersection_cache_local=logged_intersection_cache,
-                metadata=logged_metadata,
-            )
-
-    rebuild_attempts.append("fresh_simulation")
-    try:
-        fresh_hit_tables = _simulate_hit_tables_for_fit(
-            miller,
-            intensities,
-            image_size_value,
-            params_local,
-        )
-    except Exception:
-        fresh_hit_tables = []
-    fresh_rows, fresh_lattice, fresh_hit_tables = (
-        _geometry_manual_build_source_rows_from_hit_tables(
-            fresh_hit_tables,
-            image_size_value=image_size_value,
-            params_local=params_local,
-            allow_nominal_hkl_indices=True,
-        )
-    )
-    if fresh_rows:
-        return _store_success(
-            fresh_rows,
-            rebuild_source="fresh_simulation",
-            peak_table_lattice=fresh_lattice,
-            hit_tables_local=fresh_hit_tables,
-        )
-
     live_cache_inventory = _live_cache_inventory_snapshot()
-    _set_geometry_manual_source_snapshot_diagnostics(
-        source="source_snapshot",
-        cache_family="source_snapshot",
-        action="rebuild",
-        consumer=lookup_context,
-        status="snapshot_rebuild_failed",
+    background_label = _geometry_fit_background_label(background_idx)
+
+    def _build_source_rows_for_rebuild(
+        source_tables: Sequence[object] | None,
+    ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
+        table_list = list(source_tables or ())
+        if not table_list:
+            return [], [], []
+        first_table = np.asarray(table_list[0], dtype=np.float64)
+        if first_table.ndim == 2 and first_table.shape[1] >= 14:
+            hit_tables_local = intersection_cache_to_hit_tables(table_list)
+        else:
+            hit_tables_local = _copy_hit_tables(table_list)
+        return _geometry_manual_build_source_rows_from_hit_tables(
+            hit_tables_local,
+            image_size_value=int(image_size),
+            params_local=params_local,
+            allow_nominal_hkl_indices=True,
+        )
+
+    rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
         background_index=int(background_idx),
+        background_label=background_label,
+        params_local=params_local,
+        consumer=lookup_context,
+        prior_diagnostics=prior_diagnostics,
         requested_signature=requested_signature,
         requested_signature_summary=requested_signature_summary,
-        raw_peak_count=0,
-        projected_peak_count=0,
-        signature_match=False,
-        rebuild_attempts=list(rebuild_attempts),
-        prior_diagnostics=(
-            dict(prior_diagnostics) if isinstance(prior_diagnostics, Mapping) else {}
+        can_use_live_runtime_cache=can_use_live_runtime_cache,
+        build_live_rows=(
+            lambda: [
+                dict(entry)
+                for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
+                if isinstance(entry, Mapping)
+            ]
+        ),
+        get_memory_intersection_cache=get_last_intersection_cache,
+        load_logged_intersection_cache=(
+            lambda: load_most_recent_logged_intersection_cache()
+        ),
+        logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
+        build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
+        simulate_hit_tables=(
+            lambda normalized_params: _simulate_hit_tables_for_fit(
+                miller,
+                intensities,
+                int(image_size),
+                normalized_params,
+            )
+        ),
+        project_rows=(
+            _project_geometry_manual_peaks_to_current_view
+            if callable(_project_geometry_manual_peaks_to_current_view)
+            else None
         ),
         live_cache_inventory=live_cache_inventory,
     )
-    _trace_live_cache_event(
-        "source_snapshot",
-        "rebuild",
-        background_index=int(background_idx),
-        outcome="failed",
+    return _commit_geometry_manual_source_row_rebuild_result(
+        rebuild_result,
         consumer=lookup_context,
-        status="snapshot_rebuild_failed",
-        requested_signature_summary=requested_signature_summary,
     )
-    return []
 
 
 def _geometry_manual_source_rows_for_background(
@@ -20318,6 +20453,1159 @@ def _geometry_fit_live_update_manual_peak_cache(
         _render_current_geometry_manual_pairs(update_status=False)
         schedule_update()
 
+
+def _geometry_fit_before_run() -> None:
+    """Apply the existing geometry-fit pre-run UI cleanup on the main thread."""
+
+    if bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
+        _set_geometry_manual_pick_mode(False)
+    _clear_geometry_preview_artists()
+    _clear_geometry_pick_artists()
+
+
+def _set_geometry_fit_button_running(running: bool) -> None:
+    """Disable or enable the geometry-fit button for single-job execution."""
+
+    try:
+        fit_button_geometry.config(state=(tk.DISABLED if running else tk.NORMAL))
+    except Exception:
+        pass
+
+
+def _ensure_geometry_fit_worker_executor():
+    executor = simulation_runtime_state.geometry_fit_executor
+    if executor is None:
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ra-sim-geometry-fit",
+        )
+        simulation_runtime_state.geometry_fit_executor = executor
+    return executor
+
+
+def _clear_geometry_fit_worker_events() -> None:
+    event_queue = getattr(simulation_runtime_state, "geometry_fit_event_queue", None)
+    if event_queue is None:
+        return
+    while True:
+        try:
+            event_queue.get_nowait()
+        except Exception:
+            break
+
+
+def _geometry_fit_worker_action_result(
+    job: Mapping[str, object],
+    *,
+    prepare_result: gui_geometry_fit.GeometryFitPreparationResult | None = None,
+    execution_result: gui_geometry_fit.GeometryFitRuntimeExecutionResult | None = None,
+    error_text: str | None = None,
+) -> gui_geometry_fit.GeometryFitRuntimeActionResult:
+    """Build one geometry-fit action result from async runtime job metadata."""
+
+    resolved_error_text = (
+        str(error_text)
+        if error_text
+        else (
+            str(getattr(execution_result, "error_text", "") or "")
+            if execution_result is not None
+            else None
+        )
+    )
+    return gui_geometry_fit.GeometryFitRuntimeActionResult(
+        params=dict(job.get("params", {}) or {}),
+        var_names=[str(name) for name in (job.get("var_names", ()) or ())],
+        preserve_live_theta=bool(job.get("preserve_live_theta", False)),
+        prepare_result=prepare_result,
+        execution_result=execution_result,
+        error_text=resolved_error_text or None,
+    )
+
+
+def _persist_geometry_fit_preflight_failure_log(
+    *,
+    stamp: str,
+    log_path: Path | str,
+    error_text: str,
+    failure_log_sections: Sequence[tuple[str, Sequence[str]]] | None,
+) -> Path | None:
+    """Persist one geometry-fit preflight failure log when logging is enabled."""
+
+    if gui_geometry_fit.geometry_fit_all_logging_disabled():
+        return None
+    try:
+        return gui_geometry_fit.write_geometry_fit_preflight_failure_log(
+            stamp=str(stamp),
+            error_text=str(error_text),
+            log_path=Path(log_path),
+            log_sections=failure_log_sections,
+        )
+    except Exception:
+        return None
+
+
+def _build_geometry_fit_async_job(
+    bindings: gui_geometry_fit.GeometryFitRuntimeActionBindings,
+) -> dict[str, object]:
+    """Capture the live geometry-fit state needed by the worker thread."""
+
+    params = dict(bindings.value_callbacks.current_params() or {})
+    mosaic_params = dict(params.get("mosaic_params", {}) or {})
+    var_names = [str(name) for name in (bindings.value_callbacks.current_var_names() or ())]
+    preserve_live_theta = (
+        "theta_initial" not in var_names and "theta_offset" not in var_names
+    )
+    prepare_bindings = bindings.prepare_bindings_factory(var_names)
+    manual_dataset_bindings = prepare_bindings.manual_dataset_bindings
+    execution_bindings = bindings.execution_bindings
+    current_background_index = int(manual_dataset_bindings.current_background_index)
+    fit_config_snapshot = (
+        copy.deepcopy(dict(prepare_bindings.fit_config))
+        if isinstance(prepare_bindings.fit_config, Mapping)
+        else {}
+    )
+    theta_initial_value = float(prepare_bindings.theta_initial)
+    stamp = str(bindings.stamp_factory())
+    log_path = gui_geometry_fit.build_geometry_fit_log_path(
+        stamp=stamp,
+        log_dir=execution_bindings.log_dir,
+        downloads_dir=execution_bindings.downloads_dir,
+    )
+    if not gui_geometry_fit.geometry_fit_all_logging_disabled():
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.touch(exist_ok=True)
+        except Exception:
+            pass
+
+    if callable(prepare_bindings.ensure_geometry_fit_caked_view):
+        prepare_bindings.ensure_geometry_fit_caked_view()
+
+    selection_applied = bool(
+        prepare_bindings.apply_geometry_fit_background_selection(
+            trigger_update=False,
+            sync_live_theta=not preserve_live_theta,
+        )
+    )
+    selected_background_indices: list[int] = []
+    selection_error: str | None = None
+    if selection_applied:
+        try:
+            selected_background_indices = [
+                int(idx)
+                for idx in prepare_bindings.current_geometry_fit_background_indices(
+                    strict=True
+                )
+            ]
+        except Exception as exc:
+            selection_error = str(exc)
+
+    uses_shared_theta = False
+    if selection_error is None:
+        try:
+            uses_shared_theta = bool(
+                prepare_bindings.geometry_fit_uses_shared_theta_offset(
+                    list(selected_background_indices)
+                )
+            )
+        except Exception:
+            uses_shared_theta = False
+
+    theta_metadata_applied = True
+    background_theta_values: list[float] = []
+    background_theta_error: str | None = None
+    theta_offset_value = 0.0
+    if uses_shared_theta:
+        theta_metadata_applied = bool(
+            prepare_bindings.apply_background_theta_metadata(
+                trigger_update=False,
+                sync_live_theta=not preserve_live_theta,
+            )
+        )
+        if theta_metadata_applied:
+            try:
+                background_theta_values = [
+                    float(value)
+                    for value in prepare_bindings.current_background_theta_values(
+                        strict_count=True
+                    )
+                ]
+                theta_offset_value = float(
+                    prepare_bindings.current_geometry_theta_offset(strict=True)
+                )
+            except Exception as exc:
+                background_theta_error = str(exc)
+
+    fit_params_snapshot = dict(params)
+    active_in_selection = current_background_index in set(selected_background_indices)
+    primary_index = (
+        int(current_background_index)
+        if active_in_selection
+        else (
+            int(selected_background_indices[0])
+            if selected_background_indices
+            else int(current_background_index)
+        )
+    )
+    joint_background_mode = bool(
+        uses_shared_theta and len(selected_background_indices) > 1
+    )
+    build_all_selected_backgrounds = bool(joint_background_mode)
+    if uses_shared_theta:
+        fit_params_snapshot["theta_offset"] = float(theta_offset_value)
+        if 0 <= int(primary_index) < len(background_theta_values):
+            fit_params_snapshot["theta_initial"] = float(
+                background_theta_values[int(primary_index)]
+            )
+    else:
+        fit_params_snapshot["theta_offset"] = 0.0
+        theta_default = float(fit_params_snapshot.get("theta_initial", theta_initial_value))
+        fit_params_snapshot["theta_initial"] = float(theta_default)
+        background_theta_values = [float(theta_default)]
+
+    if (
+        not selection_applied
+        or selection_error is not None
+        or not active_in_selection
+    ):
+        required_indices: list[int] = []
+    elif build_all_selected_backgrounds:
+        required_indices = [int(idx) for idx in selected_background_indices]
+    else:
+        required_indices = [int(primary_index)]
+
+    background_images: dict[int, dict[str, np.ndarray]] = {}
+    manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
+    source_snapshots: dict[int, dict[str, object]] = {}
+    requested_signatures: dict[int, object] = {}
+    requested_signature_summaries: dict[int, object] = {}
+    background_labels: dict[int, str] = {}
+
+    def _theta_base_for_index(dataset_index: int) -> float:
+        if build_all_selected_backgrounds or joint_background_mode:
+            if 0 <= int(dataset_index) < len(background_theta_values):
+                return float(background_theta_values[int(dataset_index)])
+        return float(fit_params_snapshot.get("theta_initial", theta_initial_value))
+
+    for idx in required_indices:
+        native_background, display_background = (
+            manual_dataset_bindings.load_background_by_index(int(idx))
+        )
+        background_images[int(idx)] = {
+            "native": np.asarray(native_background, dtype=np.float64).copy(),
+            "display": np.asarray(display_background, dtype=np.float64).copy(),
+        }
+        manual_pairs_by_background[int(idx)] = [
+            dict(entry)
+            for entry in (manual_dataset_bindings.geometry_manual_pairs_for_index(int(idx)) or ())
+            if isinstance(entry, Mapping)
+        ]
+        source_snapshots[int(idx)] = copy.deepcopy(
+            simulation_runtime_state.source_row_snapshots.get(int(idx)) or {}
+        )
+        background_labels[int(idx)] = _geometry_fit_background_label(int(idx))
+        params_i = dict(fit_params_snapshot)
+        params_i["theta_initial"] = float(
+            _theta_base_for_index(int(idx))
+            + float(fit_params_snapshot.get("theta_offset", 0.0))
+        )
+        requested_signature = _geometry_source_snapshot_signature_for_background(
+            int(idx),
+            params_i,
+        )
+        requested_signatures[int(idx)] = requested_signature
+        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(
+            requested_signature
+        )
+
+    geometry_runtime_cfg = copy.deepcopy(
+        prepare_bindings.build_runtime_config(dict(fit_params_snapshot))
+    )
+    try:
+        manual_match_config = (
+            copy.deepcopy(manual_dataset_bindings.geometry_manual_match_config() or {})
+            if callable(manual_dataset_bindings.geometry_manual_match_config)
+            else {}
+        )
+    except Exception:
+        manual_match_config = {}
+    try:
+        pick_uses_caked_space = bool(
+            manual_dataset_bindings.pick_uses_caked_space()
+        ) if callable(manual_dataset_bindings.pick_uses_caked_space) else False
+    except Exception:
+        pick_uses_caked_space = False
+
+    live_rows_by_background: dict[int, list[dict[str, object]]] = {}
+    if int(current_background_index) in set(required_indices):
+        live_rows_by_background[int(current_background_index)] = [
+            dict(entry)
+            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
+            if isinstance(entry, Mapping)
+        ]
+
+    simulation_runtime_state.geometry_fit_job_counter = (
+        int(simulation_runtime_state.geometry_fit_job_counter) + 1
+    )
+    job_id = int(simulation_runtime_state.geometry_fit_job_counter)
+    return {
+        "job_id": int(job_id),
+        "stamp": stamp,
+        "log_path": Path(log_path),
+        "params": dict(params),
+        "var_names": list(var_names),
+        "preserve_live_theta": bool(preserve_live_theta),
+        "mosaic_params": dict(mosaic_params),
+        "fit_config": fit_config_snapshot,
+        "geometry_runtime_cfg": geometry_runtime_cfg,
+        "theta_initial": float(theta_initial_value),
+        "current_background_index": int(current_background_index),
+        "selection_applied": bool(selection_applied),
+        "selected_background_indices": [int(idx) for idx in selected_background_indices],
+        "selection_error": selection_error,
+        "uses_shared_theta": bool(uses_shared_theta),
+        "theta_metadata_applied": bool(theta_metadata_applied),
+        "background_theta_values": [float(value) for value in background_theta_values],
+        "background_theta_error": background_theta_error,
+        "theta_offset": float(theta_offset_value),
+        "joint_background_mode": bool(joint_background_mode),
+        "required_indices": [int(idx) for idx in required_indices],
+        "primary_index": int(primary_index),
+        "osc_files": [str(path) for path in (manual_dataset_bindings.osc_files or ())],
+        "image_size": int(manual_dataset_bindings.image_size),
+        "display_rotate_k": int(manual_dataset_bindings.display_rotate_k),
+        "background_images": background_images,
+        "manual_pairs_by_background": manual_pairs_by_background,
+        "source_snapshots": source_snapshots,
+        "requested_signatures": requested_signatures,
+        "requested_signature_summaries": requested_signature_summaries,
+        "background_labels": background_labels,
+        "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
+        "simulation_diagnostics": _geometry_manual_last_simulation_diagnostics(),
+        "live_cache_inventory": _live_cache_inventory_snapshot(),
+        "memory_intersection_cache": _copy_intersection_cache_tables(
+            get_last_intersection_cache()
+        ),
+        "live_rows_by_background": live_rows_by_background,
+        "manual_match_config": manual_match_config,
+        "pick_uses_caked_space": bool(pick_uses_caked_space),
+        "geometry_manual_simulated_lookup": (
+            manual_dataset_bindings.geometry_manual_simulated_lookup
+        ),
+        "geometry_manual_entry_display_coords": (
+            manual_dataset_bindings.geometry_manual_entry_display_coords
+        ),
+        "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
+        "display_to_native_sim_coords": (
+            manual_dataset_bindings.display_to_native_sim_coords
+        ),
+        "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
+        "apply_orientation_to_entries": (
+            manual_dataset_bindings.apply_orientation_to_entries
+        ),
+        "orient_image_for_fit": manual_dataset_bindings.orient_image_for_fit,
+        "apply_background_backend_orientation": (
+            manual_dataset_bindings.apply_background_backend_orientation
+        ),
+        "project_rows": (
+            _project_geometry_manual_peaks_to_current_view
+            if callable(_project_geometry_manual_peaks_to_current_view)
+            else None
+        ),
+        "solver_inputs": execution_bindings.solver_inputs,
+        "solve_fit": bindings.solve_fit,
+        "execution_bindings": execution_bindings,
+        "event_queue": simulation_runtime_state.geometry_fit_event_queue,
+    }
+
+
+def _handle_geometry_fit_worker_event(kind: str, payload: object) -> None:
+    """Apply one geometry-fit worker event on the Tk/main thread."""
+
+    event_kind = str(kind or "")
+    payload_mapping = payload if isinstance(payload, Mapping) else {}
+    if event_kind == "cmd_line":
+        text = str(payload_mapping.get("text", "") or "").strip()
+        if text:
+            _geometry_fit_cmd_line(text)
+        return
+    if event_kind == "progress_text":
+        text = str(payload_mapping.get("text", "") or "")
+        if text:
+            progress_label_geometry.config(text=text)
+        return
+    if event_kind == "live_cache_update":
+        _geometry_fit_live_update_manual_peak_cache(payload_mapping)
+        return
+    if event_kind == "source_snapshot_commit":
+        _commit_geometry_manual_source_row_rebuild_result(payload)
+        return
+
+    message_text = str(payload_mapping.get("message", "") or "")
+    if message_text:
+        progress_label_geometry.config(text=message_text)
+    if event_kind == "preflight_failure":
+        error_text = str(
+            payload_mapping.get("error_text")
+            or payload_mapping.get("message")
+            or ""
+        ).strip()
+        if error_text:
+            _geometry_fit_cmd_line(f"failed: {error_text}")
+    elif event_kind == "solver_finished" and str(payload_mapping.get("status", "")) == "error":
+        error_text = str(payload_mapping.get("error_text", "") or "").strip()
+        if error_text:
+            progress_label_geometry.config(text=error_text)
+
+
+def _drain_geometry_fit_worker_events(*, job_id: int | None = None) -> None:
+    """Drain queued geometry-fit worker events for the active job."""
+
+    event_queue = getattr(simulation_runtime_state, "geometry_fit_event_queue", None)
+    if event_queue is None:
+        return
+    while True:
+        try:
+            event = event_queue.get_nowait()
+        except Exception:
+            break
+        if not isinstance(event, Mapping):
+            continue
+        try:
+            event_job_id = int(event.get("job_id", -1))
+        except Exception:
+            event_job_id = -1
+        if job_id is not None and int(job_id) != int(event_job_id):
+            continue
+        _handle_geometry_fit_worker_event(
+            str(event.get("kind", "") or ""),
+            event.get("payload"),
+        )
+
+
+def _run_async_geometry_fit_worker_job(
+    job: Mapping[str, object],
+) -> gui_geometry_fit.GeometryFitRuntimeActionResult:
+    """Run geometry-fit preflight and solver work off the Tk thread."""
+
+    job_data = dict(job or {})
+    job_id = int(job_data.get("job_id", -1))
+    event_queue = job_data.get("event_queue")
+
+    def _emit_worker_event(kind: str, payload: object = None) -> None:
+        if event_queue is None:
+            return
+        try:
+            event_queue.put(
+                {
+                    "job_id": int(job_id),
+                    "kind": str(kind),
+                    "payload": copy.deepcopy(payload),
+                }
+            )
+        except Exception:
+            return
+
+    worker_source_row_snapshots = {
+        int(idx): copy.deepcopy(snapshot)
+        for idx, snapshot in dict(job_data.get("source_snapshots", {}) or {}).items()
+    }
+    worker_source_snapshot_diagnostics = copy.deepcopy(
+        job_data.get("source_snapshot_diagnostics") or {}
+    )
+    worker_simulation_diagnostics = copy.deepcopy(
+        job_data.get("simulation_diagnostics") or {}
+    )
+
+    def _set_worker_source_snapshot_diagnostics(**kwargs) -> None:
+        worker_source_snapshot_diagnostics.clear()
+        worker_source_snapshot_diagnostics.update(kwargs)
+
+    def _last_worker_source_snapshot_diagnostics() -> dict[str, object]:
+        return dict(worker_source_snapshot_diagnostics)
+
+    def _last_worker_simulation_diagnostics() -> dict[str, object]:
+        return dict(worker_simulation_diagnostics)
+
+    def _load_background_by_index_snapshot(index: int) -> tuple[np.ndarray, np.ndarray]:
+        background_payload = dict(
+            dict(job_data.get("background_images", {}) or {}).get(int(index)) or {}
+        )
+        return (
+            np.asarray(background_payload.get("native"), dtype=np.float64).copy(),
+            np.asarray(background_payload.get("display"), dtype=np.float64).copy(),
+        )
+
+    def _project_source_rows(raw_rows: Sequence[object] | None) -> Sequence[object]:
+        project_rows = job_data.get("project_rows")
+        if callable(project_rows):
+            return project_rows(raw_rows)
+        return raw_rows or ()
+
+    def _build_source_rows_for_rebuild(
+        source_tables: Sequence[object] | None,
+        *,
+        params_local: Mapping[str, object],
+    ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
+        table_list = list(source_tables or ())
+        if not table_list:
+            return [], [], []
+        first_table = np.asarray(table_list[0], dtype=np.float64)
+        if first_table.ndim == 2 and first_table.shape[1] >= 14:
+            hit_tables_local = intersection_cache_to_hit_tables(table_list)
+        else:
+            hit_tables_local = _copy_hit_tables(table_list)
+        return _geometry_manual_build_source_rows_from_hit_tables(
+            hit_tables_local,
+            image_size_value=int(job_data.get("image_size", image_size)),
+            params_local=params_local,
+            allow_nominal_hkl_indices=True,
+        )
+
+    def _rebuild_source_rows_for_background_worker(
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+        prior_diagnostics: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        background_idx = int(background_index)
+        lookup_context = str(consumer or "unspecified")
+        params_local = dict(job_data.get("params", {}) or {})
+        if isinstance(param_set, Mapping):
+            params_local.update(dict(param_set))
+
+        requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
+            int(background_idx)
+        )
+        requested_signature_summary = dict(
+            job_data.get("requested_signature_summaries", {}) or {}
+        ).get(int(background_idx))
+        if requested_signature_summary is None:
+            requested_signature_summary = _live_cache_signature_summary(
+                requested_signature
+            )
+        background_label = dict(job_data.get("background_labels", {}) or {}).get(
+            int(background_idx),
+            f"background {int(background_idx) + 1}",
+        )
+
+        rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
+            background_index=int(background_idx),
+            background_label=str(background_label),
+            params_local=params_local,
+            consumer=lookup_context,
+            prior_diagnostics=prior_diagnostics,
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            can_use_live_runtime_cache=(
+                int(background_idx) == int(job_data.get("current_background_index", -1))
+            ),
+            build_live_rows=(
+                lambda: [
+                    dict(entry)
+                    for entry in (
+                        dict(job_data.get("live_rows_by_background", {}) or {}).get(
+                            int(background_idx),
+                            (),
+                        )
+                        or ()
+                    )
+                    if isinstance(entry, Mapping)
+                ]
+            ),
+            get_memory_intersection_cache=(
+                lambda: _copy_intersection_cache_tables(
+                    job_data.get("memory_intersection_cache", [])
+                )
+            ),
+            load_logged_intersection_cache=load_most_recent_logged_intersection_cache,
+            logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
+            build_source_rows_from_hit_tables=(
+                lambda source_tables: _build_source_rows_for_rebuild(
+                    source_tables,
+                    params_local=params_local,
+                )
+            ),
+            simulate_hit_tables=(
+                lambda normalized_params: _simulate_hit_tables_for_fit(
+                    job_data["solver_inputs"].miller,
+                    job_data["solver_inputs"].intensities,
+                    int(job_data["solver_inputs"].image_size),
+                    normalized_params,
+                )
+            ),
+            project_rows=_project_source_rows,
+            live_cache_inventory=job_data.get("live_cache_inventory", {}),
+        )
+        _set_worker_source_snapshot_diagnostics(
+            **dict(rebuild_result.diagnostics or {})
+        )
+        worker_simulation_diagnostics.clear()
+        worker_simulation_diagnostics.update(
+            dict(rebuild_result.diagnostics or {})
+        )
+        if rebuild_result.stored_rows:
+            worker_source_row_snapshots[int(background_idx)] = {
+                "background_index": int(background_idx),
+                "simulation_signature": rebuild_result.requested_signature,
+                "rows": [dict(entry) for entry in (rebuild_result.stored_rows or ())],
+                "row_count": int(len(rebuild_result.stored_rows or ())),
+                "created_from": str(rebuild_result.rebuild_source or "unknown"),
+            }
+        _emit_worker_event("source_snapshot_commit", rebuild_result)
+        return [
+            dict(entry)
+            for entry in (rebuild_result.projected_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+
+    def _source_rows_for_background_worker(
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+    ) -> list[dict[str, object]]:
+        background_idx = int(background_index)
+        lookup_context = str(consumer or "unspecified")
+        allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")
+        snapshot = dict(worker_source_row_snapshots.get(int(background_idx)) or {})
+        requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
+            int(background_idx)
+        )
+        requested_signature_summary = dict(
+            job_data.get("requested_signature_summaries", {}) or {}
+        ).get(int(background_idx))
+        if requested_signature_summary is None:
+            requested_signature_summary = _live_cache_signature_summary(
+                requested_signature
+            )
+        background_label = dict(job_data.get("background_labels", {}) or {}).get(
+            int(background_idx),
+            f"background {int(background_idx) + 1}",
+        )
+        live_cache_inventory = copy.deepcopy(job_data.get("live_cache_inventory", {}))
+        if not snapshot:
+            _set_worker_source_snapshot_diagnostics(
+                source="source_snapshot",
+                cache_family="source_snapshot",
+                action="lookup",
+                consumer=lookup_context,
+                status="snapshot_missing_background",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                raw_peak_count=0,
+                projected_peak_count=0,
+                signature_match=False,
+                live_cache_inventory=live_cache_inventory,
+            )
+            if allow_source_snapshot_rebuild:
+                return _rebuild_source_rows_for_background_worker(
+                    background_idx,
+                    param_set,
+                    consumer=lookup_context,
+                    prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
+                )
+            return []
+
+        snapshot_signature = snapshot.get("simulation_signature")
+        stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
+        raw_rows = [
+            dict(entry)
+            for entry in (snapshot.get("rows", ()) or ())
+            if isinstance(entry, Mapping)
+        ]
+        if snapshot_signature != requested_signature:
+            _set_worker_source_snapshot_diagnostics(
+                source="source_snapshot",
+                cache_family="source_snapshot",
+                action="lookup",
+                consumer=lookup_context,
+                status="snapshot_signature_mismatch",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=snapshot_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=int(len(raw_rows)),
+                projected_peak_count=0,
+                created_from=snapshot.get("created_from"),
+                signature_match=False,
+                live_cache_inventory=live_cache_inventory,
+            )
+            if allow_source_snapshot_rebuild:
+                return _rebuild_source_rows_for_background_worker(
+                    background_idx,
+                    param_set,
+                    consumer=lookup_context,
+                    prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
+                )
+            return []
+
+        if not raw_rows:
+            _set_worker_source_snapshot_diagnostics(
+                source="source_snapshot",
+                cache_family="source_snapshot",
+                action="lookup",
+                consumer=lookup_context,
+                status="snapshot_empty",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=snapshot_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=0,
+                projected_peak_count=0,
+                created_from=snapshot.get("created_from"),
+                signature_match=True,
+                live_cache_inventory=live_cache_inventory,
+            )
+            if allow_source_snapshot_rebuild:
+                return _rebuild_source_rows_for_background_worker(
+                    background_idx,
+                    param_set,
+                    consumer=lookup_context,
+                    prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
+                )
+            return []
+
+        projected_rows = [
+            dict(entry)
+            for entry in (_project_source_rows(raw_rows) or ())
+            if isinstance(entry, Mapping)
+        ]
+        _set_worker_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status="snapshot_hit",
+            background_index=int(background_idx),
+            background_label=str(background_label),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=int(len(projected_rows)),
+            created_from=snapshot.get("created_from"),
+            signature_match=True,
+            live_cache_inventory=live_cache_inventory,
+        )
+        return projected_rows
+
+    worker_manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=list(job_data.get("osc_files", ()) or ()),
+        current_background_index=int(job_data.get("current_background_index", 0)),
+        image_size=int(job_data.get("image_size", image_size)),
+        display_rotate_k=int(job_data.get("display_rotate_k", DISPLAY_ROTATE_K)),
+        geometry_manual_pairs_for_index=(
+            lambda idx: [
+                dict(entry)
+                for entry in (
+                    dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                        int(idx),
+                        (),
+                    )
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            ]
+        ),
+        load_background_by_index=_load_background_by_index_snapshot,
+        apply_background_backend_orientation=job_data.get(
+            "apply_background_backend_orientation"
+        ),
+        geometry_manual_simulated_peaks_for_params=(lambda *_args, **_kwargs: []),
+        geometry_manual_simulated_lookup=job_data.get(
+            "geometry_manual_simulated_lookup"
+        ),
+        geometry_manual_source_rows_for_background=_source_rows_for_background_worker,
+        geometry_manual_rebuild_source_rows_for_background=(
+            _rebuild_source_rows_for_background_worker
+        ),
+        geometry_manual_last_source_snapshot_diagnostics=(
+            _last_worker_source_snapshot_diagnostics
+        ),
+        geometry_manual_last_simulation_diagnostics=_last_worker_simulation_diagnostics,
+        geometry_manual_match_config=(
+            lambda: copy.deepcopy(job_data.get("manual_match_config", {}))
+        ),
+        geometry_manual_entry_display_coords=job_data.get(
+            "geometry_manual_entry_display_coords"
+        ),
+        unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
+        display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
+        select_fit_orientation=job_data.get("select_fit_orientation"),
+        apply_orientation_to_entries=job_data.get("apply_orientation_to_entries"),
+        orient_image_for_fit=job_data.get("orient_image_for_fit"),
+        pick_uses_caked_space=(
+            lambda: bool(job_data.get("pick_uses_caked_space", False))
+        ),
+    )
+
+    def _stage_callback(stage: str, payload: Mapping[str, object]) -> None:
+        _emit_worker_event(str(stage), dict(payload or {}))
+
+    try:
+        prepare_result = gui_geometry_fit.prepare_geometry_fit_run(
+            params=dict(job_data.get("params", {}) or {}),
+            var_names=list(job_data.get("var_names", ()) or ()),
+            fit_config=dict(job_data.get("fit_config", {}) or {}),
+            osc_files=list(job_data.get("osc_files", ()) or ()),
+            current_background_index=int(job_data.get("current_background_index", 0)),
+            theta_initial=float(job_data.get("theta_initial", 0.0)),
+            preserve_live_theta=bool(job_data.get("preserve_live_theta", False)),
+            apply_geometry_fit_background_selection=(
+                lambda **_kwargs: bool(job_data.get("selection_applied", True))
+            ),
+            current_geometry_fit_background_indices=(
+                lambda **_kwargs: (
+                    (_ for _ in ()).throw(
+                        RuntimeError(str(job_data.get("selection_error")))
+                    )
+                    if job_data.get("selection_error")
+                    else list(job_data.get("selected_background_indices", ()) or ())
+                )
+            ),
+            geometry_fit_uses_shared_theta_offset=(
+                lambda _indices: bool(job_data.get("uses_shared_theta", False))
+            ),
+            apply_background_theta_metadata=(
+                lambda **_kwargs: bool(job_data.get("theta_metadata_applied", True))
+            ),
+            current_background_theta_values=(
+                lambda **_kwargs: (
+                    (_ for _ in ()).throw(
+                        RuntimeError(str(job_data.get("background_theta_error")))
+                    )
+                    if job_data.get("background_theta_error")
+                    else list(job_data.get("background_theta_values", ()) or ())
+                )
+            ),
+            current_geometry_theta_offset=(
+                lambda **_kwargs: float(job_data.get("theta_offset", 0.0))
+            ),
+            geometry_manual_pairs_for_index=(
+                worker_manual_dataset_bindings.geometry_manual_pairs_for_index
+            ),
+            ensure_geometry_fit_caked_view=lambda: None,
+            build_dataset=(
+                lambda background_index, *, theta_base, base_fit_params, orientation_cfg, stage_callback=None: (
+                    gui_geometry_fit.build_geometry_manual_fit_dataset(
+                        background_index,
+                        theta_base=theta_base,
+                        base_fit_params=base_fit_params,
+                        manual_dataset_bindings=worker_manual_dataset_bindings,
+                        orientation_cfg=orientation_cfg,
+                        stage_callback=stage_callback,
+                    )
+                )
+            ),
+            build_runtime_config=(
+                lambda _fit_params: copy.deepcopy(
+                    dict(job_data.get("geometry_runtime_cfg", {}) or {})
+                )
+            ),
+            stage_callback=_stage_callback,
+        )
+    except Exception as exc:
+        error_text = f"Geometry fit failed: {exc}"
+        failure_log_sections = gui_geometry_fit.build_geometry_fit_preflight_log_sections(
+            error_text=error_text,
+            params=dict(job_data.get("params", {}) or {}),
+            var_names=list(job_data.get("var_names", ()) or ()),
+            dataset_infos=None,
+            current_dataset=None,
+            selected_background_indices=list(
+                job_data.get("selected_background_indices", ()) or ()
+            ),
+            joint_background_mode=bool(job_data.get("joint_background_mode", False)),
+            geometry_runtime_cfg=dict(job_data.get("fit_config", {}) or {}),
+        )
+        logged_path = _persist_geometry_fit_preflight_failure_log(
+            stamp=str(job_data.get("stamp", "")),
+            log_path=job_data.get("log_path"),
+            error_text=error_text,
+            failure_log_sections=failure_log_sections,
+        )
+        prepare_result = gui_geometry_fit.GeometryFitPreparationResult(
+            error_text=error_text,
+            failure_log_sections=failure_log_sections,
+            log_path=logged_path,
+        )
+        _emit_worker_event(
+            "preflight_failure",
+            {"error_text": error_text, "message": error_text},
+        )
+        return _geometry_fit_worker_action_result(
+            job_data,
+            prepare_result=prepare_result,
+            error_text=error_text,
+        )
+
+    if prepare_result.prepared_run is None:
+        should_force_preflight_log = bool(prepare_result.error_text) or bool(
+            gui_geometry_fit.geometry_fit_debug_logging_enabled(
+                job_data.get("fit_config")
+            )
+        )
+        if should_force_preflight_log:
+            preflight_error_text = str(
+                prepare_result.error_text
+                or "Geometry fit aborted before solver start."
+            )
+            failure_log_sections = (
+                list(prepare_result.failure_log_sections or ())
+                or gui_geometry_fit.build_geometry_fit_preflight_log_sections(
+                    error_text=preflight_error_text,
+                    params=dict(job_data.get("params", {}) or {}),
+                    var_names=list(job_data.get("var_names", ()) or ()),
+                    dataset_infos=None,
+                    current_dataset=None,
+                    selected_background_indices=list(
+                        job_data.get("selected_background_indices", ()) or ()
+                    ),
+                    joint_background_mode=bool(
+                        job_data.get("joint_background_mode", False)
+                    ),
+                    geometry_runtime_cfg=dict(job_data.get("fit_config", {}) or {}),
+                )
+            )
+            logged_path = _persist_geometry_fit_preflight_failure_log(
+                stamp=str(job_data.get("stamp", "")),
+                log_path=job_data.get("log_path"),
+                error_text=preflight_error_text,
+                failure_log_sections=failure_log_sections,
+            )
+            prepare_result = gui_geometry_fit.GeometryFitPreparationResult(
+                prepared_run=prepare_result.prepared_run,
+                error_text=prepare_result.error_text,
+                failure_log_sections=[
+                    (str(title), [str(line) for line in (lines or ())])
+                    for title, lines in failure_log_sections
+                ],
+                log_path=logged_path,
+            )
+        return _geometry_fit_worker_action_result(
+            job_data,
+            prepare_result=prepare_result,
+            error_text=prepare_result.error_text,
+        )
+
+    execution_result = gui_geometry_fit.execute_runtime_geometry_fit_solver_phase(
+        prepared_run=prepare_result.prepared_run,
+        var_names=list(job_data.get("var_names", ()) or ()),
+        solve_fit=job_data.get("solve_fit"),
+        solver_inputs=job_data.get("solver_inputs"),
+        stamp=str(job_data.get("stamp", "")),
+        log_path=job_data.get("log_path"),
+        event_callback=(
+            lambda kind, payload: _emit_worker_event(str(kind), dict(payload or {}))
+        ),
+        live_update_callback=(
+            lambda payload: _emit_worker_event(
+                "live_cache_update",
+                dict(payload or {}),
+            )
+        ),
+    )
+    return _geometry_fit_worker_action_result(
+        job_data,
+        prepare_result=prepare_result,
+        execution_result=execution_result,
+        error_text=execution_result.error_text,
+    )
+
+
+def _submit_async_geometry_fit_job(job: dict[str, object]) -> None:
+    simulation_runtime_state.geometry_fit_active_job = dict(job)
+    simulation_runtime_state.geometry_fit_ready_result = None
+    simulation_runtime_state.geometry_fit_future = _ensure_geometry_fit_worker_executor().submit(
+        _run_async_geometry_fit_worker_job,
+        dict(job),
+    )
+    simulation_runtime_state.geometry_fit_error_text = None
+    if simulation_runtime_state.geometry_fit_poll_token is None:
+        simulation_runtime_state.geometry_fit_poll_token = root.after(
+            SIMULATION_WORKER_POLL_MS,
+            _poll_async_geometry_fit_job,
+        )
+
+
+def _finish_geometry_fit_async_job(
+    job: Mapping[str, object] | None,
+    action_result: gui_geometry_fit.GeometryFitRuntimeActionResult | None,
+) -> None:
+    simulation_runtime_state.geometry_fit_active_job = None
+    simulation_runtime_state.geometry_fit_future = None
+    simulation_runtime_state.geometry_fit_poll_token = None
+    simulation_runtime_state.geometry_fit_ready_result = None
+    simulation_runtime_state.geometry_fit_error_text = (
+        str(action_result.error_text)
+        if action_result is not None and action_result.error_text
+        else None
+    )
+    _set_geometry_fit_button_running(False)
+    if action_result is not None:
+        _show_geometry_fit_action_notice(action_result)
+
+
+def _consume_ready_geometry_fit_result() -> None:
+    ready_payload = simulation_runtime_state.geometry_fit_ready_result
+    simulation_runtime_state.geometry_fit_ready_result = None
+    if not isinstance(ready_payload, Mapping):
+        return
+    job = dict(ready_payload.get("job", {}) or {})
+    if job:
+        _drain_geometry_fit_worker_events(job_id=int(job.get("job_id", -1)))
+    action_result = ready_payload.get("action_result")
+    if not isinstance(action_result, gui_geometry_fit.GeometryFitRuntimeActionResult):
+        _finish_geometry_fit_async_job(job, None)
+        return
+
+    prepare_result = action_result.prepare_result
+    execution_result = action_result.execution_result
+    finalized_action_result = action_result
+    if (
+        isinstance(prepare_result, gui_geometry_fit.GeometryFitPreparationResult)
+        and prepare_result.prepared_run is not None
+        and isinstance(execution_result, gui_geometry_fit.GeometryFitRuntimeExecutionResult)
+        and execution_result.error_text is None
+        and execution_result.solver_result is not None
+    ):
+        execution_setup = gui_geometry_fit.build_runtime_geometry_fit_execution_setup_from_bindings(
+            prepared_run=prepare_result.prepared_run,
+            mosaic_params=dict(job.get("mosaic_params", {}) or {}),
+            stamp=str(job.get("stamp", "")),
+            bindings=job.get("execution_bindings"),
+        )
+        finalized_execution = gui_geometry_fit.finalize_runtime_geometry_fit_execution(
+            execution_result=execution_result,
+            prepared_run=prepare_result.prepared_run,
+            var_names=list(job.get("var_names", ()) or ()),
+            preserve_live_theta=bool(job.get("preserve_live_theta", False)),
+            setup=execution_setup,
+        )
+        finalized_action_result = _geometry_fit_worker_action_result(
+            job,
+            prepare_result=prepare_result,
+            execution_result=finalized_execution,
+            error_text=finalized_execution.error_text,
+        )
+
+    _finish_geometry_fit_async_job(job, finalized_action_result)
+
+
+def _poll_async_geometry_fit_job() -> None:
+    simulation_runtime_state.geometry_fit_poll_token = None
+    active_job = simulation_runtime_state.geometry_fit_active_job
+    future = simulation_runtime_state.geometry_fit_future
+    active_job_id = (
+        int(active_job.get("job_id", -1))
+        if isinstance(active_job, Mapping)
+        else None
+    )
+    _drain_geometry_fit_worker_events(job_id=active_job_id)
+
+    if future is None or not isinstance(active_job, Mapping):
+        return
+
+    if not future.done():
+        simulation_runtime_state.geometry_fit_poll_token = root.after(
+            SIMULATION_WORKER_POLL_MS,
+            _poll_async_geometry_fit_job,
+        )
+        return
+
+    simulation_runtime_state.geometry_fit_future = None
+    simulation_runtime_state.geometry_fit_active_job = None
+    _drain_geometry_fit_worker_events(job_id=active_job_id)
+    try:
+        action_result = future.result()
+    except Exception as exc:
+        error_text = f"Geometry fit failed: {exc}"
+        progress_label_geometry.config(text=error_text)
+        _geometry_fit_cmd_line(f"failed: {exc}")
+        action_result = _geometry_fit_worker_action_result(
+            active_job,
+            prepare_result=gui_geometry_fit.GeometryFitPreparationResult(
+                error_text=error_text,
+                log_path=(
+                    Path(active_job.get("log_path"))
+                    if active_job.get("log_path") is not None
+                    else None
+                ),
+            ),
+            error_text=error_text,
+        )
+    simulation_runtime_state.geometry_fit_ready_result = {
+        "job": dict(active_job),
+        "action_result": action_result,
+    }
+    root.after_idle(_consume_ready_geometry_fit_result)
+
+
+def _on_fit_geometry_click_async():
+    """Run geometry fit through the dedicated background worker lane."""
+
+    if (
+        simulation_runtime_state.geometry_fit_active_job is not None
+        or simulation_runtime_state.geometry_fit_future is not None
+    ):
+        message = "Geometry fit already running."
+        _geometry_fit_cmd_line("geometry fit already running")
+        progress_label_geometry.config(text=message)
+        return None
+
+    if not callable(geometry_fit_action_bindings_factory):
+        return None
+
+    _geometry_fit_before_run()
+    bindings = geometry_fit_action_bindings_factory()
+    execution_bindings = bindings.execution_bindings
+    _set_geometry_fit_button_running(True)
+    execution_bindings.cmd_line("queued: geometry-fit preflight")
+    execution_bindings.set_progress_text("preflight: collecting geometry-fit datasets")
+    if callable(bindings.flush_ui):
+        try:
+            bindings.flush_ui()
+        except Exception:
+            pass
+
+    try:
+        job = _build_geometry_fit_async_job(bindings)
+    except Exception as exc:
+        error_text = f"Geometry fit failed: {exc}"
+        _set_geometry_fit_button_running(False)
+        execution_bindings.cmd_line(f"failed: {exc}")
+        execution_bindings.set_progress_text(error_text)
+        current_var_names = list(bindings.value_callbacks.current_var_names() or ())
+        action_result = _geometry_fit_worker_action_result(
+            {
+                "params": dict(bindings.value_callbacks.current_params() or {}),
+                "var_names": current_var_names,
+                "preserve_live_theta": (
+                    "theta_initial" not in current_var_names
+                    and "theta_offset" not in current_var_names
+                ),
+            },
+            prepare_result=gui_geometry_fit.GeometryFitPreparationResult(
+                error_text=error_text
+            ),
+            error_text=error_text,
+        )
+        _show_geometry_fit_action_notice(action_result)
+        return None
+
+    _clear_geometry_fit_worker_events()
+    _submit_async_geometry_fit_job(job)
+    return None
+
 geometry_fit_runtime_workflow = (
     gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
         geometry_fit_module=gui_geometry_fit,
@@ -20518,7 +21806,7 @@ geometry_fit_action_runtime = geometry_fit_runtime_workflow.action_runtime
 geometry_fit_action_bindings_factory = (
     geometry_fit_runtime_workflow.action_bindings_factory
 )
-on_fit_geometry_click = geometry_fit_runtime_workflow.on_fit_geometry_click
+on_fit_geometry_click = _on_fit_geometry_click_async
 fit_button_geometry.config(command=on_fit_geometry_click)
 
 

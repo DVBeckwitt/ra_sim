@@ -875,6 +875,9 @@ class SimulationRuntimeState:
     interaction_drag_active: bool = False
     interaction_settle_token: Any = None
     interaction_drag_requires_settled_update: bool = False
+    main_matplotlib_redraw_token: Any = None
+    main_matplotlib_last_draw_ts: float | None = None
+    main_matplotlib_overlays_suspended: bool = False
     unscaled_image: np.ndarray | None = None
     last_1d_integration_data: dict[str, object] = field(
         default_factory=lambda: {

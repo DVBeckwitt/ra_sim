@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 from ra_sim.gui import bootstrap as gui_bootstrap
@@ -15,6 +16,14 @@ _MOSAIC_SCRIPT_NAMES = (
     "mosaic_simulator.py",
     "simulate_mosaic.py",
 )
+
+
+def _pick_available_local_port() -> int:
+    """Return an ephemeral localhost TCP port for a new Dash subprocess."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
@@ -98,6 +107,7 @@ def launch_mosaic_specular_visualizer(initial_state: object) -> None:
     except TypeError as exc:
         raise RuntimeError(f"Unable to serialize 2D_Mosaic_Sim startup state: {exc}") from exc
 
+    port = _pick_available_local_port()
     try:
         subprocess.Popen(
             [
@@ -105,6 +115,8 @@ def launch_mosaic_specular_visualizer(initial_state: object) -> None:
                 str(script_path),
                 "--mode",
                 "specular-view",
+                "--port",
+                str(port),
                 "--state-json",
                 state_json,
             ],

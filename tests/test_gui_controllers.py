@@ -238,6 +238,15 @@ def test_build_initial_state_reads_instrument_config(monkeypatch) -> None:
 def test_display_control_controller_helpers_normalize_scale_and_ranges() -> None:
     assert controllers.ensure_display_intensity_range(float("nan"), 5.0) == (0.0, 5.0)
     assert controllers.ensure_display_intensity_range(5.0, 4.0) == (5.0, 6.0)
+    sparse_simulation = np.concatenate(
+        (np.zeros(500, dtype=float), np.array([2.0, 5.0, 50.0], dtype=float))
+    )
+    expected_upper = float(np.nanpercentile(np.array([2.0, 5.0, 50.0]), 99.0))
+    assert np.isclose(
+        controllers.resolve_simulation_display_upper_bound(sparse_simulation),
+        expected_upper,
+    )
+    assert controllers.resolve_simulation_display_upper_bound(np.zeros(8, dtype=float)) == 1.0
     assert controllers.normalize_display_scale_factor("2.5", fallback=1.0) == 2.5
     assert controllers.normalize_display_scale_factor("-3", fallback=1.0) == 0.0
     assert controllers.normalize_display_scale_factor("bad", fallback="4.5") == 4.5

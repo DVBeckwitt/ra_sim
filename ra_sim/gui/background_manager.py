@@ -42,6 +42,7 @@ class BackgroundRuntimeBindings:
     set_background_alpha: Callable[[float], None] | None = None
     sync_theta_initial_to_background: Callable[[int], None] | None = None
     render_current_geometry_manual_pairs: Callable[[], None] | None = None
+    caked_view_active: Callable[[], bool] | None = None
     background_backend_debug_view_state: object | None = None
     mark_chi_square_dirty: Callable[[], None] | None = None
     refresh_chi_square_display: Callable[[], None] | None = None
@@ -93,6 +94,15 @@ def _resolve_runtime_value(value_or_callable: object) -> object:
 def _set_status_text(set_status_text: Callable[[str], None] | None, text: str) -> None:
     if callable(set_status_text):
         set_status_text(str(text))
+
+
+def _caked_view_active(caked_view_active: Callable[[], bool] | None) -> bool:
+    if not callable(caked_view_active):
+        return False
+    try:
+        return bool(caked_view_active())
+    except Exception:
+        return False
 
 
 def _replace_list(target: list, values: Sequence[object] | None) -> list:
@@ -753,6 +763,7 @@ def make_runtime_background_bindings_factory(
     set_background_alpha: Callable[[float], None] | None = None,
     sync_theta_initial_to_background: Callable[[int], None] | None = None,
     render_current_geometry_manual_pairs: Callable[[], None] | None = None,
+    caked_view_active: Callable[[], bool] | None = None,
     background_backend_debug_view_state: object | None = None,
     mark_chi_square_dirty: Callable[[], None] | None = None,
     refresh_chi_square_display: Callable[[], None] | None = None,
@@ -791,6 +802,7 @@ def make_runtime_background_bindings_factory(
             clear_geometry_pick_artists=clear_geometry_pick_artists,
             sync_theta_initial_to_background=sync_theta_initial_to_background,
             render_current_geometry_manual_pairs=render_current_geometry_manual_pairs,
+            caked_view_active=caked_view_active,
             background_backend_debug_view_state=background_backend_debug_view_state,
             mark_chi_square_dirty=mark_chi_square_dirty,
             refresh_chi_square_display=refresh_chi_square_display,
@@ -1070,6 +1082,7 @@ def switch_background_with_side_effects(
     render_current_geometry_manual_pairs: Callable[[], None],
     schedule_update: Callable[[], None],
     preempt_simulation_update: Callable[[], None] | None = None,
+    caked_view_active: Callable[[], bool] | None = None,
 ) -> dict[str, object]:
     """Switch backgrounds and apply the dependent GUI side effects."""
 
@@ -1085,16 +1098,21 @@ def switch_background_with_side_effects(
     clear_geometry_manual_undo_stack()
     clear_geometry_fit_undo_stack()
 
+    # In caked mode, keep the existing caked raster onscreen until the
+    # recomputed caked background is ready.
+    defer_immediate_canvas_refresh = _caked_view_active(caked_view_active)
     current_display = background_state.current_background_display
-    set_background_display_data(current_display)
-    update_background_slider_defaults(current_display)
+    if not defer_immediate_canvas_refresh:
+        set_background_display_data(current_display)
+        update_background_slider_defaults(current_display)
     if callable(sync_background_theta_controls):
         sync_background_theta_controls()
     elif sync_theta_initial_to_background is not None:
         sync_theta_initial_to_background(int(background_state.current_background_index))
     if callable(sync_geometry_fit_background_selection):
         sync_geometry_fit_background_selection()
-    render_current_geometry_manual_pairs()
+    if not defer_immediate_canvas_refresh:
+        render_current_geometry_manual_pairs()
     refresh_background_file_status()
     schedule_update()
     return updated
@@ -1133,6 +1151,7 @@ def switch_runtime_background(
             ),
             schedule_update=bindings.schedule_update or (lambda: None),
             preempt_simulation_update=bindings.preempt_simulation_update,
+            caked_view_active=bindings.caked_view_active,
         )
     except Exception as exc:
         _set_status_text(

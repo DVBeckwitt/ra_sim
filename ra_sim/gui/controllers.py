@@ -481,6 +481,63 @@ def ensure_display_intensity_range(
     return min_val, max_val
 
 
+def finite_percentile(
+    values: object,
+    percentile: object,
+    *,
+    fallback: object,
+    positive_only: bool = False,
+) -> float:
+    """Return one finite percentile from a numeric array-like value."""
+
+    try:
+        fallback_value = float(fallback)
+    except (TypeError, ValueError):
+        fallback_value = 0.0
+    if not math.isfinite(fallback_value):
+        fallback_value = 0.0
+
+    if values is None:
+        return fallback_value
+
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if positive_only:
+        positive = finite[finite > 0.0]
+        if positive.size:
+            finite = positive
+    if finite.size == 0:
+        return fallback_value
+
+    try:
+        percentile_value = float(percentile)
+    except (TypeError, ValueError):
+        percentile_value = 100.0
+    if not math.isfinite(percentile_value):
+        percentile_value = 100.0
+    percentile_value = float(np.clip(percentile_value, 0.0, 100.0))
+
+    result = float(np.nanpercentile(finite, percentile_value))
+    return result if math.isfinite(result) else fallback_value
+
+
+def resolve_simulation_display_upper_bound(
+    image: object,
+    *,
+    percentile: float = 99.0,
+) -> float:
+    """Return the simulation display upper bound for one rendered image."""
+
+    upper_bound = finite_percentile(
+        image,
+        percentile,
+        fallback=1.0,
+        positive_only=True,
+    )
+    _, upper_bound = ensure_display_intensity_range(0.0, upper_bound)
+    return float(upper_bound)
+
+
 def normalize_display_scale_factor(
     value: object,
     *,

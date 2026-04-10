@@ -543,10 +543,11 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     )
 
     assert len(cache) == 1
-    log_paths = list(tmp_path.glob("geometry_fit_log_*.txt"))
-    assert len(log_paths) == 1
-    log_text = log_paths[0].read_text(encoding="utf-8")
-    metadata = json.loads(log_text[log_text.index("{"):])
+    log_root = tmp_path / "intersection_cache"
+    log_dirs = list(log_root.glob("intersection_cache_*"))
+    assert len(log_dirs) == 1
+    log_dir = log_dirs[0]
+    metadata = json.loads((log_dir / "meta.json").read_text(encoding="utf-8"))
 
     assert metadata["reused"] is False
     assert metadata["rebuilt"] is True
@@ -557,6 +558,8 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     assert metadata["group_summary_count"] == 1
     assert metadata["table_count"] == 1
     assert len(metadata["cache_tables"]) == 1
+    assert metadata["table_files"] == ["table_0000.npy"]
+    assert (log_dir / "table_0000.npy").exists()
 
     group_summary = metadata["group_summaries"][0]
     assert group_summary["nominal_hkl"] == [0, 0, 3]
@@ -571,6 +574,17 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     assert table_summary["row_count_before_grouping"] == 3
     assert table_summary["row_count_after_grouping"] == 1
     assert isinstance(table_summary["representative_row_indices_kept"], list)
+
+    reloaded_cache, reloaded_metadata = diffraction.load_most_recent_logged_intersection_cache(
+        log_root=log_root
+    )
+    assert len(reloaded_cache) == 1
+    np.testing.assert_allclose(
+        np.asarray(reloaded_cache[0], dtype=np.float64),
+        np.asarray(cache[0], dtype=np.float64),
+    )
+    assert reloaded_metadata["table_count"] == 1
+    assert reloaded_metadata["log_dir"] == str(log_dir)
 
 
 def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monkeypatch):

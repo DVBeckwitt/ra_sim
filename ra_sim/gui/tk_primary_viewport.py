@@ -227,6 +227,16 @@ def _plot_bounds(view_state: ViewportViewState) -> tuple[float, float, float, fl
     )
 
 
+def _screen_pixel_bounds(start: float, span: float, limit: int) -> tuple[int, int] | None:
+    if float(span) <= _EPSILON or int(limit) <= 0:
+        return None
+    pixel_start = int(max(0, ceil(float(start) - 0.5)))
+    pixel_end = int(min(int(limit), floor(float(start) + float(span) - 0.5) + 1))
+    if pixel_end <= pixel_start:
+        return None
+    return (pixel_start, pixel_end)
+
+
 def world_to_screen(
     view_state: ViewportViewState,
     world_x: float,
@@ -982,84 +992,93 @@ class _TkPrimaryViewport:
         if src_height <= 0 or src_width <= 0:
             return None
         extent_x0, extent_x1, extent_y0, extent_y1 = layer.extent
-        view_x_min, view_x_max, view_y_min, view_y_max = _view_bounds(view_state)
-        extent_x_min, extent_x_max = (min(extent_x0, extent_x1), max(extent_x0, extent_x1))
-        extent_y_min, extent_y_max = (min(extent_y0, extent_y1), max(extent_y0, extent_y1))
-        overlap_x0 = max(view_x_min, extent_x_min)
-        overlap_x1 = min(view_x_max, extent_x_max)
-        overlap_y0 = max(view_y_min, extent_y_min)
-        overlap_y1 = min(view_y_max, extent_y_max)
-        if overlap_x1 - overlap_x0 <= _EPSILON or overlap_y1 - overlap_y0 <= _EPSILON:
+        left, top, plot_width, plot_height = _plot_bounds(view_state)
+        x_bounds = _screen_pixel_bounds(left, plot_width, int(max(int(view_state.width), 1)))
+        y_bounds = _screen_pixel_bounds(top, plot_height, int(max(int(view_state.height), 1)))
+        if x_bounds is None or y_bounds is None:
             return None
-        src_edge_x0 = self._world_to_source_edge(overlap_x0, extent_x0, extent_x1, src_width)
-        src_edge_x1 = self._world_to_source_edge(overlap_x1, extent_x0, extent_x1, src_width)
-        origin = _normalize_image_origin(layer.origin)
-        source_y_start, source_y_end = (
-            (extent_y1, extent_y0) if origin == "upper" else (extent_y0, extent_y1)
-        )
-        src_edge_y0 = self._world_to_source_edge(overlap_y0, source_y_start, source_y_end, src_height)
-        src_edge_y1 = self._world_to_source_edge(overlap_y1, source_y_start, source_y_end, src_height)
-        if None in {src_edge_x0, src_edge_x1, src_edge_y0, src_edge_y1}:
+        dst_left, dst_right = x_bounds
+        dst_top, dst_bottom = y_bounds
+        dst_width = int(dst_right - dst_left)
+        dst_height = int(dst_bottom - dst_top)
+        if dst_width <= 0 or dst_height <= 0:
             return None
-        flip_x = bool(src_edge_x1 < src_edge_x0)
-        flip_y = origin == "lower"
-        src_left = max(0, int(floor(min(src_edge_x0, src_edge_x1))))
-        src_right = min(src_width, int(ceil(max(src_edge_x0, src_edge_x1))))
-        src_top = max(0, int(floor(min(src_edge_y0, src_edge_y1))))
-        src_bottom = min(src_height, int(ceil(max(src_edge_y0, src_edge_y1))))
-        if src_right <= src_left or src_bottom <= src_top:
+        view_x0, view_x1 = view_state.xlim
+        view_y0, view_y1 = view_state.ylim
+        view_span_x = float(view_x1) - float(view_x0)
+        view_span_y = float(view_y1) - float(view_y0)
+        extent_span_x = float(extent_x1) - float(extent_x0)
+        if abs(view_span_x) <= _EPSILON or abs(view_span_y) <= _EPSILON:
             return None
-        patch_rgba = src_rgba[src_top:src_bottom, src_left:src_right]
-        if patch_rgba.size == 0:
+        if abs(extent_span_x) <= _EPSILON:
             return None
-        world_x_a = self._source_edge_to_world(
-            float(src_left),
-            extent_x0,
-            extent_x1,
-            src_width,
-        )
-        world_x_b = self._source_edge_to_world(
-            float(src_right),
-            extent_x0,
-            extent_x1,
-            src_width,
-        )
-        world_y_a = self._source_edge_to_world(
-            float(src_top),
-            source_y_start,
-            source_y_end,
-            src_height,
-        )
-        world_y_b = self._source_edge_to_world(
-            float(src_bottom),
-            source_y_start,
-            source_y_end,
-            src_height,
-        )
-        if None in {world_x_a, world_x_b, world_y_a, world_y_b}:
+        source_y_start = float(extent_y0)
+        source_y_end = float(extent_y1)
+        extent_span_y = float(source_y_end) - float(source_y_start)
+        if abs(extent_span_y) <= _EPSILON:
             return None
-        top_left = world_to_screen(view_state, float(world_x_a), float(world_y_a))
-        bottom_right = world_to_screen(view_state, float(world_x_b), float(world_y_b))
-        if top_left is None or bottom_right is None:
-            return None
-        dst_left = int(round(min(top_left[0], bottom_right[0])))
-        dst_right = int(round(max(top_left[0], bottom_right[0])))
-        dst_top = int(round(min(top_left[1], bottom_right[1])))
-        dst_bottom = int(round(max(top_left[1], bottom_right[1])))
-        if dst_right <= dst_left:
-            dst_right = dst_left + 1
-        if dst_bottom <= dst_top:
-            dst_bottom = dst_top + 1
-        patch_image = Image.fromarray(np.ascontiguousarray(patch_rgba))
-        if flip_x:
-            patch_image = patch_image.transpose(_PIL_TRANSPOSE_LEFT_RIGHT)
-        if flip_y:
-            patch_image = patch_image.transpose(_PIL_TRANSPOSE_TOP_BOTTOM)
-        patch_image = patch_image.resize(
-            (int(max(1, dst_right - dst_left)), int(max(1, dst_bottom - dst_top))),
-            resample=_interpolation_to_resample(layer.interpolation),
+        x_centers = np.arange(dst_left, dst_right, dtype=np.float64) + 0.5
+        y_centers = np.arange(dst_top, dst_bottom, dtype=np.float64) + 0.5
+        world_x = float(view_x0) + ((x_centers - float(left)) / float(plot_width)) * view_span_x
+        world_y = float(view_y0) + ((y_centers - float(top)) / float(plot_height)) * view_span_y
+        source_x = ((world_x - float(extent_x0)) / extent_span_x) * float(src_width) - 0.5
+        source_y = (
+            ((world_y - source_y_start) / extent_span_y) * float(src_height) - 0.5
         )
-        return patch_image, dst_left, dst_top
+        valid_x = np.isfinite(source_x) & (source_x >= (-0.5 - _EPSILON)) & (
+            source_x <= (float(src_width) - 0.5 + _EPSILON)
+        )
+        valid_y = np.isfinite(source_y) & (source_y >= (-0.5 - _EPSILON)) & (
+            source_y <= (float(src_height) - 0.5 + _EPSILON)
+        )
+        valid_x_indices = np.flatnonzero(valid_x)
+        valid_y_indices = np.flatnonzero(valid_y)
+        if valid_x_indices.size == 0 or valid_y_indices.size == 0:
+            return None
+        patch_rgba = np.zeros((dst_height, dst_width, 4), dtype=np.uint8)
+        normalized_interpolation = str(layer.interpolation or "").strip().lower()
+        if normalized_interpolation in {"", "nearest", "none"}:
+            sampled_x = np.asarray(
+                np.floor(source_x[valid_x_indices] + (0.5 - _EPSILON)),
+                dtype=np.int64,
+            )
+            sampled_y = np.asarray(
+                np.floor(source_y[valid_y_indices] + (0.5 - _EPSILON)),
+                dtype=np.int64,
+            )
+            sampled_x = np.clip(sampled_x, 0, src_width - 1)
+            sampled_y = np.clip(sampled_y, 0, src_height - 1)
+            patch_rgba[np.ix_(valid_y_indices, valid_x_indices)] = src_rgba[
+                np.ix_(sampled_y, sampled_x)
+            ]
+        else:
+            source_x_valid = source_x[valid_x_indices]
+            source_y_valid = source_y[valid_y_indices]
+            x0 = np.floor(source_x_valid)
+            y0 = np.floor(source_y_valid)
+            wx = source_x_valid - x0
+            wy = source_y_valid - y0
+            x0 = np.clip(np.asarray(x0, dtype=np.int64), 0, src_width - 1)
+            y0 = np.clip(np.asarray(y0, dtype=np.int64), 0, src_height - 1)
+            x1 = np.clip(x0 + 1, 0, src_width - 1)
+            y1 = np.clip(y0 + 1, 0, src_height - 1)
+            top_left_rgba = src_rgba[np.ix_(y0, x0)].astype(np.float32, copy=False)
+            top_right_rgba = src_rgba[np.ix_(y0, x1)].astype(np.float32, copy=False)
+            bottom_left_rgba = src_rgba[np.ix_(y1, x0)].astype(np.float32, copy=False)
+            bottom_right_rgba = src_rgba[np.ix_(y1, x1)].astype(np.float32, copy=False)
+            wx = wx[np.newaxis, :, np.newaxis]
+            wy = wy[:, np.newaxis, np.newaxis]
+            interpolated = (
+                (1.0 - wy) * ((1.0 - wx) * top_left_rgba + wx * top_right_rgba)
+                + wy * ((1.0 - wx) * bottom_left_rgba + wx * bottom_right_rgba)
+            )
+            patch_rgba[np.ix_(valid_y_indices, valid_x_indices)] = np.asarray(
+                np.clip(np.rint(interpolated), 0.0, 255.0),
+                dtype=np.uint8,
+            )
+        if not np.any(patch_rgba[..., 3]):
+            return None
+        return Image.fromarray(np.ascontiguousarray(patch_rgba)), dst_left, dst_top
 
     def _world_to_source_edge(
         self,
@@ -1253,7 +1272,7 @@ class TkCanvasViewportProxy:
         viewport: _TkPrimaryViewport,
         *,
         event_axes=None,
-        draw_interval_s: float = 1.0 / 60.0,
+        draw_interval_s: float = 0.0,
         sync_callback: Callable[[], None] | None = None,
     ) -> None:
         self._viewport = viewport
@@ -1519,7 +1538,7 @@ def build_tk_primary_viewport_backend(
     layer_versions_factory: object = None,
     peak_cache_factory: object = None,
     qgroup_cache_factory: object = None,
-    draw_interval_s: float = 1.0 / 60.0,
+    draw_interval_s: float = 0.0,
 ) -> PrimaryViewportBackend:
     """Build a Tk-native primary viewport backed by current Matplotlib artists."""
 

@@ -15,7 +15,6 @@ from ra_sim.debug_controls import (
     intersection_cache_logging_enabled,
     retain_optional_cache,
     resolve_intersection_cache_log_root,
-    resolve_startup_debug_log_path,
 )
 from ra_sim.utils.calculations import (
     IndexofRefraction,
@@ -285,21 +284,27 @@ def _write_intersection_cache_log(
     if cache is None:
         cache = []
 
-    log_path = resolve_startup_debug_log_path(
-        log_dir=_resolve_intersection_cache_log_root(),
+    log_root = _resolve_intersection_cache_log_root() / "intersection_cache"
+    log_dir = log_root / (
+        f"intersection_cache_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
     )
     row_counts = []
     cache_tables = []
+    table_arrays: list[np.ndarray] = []
+    table_files: list[str] = []
     for idx, table in enumerate(cache):
         table_arr = np.asarray(table, dtype=np.float64)
         if table_arr.ndim != 2:
             table_arr = np.empty((0, 14), dtype=np.float64)
+        table_name = f"table_{int(idx):04d}.npy"
         row_counts.append(int(table_arr.shape[0]))
+        table_arrays.append(np.asarray(table_arr, dtype=np.float64).copy())
+        table_files.append(table_name)
         cache_tables.append(
             {
                 "index": int(idx),
                 "row_count": int(table_arr.shape[0]),
-                "rows": table_arr.tolist(),
+                "table_file": table_name,
             }
         )
 
@@ -330,23 +335,22 @@ def _write_intersection_cache_log(
         "rows_per_table": row_counts,
         "total_rows": int(sum(int(v) for v in row_counts)),
         "cache_tables": cache_tables,
-        "log_root": str(log_path.parent),
-        "log_path": str(log_path),
+        "table_files": table_files,
+        "log_root": str(log_root),
+        "log_dir": str(log_dir),
+        "meta_path": str(log_dir / "meta.json"),
     }
     if isinstance(cache_metadata, dict) and cache_metadata:
         metadata.update(cache_metadata)
 
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        needs_separator = log_path.exists() and log_path.stat().st_size > 0
-        with log_path.open("a", encoding="utf-8") as handle:
-            if needs_separator:
-                handle.write("\n")
-            handle.write("=" * 80 + "\n")
-            handle.write(f"Intersection cache updated: {metadata['created_at']}\n")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        for table_name, table_arr in zip(table_files, table_arrays):
+            np.save(log_dir / table_name, table_arr, allow_pickle=False)
+        with (log_dir / "meta.json").open("w", encoding="utf-8") as handle:
             json.dump(metadata, handle, indent=2, sort_keys=True)
             handle.write("\n")
-        print(f"[intersection_cache] appended cache to: {log_path}")
+        print(f"[intersection_cache] wrote cache to: {log_dir}")
     except Exception:
         return
 

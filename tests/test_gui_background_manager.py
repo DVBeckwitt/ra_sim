@@ -680,6 +680,71 @@ def test_background_manager_switch_workflow_runs_follow_on_side_effects(
     ]
 
 
+def test_background_manager_switch_workflow_defers_canvas_refresh_in_caked_view(
+    monkeypatch,
+) -> None:
+    background_state = state.BackgroundRuntimeState(current_background_index=1)
+    events = []
+
+    def _fake_switch_background(
+        background_state_arg,
+        *,
+        display_rotate_k,
+        read_osc,
+    ):
+        events.append(("switch", display_rotate_k))
+        background_state_arg.current_background_display = "switched-display"
+        return {"current_background_display": "switched-display"}
+
+    monkeypatch.setattr(
+        background_manager,
+        "switch_background",
+        _fake_switch_background,
+    )
+
+    updated = background_manager.switch_background_with_side_effects(
+        background_state,
+        display_rotate_k=-1,
+        read_osc=lambda path: path,
+        sync_background_runtime_state=lambda: events.append(("sync",)),
+        invalidate_geometry_manual_pick_cache=lambda: events.append(("invalidate",)),
+        clear_geometry_manual_undo_stack=lambda: events.append(("clear_manual_undo",)),
+        clear_geometry_fit_undo_stack=lambda: events.append(("clear_fit_undo",)),
+        sync_background_theta_controls=lambda: events.append(("sync_theta_controls",)),
+        sync_geometry_fit_background_selection=lambda: events.append(
+            ("sync_fit_selection",)
+        ),
+        sync_theta_initial_to_background=lambda idx: events.append(
+            ("sync_theta_initial", idx)
+        ),
+        set_background_display_data=lambda image: events.append(("display", image)),
+        update_background_slider_defaults=lambda image: events.append(
+            ("slider_defaults", image)
+        ),
+        refresh_background_file_status=lambda: events.append(("refresh_status",)),
+        render_current_geometry_manual_pairs=lambda: events.append(
+            ("render_manual_pairs",)
+        ),
+        schedule_update=lambda: events.append(("schedule_update",)),
+        preempt_simulation_update=lambda: events.append(("preempt",)),
+        caked_view_active=lambda: True,
+    )
+
+    assert updated == {"current_background_display": "switched-display"}
+    assert events == [
+        ("preempt",),
+        ("switch", -1),
+        ("sync",),
+        ("invalidate",),
+        ("clear_manual_undo",),
+        ("clear_fit_undo",),
+        ("sync_theta_controls",),
+        ("sync_fit_selection",),
+        ("refresh_status",),
+        ("schedule_update",),
+    ]
+
+
 def test_background_manager_backend_orientation_side_effects_update_status_and_redraw() -> None:
     background_state = state.BackgroundRuntimeState(
         backend_rotation_k=3,

@@ -100,7 +100,7 @@ class _DragCallbacks:
 
 def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) -> None:
     calls = []
-    counters = {"status": 0, "draw": 0}
+    counters = {"status": 0, "draw": 0, "begin": 0, "touch": 0, "end": 0}
 
     monkeypatch.setattr(
         canvas_interactions,
@@ -117,6 +117,21 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
         counters["draw"] += 1
         idx = counters["draw"]
         return lambda: f"draw-{idx}"
+
+    def build_begin():
+        counters["begin"] += 1
+        idx = counters["begin"]
+        return lambda: f"begin-{idx}"
+
+    def build_touch():
+        counters["touch"] += 1
+        idx = counters["touch"]
+        return lambda: f"touch-{idx}"
+
+    def build_end():
+        counters["end"] += 1
+        idx = counters["end"]
+        return lambda: f"end-{idx}"
 
     factory = canvas_interactions.make_runtime_canvas_interaction_bindings_factory(
         axis="axis",
@@ -141,6 +156,9 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
         caked_view_enabled_factory=lambda: False,
         set_geometry_status_text_factory=build_status,
         draw_idle_factory=build_draw,
+        begin_live_interaction_factory=build_begin,
+        touch_live_interaction_factory=build_touch,
+        end_live_interaction_factory=build_end,
     )
 
     assert factory()["axis"] == "axis"
@@ -148,6 +166,9 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
     assert calls[0]["geometry_runtime_state"] == "geometry-runtime"
     assert calls[0]["set_geometry_status_text"] is not calls[1]["set_geometry_status_text"]
     assert calls[0]["draw_idle"] is not calls[1]["draw_idle"]
+    assert calls[0]["begin_live_interaction"] is not calls[1]["begin_live_interaction"]
+    assert calls[0]["touch_live_interaction"] is not calls[1]["touch_live_interaction"]
+    assert calls[0]["end_live_interaction"] is not calls[1]["end_live_interaction"]
 
 
 def test_canvas_click_routes_cancel_manual_preview_and_hkl_paths() -> None:
@@ -831,6 +852,7 @@ def test_canvas_right_drag_pans_detector_view() -> None:
     axis = _FakeAxis(xlim=(0.0, 10.0), ylim=(20.0, 0.0))
     drag_callbacks = _DragCallbacks()
     draw_calls = []
+    interaction_events = []
     bindings = canvas_interactions.CanvasInteractionBindings(
         axis=axis,
         geometry_runtime_state=state.GeometryRuntimeState(),
@@ -853,6 +875,9 @@ def test_canvas_right_drag_pans_detector_view() -> None:
         render_current_geometry_manual_pairs=lambda **_kwargs: True,
         caked_view_enabled_factory=lambda: False,
         draw_idle=lambda: draw_calls.append(True),
+        begin_live_interaction=lambda: interaction_events.append("begin"),
+        touch_live_interaction=lambda: interaction_events.append("touch"),
+        end_live_interaction=lambda: interaction_events.append("end"),
     )
 
     press_event = _FakeEvent(
@@ -885,7 +910,9 @@ def test_canvas_right_drag_pans_detector_view() -> None:
     assert axis.get_xlim() == (-2.0, 8.0)
     assert axis.get_ylim() == (16.0, -4.0)
     assert draw_calls == [True]
+    assert interaction_events == ["begin", "touch"]
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert interaction_events == ["begin", "touch", "end"]
     assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is False
     assert drag_callbacks.calls == []
 
@@ -956,6 +983,7 @@ def test_canvas_right_drag_pan_uses_pointer_pixels_across_multiple_motion_events
 
 def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
     axis = _FakeAxis(xlim=(0.0, 100.0), ylim=(-180.0, 180.0))
+    interaction_events = []
     bindings = canvas_interactions.CanvasInteractionBindings(
         axis=axis,
         geometry_runtime_state=state.GeometryRuntimeState(),
@@ -978,6 +1006,8 @@ def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
         render_current_geometry_manual_pairs=lambda **_kwargs: True,
         caked_view_enabled_factory=lambda: True,
         draw_idle=lambda: None,
+        touch_live_interaction=lambda: interaction_events.append("touch"),
+        end_live_interaction=lambda: interaction_events.append("end"),
     )
 
     zoom_in = _FakeEvent(
@@ -1000,10 +1030,12 @@ def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
     ylim_after_zoom_in = axis.get_ylim()
     assert xlim_after_zoom_in == pytest.approx((4.166666666666668, 87.5))
     assert ylim_after_zoom_in == pytest.approx((-155.0, 145.0))
+    assert interaction_events == ["touch", "end"]
 
     assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_out) is True
     assert axis.get_xlim() == pytest.approx((0.0, 100.0))
     assert axis.get_ylim() == pytest.approx((-180.0, 180.0))
+    assert interaction_events == ["touch", "end", "touch", "end"]
 
 
 def test_restore_axis_view_keeps_existing_zoom_within_new_bounds() -> None:

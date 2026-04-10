@@ -128,6 +128,30 @@ def test_activate_runtime_primary_viewport_activates_tk_canvas_when_available() 
     assert progress_texts == []
 
 
+def test_activate_runtime_primary_viewport_uses_immediate_redraw_by_default() -> None:
+    matplotlib_canvas = _FakeMatplotlibCanvas()
+    build_calls: list[dict[str, object]] = []
+
+    runtime_primary_viewport.activate_runtime_primary_viewport(
+        requested_backend="tk_canvas",
+        tk_primary_viewport_module=SimpleNamespace(
+            primary_viewport_runtime_available=lambda: True,
+            build_tk_primary_viewport_backend=lambda **kwargs: (
+                build_calls.append(dict(kwargs)) or _FakeBackend()
+            ),
+        ),
+        tk_module=SimpleNamespace(TOP="top", BOTH="both"),
+        canvas_frame="canvas-frame",
+        matplotlib_canvas=matplotlib_canvas,
+        ax="AX",
+        image_artist="image",
+        background_artist="background",
+        overlay_artist="overlay",
+    )
+
+    assert build_calls[0]["draw_interval_s"] == 0.0
+
+
 def test_activate_runtime_primary_viewport_falls_back_when_tk_runtime_unavailable() -> None:
     matplotlib_canvas = _FakeMatplotlibCanvas()
     progress_texts: list[str] = []
