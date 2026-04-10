@@ -309,7 +309,7 @@ def test_build_q_group_cache_uses_caked_angles_when_present() -> None:
     assert cache.visible_entries[0]["_viewport_point"] == (21.0, -8.0)
 
 
-def test_render_layer_patch_restores_original_detector_orientation() -> None:
+def test_render_layer_patch_matches_matplotlib_detector_orientation() -> None:
     viewport = tk_primary_viewport._TkPrimaryViewport(
         tk_module=_FakeTkModule(),
         parent="canvas-parent",
@@ -343,11 +343,11 @@ def test_render_layer_patch_restores_original_detector_orientation() -> None:
     patch_image, left, top = rendered
     assert (left, top) == (0, 0)
     assert patch_image.size == (1, 2)
-    assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
-    assert patch_image.getpixel((0, 1)) == (255, 0, 0, 255)
+    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
 
 
-def test_render_layer_patch_restores_original_caked_orientation() -> None:
+def test_render_layer_patch_matches_matplotlib_caked_orientation() -> None:
     viewport = tk_primary_viewport._TkPrimaryViewport(
         tk_module=_FakeTkModule(),
         parent="canvas-parent",
@@ -381,9 +381,87 @@ def test_render_layer_patch_restores_original_caked_orientation() -> None:
     patch_image, left, top = rendered
     assert (left, top) == (0, 0)
     assert patch_image.size == (1, 3)
-    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
     assert patch_image.getpixel((0, 1)) == (0, 255, 0, 255)
-    assert patch_image.getpixel((0, 2)) == (0, 0, 255, 255)
+    assert patch_image.getpixel((0, 2)) == (255, 0, 0, 255)
+
+
+def test_render_layer_patch_matches_matplotlib_detector_zoom_crop() -> None:
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(0.0, 1.0), ylim=(1.0, 0.0)),
+        initial_width=1,
+        initial_height=2,
+    )
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=1,
+        height=2,
+        xlim=(0.0, 1.0),
+        ylim=(1.0, 0.0),
+    )
+    layer = tk_primary_viewport._ViewportImageLayer(
+        name="simulation",
+        visible=True,
+        extent=(0.0, 1.0, 2.0, 0.0),
+        interpolation="nearest",
+        source_rgba=np.asarray(
+            [
+                [[255, 0, 0, 255]],
+                [[0, 0, 255, 255]],
+            ],
+            dtype=np.uint8,
+        ),
+        origin="upper",
+    )
+
+    rendered = viewport._render_layer_patch(layer, view_state)
+
+    assert rendered is not None
+    patch_image, left, top = rendered
+    assert (left, top) == (0, 0)
+    assert patch_image.size == (1, 2)
+    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert patch_image.getpixel((0, 1)) == (255, 0, 0, 255)
+
+
+def test_render_layer_patch_matches_matplotlib_caked_zoom_crop() -> None:
+    viewport = tk_primary_viewport._TkPrimaryViewport(
+        tk_module=_FakeTkModule(),
+        parent="canvas-parent",
+        ax=_FakeAxes(xlim=(10.0, 20.0), ylim=(0.0, 30.0)),
+        initial_width=1,
+        initial_height=3,
+    )
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=1,
+        height=3,
+        xlim=(10.0, 20.0),
+        ylim=(0.0, 30.0),
+    )
+    layer = _make_layer(
+        "simulation",
+        np.asarray(
+            [
+                [[255, 0, 0, 255]],
+                [[0, 255, 0, 255]],
+                [[0, 0, 255, 255]],
+            ],
+            dtype=np.uint8,
+        ),
+        extent=(10.0, 20.0, -30.0, 30.0),
+        origin="lower",
+    )
+
+    rendered = viewport._render_layer_patch(layer, view_state)
+
+    assert rendered is not None
+    patch_image, left, top = rendered
+    assert (left, top) == (0, 0)
+    assert patch_image.size == (1, 3)
+    assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
+    assert patch_image.getpixel((0, 1)) == (0, 255, 0, 255)
+    assert patch_image.getpixel((0, 2)) == (0, 255, 0, 255)
 
 
 def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:

@@ -928,12 +928,16 @@ class _TkPrimaryViewport:
             return None
         src_edge_x0 = self._world_to_source_edge(overlap_x0, extent_x0, extent_x1, src_width)
         src_edge_x1 = self._world_to_source_edge(overlap_x1, extent_x0, extent_x1, src_width)
-        src_edge_y0 = self._world_to_source_edge(overlap_y0, extent_y0, extent_y1, src_height)
-        src_edge_y1 = self._world_to_source_edge(overlap_y1, extent_y0, extent_y1, src_height)
+        origin = _normalize_image_origin(layer.origin)
+        source_y_start, source_y_end = (
+            (extent_y1, extent_y0) if origin == "upper" else (extent_y0, extent_y1)
+        )
+        src_edge_y0 = self._world_to_source_edge(overlap_y0, source_y_start, source_y_end, src_height)
+        src_edge_y1 = self._world_to_source_edge(overlap_y1, source_y_start, source_y_end, src_height)
         if None in {src_edge_x0, src_edge_x1, src_edge_y0, src_edge_y1}:
             return None
         flip_x = bool(src_edge_x1 < src_edge_x0)
-        flip_y = bool(src_edge_y1 < src_edge_y0)
+        flip_y = origin == "lower"
         src_left = max(0, int(floor(min(src_edge_x0, src_edge_x1))))
         src_right = min(src_width, int(ceil(max(src_edge_x0, src_edge_x1))))
         src_top = max(0, int(floor(min(src_edge_y0, src_edge_y1))))
