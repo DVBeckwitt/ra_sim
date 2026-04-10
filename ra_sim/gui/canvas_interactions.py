@@ -286,11 +286,40 @@ def _start_pan_session(
         {
             "x_anchor": float(x0),
             "y_anchor": float(y0),
+            "x_anchor_px": float(getattr(event, "x", np.nan)),
+            "y_anchor_px": float(getattr(event, "y", np.nan)),
             "xlim": limits[0],
             "ylim": limits[1],
         },
     )
     return True
+
+
+def _event_axis_pixel_position(axis: Any, event: Any) -> tuple[float, float] | None:
+    bbox = getattr(axis, "bbox", None)
+    if bbox is None:
+        return None
+    try:
+        bbox_x0 = float(bbox.x0)
+        bbox_y0 = float(bbox.y0)
+        bbox_width = float(bbox.width)
+        bbox_height = float(bbox.height)
+        event_x = float(getattr(event, "x", np.nan))
+        event_y = float(getattr(event, "y", np.nan))
+    except Exception:
+        return None
+    if (
+        not np.isfinite(bbox_width)
+        or not np.isfinite(bbox_height)
+        or bbox_width <= 0.0
+        or bbox_height <= 0.0
+        or not np.isfinite(event_x)
+        or not np.isfinite(event_y)
+    ):
+        return None
+    clamped_x = float(np.clip(event_x, bbox_x0, bbox_x0 + bbox_width))
+    clamped_y = float(np.clip(event_y, bbox_y0, bbox_y0 + bbox_height))
+    return clamped_x, clamped_y
 
 
 def _update_pan_session(
@@ -300,24 +329,60 @@ def _update_pan_session(
     session = _pan_session(bindings)
     if session is None:
         return False
-    if not _event_has_axis_data(bindings, event):
-        return True
-    x1, y1 = bindings.clamp_to_axis_view(
-        bindings.axis,
-        float(event.xdata),
-        float(event.ydata),
-    )
     try:
         x_anchor = float(session["x_anchor"])
         y_anchor = float(session["y_anchor"])
+        x_anchor_px = float(session.get("x_anchor_px", np.nan))
+        y_anchor_px = float(session.get("y_anchor_px", np.nan))
         xlim = tuple(float(value) for value in session["xlim"])
         ylim = tuple(float(value) for value in session["ylim"])
     except Exception:
         _clear_pan_session(bindings)
         return False
 
-    delta_x = float(x1) - x_anchor
-    delta_y = float(y1) - y_anchor
+    delta_x: float | None = None
+    delta_y: float | None = None
+    pixel_position = _event_axis_pixel_position(bindings.axis, event)
+    if (
+        pixel_position is not None
+        and np.isfinite(x_anchor_px)
+        and np.isfinite(y_anchor_px)
+    ):
+        bbox = getattr(bindings.axis, "bbox", None)
+        try:
+            bbox_width = float(getattr(bbox, "width", np.nan))
+            bbox_height = float(getattr(bbox, "height", np.nan))
+        except Exception:
+            bbox_width = np.nan
+            bbox_height = np.nan
+        if (
+            np.isfinite(bbox_width)
+            and np.isfinite(bbox_height)
+            and bbox_width > 0.0
+            and bbox_height > 0.0
+        ):
+            delta_x = (
+                (float(pixel_position[0]) - x_anchor_px)
+                * (float(xlim[1]) - float(xlim[0]))
+                / float(bbox_width)
+            )
+            delta_y = (
+                (float(pixel_position[1]) - y_anchor_px)
+                * (float(ylim[1]) - float(ylim[0]))
+                / float(bbox_height)
+            )
+
+    if delta_x is None or delta_y is None:
+        if not _event_has_axis_data(bindings, event):
+            return True
+        x1, y1 = bindings.clamp_to_axis_view(
+            bindings.axis,
+            float(event.xdata),
+            float(event.ydata),
+        )
+        delta_x = float(x1) - x_anchor
+        delta_y = float(y1) - y_anchor
+
     updated = _set_axis_limits(
         bindings.axis,
         xlim=(float(xlim[0]) - delta_x, float(xlim[1]) - delta_x),
