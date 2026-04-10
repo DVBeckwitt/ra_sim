@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/github/actions/workflow/status/DVBeckwitt/ra_sim/ci.yml?label=CI" alt="CI status" />
     </a>
     <a href="https://www.python.org/downloads/">
-      <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" />
+      <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
     </a>
     <a href="LICENSE">
       <img src="https://img.shields.io/github/license/DVBeckwitt/ra_sim" alt="License" />
@@ -50,7 +50,7 @@
 
 ## Installation
 
-RA-SIM supports Python 3.10+.
+RA-SIM supports Python 3.11+.
 
 ```bash
 git clone https://github.com/DVBeckwitt/ra_sim.git
@@ -60,6 +60,14 @@ python -m pip install -e .
 
 If you prefer the installed console script, the package also exposes `ra-sim`.
 
+The base install pulls in the supported Python-side dependencies for the main
+GUI, calibrant workflow, headless simulation tools, and the packaged mosaic
+launcher automatically.
+
+The install includes a pinned `mosaic_sim` dependency sourced from
+[`DVBeckwitt/2D_Mosaic_Sim`](https://github.com/DVBeckwitt/2D_Mosaic_Sim), so
+`python -m ra_sim mosaic` launches the installed visualizer directly.
+
 For local development and CI-equivalent tooling, install the `dev` extra:
 
 ```bash
@@ -67,8 +75,14 @@ python -m pip install -e ".[dev]"
 ```
 
 > [!TIP]
-> The GUI uses Tkinter. Most Python distributions include it already, but some
-> Linux environments require installing the system `tk` package separately.
+> The GUI uses Tkinter. Windows and macOS Python distributions usually include
+> it already, but some Linux environments require installing the system Tk
+> package separately, often as `python3-tk` or `python3.11-tk`.
+
+> [!TIP]
+> If a fresh install can run headless commands but `python -m ra_sim gui` or
+> `python -m ra_sim calibrant` reports that Tkinter is unavailable, the fix is
+> usually that missing Linux system package rather than another pip package.
 
 > [!NOTE]
 > The optional fast-viewer acceleration path is not installed by default. It
@@ -110,9 +124,9 @@ Common entry points:
 | Headless simulation | `python -m ra_sim simulate --out output.png` |
 | Headless hBN ellipse fit | `python -m ra_sim hbn-fit` |
 
-The launcher can also open the sibling `2D_Mosaic_Sim` repository directly.
-By default RA-SIM looks for it at `../2D_Mosaic_Sim` relative to this repo.
-Set `RA_SIM_MOSAIC_REPO` if your local clone lives elsewhere.
+The mosaic launcher uses the installed `mosaic_sim` package that ships as a
+hard dependency of RA-SIM. No sibling checkout or extra repository override is
+required.
 
 A typical workflow looks like this:
 
@@ -267,7 +281,7 @@ python -m ra_sim hbn-fit --load-bundle --highres-refine
 
 ## Development
 
-The CI workflow runs on Python 3.10 through 3.13. Install the dev extra, then run:
+The CI workflow runs on Python 3.11 through 3.13. Install the dev extra, then run:
 
 ```bash
 python -m pip install -e ".[dev]"

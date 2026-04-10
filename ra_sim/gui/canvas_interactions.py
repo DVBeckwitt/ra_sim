@@ -41,6 +41,9 @@ class CanvasInteractionBindings:
     begin_live_interaction: Callable[[], None] | None = None
     touch_live_interaction: Callable[[], None] | None = None
     end_live_interaction: Callable[[], None] | None = None
+    preview_view_limits: Callable[[tuple[float, float], tuple[float, float]], bool] | None = None
+    commit_preview_view: Callable[[], bool] | None = None
+    clear_preview_view: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,109 @@ def _touch_live_interaction(bindings: CanvasInteractionBindings) -> None:
 def _end_live_interaction(bindings: CanvasInteractionBindings) -> None:
     if callable(bindings.end_live_interaction):
         bindings.end_live_interaction()
+
+
+def _preview_view_key() -> str:
+    return "_canvas_preview_limits"
+
+
+def _stored_preview_limits(
+    bindings: CanvasInteractionBindings,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    stored = getattr(bindings.geometry_runtime_state, _preview_view_key(), None)
+    if not isinstance(stored, tuple) or len(stored) != 2:
+        return None
+    xlim = _coerce_limits(stored[0])
+    ylim = _coerce_limits(stored[1])
+    if xlim is None or ylim is None:
+        return None
+    return (xlim, ylim)
+
+
+def _store_preview_limits(
+    bindings: CanvasInteractionBindings,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> None:
+    setattr(
+        bindings.geometry_runtime_state,
+        _preview_view_key(),
+        (tuple(float(value) for value in xlim), tuple(float(value) for value in ylim)),
+    )
+
+
+def _clear_preview_limits(bindings: CanvasInteractionBindings) -> None:
+    setattr(bindings.geometry_runtime_state, _preview_view_key(), None)
+
+
+def _coerce_limits(
+    limits: tuple[float, float] | list[float] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(limits, (tuple, list)) or len(limits) != 2:
+        return None
+    try:
+        start = float(limits[0])
+        end = float(limits[1])
+    except Exception:
+        return None
+    if not np.isfinite(start) or not np.isfinite(end):
+        return None
+    return (start, end)
+
+
+def _current_live_limits(
+    bindings: CanvasInteractionBindings,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    preview_limits = _stored_preview_limits(bindings)
+    if preview_limits is not None:
+        return preview_limits
+    return _axis_limits(bindings.axis)
+
+
+def _preview_axis_limits(
+    bindings: CanvasInteractionBindings,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> bool:
+    xlim = _coerce_limits(xlim)
+    ylim = _coerce_limits(ylim)
+    if xlim is None or ylim is None:
+        return False
+    if callable(bindings.preview_view_limits):
+        try:
+            if bool(bindings.preview_view_limits(xlim, ylim)):
+                _store_preview_limits(bindings, xlim=xlim, ylim=ylim)
+                return True
+        except Exception:
+            _clear_preview_limits(bindings)
+            raise
+    updated = _set_axis_limits(bindings.axis, xlim=xlim, ylim=ylim)
+    if updated:
+        _clear_preview_limits(bindings)
+        _draw_idle(bindings)
+    return bool(updated)
+
+
+def _commit_preview_view(bindings: CanvasInteractionBindings) -> bool:
+    if callable(bindings.commit_preview_view):
+        committed = bool(bindings.commit_preview_view())
+        if committed:
+            _clear_preview_limits(bindings)
+        return committed
+    _clear_preview_limits(bindings)
+    return False
+
+
+def _clear_preview_view(bindings: CanvasInteractionBindings) -> bool:
+    if callable(bindings.clear_preview_view):
+        cleared = bool(bindings.clear_preview_view())
+        if cleared:
+            _clear_preview_limits(bindings)
+        return cleared
+    _clear_preview_limits(bindings)
+    return False
 
 
 def _set_mode(
@@ -290,7 +396,7 @@ def _start_pan_session(
 ) -> bool:
     if not _event_has_axis_data(bindings, event):
         return False
-    limits = _axis_limits(bindings.axis)
+    limits = _current_live_limits(bindings)
     if limits is None:
         return False
     x0, y0 = bindings.clamp_to_axis_view(
@@ -401,13 +507,11 @@ def _update_pan_session(
         delta_x = float(x1) - x_anchor
         delta_y = float(y1) - y_anchor
 
-    updated = _set_axis_limits(
-        bindings.axis,
+    updated = _preview_axis_limits(
+        bindings,
         xlim=(float(xlim[0]) - delta_x, float(xlim[1]) - delta_x),
         ylim=(float(ylim[0]) - delta_y, float(ylim[1]) - delta_y),
     )
-    if updated:
-        _draw_idle(bindings)
     return bool(updated)
 
 
@@ -605,6 +709,7 @@ def handle_runtime_canvas_press(
         return True
 
     if getattr(event, "button", None) == 3:
+        _commit_preview_view(bindings)
         started = _start_pan_session(bindings, event)
         if started:
             _begin_live_interaction(bindings)
@@ -722,7 +827,8 @@ def handle_runtime_canvas_release(
     if getattr(event, "button", None) == 3 or _pan_session(bindings) is not None:
         finished = _finish_pan_session(bindings)
         if finished:
-            _end_live_interaction(bindings)
+            if not _commit_preview_view(bindings):
+                _end_live_interaction(bindings)
         return finished
 
     if getattr(event, "button", None) != 1:
@@ -764,7 +870,7 @@ def handle_runtime_canvas_scroll(
 
     if _pan_session(bindings) is not None:
         return False
-    limits = _axis_limits(bindings.axis)
+    limits = _current_live_limits(bindings)
     if limits is None:
         return False
 
@@ -805,10 +911,9 @@ def handle_runtime_canvas_scroll(
         or abs(float(next_ylim[1]) - float(next_ylim[0])) <= 1e-9
     ):
         return False
-    if not _set_axis_limits(bindings.axis, xlim=next_xlim, ylim=next_ylim):
-        return False
     _touch_live_interaction(bindings)
-    _draw_idle(bindings)
+    if not _preview_axis_limits(bindings, xlim=next_xlim, ylim=next_ylim):
+        return False
     _end_live_interaction(bindings)
     return True
 
@@ -842,6 +947,9 @@ def make_runtime_canvas_interaction_bindings_factory(
     begin_live_interaction_factory: object | None = None,
     touch_live_interaction_factory: object | None = None,
     end_live_interaction_factory: object | None = None,
+    preview_view_limits_factory: object | None = None,
+    commit_preview_view_factory: object | None = None,
+    clear_preview_view_factory: object | None = None,
 ) -> Callable[[], CanvasInteractionBindings]:
     """Return a zero-arg factory for live runtime canvas-interaction bindings."""
 
@@ -882,6 +990,15 @@ def make_runtime_canvas_interaction_bindings_factory(
             end_live_interaction=_resolve_runtime_value(
                 end_live_interaction_factory
             ),
+            preview_view_limits=_resolve_runtime_value(
+                preview_view_limits_factory
+            ),
+            commit_preview_view=_resolve_runtime_value(
+                commit_preview_view_factory
+            ),
+            clear_preview_view=_resolve_runtime_value(
+                clear_preview_view_factory
+            ),
         )
 
     return _build_bindings
@@ -901,6 +1018,7 @@ def make_runtime_canvas_interaction_callbacks(
                 return bool(handler(bindings, event))
             except Exception:
                 traceback.print_exc()
+                _clear_preview_view(bindings)
                 _set_status_text(
                     bindings,
                     "Canvas interaction canceled after an internal error.",

@@ -9,6 +9,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ra_sim import install_prereqs
+
 from . import window_affinity
 
 
@@ -173,12 +175,11 @@ def extract_bundle_arg(argv: Sequence[str]) -> str | None:
 def quick_startup_mode_dialog() -> str | None:
     """Ask startup mode before heavy simulation initialization."""
 
-    try:
-        import tkinter as tk
-        from tkinter import ttk
-    except Exception:
-        # Headless or Tk unavailable: default to simulation behavior.
-        return "simulation"
+    tk_modules = install_prereqs.require_tkinter_modules(
+        "The RA-SIM interactive launcher (`python -m ra_sim`)"
+    )
+    tk = tk_modules.tk
+    ttk = tk_modules.ttk
 
     choice = {"mode": None}
     launch_context = window_affinity.capture_launch_window_context()
@@ -289,7 +290,7 @@ def quick_startup_mode_dialog() -> str | None:
     mosaic_btn.pack(fill="x", padx=18, pady=(0, 6))
     tk.Label(
         panel,
-        text="Open the sibling 2D_Mosaic_Sim geometry and refraction visualizer.",
+        text="Open the installed mosaic_sim geometry and refraction visualizer.",
         font=("Segoe UI", 9),
         fg="#64748b",
         bg="#ffffff",
@@ -440,7 +441,9 @@ def choose_startup_mode_dialog(root: Any) -> str | None:
 def launch_calibrant_gui(*, bundle: str | None = None) -> None:
     """Launch the calibrant fitter GUI."""
 
-    import tkinter as tk
+    tk = install_prereqs.require_tkinter_modules(
+        "The RA-SIM calibrant GUI (`python -m ra_sim calibrant` or `ra-sim calibrant`)"
+    ).tk
 
     try:
         from ra_sim.hbn_fitter.fitter import HBNFitterGUI
@@ -492,7 +495,7 @@ def build_launch_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Optional startup mode: 'gui' runs simulation directly; "
             "'calibrant' launches the hBN fitter directly; "
-            "'mosaic' launches the sibling 2D_Mosaic_Sim visualizer."
+            "'mosaic' launches the installed mosaic_sim visualizer."
         ),
     )
     parser.add_argument(

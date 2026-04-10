@@ -196,8 +196,8 @@ def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing()
     assert "caked_payload_available = (" in source
     assert show_caked_image_assignment in source
     assert "if not show_caked_image:" in source
-    assert "image_display.set_data(global_image_buffer)" in source
-    assert "background_display.set_extent([0, image_size, image_size, 0])" in source
+    assert "image_display.set_data(_display_raster_for_primary_figure(global_image_buffer))" in source
+    assert "_sync_primary_raster_geometry(show_caked_image=False)" in source
 
 
 def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> None:
@@ -408,6 +408,9 @@ def test_runtime_impl_places_qr_cylinder_mode_in_quick_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert '\"key\": \"qr_cylinder_mode\"' in source
+    assert '\"key\": \"display_raster_size\"' in source
+    assert '\"label\": \"display px\"' in source
+    assert "_refresh_main_display_raster_projection" in source
     assert "QR_CYLINDER_DISPLAY_MODE_REPLACE" in source
     assert 'parent=app_shell_view_state.match_peak_tools_frame' in source
 

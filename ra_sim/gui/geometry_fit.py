@@ -295,6 +295,26 @@ class GeometryFitSourceRowRebuildResult:
 
 
 @dataclass(frozen=True)
+class GeometryFitBackgroundCacheBundle:
+    """Job-scoped geometry-fit cache bundle for one prepared background."""
+
+    background_index: int
+    requested_signature: object
+    requested_signature_summary: object
+    background_label: str
+    theta_base: float
+    theta_initial: float
+    projected_rows: list[dict[str, object]]
+    stored_rows: list[dict[str, object]]
+    cache_source: str | None
+    diagnostics: dict[str, object]
+    peak_table_lattice: list[object] | None = None
+    hit_tables: list[object] | None = None
+    intersection_cache: list[object] | None = None
+    cache_metadata: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
 class GeometryFitPostprocessResult:
     """Pure post-solver geometry-fit analysis results."""
 
@@ -543,6 +563,7 @@ def rebuild_geometry_fit_source_rows(
     can_use_live_runtime_cache: bool,
     build_live_rows: Callable[[], Sequence[object]] | None,
     get_memory_intersection_cache: Callable[[], Sequence[object]] | None,
+    memory_cache_signature: object | None = None,
     load_logged_intersection_cache: Callable[
         [],
         tuple[Sequence[object], Mapping[str, object] | None],
@@ -670,27 +691,35 @@ def rebuild_geometry_fit_source_rows(
                 rebuild_source="live_runtime_cache",
             )
 
-    rebuild_attempts.append("last_intersection_cache_memory")
-    memory_intersection_cache = (
-        list(get_memory_intersection_cache() or ())
-        if callable(get_memory_intersection_cache)
-        else []
-    )
-    memory_rows: list[dict[str, object]] = []
-    memory_lattice: Sequence[object] | None = None
-    memory_hit_tables: Sequence[object] | None = None
-    if memory_intersection_cache:
-        memory_rows, memory_lattice, memory_hit_tables = build_source_rows_from_hit_tables(
-            memory_intersection_cache
+    if (
+        memory_cache_signature is not None
+        and memory_cache_signature != requested_signature
+    ):
+        rebuild_attempts.append("last_intersection_cache_memory_signature_mismatch")
+    else:
+        rebuild_attempts.append("last_intersection_cache_memory")
+        memory_intersection_cache = (
+            list(get_memory_intersection_cache() or ())
+            if callable(get_memory_intersection_cache)
+            else []
         )
-    if memory_rows:
-        return _success_result(
-            memory_rows,
-            rebuild_source="last_intersection_cache_memory",
-            peak_table_lattice=memory_lattice,
-            hit_tables_local=memory_hit_tables,
-            intersection_cache_local=memory_intersection_cache,
-        )
+        memory_rows: list[dict[str, object]] = []
+        memory_lattice: Sequence[object] | None = None
+        memory_hit_tables: Sequence[object] | None = None
+        if memory_intersection_cache:
+            memory_rows, memory_lattice, memory_hit_tables = (
+                build_source_rows_from_hit_tables(
+                    memory_intersection_cache
+                )
+            )
+        if memory_rows:
+            return _success_result(
+                memory_rows,
+                rebuild_source="last_intersection_cache_memory",
+                peak_table_lattice=memory_lattice,
+                hit_tables_local=memory_hit_tables,
+                intersection_cache_local=memory_intersection_cache,
+            )
 
     rebuild_attempts.append("last_intersection_cache_log")
     logged_intersection_cache: Sequence[object] = []

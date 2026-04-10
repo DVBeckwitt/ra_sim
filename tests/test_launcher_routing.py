@@ -73,7 +73,13 @@ def test_launch_startup_mode_uses_mosaic_visualizer(monkeypatch) -> None:
 
 
 def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
-    calls: list[tuple[bool | None, str, str | None]] = []
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        launcher.install_prereqs,
+        "require_tkinter",
+        lambda entrypoint_label: calls.append(("preflight", entrypoint_label)),
+    )
 
     def _fake_gui_main(
         *,
@@ -81,47 +87,41 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
         startup_mode: str = "prompt",
         calibrant_bundle: str | None = None,
     ) -> None:
-        calls.append((write_excel_flag, startup_mode, calibrant_bundle))
+        calls.append(("launch", write_excel_flag, startup_mode, calibrant_bundle))
 
     monkeypatch.setattr(gui_runtime, "main", _fake_gui_main)
 
     launcher.launch_simulation_gui(write_excel_flag=False)
 
-    assert calls == [(False, "simulation", None)]
+    assert calls == [
+        (
+            "preflight",
+            "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)",
+        ),
+        ("launch", False, "simulation", None),
+    ]
 
 
-def test_launch_mosaic_visualizer_uses_env_override(monkeypatch, tmp_path) -> None:
-    repo_path = tmp_path / "custom-mosaic"
-    repo_path.mkdir()
-    script_path = repo_path / "mosaic_simulator.py"
-    script_path.write_text("print('ok')\n", encoding="utf-8")
-
+def test_launch_mosaic_visualizer_uses_installed_module(monkeypatch) -> None:
     calls: list[tuple[list[str], object, bool]] = []
 
     def _fake_run(command: list[str], *, cwd=None, check=False) -> None:
         calls.append((command, cwd, check))
 
-    monkeypatch.setenv("RA_SIM_MOSAIC_REPO", str(repo_path))
     monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
 
     launcher.launch_mosaic_visualizer()
 
-    assert calls == [([sys.executable, str(script_path)], repo_path.resolve(), True)]
+    assert calls == [([sys.executable, "-m", "mosaic_sim.unified_app"], None, True)]
 
 
-def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch, tmp_path) -> None:
-    repo_path = tmp_path / "custom-mosaic"
-    repo_path.mkdir()
-    script_path = repo_path / "mosaic_simulator.py"
-    script_path.write_text("print('ok')\n", encoding="utf-8")
-
+def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch) -> None:
     calls: list[tuple[list[str], object]] = []
 
     def _fake_popen(command: list[str], *, cwd=None):
         calls.append((command, cwd))
         return object()
 
-    monkeypatch.setenv("RA_SIM_MOSAIC_REPO", str(repo_path))
     monkeypatch.setattr(launcher.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(launcher, "_pick_available_local_port", lambda: 8123)
 
@@ -133,7 +133,8 @@ def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch, tmp_pa
         (
             [
                 sys.executable,
-                str(script_path),
+                "-m",
+                "mosaic_sim.unified_app",
                 "--mode",
                 "specular-view",
                 "--port",
@@ -141,6 +142,6 @@ def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch, tmp_pa
                 "--state-json",
                 '{"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}',
             ],
-            repo_path.resolve(),
+            None,
         )
     ]

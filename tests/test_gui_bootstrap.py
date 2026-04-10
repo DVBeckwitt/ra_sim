@@ -81,6 +81,19 @@ def test_early_main_bootstrap_launches_mosaic_visualizer(monkeypatch) -> None:
     assert calls == ["mosaic"]
 
 
+def test_quick_startup_mode_dialog_requires_tkinter(monkeypatch) -> None:
+    error = bootstrap.install_prereqs.MissingPrerequisiteError("tk missing")
+
+    monkeypatch.setattr(
+        bootstrap.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(bootstrap.install_prereqs.MissingPrerequisiteError, match="tk missing"):
+        bootstrap.quick_startup_mode_dialog()
+
+
 def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None:
     events: list[object] = []
 
@@ -108,7 +121,14 @@ def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None
         lambda root, startup_bundle=None: events.append(("gui", root, startup_bundle))
     )
 
-    monkeypatch.setitem(sys.modules, "tkinter", fake_tk)
+    monkeypatch.setattr(
+        bootstrap.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: bootstrap.install_prereqs.TkinterModules(
+            tk=fake_tk,
+            ttk=ModuleType("tkinter.ttk"),
+        ),
+    )
     monkeypatch.setitem(sys.modules, "ra_sim.hbn_fitter.fitter", fake_fitter_module)
     monkeypatch.setattr(
         bootstrap.window_affinity,
@@ -134,6 +154,19 @@ def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None
         ("gui", fake_root, "bundle.npz"),
         ("affinity", fake_root, "launch-context", None, None),
     ]
+
+
+def test_launch_calibrant_gui_surfaces_tk_prerequisite_error(monkeypatch) -> None:
+    error = bootstrap.install_prereqs.MissingPrerequisiteError("tk missing")
+
+    monkeypatch.setattr(
+        bootstrap.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(bootstrap.install_prereqs.MissingPrerequisiteError, match="tk missing"):
+        bootstrap.launch_calibrant_gui(bundle="bundle.npz")
 
 
 def test_build_runtime_structure_factor_pruning_bootstrap_delegates_callbacks() -> None:

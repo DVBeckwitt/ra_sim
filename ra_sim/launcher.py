@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 import socket
 import subprocess
 import sys
+from ra_sim import install_prereqs
 from ra_sim.gui import bootstrap as gui_bootstrap
 
-_MOSAIC_REPO_ENV_VAR = "RA_SIM_MOSAIC_REPO"
-_MOSAIC_REPO_DIRNAME = "2D_Mosaic_Sim"
-_MOSAIC_SCRIPT_NAMES = (
-    "mosaic_simulator.py",
-    "simulate_mosaic.py",
-)
+_MOSAIC_MODULE = "mosaic_sim.unified_app"
 
 
 def _pick_available_local_port() -> int:
@@ -29,6 +23,9 @@ def _pick_available_local_port() -> int:
 def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
     """Launch the canonical packaged simulation GUI runtime."""
 
+    install_prereqs.require_tkinter(
+        "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)"
+    )
     from ra_sim.gui.runtime import main as gui_main
 
     gui_main(
@@ -43,87 +40,48 @@ def launch_calibrant_gui(*, bundle: str | None = None) -> None:
     gui_bootstrap.launch_calibrant_gui(bundle=bundle)
 
 
-def resolve_mosaic_repo_path() -> Path:
-    """Return the configured local 2D_Mosaic_Sim repository path."""
+def _mosaic_command(*args: str) -> list[str]:
+    """Build the module execution command for the installed mosaic visualizer."""
 
-    repo_root = Path(__file__).resolve().parents[1]
-    candidates: list[Path] = []
-
-    override = os.environ.get(_MOSAIC_REPO_ENV_VAR, "").strip()
-    if override:
-        candidates.append(Path(override).expanduser())
-    candidates.append(repo_root.parent / _MOSAIC_REPO_DIRNAME)
-
-    for candidate in candidates:
-        if candidate.is_dir():
-            return candidate.resolve()
-
-    searched = ", ".join(f"`{candidate}`" for candidate in candidates)
-    raise FileNotFoundError(
-        "Unable to locate the 2D_Mosaic_Sim repository. "
-        f"Checked {searched}. Set `{_MOSAIC_REPO_ENV_VAR}` to override the default location."
-    )
-
-
-def resolve_mosaic_launcher_script(repo_path: Path) -> Path:
-    """Return the preferred launcher script inside the mosaic-visualizer repo."""
-
-    for script_name in _MOSAIC_SCRIPT_NAMES:
-        script_path = repo_path / script_name
-        if script_path.is_file():
-            return script_path
-
-    expected = ", ".join(f"`{name}`" for name in _MOSAIC_SCRIPT_NAMES)
-    raise FileNotFoundError(
-        "Unable to locate a supported 2D_Mosaic_Sim launcher script in "
-        f"`{repo_path}`. Expected one of {expected}."
-    )
+    return [sys.executable, "-m", _MOSAIC_MODULE, *args]
 
 
 def launch_mosaic_visualizer() -> None:
-    """Launch the sibling 2D_Mosaic_Sim visualization tool."""
+    """Launch the installed mosaic_sim visualization tool."""
 
-    repo_path = resolve_mosaic_repo_path()
-    script_path = resolve_mosaic_launcher_script(repo_path)
     try:
         subprocess.run(
-            [sys.executable, str(script_path)],
-            cwd=repo_path,
+            _mosaic_command(),
             check=True,
         )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
-            f"2D_Mosaic_Sim exited with status {exc.returncode}."
+            f"mosaic_sim exited with status {exc.returncode}."
         ) from exc
 
 
 def launch_mosaic_specular_visualizer(initial_state: object) -> None:
-    """Launch the unified 2D_Mosaic_Sim app directly in seeded specular mode."""
+    """Launch the installed mosaic_sim app directly in seeded specular mode."""
 
-    repo_path = resolve_mosaic_repo_path()
-    script_path = resolve_mosaic_launcher_script(repo_path)
     try:
         state_json = json.dumps(initial_state)
     except TypeError as exc:
-        raise RuntimeError(f"Unable to serialize 2D_Mosaic_Sim startup state: {exc}") from exc
+        raise RuntimeError(f"Unable to serialize mosaic_sim startup state: {exc}") from exc
 
     port = _pick_available_local_port()
     try:
         subprocess.Popen(
-            [
-                sys.executable,
-                str(script_path),
+            _mosaic_command(
                 "--mode",
                 "specular-view",
                 "--port",
                 str(port),
                 "--state-json",
                 state_json,
-            ],
-            cwd=repo_path,
+            ),
         )
     except OSError as exc:
-        raise RuntimeError(f"Unable to launch 2D_Mosaic_Sim: {exc}") from exc
+        raise RuntimeError(f"Unable to launch mosaic_sim: {exc}") from exc
 
 
 def launch_startup_mode(

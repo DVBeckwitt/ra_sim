@@ -100,7 +100,16 @@ class _DragCallbacks:
 
 def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) -> None:
     calls = []
-    counters = {"status": 0, "draw": 0, "begin": 0, "touch": 0, "end": 0}
+    counters = {
+        "status": 0,
+        "draw": 0,
+        "begin": 0,
+        "touch": 0,
+        "end": 0,
+        "preview": 0,
+        "commit": 0,
+        "clear": 0,
+    }
 
     monkeypatch.setattr(
         canvas_interactions,
@@ -133,6 +142,21 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
         idx = counters["end"]
         return lambda: f"end-{idx}"
 
+    def build_preview():
+        counters["preview"] += 1
+        idx = counters["preview"]
+        return lambda xlim, ylim: f"preview-{idx}:{xlim}:{ylim}"
+
+    def build_commit():
+        counters["commit"] += 1
+        idx = counters["commit"]
+        return lambda: f"commit-{idx}"
+
+    def build_clear():
+        counters["clear"] += 1
+        idx = counters["clear"]
+        return lambda: f"clear-{idx}"
+
     factory = canvas_interactions.make_runtime_canvas_interaction_bindings_factory(
         axis="axis",
         geometry_runtime_state="geometry-runtime",
@@ -159,6 +183,9 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
         begin_live_interaction_factory=build_begin,
         touch_live_interaction_factory=build_touch,
         end_live_interaction_factory=build_end,
+        preview_view_limits_factory=build_preview,
+        commit_preview_view_factory=build_commit,
+        clear_preview_view_factory=build_clear,
     )
 
     assert factory()["axis"] == "axis"
@@ -169,6 +196,9 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
     assert calls[0]["begin_live_interaction"] is not calls[1]["begin_live_interaction"]
     assert calls[0]["touch_live_interaction"] is not calls[1]["touch_live_interaction"]
     assert calls[0]["end_live_interaction"] is not calls[1]["end_live_interaction"]
+    assert calls[0]["preview_view_limits"] is not calls[1]["preview_view_limits"]
+    assert calls[0]["commit_preview_view"] is not calls[1]["commit_preview_view"]
+    assert calls[0]["clear_preview_view"] is not calls[1]["clear_preview_view"]
 
 
 def test_canvas_click_routes_cancel_manual_preview_and_hkl_paths() -> None:
@@ -981,6 +1011,90 @@ def test_canvas_right_drag_pan_uses_pointer_pixels_across_multiple_motion_events
     assert axis.get_ylim() == pytest.approx((12.0, -8.0))
 
 
+def test_canvas_right_drag_pan_previews_limits_and_commits_once_on_release() -> None:
+    axis = _FakeAxis(xlim=(0.0, 10.0), ylim=(20.0, 0.0))
+    preview_limits = []
+    commit_calls = []
+    interaction_events = []
+
+    def _commit_preview() -> bool:
+        if not preview_limits:
+            return False
+        xlim, ylim = preview_limits[-1]
+        commit_calls.append((xlim, ylim))
+        axis.set_xlim(*xlim)
+        axis.set_ylim(*ylim)
+        return True
+
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=_DragCallbacks(),
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: False,
+        draw_idle=lambda: None,
+        begin_live_interaction=lambda: interaction_events.append("begin"),
+        touch_live_interaction=lambda: interaction_events.append("touch"),
+        end_live_interaction=lambda: interaction_events.append("end"),
+        preview_view_limits=lambda xlim, ylim: preview_limits.append((xlim, ylim))
+        or True,
+        commit_preview_view=_commit_preview,
+    )
+
+    press_event = _FakeEvent(
+        button=3,
+        inaxes=axis,
+        xdata=4.0,
+        ydata=5.0,
+        x=90.0,
+        y=95.0,
+    )
+    motion_event = _FakeEvent(
+        button=3,
+        inaxes=axis,
+        xdata=6.0,
+        ydata=9.0,
+        x=130.0,
+        y=75.0,
+    )
+    release_event = _FakeEvent(
+        button=3,
+        inaxes=axis,
+        xdata=6.0,
+        ydata=9.0,
+        x=130.0,
+        y=75.0,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, press_event) is True
+    assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is True
+    assert preview_limits == [((-2.0, 8.0), (16.0, -4.0))]
+    assert axis.set_xlim_calls == []
+    assert axis.set_ylim_calls == []
+    assert interaction_events == ["begin", "touch"]
+
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert commit_calls == [((-2.0, 8.0), (16.0, -4.0))]
+    assert axis.set_xlim_calls == [(-2.0, 8.0)]
+    assert axis.set_ylim_calls == [(16.0, -4.0)]
+    assert interaction_events == ["begin", "touch"]
+
+
 def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
     axis = _FakeAxis(xlim=(0.0, 100.0), ylim=(-180.0, 180.0))
     interaction_events = []
@@ -1035,6 +1149,70 @@ def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
     assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_out) is True
     assert axis.get_xlim() == pytest.approx((0.0, 100.0))
     assert axis.get_ylim() == pytest.approx((-180.0, 180.0))
+    assert interaction_events == ["touch", "end", "touch", "end"]
+
+
+def test_canvas_scroll_uses_pending_preview_limits_for_zoom_bursts() -> None:
+    axis = _FakeAxis(xlim=(0.0, 100.0), ylim=(-180.0, 180.0))
+    interaction_events = []
+    preview_limits = []
+
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=_DragCallbacks(),
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: True,
+        draw_idle=lambda: None,
+        touch_live_interaction=lambda: interaction_events.append("touch"),
+        end_live_interaction=lambda: interaction_events.append("end"),
+        preview_view_limits=lambda xlim, ylim: preview_limits.append((xlim, ylim))
+        or True,
+    )
+
+    zoom_in = _FakeEvent(
+        button="up",
+        step=1.0,
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+    )
+    zoom_out = _FakeEvent(
+        button="down",
+        step=-1.0,
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_in) is True
+    assert axis.set_xlim_calls == []
+    assert axis.set_ylim_calls == []
+    assert axis.get_xlim() == pytest.approx((0.0, 100.0))
+    assert axis.get_ylim() == pytest.approx((-180.0, 180.0))
+    assert preview_limits[0][0] == pytest.approx((4.166666666666668, 87.5))
+    assert preview_limits[0][1] == pytest.approx((-155.0, 145.0))
+
+    assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_out) is True
+    assert preview_limits[1][0] == pytest.approx((0.0, 100.0))
+    assert preview_limits[1][1] == pytest.approx((-180.0, 180.0))
+    assert axis.set_xlim_calls == []
+    assert axis.set_ylim_calls == []
     assert interaction_events == ["touch", "end", "touch", "end"]
 
 

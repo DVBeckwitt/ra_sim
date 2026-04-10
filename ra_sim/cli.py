@@ -17,7 +17,7 @@ Usage examples:
 - Launch the new calibrant fitter GUI:
     python -m ra_sim calibrant --bundle /path/to/hbn_bundle.npz
 
-- Launch the sibling 2D mosaic visualizer:
+- Launch the installed 2D mosaic visualizer:
     python -m ra_sim mosaic
 
 This CLI intentionally mirrors the defaults used by the GUI by reading
@@ -1583,7 +1583,7 @@ def _cmd_calibrant(args: argparse.Namespace) -> None:
 
 
 def _cmd_mosaic(_args: argparse.Namespace) -> None:
-    """Launch the sibling 2D_Mosaic_Sim visualizer."""
+    """Launch the installed mosaic_sim visualizer."""
 
     launcher.launch_mosaic_visualizer()
 
@@ -2180,7 +2180,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mosaic_parser = subparsers.add_parser(
         "mosaic",
-        help="Launch the sibling 2D_Mosaic_Sim visualizer.",
+        help="Launch the installed mosaic_sim visualizer.",
     )
     mosaic_parser.set_defaults(func=_cmd_mosaic)
 

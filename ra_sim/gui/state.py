@@ -878,6 +878,11 @@ class SimulationRuntimeState:
     main_matplotlib_redraw_token: Any = None
     main_matplotlib_last_draw_ts: float | None = None
     main_matplotlib_overlays_suspended: bool = False
+    main_matplotlib_preview_active: bool = False
+    main_matplotlib_preview_base_limits: tuple[tuple[float, float], tuple[float, float]] | None = None
+    main_matplotlib_preview_target_limits: tuple[tuple[float, float], tuple[float, float]] | None = None
+    main_matplotlib_preview_background_valid: bool = False
+    main_display_raster_limit: int | None = None
     unscaled_image: np.ndarray | None = None
     last_1d_integration_data: dict[str, object] = field(
         default_factory=lambda: {

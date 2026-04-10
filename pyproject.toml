@@ -7,7 +7,7 @@ name = "ra_sim"
 version = "0.1.0"
 description = "DWBA forward simulation and refinement for 2D oriented powder diffraction"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "GPL-3.0-only"
 authors = [{ name = "RA-SIM Contributors" }]
 keywords = ["xrd", "diffraction", "dwba", "crystallography", "image-processing"]
@@ -15,7 +15,6 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -25,8 +24,8 @@ classifiers = [
 ]
 dependencies = [
   "Dans_Diffraction",
-  "fabio>=0.11.0",
   "matplotlib>=3.0.0",
+  "mosaic_sim @ git+https://github.com/DVBeckwitt/2D_Mosaic_Sim.git@6b874945b309fda9f1078e986dda43542fa2cdd6",
   "numba>=0.50.0",
   "numpy>=1.18.0",
   "opencv-python",
@@ -67,7 +66,7 @@ include = ["ra_sim*"]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -80,7 +79,7 @@ select = ["E9", "F63", "F7", "F82", "UP015", "UP018"]
 "ra_sim/io/data_loading.py" = ["UP015"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_configs = true
 show_error_codes = true

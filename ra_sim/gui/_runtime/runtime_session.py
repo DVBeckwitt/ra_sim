@@ -168,6 +168,7 @@ from ra_sim.gui import peak_selection as gui_peak_selection
 from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
+from ra_sim.gui import display_projection as gui_display_projection
 from ra_sim.gui import fast_plot_viewer as gui_fast_plot_viewer
 from ra_sim.gui import main_matplotlib_interaction as gui_main_matplotlib_interaction
 from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome
@@ -736,6 +737,9 @@ if tilt_hint:
         )
 
 image_size = int(app_state.image_size)
+simulation_runtime_state.main_display_raster_limit = (
+    gui_display_projection.default_display_raster_size(image_size)
+)
 pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
 legacy_resolution_sample_counts = {
     "Low": 25,
@@ -2024,7 +2028,10 @@ simulation_runtime_state.unscaled_image = None
 
 # ── replace the original imshow call ────────────────────────────
 image_display = ax.imshow(
-    global_image_buffer,
+    gui_display_projection.downsample_raster_for_display(
+        global_image_buffer,
+        max_size=simulation_runtime_state.main_display_raster_limit,
+    ),
     cmap=turbo_white0,
     alpha=0.5,
     zorder=1,
@@ -2033,7 +2040,10 @@ image_display = ax.imshow(
 
 
 background_display = ax.imshow(
-    background_runtime_state.current_background_display,
+    gui_display_projection.downsample_raster_for_display(
+        background_runtime_state.current_background_display,
+        max_size=simulation_runtime_state.main_display_raster_limit,
+    ),
     cmap='turbo',
     zorder=0,
     origin='upper'
@@ -2043,7 +2053,10 @@ highlight_cmap = gui_integration_range_drag.create_integration_region_highlight_
     listed_colormap_cls=ListedColormap,
 )
 integration_region_overlay = ax.imshow(
-    np.zeros_like(global_image_buffer),
+    gui_display_projection.downsample_raster_for_display(
+        np.zeros_like(global_image_buffer),
+        max_size=simulation_runtime_state.main_display_raster_limit,
+    ),
     cmap=highlight_cmap,
     vmin=0,
     vmax=1,
@@ -2466,6 +2479,23 @@ selected_peak_marker, = ax.plot([], [], 'ys',  # yellow square outline
                                linewidth=1.5, zorder=6)
 selected_peak_marker.set_visible(False)
 
+_main_matplotlib_preview_controller = (
+    gui_main_matplotlib_interaction.MainMatplotlibPreviewController(
+        axis=ax,
+        canvas=matplotlib_canvas,
+        runtime_state=simulation_runtime_state,
+        preview_artist_factory=lambda: (
+            globals().get("background_display"),
+            globals().get("image_display"),
+            globals().get("center_marker"),
+            globals().get("selected_peak_marker"),
+        ),
+        hidden_artist_factory=lambda: (
+            globals().get("integration_region_overlay"),
+        ),
+    )
+)
+
 # Geometry click markers (sim vs real)
 geometry_runtime_state.pick_artists = []
 geometry_runtime_state.preview_artists = []
@@ -2539,6 +2569,13 @@ def _main_matplotlib_redraw_widget():
         return root
 
 
+def _legacy_main_matplotlib_preview_controller():
+    controller = globals().get("_main_matplotlib_preview_controller")
+    if controller is None:
+        return None
+    return controller
+
+
 def _draw_legacy_main_matplotlib_canvas_now() -> bool:
     if not _legacy_main_matplotlib_interaction_active():
         return False
@@ -2563,6 +2600,11 @@ def _cancel_legacy_main_matplotlib_redraw() -> None:
 
 
 def _request_legacy_main_matplotlib_redraw(*, force: bool = False) -> None:
+    preview_controller = _legacy_main_matplotlib_preview_controller()
+    if preview_controller is not None and bool(preview_controller.preview_active()):
+        if not bool(force):
+            return
+        _clear_legacy_main_matplotlib_preview_view(redraw=False)
     gui_main_matplotlib_interaction.request_main_matplotlib_redraw(
         widget=_main_matplotlib_redraw_widget(),
         runtime_state=simulation_runtime_state,
@@ -2582,17 +2624,66 @@ def _suspend_legacy_main_matplotlib_overlays() -> None:
     )
 
 
-def _restore_legacy_main_matplotlib_overlays() -> None:
+def _restore_legacy_main_matplotlib_overlays() -> bool:
     if not _legacy_main_matplotlib_interaction_active():
         simulation_runtime_state.main_matplotlib_overlays_suspended = False
-        return
-    gui_main_matplotlib_interaction.restore_main_matplotlib_overlays(
+        return False
+    return bool(gui_main_matplotlib_interaction.restore_main_matplotlib_overlays(
         simulation_runtime_state,
         restore_callback=lambda: (
             _refresh_settled_overlays(),
             _request_legacy_main_matplotlib_redraw(force=True),
         ),
+    ))
+
+
+def _preview_legacy_main_matplotlib_view_limits(
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> bool:
+    if not _legacy_main_matplotlib_interaction_active():
+        return False
+    preview_controller = _legacy_main_matplotlib_preview_controller()
+    if preview_controller is None:
+        return False
+    return bool(preview_controller.preview_view_limits(xlim, ylim))
+
+
+def _commit_legacy_main_matplotlib_preview_view() -> bool:
+    preview_controller = _legacy_main_matplotlib_preview_controller()
+    if preview_controller is None or not bool(preview_controller.preview_active()):
+        return False
+    if not bool(preview_controller.commit_preview_view()):
+        return False
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.interaction_settle_token,
     )
+    simulation_runtime_state.interaction_settle_token = None
+    simulation_runtime_state.interaction_drag_active = False
+    simulation_runtime_state.interaction_drag_requires_settled_update = False
+    _refresh_run_status_bar()
+    if not _restore_legacy_main_matplotlib_overlays():
+        _request_legacy_main_matplotlib_redraw(force=True)
+    return True
+
+
+def _clear_legacy_main_matplotlib_preview_view(*, redraw: bool = True) -> bool:
+    preview_controller = _legacy_main_matplotlib_preview_controller()
+    if preview_controller is None:
+        return False
+    cleared = bool(preview_controller.clear_preview_view(redraw=bool(redraw)))
+    if cleared:
+        simulation_runtime_state.interaction_drag_active = False
+        simulation_runtime_state.interaction_drag_requires_settled_update = False
+        gui_controllers.clear_tk_after_token(
+            root,
+            simulation_runtime_state.interaction_settle_token,
+        )
+        simulation_runtime_state.interaction_settle_token = None
+        simulation_runtime_state.main_matplotlib_overlays_suspended = False
+        _refresh_run_status_bar()
+    return cleared
 
 
 def _configure_primary_viewport_redraw_helpers() -> None:
@@ -2643,6 +2734,7 @@ def _configure_primary_viewport_redraw_helpers() -> None:
 
     def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
         if _fast_viewer_active():
+            _clear_legacy_main_matplotlib_preview_view(redraw=False)
             _cancel_legacy_main_matplotlib_redraw()
             fast_viewer_workflow.request_main_canvas_redraw(
                 force_matplotlib=bool(force_matplotlib)
@@ -2652,6 +2744,7 @@ def _configure_primary_viewport_redraw_helpers() -> None:
 
     def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
         if _fast_viewer_active():
+            _clear_legacy_main_matplotlib_preview_view(redraw=False)
             _cancel_legacy_main_matplotlib_redraw()
             fast_viewer_workflow.request_overlay_canvas_redraw(force=bool(force))
             return
@@ -5332,6 +5425,11 @@ canvas_interaction_workflow = (
         begin_live_interaction_factory=lambda: _begin_main_figure_live_interaction,
         touch_live_interaction_factory=lambda: _touch_main_figure_live_interaction,
         end_live_interaction_factory=lambda: _end_main_figure_live_interaction,
+        preview_view_limits_factory=lambda: _preview_legacy_main_matplotlib_view_limits,
+        commit_preview_view_factory=lambda: _commit_legacy_main_matplotlib_preview_view,
+        clear_preview_view_factory=lambda: (
+            lambda: _clear_legacy_main_matplotlib_preview_view(redraw=True)
+        ),
     )
 )
 canvas_interaction_runtime = canvas_interaction_workflow.runtime
@@ -5611,6 +5709,91 @@ def _get_scale_factor_value(default=1.0):
     if not np.isfinite(scale):
         return default
     return gui_controllers.normalize_display_scale_factor(scale, fallback=1.0)
+
+
+MAIN_DISPLAY_RASTER_MIN_SIZE = gui_display_projection.MIN_DISPLAY_RASTER_SIZE
+MAIN_DISPLAY_RASTER_MAX_SIZE = gui_display_projection.MAX_DISPLAY_RASTER_SIZE
+
+
+def _default_main_display_raster_size_limit() -> int:
+    return gui_display_projection.default_display_raster_size(image_size)
+
+
+def _normalize_main_display_raster_size_limit(value: object | None = None) -> int:
+    fallback = _default_main_display_raster_size_limit()
+    candidate = value
+    if candidate is None:
+        control_var = globals().get("main_display_raster_size_var")
+        getter = getattr(control_var, "get", None)
+        if callable(getter):
+            try:
+                candidate = getter()
+            except Exception:
+                candidate = None
+    normalized = gui_display_projection.normalize_display_raster_size_limit(
+        candidate,
+        fallback=getattr(
+            simulation_runtime_state,
+            "main_display_raster_limit",
+            fallback,
+        ),
+        minimum=MAIN_DISPLAY_RASTER_MIN_SIZE,
+        maximum=MAIN_DISPLAY_RASTER_MAX_SIZE,
+    )
+    simulation_runtime_state.main_display_raster_limit = int(normalized)
+    control_var = globals().get("main_display_raster_size_var")
+    setter = getattr(control_var, "set", None)
+    getter = getattr(control_var, "get", None)
+    if callable(setter) and callable(getter):
+        try:
+            current_value = float(getter())
+        except Exception:
+            current_value = math.nan
+        if not math.isfinite(current_value) or abs(current_value - float(normalized)) > 1e-9:
+            try:
+                setter(float(normalized))
+            except Exception:
+                pass
+    widgets = getattr(app_shell_view_state, "quick_control_widgets", None)
+    if isinstance(widgets, dict):
+        control = widgets.get("display_raster_size")
+        if isinstance(control, dict):
+            scale_widget = control.get("scale")
+            configure = getattr(scale_widget, "configure", None)
+            if callable(configure):
+                try:
+                    configure(
+                        from_=float(MAIN_DISPLAY_RASTER_MIN_SIZE),
+                        to=float(MAIN_DISPLAY_RASTER_MAX_SIZE),
+                    )
+                except Exception:
+                    pass
+    return int(normalized)
+
+
+def _current_main_display_raster_size_limit() -> int:
+    return int(_normalize_main_display_raster_size_limit())
+
+
+def _display_raster_for_primary_figure(image: np.ndarray | None) -> np.ndarray | None:
+    if image is None:
+        return None
+    return gui_display_projection.downsample_raster_for_display(
+        image,
+        max_size=_current_main_display_raster_size_limit(),
+    )
+
+
+def _refresh_main_display_raster_projection() -> None:
+    _normalize_main_display_raster_size_limit()
+    if _legacy_main_matplotlib_interaction_active():
+        _clear_legacy_main_matplotlib_preview_view(redraw=False)
+    apply_scale_factor_to_existing_results(
+        update_limits=False,
+        update_1d=False,
+        update_canvas=True,
+        update_chi_square=False,
+    )
 
 
 def _on_scale_factor_change(*args):
@@ -5982,7 +6165,11 @@ def apply_scale_factor_to_existing_results(
         if not show_caked_image:
             _sync_primary_raster_geometry(show_caked_image=False)
             if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
-                background_display.set_data(background_runtime_state.current_background_display)
+                background_display.set_data(
+                    _display_raster_for_primary_figure(
+                        background_runtime_state.current_background_display
+                    )
+                )
                 _apply_intensity_display_range(
                     background_display,
                     background_runtime_state.current_background_display,
@@ -6029,7 +6216,7 @@ def apply_scale_factor_to_existing_results(
     )
 
     if not show_caked_image:
-        image_display.set_data(global_image_buffer)
+        image_display.set_data(_display_raster_for_primary_figure(global_image_buffer))
         _apply_intensity_display_range(
             image_display,
             global_image_buffer,
@@ -6037,7 +6224,7 @@ def apply_scale_factor_to_existing_results(
             display_controls_view_state.simulation_max_var.get(),
         )
     else:
-        image_display.set_data(scaled_caked)
+        image_display.set_data(_display_raster_for_primary_figure(scaled_caked))
     _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
 
     if show_caked_image:
@@ -6102,7 +6289,32 @@ def apply_scale_factor_to_existing_results(
 
     if not show_caked_image:
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
-            background_display.set_data(background_runtime_state.current_background_display)
+            background_display.set_data(
+                _display_raster_for_primary_figure(
+                    background_runtime_state.current_background_display
+                )
+            )
+            background_display.set_visible(True)
+        else:
+            background_display.set_visible(False)
+    else:
+        if (
+            background_runtime_state.visible
+            and simulation_runtime_state.last_caked_background_image_unscaled is not None
+        ):
+            caked_background = np.asarray(
+                simulation_runtime_state.last_caked_background_image_unscaled,
+                dtype=float,
+            )
+            background_display.set_data(
+                _display_raster_for_primary_figure(caked_background)
+            )
+            _apply_intensity_display_range(
+                background_display,
+                caked_background,
+                display_controls_view_state.background_min_var.get(),
+                display_controls_view_state.background_max_var.get(),
+            )
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
@@ -8262,6 +8474,8 @@ def _clear_deferred_overlays(*, clear_qr_overlay: bool = True) -> None:
 
 def _finish_live_interaction() -> None:
     simulation_runtime_state.interaction_settle_token = None
+    if _commit_legacy_main_matplotlib_preview_view():
+        return
     if not simulation_runtime_state.interaction_drag_active:
         return
     simulation_runtime_state.interaction_drag_active = False
@@ -10888,7 +11102,7 @@ def do_update():
                 simulation_runtime_state.last_caked_background_image_unscaled,
                 dtype=float,
             )
-            background_display.set_data(bg_caked)
+            background_display.set_data(_display_raster_for_primary_figure(bg_caked))
             bg_display_vmax = vmax_val
             if not math.isfinite(bg_display_vmax):
                 bg_display_vmax = auto_vmax
@@ -10959,7 +11173,11 @@ def do_update():
         ax.set_ylabel('Y (pixels)')
         ax.set_title("")
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
-            background_display.set_data(background_runtime_state.current_background_display)
+            background_display.set_data(
+                _display_raster_for_primary_figure(
+                    background_runtime_state.current_background_display
+                )
+            )
             background_display.set_clim(
                 display_controls_view_state.background_min_var.get(),
                 display_controls_view_state.background_max_var.get(),
@@ -13707,6 +13925,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
             ]
         ),
         get_memory_intersection_cache=get_last_intersection_cache,
+        memory_cache_signature=simulation_runtime_state.last_simulation_signature,
         load_logged_intersection_cache=(
             lambda: load_most_recent_logged_intersection_cache()
         ),
@@ -20107,6 +20326,17 @@ bandwidth_percent_var = beam_mosaic_parameter_sliders_view_state.bandwidth_perce
 bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
 center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
+main_display_raster_size_var = tk.DoubleVar(
+    value=float(_default_main_display_raster_size_limit())
+)
+_main_display_raster_size_scale_bounds = SimpleNamespace(
+    cget=lambda key: (
+        float(MAIN_DISPLAY_RASTER_MIN_SIZE)
+        if str(key) == "from"
+        else float(MAIN_DISPLAY_RASTER_MAX_SIZE)
+    )
+)
+_normalize_main_display_raster_size_limit()
 
 gui_views.populate_app_shell_quick_controls(
     view_state=app_shell_view_state,
@@ -20133,6 +20363,14 @@ gui_views.populate_app_shell_quick_controls(
             "variable": sample_count_var,
             "scale": sample_count_scale,
             "command": lambda: _apply_random_sample_count(trigger_update=True),
+            "step": 1,
+        },
+        {
+            "key": "display_raster_size",
+            "label": "display px",
+            "variable": main_display_raster_size_var,
+            "scale": _main_display_raster_size_scale_bounds,
+            "command": _refresh_main_display_raster_projection,
             "step": 1,
         },
         {
@@ -20680,6 +20918,8 @@ def _build_geometry_fit_async_job(
     requested_signatures: dict[int, object] = {}
     requested_signature_summaries: dict[int, object] = {}
     background_labels: dict[int, str] = {}
+    theta_base_by_background: dict[int, float] = {}
+    theta_initial_by_background: dict[int, float] = {}
 
     def _theta_base_for_index(dataset_index: int) -> float:
         if build_all_selected_backgrounds or joint_background_mode:
@@ -20704,11 +20944,14 @@ def _build_geometry_fit_async_job(
             simulation_runtime_state.source_row_snapshots.get(int(idx)) or {}
         )
         background_labels[int(idx)] = _geometry_fit_background_label(int(idx))
-        params_i = dict(fit_params_snapshot)
-        params_i["theta_initial"] = float(
-            _theta_base_for_index(int(idx))
-            + float(fit_params_snapshot.get("theta_offset", 0.0))
+        theta_base_value = float(_theta_base_for_index(int(idx)))
+        theta_initial_value_i = float(
+            theta_base_value + float(fit_params_snapshot.get("theta_offset", 0.0))
         )
+        theta_base_by_background[int(idx)] = float(theta_base_value)
+        theta_initial_by_background[int(idx)] = float(theta_initial_value_i)
+        params_i = dict(fit_params_snapshot)
+        params_i["theta_initial"] = float(theta_initial_value_i)
         requested_signature = _geometry_source_snapshot_signature_for_background(
             int(idx),
             params_i,
@@ -20777,16 +21020,23 @@ def _build_geometry_fit_async_job(
         "background_images": background_images,
         "manual_pairs_by_background": manual_pairs_by_background,
         "source_snapshots": source_snapshots,
+        "background_cache_by_index": {},
         "requested_signatures": requested_signatures,
         "requested_signature_summaries": requested_signature_summaries,
         "background_labels": background_labels,
+        "theta_base_by_background": theta_base_by_background,
+        "theta_initial_by_background": theta_initial_by_background,
         "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
         "simulation_diagnostics": _geometry_manual_last_simulation_diagnostics(),
         "live_cache_inventory": _live_cache_inventory_snapshot(),
         "memory_intersection_cache": _copy_intersection_cache_tables(
             get_last_intersection_cache()
         ),
+        "memory_intersection_cache_signature": (
+            simulation_runtime_state.last_simulation_signature
+        ),
         "live_rows_by_background": live_rows_by_background,
+        "live_rows_signature": simulation_runtime_state.last_simulation_signature,
         "manual_match_config": manual_match_config,
         "pick_uses_caked_space": bool(pick_uses_caked_space),
         "geometry_manual_simulated_lookup": (
@@ -20844,6 +21094,12 @@ def _handle_geometry_fit_worker_event(kind: str, payload: object) -> None:
     message_text = str(payload_mapping.get("message", "") or "")
     if message_text:
         progress_label_geometry.config(text=message_text)
+        if event_kind in {
+            "source_cache_build_start",
+            "source_cache_build_ready",
+            "source_cache_build_failed",
+        }:
+            _geometry_fit_cmd_line(message_text)
     if event_kind == "preflight_failure":
         error_text = str(
             payload_mapping.get("error_text")
@@ -20916,6 +21172,10 @@ def _run_async_geometry_fit_worker_job(
     worker_simulation_diagnostics = copy.deepcopy(
         job_data.get("simulation_diagnostics") or {}
     )
+    worker_background_cache_by_index: dict[
+        int,
+        gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+    ] = {}
 
     def _set_worker_source_snapshot_diagnostics(**kwargs) -> None:
         worker_source_snapshot_diagnostics.clear()
@@ -20942,6 +21202,138 @@ def _run_async_geometry_fit_worker_job(
             return project_rows(raw_rows)
         return raw_rows or ()
 
+    def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
+        return [
+            dict(entry)
+            for entry in (raw_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+
+    def _copy_optional_values(
+        raw_values: Sequence[object] | None,
+    ) -> list[object] | None:
+        if raw_values is None:
+            return None
+        return [copy.deepcopy(entry) for entry in raw_values]
+
+    def _theta_base_for_background_worker(background_index: int) -> float:
+        theta_base_mapping = dict(job_data.get("theta_base_by_background", {}) or {})
+        if int(background_index) in theta_base_mapping:
+            return float(theta_base_mapping[int(background_index)])
+        return float(job_data.get("theta_initial", 0.0))
+
+    def _theta_initial_for_background_worker(background_index: int) -> float:
+        theta_initial_mapping = dict(
+            job_data.get("theta_initial_by_background", {}) or {}
+        )
+        if int(background_index) in theta_initial_mapping:
+            return float(theta_initial_mapping[int(background_index)])
+        return float(job_data.get("theta_initial", 0.0))
+
+    def _bundle_rows(
+        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle | None,
+    ) -> list[dict[str, object]]:
+        if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
+            return []
+        rows = _copy_source_rows(bundle.projected_rows)
+        if rows:
+            return rows
+        return _copy_source_rows(bundle.stored_rows)
+
+    def _store_worker_background_cache_bundle(
+        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+    ) -> None:
+        worker_background_cache_by_index[int(bundle.background_index)] = bundle
+        worker_source_row_snapshots[int(bundle.background_index)] = {
+            "background_index": int(bundle.background_index),
+            "simulation_signature": bundle.requested_signature,
+            "rows": _copy_source_rows(bundle.stored_rows),
+            "row_count": int(len(bundle.stored_rows or ())),
+            "created_from": str(bundle.cache_source or "geometry_fit_background_cache"),
+        }
+
+    def _build_geometry_fit_background_cache_bundle(
+        *,
+        background_index: int,
+        background_label: str,
+        requested_signature: object,
+        requested_signature_summary: object,
+        theta_base: float,
+        theta_initial: float,
+        stored_rows: Sequence[object] | None,
+        cache_source: str,
+        diagnostics: Mapping[str, object] | None = None,
+        peak_table_lattice: Sequence[object] | None = None,
+        hit_tables: Sequence[object] | None = None,
+        intersection_cache: Sequence[object] | None = None,
+        cache_metadata: Mapping[str, object] | None = None,
+    ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle:
+        copied_stored_rows = _copy_source_rows(stored_rows)
+        copied_projected_rows = _copy_source_rows(
+            _project_source_rows(copied_stored_rows)
+        )
+        resolved_diagnostics = (
+            dict(diagnostics)
+            if isinstance(diagnostics, Mapping)
+            else {}
+        )
+        resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
+        resolved_diagnostics.setdefault(
+            "cache_family",
+            "geometry_fit_background_cache",
+        )
+        resolved_diagnostics.setdefault("action", "prepare")
+        resolved_diagnostics.setdefault("status", "background_cache_ready")
+        resolved_diagnostics.setdefault("background_index", int(background_index))
+        resolved_diagnostics.setdefault("background_label", str(background_label))
+        resolved_diagnostics.setdefault("requested_signature", requested_signature)
+        resolved_diagnostics.setdefault(
+            "requested_signature_summary",
+            requested_signature_summary,
+        )
+        resolved_diagnostics.setdefault("snapshot_signature", requested_signature)
+        resolved_diagnostics.setdefault(
+            "stored_signature_summary",
+            requested_signature_summary,
+        )
+        resolved_diagnostics.setdefault("theta_base", float(theta_base))
+        resolved_diagnostics.setdefault("theta_initial", float(theta_initial))
+        resolved_diagnostics.setdefault(
+            "raw_peak_count",
+            int(len(copied_stored_rows)),
+        )
+        resolved_diagnostics.setdefault(
+            "projected_peak_count",
+            int(len(copied_projected_rows)),
+        )
+        resolved_diagnostics.setdefault("cache_source", str(cache_source))
+        resolved_diagnostics.setdefault("signature_match", True)
+        resolved_diagnostics.setdefault(
+            "live_cache_inventory",
+            copy.deepcopy(job_data.get("live_cache_inventory", {})),
+        )
+
+        return gui_geometry_fit.GeometryFitBackgroundCacheBundle(
+            background_index=int(background_index),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            background_label=str(background_label),
+            theta_base=float(theta_base),
+            theta_initial=float(theta_initial),
+            projected_rows=copied_projected_rows,
+            stored_rows=copied_stored_rows,
+            cache_source=str(cache_source),
+            diagnostics=resolved_diagnostics,
+            peak_table_lattice=_copy_optional_values(peak_table_lattice),
+            hit_tables=_copy_optional_values(hit_tables),
+            intersection_cache=_copy_optional_values(intersection_cache),
+            cache_metadata=(
+                dict(cache_metadata)
+                if isinstance(cache_metadata, Mapping)
+                else None
+            ),
+        )
+
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
         *,
@@ -20962,18 +21354,16 @@ def _run_async_geometry_fit_worker_job(
             allow_nominal_hkl_indices=True,
         )
 
-    def _rebuild_source_rows_for_background_worker(
+    def _prebuild_background_cache_bundle_worker(
         background_index: int,
-        param_set: dict[str, object] | None = None,
         *,
-        consumer: str | None = None,
-        prior_diagnostics: Mapping[str, object] | None = None,
-    ) -> list[dict[str, object]]:
+        theta_base: float,
+    ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle | None:
         background_idx = int(background_index)
-        lookup_context = str(consumer or "unspecified")
         params_local = dict(job_data.get("params", {}) or {})
-        if isinstance(param_set, Mapping):
-            params_local.update(dict(param_set))
+        params_local["theta_initial"] = float(
+            _theta_initial_for_background_worker(int(background_idx))
+        )
 
         requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
             int(background_idx)
@@ -20989,13 +21379,70 @@ def _run_async_geometry_fit_worker_job(
             int(background_idx),
             f"background {int(background_idx) + 1}",
         )
+        live_rows_signature = job_data.get("live_rows_signature")
+        live_rows = _copy_source_rows(
+            dict(job_data.get("live_rows_by_background", {}) or {}).get(
+                int(background_idx),
+                (),
+            )
+        )
+        if (
+            int(background_idx) == int(job_data.get("current_background_index", -1))
+            and requested_signature == live_rows_signature
+            and live_rows
+        ):
+            bundle = _build_geometry_fit_background_cache_bundle(
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                theta_base=float(theta_base),
+                theta_initial=float(params_local.get("theta_initial", 0.0)),
+                stored_rows=live_rows,
+                cache_source="live_runtime_cache",
+                diagnostics={
+                    "created_from": "live_runtime_cache",
+                    "cache_source": "live_runtime_cache",
+                },
+            )
+            _store_worker_background_cache_bundle(bundle)
+            _set_worker_source_snapshot_diagnostics(**dict(bundle.diagnostics))
+            worker_simulation_diagnostics.clear()
+            worker_simulation_diagnostics.update(dict(bundle.diagnostics))
+            return bundle
+
+        snapshot = dict(worker_source_row_snapshots.get(int(background_idx)) or {})
+        snapshot_signature = snapshot.get("simulation_signature")
+        snapshot_rows = _copy_source_rows(snapshot.get("rows"))
+        if snapshot_signature == requested_signature and snapshot_rows:
+            bundle = _build_geometry_fit_background_cache_bundle(
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                theta_base=float(theta_base),
+                theta_initial=float(params_local.get("theta_initial", 0.0)),
+                stored_rows=snapshot_rows,
+                cache_source=str(snapshot.get("created_from") or "source_snapshot"),
+                diagnostics={
+                    "created_from": snapshot.get("created_from"),
+                    "cache_source": str(
+                        snapshot.get("created_from") or "source_snapshot"
+                    ),
+                },
+            )
+            _store_worker_background_cache_bundle(bundle)
+            _set_worker_source_snapshot_diagnostics(**dict(bundle.diagnostics))
+            worker_simulation_diagnostics.clear()
+            worker_simulation_diagnostics.update(dict(bundle.diagnostics))
+            return bundle
 
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
             background_label=str(background_label),
             params_local=params_local,
-            consumer=lookup_context,
-            prior_diagnostics=prior_diagnostics,
+            consumer="geometry_fit_preflight_cache",
+            prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
             can_use_live_runtime_cache=(
@@ -21005,20 +21452,20 @@ def _run_async_geometry_fit_worker_job(
                 lambda: [
                     dict(entry)
                     for entry in (
-                        dict(job_data.get("live_rows_by_background", {}) or {}).get(
-                            int(background_idx),
-                            (),
-                        )
+                        live_rows
                         or ()
                     )
                     if isinstance(entry, Mapping)
                 ]
+                if requested_signature == live_rows_signature
+                else []
             ),
             get_memory_intersection_cache=(
                 lambda: _copy_intersection_cache_tables(
                     job_data.get("memory_intersection_cache", [])
                 )
             ),
+            memory_cache_signature=job_data.get("memory_intersection_cache_signature"),
             load_logged_intersection_cache=load_most_recent_logged_intersection_cache,
             logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
             build_source_rows_from_hit_tables=(
@@ -21046,19 +21493,26 @@ def _run_async_geometry_fit_worker_job(
             dict(rebuild_result.diagnostics or {})
         )
         if rebuild_result.stored_rows:
-            worker_source_row_snapshots[int(background_idx)] = {
-                "background_index": int(background_idx),
-                "simulation_signature": rebuild_result.requested_signature,
-                "rows": [dict(entry) for entry in (rebuild_result.stored_rows or ())],
-                "row_count": int(len(rebuild_result.stored_rows or ())),
-                "created_from": str(rebuild_result.rebuild_source or "unknown"),
-            }
-        _emit_worker_event("source_snapshot_commit", rebuild_result)
-        return [
-            dict(entry)
-            for entry in (rebuild_result.projected_rows or ())
-            if isinstance(entry, Mapping)
-        ]
+            bundle = _build_geometry_fit_background_cache_bundle(
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=rebuild_result.requested_signature,
+                requested_signature_summary=(
+                    rebuild_result.requested_signature_summary
+                ),
+                theta_base=float(theta_base),
+                theta_initial=float(params_local.get("theta_initial", 0.0)),
+                stored_rows=rebuild_result.stored_rows,
+                cache_source=str(rebuild_result.rebuild_source or "unknown"),
+                diagnostics=dict(rebuild_result.diagnostics or {}),
+                peak_table_lattice=rebuild_result.peak_table_lattice,
+                hit_tables=rebuild_result.hit_tables,
+                intersection_cache=rebuild_result.intersection_cache,
+                cache_metadata=rebuild_result.metadata,
+            )
+            _store_worker_background_cache_bundle(bundle)
+            return bundle
+        return None
 
     def _source_rows_for_background_worker(
         background_index: int,
@@ -21068,8 +21522,6 @@ def _run_async_geometry_fit_worker_job(
     ) -> list[dict[str, object]]:
         background_idx = int(background_index)
         lookup_context = str(consumer or "unspecified")
-        allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")
-        snapshot = dict(worker_source_row_snapshots.get(int(background_idx)) or {})
         requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
             int(background_idx)
         )
@@ -21085,13 +21537,14 @@ def _run_async_geometry_fit_worker_job(
             f"background {int(background_idx) + 1}",
         )
         live_cache_inventory = copy.deepcopy(job_data.get("live_cache_inventory", {}))
-        if not snapshot:
+        bundle = worker_background_cache_by_index.get(int(background_idx))
+        if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
             _set_worker_source_snapshot_diagnostics(
-                source="source_snapshot",
-                cache_family="source_snapshot",
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
                 action="lookup",
                 consumer=lookup_context,
-                status="snapshot_missing_background",
+                status="background_cache_missing",
                 background_index=int(background_idx),
                 background_label=str(background_label),
                 requested_signature=requested_signature,
@@ -21101,102 +21554,144 @@ def _run_async_geometry_fit_worker_job(
                 signature_match=False,
                 live_cache_inventory=live_cache_inventory,
             )
-            if allow_source_snapshot_rebuild:
-                return _rebuild_source_rows_for_background_worker(
-                    background_idx,
-                    param_set,
-                    consumer=lookup_context,
-                    prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
-                )
             return []
 
-        snapshot_signature = snapshot.get("simulation_signature")
-        stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
-        raw_rows = [
-            dict(entry)
-            for entry in (snapshot.get("rows", ()) or ())
-            if isinstance(entry, Mapping)
-        ]
-        if snapshot_signature != requested_signature:
+        stored_signature_summary = _live_cache_signature_summary(
+            bundle.requested_signature
+        )
+        if bundle.requested_signature != requested_signature:
             _set_worker_source_snapshot_diagnostics(
-                source="source_snapshot",
-                cache_family="source_snapshot",
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
                 action="lookup",
                 consumer=lookup_context,
-                status="snapshot_signature_mismatch",
+                status="background_cache_signature_mismatch",
                 background_index=int(background_idx),
                 background_label=str(background_label),
                 requested_signature=requested_signature,
                 requested_signature_summary=requested_signature_summary,
-                snapshot_signature=snapshot_signature,
+                snapshot_signature=bundle.requested_signature,
                 stored_signature_summary=stored_signature_summary,
-                raw_peak_count=int(len(raw_rows)),
+                raw_peak_count=int(len(bundle.stored_rows or ())),
                 projected_peak_count=0,
-                created_from=snapshot.get("created_from"),
+                created_from=bundle.cache_source,
                 signature_match=False,
                 live_cache_inventory=live_cache_inventory,
             )
-            if allow_source_snapshot_rebuild:
-                return _rebuild_source_rows_for_background_worker(
-                    background_idx,
-                    param_set,
-                    consumer=lookup_context,
-                    prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
-                )
             return []
 
-        if not raw_rows:
+        projected_rows = _bundle_rows(bundle)
+        if not projected_rows:
             _set_worker_source_snapshot_diagnostics(
-                source="source_snapshot",
-                cache_family="source_snapshot",
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
                 action="lookup",
                 consumer=lookup_context,
-                status="snapshot_empty",
+                status="background_cache_empty",
                 background_index=int(background_idx),
                 background_label=str(background_label),
                 requested_signature=requested_signature,
                 requested_signature_summary=requested_signature_summary,
-                snapshot_signature=snapshot_signature,
+                snapshot_signature=bundle.requested_signature,
                 stored_signature_summary=stored_signature_summary,
-                raw_peak_count=0,
+                raw_peak_count=int(len(bundle.stored_rows or ())),
                 projected_peak_count=0,
-                created_from=snapshot.get("created_from"),
+                created_from=bundle.cache_source,
                 signature_match=True,
                 live_cache_inventory=live_cache_inventory,
             )
-            if allow_source_snapshot_rebuild:
-                return _rebuild_source_rows_for_background_worker(
-                    background_idx,
-                    param_set,
-                    consumer=lookup_context,
-                    prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
-                )
             return []
 
-        projected_rows = [
-            dict(entry)
-            for entry in (_project_source_rows(raw_rows) or ())
-            if isinstance(entry, Mapping)
-        ]
         _set_worker_source_snapshot_diagnostics(
-            source="source_snapshot",
-            cache_family="source_snapshot",
+            source="geometry_fit_background_cache",
+            cache_family="geometry_fit_background_cache",
             action="lookup",
             consumer=lookup_context,
-            status="snapshot_hit",
+            status="background_cache_hit",
             background_index=int(background_idx),
             background_label=str(background_label),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
-            snapshot_signature=snapshot_signature,
+            snapshot_signature=bundle.requested_signature,
             stored_signature_summary=stored_signature_summary,
-            raw_peak_count=int(len(raw_rows)),
+            raw_peak_count=int(len(bundle.stored_rows or ())),
             projected_peak_count=int(len(projected_rows)),
-            created_from=snapshot.get("created_from"),
+            created_from=bundle.cache_source,
+            cache_source=bundle.cache_source,
             signature_match=True,
+            theta_base=float(bundle.theta_base),
+            theta_initial=float(bundle.theta_initial),
             live_cache_inventory=live_cache_inventory,
         )
         return projected_rows
+
+    def _prebuild_required_background_caches() -> None:
+        required_indices = [
+            int(idx)
+            for idx in (job_data.get("required_indices", ()) or ())
+        ]
+        for background_idx in required_indices:
+            background_label = dict(job_data.get("background_labels", {}) or {}).get(
+                int(background_idx),
+                f"background {int(background_idx) + 1}",
+            )
+            _emit_worker_event(
+                "source_cache_build_start",
+                {
+                    "background_index": int(background_idx),
+                    "background_label": str(background_label),
+                    "message": (
+                        "preflight: building source cache for "
+                        f"background {int(background_idx) + 1}"
+                    ),
+                },
+            )
+            bundle = _prebuild_background_cache_bundle_worker(
+                int(background_idx),
+                theta_base=float(
+                    _theta_base_for_background_worker(int(background_idx))
+                ),
+            )
+            if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
+                failure_status = str(
+                    _last_worker_source_snapshot_diagnostics().get(
+                        "status",
+                        "background_cache_build_failed",
+                    )
+                )
+                _emit_worker_event(
+                    "source_cache_build_failed",
+                    {
+                        "background_index": int(background_idx),
+                        "background_label": str(background_label),
+                        "status": failure_status,
+                        "message": (
+                            "preflight: source cache failed for "
+                            f"background {int(background_idx) + 1} "
+                            f"(status={failure_status})"
+                        ),
+                    },
+                )
+                raise RuntimeError(
+                    "Geometry-fit background cache unavailable for "
+                    f"background {int(background_idx) + 1} "
+                    f"(status={failure_status})."
+                )
+            _emit_worker_event(
+                "source_cache_build_ready",
+                {
+                    "background_index": int(background_idx),
+                    "background_label": str(background_label),
+                    "cache_source": str(bundle.cache_source or "unknown"),
+                    "row_count": int(len(bundle.projected_rows or ())),
+                    "message": (
+                        "preflight: source cache ready for "
+                        f"background {int(background_idx) + 1} "
+                        f"({int(len(bundle.projected_rows or ()))} rows via "
+                        f"{str(bundle.cache_source or 'unknown')})"
+                    ),
+                },
+            )
 
     worker_manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=list(job_data.get("osc_files", ()) or ()),
@@ -21225,9 +21720,7 @@ def _run_async_geometry_fit_worker_job(
             "geometry_manual_simulated_lookup"
         ),
         geometry_manual_source_rows_for_background=_source_rows_for_background_worker,
-        geometry_manual_rebuild_source_rows_for_background=(
-            _rebuild_source_rows_for_background_worker
-        ),
+        geometry_manual_rebuild_source_rows_for_background=None,
         geometry_manual_last_source_snapshot_diagnostics=(
             _last_worker_source_snapshot_diagnostics
         ),
@@ -21252,6 +21745,7 @@ def _run_async_geometry_fit_worker_job(
         _emit_worker_event(str(stage), dict(payload or {}))
 
     try:
+        _prebuild_required_background_caches()
         prepare_result = gui_geometry_fit.prepare_geometry_fit_run(
             params=dict(job_data.get("params", {}) or {}),
             var_names=list(job_data.get("var_names", ()) or ()),
@@ -21342,6 +21836,7 @@ def _run_async_geometry_fit_worker_job(
             "preflight_failure",
             {"error_text": error_text, "message": error_text},
         )
+        worker_background_cache_by_index.clear()
         return _geometry_fit_worker_action_result(
             job_data,
             prepare_result=prepare_result,
@@ -21391,6 +21886,7 @@ def _run_async_geometry_fit_worker_job(
                 ],
                 log_path=logged_path,
             )
+        worker_background_cache_by_index.clear()
         return _geometry_fit_worker_action_result(
             job_data,
             prepare_result=prepare_result,
@@ -21414,6 +21910,7 @@ def _run_async_geometry_fit_worker_job(
             )
         ),
     )
+    worker_background_cache_by_index.clear()
     return _geometry_fit_worker_action_result(
         job_data,
         prepare_result=prepare_result,
@@ -22791,8 +23288,8 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     startup_mode : {"prompt", "simulation", "calibrant", "mosaic"}, optional
         Startup behavior. ``prompt`` shows a launcher GUI asking which mode
         to run, ``simulation`` starts this GUI directly, and ``calibrant``
-        launches the hBN calibrant fitter. ``mosaic`` launches the sibling
-        2D_Mosaic_Sim visualizer.
+        launches the hBN calibrant fitter. ``mosaic`` launches the installed
+        mosaic_sim visualizer.
     calibrant_bundle : str or None, optional
         Optional NPZ bundle path to preload when launching calibrant mode.
     """
