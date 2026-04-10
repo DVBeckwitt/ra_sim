@@ -332,6 +332,7 @@ def test_runtime_impl_defaults_primary_viewport_to_tk_canvas_with_safe_activatio
     assert 'RA_SIM_PRIMARY_VIEWPORT", "tk_canvas"' in source
     assert "activate_runtime_primary_viewport(" in source
     assert "PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend" in source
+    assert '"key": "primary_viewport_backend"' not in source
 
 
 def test_runtime_impl_shares_pick_hkl_live_cache_with_manual_qr_picker() -> None:
