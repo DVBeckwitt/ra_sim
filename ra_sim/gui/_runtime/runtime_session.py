@@ -2458,43 +2458,214 @@ primary_viewport_selection = gui_runtime_primary_viewport.activate_runtime_prima
 PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend
 primary_viewport_backend = primary_viewport_selection.backend
 _set_runtime_canvas(primary_viewport_selection.canvas_proxy)
-if PRIMARY_VIEWPORT_BACKEND == "tk_canvas":
-    def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
-        active_canvas = globals().get("canvas", matplotlib_canvas)
-        draw_name = "draw" if bool(force_matplotlib) else "draw_idle"
-        try:
-            draw_fn = getattr(active_canvas, draw_name, None)
-            if callable(draw_fn):
-                draw_fn()
-                return
-        except Exception:
-            pass
-        fallback_draw = getattr(matplotlib_canvas, draw_name, None)
-        if callable(fallback_draw):
+primary_canvas_interaction_canvas = None
+primary_canvas_interaction_cids: tuple[object, ...] = ()
+
+
+def _configure_primary_viewport_redraw_helpers() -> None:
+    global _request_main_canvas_redraw
+    global _request_overlay_canvas_redraw
+    global _reset_fast_viewer_view
+
+    if str(globals().get("PRIMARY_VIEWPORT_BACKEND", "matplotlib")) == "tk_canvas":
+
+        def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
+            active_canvas = globals().get("canvas", matplotlib_canvas)
+            draw_name = "draw" if bool(force_matplotlib) else "draw_idle"
             try:
-                fallback_draw()
+                draw_fn = getattr(active_canvas, draw_name, None)
+                if callable(draw_fn):
+                    draw_fn()
+                    return
+            except Exception:
+                pass
+            fallback_draw = getattr(matplotlib_canvas, draw_name, None)
+            if callable(fallback_draw):
+                try:
+                    fallback_draw()
+                except Exception:
+                    pass
+
+        def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
+            if not force:
+                defer_redraw = globals().get("_defer_nonessential_redraw")
+                if callable(defer_redraw):
+                    try:
+                        if bool(defer_redraw()):
+                            return
+                    except Exception:
+                        pass
+            _request_main_canvas_redraw(force_matplotlib=bool(force))
+
+        def _reset_fast_viewer_view() -> None:
+            backend = globals().get("primary_viewport_backend")
+            if backend is None:
+                return
+            try:
+                backend.sync_from_matplotlib(force_view_range=True)
             except Exception:
                 pass
 
-    def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
-        if not force:
-            defer_redraw = globals().get("_defer_nonessential_redraw")
-            if callable(defer_redraw):
-                try:
-                    if bool(defer_redraw()):
-                        return
-                except Exception:
-                    pass
-        _request_main_canvas_redraw(force_matplotlib=bool(force))
+        return
 
-    def _reset_fast_viewer_view() -> None:
-        backend = globals().get("primary_viewport_backend")
-        if backend is None:
-            return
+    _request_main_canvas_redraw = fast_viewer_workflow.request_main_canvas_redraw
+    _request_overlay_canvas_redraw = fast_viewer_workflow.request_overlay_canvas_redraw
+    _reset_fast_viewer_view = fast_viewer_workflow.reset_view
+
+
+def _bind_primary_canvas_interactions(target_canvas) -> None:
+    global primary_canvas_interaction_canvas
+    global primary_canvas_interaction_cids
+
+    old_canvas = primary_canvas_interaction_canvas
+    old_cids = tuple(primary_canvas_interaction_cids or ())
+    disconnect = getattr(old_canvas, "mpl_disconnect", None)
+    if callable(disconnect):
+        for cid in old_cids:
+            try:
+                disconnect(cid)
+            except Exception:
+                pass
+
+    callbacks = globals().get("canvas_interaction_runtime_callbacks")
+    if callbacks is None or target_canvas is None:
+        primary_canvas_interaction_canvas = target_canvas
+        primary_canvas_interaction_cids = ()
+        return
+
+    try:
+        primary_canvas_interaction_cids = tuple(
+            gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
+                canvas=target_canvas,
+                callbacks=callbacks,
+            )
+            or ()
+        )
+    except Exception:
+        primary_canvas_interaction_cids = ()
+    primary_canvas_interaction_canvas = target_canvas
+
+
+def _primary_viewport_backend_choice_from_backend(backend: object) -> str:
+    normalized = gui_tk_primary_viewport.parse_primary_viewport_backend(backend)
+    return "Tk" if normalized == "tk_canvas" else "Matplotlib"
+
+
+def _read_requested_primary_viewport_backend() -> str:
+    backend_var = globals().get("primary_viewport_backend_var")
+    getter = getattr(backend_var, "get", None)
+    raw_value = getter() if callable(getter) else globals().get("PRIMARY_VIEWPORT_BACKEND")
+    return gui_tk_primary_viewport.parse_primary_viewport_backend(raw_value)
+
+
+def _sync_primary_viewport_backend_choice_var(backend: object | None = None) -> None:
+    backend_var = globals().get("primary_viewport_backend_var")
+    setter = getattr(backend_var, "set", None)
+    if not callable(setter):
+        return
+    try:
+        setter(
+            _primary_viewport_backend_choice_from_backend(
+                globals().get("PRIMARY_VIEWPORT_BACKEND")
+                if backend is None
+                else backend
+            )
+        )
+    except Exception:
+        pass
+
+
+def _activate_primary_viewport_backend(requested_backend: object | None = None) -> str:
+    global PRIMARY_VIEWPORT_BACKEND
+    global primary_viewport_backend
+
+    requested = gui_tk_primary_viewport.parse_primary_viewport_backend(
+        requested_backend
+        if requested_backend is not None
+        else _read_requested_primary_viewport_backend()
+    )
+    current_active = str(globals().get("PRIMARY_VIEWPORT_BACKEND", "matplotlib"))
+    current_backend = globals().get("primary_viewport_backend")
+    if requested == current_active and (
+        requested != "tk_canvas" or current_backend is not None
+    ):
+        _sync_primary_viewport_backend_choice_var(current_active)
+        return current_active
+
+    if current_backend is not None:
         try:
-            backend.sync_from_matplotlib(force_view_range=True)
+            current_backend.deactivate()
         except Exception:
             pass
+        try:
+            current_backend.shutdown()
+        except Exception:
+            pass
+        primary_viewport_backend = None
+
+    primary_viewport_selection = gui_runtime_primary_viewport.activate_runtime_primary_viewport(
+        requested_backend=requested,
+        tk_primary_viewport_module=gui_tk_primary_viewport,
+        tk_module=tk,
+        canvas_frame=app_shell_view_state.canvas_frame,
+        matplotlib_canvas=matplotlib_canvas,
+        ax=ax,
+        image_artist=image_display,
+        background_artist=background_display,
+        overlay_artist=integration_region_overlay,
+        marker_artist_factory=lambda: (
+            globals().get("center_marker"),
+            globals().get("selected_peak_marker"),
+        ),
+        overlay_model_factory=_fast_viewer_overlay_model,
+        overlay_artist_groups_factory=lambda: (
+            getattr(globals().get("geometry_runtime_state"), "pick_artists", ()),
+            getattr(globals().get("geometry_runtime_state"), "preview_artists", ()),
+            getattr(globals().get("geometry_runtime_state"), "manual_preview_artists", ()),
+            getattr(
+                globals().get("geometry_runtime_state"),
+                "qr_cylinder_overlay_artists",
+                (),
+            ),
+        ),
+        layer_versions_factory=_fast_viewer_layer_versions,
+        peak_cache_factory=lambda: getattr(
+            globals().get("simulation_runtime_state"),
+            "peak_positions",
+            (),
+        ),
+        qgroup_cache_factory=lambda: getattr(
+            globals().get("geometry_runtime_state"),
+            "manual_pick_cache_data",
+            {},
+        ).get("grouped_candidates", {}),
+        draw_interval_s=1.0 / 60.0,
+        set_progress_text=lambda text: progress_label.config(text=text),
+    )
+    PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend
+    primary_viewport_backend = primary_viewport_selection.backend
+    _set_runtime_canvas(primary_viewport_selection.canvas_proxy)
+    _configure_primary_viewport_redraw_helpers()
+    _bind_primary_canvas_interactions(primary_viewport_selection.canvas_proxy)
+    _sync_primary_viewport_backend_choice_var(primary_viewport_selection.active_backend)
+    if primary_viewport_selection.active_backend == requested:
+        try:
+            progress_label.config(
+                text=(
+                    "Main viewport: "
+                    f"{_primary_viewport_backend_choice_from_backend(requested)}"
+                )
+            )
+        except Exception:
+            pass
+    try:
+        _request_main_canvas_redraw(force_matplotlib=True)
+    except Exception:
+        pass
+    return str(primary_viewport_selection.active_backend)
+
+
+_configure_primary_viewport_redraw_helpers()
 
 geometry_fit_history_state = app_state.geometry_fit_history
 geometry_fit_dataset_cache_state = app_state.geometry_fit_dataset_cache
@@ -5131,10 +5302,7 @@ canvas_interaction_runtime_callbacks = canvas_interaction_workflow.callbacks
 # -----------------------------------------------------------
 # 3)  Bind the handler
 # -----------------------------------------------------------
-gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
-    canvas=canvas,
-    callbacks=canvas_interaction_runtime_callbacks,
-)
+_bind_primary_canvas_interactions(canvas)
 
 
 # ---------------------------------------------------------------------------
@@ -19924,6 +20092,10 @@ bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_per
 center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
 
+primary_viewport_backend_var = tk.StringVar(
+    value=_primary_viewport_backend_choice_from_backend(PRIMARY_VIEWPORT_BACKEND)
+)
+
 
 gui_views.populate_app_shell_quick_controls(
     view_state=app_shell_view_state,
@@ -19983,6 +20155,14 @@ gui_views.populate_app_shell_quick_controls(
             "label": "Reset view",
             "control_type": "button",
             "command": _reset_primary_figure_view,
+        },
+        {
+            "key": "primary_viewport_backend",
+            "label": "Main viewport",
+            "control_type": "choice",
+            "variable": primary_viewport_backend_var,
+            "options": ("Matplotlib", "Tk"),
+            "command": _activate_primary_viewport_backend,
         },
         {
             "key": "clear_integration_region",

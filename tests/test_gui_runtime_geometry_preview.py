@@ -131,7 +131,10 @@ def test_build_runtime_canvas_interaction_workflow_uses_late_bound_preview_callb
 def test_initialize_runtime_canvas_interaction_bindings_connects_canvas_events() -> None:
     events: list[tuple[str, object]] = []
     canvas = SimpleNamespace(
-        mpl_connect=lambda event_name, callback: events.append((event_name, callback))
+        mpl_connect=lambda event_name, callback: (
+            events.append((event_name, callback)),
+            f"cid-{len(events)}",
+        )[1]
     )
     callbacks = SimpleNamespace(
         on_click="on-click",
@@ -141,7 +144,7 @@ def test_initialize_runtime_canvas_interaction_bindings_connects_canvas_events()
         on_scroll="on-scroll",
     )
 
-    runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
+    cids = runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
         canvas=canvas,
         callbacks=callbacks,
     )
@@ -153,3 +156,10 @@ def test_initialize_runtime_canvas_interaction_bindings_connects_canvas_events()
         ("button_release_event", "on-release"),
         ("scroll_event", "on-scroll"),
     ]
+    assert cids == (
+        "cid-1",
+        "cid-2",
+        "cid-3",
+        "cid-4",
+        "cid-5",
+    )

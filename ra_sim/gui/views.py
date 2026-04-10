@@ -1852,13 +1852,25 @@ def populate_app_shell_quick_controls(
             row = ttk.Frame(parent)
             row.pack(fill=tk.X, pady=(0, 8))
             ttk.Label(row, text=label_text).pack(anchor=tk.W)
-            menu = ttk.OptionMenu(row, variable, default_value, *options)
+            menu_kwargs: dict[str, object] = {}
+            if callable(control.get("command")):
+                menu_kwargs["command"] = (
+                    lambda _selection, callback=control.get("command"): callback()
+                )
+            menu = ttk.OptionMenu(
+                row,
+                variable,
+                default_value,
+                *options,
+                **menu_kwargs,
+            )
             menu.pack(fill=tk.X, pady=(2, 0))
             view_state.quick_control_widgets[key] = {
                 "frame": row,
                 "menu": menu,
                 "options": options,
                 "variable": variable,
+                "command": menu_kwargs.get("command"),
             }
             continue
         if control_type in {"check", "checkbox", "toggle"}:

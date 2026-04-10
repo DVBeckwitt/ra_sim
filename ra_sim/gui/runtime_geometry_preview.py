@@ -135,11 +135,13 @@ def initialize_runtime_canvas_interaction_bindings(
     *,
     canvas,
     callbacks,
-) -> None:
+) -> tuple[object, ...]:
     """Bind the shared canvas-interaction callbacks to the matplotlib canvas."""
 
-    canvas.mpl_connect("button_press_event", callbacks.on_click)
-    canvas.mpl_connect("button_press_event", callbacks.on_press)
-    canvas.mpl_connect("motion_notify_event", callbacks.on_motion)
-    canvas.mpl_connect("button_release_event", callbacks.on_release)
-    canvas.mpl_connect("scroll_event", callbacks.on_scroll)
+    return (
+        canvas.mpl_connect("button_press_event", callbacks.on_click),
+        canvas.mpl_connect("button_press_event", callbacks.on_press),
+        canvas.mpl_connect("motion_notify_event", callbacks.on_motion),
+        canvas.mpl_connect("button_release_event", callbacks.on_release),
+        canvas.mpl_connect("scroll_event", callbacks.on_scroll),
+    )

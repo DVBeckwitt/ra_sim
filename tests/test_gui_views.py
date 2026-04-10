@@ -700,11 +700,12 @@ class _FakeSpinbox:
 class _FakeOptionMenu:
     created = []
 
-    def __init__(self, parent, variable, default, *values) -> None:
+    def __init__(self, parent, variable, default, *values, **kwargs) -> None:
         self.parent = parent
         self.variable = variable
         self.default = default
         self.values = values
+        self.command = kwargs.get("command")
         _FakeOptionMenu.created.append(self)
 
     def pack(self, **_kwargs) -> None:
@@ -3513,3 +3514,44 @@ def test_populate_app_shell_quick_controls_supports_check_and_button_controls(
 
     assert events == [("log", True), "auto-match"]
     assert view_state.quick_controls_more_button is None
+
+
+def test_populate_app_shell_quick_controls_supports_choice_controls(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeOptionMenu.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "OptionMenu", _FakeOptionMenu)
+
+    events = []
+    backend_var = _FakeStringVar("Tk")
+    view_state = state.AppShellViewState(
+        quick_controls_body=_FakeFrame(object()),
+    )
+
+    views.populate_app_shell_quick_controls(
+        view_state=view_state,
+        controls=[
+            {
+                "key": "primary_viewport_backend",
+                "label": "Main viewport",
+                "control_type": "choice",
+                "variable": backend_var,
+                "options": ("Matplotlib", "Tk"),
+                "command": lambda: events.append(backend_var.get()),
+            }
+        ],
+    )
+
+    assert "primary_viewport_backend" in view_state.quick_control_widgets
+    control = view_state.quick_control_widgets["primary_viewport_backend"]
+    assert isinstance(control["menu"], _FakeOptionMenu)
+    assert control["variable"] is backend_var
+    assert control["options"] == ("Matplotlib", "Tk")
+
+    backend_var.set("Matplotlib")
+    control["menu"].command("Matplotlib")
+
+    assert events == ["Matplotlib"]
