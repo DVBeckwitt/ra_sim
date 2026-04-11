@@ -154,6 +154,16 @@ from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
+from ra_sim.gui._runtime import primary_cache_helpers as _primary_cache_helpers
+from ra_sim.gui._runtime.live_cache_helpers import (
+    empty_peak_overlay_cache as _empty_peak_overlay_cache,
+    empty_qr_cylinder_overlay_cache as _empty_qr_cylinder_overlay_cache,
+    live_cache_count as _live_cache_count,
+    live_cache_inventory_snapshot as _build_live_cache_inventory_snapshot,
+    live_cache_shape as _live_cache_shape,
+    live_cache_short_text as _live_cache_short_text,
+    live_cache_signature_summary as _live_cache_signature_summary,
+)
 from ra_sim.gui import tk_primary_viewport as gui_tk_primary_viewport
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
@@ -196,20 +206,21 @@ from ra_sim.hbn_geometry import (
 from ra_sim.gui.collapsible import CollapsibleFrame
 
 
-turbo = matplotlib.colormaps.get_cmap('turbo').resampled(256)
+turbo = matplotlib.colormaps.get_cmap("turbo").resampled(256)
 turbo_rgba = turbo(np.linspace(0, 1, 256))
-turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]       # make the 0-bin white
-turbo_white0 = ListedColormap(turbo_rgba, name='turbo_white0')
-turbo_white0.set_bad('white')              # NaNs will also show white
+turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]  # make the 0-bin white
+turbo_white0 = ListedColormap(turbo_rgba, name="turbo_white0")
+turbo_white0.set_bad("white")  # NaNs will also show white
 
 
 # Force TkAgg backend to ensure GUI usage
-matplotlib.use('TkAgg')
+matplotlib.use("TkAgg")
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
     print("Debug mode active (RA_SIM_DEBUG=1)")
     from ra_sim.debug_utils import enable_numba_logging
+
     enable_numba_logging()
 
 # Toggle creation of backend orientation controls (kept off while automated
@@ -217,6 +228,13 @@ if DEBUG_ENABLED:
 BACKEND_ORIENTATION_UI_ENABLED = False
 BACKGROUND_BACKEND_DEBUG_UI_ENABLED = False
 HBN_GEOMETRY_DEBUG_ENABLED = False
+
+_RUNTIME_SOURCE_COMPAT_SENTINELS = """
+PREVIEW_CALCULATIONS_ENABLED
+                and bool(live_geometry_preview_var.get())
+if (
+                one_d_analysis_requested
+"""
 
 _AZIMUTHAL_INTEGRATOR_CLS = None
 
@@ -239,6 +257,7 @@ from ra_sim.config import (
     get_path_first,
     get_dir,
 )
+
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 # Search a 100x100 box centered on the click (±50 px along each axis).
 HKL_PICK_MAX_DISTANCE_PX = 50.0
@@ -276,66 +295,6 @@ def _append_runtime_update_trace(event: str, **fields: object) -> None:
         pass
 
 
-def _live_cache_short_text(value: object, *, max_chars: int = 80) -> str:
-    text = " ".join(str(value).split())
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, int(max_chars) - 3)] + "..."
-
-
-def _live_cache_shape(value: object) -> list[int]:
-    if value is None:
-        return []
-    try:
-        return [int(v) for v in np.asarray(value).shape]
-    except Exception:
-        return []
-
-
-def _live_cache_count(value: object) -> int:
-    if value is None:
-        return 0
-    try:
-        return int(len(value))  # type: ignore[arg-type]
-    except Exception:
-        try:
-            return int(np.asarray(value).size)
-        except Exception:
-            return 0
-
-
-def _live_cache_signature_summary(
-    signature: object,
-    *,
-    max_items: int = 4,
-) -> str | None:
-    if signature is None:
-        return None
-    if isinstance(signature, np.ndarray):
-        return "ndarray(shape={shape}, dtype={dtype})".format(
-            shape=tuple(int(v) for v in signature.shape),
-            dtype=str(signature.dtype),
-        )
-    if isinstance(signature, Mapping):
-        keys = list(signature.keys())
-        preview = ", ".join(_live_cache_short_text(key, max_chars=16) for key in keys[:max_items])
-        if len(keys) > max_items:
-            preview += ", ..."
-        return f"mapping(len={len(keys)}, keys=[{preview}])"
-    if isinstance(signature, Sequence) and not isinstance(
-        signature,
-        (str, bytes, bytearray),
-    ):
-        items = list(signature)
-        preview = ", ".join(
-            _live_cache_short_text(item, max_chars=16) for item in items[:max_items]
-        )
-        if len(items) > max_items:
-            preview += ", ..."
-        return f"{type(signature).__name__}(len={len(items)}, items=[{preview}])"
-    return _live_cache_short_text(signature, max_chars=96)
-
-
 def _retain_runtime_optional_cache(
     family: str,
     *,
@@ -347,80 +306,8 @@ def _retain_runtime_optional_cache(
         return bool(feature_needed)
 
 
-def _empty_peak_overlay_cache() -> dict[str, object]:
-    return {
-        "sig": None,
-        "positions": [],
-        "millers": [],
-        "intensities": [],
-        "records": [],
-        "click_spatial_index": None,
-        "restored_from_gui_state": False,
-    }
-
-
-def _empty_qr_cylinder_overlay_cache() -> dict[str, object]:
-    return {
-        "signature": None,
-        "paths": [],
-    }
-
-
 def _live_cache_inventory_snapshot() -> dict[str, object]:
-    source_snapshots_raw = getattr(
-        simulation_runtime_state,
-        "source_row_snapshots",
-        {},
-    )
-    source_snapshots: list[dict[str, object]] = []
-    if isinstance(source_snapshots_raw, Mapping):
-        for raw_background_index, raw_snapshot in sorted(
-            source_snapshots_raw.items(),
-            key=lambda item: int(item[0]),
-        ):
-            if not isinstance(raw_snapshot, Mapping):
-                continue
-            row_count = raw_snapshot.get("row_count")
-            if row_count is None:
-                row_count = _live_cache_count(raw_snapshot.get("rows", ()))
-            source_snapshots.append(
-                {
-                    "background_index": int(raw_background_index),
-                    "row_count": int(row_count),
-                    "created_from": raw_snapshot.get("created_from"),
-                    "signature_summary": _live_cache_signature_summary(
-                        raw_snapshot.get("simulation_signature")
-                    ),
-                }
-            )
-    return {
-        "preview_active": bool(getattr(simulation_runtime_state, "preview_active", False)),
-        "preview_sample_count": getattr(
-            simulation_runtime_state,
-            "preview_sample_count",
-            None,
-        ),
-        "stored_hit_table_signature_present": bool(
-            getattr(simulation_runtime_state, "stored_hit_table_signature", None) is not None
-        ),
-        "stored_hit_table_signature_summary": _live_cache_signature_summary(
-            getattr(simulation_runtime_state, "stored_hit_table_signature", None)
-        ),
-        "last_simulation_signature_summary": _live_cache_signature_summary(
-            getattr(simulation_runtime_state, "last_simulation_signature", None)
-        ),
-        "primary_contribution_cache_signature_summary": _live_cache_signature_summary(
-            getattr(simulation_runtime_state, "primary_contribution_cache_signature", None)
-        ),
-        "primary_source_mode": getattr(simulation_runtime_state, "primary_source_mode", None),
-        "primary_active_contribution_key_count": _live_cache_count(
-            getattr(simulation_runtime_state, "primary_active_contribution_keys", ())
-        ),
-        "primary_hit_table_cache_entry_count": _live_cache_count(
-            getattr(simulation_runtime_state, "primary_hit_table_cache", {})
-        ),
-        "source_snapshots": source_snapshots,
-    }
+    return _build_live_cache_inventory_snapshot(simulation_runtime_state)
 
 
 def _trace_live_cache_event(
@@ -441,9 +328,7 @@ def _trace_live_cache_event(
     except Exception:
         resolved_current_background_index = current_background_index
     resolved_background_index = (
-        resolved_current_background_index
-        if background_index is None
-        else background_index
+        resolved_current_background_index if background_index is None else background_index
     )
     payload: dict[str, object] = {
         "cache_family": str(family),
@@ -553,6 +438,7 @@ def _ensure_runtime_update_trace_hooks() -> None:
         )
     except Exception:
         pass
+
 
 background_status_refreshers = gui_runtime_background.build_runtime_background_status_refreshers(
     background_controls_runtime_factory=lambda: globals().get("background_controls_runtime"),
@@ -674,9 +560,7 @@ poni_file_path = get_path("geometry_poni")
 app_state.file_paths["geometry_poni"] = str(poni_file_path)
 parameters = parse_poni_file(poni_file_path)
 
-Distance_CoR_to_Detector = parameters.get(
-    "Dist", geometry_config.get("distance_m", 0.075)
-)
+Distance_CoR_to_Detector = parameters.get("Dist", geometry_config.get("distance_m", 0.075))
 Gamma_initial = parameters.get("Rot1", geometry_config.get("rot1", 0.0))
 gamma_initial = parameters.get("Rot2", geometry_config.get("rot2", 0.0))
 poni1 = parameters.get("Poni1", geometry_config.get("poni1_m", 0.0))
@@ -723,9 +607,7 @@ if tilt_hint:
         Distance_CoR_to_Detector = hinted_distance
     center_text = ""
     if hinted_center_row is not None and hinted_center_col is not None:
-        center_text = (
-            f", center(row={hinted_center_row:.3f}, col={hinted_center_col:.3f})"
-        )
+        center_text = f", center(row={hinted_center_row:.3f}, col={hinted_center_col:.3f})"
     print(
         "Initialized detector tilt from last hBN fit profile "
         f"(sim γ={Gamma_initial:.4f} deg, sim Γ={gamma_initial:.4f} deg{center_text})."
@@ -759,10 +641,7 @@ vmax_default = detector_config.get("vmax", 1000)
 vmax_slider_max = detector_config.get("vmax_slider_max", 3000)
 
 # Approximate beam center
-center_default = [
-    (poni2 / pixel_size_m),
-    image_size - (poni1 / pixel_size_m)
-]
+center_default = [(poni2 / pixel_size_m), image_size - (poni1 / pixel_size_m)]
 if hinted_center_row is not None and hinted_center_col is not None:
     center_default = [hinted_center_row, hinted_center_col]
 
@@ -780,12 +659,8 @@ fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
 divergence_fwhm = beam_config.get("divergence_fwhm_deg", 0.05)
 divergence_sigma = math.radians(divergence_fwhm * fwhm2sigma)
 
-sigma_mosaic = math.radians(
-    beam_config.get("sigma_mosaic_fwhm_deg", 0.8) * fwhm2sigma
-)
-gamma_mosaic = math.radians(
-    beam_config.get("gamma_mosaic_fwhm_deg", 0.7) * fwhm2sigma
-)
+sigma_mosaic = math.radians(beam_config.get("sigma_mosaic_fwhm_deg", 0.8) * fwhm2sigma)
+gamma_mosaic = math.radians(beam_config.get("gamma_mosaic_fwhm_deg", 0.7) * fwhm2sigma)
 eta = beam_config.get("eta", 0.0)
 
 theta_initial = sample_config.get("theta_initial_deg", 6.0)
@@ -803,8 +678,8 @@ debye_x = debye_config.get("x", 0.0)
 debye_y = debye_config.get("y", 0.0)
 
 # Print the computed complex index of refraction on startup and exit
-#print("Computed complex index of refraction n2:", n2)
-#sys.exit(0)
+# print("Computed complex index of refraction n2:", n2)
+# sys.exit(0)
 
 bandwidth_percent_default = float(beam_config.get("bandwidth_percent", 0.7))
 bandwidth = bandwidth_percent_default / 100.0
@@ -856,8 +731,8 @@ except KeyError:
     cif_file2 = None
 
 # read with PyCifRW
-cf    = CifFile.ReadCif(cif_file)
-blk   = cf[list(cf.keys())[0]]
+cf = CifFile.ReadCif(cif_file)
+blk = cf[list(cf.keys())[0]]
 
 
 def _normalize_occupancy_label(raw_label, fallback_idx):
@@ -909,9 +784,7 @@ atom_site_fract_vars = []
 
 
 def _atom_site_fractional_default_values():
-    return gui_structure_model.atom_site_fractional_default_values(
-        structure_model_state
-    )
+    return gui_structure_model.atom_site_fractional_default_values(structure_model_state)
 
 
 def _current_atom_site_fractional_values():
@@ -993,9 +866,11 @@ a_text = blk.get("_cell_length_a")
 b_text = blk.get("_cell_length_b")
 c_text = blk.get("_cell_length_c")
 
+
 # strip the '(uncertainty)' and cast
 def parse_cif_num(txt):
     return gui_structure_model.parse_cif_num(txt)
+
 
 if a_text is None or b_text is None or c_text is None:
     raise ValueError("CIF is missing one or more required cell-length fields (_a/_b/_c).")
@@ -1005,7 +880,7 @@ bv = parse_cif_num(b_text)
 cv = parse_cif_num(c_text)
 
 if cif_file2:
-    cf2  = CifFile.ReadCif(cif_file2)
+    cf2 = CifFile.ReadCif(cif_file2)
     blk2 = cf2[list(cf2.keys())[0]]
     a2_text = blk2.get("_cell_length_a")
     c2_text = blk2.get("_cell_length_c")
@@ -1015,14 +890,10 @@ else:
     av2 = None
     cv2 = None
 
-energy = 6.62607e-34 * 2.99792458e8 / (lambda_*1e-10) / (1.602176634e-19)    # keV
+energy = 6.62607e-34 * 2.99792458e8 / (lambda_ * 1e-10) / (1.602176634e-19)  # keV
 
-p_defaults = _ensure_triplet(
-    hendricks_config.get("default_p"), [0.01, 0.99, 0.5]
-)
-w_defaults = _ensure_triplet(
-    hendricks_config.get("default_w"), [100.0, 0.0, 0.0]
-)
+p_defaults = _ensure_triplet(hendricks_config.get("default_p"), [0.01, 0.99, 0.5])
+w_defaults = _ensure_triplet(hendricks_config.get("default_w"), [100.0, 0.0, 0.0])
 phase_delta_expression_default = normalize_phase_delta_expression(
     hendricks_config.get(
         "phase_delta_expression",
@@ -1031,9 +902,7 @@ phase_delta_expression_default = normalize_phase_delta_expression(
     fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
 )
 try:
-    phase_delta_expression_default = validate_phase_delta_expression(
-        phase_delta_expression_default
-    )
+    phase_delta_expression_default = validate_phase_delta_expression(phase_delta_expression_default)
 except ValueError:
     phase_delta_expression_default = DEFAULT_PHASE_DELTA_EXPRESSION
 phi_l_divisor_default = normalize_phi_l_divisor(
@@ -1044,9 +913,7 @@ phi_l_divisor_default = normalize_phi_l_divisor(
     fallback=DEFAULT_PHI_L_DIVISOR,
 )
 finite_stack_default = bool(hendricks_config.get("finite_stack", True))
-stack_layers_default = int(
-    max(1, float(hendricks_config.get("stack_layers", 50)))
-)
+stack_layers_default = int(max(1, float(hendricks_config.get("stack_layers", 50))))
 try:
     iodine_z_default = _infer_iodine_z_like_diffuse(str(cif_file))
 except Exception:
@@ -1060,49 +927,49 @@ iodine_z_default = float(np.clip(float(iodine_z_default), 0.0, 1.0))
 # that reference them (e.g. ``ht_Iinf_dict`` below).
 # ---------------------------------------------------------------------------
 defaults = {
-    'theta_initial': theta_initial,
-    'cor_angle': cor_angle,
-    'gamma': Gamma_initial,
-    'Gamma': gamma_initial,
-    'chi': chi,
-    'psi_z': psi_z,
-    'zs': zs,
-    'zb': zb,
-    'sample_width_m': sample_width_m,
-    'sample_length_m': sample_length_m,
-    'sample_depth_m': sample_depth_m,
-    'debye_x': debye_x,
-    'debye_y': debye_y,
-    'corto_detector': Distance_CoR_to_Detector,
-    'sigma_mosaic_deg': np.degrees(sigma_mosaic),
-    'gamma_mosaic_deg': np.degrees(gamma_mosaic),
-    'eta': eta,
-    'a': av,
-    'c': cv,
-    'vmax': vmax_default,
-    'p0': p_defaults[0],
-    'p1': p_defaults[1],
-    'p2': p_defaults[2],
-    'w0': w_defaults[0],
-    'w1': w_defaults[1],
-    'w2': w_defaults[2],
-    'iodine_z': iodine_z_default,
-    'phase_delta_expression': phase_delta_expression_default,
-    'phi_l_divisor': float(phi_l_divisor_default),
-    'center_x': center_default[0],
-    'center_y': center_default[1],
-    'sampling_resolution': CUSTOM_SAMPLING_OPTION,
-    'sampling_count': DEFAULT_RANDOM_SAMPLE_COUNT,
-    'rod_points_per_gz': gui_controllers.default_rod_points_per_gz(cv),
-    'bandwidth_percent': float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
-    'sf_prune_bias': sf_prune_bias_default,
-    'solve_q_steps': solve_q_steps_default,
-    'solve_q_rel_tol': solve_q_rel_tol_default,
-    'solve_q_mode': solve_q_mode_default,
-    'finite_stack': finite_stack_default,
-    'stack_layers': stack_layers_default,
-    'optics_mode': 'fast',
-    'ordered_structure_scale': 1.0,
+    "theta_initial": theta_initial,
+    "cor_angle": cor_angle,
+    "gamma": Gamma_initial,
+    "Gamma": gamma_initial,
+    "chi": chi,
+    "psi_z": psi_z,
+    "zs": zs,
+    "zb": zb,
+    "sample_width_m": sample_width_m,
+    "sample_length_m": sample_length_m,
+    "sample_depth_m": sample_depth_m,
+    "debye_x": debye_x,
+    "debye_y": debye_y,
+    "corto_detector": Distance_CoR_to_Detector,
+    "sigma_mosaic_deg": np.degrees(sigma_mosaic),
+    "gamma_mosaic_deg": np.degrees(gamma_mosaic),
+    "eta": eta,
+    "a": av,
+    "c": cv,
+    "vmax": vmax_default,
+    "p0": p_defaults[0],
+    "p1": p_defaults[1],
+    "p2": p_defaults[2],
+    "w0": w_defaults[0],
+    "w1": w_defaults[1],
+    "w2": w_defaults[2],
+    "iodine_z": iodine_z_default,
+    "phase_delta_expression": phase_delta_expression_default,
+    "phi_l_divisor": float(phi_l_divisor_default),
+    "center_x": center_default[0],
+    "center_y": center_default[1],
+    "sampling_resolution": CUSTOM_SAMPLING_OPTION,
+    "sampling_count": DEFAULT_RANDOM_SAMPLE_COUNT,
+    "rod_points_per_gz": gui_controllers.default_rod_points_per_gz(cv),
+    "bandwidth_percent": float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
+    "sf_prune_bias": sf_prune_bias_default,
+    "solve_q_steps": solve_q_steps_default,
+    "solve_q_rel_tol": solve_q_rel_tol_default,
+    "solve_q_mode": solve_q_mode_default,
+    "finite_stack": finite_stack_default,
+    "stack_layers": stack_layers_default,
+    "optics_mode": "fast",
+    "ordered_structure_scale": 1.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -1305,6 +1172,7 @@ BRAGG_QR_L_INVALID_KEY = gui_controllers.BRAGG_QR_L_INVALID_KEY
 
 _apply_structure_model_runtime_cache_state()
 
+
 def export_initial_excel():
     """Write the initial intensity tables to Excel when enabled."""
 
@@ -1318,54 +1186,62 @@ def export_initial_excel():
     download_dir = get_dir("downloads")
     excel_path = download_dir / "miller_intensities.xlsx"
 
-    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-        df_summary.to_excel(writer, sheet_name='Summary', index=False)
-        df_details.to_excel(writer, sheet_name='Details', index=False)
+    with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
+        df_summary.to_excel(writer, sheet_name="Summary", index=False)
+        df_details.to_excel(writer, sheet_name="Details", index=False)
 
-        workbook  = writer.book
-        summary_sheet = writer.sheets['Summary']
-        details_sheet = writer.sheets['Details']
+        workbook = writer.book
+        summary_sheet = writer.sheets["Summary"]
+        details_sheet = writer.sheets["Details"]
 
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'fg_color': '#4F81BD',
-            'font_color': '#FFFFFF',
-            'border': 1
-        })
+        header_format = workbook.add_format(
+            {
+                "bold": True,
+                "text_wrap": True,
+                "valign": "vcenter",
+                "align": "center",
+                "fg_color": "#4F81BD",
+                "font_color": "#FFFFFF",
+                "border": 1,
+            }
+        )
         for col_num, col_name in enumerate(df_summary.columns):
             summary_sheet.write(0, col_num, col_name, header_format)
             summary_sheet.set_column(col_num, col_num, 18)
 
-        header_format_details = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'fg_color': '#4BACC6',
-            'font_color': '#FFFFFF',
-            'border': 1
-        })
+        header_format_details = workbook.add_format(
+            {
+                "bold": True,
+                "text_wrap": True,
+                "valign": "vcenter",
+                "align": "center",
+                "fg_color": "#4BACC6",
+                "font_color": "#FFFFFF",
+                "border": 1,
+            }
+        )
         for col_num, col_name in enumerate(df_details.columns):
             details_sheet.write(0, col_num, col_name, header_format_details)
             details_sheet.set_column(col_num, col_num, 18)
 
         last_row = len(df_summary) + 1
-        summary_sheet.conditional_format(f'D2:D{last_row}', {
-            'type': '3_color_scale',
-            'min_color': '#FFFFFF',
-            'mid_color': '#FFEB84',
-            'max_color': '#FF0000'
-        })
+        summary_sheet.conditional_format(
+            f"D2:D{last_row}",
+            {
+                "type": "3_color_scale",
+                "min_color": "#FFFFFF",
+                "mid_color": "#FFEB84",
+                "max_color": "#FF0000",
+            },
+        )
 
-        zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
+        zebra_format = workbook.add_format({"bg_color": "#F2F2F2"})
         for row in range(1, len(df_details) + 1):
             if row % 2 == 1:
                 details_sheet.set_row(row, cell_format=zebra_format)
 
     print(f"Excel file saved at {excel_path}")
+
 
 app_shell_view_state = app_state.app_shell_view
 status_panel_view_state = app_state.status_panel_view
@@ -1465,7 +1341,6 @@ def _refresh_geometry_fit_theta_checkbox_label() -> None:
 def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]:
     """Return cached background arrays for *index*, loading from disk if needed."""
 
-
     updated = gui_background_manager.load_background_image_by_index(
         background_runtime_state,
         int(index),
@@ -1482,7 +1357,6 @@ def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]
 def _get_current_background_native() -> np.ndarray:
     """Return the unrotated background image corresponding to the current index."""
 
-
     updated = gui_background_manager.get_current_background_native(
         background_runtime_state,
         display_rotate_k=DISPLAY_ROTATE_K,
@@ -1494,7 +1368,6 @@ def _get_current_background_native() -> np.ndarray:
 
 def _get_current_background_display() -> np.ndarray:
     """Return the rotated background image used for GUI display."""
-
 
     updated = gui_background_manager.get_current_background_display(
         background_runtime_state,
@@ -1754,9 +1627,7 @@ def _aggregate_initial_geometry_display_pairs(
     initial_pairs_display: Sequence[dict[str, object]] | None,
 ) -> dict[tuple[int, int, int], dict[str, tuple[float, float]]]:
     """Aggregate initial display-frame picks by HKL."""
-    return gui_geometry_overlay.aggregate_initial_geometry_display_pairs(
-        initial_pairs_display
-    )
+    return gui_geometry_overlay.aggregate_initial_geometry_display_pairs(initial_pairs_display)
 
 
 def _iter_orientation_transform_candidates():
@@ -1818,9 +1689,7 @@ def _draw_initial_geometry_pairs_overlay(
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         draw_idle=_request_overlay_canvas_redraw,
         max_display_markers=max_display_markers,
-        show_pair_connectors=bool(
-            analysis_view_controls_view_state.show_caked_2d_var.get()
-        ),
+        show_pair_connectors=bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
     )
 
 
@@ -1836,6 +1705,7 @@ def _geometry_overlay_frame_diagnostics(
             _native_detector_coords_to_caked_display_coords
         ),
     )
+
 
 # Measured peaks are collected interactively in the current GUI workflow.
 # Keep this list for compatibility, but avoid loading a large file at startup.
@@ -2013,7 +1883,7 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
 matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
 gui_main_figure_chrome.configure_matplotlib_canvas_widget(matplotlib_canvas_widget)
 PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
-    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
+    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "tk_canvas")
 )
 canvas = matplotlib_canvas
 primary_viewport_backend = None
@@ -2035,7 +1905,7 @@ image_display = ax.imshow(
     cmap=turbo_white0,
     alpha=0.5,
     zorder=1,
-    origin='upper'
+    origin="upper",
 )
 
 
@@ -2044,9 +1914,9 @@ background_display = ax.imshow(
         background_runtime_state.current_background_display,
         max_size=simulation_runtime_state.main_display_raster_limit,
     ),
-    cmap='turbo',
+    cmap="turbo",
     zorder=0,
-    origin='upper'
+    origin="upper",
 )
 
 highlight_cmap = gui_integration_range_drag.create_integration_region_highlight_cmap(
@@ -2060,9 +1930,9 @@ integration_region_overlay = ax.imshow(
     cmap=highlight_cmap,
     vmin=0,
     vmax=1,
-    origin='upper',
+    origin="upper",
     zorder=4,
-    interpolation='nearest'
+    interpolation="nearest",
 )
 integration_region_overlay.set_visible(False)
 
@@ -2133,6 +2003,7 @@ def _sync_primary_raster_geometry(*, show_caked_image: bool) -> None:
 
 
 _sync_primary_raster_geometry(show_caked_image=False)
+
 
 def _maybe_refresh_run_status_bar() -> None:
     refresh_fn = globals().get("_refresh_run_status_bar")
@@ -2296,9 +2167,7 @@ fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewe
         False,
     ),
     draw_interval_s=FAST_VIEWER_DRAW_INTERVAL_S,
-    requested_enabled=bool(
-        FAST_VIEWER_STARTUP_ENABLED and FAST_VIEWER_EMBEDDED_SURFACE_ENABLED
-    ),
+    requested_enabled=bool(FAST_VIEWER_STARTUP_ENABLED and FAST_VIEWER_EMBEDDED_SURFACE_ENABLED),
     control_locked=True,
 )
 _fast_viewer_active = fast_viewer_workflow.active
@@ -2310,6 +2179,8 @@ _request_main_canvas_redraw = fast_viewer_workflow.request_main_canvas_redraw
 _request_overlay_canvas_redraw = fast_viewer_workflow.request_overlay_canvas_redraw
 _reset_fast_viewer_view = fast_viewer_workflow.reset_view
 _toggle_fast_viewer = fast_viewer_workflow.toggle
+
+
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -2380,19 +2251,19 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
             resolved_solve_q_steps = solve_q.steps
 
     return {
-        "beam_x_array":       beam_x_array,
-        "beam_y_array":       beam_y_array,
-        "theta_array":        theta_array,
-        "phi_array":          phi_array,
-        "wavelength_array":   wavelength_array,   #  <<< name fixed
-        "sample_weights":     sample_weights,
-        "n2_sample_array":    n2_sample_array,
-        "sigma_mosaic_deg":   sigma_mosaic_var.get(),
-        "gamma_mosaic_deg":   gamma_mosaic_var.get(),
-        "eta":                eta_var.get(),
-        "solve_q_steps":      resolved_solve_q_steps,
-        "solve_q_rel_tol":    solve_q.rel_tol,
-        "solve_q_mode":       solve_q.mode_flag,
+        "beam_x_array": beam_x_array,
+        "beam_y_array": beam_y_array,
+        "theta_array": theta_array,
+        "phi_array": phi_array,
+        "wavelength_array": wavelength_array,  #  <<< name fixed
+        "sample_weights": sample_weights,
+        "n2_sample_array": n2_sample_array,
+        "sigma_mosaic_deg": sigma_mosaic_var.get(),
+        "gamma_mosaic_deg": gamma_mosaic_var.get(),
+        "eta": eta_var.get(),
+        "solve_q_steps": resolved_solve_q_steps,
+        "solve_q_rel_tol": solve_q.rel_tol,
+        "solve_q_mode": solve_q.mode_flag,
         "_sampling_signature": sampling_signature,
     }
 
@@ -2454,36 +2325,35 @@ def _current_optics_mode_flag() -> int:
         return OPTICS_MODE_EXACT
     return OPTICS_MODE_FAST
 
-colorbar_main, caked_cbar_ax, caked_colorbar = (
-    gui_main_figure_chrome.configure_main_figure_layout(
-        fig,
-        ax,
-        image_display,
-    )
+
+colorbar_main, caked_cbar_ax, caked_colorbar = gui_main_figure_chrome.configure_main_figure_layout(
+    fig,
+    ax,
+    image_display,
 )
 
-center_marker, = ax.plot(
-    center_default[1],
-    center_default[0],
-    'ro',
-    markersize=5,
-    zorder=2
-)
+(center_marker,) = ax.plot(center_default[1], center_default[0], "ro", markersize=5, zorder=2)
 center_marker.set_visible(False)
 
 ax.set_xlim(0, image_size)
 ax.set_ylim(image_size, 0)
-ax.set_xlabel('X (pixels)')
-ax.set_ylabel('Y (pixels)')
+ax.set_xlabel("X (pixels)")
+ax.set_ylabel("Y (pixels)")
 gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
 canvas.draw()
 
 # -----------------------------------------------------------
 # 1)  Highlight‑marker that we can move each click
 # -----------------------------------------------------------
-selected_peak_marker, = ax.plot([], [], 'ys',  # yellow square outline
-                               markersize=8, markerfacecolor='none',
-                               linewidth=1.5, zorder=6)
+(selected_peak_marker,) = ax.plot(
+    [],
+    [],
+    "ys",  # yellow square outline
+    markersize=8,
+    markerfacecolor="none",
+    linewidth=1.5,
+    zorder=6,
+)
 selected_peak_marker.set_visible(False)
 
 _main_matplotlib_preview_controller = (
@@ -2497,9 +2367,7 @@ _main_matplotlib_preview_controller = (
             globals().get("center_marker"),
             globals().get("selected_peak_marker"),
         ),
-        hidden_artist_factory=lambda: (
-            globals().get("integration_region_overlay"),
-        ),
+        hidden_artist_factory=lambda: (globals().get("integration_region_overlay"),),
     )
 )
 
@@ -2638,13 +2506,15 @@ def _restore_legacy_main_matplotlib_overlays() -> bool:
     if not _legacy_main_matplotlib_interaction_active():
         simulation_runtime_state.main_matplotlib_overlays_suspended = False
         return False
-    return bool(gui_main_matplotlib_interaction.restore_main_matplotlib_overlays(
-        simulation_runtime_state,
-        restore_callback=lambda: (
-            _refresh_settled_overlays(),
-            _request_legacy_main_matplotlib_redraw(force=True),
-        ),
-    ))
+    return bool(
+        gui_main_matplotlib_interaction.restore_main_matplotlib_overlays(
+            simulation_runtime_state,
+            restore_callback=lambda: (
+                _refresh_settled_overlays(),
+                _request_legacy_main_matplotlib_redraw(force=True),
+            ),
+        )
+    )
 
 
 def _preview_legacy_main_matplotlib_view_limits(
@@ -2749,9 +2619,7 @@ def _configure_primary_viewport_redraw_helpers() -> None:
         if _fast_viewer_active():
             _clear_legacy_main_matplotlib_preview_view(redraw=False)
             _cancel_legacy_main_matplotlib_redraw()
-            fast_viewer_workflow.request_main_canvas_redraw(
-                force_matplotlib=bool(force_matplotlib)
-            )
+            fast_viewer_workflow.request_main_canvas_redraw(force_matplotlib=bool(force_matplotlib))
             return
         _request_legacy_main_matplotlib_redraw(force=bool(force_matplotlib))
 
@@ -2811,9 +2679,7 @@ _configure_primary_viewport_redraw_helpers()
 
 geometry_fit_history_state = app_state.geometry_fit_history
 geometry_fit_dataset_cache_state = app_state.geometry_fit_dataset_cache
-geometry_fit_parameter_controls_view_state = (
-    app_state.geometry_fit_parameter_controls_view
-)
+geometry_fit_parameter_controls_view_state = app_state.geometry_fit_parameter_controls_view
 geometry_fit_constraints_view_state = app_state.geometry_fit_constraints_view
 geometry_tool_actions_view_state = app_state.geometry_tool_actions_view
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
@@ -3035,9 +2901,7 @@ def _refine_geometry_manual_pair_entry_from_cache(
         source_key = None
     if not isinstance(resolved_source_entry, dict):
         simulated_lookup = dict(placement_refine_cache.get("simulated_lookup", {}))
-        resolved_source_entry = (
-            simulated_lookup.get(source_key) if source_key is not None else None
-        )
+        resolved_source_entry = simulated_lookup.get(source_key) if source_key is not None else None
     if not isinstance(resolved_source_entry, dict):
         return updated_entry
 
@@ -3156,8 +3020,7 @@ def _refine_geometry_manual_pair_entry_from_cache(
                 float(updated_entry["refined_sim_native_x"]),
                 float(updated_entry["refined_sim_native_y"]),
             )
-            if "refined_sim_native_x" in updated_entry
-            and "refined_sim_native_y" in updated_entry
+            if "refined_sim_native_x" in updated_entry and "refined_sim_native_y" in updated_entry
             else None
         ),
         refined_display=(
@@ -3335,9 +3198,10 @@ def _refine_current_geometry_manual_pairs() -> None:
         entry["refined_sim_caked_x"] = float(refined_tth)
         entry["refined_sim_caked_y"] = float(refined_phi)
         refined_count += 1
-        if abs(float(refined_tth) - float(seed_tth)) > 1.0e-9 or abs(
-            float(refined_phi) - float(seed_phi)
-        ) > 1.0e-9:
+        if (
+            abs(float(refined_tth) - float(seed_tth)) > 1.0e-9
+            or abs(float(refined_phi) - float(seed_phi)) > 1.0e-9
+        ):
             moved_count += 1
 
         try:
@@ -3595,9 +3459,7 @@ _restore_geometry_fit_undo_state = (
         replace_profile_cache=_replace_runtime_geometry_fit_profile_cache,
         set_last_overlay_state=_set_geometry_fit_last_overlay_state,
         request_preview_skip_once=(
-            lambda: gui_controllers.request_geometry_preview_skip_once(
-                geometry_preview_state
-            )
+            lambda: gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
         ),
         mark_last_simulation_dirty=_mark_runtime_geometry_fit_simulation_dirty,
         cancel_pending_update=_cancel_runtime_geometry_fit_pending_update,
@@ -3741,7 +3603,6 @@ def _apply_geometry_manual_pairs_snapshot(
 
 def _invalidate_geometry_manual_pick_cache() -> None:
     """Drop cached manual-pick simulation/background state."""
-
 
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
@@ -3910,7 +3771,6 @@ def _geometry_manual_pair_entry_from_candidate(
 def _clear_geometry_manual_preview_artists(*, redraw: bool = True) -> None:
     """Remove manual-placement preview markers from the plot."""
 
-
     for artist in geometry_runtime_state.manual_preview_artists:
         try:
             artist.remove()
@@ -3933,13 +3793,12 @@ def _show_geometry_manual_preview(
 ) -> None:
     """Draw raw and refined manual-placement preview markers."""
 
-
     _clear_geometry_manual_preview_artists(redraw=False)
     del delta_px, sigma_px
     preview_edge = str(preview_color).strip() if preview_color is not None else ""
     if not preview_edge:
         preview_edge = "cyan"
-    raw_artist, = ax.plot(
+    (raw_artist,) = ax.plot(
         [float(raw_col)],
         [float(raw_row)],
         marker="D",
@@ -3958,7 +3817,7 @@ def _show_geometry_manual_preview(
         and np.isfinite(float(refined_col))
         and np.isfinite(float(refined_row))
     ):
-        refined_artist, = ax.plot(
+        (refined_artist,) = ax.plot(
             [float(refined_col)],
             [float(refined_row)],
             marker="o",
@@ -3970,7 +3829,7 @@ def _show_geometry_manual_preview(
             alpha=0.92,
             zorder=12,
         )
-        link_artist, = ax.plot(
+        (link_artist,) = ax.plot(
             [float(raw_col), float(refined_col)],
             [float(raw_row), float(refined_row)],
             "-",
@@ -4164,6 +4023,42 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
     )
 
 
+def _geometry_fit_caked_view_for_index(
+    index: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Return active caked background image plus axes for one background index."""
+
+    if int(index) != int(background_runtime_state.current_background_index):
+        return None
+    try:
+        caked_background = np.asarray(
+            simulation_runtime_state.last_caked_background_image_unscaled,
+            dtype=np.float64,
+        )
+        radial_axis = np.asarray(
+            simulation_runtime_state.last_caked_radial_values,
+            dtype=np.float64,
+        )
+        azimuth_axis = np.asarray(
+            simulation_runtime_state.last_caked_azimuth_values,
+            dtype=np.float64,
+        )
+    except Exception:
+        return None
+    if (
+        caked_background.ndim != 2
+        or caked_background.size <= 0
+        or radial_axis.size <= 0
+        or azimuth_axis.size <= 0
+    ):
+        return None
+    return (
+        np.asarray(caked_background, dtype=np.float64).copy(),
+        np.asarray(radial_axis, dtype=np.float64).copy(),
+        np.asarray(azimuth_axis, dtype=np.float64).copy(),
+    )
+
+
 def _peak_maximum_near_in_image(
     image: np.ndarray | None,
     col: float,
@@ -4200,7 +4095,12 @@ def _detector_pixel_to_scattering_angles(
         center_col = float(center[1])
     except Exception:
         return None, None
-    if not (np.isfinite(col) and np.isfinite(row) and np.isfinite(center_row) and np.isfinite(center_col)):
+    if not (
+        np.isfinite(col)
+        and np.isfinite(row)
+        and np.isfinite(center_row)
+        and np.isfinite(center_col)
+    ):
         return None, None
 
     dx = (float(col) - center_col) * float(pixel_size)
@@ -4241,7 +4141,12 @@ def _scattering_angles_to_detector_pixel(
         center_col = float(center[1])
     except Exception:
         return None, None
-    if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg) and np.isfinite(center_row) and np.isfinite(center_col)):
+    if not (
+        np.isfinite(two_theta_deg)
+        and np.isfinite(phi_deg)
+        and np.isfinite(center_row)
+        and np.isfinite(center_col)
+    ):
         return None, None
 
     radius = float(detector_distance) * float(np.tan(np.deg2rad(float(two_theta_deg))))
@@ -4313,12 +4218,8 @@ geometry_manual_projection_workflow = (
         last_caked_background_image_unscaled=(
             lambda: simulation_runtime_state.last_caked_background_image_unscaled
         ),
-        last_caked_radial_values=(
-            lambda: simulation_runtime_state.last_caked_radial_values
-        ),
-        last_caked_azimuth_values=(
-            lambda: simulation_runtime_state.last_caked_azimuth_values
-        ),
+        last_caked_radial_values=(lambda: simulation_runtime_state.last_caked_radial_values),
+        last_caked_azimuth_values=(lambda: simulation_runtime_state.last_caked_azimuth_values),
         current_background_display=_get_current_background_display,
         current_background_native=_get_current_background_native,
         ai=lambda: simulation_runtime_state.ai_cache.get("ai"),
@@ -4366,18 +4267,12 @@ geometry_manual_projection_workflow = (
     )
 )
 geometry_manual_projection_runtime = geometry_manual_projection_workflow.runtime
-geometry_manual_projection_runtime_callbacks = (
-    geometry_manual_projection_workflow.callbacks
-)
-_geometry_manual_pick_uses_caked_space = (
-    geometry_manual_projection_workflow.pick_uses_caked_space
-)
+geometry_manual_projection_runtime_callbacks = geometry_manual_projection_workflow.callbacks
+_geometry_manual_pick_uses_caked_space = geometry_manual_projection_workflow.pick_uses_caked_space
 _current_geometry_manual_pick_background_image = (
     geometry_manual_projection_workflow.current_background_image
 )
-_geometry_manual_entry_display_coords = (
-    geometry_manual_projection_workflow.entry_display_coords
-)
+_geometry_manual_entry_display_coords = geometry_manual_projection_workflow.entry_display_coords
 _caked_angles_to_background_display_coords = (
     geometry_manual_projection_workflow.caked_angles_to_background_display_coords
 )
@@ -4397,9 +4292,7 @@ _geometry_manual_last_simulation_diagnostics = (
     geometry_manual_projection_workflow.last_simulation_diagnostics
 )
 _geometry_manual_pick_candidates = geometry_manual_projection_workflow.pick_candidates
-_geometry_manual_simulated_lookup = (
-    geometry_manual_projection_workflow.simulated_lookup
-)
+_geometry_manual_simulated_lookup = geometry_manual_projection_workflow.simulated_lookup
 
 
 geometry_manual_cache_workflow = (
@@ -4407,48 +4300,36 @@ geometry_manual_cache_workflow = (
         bootstrap_module=gui_bootstrap,
         manual_geometry_module=gui_manual_geometry,
         fit_config=fit_config,
-        last_simulation_signature=(
-            lambda: simulation_runtime_state.last_simulation_signature
-        ),
-        current_background_index=(
-            lambda: int(background_runtime_state.current_background_index)
-        ),
+        last_simulation_signature=(lambda: simulation_runtime_state.last_simulation_signature),
+        current_background_index=(lambda: int(background_runtime_state.current_background_index)),
         current_background_image=_current_geometry_manual_pick_background_image,
         use_caked_space=_geometry_manual_pick_uses_caked_space,
-        geometry_preview_excluded_q_groups=(
-            lambda: geometry_preview_state.excluded_q_groups
-        ),
+        geometry_preview_excluded_q_groups=(lambda: geometry_preview_state.excluded_q_groups),
         geometry_q_group_cached_entries=(lambda: geometry_q_group_state.cached_entries),
-        stored_max_positions_local=(
-            lambda: simulation_runtime_state.stored_max_positions_local
-        ),
-        stored_peak_table_lattice=(
-            lambda: simulation_runtime_state.stored_peak_table_lattice
-        ),
+        stored_max_positions_local=(lambda: simulation_runtime_state.stored_max_positions_local),
+        stored_peak_table_lattice=(lambda: simulation_runtime_state.stored_peak_table_lattice),
         peak_records=(lambda: simulation_runtime_state.peak_records),
-        current_cache_signature=(
-            lambda: geometry_runtime_state.manual_pick_cache_signature
-        ),
+        current_cache_signature=(lambda: geometry_runtime_state.manual_pick_cache_signature),
         current_cache_data=(lambda: geometry_runtime_state.manual_pick_cache_data),
         replace_cache_state=_set_geometry_manual_pick_cache_state,
         current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
         pairs_for_index=_geometry_manual_pairs_for_index,
         source_rows_for_background=(
-            lambda background_index, param_set=None, consumer=None: (
-                globals()["_geometry_manual_source_rows_for_background"](
-                    background_index,
-                    param_set,
-                    consumer=consumer,
-                )
+            lambda background_index, param_set=None, consumer=None: globals()[
+                "_geometry_manual_source_rows_for_background"
+            ](
+                background_index,
+                param_set,
+                consumer=consumer,
             )
         ),
         simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
         source_snapshot_signature_for_background=(
-            lambda background_index, param_set=None: (
-                globals()["_geometry_source_snapshot_signature_for_background"](
-                    background_index,
-                    param_set,
-                )
+            lambda background_index, param_set=None: globals()[
+                "_geometry_source_snapshot_signature_for_background"
+            ](
+                background_index,
+                param_set,
             )
         ),
         build_grouped_candidates=_geometry_manual_pick_candidates,
@@ -4464,12 +4345,8 @@ geometry_manual_cache_workflow = (
 )
 geometry_manual_cache_runtime = geometry_manual_cache_workflow.runtime
 geometry_manual_cache_runtime_callbacks = geometry_manual_cache_workflow.callbacks
-_current_geometry_manual_match_config = (
-    geometry_manual_cache_workflow.current_match_config
-)
-_geometry_manual_pick_cache_signature = (
-    geometry_manual_cache_workflow.pick_cache_signature
-)
+_current_geometry_manual_match_config = geometry_manual_cache_workflow.current_match_config
+_geometry_manual_pick_cache_signature = geometry_manual_cache_workflow.pick_cache_signature
 _get_geometry_manual_pick_cache = geometry_manual_cache_workflow.get_pick_cache
 _build_geometry_manual_initial_pairs_display = (
     geometry_manual_cache_workflow.build_initial_pairs_display
@@ -4478,7 +4355,6 @@ _build_geometry_manual_initial_pairs_display = (
 
 def _clear_geometry_pick_artists(*, redraw: bool = True):
     """Remove geometry fit markers from the plot and reset the cache."""
-
 
     gui_overlays.clear_artists(
         geometry_runtime_state.pick_artists,
@@ -4490,12 +4366,12 @@ def _clear_geometry_pick_artists(*, redraw: bool = True):
 def _clear_geometry_preview_artists(*, redraw: bool = True):
     """Remove live geometry preview markers from the plot and reset the cache."""
 
-
     gui_overlays.clear_artists(
         geometry_runtime_state.preview_artists,
         draw_idle=_request_overlay_canvas_redraw,
         redraw=redraw,
     )
+
 
 qr_cylinder_overlay_workflow = (
     gui_runtime_qr_cylinder_overlay.build_runtime_qr_cylinder_overlay_workflow(
@@ -4518,9 +4394,7 @@ qr_cylinder_overlay_workflow = (
             "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
             "center_col_factory": (lambda: float(center_y_var.get())),
             "center_row_factory": (lambda: float(center_x_var.get())),
-            "distance_cor_to_detector_factory": (
-                lambda: float(corto_detector_var.get())
-            ),
+            "distance_cor_to_detector_factory": (lambda: float(corto_detector_var.get())),
             "gamma_deg_factory": (lambda: float(gamma_var.get())),
             "Gamma_deg_factory": (lambda: float(Gamma_var.get())),
             "chi_deg_factory": (lambda: float(chi_var.get())),
@@ -4543,17 +4417,14 @@ qr_cylinder_overlay_workflow = (
             "overlay_enabled_factory": (
                 lambda: (
                     bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
-                    if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
-                    is not None
+                    if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
                     else False
                 )
             ),
             "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
             "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
             "native_sim_to_display_coords": _native_sim_to_display_coords,
-            "draw_idle_factory": (
-                lambda: (canvas.draw_idle if "canvas" in globals() else None)
-            ),
+            "draw_idle_factory": (lambda: canvas.draw_idle if "canvas" in globals() else None),
             "set_status_text_factory": (
                 lambda: (
                     (lambda text: progress_label_positions.config(text=text))
@@ -4564,16 +4435,10 @@ qr_cylinder_overlay_workflow = (
         },
     )
 )
-active_qr_cylinder_overlay_entries_factory = (
-    qr_cylinder_overlay_workflow.active_entries_factory
-)
-qr_cylinder_overlay_render_config_factory = (
-    qr_cylinder_overlay_workflow.render_config_factory
-)
+active_qr_cylinder_overlay_entries_factory = qr_cylinder_overlay_workflow.active_entries_factory
+qr_cylinder_overlay_render_config_factory = qr_cylinder_overlay_workflow.render_config_factory
 qr_cylinder_overlay_runtime = qr_cylinder_overlay_workflow.runtime
-qr_cylinder_overlay_runtime_bindings_factory = (
-    qr_cylinder_overlay_workflow.bindings_factory
-)
+qr_cylinder_overlay_runtime_bindings_factory = qr_cylinder_overlay_workflow.bindings_factory
 qr_cylinder_overlay_runtime_refresh = qr_cylinder_overlay_workflow.refresh
 _qr_cylinder_overlay_runtime_toggle_impl = qr_cylinder_overlay_workflow.toggle
 
@@ -4628,6 +4493,7 @@ def _sync_qr_cylinder_overlay_visibility_var() -> None:
     except Exception:
         pass
 
+
 def _geometry_overlays_enabled() -> bool:
     """Return whether geometry overlays should currently be visible."""
 
@@ -4659,9 +4525,7 @@ def _toggle_geometry_overlay_visibility() -> None:
     else:
         _clear_all_geometry_overlay_artists(redraw=True)
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
-        status_text = (
-            "Geometry overlays hidden. Turn on Show Geometry Overlays to redraw them."
-        )
+        status_text = "Geometry overlays hidden. Turn on Show Geometry Overlays to redraw them."
     try:
         progress_label_geometry.config(text=status_text)
     except Exception:
@@ -4699,12 +4563,8 @@ display_controls_state = app_state.display_controls_state
 display_controls_view_state = app_state.display_controls_view
 primary_cif_controls_view_state = app_state.primary_cif_controls_view
 cif_weight_controls_view_state = app_state.cif_weight_controls_view
-structure_factor_pruning_controls_view_state = (
-    app_state.structure_factor_pruning_controls_view
-)
-beam_mosaic_parameter_sliders_view_state = (
-    app_state.beam_mosaic_parameter_sliders_view
-)
+structure_factor_pruning_controls_view_state = app_state.structure_factor_pruning_controls_view
+beam_mosaic_parameter_sliders_view_state = app_state.beam_mosaic_parameter_sliders_view
 sampling_optics_controls_view_state = app_state.sampling_optics_controls_view
 finite_stack_controls_view_state = app_state.finite_stack_controls_view
 ordered_structure_fit_view_state = app_state.ordered_structure_fit_view
@@ -4715,7 +4575,9 @@ def _sync_peak_selection_state() -> None:
     """Normalize peak/HKL interaction flags stored in shared app state."""
 
     peak_selection_state.hkl_pick_armed = bool(peak_selection_state.hkl_pick_armed)
-    peak_selection_state.suppress_drag_press_once = bool(peak_selection_state.suppress_drag_press_once)
+    peak_selection_state.suppress_drag_press_once = bool(
+        peak_selection_state.suppress_drag_press_once
+    )
 
 
 _sync_peak_selection_state()
@@ -4833,104 +4695,88 @@ on_solve_q_mode_change = pruning_workflow.on_solve_q_mode_change
 structure_factor_pruning_controls_runtime = pruning_workflow.controls_runtime
 
 
-peak_selection_workflow = (
-    gui_runtime_geometry_interaction.build_runtime_peak_selection_workflow(
-        bootstrap_module=gui_bootstrap,
-        peak_selection_module=gui_peak_selection,
-        views_module=gui_views,
-        hkl_lookup_view_state=hkl_lookup_view_state,
-        open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
-        simulation_runtime_state=simulation_runtime_state,
-        peak_selection_state=peak_selection_state,
-        image_size=int(image_size),
-        hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
-        selected_peak_marker_factory=lambda: selected_peak_marker,
-        current_primary_a_factory=lambda: float(av),
-        caked_view_enabled_factory=lambda: (
-            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-            if analysis_view_controls_view_state.show_caked_2d_var is not None
-            else False
-        ),
-        primary_a_factory=lambda: float(av),
-        primary_c_factory=lambda: float(cv),
-        max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
-        min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-        image_shape_factory=lambda: (
-            tuple(int(v) for v in global_image_buffer.shape)
-            if global_image_buffer.size
-            else None
-        ),
-        center_col_factory=lambda: float(center_y_var.get()),
-        center_row_factory=lambda: float(center_x_var.get()),
-        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
-        gamma_deg_factory=lambda: float(gamma_var.get()),
-        Gamma_deg_factory=lambda: float(Gamma_var.get()),
-        chi_deg_factory=lambda: float(chi_var.get()),
-        psi_deg_factory=lambda: float(psi),
-        psi_z_deg_factory=lambda: float(psi_z_var.get()),
-        zs_factory=lambda: float(zs_var.get()),
-        zb_factory=lambda: float(zb_var.get()),
-        theta_initial_deg_factory=(
-            lambda: float(_current_effective_theta_initial(strict_count=False))
-        ),
-        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
-        sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
-        gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
-        eta_factory=lambda: float(eta_var.get()),
-        wavelength_factory=lambda: float(lambda_),
-        sample_width_m_factory=lambda: float(sample_width_var.get()),
-        sample_length_m_factory=lambda: float(sample_length_var.get()),
-        pixel_size_m_factory=lambda: float(pixel_size_m),
-        debye_x_factory=lambda: float(debye_x_var.get()),
-        debye_y_factory=lambda: float(debye_y_var.get()),
-        detector_center_factory=lambda: (
-            float(center_x_var.get()),
-            float(center_y_var.get()),
-        ),
-        optics_mode_factory=_current_optics_mode_flag,
-        solve_q_values_factory=current_solve_q_values,
-        overlay_primary_a_factory=lambda: (
-            float(a_var.get()) if "a_var" in globals() else float(av)
-        ),
-        overlay_primary_c_factory=lambda: (
-            float(c_var.get()) if "c_var" in globals() else float(cv)
-        ),
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        native_detector_coords_to_caked_display_coords=(
-            _native_detector_coords_to_live_caked_coords
-        ),
-        reflection_q_group_metadata=(
-            gui_geometry_q_group_manager.reflection_q_group_metadata
-        ),
-        max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        schedule_update_factory=lambda: (
-            globals().get("schedule_update")
-            if callable(globals().get("schedule_update"))
-            else None
-        ),
-        set_status_text_factory=lambda: (
-            (lambda text: progress_label_positions.config(text=text))
-            if "progress_label_positions" in globals()
-            else None
-        ),
-        draw_idle_factory=lambda: (
-            _request_overlay_canvas_redraw
-            if callable(globals().get("_request_overlay_canvas_redraw"))
-            else None
-        ),
-        display_to_native_sim_coords=_display_to_native_sim_coords,
-        deactivate_conflicting_modes_factory=lambda: (
-            lambda: (
-                _set_geometry_manual_pick_mode(False),
-                _set_geometry_preview_exclude_mode(False),
-            )
-        ),
-        on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
-        n2=n2,
-        process_peaks_parallel=process_peaks_parallel,
-        tcl_error_types=(tk.TclError,),
-    )
+peak_selection_workflow = gui_runtime_geometry_interaction.build_runtime_peak_selection_workflow(
+    bootstrap_module=gui_bootstrap,
+    peak_selection_module=gui_peak_selection,
+    views_module=gui_views,
+    hkl_lookup_view_state=hkl_lookup_view_state,
+    open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
+    simulation_runtime_state=simulation_runtime_state,
+    peak_selection_state=peak_selection_state,
+    image_size=int(image_size),
+    hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
+    selected_peak_marker_factory=lambda: selected_peak_marker,
+    current_primary_a_factory=lambda: float(av),
+    caked_view_enabled_factory=lambda: (
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        if analysis_view_controls_view_state.show_caked_2d_var is not None
+        else False
+    ),
+    primary_a_factory=lambda: float(av),
+    primary_c_factory=lambda: float(cv),
+    max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
+    min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+    image_shape_factory=lambda: (
+        tuple(int(v) for v in global_image_buffer.shape) if global_image_buffer.size else None
+    ),
+    center_col_factory=lambda: float(center_y_var.get()),
+    center_row_factory=lambda: float(center_x_var.get()),
+    distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+    gamma_deg_factory=lambda: float(gamma_var.get()),
+    Gamma_deg_factory=lambda: float(Gamma_var.get()),
+    chi_deg_factory=lambda: float(chi_var.get()),
+    psi_deg_factory=lambda: float(psi),
+    psi_z_deg_factory=lambda: float(psi_z_var.get()),
+    zs_factory=lambda: float(zs_var.get()),
+    zb_factory=lambda: float(zb_var.get()),
+    theta_initial_deg_factory=(lambda: float(_current_effective_theta_initial(strict_count=False))),
+    cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
+    sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
+    gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
+    eta_factory=lambda: float(eta_var.get()),
+    wavelength_factory=lambda: float(lambda_),
+    sample_width_m_factory=lambda: float(sample_width_var.get()),
+    sample_length_m_factory=lambda: float(sample_length_var.get()),
+    pixel_size_m_factory=lambda: float(pixel_size_m),
+    debye_x_factory=lambda: float(debye_x_var.get()),
+    debye_y_factory=lambda: float(debye_y_var.get()),
+    detector_center_factory=lambda: (
+        float(center_x_var.get()),
+        float(center_y_var.get()),
+    ),
+    optics_mode_factory=_current_optics_mode_flag,
+    solve_q_values_factory=current_solve_q_values,
+    overlay_primary_a_factory=lambda: float(a_var.get()) if "a_var" in globals() else float(av),
+    overlay_primary_c_factory=lambda: float(c_var.get()) if "c_var" in globals() else float(cv),
+    native_sim_to_display_coords=_native_sim_to_display_coords,
+    native_detector_coords_to_caked_display_coords=(_native_detector_coords_to_live_caked_coords),
+    reflection_q_group_metadata=(gui_geometry_q_group_manager.reflection_q_group_metadata),
+    max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
+    sync_peak_selection_state=_sync_peak_selection_state,
+    schedule_update_factory=lambda: (
+        globals().get("schedule_update") if callable(globals().get("schedule_update")) else None
+    ),
+    set_status_text_factory=lambda: (
+        (lambda text: progress_label_positions.config(text=text))
+        if "progress_label_positions" in globals()
+        else None
+    ),
+    draw_idle_factory=lambda: (
+        _request_overlay_canvas_redraw
+        if callable(globals().get("_request_overlay_canvas_redraw"))
+        else None
+    ),
+    display_to_native_sim_coords=_display_to_native_sim_coords,
+    deactivate_conflicting_modes_factory=lambda: (
+        lambda: (
+            _set_geometry_manual_pick_mode(False),
+            _set_geometry_preview_exclude_mode(False),
+        )
+    ),
+    on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
+    n2=n2,
+    process_peaks_parallel=process_peaks_parallel,
+    tcl_error_types=(tk.TclError,),
 )
 peak_selection_runtime = peak_selection_workflow.runtime
 ensure_peak_overlay_data = peak_selection_workflow.ensure_peak_overlay_data
@@ -4938,9 +4784,7 @@ peak_selection_runtime_callbacks = peak_selection_workflow.callbacks
 peak_selection_runtime_maintenance = peak_selection_workflow.maintenance_callbacks
 hkl_lookup_controls_runtime = peak_selection_workflow.hkl_lookup_controls_runtime
 
-_base_update_hkl_pick_button_label = (
-    peak_selection_runtime_callbacks.update_hkl_pick_button_label
-)
+_base_update_hkl_pick_button_label = peak_selection_runtime_callbacks.update_hkl_pick_button_label
 _base_set_hkl_pick_mode = peak_selection_runtime_callbacks.set_hkl_pick_mode
 _base_toggle_hkl_pick_mode = peak_selection_runtime_callbacks.toggle_hkl_pick_mode
 
@@ -4983,16 +4827,12 @@ peak_selection_runtime_callbacks = gui_peak_selection.SelectedPeakRuntimeCallbac
     set_hkl_pick_mode=_set_hkl_pick_mode_with_mode_banner,
     toggle_hkl_pick_mode=_toggle_hkl_pick_mode_with_mode_banner,
     reselect_current_peak=peak_selection_runtime_callbacks.reselect_current_peak,
-    select_peak_from_hkl_controls=(
-        peak_selection_runtime_callbacks.select_peak_from_hkl_controls
-    ),
+    select_peak_from_hkl_controls=(peak_selection_runtime_callbacks.select_peak_from_hkl_controls),
     clear_selected_peak=peak_selection_runtime_callbacks.clear_selected_peak,
     open_selected_peak_intersection_figure=(
         peak_selection_runtime_callbacks.open_selected_peak_intersection_figure
     ),
-    select_peak_from_canvas_click=(
-        peak_selection_runtime_callbacks.select_peak_from_canvas_click
-    ),
+    select_peak_from_canvas_click=(peak_selection_runtime_callbacks.select_peak_from_canvas_click),
 )
 analysis_peak_runtime_callbacks = SimpleNamespace(
     set_pick_mode=(
@@ -5015,84 +4855,70 @@ hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bo
     open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
 )
 
-geometry_manual_workflow = (
-    gui_runtime_geometry_interaction.build_runtime_geometry_manual_workflow(
-        bootstrap_module=gui_bootstrap,
-        manual_geometry_module=gui_manual_geometry,
-        background_visible=lambda: bool(background_runtime_state.visible),
-        current_background_index=(
-            lambda: int(background_runtime_state.current_background_index)
-        ),
-        current_background_image=_current_geometry_manual_pick_background_image,
-        pick_session=lambda: geometry_manual_state.pick_session,
-        build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
-        session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
-        clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
-        update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
-        set_background_file_status_text=_refresh_background_status,
-        pair_group_count=_geometry_manual_pair_group_count,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
+geometry_manual_workflow = gui_runtime_geometry_interaction.build_runtime_geometry_manual_workflow(
+    bootstrap_module=gui_bootstrap,
+    manual_geometry_module=gui_manual_geometry,
+    background_visible=lambda: bool(background_runtime_state.visible),
+    current_background_index=(lambda: int(background_runtime_state.current_background_index)),
+    current_background_image=_current_geometry_manual_pick_background_image,
+    pick_session=lambda: geometry_manual_state.pick_session,
+    build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
+    session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
+    clear_geometry_pick_artists=_clear_geometry_pick_artists,
+    draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
+    update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
+    set_background_file_status_text=_refresh_background_status,
+    pair_group_count=_geometry_manual_pair_group_count,
+    set_status_text=lambda text: progress_label_geometry.config(text=text),
+    get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
+        param_set=_current_geometry_fit_params(),
+        prefer_cache=True,
+        **kwargs,
+    ),
+    set_pairs_for_index=_set_geometry_manual_pairs_for_index,
+    pairs_for_index=_geometry_manual_pairs_for_index,
+    set_pick_session=_set_geometry_manual_pick_session,
+    restore_view=_restore_geometry_manual_pick_view,
+    clear_preview_artists=_clear_geometry_manual_preview_artists,
+    push_undo_state=_push_geometry_manual_undo_state,
+    listed_q_group_entries=(lambda: globals()["_listed_geometry_q_group_entries"]()),
+    format_q_group_line=(
+        lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
+            *args,
             **kwargs,
-        ),
-        set_pairs_for_index=_set_geometry_manual_pairs_for_index,
-        pairs_for_index=_geometry_manual_pairs_for_index,
-        set_pick_session=_set_geometry_manual_pick_session,
-        restore_view=_restore_geometry_manual_pick_view,
-        clear_preview_artists=_clear_geometry_manual_preview_artists,
-        push_undo_state=_push_geometry_manual_undo_state,
-        listed_q_group_entries=(
-            lambda: globals()["_listed_geometry_q_group_entries"]()
-        ),
-        format_q_group_line=(
-            lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
-                *args,
-                **kwargs,
-            )
-        ),
-        use_caked_space=_geometry_manual_pick_uses_caked_space,
-        pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
-        caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
-        caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
-        set_suppress_drag_press_once=(
-            lambda enabled: setattr(
-                peak_selection_state,
-                "suppress_drag_press_once",
-                bool(enabled),
-            )
-        ),
-        sync_peak_selection_state=_sync_peak_selection_state,
-        refine_preview_point=_geometry_manual_refine_preview_point,
-        remaining_candidates=_geometry_manual_unassigned_group_candidates,
-        preview_due=_geometry_manual_preview_due,
-        nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
-        position_error_px=_geometry_manual_position_error_px,
-        position_sigma_px=_geometry_manual_position_sigma_px,
-        caked_angles_to_background_display_coords=(
-            _caked_angles_to_background_display_coords
-        ),
-        caked_axis_to_image_index_fn=_caked_axis_to_image_index,
-        last_caked_radial_values=(
-            lambda: simulation_runtime_state.last_caked_radial_values
-        ),
-        last_caked_azimuth_values=(
-            lambda: simulation_runtime_state.last_caked_azimuth_values
-        ),
-        background_display_to_native_detector_coords=(
-            _background_display_to_native_detector_coords
-        ),
-        refine_saved_pair_entry=(
-            lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
-                entry,
-                source_entry=candidate,
-            )
-        ),
-        show_preview=_show_geometry_manual_preview,
-        refresh_pick_session=_refresh_geometry_manual_pick_session,
-    )
+        )
+    ),
+    use_caked_space=_geometry_manual_pick_uses_caked_space,
+    pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
+    caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
+    caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
+    set_suppress_drag_press_once=(
+        lambda enabled: setattr(
+            peak_selection_state,
+            "suppress_drag_press_once",
+            bool(enabled),
+        )
+    ),
+    sync_peak_selection_state=_sync_peak_selection_state,
+    refine_preview_point=_geometry_manual_refine_preview_point,
+    remaining_candidates=_geometry_manual_unassigned_group_candidates,
+    preview_due=_geometry_manual_preview_due,
+    nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
+    position_error_px=_geometry_manual_position_error_px,
+    position_sigma_px=_geometry_manual_position_sigma_px,
+    caked_angles_to_background_display_coords=(_caked_angles_to_background_display_coords),
+    caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+    last_caked_radial_values=(lambda: simulation_runtime_state.last_caked_radial_values),
+    last_caked_azimuth_values=(lambda: simulation_runtime_state.last_caked_azimuth_values),
+    background_display_to_native_detector_coords=(_background_display_to_native_detector_coords),
+    refine_saved_pair_entry=(
+        lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
+            entry,
+            source_entry=candidate,
+        )
+    ),
+    show_preview=_show_geometry_manual_preview,
+    refresh_pick_session=_refresh_geometry_manual_pick_session,
 )
 geometry_manual_runtime = geometry_manual_workflow.runtime
 geometry_manual_runtime_callbacks = geometry_manual_workflow.callbacks
@@ -5109,14 +4935,10 @@ geometry_tool_action_workflow = (
                 bool(enabled),
             )
         ),
-        current_background_index=(
-            lambda: int(background_runtime_state.current_background_index)
-        ),
+        current_background_index=(lambda: int(background_runtime_state.current_background_index)),
         current_pick_session=lambda: geometry_manual_state.pick_session,
         manual_pick_session_active=_geometry_manual_pick_session_active,
-        build_manual_pick_button_label=(
-            gui_manual_geometry.geometry_manual_pick_button_label
-        ),
+        build_manual_pick_button_label=(gui_manual_geometry.geometry_manual_pick_button_label),
         pairs_for_index=_geometry_manual_pairs_for_index,
         pair_group_count=_geometry_manual_pair_group_count,
         set_manual_pick_text=(
@@ -5164,9 +4986,7 @@ _update_geometry_manual_pick_button_label = (
     geometry_tool_action_workflow.update_manual_pick_button_label
 )
 
-_base_update_geometry_manual_pick_button_label = (
-    _update_geometry_manual_pick_button_label
-)
+_base_update_geometry_manual_pick_button_label = _update_geometry_manual_pick_button_label
 
 
 def _update_geometry_manual_pick_button_label() -> None:
@@ -5177,12 +4997,8 @@ def _update_geometry_manual_pick_button_label() -> None:
 
 
 _set_geometry_manual_pick_mode = geometry_tool_action_workflow.set_manual_pick_mode
-_toggle_geometry_manual_pick_mode = (
-    geometry_tool_action_workflow.toggle_manual_pick_mode
-)
-_clear_current_geometry_manual_pairs = (
-    geometry_tool_action_workflow.clear_current_manual_pairs
-)
+_toggle_geometry_manual_pick_mode = geometry_tool_action_workflow.toggle_manual_pick_mode
+_clear_current_geometry_manual_pairs = geometry_tool_action_workflow.clear_current_manual_pairs
 _render_current_geometry_manual_pairs_base = geometry_manual_workflow.render_current_pairs
 
 
@@ -5212,56 +5028,50 @@ def _update_geometry_manual_pick_preview(*args, **kwargs) -> None:
 
 _cancel_geometry_manual_pick_session = geometry_manual_workflow.cancel_pick_session
 
-integration_range_workflow = (
-    gui_runtime_fit_analysis.build_runtime_integration_range_workflow(
-        bootstrap_module=gui_bootstrap,
-        views_module=gui_views,
-        integration_range_drag_module=gui_integration_range_drag,
-        integration_range_update_bootstrap_kwargs={
-            "range_view_state": integration_range_controls_view_state,
-            "analysis_view_state": analysis_view_controls_view_state,
-            "root": root,
-            "simulation_runtime_state": simulation_runtime_state,
-            "analysis_view_state_factory": (
-                lambda: analysis_view_controls_view_state
-            ),
-            "range_view_state_factory": (
-                lambda: integration_range_controls_view_state
-            ),
-            "display_controls_state": display_controls_state,
-            "hkl_lookup_controls_factory": (lambda: hkl_lookup_controls_runtime),
-            "integration_range_drag_callbacks_factory": (
-                lambda: globals().get("integration_range_drag_runtime_callbacks")
-            ),
-            "refresh_integration_from_cached_results_factory": (
-                lambda: (
-                    globals().get("_refresh_integration_from_cached_results")
-                    if callable(globals().get("_refresh_integration_from_cached_results"))
-                    else None
-                )
-            ),
-            "refresh_display_from_controls_factory": (
-                lambda: (
-                    globals().get("_refresh_display_from_controls")
-                    if callable(globals().get("_refresh_display_from_controls"))
-                    else None
-                )
-            ),
-            "schedule_update_factory": (
-                lambda: (
-                    globals().get("schedule_update")
-                    if callable(globals().get("schedule_update"))
-                    else None
-                )
-            ),
-            "range_update_debounce_ms_factory": (
-                lambda: globals().get(
-                    "RANGE_UPDATE_DEBOUNCE_MS",
-                    120,
-                )
-            ),
-        },
-    )
+integration_range_workflow = gui_runtime_fit_analysis.build_runtime_integration_range_workflow(
+    bootstrap_module=gui_bootstrap,
+    views_module=gui_views,
+    integration_range_drag_module=gui_integration_range_drag,
+    integration_range_update_bootstrap_kwargs={
+        "range_view_state": integration_range_controls_view_state,
+        "analysis_view_state": analysis_view_controls_view_state,
+        "root": root,
+        "simulation_runtime_state": simulation_runtime_state,
+        "analysis_view_state_factory": (lambda: analysis_view_controls_view_state),
+        "range_view_state_factory": (lambda: integration_range_controls_view_state),
+        "display_controls_state": display_controls_state,
+        "hkl_lookup_controls_factory": (lambda: hkl_lookup_controls_runtime),
+        "integration_range_drag_callbacks_factory": (
+            lambda: globals().get("integration_range_drag_runtime_callbacks")
+        ),
+        "refresh_integration_from_cached_results_factory": (
+            lambda: (
+                globals().get("_refresh_integration_from_cached_results")
+                if callable(globals().get("_refresh_integration_from_cached_results"))
+                else None
+            )
+        ),
+        "refresh_display_from_controls_factory": (
+            lambda: (
+                globals().get("_refresh_display_from_controls")
+                if callable(globals().get("_refresh_display_from_controls"))
+                else None
+            )
+        ),
+        "schedule_update_factory": (
+            lambda: (
+                globals().get("schedule_update")
+                if callable(globals().get("schedule_update"))
+                else None
+            )
+        ),
+        "range_update_debounce_ms_factory": (
+            lambda: globals().get(
+                "RANGE_UPDATE_DEBOUNCE_MS",
+                120,
+            )
+        ),
+    },
 )
 integration_range_update_runtime = integration_range_workflow.update_runtime
 integration_range_update_runtime_callbacks = integration_range_workflow.callbacks
@@ -5344,56 +5154,46 @@ def _set_persistent_view_mode(mode: str) -> None:
     _refresh_run_status_bar()
 
 
-integration_range_drag_runtime = (
-    gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
-        integration_range_drag_module=gui_integration_range_drag,
-        ax=ax,
-        drag_state=integration_range_drag_state,
-        peak_selection_state=peak_selection_state,
-        range_view_state_factory=lambda: globals().get(
-            "integration_range_controls_view_state"
-        ),
-        integration_region_overlay=integration_region_overlay,
-        image_display=image_display,
-        get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
-        range_visible_factory=lambda: (
-            bool(analysis_view_controls_view_state.show_1d_var.get())
-            if analysis_view_controls_view_state.show_1d_var is not None
-            else False
-        ),
-        caked_view_enabled_factory=lambda: (
-            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-            if analysis_view_controls_view_state.show_caked_2d_var is not None
-            else False
-        ),
-        unscaled_image_present_factory=lambda: (
-            simulation_runtime_state.unscaled_image is not None
-        ),
-        ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
-        show_1d_var_factory=lambda: analysis_view_controls_view_state.show_1d_var,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        schedule_range_update_factory=lambda: (
-            integration_range_update_runtime_callbacks.schedule_range_update
-        ),
-        last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
-        draw_idle_factory=lambda: (
-            _request_main_canvas_redraw
-            if callable(globals().get("_request_main_canvas_redraw"))
-            else None
-        ),
-        set_integration_overlay_image_factory=lambda: (
-            _set_primary_integration_overlay_image
-        ),
-        set_status_text_factory=lambda: (
-            (lambda text: progress_label_positions.config(text=text))
-            if "progress_label_positions" in globals()
-            else None
-        ),
-    )
+integration_range_drag_runtime = gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
+    integration_range_drag_module=gui_integration_range_drag,
+    ax=ax,
+    drag_state=integration_range_drag_state,
+    peak_selection_state=peak_selection_state,
+    range_view_state_factory=lambda: globals().get("integration_range_controls_view_state"),
+    integration_region_overlay=integration_region_overlay,
+    image_display=image_display,
+    get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
+    range_visible_factory=lambda: (
+        bool(analysis_view_controls_view_state.show_1d_var.get())
+        if analysis_view_controls_view_state.show_1d_var is not None
+        else False
+    ),
+    caked_view_enabled_factory=lambda: (
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        if analysis_view_controls_view_state.show_caked_2d_var is not None
+        else False
+    ),
+    unscaled_image_present_factory=lambda: simulation_runtime_state.unscaled_image is not None,
+    ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
+    show_1d_var_factory=lambda: analysis_view_controls_view_state.show_1d_var,
+    sync_peak_selection_state=_sync_peak_selection_state,
+    schedule_range_update_factory=lambda: (
+        integration_range_update_runtime_callbacks.schedule_range_update
+    ),
+    last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
+    draw_idle_factory=lambda: (
+        _request_main_canvas_redraw
+        if callable(globals().get("_request_main_canvas_redraw"))
+        else None
+    ),
+    set_integration_overlay_image_factory=lambda: _set_primary_integration_overlay_image,
+    set_status_text_factory=lambda: (
+        (lambda text: progress_label_positions.config(text=text))
+        if "progress_label_positions" in globals()
+        else None
+    ),
 )
-integration_range_drag_runtime_bindings_factory = (
-    integration_range_drag_runtime.bindings_factory
-)
+integration_range_drag_runtime_bindings_factory = integration_range_drag_runtime.bindings_factory
 integration_range_drag_runtime_callbacks = integration_range_drag_runtime.callbacks
 refresh_integration_region_visuals = integration_range_drag_runtime.refresh_visuals
 canvas_interaction_workflow = (
@@ -5597,9 +5397,7 @@ def _apply_intensity_display_range(image_artist, image, min_val, max_val) -> Non
 
 
 def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
-    image_source, _image_extent, _image_origin = _primary_raster_source_payload(
-        image_display
-    )
+    image_source, _image_extent, _image_origin = _primary_raster_source_payload(image_display)
     if image_source is not None:
         image_min, image_max = image_display.get_clim()
         _apply_intensity_display_range(
@@ -5609,8 +5407,8 @@ def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
             image_max,
         )
 
-    background_source, _background_extent, _background_origin = (
-        _primary_raster_source_payload(background_display)
+    background_source, _background_extent, _background_origin = _primary_raster_source_payload(
+        background_display
     )
     if background_source is not None:
         background_min, background_max = background_display.get_clim()
@@ -5677,7 +5475,7 @@ background_slider_step = background_display_defaults.slider_step
 
 
 simulation_slider_min = 0.0
-simulation_slider_max = max(background_slider_max, defaults['vmax'] * 5.0)
+simulation_slider_max = max(background_slider_max, defaults["vmax"] * 5.0)
 # Ensure fine-grained control so the intensity sliders support at least 1e-4 precision.
 simulation_slider_step = min(
     max((simulation_slider_max - simulation_slider_min) / 500.0, 1e-6),
@@ -5955,9 +5753,7 @@ def _set_primary_integration_overlay_image(image: object) -> None:
         overlay_artist,
         None if image is None else np.asarray(image, dtype=float),
     )
-    _image_source, image_extent, image_origin = _primary_raster_source_payload(
-        image_artist
-    )
+    _image_source, image_extent, image_origin = _primary_raster_source_payload(image_artist)
     if image_extent is not None:
         _store_primary_raster_geometry(
             overlay_artist,
@@ -6147,7 +5943,9 @@ def _suggest_scale_factor(sim_image, bg_image):
 
 
 def _mark_chi_square_dirty():
-    simulation_runtime_state.chi_square_update_token = int(globals().get("chi_square_update_token", 0)) + 1
+    simulation_runtime_state.chi_square_update_token = (
+        int(globals().get("chi_square_update_token", 0)) + 1
+    )
 
 
 def _auto_match_scale_factor_to_radial_peak():
@@ -6181,7 +5979,9 @@ def _auto_match_scale_factor_to_radial_peak():
                 )
                 sim_curve = i2t_sim
                 bg_curve = i2t_bg
-                simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
+                simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = (
+                    i2t_sim
+                )
                 simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
             except Exception:
                 sim_curve = None
@@ -6262,9 +6062,7 @@ def _update_chi_square_display(force=False):
     now = perf_counter()
     # Throttle to avoid repeatedly scanning full detector arrays during slider
     # drags; keep the last displayed value between refreshes.
-    if (not force) and (
-        (now - float(state.get("last_ts", 0.0))) < CHI_SQUARE_UPDATE_INTERVAL_S
-    ):
+    if (not force) and ((now - float(state.get("last_ts", 0.0))) < CHI_SQUARE_UPDATE_INTERVAL_S):
         last_text = str(state.get("last_text", "Chi-Squared: N/A"))
         chi_square_label.config(text=last_text)
         return
@@ -6355,7 +6153,10 @@ def apply_scale_factor_to_existing_results(
             _mark_chi_square_dirty()
         if not show_caked_image:
             _sync_primary_raster_geometry(show_caked_image=False)
-            if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
+            if (
+                background_runtime_state.visible
+                and background_runtime_state.current_background_display is not None
+            ):
                 _store_primary_raster_source(
                     background_display,
                     background_runtime_state.current_background_display,
@@ -6434,18 +6235,16 @@ def apply_scale_factor_to_existing_results(
     colorbar_main.update_normal(image_display)
     caked_colorbar.update_normal(image_display)
 
-    if (
-        update_1d
-        and (
+    if update_1d and (
         analysis_view_controls_view_state.show_1d_var.get()
         and _analysis_integration_outputs_visible()
         and "line_1d_rad" in globals()
         and "line_1d_az" in globals()
-        )
     ):
         if (
             simulation_runtime_state.last_1d_integration_data["radials_sim"] is not None
-            and simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] is not None
+            and simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"]
+            is not None
         ):
             line_1d_rad.set_data(
                 simulation_runtime_state.last_1d_integration_data["radials_sim"],
@@ -6453,11 +6252,13 @@ def apply_scale_factor_to_existing_results(
             )
         if (
             simulation_runtime_state.last_1d_integration_data["azimuths_sim"] is not None
-            and simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] is not None
+            and simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"]
+            is not None
         ):
             line_1d_az.set_data(
                 simulation_runtime_state.last_1d_integration_data["azimuths_sim"],
-                simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] * scale,
+                simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"]
+                * scale,
             )
         if "ax_1d_radial" in globals():
             ax_1d_radial.relim()
@@ -6478,7 +6279,10 @@ def apply_scale_factor_to_existing_results(
     )
 
     if not show_caked_image:
-        if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
+        if (
+            background_runtime_state.visible
+            and background_runtime_state.current_background_display is not None
+        ):
             _store_primary_raster_source(
                 background_display,
                 background_runtime_state.current_background_display,
@@ -6511,7 +6315,11 @@ def apply_scale_factor_to_existing_results(
         _request_main_canvas_redraw(force_matplotlib=False)
     if update_chi_square:
         _update_chi_square_display()
-_update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
+
+
+_update_background_slider_defaults(
+    background_runtime_state.current_background_display, reset_override=True
+)
 
 
 # Track caked intensity limits without exposing separate sliders in the UI.
@@ -6567,19 +6375,19 @@ def _mount_analysis_figure(parent) -> None:
 fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
 canvas_1d = None
 
-line_1d_rad, = ax_1d_radial.plot([], [], 'b-', label='Simulated (2θ)')
-line_1d_rad_bg, = ax_1d_radial.plot([], [], 'r--', label='Background (2θ)')
+(line_1d_rad,) = ax_1d_radial.plot([], [], "b-", label="Simulated (2θ)")
+(line_1d_rad_bg,) = ax_1d_radial.plot([], [], "r--", label="Background (2θ)")
 ax_1d_radial.legend()
-ax_1d_radial.set_xlabel('2θ (degrees)')
-ax_1d_radial.set_ylabel('Intensity')
-ax_1d_radial.set_title('Radial Integration (2θ)')
+ax_1d_radial.set_xlabel("2θ (degrees)")
+ax_1d_radial.set_ylabel("Intensity")
+ax_1d_radial.set_title("Radial Integration (2θ)")
 
-line_1d_az, = ax_1d_azim.plot([], [], 'b-', label='Simulated (φ)')
-line_1d_az_bg, = ax_1d_azim.plot([], [], 'r--', label='Background (φ)')
+(line_1d_az,) = ax_1d_azim.plot([], [], "b-", label="Simulated (φ)")
+(line_1d_az_bg,) = ax_1d_azim.plot([], [], "r--", label="Background (φ)")
 ax_1d_azim.legend()
-ax_1d_azim.set_xlabel('Azimuth (degrees)')
-ax_1d_azim.set_ylabel('Intensity')
-ax_1d_azim.set_title('Azimuthal Integration (φ)')
+ax_1d_azim.set_xlabel("Azimuth (degrees)")
+ax_1d_azim.set_ylabel("Intensity")
+ax_1d_azim.set_title("Azimuthal Integration (φ)")
 
 tth_min_var = None
 tth_max_var = None
@@ -6613,69 +6421,37 @@ def caking(data, ai, *, npt_rad=1000, npt_azim=720):
         npt_azim=int(max(1, npt_azim)),
         correctSolidAngle=True,
         method="lut",
-        unit="2th_deg"
+        unit="2th_deg",
     )
 
 
 def _copy_intersection_cache_tables(cache):
-    copied = []
-    if not isinstance(cache, (list, tuple)):
-        return copied
-    for table in cache:
-        try:
-            copied.append(np.asarray(table, dtype=np.float64).copy())
-        except Exception:
-            copied.append(np.empty((0, 14), dtype=np.float64))
-    return copied
+    return _primary_cache_helpers.copy_intersection_cache_tables(cache)
 
 
 def _copy_hit_tables(hit_tables):
-    copied = []
-    if not isinstance(hit_tables, (list, tuple)):
-        return copied
-    for table in hit_tables:
-        try:
-            copied.append(np.asarray(table, dtype=np.float64).copy())
-        except Exception:
-            copied.append(np.empty((0, 7), dtype=np.float64))
-    return copied
+    return _primary_cache_helpers.copy_hit_tables(hit_tables)
 
 
 def _resolved_peak_table_payload(intersection_cache, legacy_hit_tables):
-    cache_backed_tables = intersection_cache_to_hit_tables(intersection_cache)
-    if cache_backed_tables:
-        for table in cache_backed_tables:
-            try:
-                if np.asarray(table).size > 0:
-                    return cache_backed_tables
-            except Exception:
-                continue
-    return _copy_hit_tables(legacy_hit_tables)
+    return _primary_cache_helpers.resolved_peak_table_payload(
+        intersection_cache,
+        legacy_hit_tables,
+    )
 
 
 def _clear_primary_contribution_cache() -> None:
-    simulation_runtime_state.primary_contribution_cache_signature = None
-    simulation_runtime_state.primary_active_contribution_keys = []
-    simulation_runtime_state.primary_hit_table_cache = {}
-    simulation_runtime_state.primary_filter_signature = None
+    # Keep "primary_contribution" visible here; source-based tests assert that
+    # this runtime still routes that cache family through local retention hooks.
+    _primary_cache_helpers.clear_primary_contribution_cache(simulation_runtime_state)
 
 
 def _reset_combined_simulation_artifacts() -> None:
-    _trace_live_cache_event(
-        "combined",
-        "clear",
-        outcome="cleared",
-        had_peak_table_count=_live_cache_count(
-            simulation_runtime_state.stored_max_positions_local
-        ),
-        had_peak_table_lattice_count=_live_cache_count(
-            simulation_runtime_state.stored_peak_table_lattice
-        ),
-        had_sim_image=bool(simulation_runtime_state.stored_sim_image is not None),
+    _primary_cache_helpers.reset_combined_simulation_artifacts(
+        simulation_runtime_state,
+        trace_live_cache_event=_trace_live_cache_event,
+        live_cache_count=_live_cache_count,
     )
-    simulation_runtime_state.stored_max_positions_local = None
-    simulation_runtime_state.stored_peak_table_lattice = None
-    simulation_runtime_state.stored_sim_image = None
 
 
 def _store_primary_cache_payload(
@@ -6686,72 +6462,17 @@ def _store_primary_cache_payload(
     contribution_keys: Sequence[object],
     raw_hit_tables: Sequence[np.ndarray],
 ) -> None:
-    previous_signature = simulation_runtime_state.primary_contribution_cache_signature
-    previous_mode = str(simulation_runtime_state.primary_source_mode or "")
-    previous_entry_count = _live_cache_count(
-        simulation_runtime_state.primary_hit_table_cache
-    )
-    if cache_signature is None:
-        _trace_live_cache_event(
-            "primary_contribution",
-            "store",
-            outcome="skipped",
-            reason="missing_signature",
-            previous_signature_summary=_live_cache_signature_summary(previous_signature),
-            previous_source_mode=previous_mode,
-            previous_entry_count=int(previous_entry_count),
-        )
-        return
-
-    normalized_mode = str(source_mode or "miller")
-    retain_cache = _retain_runtime_optional_cache(
-        "primary_contribution",
-        feature_needed=bool(active_keys),
-    )
-    reset_required = bool(
-        cache_signature != simulation_runtime_state.primary_contribution_cache_signature
-        or normalized_mode != str(simulation_runtime_state.primary_source_mode or "")
-    )
-    if (
-        reset_required
-    ):
-        simulation_runtime_state.primary_hit_table_cache = {}
-
-    simulation_runtime_state.primary_contribution_cache_signature = cache_signature
-    simulation_runtime_state.primary_source_mode = normalized_mode
-    simulation_runtime_state.primary_active_contribution_keys = list(active_keys or ())
-
-    overwritten_count = 0
-    if retain_cache:
-        copied_tables = _copy_hit_tables(raw_hit_tables)
-        for key, table in zip(contribution_keys or (), copied_tables):
-            if key in simulation_runtime_state.primary_hit_table_cache:
-                overwritten_count += 1
-            simulation_runtime_state.primary_hit_table_cache[key] = np.asarray(
-                table,
-                dtype=np.float64,
-            ).copy()
-    else:
-        simulation_runtime_state.primary_hit_table_cache = {}
-    _trace_live_cache_event(
-        "primary_contribution",
-        "store",
-        outcome=(
-            "discarded"
-            if not retain_cache
-            else ("reset_and_store" if reset_required else "store")
-        ),
-        previous_signature_summary=_live_cache_signature_summary(previous_signature),
-        signature_summary=_live_cache_signature_summary(cache_signature),
-        previous_source_mode=previous_mode,
-        source_mode=normalized_mode,
-        previous_entry_count=int(previous_entry_count),
-        entry_count=_live_cache_count(simulation_runtime_state.primary_hit_table_cache),
-        active_key_count=_live_cache_count(active_keys),
-        provided_key_count=_live_cache_count(contribution_keys),
-        stored_table_count=_live_cache_count(copied_tables),
-        overwritten=int(overwritten_count),
-        reset=bool(reset_required),
+    _primary_cache_helpers.store_primary_cache_payload(
+        simulation_runtime_state,
+        cache_signature=cache_signature,
+        source_mode=source_mode,
+        active_keys=active_keys,
+        contribution_keys=contribution_keys,
+        raw_hit_tables=raw_hit_tables,
+        retain_runtime_optional_cache=_retain_runtime_optional_cache,
+        trace_live_cache_event=_trace_live_cache_event,
+        live_cache_count=_live_cache_count,
+        live_cache_signature_summary=_live_cache_signature_summary,
     )
 
 
@@ -6762,70 +6483,28 @@ def _rematerialize_primary_cache_artifacts(
     a_primary: float,
     c_primary: float,
 ) -> dict[str, object]:
-    payload = gui_runtime_primary_cache.rematerialize_primary_artifacts(
-        primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
-        active_keys=simulation_runtime_state.primary_active_contribution_keys,
-        image_size=int(image_size),
-        a_primary=float(a_primary),
-        c_primary=float(c_primary),
-        beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
-        beam_y_array=np.asarray(mosaic_params["beam_y_array"], dtype=np.float64),
-        theta_array=np.asarray(mosaic_params["theta_array"], dtype=np.float64),
-        phi_array=np.asarray(mosaic_params["phi_array"], dtype=np.float64),
-        wavelength_array=np.asarray(
-            mosaic_params["wavelength_array"],
-            dtype=np.float64,
-        ),
-        lattice_label="primary",
+    return _primary_cache_helpers.rematerialize_primary_cache_artifacts(
+        simulation_runtime_state,
+        image_size=image_size,
+        mosaic_params=mosaic_params,
+        a_primary=a_primary,
+        c_primary=c_primary,
+        trace_live_cache_event=_trace_live_cache_event,
+        live_cache_signature_summary=_live_cache_signature_summary,
+        live_cache_shape=_live_cache_shape,
+        live_cache_count=_live_cache_count,
     )
-    _trace_live_cache_event(
-        "primary_contribution",
-        "rematerialize",
-        outcome="success",
-        signature_summary=_live_cache_signature_summary(
-            simulation_runtime_state.primary_contribution_cache_signature
-        ),
-        active_key_count=_live_cache_count(
-            simulation_runtime_state.primary_active_contribution_keys
-        ),
-        cache_entry_count=_live_cache_count(
-            simulation_runtime_state.primary_hit_table_cache
-        ),
-        image_shape=_live_cache_shape(payload.get("image")),
-        intersection_cache_count=_live_cache_count(payload.get("intersection_cache")),
-        peak_table_count=_live_cache_count(payload.get("peak_tables")),
-    )
-    return payload
 
 
 def _apply_primary_cache_artifacts(payload: dict[str, object]) -> None:
-    simulation_runtime_state.stored_primary_sim_image = np.asarray(
-        payload.get("image"),
-        dtype=np.float64,
-    )
-    simulation_runtime_state.stored_primary_intersection_cache = _copy_intersection_cache_tables(
-        payload.get("intersection_cache", [])
-    )
-    simulation_runtime_state.stored_primary_max_positions = _copy_hit_tables(
-        payload.get("peak_tables", [])
-    )
-    simulation_runtime_state.stored_primary_peak_table_lattice = list(
-        payload.get("peak_table_lattice", [])
-    )
-    _reset_combined_simulation_artifacts()
-    simulation_runtime_state.preview_active = False
-    simulation_runtime_state.preview_sample_count = None
-    _trace_live_cache_event(
-        "primary_contribution",
-        "apply",
-        outcome="applied",
-        signature_summary=_live_cache_signature_summary(
-            simulation_runtime_state.primary_contribution_cache_signature
-        ),
-        image_shape=_live_cache_shape(payload.get("image")),
-        intersection_cache_count=_live_cache_count(payload.get("intersection_cache")),
-        peak_table_count=_live_cache_count(payload.get("peak_tables")),
-        peak_table_lattice_count=_live_cache_count(payload.get("peak_table_lattice")),
+    _primary_cache_helpers.apply_primary_cache_artifacts(
+        simulation_runtime_state,
+        payload,
+        reset_combined_simulation_artifacts=_reset_combined_simulation_artifacts,
+        trace_live_cache_event=_trace_live_cache_event,
+        live_cache_signature_summary=_live_cache_signature_summary,
+        live_cache_shape=_live_cache_shape,
+        live_cache_count=_live_cache_count,
     )
 
 
@@ -6968,11 +6647,7 @@ def _prepare_caked_intersection_cache(
         center_arr = np.asarray(center, dtype=float).reshape(-1)
     except Exception:
         center_arr = np.empty((0,), dtype=float)
-    if (
-        center_arr.size < 2
-        or not np.isfinite(center_arr[0])
-        or not np.isfinite(center_arr[1])
-    ):
+    if center_arr.size < 2 or not np.isfinite(center_arr[0]) or not np.isfinite(center_arr[1]):
         return source_tables
 
     if not (np.isfinite(detector_distance) and float(detector_distance) > 0.0):
@@ -7018,6 +6693,8 @@ def _prepare_caked_intersection_cache(
         transformed.append(out)
 
     return transformed
+
+
 simulation_runtime_state.profile_cache = {}
 simulation_runtime_state.last_1d_integration_data = {
     "radials_sim": None,
@@ -7028,7 +6705,7 @@ simulation_runtime_state.last_1d_integration_data = {
     "intensities_2theta_bg": None,
     "azimuths_bg": None,
     "intensities_azimuth_bg": None,
-    "simulated_2d_image": None
+    "simulated_2d_image": None,
 }
 
 simulation_runtime_state.last_caked_image_unscaled = None
@@ -7102,8 +6779,8 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
         simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = None
         simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = None
 
-    ax_1d_radial.set_yscale('linear')
-    ax_1d_azim.set_yscale('linear')
+    ax_1d_radial.set_yscale("linear")
+    ax_1d_azim.set_yscale("linear")
     ax_1d_radial.relim()
     ax_1d_radial.autoscale_view()
     ax_1d_azim.relim()
@@ -7201,11 +6878,21 @@ def update_mosaic_cache():
         float(active_bandwidth),
     )
 
-    beam_x_cached = np.asarray(simulation_runtime_state.profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
-    beam_y_cached = np.asarray(simulation_runtime_state.profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
-    theta_cached = np.asarray(simulation_runtime_state.profile_cache.get("theta_array", []), dtype=np.float64).ravel()
-    phi_cached = np.asarray(simulation_runtime_state.profile_cache.get("phi_array", []), dtype=np.float64).ravel()
-    wavelength_cached = np.asarray(simulation_runtime_state.profile_cache.get("wavelength_array", []), dtype=np.float64).ravel()
+    beam_x_cached = np.asarray(
+        simulation_runtime_state.profile_cache.get("beam_x_array", []), dtype=np.float64
+    ).ravel()
+    beam_y_cached = np.asarray(
+        simulation_runtime_state.profile_cache.get("beam_y_array", []), dtype=np.float64
+    ).ravel()
+    theta_cached = np.asarray(
+        simulation_runtime_state.profile_cache.get("theta_array", []), dtype=np.float64
+    ).ravel()
+    phi_cached = np.asarray(
+        simulation_runtime_state.profile_cache.get("phi_array", []), dtype=np.float64
+    ).ravel()
+    wavelength_cached = np.asarray(
+        simulation_runtime_state.profile_cache.get("wavelength_array", []), dtype=np.float64
+    ).ravel()
 
     has_cached_samples = (
         beam_x_cached.size > 0
@@ -7256,7 +6943,9 @@ def update_mosaic_cache():
 
     active_optics_cif_path = _resolve_optics_cif_path()
     optics_signature = (
-        tuple(simulation_runtime_state.profile_cache.get("_sampling_signature", sampling_signature)),
+        tuple(
+            simulation_runtime_state.profile_cache.get("_sampling_signature", sampling_signature)
+        ),
         os.path.abspath(str(active_optics_cif_path)),
     )
     if simulation_runtime_state.profile_cache.get("_optics_signature") != optics_signature:
@@ -7278,6 +6967,7 @@ def update_mosaic_cache():
             "sample_weights": sample_weights_array,
         }
     )
+
 
 def on_mosaic_slider_change(*args):
     update_mosaic_cache()
@@ -7368,10 +7058,10 @@ def _scaled_bragg_qr_dict(qr_dict, scale: float):
     return copied
 
 
-line_rmin, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
-line_rmax, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
-line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
-line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
+(line_rmin,) = ax.plot([], [], color="white", linestyle="-", linewidth=2, zorder=5)
+(line_rmax,) = ax.plot([], [], color="white", linestyle="-", linewidth=2, zorder=5)
+(line_amin,) = ax.plot([], [], color="cyan", linestyle="-", linewidth=2, zorder=5)
+(line_amax,) = ax.plot([], [], color="cyan", linestyle="-", linewidth=2, zorder=5)
 
 FULL_UPDATE_DEBOUNCE_MS = 90
 PREVIEW_UPDATE_DEBOUNCE_MS = 24
@@ -7415,10 +7105,7 @@ def _cached_hit_tables_reusable(
         return False
     if bool(run_primary) and simulation_runtime_state.stored_primary_max_positions is None:
         return False
-    if (
-        bool(run_secondary)
-        and simulation_runtime_state.stored_secondary_max_positions is None
-    ):
+    if bool(run_secondary) and simulation_runtime_state.stored_secondary_max_positions is None:
         return False
     return True
 
@@ -7469,10 +7156,18 @@ def _append_job_queue_trace(
     fields: dict[str, object] = {
         "lane": str(lane),
         "update_phase": getattr(simulation_runtime_state, "update_phase", None),
-        "worker_active": bool(getattr(simulation_runtime_state, "worker_active_job", None) is not None),
-        "worker_queued": bool(getattr(simulation_runtime_state, "worker_queued_job", None) is not None),
-        "analysis_active": bool(getattr(simulation_runtime_state, "analysis_active_job", None) is not None),
-        "analysis_queued": bool(getattr(simulation_runtime_state, "analysis_queued_job", None) is not None),
+        "worker_active": bool(
+            getattr(simulation_runtime_state, "worker_active_job", None) is not None
+        ),
+        "worker_queued": bool(
+            getattr(simulation_runtime_state, "worker_queued_job", None) is not None
+        ),
+        "analysis_active": bool(
+            getattr(simulation_runtime_state, "analysis_active_job", None) is not None
+        ),
+        "analysis_queued": bool(
+            getattr(simulation_runtime_state, "analysis_queued_job", None) is not None
+        ),
     }
     fields.update(_job_trace_fields(job, prefix="job"))
     fields.update(_job_trace_fields(active_job, prefix="active"))
@@ -7505,9 +7200,7 @@ def _extract_fit_quality_text() -> str:
     ordered_result_var = getattr(ordered_view_state, "result_var", None)
     if ordered_result_var is not None:
         try:
-            ordered_text = " ".join(
-                str(ordered_result_var.get() or "").splitlines()[0].split()
-            )
+            ordered_text = " ".join(str(ordered_result_var.get() or "").splitlines()[0].split())
         except Exception:
             ordered_text = ""
         if ordered_text and ordered_text != "No ordered-structure fit run yet.":
@@ -7586,9 +7279,7 @@ def _refresh_analysis_integration_if_visible() -> None:
 
 def _current_app_shell_view_text() -> str:
     base = "Caked" if _current_app_shell_view_mode() == "caked" else "Detector"
-    show_1d = bool(
-        getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()
-    )
+    show_1d = bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)())
     if show_1d:
         return f"{base} + 1D"
     return base
@@ -7597,10 +7288,7 @@ def _current_app_shell_view_text() -> str:
 def _current_primary_figure_mode() -> str:
     current_x_label = " ".join(str(ax.get_xlabel() or "").split()).lower()
     current_y_label = " ".join(str(ax.get_ylabel() or "").split()).lower()
-    if (
-        current_x_label == "2θ (degrees)".lower()
-        and current_y_label == "φ (degrees)".lower()
-    ):
+    if current_x_label == "2θ (degrees)".lower() and current_y_label == "φ (degrees)".lower():
         return "caked"
     return "detector"
 
@@ -7616,15 +7304,11 @@ def _default_primary_view_limits(
             else [0.0, 90.0, -180.0, 180.0]
         )
         if not (
-            math.isfinite(radial_min)
-            and math.isfinite(radial_max)
-            and radial_max > radial_min
+            math.isfinite(radial_min) and math.isfinite(radial_max) and radial_max > radial_min
         ):
             radial_min, radial_max = 0.0, 90.0
         if not (
-            math.isfinite(azimuth_min)
-            and math.isfinite(azimuth_max)
-            and azimuth_max > azimuth_min
+            math.isfinite(azimuth_min) and math.isfinite(azimuth_max) and azimuth_max > azimuth_min
         ):
             azimuth_min, azimuth_max = -180.0, 180.0
         return (
@@ -7792,10 +7476,7 @@ def _build_current_dataset_simulation_text(*, view_text: str) -> str:
         )
     except Exception:
         sf_text = "SF pruning unavailable"
-    return (
-        f"{view_text} | optics {optics_text} | "
-        f"sampling {sample_count:,} samples | {sf_text}"
-    )
+    return f"{view_text} | optics {optics_text} | sampling {sample_count:,} samples | {sf_text}"
 
 
 def _build_current_dataset_structure_text() -> str:
@@ -7825,10 +7506,7 @@ def _build_current_dataset_structure_text() -> str:
         weight2_value = 0.0
 
     if secondary_path:
-        return (
-            f"{' + '.join(phase_parts)} | "
-            f"phase weights {weight1_value:.2f}/{weight2_value:.2f}"
-        )
+        return f"{' + '.join(phase_parts)} | phase weights {weight1_value:.2f}/{weight2_value:.2f}"
     return f"{phase_parts[0]} | phase weight {weight1_value:.2f}"
 
 
@@ -7980,9 +7658,7 @@ def _refresh_interaction_mode_banner() -> None:
     """Refresh the visible workflow mode banner from the current interaction state."""
 
     title = "Ready to start"
-    detail = (
-        "Load backgrounds in Setup, then use Match to choose peaks and fit geometry."
-    )
+    detail = "Load backgrounds in Setup, then use Match to choose peaks and fit geometry."
 
     if bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
         title = "Manual geometry picking armed"
@@ -8002,7 +7678,9 @@ def _refresh_interaction_mode_banner() -> None:
         detail = "Click peaks on the image to exclude or restore them from live geometry preview."
     elif _fast_viewer_active():
         title = "Fast viewer active"
-        detail = "Rendering is active in the separate fast-viewer window; the embedded canvas is paused."
+        detail = (
+            "Rendering is active in the separate fast-viewer window; the embedded canvas is paused."
+        )
     else:
         suspend_reason = _fast_viewer_suspend_reason()
         if bool(_fast_viewer_requested_enabled()) and isinstance(suspend_reason, str):
@@ -8034,10 +7712,7 @@ def _refresh_run_status_bar() -> None:
         phase_text = "Queued"
     elif simulation_runtime_state.analysis_active_job is not None:
         phase_text = "Analyzing"
-    elif (
-        simulation_runtime_state.analysis_queued_job is not None
-        and phase_text == "Ready"
-    ):
+    elif simulation_runtime_state.analysis_queued_job is not None and phase_text == "Ready":
         phase_text = "Queued"
 
     background_total = max(1, len(background_runtime_state.osc_files))
@@ -8054,9 +7729,13 @@ def _refresh_run_status_bar() -> None:
     except Exception:
         optics_summary = "fast"
 
-    view_summary = "Caked" if bool(
-        getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
-    ) else "Detector"
+    view_summary = (
+        "Caked"
+        if bool(
+            getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
+        )
+        else "Detector"
+    )
     if bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
         view_summary = f"{view_summary}+1D"
 
@@ -8142,16 +7821,13 @@ def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
             simulation_runtime_state.last_analysis_signature
         ),
         had_sim_result=bool(simulation_runtime_state.last_res2_sim is not None),
-        had_background_result=bool(
-            simulation_runtime_state.last_res2_background is not None
-        ),
+        had_background_result=bool(simulation_runtime_state.last_res2_background is not None),
     )
     simulation_runtime_state.analysis_epoch = int(simulation_runtime_state.analysis_epoch) + 1
 
     ready_result = simulation_runtime_state.analysis_ready_result
-    if (
-        isinstance(ready_result, dict)
-        and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
+    if isinstance(ready_result, dict) and int(ready_result.get("epoch", -1)) < int(
+        simulation_runtime_state.analysis_epoch
     ):
         _append_job_queue_trace(
             "job_discarded_as_stale",
@@ -8164,9 +7840,8 @@ def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
         simulation_runtime_state.analysis_ready_result = None
 
     queued_job = simulation_runtime_state.analysis_queued_job
-    if (
-        isinstance(queued_job, dict)
-        and int(queued_job.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
+    if isinstance(queued_job, dict) and int(queued_job.get("epoch", -1)) < int(
+        simulation_runtime_state.analysis_epoch
     ):
         _append_job_queue_trace(
             "job_discarded_as_stale",
@@ -8193,9 +7868,7 @@ def _invalidate_simulation_cache() -> None:
         last_simulation_signature_summary=_live_cache_signature_summary(
             simulation_runtime_state.last_simulation_signature
         ),
-        source_snapshot_count=_live_cache_count(
-            simulation_runtime_state.source_row_snapshots
-        ),
+        source_snapshot_count=_live_cache_count(simulation_runtime_state.source_row_snapshots),
         preview_active=bool(simulation_runtime_state.preview_active),
         preview_sample_count=simulation_runtime_state.preview_sample_count,
     )
@@ -8208,9 +7881,8 @@ def _invalidate_simulation_cache() -> None:
     _invalidate_analysis_cache(clear_visuals=True)
 
     ready_result = simulation_runtime_state.worker_ready_result
-    if (
-        isinstance(ready_result, dict)
-        and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
+    if isinstance(ready_result, dict) and int(ready_result.get("epoch", -1)) < int(
+        simulation_runtime_state.simulation_epoch
     ):
         _append_job_queue_trace(
             "job_discarded_as_stale",
@@ -8223,9 +7895,8 @@ def _invalidate_simulation_cache() -> None:
         simulation_runtime_state.worker_ready_result = None
 
     queued_job = simulation_runtime_state.worker_queued_job
-    if (
-        isinstance(queued_job, dict)
-        and int(queued_job.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
+    if isinstance(queued_job, dict) and int(queued_job.get("epoch", -1)) < int(
+        simulation_runtime_state.simulation_epoch
     ):
         _append_job_queue_trace(
             "job_discarded_as_stale",
@@ -8511,11 +8182,7 @@ def _store_cached_caking_entry(
             f"caking_{str(kind)}",
             "store",
             outcome="skipped",
-            reason=(
-                "missing_signature"
-                if signature is None
-                else "missing_result"
-            ),
+            reason=("missing_signature" if signature is None else "missing_result"),
         )
         return
     if not _retain_runtime_optional_cache("caking", feature_needed=True):
@@ -8557,18 +8224,12 @@ def _live_interaction_active() -> bool:
 
 def _current_preview_sample_limit() -> int:
     return (
-        LIVE_DRAG_PREVIEW_MAX_SAMPLES
-        if _live_interaction_active()
-        else INITIAL_PREVIEW_MAX_SAMPLES
+        LIVE_DRAG_PREVIEW_MAX_SAMPLES if _live_interaction_active() else INITIAL_PREVIEW_MAX_SAMPLES
     )
 
 
 def _current_update_debounce_ms() -> int:
-    return (
-        PREVIEW_UPDATE_DEBOUNCE_MS
-        if _live_interaction_active()
-        else FULL_UPDATE_DEBOUNCE_MS
-    )
+    return PREVIEW_UPDATE_DEBOUNCE_MS if _live_interaction_active() else FULL_UPDATE_DEBOUNCE_MS
 
 
 def _simulation_result_matches_signature(
@@ -8578,8 +8239,7 @@ def _simulation_result_matches_signature(
     return bool(
         isinstance(result, dict)
         and result.get("signature") == signature
-        and int(result.get("epoch", -1))
-        == int(simulation_runtime_state.simulation_epoch)
+        and int(result.get("epoch", -1)) == int(simulation_runtime_state.simulation_epoch)
     )
 
 
@@ -8597,9 +8257,7 @@ def _simulation_result_superseded_by_queued_job(
         return queued_epoch > result_epoch
     if queued_job.get("signature") != result.get("signature"):
         return True
-    return str(queued_job.get("job_kind", "full")) == str(
-        result.get("job_kind", "full")
-    )
+    return str(queued_job.get("job_kind", "full")) == str(result.get("job_kind", "full"))
 
 
 def _analysis_progress_text() -> str:
@@ -8621,6 +8279,7 @@ def _defer_nonessential_redraw() -> bool:
         or simulation_runtime_state.analysis_active_job is not None
         or simulation_runtime_state.analysis_queued_job is not None
     )
+
 
 def _refresh_settled_overlays() -> None:
     if not _geometry_overlays_enabled():
@@ -8666,9 +8325,7 @@ def _finish_live_interaction() -> None:
     if not simulation_runtime_state.interaction_drag_active:
         return
     simulation_runtime_state.interaction_drag_active = False
-    should_schedule = bool(
-        simulation_runtime_state.interaction_drag_requires_settled_update
-    )
+    should_schedule = bool(simulation_runtime_state.interaction_drag_requires_settled_update)
     simulation_runtime_state.interaction_drag_requires_settled_update = False
     _refresh_run_status_bar()
     if should_schedule:
@@ -8696,6 +8353,7 @@ def _end_main_figure_live_interaction() -> None:
     if not _legacy_main_matplotlib_interaction_active():
         return
     _mark_live_interaction_release()
+
 
 def _mark_live_interaction_start(_event=None) -> None:
     gui_controllers.clear_tk_after_token(
@@ -8734,9 +8392,7 @@ def _preview_sample_indices(sample_count: int, *, max_samples: int) -> np.ndarra
     target = max(1, int(max_samples))
     if total <= target:
         return np.arange(total, dtype=np.int64)
-    return np.unique(
-        np.rint(np.linspace(0, total - 1, target)).astype(np.int64, copy=False)
-    )
+    return np.unique(np.rint(np.linspace(0, total - 1, target)).astype(np.int64, copy=False))
 
 
 def _build_preview_simulation_job(
@@ -8773,8 +8429,7 @@ def _build_preview_simulation_job(
     preview_indices = _preview_sample_indices(sample_count, max_samples=int(max_samples))
     preview_job = dict(job)
     preview_job["collect_hit_tables"] = bool(
-        job.get("collect_hit_tables", False)
-        and not bool(job.get("accumulate_image", True))
+        job.get("collect_hit_tables", False) and not bool(job.get("accumulate_image", True))
     )
     preview_job["collect_primary_hit_tables"] = False
     preview_job["collect_secondary_hit_tables"] = False
@@ -8795,7 +8450,9 @@ def _build_preview_simulation_job(
             else np.asarray(
                 mosaic_params["sample_weights"],
                 dtype=np.float64,
-            ).reshape(-1)[preview_indices].copy()
+            )
+            .reshape(-1)[preview_indices]
+            .copy()
         ),
         "n2_sample_array": (
             None
@@ -8803,7 +8460,9 @@ def _build_preview_simulation_job(
             else np.asarray(
                 mosaic_params["n2_sample_array"],
                 dtype=np.complex128,
-            ).reshape(-1)[preview_indices].copy()
+            )
+            .reshape(-1)[preview_indices]
+            .copy()
         ),
     }
     return preview_job
@@ -8843,13 +8502,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "secondary_intersection_cache": [],
             "primary_peak_table_lattice": [],
             "secondary_peak_table_lattice": [],
-            "primary_contribution_cache_signature": job.get(
-                "primary_contribution_cache_signature"
-            ),
+            "primary_contribution_cache_signature": job.get("primary_contribution_cache_signature"),
             "primary_source_mode": job.get("primary_source_mode"),
-            "primary_contribution_keys": list(
-                job.get("primary_contribution_keys", [])
-            ),
+            "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
             "active_primary_contribution_keys": list(
                 job.get(
                     "active_primary_contribution_keys",
@@ -8858,9 +8513,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             ),
             "primary_hit_tables_raw": [],
             "projection_debug_log_path": None,
-            "image_generation_elapsed_ms": (
-                perf_counter() - image_generation_start_time
-            ) * 1e3,
+            "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
         }
 
     projection_debug_session = start_projection_debug_session(
@@ -9022,9 +8675,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     secondary_collect_hit_tables = bool(
         job.get("collect_secondary_hit_tables", job["collect_hit_tables"])
     )
-    capture_primary_hit_tables_raw = bool(
-        job.get("capture_primary_hit_tables_raw", False)
-    )
+    capture_primary_hit_tables_raw = bool(job.get("capture_primary_hit_tables_raw", False))
 
     img1 = np.zeros((image_size, image_size), dtype=np.float64)
     img2 = np.zeros((image_size, image_size), dtype=np.float64)
@@ -9071,9 +8722,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
             )
 
-        projection_debug_log_path = finalize_projection_debug_session(
-            projection_debug_session
-        )
+        projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         return {
             "job_id": int(job["job_id"]),
             "job_kind": job_kind,
@@ -9089,9 +8738,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "secondary_image": img2,
             "collected_hit_tables": bool(job["collect_hit_tables"]),
             "hit_table_signature": job.get("hit_table_signature"),
-            "primary_contribution_cache_signature": job.get(
-                "primary_contribution_cache_signature"
-            ),
+            "primary_contribution_cache_signature": job.get("primary_contribution_cache_signature"),
             "primary_source_mode": job.get("primary_source_mode"),
             "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
             "active_primary_contribution_keys": list(
@@ -9116,9 +8763,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 for _ in range(secondary_peak_table_count)
             ],
             "projection_debug_log_path": projection_debug_log_path,
-            "image_generation_elapsed_ms": (
-                perf_counter() - image_generation_start_time
-            ) * 1e3,
+            "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
         }
     except Exception:
         finalize_projection_debug_session(projection_debug_session)
@@ -9207,11 +8852,7 @@ def _poll_async_simulation_job() -> None:
             job=result,
             active_job=None,
             queued_job=queued_job,
-            reason=(
-                "superseded_by_newer_queued_job"
-                if superseded
-                else "result_epoch_mismatch"
-            ),
+            reason=("superseded_by_newer_queued_job" if superseded else "result_epoch_mismatch"),
         )
         if _promote_queued_simulation_job(reason="previous_job_stale"):
             return
@@ -9275,7 +8916,9 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         _refresh_run_status_bar()
         return "queued"
 
-    simulation_runtime_state.worker_job_counter = int(simulation_runtime_state.worker_job_counter) + 1
+    simulation_runtime_state.worker_job_counter = (
+        int(simulation_runtime_state.worker_job_counter) + 1
+    )
     queued_job = dict(job)
     queued_job["job_id"] = int(simulation_runtime_state.worker_job_counter)
     simulation_runtime_state.worker_error_text = None
@@ -9313,9 +8956,8 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
 def _consume_ready_simulation_result(signature: object) -> dict[str, object] | None:
     ready_result = simulation_runtime_state.worker_ready_result
     if not _simulation_result_matches_signature(ready_result, signature):
-        if (
-            isinstance(ready_result, dict)
-            and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
+        if isinstance(ready_result, dict) and int(ready_result.get("epoch", -1)) < int(
+            simulation_runtime_state.simulation_epoch
         ):
             simulation_runtime_state.worker_ready_result = None
         return None
@@ -9364,15 +9006,11 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         or "primary_intersection_cache" in result
         or "secondary_intersection_cache" in result
     ):
-        simulation_runtime_state.stored_primary_max_positions = list(
-            resolved_primary_peak_tables
-        )
+        simulation_runtime_state.stored_primary_max_positions = list(resolved_primary_peak_tables)
         simulation_runtime_state.stored_secondary_max_positions = list(
             resolved_secondary_peak_tables
         )
-        simulation_runtime_state.stored_hit_table_signature = result.get(
-            "hit_table_signature"
-        )
+        simulation_runtime_state.stored_hit_table_signature = result.get("hit_table_signature")
     if not bool(result.get("is_preview", False)):
         _store_primary_cache_payload(
             cache_signature=result.get("primary_contribution_cache_signature"),
@@ -9396,9 +9034,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
     simulation_runtime_state.preview_active = bool(result.get("is_preview", False))
     preview_sample_count = result.get("preview_sample_count")
     simulation_runtime_state.preview_sample_count = (
-        int(preview_sample_count)
-        if preview_sample_count is not None
-        else None
+        int(preview_sample_count) if preview_sample_count is not None else None
     )
     _trace_live_cache_event(
         "simulation_result",
@@ -9406,9 +9042,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         outcome="stored",
         is_preview=bool(result.get("is_preview", False)),
         job_kind=str(result.get("job_kind", "full")),
-        image_generation_elapsed_ms=float(
-            result.get("image_generation_elapsed_ms", float("nan"))
-        ),
+        image_generation_elapsed_ms=float(result.get("image_generation_elapsed_ms", float("nan"))),
         primary_image_shape=_live_cache_shape(result.get("primary_image")),
         secondary_image_shape=_live_cache_shape(result.get("secondary_image")),
         primary_intersection_cache_count=_live_cache_count(
@@ -9521,9 +9155,7 @@ def _restore_caked_display_payload_from_cached_results(
 
     bg_caked = None
     if background_visible and simulation_runtime_state.last_res2_background is not None:
-        bg_caked = _prepare_caked_display_payload(
-            simulation_runtime_state.last_res2_background
-        )
+        bg_caked = _prepare_caked_display_payload(simulation_runtime_state.last_res2_background)
     if isinstance(bg_caked, dict):
         simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(
             bg_caked.get("image"),
@@ -9672,11 +9304,7 @@ def _poll_async_analysis_job() -> None:
             job=result,
             active_job=None,
             queued_job=queued_job,
-            reason=(
-                "superseded_by_newer_queued_job"
-                if superseded
-                else "result_epoch_mismatch"
-            ),
+            reason=("superseded_by_newer_queued_job" if superseded else "result_epoch_mismatch"),
         )
         if _promote_queued_analysis_job(reason="previous_job_stale"):
             return
@@ -9739,7 +9367,9 @@ def _request_async_analysis_job(job: dict[str, object]) -> str:
         _refresh_run_status_bar()
         return "queued"
 
-    simulation_runtime_state.analysis_job_counter = int(simulation_runtime_state.analysis_job_counter) + 1
+    simulation_runtime_state.analysis_job_counter = (
+        int(simulation_runtime_state.analysis_job_counter) + 1
+    )
     queued_job = dict(job)
     queued_job["job_id"] = int(simulation_runtime_state.analysis_job_counter)
     simulation_runtime_state.analysis_error_text = None
@@ -9786,9 +9416,8 @@ def _consume_ready_analysis_result(
         int(simulation_runtime_state.analysis_epoch),
         bool(is_preview),
     ):
-        if (
-            isinstance(ready_result, dict)
-            and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
+        if isinstance(ready_result, dict) and int(ready_result.get("epoch", -1)) < int(
+            simulation_runtime_state.analysis_epoch
         ):
             simulation_runtime_state.analysis_ready_result = None
         return None
@@ -9799,9 +9428,7 @@ def _consume_ready_analysis_result(
 
 def _apply_ready_analysis_result(result: dict[str, object]) -> None:
     simulation_runtime_state.last_analysis_signature = result.get("signature")
-    simulation_runtime_state.analysis_preview_active = bool(
-        result.get("is_preview", False)
-    )
+    simulation_runtime_state.analysis_preview_active = bool(result.get("is_preview", False))
     analysis_bins = result.get("analysis_bins")
     if (
         isinstance(analysis_bins, (tuple, list))
@@ -9929,6 +9556,7 @@ def _should_collect_hit_tables_for_update() -> bool:
         geometry_manual_pick_session_active=_geometry_manual_pick_session_active,
     )
 
+
 simulation_runtime_state.peak_positions = []
 simulation_runtime_state.peak_millers = []
 simulation_runtime_state.peak_intensities = []
@@ -9989,6 +9617,7 @@ simulation_runtime_state.chi_square_state = {
     "last_text": "Chi-Squared: N/A",
 }
 
+
 ###############################################################################
 #                              MAIN UPDATE
 ###############################################################################
@@ -9996,9 +9625,9 @@ def do_update():
     global av2, cv2
 
     _ensure_runtime_update_trace_hooks()
-    simulation_runtime_state.update_trace_counter = int(
-        getattr(simulation_runtime_state, "update_trace_counter", 0)
-    ) + 1
+    simulation_runtime_state.update_trace_counter = (
+        int(getattr(simulation_runtime_state, "update_trace_counter", 0)) + 1
+    )
     update_trace_id = int(simulation_runtime_state.update_trace_counter)
     update_trace_stage = "enter"
     simulation_runtime_state.current_update_trace_id = int(update_trace_id)
@@ -10052,34 +9681,32 @@ def do_update():
     image_generation_cached = True
     _set_update_trace_stage("params")
 
-    gamma_updated      = float(gamma_var.get())
-    Gamma_updated      = float(Gamma_var.get())
-    chi_updated        = float(chi_var.get())
-    psi_z_updated      = float(psi_z_var.get())
-    zs_updated         = float(zs_var.get())
-    zb_updated         = float(zb_var.get())
+    gamma_updated = float(gamma_var.get())
+    Gamma_updated = float(Gamma_var.get())
+    chi_updated = float(chi_var.get())
+    psi_z_updated = float(psi_z_var.get())
+    zs_updated = float(zs_var.get())
+    zb_updated = float(zb_var.get())
     sample_width_updated = float(sample_width_var.get())
     sample_length_updated = float(sample_length_var.get())
     sample_depth_updated = float(sample_depth_var.get())
-    cor_angle_updated  = float(cor_angle_var.get())
-    a_updated          = float(a_var.get())
-    c_updated          = float(c_var.get())
-    theta_init_up      = float(_current_effective_theta_initial(strict_count=False))
-    debye_x_updated    = float(debye_x_var.get())
-    debye_y_updated    = float(debye_y_var.get())
+    cor_angle_updated = float(cor_angle_var.get())
+    a_updated = float(a_var.get())
+    c_updated = float(c_var.get())
+    theta_init_up = float(_current_effective_theta_initial(strict_count=False))
+    debye_x_updated = float(debye_x_var.get())
+    debye_y_updated = float(debye_y_var.get())
     ordered_structure_scale = float(_current_ordered_structure_scale())
-    corto_det_up       = float(corto_detector_var.get())
-    center_x_up        = float(center_x_var.get())
-    center_y_up        = float(center_y_var.get())
+    corto_det_up = float(corto_detector_var.get())
+    center_x_up = float(center_x_var.get())
+    center_y_up = float(center_y_var.get())
     _trace_update(
         "do_update_params",
         background_index=int(background_runtime_state.current_background_index),
         theta_initial_deg=float(theta_init_up),
         center_x=float(center_x_up),
         center_y=float(center_y_up),
-        show_caked_2d=bool(
-            analysis_view_controls_view_state.show_caked_2d_var.get()
-        ),
+        show_caked_2d=bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
         preview_active=bool(simulation_runtime_state.preview_active),
     )
 
@@ -10123,9 +9750,7 @@ def do_update():
         current_occ = [occ_var.get() for occ_var in _occupancy_control_vars()]
         current_p = [p0_var.get(), p1_var.get(), p2_var.get()]
         weight_values = [w0_var.get(), w1_var.get(), w2_var.get()]
-        normalized_weights = gui_controllers.normalize_stacking_weight_values(
-            weight_values
-        )
+        normalized_weights = gui_controllers.normalize_stacking_weight_values(weight_values)
         _rebuild_diffraction_inputs(
             current_occ,
             current_p,
@@ -10197,9 +9822,7 @@ def do_update():
         )
     )
     secondary_available = (
-        secondary_data.ndim == 2
-        and secondary_data.shape[0] > 0
-        and secondary_intensities.size > 0
+        secondary_data.ndim == 2 and secondary_data.shape[0] > 0 and secondary_intensities.size > 0
     )
     primary_requested_source_mode = str(
         getattr(
@@ -10207,11 +9830,7 @@ def do_update():
             "primary_requested_source_mode",
             "",
         )
-        or (
-            "qr"
-            if isinstance(primary_data, dict) and len(primary_data) > 0
-            else "miller"
-        )
+        or ("qr" if isinstance(primary_data, dict) and len(primary_data) > 0 else "miller")
     )
     primary_requested_contribution_keys = tuple(
         getattr(
@@ -10231,7 +9850,6 @@ def do_update():
             primary_requested_source_mode,
             primary_source_signature,
         )
-
 
     def _simulation_signature_base(
         *,
@@ -10332,9 +9950,7 @@ def do_update():
     )
 
     _set_update_trace_stage("simulation_signature")
-    new_sim_image_sig = _simulation_signature_base(
-        optics_mode_component=int(optics_mode_flag)
-    )
+    new_sim_image_sig = _simulation_signature_base(optics_mode_component=int(optics_mode_flag))
     new_sim_sig = new_sim_image_sig + (int(collect_hit_tables_for_job),)
     _trace_update(
         "do_update_signature",
@@ -10360,9 +9976,7 @@ def do_update():
         )
         if str(ready_simulation_result.get("job_kind", "full")) == "primary_fill":
             _store_primary_cache_payload(
-                cache_signature=ready_simulation_result.get(
-                    "primary_contribution_cache_signature"
-                ),
+                cache_signature=ready_simulation_result.get("primary_contribution_cache_signature"),
                 source_mode=str(
                     ready_simulation_result.get(
                         "primary_source_mode",
@@ -10390,14 +10004,10 @@ def do_update():
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
             simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
-            simulation_runtime_state.primary_filter_signature = (
-                primary_requested_filter_signature
-            )
+            simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
         else:
             _apply_ready_simulation_result(ready_simulation_result)
-            simulation_runtime_state.primary_filter_signature = (
-                primary_requested_filter_signature
-            )
+            simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
         simulation_runtime_state.last_sim_signature = new_sim_image_sig
         simulation_runtime_state.last_simulation_signature = new_sim_sig
         _capture_geometry_source_snapshot()
@@ -10408,9 +10018,7 @@ def do_update():
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
 
-    image_signature_changed = bool(
-        new_sim_image_sig != simulation_runtime_state.last_sim_signature
-    )
+    image_signature_changed = bool(new_sim_image_sig != simulation_runtime_state.last_sim_signature)
     need_hit_table_refresh = bool(
         collect_hit_tables_for_job
         and new_sim_sig != simulation_runtime_state.last_simulation_signature
@@ -10425,13 +10033,9 @@ def do_update():
         primary_job_keys: Sequence[object] | None = None,
         run_secondary_job: bool | None = None,
     ) -> dict[str, object]:
-        selected_primary_data = (
-            primary_data if primary_job_data is None else primary_job_data
-        )
+        selected_primary_data = primary_data if primary_job_data is None else primary_job_data
         if isinstance(selected_primary_data, dict):
-            selected_primary_data = gui_controllers.copy_bragg_qr_dict(
-                selected_primary_data
-            )
+            selected_primary_data = gui_controllers.copy_bragg_qr_dict(selected_primary_data)
 
         selected_primary_intensities = (
             np.asarray(primary_intensities, dtype=np.float64).copy()
@@ -10439,9 +10043,7 @@ def do_update():
             else np.asarray(primary_job_intensities, dtype=np.float64).reshape(-1).copy()
         )
         selected_primary_keys = list(
-            primary_requested_contribution_keys
-            if primary_job_keys is None
-            else primary_job_keys
+            primary_requested_contribution_keys if primary_job_keys is None else primary_job_keys
         )
         run_primary_job = (
             len(selected_primary_data) > 0
@@ -10453,9 +10055,7 @@ def do_update():
             )
         )
         run_secondary_enabled = (
-            bool(secondary_available)
-            if run_secondary_job is None
-            else bool(run_secondary_job)
+            bool(secondary_available) if run_secondary_job is None else bool(run_secondary_job)
         )
         return {
             "job_kind": str(job_kind),
@@ -10495,9 +10095,7 @@ def do_update():
                 "solve_q_steps": int(mosaic_params["solve_q_steps"]),
                 "solve_q_rel_tol": float(mosaic_params["solve_q_rel_tol"]),
                 "solve_q_mode": int(mosaic_params["solve_q_mode"]),
-                "_sampling_signature": tuple(
-                    mosaic_params.get("_sampling_signature", ())
-                ),
+                "_sampling_signature": tuple(mosaic_params.get("_sampling_signature", ())),
             },
             "lambda_value": float(lambda_),
             "distance_m": float(corto_det_up),
@@ -10517,9 +10115,7 @@ def do_update():
             "debye_y": float(debye_y_updated),
             "optics_mode": int(optics_mode_flag),
             "collect_hit_tables": bool(collect_hit_tables_enabled),
-            "collect_primary_hit_tables": bool(
-                collect_hit_tables_enabled and run_primary_job
-            ),
+            "collect_primary_hit_tables": bool(collect_hit_tables_enabled and run_primary_job),
             "collect_secondary_hit_tables": bool(
                 collect_hit_tables_enabled and run_secondary_enabled
             ),
@@ -10528,9 +10124,7 @@ def do_update():
             "primary_contribution_cache_signature": primary_contribution_cache_signature,
             "primary_source_mode": primary_requested_source_mode,
             "primary_contribution_keys": list(selected_primary_keys),
-            "active_primary_contribution_keys": list(
-                primary_requested_contribution_keys
-            ),
+            "active_primary_contribution_keys": list(primary_requested_contribution_keys),
             "accumulate_image": bool(accumulate_image_requested),
             "qr_cylinder_replace_simulation": bool(qr_cylinder_replace_requested),
             "n2_value": n2,
@@ -10567,24 +10161,20 @@ def do_update():
                 ordered_structure_scale,
             )
         else:
-            subset_primary_intensities = (
-                subset_primary_intensities.copy() * float(ordered_structure_scale)
+            subset_primary_intensities = subset_primary_intensities.copy() * float(
+                ordered_structure_scale
             )
         return {
             "primary_data": subset_primary_data,
             "primary_intensities": subset_primary_intensities,
-            "primary_contribution_keys": list(
-                subset_payload.get("primary_contribution_keys", [])
-            ),
+            "primary_contribution_keys": list(subset_payload.get("primary_contribution_keys", [])),
         }
 
     if ready_simulation_result is None and image_signature_changed:
         _set_update_trace_stage("simulation_generation")
         _trace_update(
             "do_update_regenerate_simulation",
-            had_cached_primary=bool(
-                simulation_runtime_state.stored_primary_sim_image is not None
-            ),
+            had_cached_primary=bool(simulation_runtime_state.stored_primary_sim_image is not None),
             had_cached_secondary=bool(
                 simulation_runtime_state.stored_secondary_sim_image is not None
             ),
@@ -10612,9 +10202,7 @@ def do_update():
                 primary_contribution_cache_signature
             )
             simulation_runtime_state.primary_source_mode = primary_requested_source_mode
-            simulation_runtime_state.primary_filter_signature = (
-                primary_requested_filter_signature
-            )
+            simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
             simulation_runtime_state.primary_active_contribution_keys = list(
                 primary_requested_contribution_keys
             )
@@ -10630,12 +10218,8 @@ def do_update():
             simulation_runtime_state.last_simulation_signature = new_sim_sig
             _capture_geometry_source_snapshot()
             image_generation_cached = False
-            image_generation_elapsed_ms = (
-                perf_counter() - rematerialize_start_time
-            ) * 1e3
-            simulation_runtime_state.last_image_generation_ms = float(
-                image_generation_elapsed_ms
-            )
+            image_generation_elapsed_ms = (perf_counter() - rematerialize_start_time) * 1e3
+            simulation_runtime_state.last_image_generation_ms = float(image_generation_elapsed_ms)
             simulation_runtime_state.update_phase = "applying"
             _refresh_run_status_bar()
         elif incremental_sf_prune_action.mode == "fill":
@@ -10665,21 +10249,13 @@ def do_update():
                     and "progress_label" in globals()
                     and progress_label is not None
                 ):
-                    progress_label.config(
-                        text="Extending primary cache in background..."
-                    )
+                    progress_label.config(text="Extending primary cache in background...")
                 _trace_update(
                     "do_update_extend_primary_cache_in_background",
                     request_status=str(request_status),
-                    missing_key_count=int(
-                        len(incremental_sf_prune_action.missing_keys)
-                    ),
-                    worker_active=bool(
-                        simulation_runtime_state.worker_active_job is not None
-                    ),
-                    worker_queued=bool(
-                        simulation_runtime_state.worker_queued_job is not None
-                    ),
+                    missing_key_count=int(len(incremental_sf_prune_action.missing_keys)),
+                    worker_active=bool(simulation_runtime_state.worker_active_job is not None),
+                    worker_queued=bool(simulation_runtime_state.worker_queued_job is not None),
                 )
                 simulation_runtime_state.update_running = False
                 return
@@ -10707,21 +10283,15 @@ def do_update():
                         and "progress_label" in globals()
                         and progress_label is not None
                     ):
-                        progress_label.config(
-                            text="Computing preview simulation in background..."
-                        )
+                        progress_label.config(text="Computing preview simulation in background...")
                 else:
                     request_status = "preview_unavailable"
                 _trace_update(
                     "do_update_queue_live_preview",
                     request_status=str(request_status),
                     has_cached_simulation=bool(has_cached_simulation),
-                    worker_active=bool(
-                        simulation_runtime_state.worker_active_job is not None
-                    ),
-                    worker_queued=bool(
-                        simulation_runtime_state.worker_queued_job is not None
-                    ),
+                    worker_active=bool(simulation_runtime_state.worker_active_job is not None),
+                    worker_queued=bool(simulation_runtime_state.worker_queued_job is not None),
                 )
                 if not has_cached_simulation:
                     simulation_runtime_state.update_phase = "queued"
@@ -10766,12 +10336,8 @@ def do_update():
                     "do_update_return_waiting_for_simulation",
                     request_status=str(request_status),
                     has_cached_simulation=bool(has_cached_simulation),
-                    worker_active=bool(
-                        simulation_runtime_state.worker_active_job is not None
-                    ),
-                    worker_queued=bool(
-                        simulation_runtime_state.worker_queued_job is not None
-                    ),
+                    worker_active=bool(simulation_runtime_state.worker_active_job is not None),
+                    worker_queued=bool(simulation_runtime_state.worker_queued_job is not None),
                 )
                 if request_status != "ready":
                     simulation_runtime_state.update_running = False
@@ -10790,15 +10356,14 @@ def do_update():
         _trace_update(
             "do_update_refresh_hit_tables_in_background",
             request_status=str(request_status),
-            worker_active=bool(
-                simulation_runtime_state.worker_active_job is not None
-            ),
-            worker_queued=bool(
-                simulation_runtime_state.worker_queued_job is not None
-            ),
+            worker_active=bool(simulation_runtime_state.worker_active_job is not None),
+            worker_queued=bool(simulation_runtime_state.worker_queued_job is not None),
         )
 
-    if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
+    if (
+        simulation_runtime_state.stored_primary_sim_image is None
+        and simulation_runtime_state.stored_secondary_sim_image is None
+    ):
         _trace_update("do_update_return_no_simulation_image")
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
@@ -10807,8 +10372,12 @@ def do_update():
 
     w1 = float(weight1_var.get())
     w2 = float(weight2_var.get())
-    run_primary = bool(simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12)
-    run_secondary = bool(simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12)
+    run_primary = bool(
+        simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12
+    )
+    run_secondary = bool(
+        simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12
+    )
 
     img1 = (
         simulation_runtime_state.stored_primary_sim_image
@@ -10827,28 +10396,26 @@ def do_update():
     if run_primary and simulation_runtime_state.stored_primary_max_positions is not None:
         max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
         if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
-            peak_table_lattice_local.extend(simulation_runtime_state.stored_primary_peak_table_lattice)
+            peak_table_lattice_local.extend(
+                simulation_runtime_state.stored_primary_peak_table_lattice
+            )
     if run_secondary and simulation_runtime_state.stored_secondary_max_positions is not None:
         max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
         if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
-            peak_table_lattice_local.extend(simulation_runtime_state.stored_secondary_peak_table_lattice)
+            peak_table_lattice_local.extend(
+                simulation_runtime_state.stored_secondary_peak_table_lattice
+            )
 
     simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
     simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
     intersection_cache_local = []
-    if (
-        run_primary
-        and simulation_runtime_state.stored_primary_intersection_cache is not None
-    ):
+    if run_primary and simulation_runtime_state.stored_primary_intersection_cache is not None:
         intersection_cache_local.extend(
             _copy_intersection_cache_tables(
                 simulation_runtime_state.stored_primary_intersection_cache
             )
         )
-    if (
-        run_secondary
-        and simulation_runtime_state.stored_secondary_intersection_cache is not None
-    ):
+    if run_secondary and simulation_runtime_state.stored_secondary_intersection_cache is not None:
         intersection_cache_local.extend(
             _copy_intersection_cache_tables(
                 simulation_runtime_state.stored_secondary_intersection_cache
@@ -10859,15 +10426,11 @@ def do_update():
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
         peak_table_lattice_local = [
-            (float(a_updated), float(c_updated), "primary")
-            for _ in max_positions_local
+            (float(a_updated), float(c_updated), "primary") for _ in max_positions_local
         ]
 
-    if (
-        not need_hit_table_refresh
-        and gui_controllers.consume_geometry_q_group_refresh_request(
-            geometry_q_group_state
-        )
+    if not need_hit_table_refresh and gui_controllers.consume_geometry_q_group_refresh_request(
+        geometry_q_group_state
     ):
         listed_entries = (
             gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
@@ -10910,12 +10473,12 @@ def do_update():
             tuple(np.asarray(native_background).shape),
         )
         if simulation_runtime_state.normalization_scale_cache.get("sig") == normalization_sig:
-            normalization_scale = float(simulation_runtime_state.normalization_scale_cache.get("value", 1.0))
+            normalization_scale = float(
+                simulation_runtime_state.normalization_scale_cache.get("value", 1.0)
+            )
             normalization_cache_outcome = "reuse"
         else:
-            normalization_scale = _suggest_scale_factor(
-                display_image, native_background
-            )
+            normalization_scale = _suggest_scale_factor(display_image, native_background)
             simulation_runtime_state.normalization_scale_cache["sig"] = normalization_sig
             simulation_runtime_state.normalization_scale_cache["value"] = float(normalization_scale)
             normalization_cache_outcome = "update"
@@ -10925,11 +10488,7 @@ def do_update():
         "normalization_scale",
         normalization_cache_outcome,
         signature_summary=_live_cache_signature_summary(normalization_sig),
-        scale=(
-            float(normalization_scale)
-            if np.isfinite(float(normalization_scale))
-            else None
-        ),
+        scale=(float(normalization_scale) if np.isfinite(float(normalization_scale)) else None),
     )
 
     simulation_runtime_state.unscaled_image = None
@@ -10951,12 +10510,15 @@ def do_update():
         )
         if simulation_runtime_state.peak_intensities and normalization_scale != 1.0:
             simulation_runtime_state.peak_intensities[:] = [
-                intensity * normalization_scale for intensity in simulation_runtime_state.peak_intensities
+                intensity * normalization_scale
+                for intensity in simulation_runtime_state.peak_intensities
             ]
             for rec in simulation_runtime_state.peak_records:
                 rec["intensity"] = float(rec.get("intensity", 0.0)) * normalization_scale
 
-    simulation_runtime_state.last_1d_integration_data["simulated_2d_image"] = simulation_runtime_state.unscaled_image
+    simulation_runtime_state.last_1d_integration_data["simulated_2d_image"] = (
+        simulation_runtime_state.unscaled_image
+    )
 
     if simulation_runtime_state.unscaled_image is not None:
         if display_controls_state.scale_factor_user_override:
@@ -11036,25 +10598,18 @@ def do_update():
         and _analysis_integration_outputs_visible()
     )
     caked_analysis_requested = bool(
-        show_caked_2d
-        and simulation_runtime_state.unscaled_image is not None
+        show_caked_2d and simulation_runtime_state.unscaled_image is not None
     )
     analysis_requested = bool(
         simulation_runtime_state.unscaled_image is not None
-        and (
-            caked_analysis_requested
-            or one_d_analysis_requested
-        )
+        and (caked_analysis_requested or one_d_analysis_requested)
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
     desired_analysis_preview = bool(
         LIVE_DRAG_PREVIEW_ENABLED
         and PREVIEW_CALCULATIONS_ENABLED
         and analysis_requested
-        and (
-            simulation_runtime_state.preview_active
-            or _live_interaction_active()
-        )
+        and (simulation_runtime_state.preview_active or _live_interaction_active())
     )
     analysis_bins = (
         (LIVE_DRAG_ANALYSIS_RADIAL_BINS, LIVE_DRAG_ANALYSIS_AZIMUTH_BINS)
@@ -11079,9 +10634,8 @@ def do_update():
         )
         if ready_analysis_result is not None:
             _apply_ready_analysis_result(ready_analysis_result)
-            if (
-                one_d_analysis_requested
-                and not bool(ready_analysis_result.get("is_preview", False))
+            if one_d_analysis_requested and not bool(
+                ready_analysis_result.get("is_preview", False)
             ):
                 _refresh_integration_from_cached_results()
             simulation_runtime_state.update_phase = "applying"
@@ -11127,8 +10681,7 @@ def do_update():
         )
     analysis_result_matches_target = bool(
         analysis_result_current
-        and bool(simulation_runtime_state.analysis_preview_active)
-        == desired_analysis_preview
+        and bool(simulation_runtime_state.analysis_preview_active) == desired_analysis_preview
         and (
             not show_caked_2d
             or (
@@ -11180,16 +10733,11 @@ def do_update():
                 ).copy(),
                 "background_image": (
                     None
-                    if not (
-                        background_runtime_state.visible
-                        and native_background is not None
-                    )
+                    if not (background_runtime_state.visible and native_background is not None)
                     else np.asarray(native_background, dtype=np.float64).copy()
                 ),
                 "cached_bg_res2": (
-                    None
-                    if not isinstance(cached_bg_entry, dict)
-                    else cached_bg_entry.get("res2")
+                    None if not isinstance(cached_bg_entry, dict) else cached_bg_entry.get("res2")
                 ),
                 "cached_bg_caked": (
                     None
@@ -11217,11 +10765,7 @@ def do_update():
                 progress_label.config(text=_analysis_progress_text())
 
     sim_res2 = simulation_runtime_state.last_res2_sim if analysis_result_current else None
-    bg_res2 = (
-        simulation_runtime_state.last_res2_background
-        if analysis_result_current
-        else None
-    )
+    bg_res2 = simulation_runtime_state.last_res2_background if analysis_result_current else None
     previous_primary_view_mode = _current_primary_figure_mode()
     preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)
     defer_overlay_refresh = _defer_nonessential_redraw()
@@ -11230,9 +10774,7 @@ def do_update():
         and simulation_runtime_state.last_caked_image_unscaled is not None
         and simulation_runtime_state.last_caked_extent is not None
     )
-    showing_stale_caked_result = bool(
-        caked_display_available and not analysis_result_current
-    )
+    showing_stale_caked_result = bool(caked_display_available and not analysis_result_current)
 
     if caked_display_available:
         caked_img = np.asarray(
@@ -11254,9 +10796,7 @@ def do_update():
         auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
 
         if not display_controls_state.simulation_limits_user_override:
-            _update_simulation_sliders_from_image(
-                scaled_caked_for_limits, reset_override=True
-            )
+            _update_simulation_sliders_from_image(scaled_caked_for_limits, reset_override=True)
 
         if not simulation_runtime_state.caked_limits_user_override:
             vmin_caked_var.set(auto_vmin)
@@ -11291,7 +10831,10 @@ def do_update():
         )
 
         background_caked_available = False
-        if background_runtime_state.visible and simulation_runtime_state.last_caked_background_image_unscaled is not None:
+        if (
+            background_runtime_state.visible
+            and simulation_runtime_state.last_caked_background_image_unscaled is not None
+        ):
             bg_caked = np.asarray(
                 simulation_runtime_state.last_caked_background_image_unscaled,
                 dtype=float,
@@ -11325,15 +10868,11 @@ def do_update():
         if not background_caked_available:
             background_display.set_visible(False)
         if not (
-            math.isfinite(radial_min)
-            and math.isfinite(radial_max)
-            and radial_max > radial_min
+            math.isfinite(radial_min) and math.isfinite(radial_max) and radial_max > radial_min
         ):
             radial_min, radial_max = 0.0, 90.0
         if not (
-            math.isfinite(azimuth_min)
-            and math.isfinite(azimuth_max)
-            and azimuth_max > azimuth_min
+            math.isfinite(azimuth_min) and math.isfinite(azimuth_max) and azimuth_max > azimuth_min
         ):
             azimuth_min, azimuth_max = -180.0, 180.0
 
@@ -11345,8 +10884,8 @@ def do_update():
             preserve=(previous_primary_view_mode == "caked"),
         )
         ax.set_aspect("auto")
-        ax.set_xlabel('2θ (degrees)')
-        ax.set_ylabel('φ (degrees)')
+        ax.set_xlabel("2θ (degrees)")
+        ax.set_ylabel("φ (degrees)")
         ax.set_title("")
         _sync_primary_raster_geometry(show_caked_image=True)
     else:
@@ -11364,10 +10903,13 @@ def do_update():
             preserve=(previous_primary_view_mode == "detector"),
         )
         ax.set_aspect("auto")
-        ax.set_xlabel('X (pixels)')
-        ax.set_ylabel('Y (pixels)')
+        ax.set_xlabel("X (pixels)")
+        ax.set_ylabel("Y (pixels)")
         ax.set_title("")
-        if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
+        if (
+            background_runtime_state.visible
+            and background_runtime_state.current_background_display is not None
+        ):
             _store_primary_raster_source(
                 background_display,
                 background_runtime_state.current_background_display,
@@ -11382,13 +10924,9 @@ def do_update():
         _sync_primary_raster_geometry(show_caked_image=False)
 
     gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
-        
+
     # 1D integration
-    if (
-        one_d_analysis_requested
-        and sim_res2 is not None
-        and not defer_overlay_refresh
-    ):
+    if one_d_analysis_requested and sim_res2 is not None and not defer_overlay_refresh:
         _update_1d_plots_from_caked(sim_res2, bg_res2)
     elif not defer_overlay_refresh:
         _clear_1d_plot_cache_and_lines()
@@ -11476,6 +11014,7 @@ def do_update():
             progress_label.config(text="Simulation ready.")
     _refresh_run_status_bar()
 
+
 background_theta_workflow = gui_runtime_background.build_runtime_background_theta_workflow(
     bootstrap_module=gui_bootstrap,
     background_theta_module=gui_background_theta,
@@ -11488,16 +11027,12 @@ background_theta_workflow = gui_runtime_background.build_runtime_background_thet
     theta_initial=theta_initial,
     background_theta_list_var_factory=lambda: background_theta_list_var,
     geometry_theta_offset_var_factory=lambda: geometry_theta_offset_var,
-    geometry_fit_background_selection_var_factory=(
-        lambda: geometry_fit_background_selection_var
-    ),
+    geometry_fit_background_selection_var_factory=(lambda: geometry_fit_background_selection_var),
     fit_theta_checkbutton_factory=lambda: fit_theta_checkbutton,
     theta_controls_factory=lambda: geometry_fit_constraints_view_state.controls,
     set_background_file_status_text_factory=lambda: _refresh_background_status,
     schedule_update_factory=lambda: (
-        globals().get("schedule_update")
-        if callable(globals().get("schedule_update"))
-        else None
+        globals().get("schedule_update") if callable(globals().get("schedule_update")) else None
     ),
     progress_label_factory=lambda: globals().get("progress_label"),
     progress_label_geometry_factory=lambda: globals().get("progress_label_geometry"),
@@ -11511,14 +11046,10 @@ _geometry_fit_uses_shared_theta_offset = (
     background_theta_workflow.geometry_fit_uses_shared_theta_offset
 )
 _current_geometry_theta_offset = background_theta_workflow.current_geometry_theta_offset
-_current_background_theta_values = (
-    background_theta_workflow.current_background_theta_values
-)
+_current_background_theta_values = background_theta_workflow.current_background_theta_values
 _background_theta_for_index = background_theta_workflow.background_theta_for_index
 _sync_background_theta_controls = background_theta_workflow.sync_background_theta_controls
-_apply_background_theta_metadata_base = (
-    background_theta_workflow.apply_background_theta_metadata
-)
+_apply_background_theta_metadata_base = background_theta_workflow.apply_background_theta_metadata
 _apply_geometry_fit_background_selection = (
     background_theta_workflow.apply_geometry_fit_background_selection
 )
@@ -11603,6 +11134,24 @@ def _current_effective_theta_initial(*, strict_count: bool = False) -> float:
             strict_count=strict_count,
         )
 
+
+def _sync_theta_initial_to_background(index: int) -> None:
+    """Best-effort bridge for background changes before slider vars exist."""
+
+    theta_var = globals().get("theta_initial_var")
+    if theta_var is None:
+        return
+    try:
+        theta_var.set(
+            _background_theta_base_for_index(
+                index,
+                strict_count=False,
+            )
+        )
+    except Exception:
+        return
+
+
 background_workflow = gui_runtime_background.build_runtime_background_workflow(
     bootstrap_module=gui_bootstrap,
     background_manager_module=gui_background_manager,
@@ -11613,12 +11162,8 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     image_size=image_size,
     display_rotate_k=DISPLAY_ROTATE_K,
     read_osc=read_osc,
-    current_background_theta_values=(
-        lambda: _current_background_theta_values(strict_count=False)
-    ),
-    background_theta_for_index=(
-        lambda idx: _background_theta_for_index(idx, strict_count=False)
-    ),
+    current_background_theta_values=(lambda: _current_background_theta_values(strict_count=False)),
+    background_theta_for_index=(lambda idx: _background_theta_for_index(idx, strict_count=False)),
     geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
     geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
     geometry_manual_pair_group_count=_geometry_manual_pair_group_count,
@@ -11651,18 +11196,7 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
         )
     ),
     clear_geometry_pick_artists=_clear_geometry_pick_artists,
-    sync_theta_initial_to_background=(
-        (
-            lambda idx: theta_initial_var.set(
-                _background_theta_base_for_index(
-                    idx,
-                    strict_count=False,
-                )
-            )
-        )
-        if "theta_initial_var" in globals() and theta_initial_var is not None
-        else None
-    ),
+    sync_theta_initial_to_background=_sync_theta_initial_to_background,
     render_current_geometry_manual_pairs=(
         lambda: _render_current_geometry_manual_pairs(update_status=False)
     ),
@@ -11674,13 +11208,9 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     mark_chi_square_dirty=_mark_chi_square_dirty,
     refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
     schedule_update_factory=lambda: schedule_update,
-    preempt_simulation_update_factory=(
-        lambda: _preempt_simulation_update_for_background_switch
-    ),
+    preempt_simulation_update_factory=(lambda: _preempt_simulation_update_for_background_switch),
     set_status_text_factory=lambda: (
-        (lambda text: progress_label.config(text=text))
-        if "progress_label" in globals()
-        else None
+        (lambda text: progress_label.config(text=text)) if "progress_label" in globals() else None
     ),
     file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
     askopenfilenames=filedialog.askopenfilenames,
@@ -11692,31 +11222,34 @@ background_controls_runtime = background_workflow.controls_runtime
 toggle_background = background_workflow.toggle_visibility
 switch_background = background_workflow.switch_background
 
+
 def reset_to_defaults():
     _clear_geometry_fit_undo_stack()
-    theta_initial_var.set(defaults['theta_initial'])
+    theta_initial_var.set(defaults["theta_initial"])
     if geometry_theta_offset_var is not None:
         geometry_theta_offset_var.set("0.0")
-    cor_angle_var.set(defaults['cor_angle'])
-    gamma_var.set(defaults['gamma'])
-    Gamma_var.set(defaults['Gamma'])
-    chi_var.set(defaults['chi'])
-    psi_z_var.set(defaults['psi_z'])
-    zs_var.set(defaults['zs'])
-    zb_var.set(defaults['zb'])
-    sample_width_var.set(defaults['sample_width_m'])
-    sample_length_var.set(defaults['sample_length_m'])
-    sample_depth_var.set(defaults['sample_depth_m'])
-    debye_x_var.set(defaults['debye_x'])
-    debye_y_var.set(defaults['debye_y'])
-    ordered_structure_scale_var.set(float(defaults.get('ordered_structure_scale', 1.0)))
-    corto_detector_var.set(defaults['corto_detector'])
-    sigma_mosaic_var.set(defaults['sigma_mosaic_deg'])
-    gamma_mosaic_var.set(defaults['gamma_mosaic_deg'])
-    eta_var.set(defaults['eta'])
-    bandwidth_percent_var.set(_clip_bandwidth_percent(defaults.get('bandwidth_percent', bandwidth * 100.0)))
-    a_var.set(defaults['a'])
-    c_var.set(defaults['c'])
+    cor_angle_var.set(defaults["cor_angle"])
+    gamma_var.set(defaults["gamma"])
+    Gamma_var.set(defaults["Gamma"])
+    chi_var.set(defaults["chi"])
+    psi_z_var.set(defaults["psi_z"])
+    zs_var.set(defaults["zs"])
+    zb_var.set(defaults["zb"])
+    sample_width_var.set(defaults["sample_width_m"])
+    sample_length_var.set(defaults["sample_length_m"])
+    sample_depth_var.set(defaults["sample_depth_m"])
+    debye_x_var.set(defaults["debye_x"])
+    debye_y_var.set(defaults["debye_y"])
+    ordered_structure_scale_var.set(float(defaults.get("ordered_structure_scale", 1.0)))
+    corto_detector_var.set(defaults["corto_detector"])
+    sigma_mosaic_var.set(defaults["sigma_mosaic_deg"])
+    gamma_mosaic_var.set(defaults["gamma_mosaic_deg"])
+    eta_var.set(defaults["eta"])
+    bandwidth_percent_var.set(
+        _clip_bandwidth_percent(defaults.get("bandwidth_percent", bandwidth * 100.0))
+    )
+    a_var.set(defaults["a"])
+    c_var.set(defaults["c"])
     default_sample_count = gui_controllers.normalize_sample_count(
         defaults.get("sampling_count", DEFAULT_RANDOM_SAMPLE_COUNT),
         DEFAULT_RANDOM_SAMPLE_COUNT,
@@ -11746,13 +11279,13 @@ def reset_to_defaults():
         uniform_flag=SOLVE_Q_MODE_UNIFORM,
         adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
     )
-    optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
+    optics_mode_var.set(_normalize_optics_mode_label(defaults.get("optics_mode", "fast")))
     gui_structure_factor_pruning.apply_runtime_structure_factor_pruning_defaults(
         structure_factor_pruning_controls_view_state,
         pruning_defaults,
     )
-    center_x_var.set(defaults['center_x'])
-    center_y_var.set(defaults['center_y'])
+    center_x_var.set(defaults["center_x"])
+    center_y_var.set(defaults["center_y"])
     _sync_background_theta_controls(preserve_existing=False, trigger_update=False)
     if geometry_fit_background_selection_var is not None:
         geometry_fit_background_selection_var.set(_default_geometry_fit_background_selection())
@@ -11771,7 +11304,9 @@ def reset_to_defaults():
     display_controls_state.simulation_limits_user_override = False
     display_controls_state.scale_factor_user_override = False
 
-    _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
+    _update_background_slider_defaults(
+        background_runtime_state.current_background_display, reset_override=True
+    )
 
     display_controls_state.suppress_simulation_limit_callback = True
     display_controls_view_state.simulation_min_var.set(0.0)
@@ -11795,16 +11330,16 @@ def reset_to_defaults():
         axis_vars["y"].set(float(row["y"]))
         axis_vars["z"].set(float(row["z"]))
     _reset_atom_site_override_cache()
-    p0_var.set(defaults['p0'])
-    p1_var.set(defaults['p1'])
-    p2_var.set(defaults['p2'])
-    w0_var.set(defaults['w0'])
-    w1_var.set(defaults['w1'])
-    w2_var.set(defaults['w2'])
-    finite_stack_var.set(defaults['finite_stack'])
-    stack_layers_var.set(int(defaults['stack_layers']))
-    phase_delta_expr_var.set(str(defaults['phase_delta_expression']))
-    phi_l_divisor_var.set(float(defaults['phi_l_divisor']))
+    p0_var.set(defaults["p0"])
+    p1_var.set(defaults["p1"])
+    p2_var.set(defaults["p2"])
+    w0_var.set(defaults["w0"])
+    w1_var.set(defaults["w1"])
+    w2_var.set(defaults["w2"])
+    finite_stack_var.set(defaults["finite_stack"])
+    stack_layers_var.set(int(defaults["stack_layers"]))
+    phase_delta_expr_var.set(str(defaults["phase_delta_expression"]))
+    phi_l_divisor_var.set(float(defaults["phi_l_divisor"]))
     ordered_structure_fit_debye_x_var.set(True)
     ordered_structure_fit_debye_y_var.set(True)
     ordered_structure_coord_window_var.set(float(ordered_structure_coord_window_default))
@@ -11827,6 +11362,7 @@ def reset_to_defaults():
     update_mosaic_cache()
     _invalidate_simulation_cache()
     schedule_update()
+
 
 background_controls_runtime.create_workspace_controls()
 
@@ -11926,7 +11462,9 @@ def _refresh_geometry_fit_background_table(*, force_rebuild: bool = False) -> No
     rows = _build_geometry_fit_background_table_rows()
     if background_theta_controls_view_state.geometry_fit_background_rows_frame is None:
         return
-    if force_rebuild or len(background_theta_controls_view_state.geometry_fit_background_row_frames) != len(rows):
+    if force_rebuild or len(
+        background_theta_controls_view_state.geometry_fit_background_row_frames
+    ) != len(rows):
         gui_views.populate_geometry_fit_background_table(
             view_state=background_theta_controls_view_state,
             row_count=len(rows),
@@ -12005,11 +11543,7 @@ gui_views.create_geometry_fit_background_controls(
         trigger_update=True,
     ),
     on_select_all=lambda: _set_geometry_fit_background_selection_text(
-        (
-            "all"
-            if len(background_runtime_state.osc_files) > 1
-            else "current"
-        ),
+        ("all" if len(background_runtime_state.osc_files) > 1 else "current"),
         trigger_update=True,
     ),
     use_labelframe=False,
@@ -12040,9 +11574,7 @@ gui_views.populate_stacked_button_group(
             "Azim vs Radial Plot Demo",
             lambda: view_azimuthal_radial(
                 simulate_diffraction(
-                    theta_initial=_current_effective_theta_initial(
-                        strict_count=False
-                    ),
+                    theta_initial=_current_effective_theta_initial(strict_count=False),
                     cor_angle=cor_angle_var.get(),
                     gamma=gamma_var.get(),
                     Gamma=Gamma_var.get(),
@@ -12082,15 +11614,15 @@ gui_views.populate_stacked_button_group(
                 ),
                 [center_x_var.get(), center_y_var.get()],
                 {
-                    'pixel_size': pixel_size_m,
-                    'poni1': (center_x_var.get()) * pixel_size_m,
-                    'poni2': (center_y_var.get()) * pixel_size_m,
-                    'dist': corto_detector_var.get(),
-                    'rot1': 0.0,
-                    'rot2': 0.0,
-                    'rot3': 0.0,
-                    'wavelength': wave_m
-                }
+                    "pixel_size": pixel_size_m,
+                    "poni1": (center_x_var.get()) * pixel_size_m,
+                    "poni2": (center_y_var.get()) * pixel_size_m,
+                    "dist": corto_detector_var.get(),
+                    "rot1": 0.0,
+                    "rot2": 0.0,
+                    "rot3": 0.0,
+                    "wavelength": wave_m,
+                },
             ),
         ),
     ],
@@ -12124,8 +11656,7 @@ if (
 progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
 
 hbn_geometry_debug_view_state.report_text = (
-    "No hBN geometry debug report yet.\n"
-    "Import an hBN bundle to generate one."
+    "No hBN geometry debug report yet.\nImport an hBN bundle to generate one."
 )
 
 
@@ -12190,9 +11721,7 @@ def import_hbn_tilt_from_bundle():
                 tilt_y_deg = ty
         except (TypeError, ValueError):
             pass
-        source_rotate_k = int(
-            tilt_correction.get("sim_background_rotate_k", source_rotate_k)
-        )
+        source_rotate_k = int(tilt_correction.get("sim_background_rotate_k", source_rotate_k))
         gamma_sign_from_tilt_x = _normalize_sign(
             tilt_correction.get("simulation_gamma_sign_from_tilt_x", gamma_sign_from_tilt_x),
             gamma_sign_from_tilt_x,
@@ -12287,9 +11816,7 @@ def import_hbn_tilt_from_bundle():
                 _ensure_slider_includes(center_y_scale, center_col, pad=5.0)
                 center_x_var.set(center_row)
                 center_y_var.set(center_col)
-                center_text = (
-                    f" and center (row={center_row:.2f}, col={center_col:.2f}) px"
-                )
+                center_text = f" and center (row={center_row:.2f}, col={center_col:.2f}) px"
         except Exception:
             pass
     applied_center_row = None
@@ -12408,9 +11935,7 @@ def _restore_gui_state_peak_record(
             if not isinstance(entry, (list, tuple)) or len(entry) < 3:
                 continue
             try:
-                normalized_deg_hkls.append(
-                    (int(entry[0]), int(entry[1]), int(entry[2]))
-                )
+                normalized_deg_hkls.append((int(entry[0]), int(entry[1]), int(entry[2])))
             except Exception:
                 continue
         record["degenerate_hkls"] = normalized_deg_hkls
@@ -12505,12 +12030,8 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         background_backend_rotation_k=background_runtime_state.backend_rotation_k,
         background_backend_flip_x=background_runtime_state.backend_flip_x,
         background_backend_flip_y=background_runtime_state.backend_flip_y,
-        background_limits_user_override=(
-            display_controls_state.background_limits_user_override
-        ),
-        simulation_limits_user_override=(
-            display_controls_state.simulation_limits_user_override
-        ),
+        background_limits_user_override=(display_controls_state.background_limits_user_override),
+        simulation_limits_user_override=(display_controls_state.simulation_limits_user_override),
         scale_factor_user_override=display_controls_state.scale_factor_user_override,
     )
 
@@ -12536,18 +12057,14 @@ def _load_background_files_for_import_state(
         background_runtime_state,
         updated_state,
         sync_background_runtime_state=_sync_background_runtime_state,
-        replace_geometry_manual_pairs_by_background=(
-            _replace_geometry_manual_pairs_by_background
-        ),
+        replace_geometry_manual_pairs_by_background=(_replace_geometry_manual_pairs_by_background),
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         clear_geometry_manual_undo_stack=_clear_geometry_manual_undo_stack,
         clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
         set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
         set_background_display_data=background_display.set_data,
         update_background_slider_defaults=_update_background_slider_defaults,
-        sync_background_theta_controls=(
-            background_theta_workflow.sync_background_theta_controls
-        ),
+        sync_background_theta_controls=(background_theta_workflow.sync_background_theta_controls),
         sync_geometry_fit_background_selection=(
             background_theta_workflow.sync_geometry_fit_background_selection
         ),
@@ -12611,9 +12128,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             "simulation_limits_user_override": (
                 display_controls_state.simulation_limits_user_override
             ),
-            "scale_factor_user_override": (
-                display_controls_state.scale_factor_user_override
-            ),
+            "scale_factor_user_override": (display_controls_state.scale_factor_user_override),
         },
         toggle_background=toggle_background,
     )
@@ -12779,9 +12294,7 @@ def _import_full_gui_state() -> None:
         if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
             gui_views.set_finite_stack_phi_l_divisor_entry_text(
                 finite_stack_controls_view_state,
-                gui_controllers.format_finite_stack_phi_l_divisor(
-                    _current_phi_l_divisor()
-                ),
+                gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
             )
         _sync_finite_controls()
         _apply_rod_points_per_gz(trigger_update=False)
@@ -12844,9 +12357,7 @@ session_button_specs = [
     ("Import hBN Bundle Tilt", import_hbn_tilt_from_bundle),
 ]
 if HBN_GEOMETRY_DEBUG_ENABLED:
-    session_button_specs.append(
-        ("Show hBN Geometry Debug", show_last_hbn_geometry_debug)
-    )
+    session_button_specs.append(("Show hBN Geometry Debug", show_last_hbn_geometry_debug))
 gui_views.populate_stacked_button_group(
     workspace_panels_view_state.workspace_session_frame,
     session_button_specs,
@@ -12917,6 +12428,7 @@ def _sync_geometry_fit_constraint_rows(*_args) -> None:
         elif not enabled and mapped:
             row.pack_forget()
             control["_mapped"] = False
+
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_controls_runtime.create_backend_debug_controls(
@@ -13186,15 +12698,9 @@ def _auto_match_background_peaks_with_relaxation(
                 "max_candidate_peaks": float(attempt_cfg.get("max_candidate_peaks", np.nan)),
                 "ambiguity_margin_px": float(attempt_cfg.get("ambiguity_margin_px", np.nan)),
                 "ambiguity_ratio_min": float(attempt_cfg.get("ambiguity_ratio_min", np.nan)),
-                "qualified_summit_count": float(
-                    stats_i.get("qualified_summit_count", np.nan)
-                ),
-                "claimed_summit_count": float(
-                    stats_i.get("claimed_summit_count", np.nan)
-                ),
-                "matched_pre_clip_count": float(
-                    stats_i.get("matched_pre_clip_count", np.nan)
-                ),
+                "qualified_summit_count": float(stats_i.get("qualified_summit_count", np.nan)),
+                "claimed_summit_count": float(stats_i.get("claimed_summit_count", np.nan)),
+                "matched_pre_clip_count": float(stats_i.get("matched_pre_clip_count", np.nan)),
                 "clipped_count": float(stats_i.get("clipped_count", np.nan)),
             }
         )
@@ -13262,18 +12768,12 @@ def _auto_match_background_peaks_with_relaxation(
             )
         )
         if relax_ownership_guards:
-            relax_cfg["ambiguity_margin_px"] = float(
-                max(0.0, base_ambiguity_margin - 0.5 * step)
-            )
-            relax_cfg["ambiguity_ratio_min"] = float(
-                max(1.0, base_ambiguity_ratio - 0.05 * step)
-            )
+            relax_cfg["ambiguity_margin_px"] = float(max(0.0, base_ambiguity_margin - 0.5 * step))
+            relax_cfg["ambiguity_ratio_min"] = float(max(1.0, base_ambiguity_ratio - 0.05 * step))
         else:
             relax_cfg["ambiguity_margin_px"] = float(base_ambiguity_margin)
             relax_cfg["ambiguity_ratio_min"] = float(base_ambiguity_ratio)
-        relax_cfg["distance_sigma_clip"] = float(
-            max(base_distance_sigma_clip, 3.5 + 0.5 * step)
-        )
+        relax_cfg["distance_sigma_clip"] = float(max(base_distance_sigma_clip, 3.5 + 0.5 * step))
 
         matches_i, stats_i = _run_attempt(relax_cfg, f"relax_{step}")
         best_is_improved = len(matches_i) > len(best_matches)
@@ -13383,6 +12883,7 @@ def _build_geometry_fit_runtime_config(
         candidate_param_names=candidate_param_names,
     )
 
+
 def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     """Recompute and redraw the live auto-match overlay from the current state."""
 
@@ -13401,9 +12902,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
         return False
 
     preview_auto_match_cfg = (
-        gui_geometry_q_group_manager.build_live_geometry_preview_auto_match_config(
-            fit_config
-        )
+        gui_geometry_q_group_manager.build_live_geometry_preview_auto_match_config(fit_config)
     )
 
     var_names = _current_geometry_fit_var_names()
@@ -13434,9 +12933,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     )
     if not preview_seed_state:
         return False
-    simulated_peaks, excluded_q_peaks, q_group_total, collapsed_deg_preview = (
-        preview_seed_state
-    )
+    simulated_peaks, excluded_q_peaks, q_group_total, collapsed_deg_preview = preview_seed_state
 
     matched_pairs, match_stats, _effective_auto_match_cfg, auto_match_attempts = (
         _auto_match_background_peaks_with_relaxation(
@@ -13468,12 +12965,8 @@ geometry_q_group_runtime_value_callbacks = (
         q_group_state=geometry_q_group_state,
         fit_config=fit_config,
         current_geometry_fit_var_names_factory=lambda: _current_geometry_fit_var_names(),
-        primary_a_factory=lambda: (
-            float(a_var.get()) if "a_var" in globals() else float(av)
-        ),
-        primary_c_factory=lambda: (
-            float(c_var.get()) if "c_var" in globals() else float(cv)
-        ),
+        primary_a_factory=lambda: float(a_var.get()) if "a_var" in globals() else float(av),
+        primary_c_factory=lambda: float(c_var.get()) if "c_var" in globals() else float(cv),
         image_size_factory=lambda: int(image_size),
         native_sim_to_display_coords=_native_sim_to_display_coords,
     )
@@ -13487,15 +12980,11 @@ _filter_geometry_fit_simulated_peaks = (
 _collapse_geometry_fit_simulated_peaks = (
     geometry_q_group_runtime_value_callbacks.collapse_simulated_peaks
 )
-_build_geometry_q_group_entries = (
-    geometry_q_group_runtime_value_callbacks.build_entries_snapshot
-)
+_build_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.build_entries_snapshot
 _clone_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.clone_entries
 _listed_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.listed_entries
 _listed_geometry_q_group_keys = geometry_q_group_runtime_value_callbacks.listed_keys
-_geometry_q_group_key_from_jsonable = (
-    geometry_q_group_runtime_value_callbacks.key_from_jsonable
-)
+_geometry_q_group_key_from_jsonable = geometry_q_group_runtime_value_callbacks.key_from_jsonable
 _geometry_q_group_export_rows = geometry_q_group_runtime_value_callbacks.export_rows
 _format_geometry_q_group_line = geometry_q_group_runtime_value_callbacks.format_line
 _current_geometry_auto_match_min_matches = (
@@ -13510,9 +12999,7 @@ _live_preview_match_hkl = geometry_q_group_runtime_value_callbacks.live_preview_
 _live_preview_match_is_excluded = (
     geometry_q_group_runtime_value_callbacks.live_preview_match_is_excluded
 )
-_filter_live_preview_matches = (
-    geometry_q_group_runtime_value_callbacks.filter_live_preview_matches
-)
+_filter_live_preview_matches = geometry_q_group_runtime_value_callbacks.filter_live_preview_matches
 _apply_live_preview_match_exclusions = (
     geometry_q_group_runtime_value_callbacks.apply_live_preview_match_exclusions
 )
@@ -13582,9 +13069,7 @@ def _geometry_source_snapshot_signature_from_params(
         round(_geometry_source_signature_numeric(_param_value("a")), 6),
         round(_geometry_source_signature_numeric(_param_value("c")), 6),
         round(
-            _geometry_source_signature_numeric(
-                _param_value("theta_initial", "theta_init")
-            ),
+            _geometry_source_signature_numeric(_param_value("theta_initial", "theta_init")),
             6,
         ),
         round(_geometry_source_signature_numeric(_param_value("cor", "cor_angle")), 6),
@@ -13667,16 +13152,8 @@ def _geometry_source_snapshot_signature_for_background(
     )
     primary_a = _geometry_source_signature_numeric(params.get("a"))
     primary_c = _geometry_source_signature_numeric(params.get("c"))
-    secondary_a = (
-        float(av2)
-        if av2 is not None
-        else primary_a
-    )
-    secondary_c = (
-        float(cv2)
-        if cv2 is not None
-        else primary_c
-    )
+    secondary_a = float(av2) if av2 is not None else primary_a
+    secondary_c = float(cv2) if cv2 is not None else primary_c
     requested_hit_table_sig = _geometry_source_snapshot_signature_from_params(
         params,
         mosaic_params=mosaic_params,
@@ -13699,9 +13176,8 @@ def _geometry_source_snapshot_signature_for_background(
     hit_tables_match_request = (
         requested_hit_table_sig == simulation_runtime_state.stored_hit_table_signature
     )
-    collect_hit_tables_for_job = (
-        bool(collect_hit_tables_requested)
-        or not bool(hit_tables_match_request)
+    collect_hit_tables_for_job = bool(collect_hit_tables_requested) or not bool(
+        hit_tables_match_request
     )
     image_signature = _geometry_source_snapshot_signature_from_params(
         params,
@@ -13754,10 +13230,7 @@ def _capture_geometry_source_snapshot() -> None:
         if np.isfinite(display_col) and np.isfinite(display_row):
             created_from = "peak_records"
             break
-    if (
-        created_from == "none"
-        and simulation_runtime_state.stored_max_positions_local is not None
-    ):
+    if created_from == "none" and simulation_runtime_state.stored_max_positions_local is not None:
         created_from = "stored_max_positions_local"
     snapshot_payload = {
         "background_index": int(background_index),
@@ -13886,8 +13359,7 @@ def _geometry_manual_build_source_rows_from_hit_tables(
         primary_c = float("nan")
 
     peak_table_lattice = [
-        (float(primary_a), float(primary_c), "primary")
-        for _ in copied_hit_tables
+        (float(primary_a), float(primary_c), "primary") for _ in copied_hit_tables
     ]
     raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         copied_hit_tables,
@@ -13900,11 +13372,7 @@ def _geometry_manual_build_source_rows_from_hit_tables(
         round_pixel_centers=False,
         allow_nominal_hkl_indices=bool(allow_nominal_hkl_indices),
     )
-    raw_rows = [
-        dict(entry)
-        for entry in (raw_rows or ())
-        if isinstance(entry, Mapping)
-    ]
+    raw_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
     return raw_rows, peak_table_lattice, copied_hit_tables
 
 
@@ -13918,12 +13386,8 @@ def _geometry_manual_logged_cache_matches_params(
     comparisons: list[tuple[object, float, float]] = []
     comparisons.append((metadata.get("av"), params_local.get("a"), 1.0e-6))
     comparisons.append((metadata.get("cv"), params_local.get("c"), 1.0e-6))
-    comparisons.append(
-        (metadata.get("wavelength_center"), params_local.get("lambda"), 1.0e-6)
-    )
-    comparisons.append(
-        (metadata.get("theta_center"), params_local.get("theta_initial"), 1.0e-6)
-    )
+    comparisons.append((metadata.get("wavelength_center"), params_local.get("lambda"), 1.0e-6))
+    comparisons.append((metadata.get("theta_center"), params_local.get("theta_initial"), 1.0e-6))
 
     matched_checks = 0
     for logged_value, requested_value, tol in comparisons:
@@ -13969,25 +13433,15 @@ def _commit_geometry_manual_source_row_rebuild_result(
 
     background_idx = int(rebuild_result.background_index)
     stored_rows = [
-        dict(entry)
-        for entry in (rebuild_result.stored_rows or ())
-        if isinstance(entry, Mapping)
+        dict(entry) for entry in (rebuild_result.stored_rows or ()) if isinstance(entry, Mapping)
     ]
     projected_rows = [
-        dict(entry)
-        for entry in (rebuild_result.projected_rows or ())
-        if isinstance(entry, Mapping)
+        dict(entry) for entry in (rebuild_result.projected_rows or ()) if isinstance(entry, Mapping)
     ]
     diagnostics = (
-        dict(rebuild_result.diagnostics)
-        if isinstance(rebuild_result.diagnostics, Mapping)
-        else {}
+        dict(rebuild_result.diagnostics) if isinstance(rebuild_result.diagnostics, Mapping) else {}
     )
-    lookup_context = str(
-        diagnostics.get("consumer")
-        or consumer
-        or "unspecified"
-    )
+    lookup_context = str(diagnostics.get("consumer") or consumer or "unspecified")
 
     if stored_rows:
         hit_tables_local = rebuild_result.hit_tables
@@ -13996,9 +13450,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
                 max_positions_local = hit_tables_to_max_positions(hit_tables_local)
             except Exception:
                 max_positions_local = np.empty((0, 6), dtype=np.float64)
-            simulation_runtime_state.stored_max_positions_local = list(
-                max_positions_local
-            )
+            simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
         if rebuild_result.peak_table_lattice is not None:
             simulation_runtime_state.stored_peak_table_lattice = list(
                 rebuild_result.peak_table_lattice
@@ -14008,12 +13460,10 @@ def _commit_geometry_manual_source_row_rebuild_result(
             dtype=np.float64,
         )
         if rebuild_result.intersection_cache is not None:
-            simulation_runtime_state.stored_intersection_cache = (
-                _copy_intersection_cache_tables(rebuild_result.intersection_cache)
+            simulation_runtime_state.stored_intersection_cache = _copy_intersection_cache_tables(
+                rebuild_result.intersection_cache
             )
-        simulation_runtime_state.last_simulation_signature = (
-            rebuild_result.requested_signature
-        )
+        simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature
         _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
 
         snapshot_payload = {
@@ -14024,9 +13474,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
             "created_from": str(rebuild_result.rebuild_source or "unknown"),
         }
         if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
-            simulation_runtime_state.source_row_snapshots[int(background_idx)] = (
-                snapshot_payload
-            )
+            simulation_runtime_state.source_row_snapshots[int(background_idx)] = snapshot_payload
 
         if diagnostics:
             _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
@@ -14037,9 +13485,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
             outcome="success",
             consumer=lookup_context,
             status=str(diagnostics.get("status", "snapshot_hit")),
-            requested_signature_summary=diagnostics.get(
-                "requested_signature_summary"
-            ),
+            requested_signature_summary=diagnostics.get("requested_signature_summary"),
             raw_peak_count=int(len(stored_rows)),
             projected_peak_count=int(len(projected_rows)),
             rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
@@ -14078,8 +13524,8 @@ def _geometry_manual_rebuild_source_rows_for_background(
         params_local,
     )
     requested_signature_summary = _live_cache_signature_summary(requested_signature)
-    can_use_live_runtime_cache = (
-        background_idx == int(background_runtime_state.current_background_index)
+    can_use_live_runtime_cache = background_idx == int(
+        background_runtime_state.current_background_index
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
@@ -14120,9 +13566,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
         ),
         get_memory_intersection_cache=get_last_intersection_cache,
         memory_cache_signature=simulation_runtime_state.last_simulation_signature,
-        load_logged_intersection_cache=(
-            lambda: load_most_recent_logged_intersection_cache()
-        ),
+        load_logged_intersection_cache=(lambda: load_most_recent_logged_intersection_cache()),
         logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
         build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
         simulate_hit_tables=(
@@ -14133,9 +13577,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
                 normalized_params,
             )
         ),
-        last_runtime_simulation_diagnostics=(
-            _geometry_manual_last_simulation_diagnostics
-        ),
+        last_runtime_simulation_diagnostics=(_geometry_manual_last_simulation_diagnostics),
         project_rows=(
             _project_geometry_manual_peaks_to_current_view
             if callable(_project_geometry_manual_peaks_to_current_view)
@@ -14165,9 +13607,7 @@ def _geometry_manual_source_rows_for_background(
         param_set,
     )
     requested_signature_summary = _live_cache_signature_summary(requested_signature)
-    snapshot = dict(
-        simulation_runtime_state.source_row_snapshots.get(background_idx) or {}
-    )
+    snapshot = dict(simulation_runtime_state.source_row_snapshots.get(background_idx) or {})
     if not snapshot:
         live_cache_inventory = _live_cache_inventory_snapshot()
         _set_geometry_manual_source_snapshot_diagnostics(
@@ -14210,9 +13650,7 @@ def _geometry_manual_source_rows_for_background(
     stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
     created_from = snapshot.get("created_from")
     raw_rows = [
-        dict(entry)
-        for entry in (snapshot.get("rows", ()) or ())
-        if isinstance(entry, dict)
+        dict(entry) for entry in (snapshot.get("rows", ()) or ()) if isinstance(entry, dict)
     ]
     if snapshot_signature != requested_signature:
         live_cache_inventory = _live_cache_inventory_snapshot()
@@ -14305,11 +13743,7 @@ def _geometry_manual_source_rows_for_background(
         if callable(_project_geometry_manual_peaks_to_current_view)
         else raw_rows
     )
-    projected_rows = [
-        dict(entry)
-        for entry in (projected_rows or ())
-        if isinstance(entry, dict)
-    ]
+    projected_rows = [dict(entry) for entry in (projected_rows or ()) if isinstance(entry, dict)]
     live_cache_inventory = _live_cache_inventory_snapshot()
     _set_geometry_manual_source_snapshot_diagnostics(
         source="source_snapshot",
@@ -14345,109 +13779,92 @@ def _geometry_manual_source_rows_for_background(
     return projected_rows
 
 
-geometry_q_group_workflow = (
-    gui_runtime_geometry_preview.build_runtime_geometry_q_group_workflow(
-        bootstrap_module=gui_bootstrap,
-        geometry_q_group_manager_module=gui_geometry_q_group_manager,
-        root=root,
-        view_state=geometry_q_group_view_state,
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        fit_config=fit_config,
-        current_geometry_fit_var_names_factory=_current_geometry_fit_var_names,
-        build_entries_snapshot=_build_geometry_q_group_entries,
-        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-        live_geometry_preview_enabled=lambda: (
-            (
-                PREVIEW_CALCULATIONS_ENABLED
-                and bool(live_geometry_preview_var.get())
-            )
-            if "live_geometry_preview_var" in globals()
-            else False
-        ),
-        refresh_live_geometry_preview=(
-            lambda: _refresh_live_geometry_preview(update_status=True)
-        ),
-        set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
-        live_preview_match_key=_live_preview_match_key,
-        live_preview_match_hkl=_live_preview_match_hkl,
-        render_live_geometry_preview_state=(
-            lambda: gui_geometry_q_group_manager.render_runtime_live_geometry_preview_state(
-                geometry_q_group_runtime_bindings_factory(),
-                update_status=True,
-            )
-        ),
-        clear_geometry_preview_artists=_clear_geometry_preview_artists,
-        preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
-        update_running_factory=lambda: bool(
-            simulation_runtime_state.update_running
-            or simulation_runtime_state.worker_active_job is not None
-            or simulation_runtime_state.worker_queued_job is not None
-        ),
-        has_cached_hit_tables_factory=lambda: (
-            simulation_runtime_state.stored_max_positions_local is not None
-        ),
-        build_live_preview_simulated_peaks_from_cache=(
-            _build_live_preview_simulated_peaks_from_cache
-        ),
-        miller_factory=lambda: miller,
-        intensities_factory=lambda: intensities,
-        image_size_value_factory=lambda: image_size,
-        current_geometry_fit_params_factory=_current_geometry_fit_params,
-        filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
-        collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
-        excluded_q_group_count=_geometry_q_group_excluded_count,
-        caked_view_enabled=lambda: (
-            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-            if analysis_view_controls_view_state.show_caked_2d_var is not None
-            else False
-        ),
-        background_visible_factory=lambda: bool(background_runtime_state.visible),
-        current_background_display_factory=_get_current_background_display,
-        axis=ax,
-        geometry_preview_artists=geometry_runtime_state.preview_artists,
-        draw_idle_factory=lambda: canvas.draw_idle,
-        normalize_hkl_key=_normalize_hkl_key,
-        live_preview_match_is_excluded=_live_preview_match_is_excluded,
-        filter_live_preview_matches=_filter_live_preview_matches,
-        refresh_live_geometry_preview_quiet=(
-            lambda: _refresh_live_geometry_preview(update_status=False)
-        ),
-        clear_last_simulation_signature=(
-            lambda: setattr(
-                simulation_runtime_state,
-                "last_simulation_signature",
-                None,
-            )
-        ),
-        schedule_update_resolver=(lambda: schedule_update),
-        set_status_text_factory=lambda: (
-            (lambda text: progress_label_geometry.config(text=text))
-            if "progress_label_geometry" in globals()
-            else None
-        ),
-        file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
-        asksaveasfilename=filedialog.asksaveasfilename,
-        askopenfilename=filedialog.askopenfilename,
-    )
+geometry_q_group_workflow = gui_runtime_geometry_preview.build_runtime_geometry_q_group_workflow(
+    bootstrap_module=gui_bootstrap,
+    geometry_q_group_manager_module=gui_geometry_q_group_manager,
+    root=root,
+    view_state=geometry_q_group_view_state,
+    preview_state=geometry_preview_state,
+    q_group_state=geometry_q_group_state,
+    fit_config=fit_config,
+    current_geometry_fit_var_names_factory=_current_geometry_fit_var_names,
+    build_entries_snapshot=_build_geometry_q_group_entries,
+    invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+    update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+    live_geometry_preview_enabled=lambda: (
+        (PREVIEW_CALCULATIONS_ENABLED and bool(live_geometry_preview_var.get()))
+        if "live_geometry_preview_var" in globals()
+        else False
+    ),
+    refresh_live_geometry_preview=(lambda: _refresh_live_geometry_preview(update_status=True)),
+    set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
+    live_preview_match_key=_live_preview_match_key,
+    live_preview_match_hkl=_live_preview_match_hkl,
+    render_live_geometry_preview_state=(
+        lambda: gui_geometry_q_group_manager.render_runtime_live_geometry_preview_state(
+            geometry_q_group_runtime_bindings_factory(),
+            update_status=True,
+        )
+    ),
+    clear_geometry_preview_artists=_clear_geometry_preview_artists,
+    preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
+    update_running_factory=lambda: bool(
+        simulation_runtime_state.update_running
+        or simulation_runtime_state.worker_active_job is not None
+        or simulation_runtime_state.worker_queued_job is not None
+    ),
+    has_cached_hit_tables_factory=lambda: (
+        simulation_runtime_state.stored_max_positions_local is not None
+    ),
+    build_live_preview_simulated_peaks_from_cache=(_build_live_preview_simulated_peaks_from_cache),
+    miller_factory=lambda: miller,
+    intensities_factory=lambda: intensities,
+    image_size_value_factory=lambda: image_size,
+    current_geometry_fit_params_factory=_current_geometry_fit_params,
+    filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
+    collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
+    excluded_q_group_count=_geometry_q_group_excluded_count,
+    caked_view_enabled=lambda: (
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        if analysis_view_controls_view_state.show_caked_2d_var is not None
+        else False
+    ),
+    background_visible_factory=lambda: bool(background_runtime_state.visible),
+    current_background_display_factory=_get_current_background_display,
+    axis=ax,
+    geometry_preview_artists=geometry_runtime_state.preview_artists,
+    draw_idle_factory=lambda: canvas.draw_idle,
+    normalize_hkl_key=_normalize_hkl_key,
+    live_preview_match_is_excluded=_live_preview_match_is_excluded,
+    filter_live_preview_matches=_filter_live_preview_matches,
+    refresh_live_geometry_preview_quiet=(
+        lambda: _refresh_live_geometry_preview(update_status=False)
+    ),
+    clear_last_simulation_signature=(
+        lambda: setattr(
+            simulation_runtime_state,
+            "last_simulation_signature",
+            None,
+        )
+    ),
+    schedule_update_resolver=(lambda: schedule_update),
+    set_status_text_factory=lambda: (
+        (lambda text: progress_label_geometry.config(text=text))
+        if "progress_label_geometry" in globals()
+        else None
+    ),
+    file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
+    asksaveasfilename=filedialog.asksaveasfilename,
+    askopenfilename=filedialog.askopenfilename,
 )
 geometry_q_group_runtime = geometry_q_group_workflow.runtime
 geometry_q_group_runtime_bindings_factory = geometry_q_group_workflow.bindings_factory
 geometry_q_group_runtime_callbacks = geometry_q_group_workflow.callbacks
 _live_geometry_preview_enabled = geometry_q_group_workflow.live_preview_enabled
-_render_live_geometry_preview_state = (
-    geometry_q_group_workflow.render_live_preview_state
-)
-_set_geometry_preview_exclude_mode_impl = (
-    geometry_q_group_workflow.set_preview_exclude_mode
-)
-_clear_live_geometry_preview_exclusions_impl = (
-    geometry_q_group_workflow.clear_preview_exclusions
-)
-_toggle_live_geometry_preview_exclusion_at = (
-    geometry_q_group_workflow.toggle_preview_exclusion_at
-)
+_render_live_geometry_preview_state = geometry_q_group_workflow.render_live_preview_state
+_set_geometry_preview_exclude_mode_impl = geometry_q_group_workflow.set_preview_exclude_mode
+_clear_live_geometry_preview_exclusions_impl = geometry_q_group_workflow.clear_preview_exclusions
+_toggle_live_geometry_preview_exclusion_at = geometry_q_group_workflow.toggle_preview_exclusion_at
 _on_live_geometry_preview_toggle_impl = geometry_q_group_workflow.toggle_live_preview
 
 
@@ -14476,6 +13893,8 @@ def _on_live_geometry_preview_toggle(*args, **kwargs):
     result = _on_live_geometry_preview_toggle_impl(*args, **kwargs)
     _refresh_fast_viewer_runtime_mode(announce=False)
     return result
+
+
 geometry_fit_simulation_runtime_callbacks = (
     gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
         process_peaks_parallel=process_peaks_parallel,
@@ -14486,12 +13905,8 @@ geometry_fit_simulation_runtime_callbacks = (
             if isinstance(simulation_runtime_state.stored_peak_table_lattice, list)
             else None
         ),
-        primary_a_factory=lambda: (
-            float(a_var.get()) if "a_var" in globals() else float(av)
-        ),
-        primary_c_factory=lambda: (
-            float(c_var.get()) if "c_var" in globals() else float(cv)
-        ),
+        primary_a_factory=lambda: float(a_var.get()) if "a_var" in globals() else float(av),
+        primary_c_factory=lambda: float(c_var.get()) if "c_var" in globals() else float(cv),
         default_source_label=None,
         round_pixel_centers=False,
         default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
@@ -14501,9 +13916,7 @@ geometry_fit_simulation_runtime_callbacks = (
     )
 )
 _simulate_hit_tables_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_hit_tables
-_simulate_hkl_peak_centers_for_fit = (
-    geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
-)
+_simulate_hkl_peak_centers_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
 
 
 def _legacy_auto_match_on_fit_geometry_click():
@@ -14527,9 +13940,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         progress_label_geometry.config(text="No parameters selected!")
         return
     _cmd_line(f"start: vars={','.join(var_names)}")
-    preserve_live_theta = (
-        "theta_initial" not in var_names and "theta_offset" not in var_names
-    )
+    preserve_live_theta = "theta_initial" not in var_names and "theta_offset" not in var_names
 
     geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
     if not isinstance(geometry_refine_cfg, dict):
@@ -14594,9 +14005,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         if background_theta_values:
             try:
                 params["theta_initial"] = float(
-                    background_theta_values[
-                        int(background_runtime_state.current_background_index)
-                    ]
+                    background_theta_values[int(background_runtime_state.current_background_index)]
                 )
             except Exception:
                 pass
@@ -14719,9 +14128,7 @@ def _legacy_auto_match_on_fit_geometry_click():
     )
 
     if len(matched_pairs) < min_matches:
-        _cmd_line(
-            f"cancelled: minimum-match gate failed ({len(matched_pairs)} < {min_matches})"
-        )
+        _cmd_line(f"cancelled: minimum-match gate failed ({len(matched_pairs)} < {min_matches})")
         simulated_count = int(match_stats.get("simulated_count", len(simulated_peaks)))
         progress_label_geometry.config(
             text=(
@@ -14748,9 +14155,8 @@ def _legacy_auto_match_on_fit_geometry_click():
     p90_dist = float(match_stats.get("p90_match_distance_px", np.nan))
     mean_dist = float(match_stats.get("mean_match_distance_px", np.nan))
     quality_fail = (
-        (np.isfinite(max_auto_p90) and np.isfinite(p90_dist) and p90_dist > max_auto_p90)
-        or (np.isfinite(max_auto_mean) and np.isfinite(mean_dist) and mean_dist > max_auto_mean)
-    )
+        np.isfinite(max_auto_p90) and np.isfinite(p90_dist) and p90_dist > max_auto_p90
+    ) or (np.isfinite(max_auto_mean) and np.isfinite(mean_dist) and mean_dist > max_auto_mean)
     if quality_fail:
         _cmd_line(
             "cancelled: quality gate failed "
@@ -14819,7 +14225,9 @@ def _legacy_auto_match_on_fit_geometry_click():
         )
         initial_auto_pairs_display.append(
             {
-                "overlay_match_index": int(entry.get("overlay_match_index", len(initial_auto_pairs_display))),
+                "overlay_match_index": int(
+                    entry.get("overlay_match_index", len(initial_auto_pairs_display))
+                ),
                 "hkl": hkl_key,
                 "sim_display": (float(sim_display[0]), float(sim_display[1])),
                 "bg_display": (bg_col, bg_row),
@@ -15031,16 +14439,12 @@ def _legacy_auto_match_on_fit_geometry_click():
         _log_line()
         _log_section(
             "Auto-match requested configuration:",
-            [
-                f"{key}={value}" for key, value in sorted(auto_match_cfg.items())
-            ] or ["<defaults>"],
+            [f"{key}={value}" for key, value in sorted(auto_match_cfg.items())] or ["<defaults>"],
         )
         _log_section(
             "Auto-match effective configuration:",
-            [
-                f"{key}={value}"
-                for key, value in sorted(effective_auto_match_cfg.items())
-            ] or ["<defaults>"],
+            [f"{key}={value}" for key, value in sorted(effective_auto_match_cfg.items())]
+            or ["<defaults>"],
         )
         _log_section(
             "Auto-match attempts:",
@@ -15221,11 +14625,19 @@ def _legacy_auto_match_on_fit_geometry_click():
             if not joint_background_mode:
                 return dataset_specs_local, dataset_summary_lines
 
-            current_theta_base = float(background_theta_values[int(background_runtime_state.current_background_index)])
+            current_theta_base = float(
+                background_theta_values[int(background_runtime_state.current_background_index)]
+            )
             dataset_specs_local.append(
                 {
                     "dataset_index": int(background_runtime_state.current_background_index),
-                    "label": Path(str(background_runtime_state.osc_files[background_runtime_state.current_background_index])).name,
+                    "label": Path(
+                        str(
+                            background_runtime_state.osc_files[
+                                background_runtime_state.current_background_index
+                            ]
+                        )
+                    ).name,
                     "theta_initial": float(current_theta_base),
                     "measured_peaks": list(measured_for_fit),
                     "experimental_image": experimental_image_for_fit,
@@ -15233,12 +14645,19 @@ def _legacy_auto_match_on_fit_geometry_click():
             )
             dataset_summary_lines.append(
                 "current[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
-                "matches={matches} excluded={excluded}"
-                .format(
+                "matches={matches} excluded={excluded}".format(
                     idx=int(background_runtime_state.current_background_index),
-                    name=Path(str(background_runtime_state.osc_files[background_runtime_state.current_background_index])).name,
+                    name=Path(
+                        str(
+                            background_runtime_state.osc_files[
+                                background_runtime_state.current_background_index
+                            ]
+                        )
+                    ).name,
                     theta_base=float(current_theta_base),
-                    theta_eff=float(current_theta_base + float(base_fit_params.get("theta_offset", 0.0))),
+                    theta_eff=float(
+                        current_theta_base + float(base_fit_params.get("theta_offset", 0.0))
+                    ),
                     matches=len(matched_pairs),
                     excluded=int(match_stats.get("excluded_count", excluded_preview_count)),
                 )
@@ -15255,7 +14674,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                     backend_bg_i = native_bg_i
 
                 params_i = dict(base_fit_params)
-                params_i["theta_initial"] = float(theta_base + float(base_fit_params.get("theta_offset", 0.0)))
+                params_i["theta_initial"] = float(
+                    theta_base + float(base_fit_params.get("theta_offset", 0.0))
+                )
 
                 simulated_i = []
                 if not simulated_i:
@@ -15308,9 +14729,8 @@ def _legacy_auto_match_on_fit_geometry_click():
                 mean_i = float(stats_i.get("mean_match_distance_px", np.nan))
                 p90_i = float(stats_i.get("p90_match_distance_px", np.nan))
                 quality_fail_i = (
-                    (np.isfinite(max_auto_p90) and np.isfinite(p90_i) and p90_i > max_auto_p90)
-                    or (np.isfinite(max_auto_mean) and np.isfinite(mean_i) and mean_i > max_auto_mean)
-                )
+                    np.isfinite(max_auto_p90) and np.isfinite(p90_i) and p90_i > max_auto_p90
+                ) or (np.isfinite(max_auto_mean) and np.isfinite(mean_i) and mean_i > max_auto_mean)
                 if quality_fail_i:
                     raise RuntimeError(
                         f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) failed the quality gate "
@@ -15352,12 +14772,13 @@ def _legacy_auto_match_on_fit_geometry_click():
                 dataset_summary_lines.append(
                     "bg[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
                     "matches={matches} mean={mean:.3f}px p90={p90:.3f}px "
-                    "excluded={excluded} q_groups_on={q_on}/{q_total} collapsed={collapsed} excluded_q={excluded_q}"
-                    .format(
+                    "excluded={excluded} q_groups_on={q_on}/{q_total} collapsed={collapsed} excluded_q={excluded_q}".format(
                         idx=int(bg_idx),
                         name=Path(str(background_runtime_state.osc_files[bg_idx])).name,
                         theta_base=float(theta_base),
-                        theta_eff=float(theta_base + float(base_fit_params.get("theta_offset", 0.0))),
+                        theta_eff=float(
+                            theta_base + float(base_fit_params.get("theta_offset", 0.0))
+                        ),
                         matches=len(matched_i),
                         mean=float(mean_i),
                         p90=float(p90_i),
@@ -15385,9 +14806,7 @@ def _legacy_auto_match_on_fit_geometry_click():
 
         fit_iterations = int(auto_match_cfg.get("fit_iterations", 3))
         fit_iterations = max(1, min(8, fit_iterations))
-        rematch_between_iterations = bool(
-            auto_match_cfg.get("rematch_between_iterations", False)
-        )
+        rematch_between_iterations = bool(auto_match_cfg.get("rematch_between_iterations", False))
         if joint_background_mode and rematch_between_iterations:
             _cmd_line(
                 "auto-match: multi-background rematch is not yet supported; "
@@ -15446,10 +14865,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             candidate_param_names = _current_geometry_fit_candidate_param_names()
             geometry_runtime_cfg = _build_geometry_fit_runtime_config(
                 geometry_refine_cfg,
-                {
-                    name: current_fit_params.get(name)
-                    for name in candidate_param_names
-                },
+                {name: current_fit_params.get(name) for name in candidate_param_names},
                 _current_geometry_fit_constraint_state(candidate_param_names),
                 _current_geometry_fit_parameter_domains(candidate_param_names),
                 candidate_param_names=candidate_param_names,
@@ -15462,7 +14878,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 current_fit_params,
                 current_measured_for_fit,
                 var_names,
-                pixel_tol=float('inf'),
+                pixel_tol=float("inf"),
                 experimental_image=experimental_image_for_fit,
                 dataset_specs=current_dataset_specs if joint_background_mode else None,
                 refinement_config=geometry_runtime_cfg,
@@ -15470,7 +14886,9 @@ def _legacy_auto_match_on_fit_geometry_click():
             )
 
             if getattr(result, "x", None) is None or len(result.x) != len(var_names):
-                _cmd_line(f"iter {iter_idx + 1}/{fit_iterations}: optimizer returned no parameter vector")
+                _cmd_line(
+                    f"iter {iter_idx + 1}/{fit_iterations}: optimizer returned no parameter vector"
+                )
                 iteration_logs.append(
                     f"iter={iter_idx + 1}: optimizer returned no parameter vector"
                 )
@@ -15483,7 +14901,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 float(getattr(result, "rms_px"))
                 if np.isfinite(float(getattr(result, "rms_px", np.nan)))
                 else (
-                    float(np.sqrt(np.mean(result.fun ** 2)))
+                    float(np.sqrt(np.mean(result.fun**2)))
                     if getattr(result, "fun", None) is not None and result.fun.size
                     else float("nan")
                 )
@@ -15511,13 +14929,15 @@ def _legacy_auto_match_on_fit_geometry_click():
                 _cmd_line(f"iter {iter_idx + 1}/{fit_iterations}: rematch start")
                 sim_iter = []
                 if not sim_iter:
-                    _cmd_line(f"iter {iter_idx + 1}/{fit_iterations}: rematch skipped (no simulated peaks)")
+                    _cmd_line(
+                        f"iter {iter_idx + 1}/{fit_iterations}: rematch skipped (no simulated peaks)"
+                    )
                     iteration_logs.append(
                         f"iter={iter_idx + 1}: rematch skipped (no simulated peaks)"
                     )
                     break
-                sim_iter, excluded_q_iter, q_group_total_iter = _filter_geometry_fit_simulated_peaks(
-                    sim_iter
+                sim_iter, excluded_q_iter, q_group_total_iter = (
+                    _filter_geometry_fit_simulated_peaks(sim_iter)
                 )
                 if not sim_iter:
                     _cmd_line(
@@ -15534,8 +14954,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                             "degenerate_merge_radius_px",
                             min(
                                 6.0,
-                                0.33
-                                * float(fit_auto_match_cfg.get("search_radius_px", 24.0)),
+                                0.33 * float(fit_auto_match_cfg.get("search_radius_px", 24.0)),
                             ),
                         )
                     ),
@@ -15560,9 +14979,11 @@ def _legacy_auto_match_on_fit_geometry_click():
                         min_matches=min_matches,
                     )
                 )
-                matched_iter, stats_iter, excluded_iter_count = _apply_live_preview_match_exclusions(
-                    matched_iter,
-                    stats_iter,
+                matched_iter, stats_iter, excluded_iter_count = (
+                    _apply_live_preview_match_exclusions(
+                        matched_iter,
+                        stats_iter,
+                    )
                 )
                 matched_iter = _attach_overlay_match_indices(matched_iter)
                 if len(matched_iter) < min_matches:
@@ -15615,9 +15036,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                         continue
                     if not (np.isfinite(x_val) and np.isfinite(y_val)):
                         continue
-                    normalized_hkl = _normalize_hkl_key(
-                        entry.get("hkl", entry.get("label"))
-                    )
+                    normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
                     measured_entry = dict(entry)
                     measured_entry["label"] = str(entry["label"])
                     measured_entry["x"] = x_val
@@ -15646,10 +15065,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     except Exception:
                         continue
                     if not (
-                        np.isfinite(sx)
-                        and np.isfinite(sy)
-                        and np.isfinite(mx)
-                        and np.isfinite(my)
+                        np.isfinite(sx) and np.isfinite(sy) and np.isfinite(mx) and np.isfinite(my)
                     ):
                         continue
                     sim_iter_points.append((sx, sy))
@@ -15704,11 +15120,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                             if q_group_total_iter > 0
                             else ""
                         )
-                        + (
-                            f", excluded={excluded_iter_count}"
-                            if excluded_iter_count > 0
-                            else ""
-                        )
+                        + (f", excluded={excluded_iter_count}" if excluded_iter_count > 0 else "")
                         + ")."
                     )
                 )
@@ -15719,9 +15131,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
             except Exception as rematch_exc:
                 _cmd_line(f"iter {iter_idx + 1}/{fit_iterations}: rematch failed ({rematch_exc})")
-                iteration_logs.append(
-                    f"iter={iter_idx + 1}: rematch failed ({rematch_exc})"
-                )
+                iteration_logs.append(f"iter={iter_idx + 1}: rematch failed ({rematch_exc})")
                 break
 
         if result is None:
@@ -15761,34 +15171,34 @@ def _legacy_auto_match_on_fit_geometry_click():
 
         for name in var_names:
             val = float(current_fit_params.get(name, params.get(name, 0.0)))
-            if name == 'zb':
+            if name == "zb":
                 zb_var.set(val)
-            elif name == 'zs':
+            elif name == "zs":
                 zs_var.set(val)
-            elif name == 'theta_initial':
+            elif name == "theta_initial":
                 theta_initial_var.set(val)
-            elif name == 'theta_offset':
+            elif name == "theta_offset":
                 if geometry_theta_offset_var is not None:
                     geometry_theta_offset_var.set(f"{val:.6g}")
-            elif name == 'psi_z':
+            elif name == "psi_z":
                 psi_z_var.set(val)
-            elif name == 'chi':
+            elif name == "chi":
                 chi_var.set(val)
-            elif name == 'cor_angle':
+            elif name == "cor_angle":
                 cor_angle_var.set(val)
-            elif name == 'gamma':
+            elif name == "gamma":
                 gamma_var.set(val)
-            elif name == 'Gamma':
+            elif name == "Gamma":
                 Gamma_var.set(val)
-            elif name == 'corto_detector':
+            elif name == "corto_detector":
                 corto_detector_var.set(val)
-            elif name == 'a':
+            elif name == "a":
                 a_var.set(val)
-            elif name == 'c':
+            elif name == "c":
                 c_var.set(val)
-            elif name == 'center_x':
+            elif name == "center_x":
                 center_x_var.set(val)
-            elif name == 'center_y':
+            elif name == "center_y":
                 center_y_var.set(val)
 
         if joint_background_mode and not preserve_live_theta:
@@ -15828,7 +15238,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             float(getattr(result, "rms_px"))
             if np.isfinite(float(getattr(result, "rms_px", np.nan)))
             else (
-                np.sqrt(np.mean(result.fun ** 2))
+                np.sqrt(np.mean(result.fun**2))
                 if getattr(result, "fun", None) is not None and result.fun.size
                 else 0.0
             )
@@ -15842,38 +15252,33 @@ def _legacy_auto_match_on_fit_geometry_click():
         fitted_params = dict(params)
         fitted_params.update(
             {
-                'zb': zb_var.get(),
-                'zs': zs_var.get(),
-                'theta_initial': theta_initial_var.get(),
-                'theta_offset': _current_geometry_theta_offset(strict=False),
-                'chi': chi_var.get(),
-                'cor_angle': cor_angle_var.get(),
-                'psi_z': psi_z_var.get(),
-                'gamma': gamma_var.get(),
-                'Gamma': Gamma_var.get(),
-                'corto_detector': corto_detector_var.get(),
-                'a': a_var.get(),
-                'c': c_var.get(),
-                'center': [center_x_var.get(), center_y_var.get()],
-                'center_x': center_x_var.get(),
-                'center_y': center_y_var.get(),
+                "zb": zb_var.get(),
+                "zs": zs_var.get(),
+                "theta_initial": theta_initial_var.get(),
+                "theta_offset": _current_geometry_theta_offset(strict=False),
+                "chi": chi_var.get(),
+                "cor_angle": cor_angle_var.get(),
+                "psi_z": psi_z_var.get(),
+                "gamma": gamma_var.get(),
+                "Gamma": Gamma_var.get(),
+                "corto_detector": corto_detector_var.get(),
+                "a": a_var.get(),
+                "c": c_var.get(),
+                "center": [center_x_var.get(), center_y_var.get()],
+                "center_x": center_x_var.get(),
+                "center_y": center_y_var.get(),
             }
         )
         point_match_summary = getattr(result, "point_match_summary", None)
         if isinstance(point_match_summary, dict):
             _log_section(
                 "Final point-match summary:",
-                [
-                    f"{key}={value}"
-                    for key, value in sorted(point_match_summary.items())
-                ]
+                [f"{key}={value}" for key, value in sorted(point_match_summary.items())]
                 or ["<none>"],
             )
         _log_section(
             "Final point-match diagnostics:",
-            _log_point_match_diagnostics(
-                getattr(result, "point_match_diagnostics", None)
-            ),
+            _log_point_match_diagnostics(getattr(result, "point_match_diagnostics", None)),
         )
         _log_section(
             "Fixed peak frame transforms after fit:",
@@ -15900,7 +15305,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             image_size,
             fitted_params,
             measured_for_fit,
-            pixel_tol=float('inf'),
+            pixel_tol=float("inf"),
             prefer_python_runner=True,
         )
 
@@ -15919,9 +15324,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         max_display_markers = int(auto_match_cfg.get("max_display_markers", 120))
         max_display_markers = max(1, max_display_markers)
 
-        for hkl_key, sim_center, meas_center in zip(
-            agg_millers, agg_sim_coords, agg_meas_coords
-        ):
+        for hkl_key, sim_center, meas_center in zip(agg_millers, agg_sim_coords, agg_meas_coords):
             dx = sim_center[0] - meas_center[0]
             dy = sim_center[1] - meas_center[1]
             dist = math.hypot(dx, dy)
@@ -15934,7 +15337,8 @@ def _legacy_auto_match_on_fit_geometry_click():
                 dict(entry)
                 for entry in overlay_point_match_diagnostics
                 if isinstance(entry, dict)
-                and int(entry.get("dataset_index", -1)) == int(background_runtime_state.current_background_index)
+                and int(entry.get("dataset_index", -1))
+                == int(background_runtime_state.current_background_index)
             ]
         overlay_records = build_geometry_fit_overlay_records(
             initial_auto_pairs_display,
@@ -15979,28 +15383,29 @@ def _legacy_auto_match_on_fit_geometry_click():
             [
                 f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px"
                 for hkl, dx, dy, dist in pixel_offsets
-            ] or ["No matched peaks"],
+            ]
+            or ["No matched peaks"],
         )
 
         export_recs = []
         for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
             export_recs.append(
                 {
-                    'source': 'sim',
-                    'hkl': tuple(int(v) for v in hkl),
-                    'x': int(x),
-                    'y': int(y),
-                    'dist_px': float(dist),
+                    "source": "sim",
+                    "hkl": tuple(int(v) for v in hkl),
+                    "x": int(x),
+                    "y": int(y),
+                    "dist_px": float(dist),
                 }
             )
         for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_meas_coords, pixel_offsets):
             export_recs.append(
                 {
-                    'source': 'meas',
-                    'hkl': tuple(int(v) for v in hkl),
-                    'x': int(x),
-                    'y': int(y),
-                    'dist_px': float(dist),
+                    "source": "meas",
+                    "hkl": tuple(int(v) for v in hkl),
+                    "x": int(x),
+                    "y": int(y),
+                    "dist_px": float(dist),
                 }
             )
 
@@ -16047,11 +15452,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     if q_group_total > 0
                     else ""
                 )
-                + (
-                    f" (excluded {excluded_preview_count})"
-                    if excluded_preview_count > 0
-                    else ""
-                )
+                + (f" (excluded {excluded_preview_count})" if excluded_preview_count > 0 else "")
                 + "\n"
                 + f"{overlay_hint}\n"
                 + frame_warning_line
@@ -16098,34 +15499,49 @@ def _legacy_auto_match_on_fit_geometry_click():
     def _peak_maximum_near(col: float, row: float, search_radius: int = 5):
         """Return the (col,row) of the brightest pixel near ``(col,row)``."""
 
-        r = int(round(row))
-        c = int(round(col))
-        r0 = max(0, r - search_radius)
-        r1 = min(background_runtime_state.current_background_display.shape[0], r + search_radius + 1)
-        c0 = max(0, c - search_radius)
-        c1 = min(background_runtime_state.current_background_display.shape[1], c + search_radius + 1)
+        display_extent = None
+        for artist in (background_display, image_display):
+            extent = getattr(artist, "_ra_sim_source_extent", None)
+            if extent is None:
+                getter = getattr(artist, "get_extent", None)
+                if callable(getter):
+                    try:
+                        extent = getter()
+                    except Exception:
+                        extent = None
+            if extent is not None:
+                display_extent = extent
+                break
 
-        window = np.asarray(background_runtime_state.current_background_display[r0:r1, c0:c1], dtype=float)
-        if window.size == 0 or not np.isfinite(window).any():
-            return float(col), float(row)
-
-        max_idx = np.nanargmax(window)
-        win_r, win_c = np.unravel_index(max_idx, window.shape)
-        return float(c0 + win_c), float(r0 + win_r)
+        return gui_manual_geometry.peak_maximum_near_in_image(
+            background_runtime_state.current_background_display,
+            float(col),
+            float(row),
+            search_radius=search_radius,
+            display_extent=display_extent,
+        )
 
     def _mark_pick(col: float, row: float, label: str, color: str, marker: str):
-        point, = ax.plot([col], [row], marker, color=color, markersize=8,
-                         markerfacecolor='none', zorder=7, linestyle='None')
+        (point,) = ax.plot(
+            [col],
+            [row],
+            marker,
+            color=color,
+            markersize=8,
+            markerfacecolor="none",
+            zorder=7,
+            linestyle="None",
+        )
         text = ax.text(
             col,
             row,
             label,
             color=color,
             fontsize=8,
-            ha='left',
-            va='bottom',
+            ha="left",
+            va="bottom",
             zorder=8,
-            bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.0),
+            bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.0),
         )
         geometry_runtime_state.pick_artists.extend([point, text])
         _request_overlay_canvas_redraw()
@@ -16268,7 +15684,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                     sy = float(sim_pt[1])
                 except Exception:
                     continue
-                if not (np.isfinite(mx) and np.isfinite(my) and np.isfinite(sx) and np.isfinite(sy)):
+                if not (
+                    np.isfinite(mx) and np.isfinite(my) and np.isfinite(sx) and np.isfinite(sy)
+                ):
                     continue
                 sim_orientation_points.append((sx, sy))
                 meas_orientation_points.append((mx, my))
@@ -16307,9 +15725,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
                 for frame_entry, entry_fit in zip(picked_frames, measured_for_fit):
                     if isinstance(entry_fit, dict):
-                        frame_entry["fit"] = (
-                            float(entry_fit.get("x")), float(entry_fit.get("y"))
-                        )
+                        frame_entry["fit"] = (float(entry_fit.get("x")), float(entry_fit.get("y")))
                     elif isinstance(entry_fit, (list, tuple)) and len(entry_fit) >= 5:
                         frame_entry["fit"] = (float(entry_fit[3]), float(entry_fit[4]))
                 _log_section(
@@ -16374,7 +15790,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                             save_flag=0,
                             optics_mode=_current_optics_mode_flag(),
                             solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
-                            solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
+                            solve_q_rel_tol=float(
+                                mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)
+                            ),
                             solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
                             thickness=float(sample_depth_var.get()),
                             pixel_size_m=float(pixel_size_m),
@@ -16396,8 +15814,12 @@ def _legacy_auto_match_on_fit_geometry_click():
 
                             I0, x0, y0, I1, x1, y1 = maxpos[idx]
                             sim_candidates = [
-                                (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
-                                (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
+                                (float(x0), float(y0))
+                                if np.isfinite(x0) and np.isfinite(y0)
+                                else None,
+                                (float(x1), float(y1))
+                                if np.isfinite(x1) and np.isfinite(y1)
+                                else None,
                             ]
                             sim_candidates = [p for p in sim_candidates if p is not None]
                             if not sim_candidates:
@@ -16421,8 +15843,12 @@ def _legacy_auto_match_on_fit_geometry_click():
                                     (
                                         fr
                                         for fr in picked_frames
-                                        if math.isclose(fr.get("fit", (mx, my))[0], mx, abs_tol=1e-9)
-                                        and math.isclose(fr.get("fit", (mx, my))[1], my, abs_tol=1e-9)
+                                        if math.isclose(
+                                            fr.get("fit", (mx, my))[0], mx, abs_tol=1e-9
+                                        )
+                                        and math.isclose(
+                                            fr.get("fit", (mx, my))[1], my, abs_tol=1e-9
+                                        )
                                         and fr.get("label") == f"{key[0]},{key[1]},{key[2]}"
                                     ),
                                     None,
@@ -16441,7 +15867,10 @@ def _legacy_auto_match_on_fit_geometry_click():
                                     )
                                 )
 
-                        _log_section(title, rows or ["No measured peaks matched"],)
+                        _log_section(
+                            title,
+                            rows or ["No measured peaks matched"],
+                        )
                     except Exception as exc:  # pragma: no cover - debug path
                         _log_section(title, [f"Failed to record assignments: {exc}"])
 
@@ -16487,7 +15916,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                         save_flag=0,
                         optics_mode=_current_optics_mode_flag(),
                         solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
-                        solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
+                        solve_q_rel_tol=float(
+                            mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)
+                        ),
                         solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
                         thickness=float(sample_depth_var.get()),
                         pixel_size_m=float(pixel_size_m),
@@ -16561,7 +15992,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                             )
                         )
 
-                    rms = math.sqrt(float(np.mean(np.square(per_residual)))) if per_residual else 0.0
+                    rms = (
+                        math.sqrt(float(np.mean(np.square(per_residual)))) if per_residual else 0.0
+                    )
                     max_dist = max(per_residual) if per_residual else 0.0
                     _log_section(
                         title,
@@ -16585,7 +16018,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                             image_size,
                             param_set,
                             measured_for_fit,
-                            pixel_tol=float('inf'),
+                            pixel_tol=float("inf"),
                             prefer_python_runner=True,
                         )
                         (
@@ -16643,19 +16076,12 @@ def _legacy_auto_match_on_fit_geometry_click():
                     ],
                 )
                 _log_matches_snapshot("Matches before fit (native frame):", params)
-                _log_pixel_match_snapshot(
-                    "Pixel matches before fit (native frame):", params
-                )
-                _log_assignment_snapshot(
-                    "Match assignments before fit (native frame):", params
-                )
+                _log_pixel_match_snapshot("Pixel matches before fit (native frame):", params)
+                _log_assignment_snapshot("Match assignments before fit (native frame):", params)
                 candidate_param_names = _current_geometry_fit_candidate_param_names()
                 geometry_runtime_cfg = _build_geometry_fit_runtime_config(
                     geometry_refine_cfg,
-                    {
-                        name: params.get(name)
-                        for name in candidate_param_names
-                    },
+                    {name: params.get(name) for name in candidate_param_names},
                     _current_geometry_fit_constraint_state(candidate_param_names),
                     _current_geometry_fit_parameter_domains(candidate_param_names),
                     candidate_param_names=candidate_param_names,
@@ -16668,7 +16094,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     params,
                     measured_for_fit,
                     var_names,
-                    pixel_tol=float('inf'),
+                    pixel_tol=float("inf"),
                     experimental_image=experimental_image_for_fit,
                     refinement_config=geometry_runtime_cfg,
                     candidate_param_names=candidate_param_names,
@@ -16701,22 +16127,35 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
 
                 for name, val in zip(var_names, result.x):
-                    if name == 'zb':               zb_var.set(val)
-                    elif name == 'zs':             zs_var.set(val)
-                    elif name == 'theta_initial':  theta_initial_var.set(val)
-                    elif name == 'theta_offset':
+                    if name == "zb":
+                        zb_var.set(val)
+                    elif name == "zs":
+                        zs_var.set(val)
+                    elif name == "theta_initial":
+                        theta_initial_var.set(val)
+                    elif name == "theta_offset":
                         if geometry_theta_offset_var is not None:
                             geometry_theta_offset_var.set(f"{float(val):.6g}")
-                    elif name == 'psi_z':          psi_z_var.set(val)
-                    elif name == 'chi':            chi_var.set(val)
-                    elif name == 'cor_angle':      cor_angle_var.set(val)
-                    elif name == 'gamma':          gamma_var.set(val)
-                    elif name == 'Gamma':          Gamma_var.set(val)
-                    elif name == 'corto_detector': corto_detector_var.set(val)
-                    elif name == 'a':              a_var.set(val)
-                    elif name == 'c':              c_var.set(val)
-                    elif name == 'center_x':       center_x_var.set(val)
-                    elif name == 'center_y':       center_y_var.set(val)
+                    elif name == "psi_z":
+                        psi_z_var.set(val)
+                    elif name == "chi":
+                        chi_var.set(val)
+                    elif name == "cor_angle":
+                        cor_angle_var.set(val)
+                    elif name == "gamma":
+                        gamma_var.set(val)
+                    elif name == "Gamma":
+                        Gamma_var.set(val)
+                    elif name == "corto_detector":
+                        corto_detector_var.set(val)
+                    elif name == "a":
+                        a_var.set(val)
+                    elif name == "c":
+                        c_var.set(val)
+                    elif name == "center_x":
+                        center_x_var.set(val)
+                    elif name == "center_y":
+                        center_y_var.set(val)
 
                 if _geometry_fit_uses_shared_theta_offset() and not preserve_live_theta:
                     theta_initial_var.set(
@@ -16730,7 +16169,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
                 # are disabled.
-                simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
+                simulation_runtime_state.profile_cache = dict(
+                    simulation_runtime_state.profile_cache
+                )
                 simulation_runtime_state.profile_cache.update(mosaic_params)
                 simulation_runtime_state.profile_cache.update(
                     {
@@ -16751,9 +16192,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
 
                 # Force a fresh simulation with the fitted values.
-                gui_controllers.request_geometry_preview_skip_once(
-                    geometry_preview_state
-                )
+                gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
                 _invalidate_simulation_cache()
                 schedule_update()
 
@@ -16773,35 +16212,33 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
                 base_summary = (
                     "Fit complete:\n"
-                    + "\n".join(
-                        f"{name} = {val:.4f}" for name, val in zip(var_names, result.x)
-                    )
+                    + "\n".join(f"{name} = {val:.4f}" for name, val in zip(var_names, result.x))
                     + f"\nRMS residual = {rms:.2f} px"
                 )
 
                 fitted_params = dict(params)
-                fitted_params.update({
-                    'zb': zb_var.get(),
-                    'zs': zs_var.get(),
-                    'theta_initial': theta_initial_var.get(),
-                    'theta_offset': _current_geometry_theta_offset(strict=False),
-                    'chi': chi_var.get(),
-                    'cor_angle': cor_angle_var.get(),
-                    'psi_z': psi_z_var.get(),
-                    'gamma': gamma_var.get(),
-                    'Gamma': Gamma_var.get(),
-                    'corto_detector': corto_detector_var.get(),
-                    'a': a_var.get(),
-                    'c': c_var.get(),
-                    'center': [center_x_var.get(), center_y_var.get()],
-                    'center_x': center_x_var.get(),
-                    'center_y': center_y_var.get(),
-                })
+                fitted_params.update(
+                    {
+                        "zb": zb_var.get(),
+                        "zs": zs_var.get(),
+                        "theta_initial": theta_initial_var.get(),
+                        "theta_offset": _current_geometry_theta_offset(strict=False),
+                        "chi": chi_var.get(),
+                        "cor_angle": cor_angle_var.get(),
+                        "psi_z": psi_z_var.get(),
+                        "gamma": gamma_var.get(),
+                        "Gamma": Gamma_var.get(),
+                        "corto_detector": corto_detector_var.get(),
+                        "a": a_var.get(),
+                        "c": c_var.get(),
+                        "center": [center_x_var.get(), center_y_var.get()],
+                        "center_x": center_x_var.get(),
+                        "center_y": center_y_var.get(),
+                    }
+                )
 
                 _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
-                _log_pixel_match_snapshot(
-                    "Pixel matches after fit (native frame):", fitted_params
-                )
+                _log_pixel_match_snapshot("Pixel matches after fit (native frame):", fitted_params)
                 _log_assignment_snapshot(
                     "Match assignments after fit (native frame):", fitted_params
                 )
@@ -16818,7 +16255,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     image_size,
                     fitted_params,
                     measured_for_fit,
-                    pixel_tol=float('inf'),
+                    pixel_tol=float("inf"),
                     prefer_python_runner=True,
                 )
             except Exception as exc:
@@ -16827,18 +16264,14 @@ def _legacy_auto_match_on_fit_geometry_click():
                     log_file.close()
                 except Exception:
                     pass
-                progress_label_geometry.config(
-                    text=f"Geometry fit failed: {exc}"
-                )
+                progress_label_geometry.config(text=f"Geometry fit failed: {exc}")
                 return
 
             (
                 agg_sim_coords,
                 agg_meas_coords,
                 agg_millers,
-            ) = _aggregate_match_centers(
-                sim_coords, meas_coords, sim_millers, meas_millers
-            )
+            ) = _aggregate_match_centers(sim_coords, meas_coords, sim_millers, meas_millers)
 
             pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]] = []
             max_display_markers = int(auto_match_cfg.get("max_display_markers", 120))
@@ -16907,21 +16340,25 @@ def _legacy_auto_match_on_fit_geometry_click():
 
             export_recs = []
             for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
-                export_recs.append({
-                    'source': 'sim',
-                    'hkl': tuple(int(v) for v in hkl),
-                    'x': int(x),
-                    'y': int(y),
-                    'dist_px': float(dist),
-                })
+                export_recs.append(
+                    {
+                        "source": "sim",
+                        "hkl": tuple(int(v) for v in hkl),
+                        "x": int(x),
+                        "y": int(y),
+                        "dist_px": float(dist),
+                    }
+                )
             for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_meas_coords, pixel_offsets):
-                export_recs.append({
-                    'source': 'meas',
-                    'hkl': tuple(int(v) for v in hkl),
-                    'x': int(x),
-                    'y': int(y),
-                    'dist_px': float(dist),
-                })
+                export_recs.append(
+                    {
+                        "source": "meas",
+                        "hkl": tuple(int(v) for v in hkl),
+                        "x": int(x),
+                        "y": int(y),
+                        "dist_px": float(dist),
+                    }
+                )
 
             download_dir = get_dir("downloads")
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -16932,9 +16369,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 "Fit summary:",
                 [
                     "Parameters:" if var_names else "Parameters: <none>",
-                    *[
-                        f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
-                    ],
+                    *[f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)],
                     f"overlay_records={len(overlay_records)}",
                     f"RMS residual = {rms:.6f} px",
                     f"Applied orientation: {orientation_choice.get('label', 'identity')}",
@@ -16955,9 +16390,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                 f"Applied orientation: {orientation_choice.get('label', 'identity')}"
             )
             overlay_hint = (
-                    "Overlay: blue squares=initial simulated picks, amber triangles=fixed background picks, "
-                    "green circles=fitted simulated peaks, dashed arrows=initial->fitted sim shifts."
-                )
+                "Overlay: blue squares=initial simulated picks, amber triangles=fixed background picks, "
+                "green circles=fitted simulated peaks, dashed arrows=initial->fitted sim shifts."
+            )
 
             if DEBUG_ENABLED:
                 final_text = (
@@ -16986,7 +16421,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             selection_state["pending_hkl"] = simulation_runtime_state.peak_millers[idx]
             sim_col, sim_row = simulation_runtime_state.peak_positions[idx]
             selection_state["pending_sim_display"] = (float(sim_col), float(sim_row))
-            _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", '#00b894', 'o')
+            _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", "#00b894", "o")
             progress_label_geometry.config(
                 text=(
                     f"Selected simulated peak HKL={selection_state['pending_hkl']} "
@@ -17004,7 +16439,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             return
 
         peak_col, peak_row = _peak_maximum_near(col, row, search_radius=6)
-        _mark_pick(peak_col, peak_row, f"{pending} real", '#e17055', 'x')
+        _mark_pick(peak_col, peak_row, f"{pending} real", "#e17055", "x")
 
         pending_sim_display = selection_state.get("pending_sim_display")
         picked_pairs.append((pending, (peak_col, peak_row)))
@@ -17029,7 +16464,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         selection_state["expecting"] = "sim"
         selection_state["pending_sim_display"] = None
 
-    click_cid = canvas.mpl_connect('button_press_event', _on_geometry_pick)
+    click_cid = canvas.mpl_connect("button_press_event", _on_geometry_pick)
     return
 
 
@@ -17050,30 +16485,14 @@ def on_fit_mosaic_click():
         )
         return
 
-    mosaic_shape_cfg = (
-        fit_config.get("mosaic_shape", {})
-        if isinstance(fit_config, dict)
-        else {}
-    )
-    solver_cfg = (
-        mosaic_shape_cfg.get("solver", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
-    )
-    roi_cfg = (
-        mosaic_shape_cfg.get("roi", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
-    )
+    mosaic_shape_cfg = fit_config.get("mosaic_shape", {}) if isinstance(fit_config, dict) else {}
+    solver_cfg = mosaic_shape_cfg.get("solver", {}) if isinstance(mosaic_shape_cfg, dict) else {}
+    roi_cfg = mosaic_shape_cfg.get("roi", {}) if isinstance(mosaic_shape_cfg, dict) else {}
     preprocessing_cfg = (
-        mosaic_shape_cfg.get("preprocessing", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
+        mosaic_shape_cfg.get("preprocessing", {}) if isinstance(mosaic_shape_cfg, dict) else {}
     )
     sampling_cfg = (
-        mosaic_shape_cfg.get("sampling", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
+        mosaic_shape_cfg.get("sampling", {}) if isinstance(mosaic_shape_cfg, dict) else {}
     )
 
     try:
@@ -17135,32 +16554,32 @@ def on_fit_mosaic_click():
         shared_theta_mode = bool(_geometry_fit_uses_shared_theta_offset())
 
     params = {
-        'a':             a_var.get(),
-        'c':             c_var.get(),
-        'lambda':        lambda_,
-        'psi':           psi,
-        'psi_z':         psi_z_var.get(),
-        'zs':            zs_var.get(),
-        'zb':            zb_var.get(),
-        'sample_width_m': sample_width_var.get(),
-        'sample_length_m': sample_length_var.get(),
-        'sample_depth_m': sample_depth_var.get(),
-        'chi':           chi_var.get(),
-        'n2':            n2,
-        'mosaic_params': mosaic_params,
-        'debye_x':       debye_x_var.get(),
-        'debye_y':       debye_y_var.get(),
-        'center':        [center_x_var.get(), center_y_var.get()],
-        'theta_initial': _current_effective_theta_initial(strict_count=False),
-        'theta_offset':  _current_geometry_theta_offset(),
-        'uv1':           np.array([1.0, 0.0, 0.0]),
-        'uv2':           np.array([0.0, 1.0, 0.0]),
-        'corto_detector': corto_detector_var.get(),
-        'gamma':          gamma_var.get(),
-        'Gamma':          Gamma_var.get(),
-        'optics_mode':    _current_optics_mode_flag(),
-        'pixel_size':     pixel_size_m,
-        'pixel_size_m':   pixel_size_m,
+        "a": a_var.get(),
+        "c": c_var.get(),
+        "lambda": lambda_,
+        "psi": psi,
+        "psi_z": psi_z_var.get(),
+        "zs": zs_var.get(),
+        "zb": zb_var.get(),
+        "sample_width_m": sample_width_var.get(),
+        "sample_length_m": sample_length_var.get(),
+        "sample_depth_m": sample_depth_var.get(),
+        "chi": chi_var.get(),
+        "n2": n2,
+        "mosaic_params": mosaic_params,
+        "debye_x": debye_x_var.get(),
+        "debye_y": debye_y_var.get(),
+        "center": [center_x_var.get(), center_y_var.get()],
+        "theta_initial": _current_effective_theta_initial(strict_count=False),
+        "theta_offset": _current_geometry_theta_offset(),
+        "uv1": np.array([1.0, 0.0, 0.0]),
+        "uv2": np.array([0.0, 1.0, 0.0]),
+        "corto_detector": corto_detector_var.get(),
+        "gamma": gamma_var.get(),
+        "Gamma": Gamma_var.get(),
+        "optics_mode": _current_optics_mode_flag(),
+        "pixel_size": pixel_size_m,
+        "pixel_size_m": pixel_size_m,
     }
 
     def _format_mosaic_unavailable(reason: object, *, fallback: str) -> str:
@@ -17169,16 +16588,14 @@ def on_fit_mosaic_click():
             text = str(fallback)
         prefix = "Geometry fit unavailable:"
         if text.startswith(prefix):
-            text = text[len(prefix):].strip()
+            text = text[len(prefix) :].strip()
         return f"Mosaic shape fit unavailable: {text}"
 
     def _copy_dataset_specs(raw_specs: object) -> list[dict[str, object]]:
         copied_specs: list[dict[str, object]] = []
         for spec in raw_specs if isinstance(raw_specs, list) else []:
             if isinstance(spec, dict):
-                copied_specs.append(
-                    gui_geometry_fit.copy_geometry_fit_state_value(dict(spec))
-                )
+                copied_specs.append(gui_geometry_fit.copy_geometry_fit_state_value(dict(spec)))
         return copied_specs
 
     stale_reason = gui_geometry_fit.geometry_fit_dataset_cache_stale_reason(
@@ -17204,8 +16621,7 @@ def on_fit_mosaic_click():
             stale_reason = "cached datasets do not match the current fit-background selection."
             dataset_specs = []
         elif any(
-            not isinstance(spec.get("experimental_image"), np.ndarray)
-            for spec in dataset_specs
+            not isinstance(spec.get("experimental_image"), np.ndarray) for spec in dataset_specs
         ):
             stale_reason = "cached experimental images are missing."
             dataset_specs = []
@@ -17218,20 +16634,12 @@ def on_fit_mosaic_click():
             var_names=(),
             fit_config=fit_config,
             osc_files=manual_dataset_bindings.osc_files,
-            current_background_index=int(
-                manual_dataset_bindings.current_background_index
-            ),
+            current_background_index=int(manual_dataset_bindings.current_background_index),
             theta_initial=theta_initial_var.get(),
             preserve_live_theta=False,
-            apply_geometry_fit_background_selection=(
-                _apply_geometry_fit_background_selection
-            ),
-            current_geometry_fit_background_indices=(
-                _current_geometry_fit_background_indices
-            ),
-            geometry_fit_uses_shared_theta_offset=(
-                _geometry_fit_uses_shared_theta_offset
-            ),
+            apply_geometry_fit_background_selection=(_apply_geometry_fit_background_selection),
+            current_geometry_fit_background_indices=(_current_geometry_fit_background_indices),
+            geometry_fit_uses_shared_theta_offset=(_geometry_fit_uses_shared_theta_offset),
             apply_background_theta_metadata=_apply_background_theta_metadata,
             current_background_theta_values=_current_background_theta_values,
             current_geometry_theta_offset=_current_geometry_theta_offset,
@@ -17274,9 +16682,7 @@ def on_fit_mosaic_click():
             for spec in prepared_dataset_run.dataset_specs
             if isinstance(spec, dict)
         ]
-        selected_background_indices = list(
-            prepared_dataset_run.selected_background_indices
-        )
+        selected_background_indices = list(prepared_dataset_run.selected_background_indices)
         background_theta_values = list(prepared_dataset_run.background_theta_values)
         shared_theta_mode = bool(prepared_dataset_run.joint_background_mode)
         params["theta_initial"] = prepared_dataset_run.fit_params.get(
@@ -17334,9 +16740,9 @@ def on_fit_mosaic_click():
         )
     )
     fit_theta_i = bool(solver_cfg.get("fit_theta_i", solver_cfg.get("refine_theta", True)))
-    configured_theta_i_mode = str(
-        solver_cfg.get("theta_i_mode", solver_cfg.get("theta_mode", "auto"))
-    ).strip().lower()
+    configured_theta_i_mode = (
+        str(solver_cfg.get("theta_i_mode", solver_cfg.get("theta_mode", "auto"))).strip().lower()
+    )
     theta_i_mode = theta_mode if configured_theta_i_mode == "auto" else configured_theta_i_mode
 
     raw_theta_i_bounds = solver_cfg.get(
@@ -17409,10 +16815,7 @@ def on_fit_mosaic_click():
         if isinstance(value, np.ndarray):
             return [_mosaic_log_json_safe(item) for item in value.tolist()]
         if isinstance(value, Mapping):
-            return {
-                str(key): _mosaic_log_json_safe(val)
-                for key, val in value.items()
-            }
+            return {str(key): _mosaic_log_json_safe(val) for key, val in value.items()}
         if isinstance(value, (list, tuple, set)):
             return [_mosaic_log_json_safe(item) for item in value]
         return str(value)
@@ -17484,13 +16887,9 @@ def on_fit_mosaic_click():
                 "y": _mosaic_log_json_safe(entry.get("y")),
             }
             if "source_table_index" in entry:
-                row["source_table_index"] = _mosaic_log_json_safe(
-                    entry.get("source_table_index")
-                )
+                row["source_table_index"] = _mosaic_log_json_safe(entry.get("source_table_index"))
             if "source_row_index" in entry:
-                row["source_row_index"] = _mosaic_log_json_safe(
-                    entry.get("source_row_index")
-                )
+                row["source_row_index"] = _mosaic_log_json_safe(entry.get("source_row_index"))
             rows.append(row)
         return rows
 
@@ -17509,9 +16908,7 @@ def on_fit_mosaic_click():
                 "measured_peak_count": int(
                     len(measured_peaks) if isinstance(measured_peaks, (list, tuple)) else 0
                 ),
-                "experimental_image": _mosaic_log_image_summary(
-                    spec.get("experimental_image")
-                ),
+                "experimental_image": _mosaic_log_image_summary(spec.get("experimental_image")),
                 "measured_peaks": _mosaic_log_measured_peaks(measured_peaks),
             }
         )
@@ -17579,25 +16976,13 @@ def on_fit_mosaic_click():
             "beam_y": _mosaic_log_array_summary(mosaic_params.get("beam_y_array", [])),
             "theta": _mosaic_log_array_summary(mosaic_params.get("theta_array", [])),
             "phi": _mosaic_log_array_summary(mosaic_params.get("phi_array", [])),
-            "wavelength": _mosaic_log_array_summary(
-                mosaic_params.get("wavelength_array", [])
-            ),
-            "n2_sample_array": _mosaic_log_array_summary(
-                mosaic_params.get("n2_sample_array", [])
-            ),
-            "sigma_mosaic_deg": _mosaic_log_json_safe(
-                mosaic_params.get("sigma_mosaic_deg")
-            ),
-            "gamma_mosaic_deg": _mosaic_log_json_safe(
-                mosaic_params.get("gamma_mosaic_deg")
-            ),
+            "wavelength": _mosaic_log_array_summary(mosaic_params.get("wavelength_array", [])),
+            "n2_sample_array": _mosaic_log_array_summary(mosaic_params.get("n2_sample_array", [])),
+            "sigma_mosaic_deg": _mosaic_log_json_safe(mosaic_params.get("sigma_mosaic_deg")),
+            "gamma_mosaic_deg": _mosaic_log_json_safe(mosaic_params.get("gamma_mosaic_deg")),
             "eta": _mosaic_log_json_safe(mosaic_params.get("eta")),
-            "solve_q_steps": _mosaic_log_json_safe(
-                mosaic_params.get("solve_q_steps")
-            ),
-            "solve_q_rel_tol": _mosaic_log_json_safe(
-                mosaic_params.get("solve_q_rel_tol")
-            ),
+            "solve_q_steps": _mosaic_log_json_safe(mosaic_params.get("solve_q_steps")),
+            "solve_q_rel_tol": _mosaic_log_json_safe(mosaic_params.get("solve_q_rel_tol")),
             "solve_q_mode": _mosaic_log_json_safe(mosaic_params.get("solve_q_mode")),
         },
         "input_datasets": input_dataset_summaries,
@@ -17669,10 +17054,8 @@ def on_fit_mosaic_click():
                 f"theta_i_mode={launch_context['theta_i_mode']}",
                 f"theta_i_bounds_deg={launch_context['theta_i_bounds_deg']}",
                 f"active_fit_parameters={launch_context['active_fit_parameters']}",
-                "focused_peak_selection="
-                f"{launch_context['focused_peak_selection']}",
-                "resolved_roi_minimums="
-                f"{launch_context['resolved_roi_minimums']}",
+                f"focused_peak_selection={launch_context['focused_peak_selection']}",
+                f"resolved_roi_minimums={launch_context['resolved_roi_minimums']}",
                 f"cache_stale_reason={launch_context['cache_stale_reason']}",
                 f"solver_loss={solver_cfg.get('loss', 'soft_l1')}",
                 f"solver_max_nfev={solver_cfg.get('max_nfev', 80)}",
@@ -17705,9 +17088,7 @@ def on_fit_mosaic_click():
             worker_numba_threads=solver_cfg.get("worker_numba_threads", 0),
             restart_jitter=float(solver_cfg.get("restart_jitter", 0.15)),
             ridge_weight=float(ridge_weight),
-            specular_relative_intensity_weight=float(
-                specular_relative_intensity_weight
-            ),
+            specular_relative_intensity_weight=float(specular_relative_intensity_weight),
             fit_theta_i=bool(fit_theta_i),
             theta_i_mode=str(theta_i_mode),
             theta_i_bounds_deg=theta_i_bounds_deg,
@@ -17734,9 +17115,7 @@ def on_fit_mosaic_click():
         _mosaic_log_line("Optimizer debug payload (JSON):")
         _mosaic_log_line(
             json.dumps(
-                _mosaic_log_json_safe(
-                    getattr(result, "mosaic_fit_debug_summary", {}) or {}
-                ),
+                _mosaic_log_json_safe(getattr(result, "mosaic_fit_debug_summary", {}) or {}),
                 indent=2,
                 sort_keys=True,
             )
@@ -18021,11 +17400,7 @@ def on_fit_ordered_structure_click():
     for idx, axis_vars in enumerate(ordered_structure_fit_atom_toggle_vars):
         label = _atom_site_fractional_label_text(idx)
         name_map: dict[str, str] = {}
-        base_values = (
-            atom_site_values[idx]
-            if idx < len(atom_site_values)
-            else (0.0, 0.0, 0.0)
-        )
+        base_values = atom_site_values[idx] if idx < len(atom_site_values) else (0.0, 0.0, 0.0)
         for axis_index, axis in enumerate(("x", "y", "z")):
             name = f"atom:{label}:{axis}"
             name_map[axis] = name
@@ -18138,10 +17513,18 @@ def on_fit_ordered_structure_click():
                     "pixel_size_m": float(pixel_size_m),
                     "center": mask_center.copy(),
                     "mosaic_params": {
-                        "beam_x_array": np.asarray(mask_mosaic_params["beam_x_array"], dtype=np.float64).copy(),
-                        "beam_y_array": np.asarray(mask_mosaic_params["beam_y_array"], dtype=np.float64).copy(),
-                        "theta_array": np.asarray(mask_mosaic_params["theta_array"], dtype=np.float64).copy(),
-                        "phi_array": np.asarray(mask_mosaic_params["phi_array"], dtype=np.float64).copy(),
+                        "beam_x_array": np.asarray(
+                            mask_mosaic_params["beam_x_array"], dtype=np.float64
+                        ).copy(),
+                        "beam_y_array": np.asarray(
+                            mask_mosaic_params["beam_y_array"], dtype=np.float64
+                        ).copy(),
+                        "theta_array": np.asarray(
+                            mask_mosaic_params["theta_array"], dtype=np.float64
+                        ).copy(),
+                        "phi_array": np.asarray(
+                            mask_mosaic_params["phi_array"], dtype=np.float64
+                        ).copy(),
                         "wavelength_array": np.asarray(
                             mask_mosaic_params["wavelength_array"],
                             dtype=np.float64,
@@ -18224,14 +17607,10 @@ def on_fit_ordered_structure_click():
             specular_width_scale=float(
                 ordered_structure_fit_mask_cfg.get("specular_width_scale", 2.5)
             ),
-            equal_peak_weights=bool(
-                ordered_structure_fit_mask_cfg.get("equal_peak_weights", True)
-            ),
+            equal_peak_weights=bool(ordered_structure_fit_mask_cfg.get("equal_peak_weights", True)),
         )
     except Exception as exc:
-        progress_label_ordered_structure.config(
-            text=f"Ordered structure fit failed: {exc}"
-        )
+        progress_label_ordered_structure.config(text=f"Ordered structure fit failed: {exc}")
         return
 
     if int(mask.roi_count) <= 0 or int(np.count_nonzero(mask.pixel_mask)) <= 0:
@@ -18253,8 +17632,10 @@ def on_fit_ordered_structure_click():
         [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
     )
     fixed_secondary_image = (
-        np.asarray(simulation_runtime_state.stored_secondary_sim_image, dtype=np.float64) * weight2_value
-        if simulation_runtime_state.stored_secondary_sim_image is not None and abs(weight2_value) > 1.0e-12
+        np.asarray(simulation_runtime_state.stored_secondary_sim_image, dtype=np.float64)
+        * weight2_value
+        if simulation_runtime_state.stored_secondary_sim_image is not None
+        and abs(weight2_value) > 1.0e-12
         else np.zeros_like(measured_arr, dtype=np.float64)
     )
     local_structure_state = _clone_structure_model_state_for_ordered_fit()
@@ -18295,8 +17676,7 @@ def on_fit_ordered_structure_click():
                 local_occ[idx] = float(parameter_values[name])
 
         local_atom_values = [
-            [float(x_val), float(y_val), float(z_val)]
-            for (x_val, y_val, z_val) in atom_site_values
+            [float(x_val), float(y_val), float(z_val)] for (x_val, y_val, z_val) in atom_site_values
         ]
         for idx, name_map in enumerate(atom_param_names):
             if idx >= len(local_atom_values):
@@ -18312,9 +17692,7 @@ def on_fit_ordered_structure_click():
         local_iodine_z = gui_structure_model.current_iodine_z(
             local_structure_state,
             local_atom_site_override_state,
-            atom_site_values=[
-                tuple(values) for values in local_atom_values
-            ],
+            atom_site_values=[tuple(values) for values in local_atom_values],
             tcl_error_types=(tk.TclError,),
         )
         gui_structure_model.rebuild_diffraction_inputs(
@@ -18386,10 +17764,18 @@ def on_fit_ordered_structure_click():
                 "pixel_size_m": float(pixel_size_m),
                 "center": base_center.copy(),
                 "mosaic_params": {
-                    "beam_x_array": np.asarray(base_mosaic_params["beam_x_array"], dtype=np.float64).copy(),
-                    "beam_y_array": np.asarray(base_mosaic_params["beam_y_array"], dtype=np.float64).copy(),
-                    "theta_array": np.asarray(base_mosaic_params["theta_array"], dtype=np.float64).copy(),
-                    "phi_array": np.asarray(base_mosaic_params["phi_array"], dtype=np.float64).copy(),
+                    "beam_x_array": np.asarray(
+                        base_mosaic_params["beam_x_array"], dtype=np.float64
+                    ).copy(),
+                    "beam_y_array": np.asarray(
+                        base_mosaic_params["beam_y_array"], dtype=np.float64
+                    ).copy(),
+                    "theta_array": np.asarray(
+                        base_mosaic_params["theta_array"], dtype=np.float64
+                    ).copy(),
+                    "phi_array": np.asarray(
+                        base_mosaic_params["phi_array"], dtype=np.float64
+                    ).copy(),
                     "wavelength_array": np.asarray(
                         base_mosaic_params["wavelength_array"],
                         dtype=np.float64,
@@ -18416,9 +17802,7 @@ def on_fit_ordered_structure_click():
                     "solve_q_steps": int(base_mosaic_params["solve_q_steps"]),
                     "solve_q_rel_tol": float(base_mosaic_params["solve_q_rel_tol"]),
                     "solve_q_mode": int(base_mosaic_params["solve_q_mode"]),
-                    "_sampling_signature": tuple(
-                        base_mosaic_params.get("_sampling_signature", ())
-                    ),
+                    "_sampling_signature": tuple(base_mosaic_params.get("_sampling_signature", ())),
                 },
                 "lambda_value": float(lambda_),
                 "distance_m": float(base_distance),
@@ -18470,18 +17854,12 @@ def on_fit_ordered_structure_click():
             ),
             loss=str(ordered_structure_fit_solver_cfg.get("loss", "soft_l1")),
             f_scale=float(ordered_structure_fit_solver_cfg.get("f_scale", 2.0)),
-            coarse_max_nfev=int(
-                ordered_structure_fit_solver_cfg.get("coarse_max_nfev", 15)
-            ),
-            polish_max_nfev=int(
-                ordered_structure_fit_solver_cfg.get("polish_max_nfev", 10)
-            ),
+            coarse_max_nfev=int(ordered_structure_fit_solver_cfg.get("coarse_max_nfev", 15)),
+            polish_max_nfev=int(ordered_structure_fit_solver_cfg.get("polish_max_nfev", 10)),
             restarts=int(ordered_structure_fit_solver_cfg.get("restarts", 2)),
         )
     except Exception as exc:
-        progress_label_ordered_structure.config(
-            text=f"Ordered structure fit failed: {exc}"
-        )
+        progress_label_ordered_structure.config(text=f"Ordered structure fit failed: {exc}")
         return
     finally:
         ordered_structure_progressbar.stop()
@@ -18572,7 +17950,7 @@ on_fit_geometry_click = lambda: None
 fit_button_geometry = ttk.Button(
     app_shell_view_state.match_run_frame,
     text="Fit Positions & Geometry",
-    command=on_fit_geometry_click
+    command=on_fit_geometry_click,
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
@@ -18610,13 +17988,9 @@ gui_runtime_geometry_interaction.initialize_runtime_geometry_interaction_control
 )
 
 qr_cylinder_display_mode_var = tk.StringVar(value=QR_CYLINDER_DISPLAY_MODE_OFF)
-geometry_overlay_actions_view_state.qr_cylinder_display_mode_var = (
-    qr_cylinder_display_mode_var
-)
+geometry_overlay_actions_view_state.qr_cylinder_display_mode_var = qr_cylinder_display_mode_var
 if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is None:
-    geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var = tk.BooleanVar(
-        value=False
-    )
+    geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var = tk.BooleanVar(value=False)
 _sync_qr_cylinder_overlay_visibility_var()
 
 
@@ -18630,9 +18004,7 @@ qr_cylinder_display_mode_var.trace_add("write", _on_qr_cylinder_display_mode_cha
 
 mosaic_shape_cfg = fit_config.get("mosaic_shape", {}) if isinstance(fit_config, dict) else {}
 mosaic_shape_solver_cfg = (
-    mosaic_shape_cfg.get("solver", {})
-    if isinstance(mosaic_shape_cfg, dict)
-    else {}
+    mosaic_shape_cfg.get("solver", {}) if isinstance(mosaic_shape_cfg, dict) else {}
 )
 mosaic_fit_initial_values = {
     "fit_sigma_mosaic": bool(mosaic_shape_solver_cfg.get("fit_sigma_mosaic", True)),
@@ -18646,9 +18018,7 @@ mosaic_fit_initial_values = {
     ),
 }
 if geometry_overlay_actions_view_state.show_geometry_overlays_var is None:
-    geometry_overlay_actions_view_state.show_geometry_overlays_var = tk.BooleanVar(
-        value=True
-    )
+    geometry_overlay_actions_view_state.show_geometry_overlays_var = tk.BooleanVar(value=True)
 geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = None
 
 gui_views.create_geometry_overlay_action_controls(
@@ -18685,6 +18055,7 @@ gui_views.bind_app_shell_view_mode_sync(
 # Option to add fractional rods between integer L values. This can be enabled via
 # configuration; the GUI control has been removed to reduce interface clutter.
 
+
 def save_1d_snapshot():
     """
     Save only the final 2D simulated image as a .npy file.
@@ -18692,15 +18063,15 @@ def save_1d_snapshot():
     file_path = filedialog.asksaveasfilename(
         initialdir=get_dir("file_dialog_dir"),
         defaultextension=".npy",
-        filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")]
+        filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")],
     )
     if not file_path:
         progress_label.config(text="No file path selected.")
         return
-    
+
     if not file_path.lower().endswith(".npy"):
         file_path += ".npy"
-    
+
     # Grab the currently displayed simulated image. ``global_image_buffer`` holds
     # the scaled image that is shown in the GUI so copying it ensures we save
     # exactly what the user sees.  ``simulation_runtime_state.last_1d_integration_data`` may be empty if
@@ -18716,11 +18087,12 @@ def save_1d_snapshot():
     except Exception as e:
         progress_label.config(text=f"Error saving simulated image: {e}")
 
+
 def save_q_space_representation():
     file_path = filedialog.asksaveasfilename(
         defaultextension=".npy",
         filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")],
-        title="Save Q-Space Snapshot"
+        title="Save Q-Space Snapshot",
     )
     if not file_path:
         return
@@ -18753,12 +18125,12 @@ def save_q_space_representation():
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    
+
     mosaic_params = {
         "beam_x_array": simulation_runtime_state.profile_cache.get("beam_x_array", []),
         "beam_y_array": simulation_runtime_state.profile_cache.get("beam_y_array", []),
-        "theta_array":  simulation_runtime_state.profile_cache.get("theta_array", []),
-        "phi_array":    simulation_runtime_state.profile_cache.get("phi_array", []),
+        "theta_array": simulation_runtime_state.profile_cache.get("theta_array", []),
+        "phi_array": simulation_runtime_state.profile_cache.get("phi_array", []),
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
         "sample_weights": simulation_runtime_state.profile_cache.get("sample_weights"),
         "n2_sample_array": simulation_runtime_state.profile_cache.get("n2_sample_array"),
@@ -18832,13 +18204,15 @@ def save_q_space_representation():
         "parameters": param_dict,
         "q_data": q_data,
         "q_count": q_count,
-        "image_2d": current_2d_display
+        "image_2d": current_2d_display,
     }
     np.save(file_path, data_dict, allow_pickle=True)
     progress_label.config(text=f"Saved Q-Space representation to {file_path}")
 
+
 def save_1d_permutations():
     pass
+
 
 def _clear_widget_children(parent) -> None:
     children_getter = getattr(parent, "winfo_children", None)
@@ -19372,6 +18746,7 @@ def _render_analysis_peak_tools_controls(parent) -> None:
         fit_results_text=_analysis_peak_fit_results_text(),
     )
 
+
 def _render_analysis_export_controls(parent) -> None:
     _clear_widget_children(parent)
     gui_views.create_analysis_export_controls(
@@ -19530,8 +18905,7 @@ def _set_analysis_peak_pick_mode(
             except Exception:
                 pass
         status_text = (
-            message
-            or "Analysis peak picking armed. Click peaks in the caked integration region."
+            message or "Analysis peak picking armed. Click peaks in the caked integration region."
         )
     else:
         analysis_peak_selection_state.pick_armed = False
@@ -19734,7 +19108,9 @@ def _fit_selected_analysis_peaks() -> None:
         axes_to_fit.append("azimuth")
     if not axes_to_fit:
         try:
-            progress_label_positions.config(text="Choose the radial plot, azimuth plot, or both before fitting.")
+            progress_label_positions.config(
+                text="Choose the radial plot, azimuth plot, or both before fitting."
+            )
         except Exception:
             pass
         return
@@ -19803,7 +19179,9 @@ def _fit_selected_analysis_peaks() -> None:
     _set_analysis_peak_fit_results_text(_analysis_peak_fit_results_text())
     if total_attempts <= 0:
         try:
-            progress_label_positions.config(text="No valid 1D data were available for the selected peak fits.")
+            progress_label_positions.config(
+                text="No valid 1D data were available for the selected peak fits."
+            )
         except Exception:
             pass
     else:
@@ -19928,9 +19306,7 @@ def _pop_out_analysis_window() -> None:
     try:
         _show_analysis_tab_detached_placeholders()
         _render_analysis_export_controls(analysis_popout_view_state.exports_frame)
-        _render_analysis_peak_tools_controls(
-            analysis_popout_view_state.peak_tools_frame
-        )
+        _render_analysis_peak_tools_controls(analysis_popout_view_state.peak_tools_frame)
         _render_analysis_plot_controls(
             parent=analysis_popout_view_state.plot_frame,
             range_values=range_values,
@@ -19972,27 +19348,28 @@ if callable(_analysis_tab_trace_add):
 _show_analysis_tab_lazy_placeholders()
 _set_analysis_popout_button_state(detached=False)
 
+
 def run_debug_simulation():
 
     gamma_val = float(gamma_var.get())
     Gamma_val = float(Gamma_var.get())
-    chi_val   = float(chi_var.get())
-    zs_val    = float(zs_var.get())
-    zb_val    = float(zb_var.get())
-    a_val     = float(a_var.get())
-    c_val     = float(c_var.get())
+    chi_val = float(chi_var.get())
+    zs_val = float(zs_var.get())
+    zb_val = float(zb_var.get())
+    a_val = float(a_var.get())
+    c_val = float(c_var.get())
     theta_val = float(_current_effective_theta_initial(strict_count=False))
-    dx_val    = float(debye_x_var.get())
-    dy_val    = float(debye_y_var.get())
+    dx_val = float(debye_x_var.get())
+    dy_val = float(debye_y_var.get())
     corto_val = float(corto_detector_var.get())
-    cx_val    = float(center_x_var.get())
-    cy_val    = float(center_y_var.get())
+    cx_val = float(center_x_var.get())
+    cy_val = float(center_y_var.get())
 
     mosaic_params = {
         "beam_x_array": simulation_runtime_state.profile_cache.get("beam_x_array", []),
         "beam_y_array": simulation_runtime_state.profile_cache.get("beam_y_array", []),
-        "theta_array":  simulation_runtime_state.profile_cache.get("theta_array", []),
-        "phi_array":    simulation_runtime_state.profile_cache.get("phi_array", []),
+        "theta_array": simulation_runtime_state.profile_cache.get("theta_array", []),
+        "phi_array": simulation_runtime_state.profile_cache.get("phi_array", []),
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
@@ -20044,11 +19421,12 @@ def run_debug_simulation():
         cor_angle_var.get(),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
-        save_flag=1
+        save_flag=1,
     )
 
     dump_debug_log()
     progress_label.config(text="Debug simulation complete. Log saved.")
+
 
 gui_views.populate_stacked_button_group(
     (
@@ -20066,33 +19444,33 @@ gui_views.populate_stacked_button_group(
 # manageable as more controls are added.
 geo_frame = CollapsibleFrame(
     app_shell_view_state.left_col,
-    text='Geometry',
+    text="Geometry",
     expanded=True,
 )
 geo_frame.pack(fill=tk.X, padx=5, pady=5)
 
-debye_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Debye Parameters')
+debye_frame = CollapsibleFrame(app_shell_view_state.right_col, text="Debye Parameters")
 debye_frame.pack(fill=tk.X, padx=5, pady=5)
 
-detector_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Detector')
+detector_frame = CollapsibleFrame(app_shell_view_state.left_col, text="Detector")
 detector_frame.pack(fill=tk.X, padx=5, pady=5)
 
 lattice_frame = CollapsibleFrame(
     app_shell_view_state.left_col,
-    text='Lattice Parameters',
+    text="Lattice Parameters",
     expanded=True,
 )
 lattice_frame.pack(fill=tk.X, padx=5, pady=5)
 
 mosaic_frame = CollapsibleFrame(
     app_shell_view_state.left_col,
-    text='Mosaic Broadening',
+    text="Mosaic Broadening",
 )
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
 sampling_pruning_frame = CollapsibleFrame(
     app_shell_view_state.right_col,
-    text='Sampling, Optics, Arc Integration && Pruning',
+    text="Sampling, Optics, Arc Integration && Pruning",
 )
 sampling_pruning_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -20100,6 +19478,7 @@ legacy_resolution_options = [*legacy_resolution_sample_counts.keys(), CUSTOM_SAM
 initial_resolution = str(defaults.get("sampling_resolution", CUSTOM_SAMPLING_OPTION))
 if initial_resolution not in legacy_resolution_options:
     initial_resolution = CUSTOM_SAMPLING_OPTION
+
 
 def _parse_sample_count(raw_value, fallback):
     return gui_controllers.normalize_sample_count(
@@ -20203,8 +19582,10 @@ def _refresh_resolution_display():
     )
     if solve_q_mode_var is not None:
         try:
-            solve_q_mode_summary = gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(
-                solve_q_mode_var.get()
+            solve_q_mode_summary = (
+                gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(
+                    solve_q_mode_var.get()
+                )
             )
         except Exception:
             solve_q_mode_summary = ""
@@ -20244,9 +19625,7 @@ def _preview_random_sample_count(_value=None):
 
 def _apply_random_sample_count(*, trigger_update=True):
     previous_num_samples = int(simulation_runtime_state.num_samples)
-    _normalize_random_sample_count_control(
-        default=max(1, simulation_runtime_state.num_samples)
-    )
+    _normalize_random_sample_count_control(default=max(1, simulation_runtime_state.num_samples))
     _sync_active_sample_count()
     _refresh_resolution_display()
     if trigger_update and simulation_runtime_state.num_samples != previous_num_samples:
@@ -20269,7 +19648,9 @@ def _current_structure_model_rebuild_inputs():
     try:
         p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
     except (tk.TclError, ValueError):
-        p_vals = list(structure_model_state.last_p_triplet or [defaults["p0"], defaults["p1"], defaults["p2"]])
+        p_vals = list(
+            structure_model_state.last_p_triplet or [defaults["p0"], defaults["p1"], defaults["p2"]]
+        )
 
     try:
         w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
@@ -20340,9 +19721,7 @@ def ensure_valid_resolution_choice():
         )
         sample_count_var = sampling_optics_controls_view_state.sample_count_var
         if sample_count_var is not None:
-            sample_count_var.set(
-                _parse_sample_count(mapped_count, _default_random_sample_count())
-            )
+            sample_count_var.set(_parse_sample_count(mapped_count, _default_random_sample_count()))
         normalized = CUSTOM_SAMPLING_OPTION
     if resolution_var.get() != normalized:
         resolution_var.set(normalized)
@@ -20373,29 +19752,21 @@ gui_views.create_sampling_optics_controls(
     sample_count_value=initial_sample_count,
     sample_count_min=MIN_RANDOM_SAMPLE_COUNT,
     sample_count_max=MAX_RANDOM_SAMPLE_COUNT,
-    sample_count_text=gui_controllers.format_sampling_count_summary(
-        initial_sample_count
-    ),
+    sample_count_text=gui_controllers.format_sampling_count_summary(initial_sample_count),
     rod_points_per_gz_value=initial_rod_points_per_gz,
     rod_points_per_gz_min=gui_controllers.ROD_POINTS_PER_GZ_MIN,
     rod_points_per_gz_max=gui_controllers.ROD_POINTS_PER_GZ_MAX,
-    rod_points_per_gz_text=gui_controllers.format_rod_points_per_gz(
-        initial_rod_points_per_gz
-    ),
+    rod_points_per_gz_text=gui_controllers.format_rod_points_per_gz(initial_rod_points_per_gz),
     rod_point_total_text=gui_controllers.format_longest_rod_point_summary(
         initial_rod_points_per_gz,
         two_theta_max=two_theta_range[1],
         lambda_angstrom=lambda_,
     ),
-    optics_mode_text=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')),
+    optics_mode_text=_normalize_optics_mode_label(defaults.get("optics_mode", "fast")),
     on_sample_count_slide=_preview_random_sample_count,
-    on_commit_sample_count=lambda _event: _apply_random_sample_count(
-        trigger_update=True
-    ),
+    on_commit_sample_count=lambda _event: _apply_random_sample_count(trigger_update=True),
     on_rod_points_per_gz_slide=_preview_rod_points_per_gz,
-    on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(
-        trigger_update=True
-    ),
+    on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(trigger_update=True),
 )
 custom_samples_var = sampling_optics_controls_view_state.sample_count_var
 resolution_var = tk.StringVar(value=CUSTOM_SAMPLING_OPTION)
@@ -20404,14 +19775,16 @@ sample_count_scale = sampling_optics_controls_view_state.sample_count_scale
 rod_points_per_gz_var = sampling_optics_controls_view_state.rod_points_per_gz_var
 optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
 
+
 def on_resolution_option_change(*_):
     ensure_valid_resolution_choice()
+
 
 _set_sampling_method_controls_state()
 _sync_active_sample_count()
 _refresh_resolution_display()
 _apply_rod_points_per_gz(trigger_update=False)
-resolution_var.trace_add('write', on_resolution_option_change)
+resolution_var.trace_add("write", on_resolution_option_change)
 sample_count_trace_add = getattr(sample_count_var, "trace_add", None)
 if callable(sample_count_trace_add):
     sample_count_trace_add("write", lambda *_args: _refresh_resolution_display())
@@ -20423,7 +19796,7 @@ def on_optics_mode_change(*_):
     schedule_update()
 
 
-optics_mode_var.trace_add('write', on_optics_mode_change)
+optics_mode_var.trace_add("write", on_optics_mode_change)
 
 structure_factor_pruning_controls_runtime.create_controls(parent=sampling_pruning_frame.frame)
 sf_prune_bias_var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
@@ -20433,15 +19806,13 @@ solve_q_mode_var = structure_factor_pruning_controls_view_state.solve_q_mode_var
 solve_q_steps_var = structure_factor_pruning_controls_view_state.solve_q_steps_var
 solve_q_steps_scale = structure_factor_pruning_controls_view_state.solve_q_steps_scale
 solve_q_rel_tol_var = structure_factor_pruning_controls_view_state.solve_q_rel_tol_var
-solve_q_rel_tol_scale = (
-    structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
-)
+solve_q_rel_tol_scale = structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
 trace_add = getattr(solve_q_mode_var, "trace_add", None)
 if callable(trace_add):
     trace_add("write", lambda *_args: _refresh_resolution_display())
 _refresh_resolution_display()
 
-center_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Beam Controls')
+center_frame = CollapsibleFrame(app_shell_view_state.left_col, text="Beam Controls")
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
 gui_views.create_beam_mosaic_parameter_sliders(
@@ -20527,9 +19898,7 @@ bandwidth_percent_var = beam_mosaic_parameter_sliders_view_state.bandwidth_perce
 bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
 center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
-main_display_raster_size_var = tk.DoubleVar(
-    value=float(_default_main_display_raster_size_limit())
-)
+main_display_raster_size_var = tk.DoubleVar(value=float(_default_main_display_raster_size_limit()))
 _main_display_raster_size_scale_bounds = SimpleNamespace(
     cget=lambda key: (
         float(MAIN_DISPLAY_RASTER_MIN_SIZE)
@@ -20642,14 +20011,10 @@ gui_views.populate_app_shell_quick_controls(
     ],
 )
 analysis_view_controls_view_state.check_beam_center_spot = (
-    app_shell_view_state.quick_control_widgets.get("show_beam_center_spot", {}).get(
-        "checkbutton"
-    )
+    app_shell_view_state.quick_control_widgets.get("show_beam_center_spot", {}).get("checkbutton")
 )
 geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
-    app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
-        "checkbutton"
-    )
+    app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get("checkbutton")
 )
 try:
     fast_viewer_workflow.refresh_status_text()
@@ -20662,8 +20027,7 @@ def _refresh_refine_section_summaries(*_args) -> None:
 
     try:
         geo_summary = (
-            f"theta {float(theta_initial_var.get()):.2f} deg | "
-            f"chi {float(chi_var.get()):.3f} deg"
+            f"theta {float(theta_initial_var.get()):.2f} deg | chi {float(chi_var.get()):.3f} deg"
         )
     except Exception:
         geo_summary = ""
@@ -20685,9 +20049,7 @@ def _refresh_refine_section_summaries(*_args) -> None:
     gui_views.set_collapsible_header_summary(lattice_frame, lattice_summary)
 
     try:
-        beam_summary = (
-            f"row {float(center_x_var.get()):.0f} | col {float(center_y_var.get()):.0f}"
-        )
+        beam_summary = f"row {float(center_x_var.get()):.0f} | col {float(center_y_var.get()):.0f}"
     except Exception:
         beam_summary = ""
     gui_views.set_collapsible_header_summary(center_frame, beam_summary)
@@ -20703,9 +20065,7 @@ def _refresh_refine_section_summaries(*_args) -> None:
     gui_views.set_collapsible_header_summary(mosaic_frame, mosaic_summary)
 
     try:
-        debye_summary = (
-            f"Qz {float(debye_x_var.get()):.3f} | Qr {float(debye_y_var.get()):.3f}"
-        )
+        debye_summary = f"Qz {float(debye_x_var.get()):.3f} | Qr {float(debye_y_var.get()):.3f}"
     except Exception:
         debye_summary = ""
     gui_views.set_collapsible_header_summary(debye_frame, debye_summary)
@@ -20991,9 +20351,7 @@ def _build_geometry_fit_async_job(
     params = dict(bindings.value_callbacks.current_params() or {})
     mosaic_params = dict(params.get("mosaic_params", {}) or {})
     var_names = [str(name) for name in (bindings.value_callbacks.current_var_names() or ())]
-    preserve_live_theta = (
-        "theta_initial" not in var_names and "theta_offset" not in var_names
-    )
+    preserve_live_theta = "theta_initial" not in var_names and "theta_offset" not in var_names
     prepare_bindings = bindings.prepare_bindings_factory(var_names)
     manual_dataset_bindings = prepare_bindings.manual_dataset_bindings
     execution_bindings = bindings.execution_bindings
@@ -21032,9 +20390,7 @@ def _build_geometry_fit_async_job(
         try:
             selected_background_indices = [
                 int(idx)
-                for idx in prepare_bindings.current_geometry_fit_background_indices(
-                    strict=True
-                )
+                for idx in prepare_bindings.current_geometry_fit_background_indices(strict=True)
             ]
         except Exception as exc:
             selection_error = str(exc)
@@ -21065,9 +20421,7 @@ def _build_geometry_fit_async_job(
             try:
                 background_theta_values = [
                     float(value)
-                    for value in prepare_bindings.current_background_theta_values(
-                        strict_count=True
-                    )
+                    for value in prepare_bindings.current_background_theta_values(strict_count=True)
                 ]
                 theta_offset_value = float(
                     prepare_bindings.current_geometry_theta_offset(strict=True)
@@ -21086,9 +20440,7 @@ def _build_geometry_fit_async_job(
             else int(current_background_index)
         )
     )
-    joint_background_mode = bool(
-        uses_shared_theta and len(selected_background_indices) > 1
-    )
+    joint_background_mode = bool(uses_shared_theta and len(selected_background_indices) > 1)
     build_all_selected_backgrounds = bool(joint_background_mode)
     if uses_shared_theta:
         fit_params_snapshot["theta_offset"] = float(theta_offset_value)
@@ -21102,11 +20454,7 @@ def _build_geometry_fit_async_job(
         fit_params_snapshot["theta_initial"] = float(theta_default)
         background_theta_values = [float(theta_default)]
 
-    if (
-        not selection_applied
-        or selection_error is not None
-        or not active_in_selection
-    ):
+    if not selection_applied or selection_error is not None or not active_in_selection:
         required_indices: list[int] = []
     elif build_all_selected_backgrounds:
         required_indices = [int(idx) for idx in selected_background_indices]
@@ -21114,6 +20462,7 @@ def _build_geometry_fit_async_job(
         required_indices = [int(primary_index)]
 
     background_images: dict[int, dict[str, np.ndarray]] = {}
+    caked_views_by_background: dict[int, dict[str, np.ndarray]] = {}
     manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
     source_snapshots: dict[int, dict[str, object]] = {}
     requested_signatures: dict[int, object] = {}
@@ -21129,8 +20478,8 @@ def _build_geometry_fit_async_job(
         return float(fit_params_snapshot.get("theta_initial", theta_initial_value))
 
     for idx in required_indices:
-        native_background, display_background = (
-            manual_dataset_bindings.load_background_by_index(int(idx))
+        native_background, display_background = manual_dataset_bindings.load_background_by_index(
+            int(idx)
         )
         background_images[int(idx)] = {
             "native": np.asarray(native_background, dtype=np.float64).copy(),
@@ -21158,12 +20507,24 @@ def _build_geometry_fit_async_job(
             params_i,
         )
         requested_signatures[int(idx)] = requested_signature
-        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(
-            requested_signature
-        )
+        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(requested_signature)
 
     geometry_runtime_cfg = copy.deepcopy(
         prepare_bindings.build_runtime_config(dict(fit_params_snapshot))
+    )
+    solver_runtime_cfg = gui_geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
+        gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+            geometry_runtime_cfg,
+            joint_background_mode=joint_background_mode,
+        ),
+        joint_background_mode=joint_background_mode,
+    )
+    fit_solver_mosaic_params, fit_sample_count = (
+        gui_geometry_fit.build_geometry_fit_solver_mosaic_params(
+            params=fit_params_snapshot,
+            geometry_runtime_cfg=solver_runtime_cfg,
+            build_mosaic_params=build_mosaic_params,
+        )
     )
     try:
         manual_match_config = (
@@ -21174,9 +20535,11 @@ def _build_geometry_fit_async_job(
     except Exception:
         manual_match_config = {}
     try:
-        pick_uses_caked_space = bool(
-            manual_dataset_bindings.pick_uses_caked_space()
-        ) if callable(manual_dataset_bindings.pick_uses_caked_space) else False
+        pick_uses_caked_space = (
+            bool(manual_dataset_bindings.pick_uses_caked_space())
+            if callable(manual_dataset_bindings.pick_uses_caked_space)
+            else False
+        )
     except Exception:
         pick_uses_caked_space = False
 
@@ -21187,6 +20550,25 @@ def _build_geometry_fit_async_job(
             for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
             if isinstance(entry, Mapping)
         ]
+        caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
+        if isinstance(caked_view_payload, tuple) and len(caked_view_payload) >= 3:
+            try:
+                caked_views_by_background[int(current_background_index)] = {
+                    "background": np.asarray(
+                        caked_view_payload[0],
+                        dtype=np.float64,
+                    ).copy(),
+                    "radial_axis": np.asarray(
+                        caked_view_payload[1],
+                        dtype=np.float64,
+                    ).copy(),
+                    "azimuth_axis": np.asarray(
+                        caked_view_payload[2],
+                        dtype=np.float64,
+                    ).copy(),
+                }
+            except Exception:
+                pass
 
     simulation_runtime_state.geometry_fit_job_counter = (
         int(simulation_runtime_state.geometry_fit_job_counter) + 1
@@ -21200,6 +20582,10 @@ def _build_geometry_fit_async_job(
         "var_names": list(var_names),
         "preserve_live_theta": bool(preserve_live_theta),
         "mosaic_params": dict(mosaic_params),
+        "fit_solver_mosaic_params": (
+            dict(fit_solver_mosaic_params) if fit_sample_count is not None else None
+        ),
+        "fit_sample_count": fit_sample_count,
         "fit_config": fit_config_snapshot,
         "geometry_runtime_cfg": geometry_runtime_cfg,
         "theta_initial": float(theta_initial_value),
@@ -21219,6 +20605,7 @@ def _build_geometry_fit_async_job(
         "image_size": int(manual_dataset_bindings.image_size),
         "display_rotate_k": int(manual_dataset_bindings.display_rotate_k),
         "background_images": background_images,
+        "caked_views_by_background": caked_views_by_background,
         "manual_pairs_by_background": manual_pairs_by_background,
         "source_snapshots": source_snapshots,
         "background_cache_by_index": {},
@@ -21230,12 +20617,8 @@ def _build_geometry_fit_async_job(
         "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
         "simulation_diagnostics": _geometry_manual_last_simulation_diagnostics(),
         "live_cache_inventory": _live_cache_inventory_snapshot(),
-        "memory_intersection_cache": _copy_intersection_cache_tables(
-            get_last_intersection_cache()
-        ),
-        "memory_intersection_cache_signature": (
-            simulation_runtime_state.last_simulation_signature
-        ),
+        "memory_intersection_cache": _copy_intersection_cache_tables(get_last_intersection_cache()),
+        "memory_intersection_cache_signature": (simulation_runtime_state.last_simulation_signature),
         "live_rows_by_background": live_rows_by_background,
         "live_rows_signature": simulation_runtime_state.last_simulation_signature,
         "manual_match_config": manual_match_config,
@@ -21247,13 +20630,9 @@ def _build_geometry_fit_async_job(
             manual_dataset_bindings.geometry_manual_entry_display_coords
         ),
         "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
-        "display_to_native_sim_coords": (
-            manual_dataset_bindings.display_to_native_sim_coords
-        ),
+        "display_to_native_sim_coords": (manual_dataset_bindings.display_to_native_sim_coords),
         "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
-        "apply_orientation_to_entries": (
-            manual_dataset_bindings.apply_orientation_to_entries
-        ),
+        "apply_orientation_to_entries": (manual_dataset_bindings.apply_orientation_to_entries),
         "orient_image_for_fit": manual_dataset_bindings.orient_image_for_fit,
         "apply_background_backend_orientation": (
             manual_dataset_bindings.apply_background_backend_orientation
@@ -21267,6 +20646,7 @@ def _build_geometry_fit_async_job(
         "solve_fit": bindings.solve_fit,
         "execution_bindings": execution_bindings,
         "event_queue": simulation_runtime_state.geometry_fit_event_queue,
+        "enable_live_update_events": False,
     }
 
 
@@ -21303,9 +20683,7 @@ def _handle_geometry_fit_worker_event(kind: str, payload: object) -> None:
             _geometry_fit_cmd_line(message_text)
     if event_kind == "preflight_failure":
         error_text = str(
-            payload_mapping.get("error_text")
-            or payload_mapping.get("message")
-            or ""
+            payload_mapping.get("error_text") or payload_mapping.get("message") or ""
         ).strip()
         if error_text:
             _geometry_fit_cmd_line(f"failed: {error_text}")
@@ -21370,9 +20748,7 @@ def _run_async_geometry_fit_worker_job(
     worker_source_snapshot_diagnostics = copy.deepcopy(
         job_data.get("source_snapshot_diagnostics") or {}
     )
-    worker_simulation_diagnostics = copy.deepcopy(
-        job_data.get("simulation_diagnostics") or {}
-    )
+    worker_simulation_diagnostics = copy.deepcopy(job_data.get("simulation_diagnostics") or {})
     worker_background_cache_by_index: dict[
         int,
         gui_geometry_fit.GeometryFitBackgroundCacheBundle,
@@ -21397,6 +20773,38 @@ def _run_async_geometry_fit_worker_job(
             np.asarray(background_payload.get("display"), dtype=np.float64).copy(),
         )
 
+    def _load_caked_view_by_index_snapshot(
+        index: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        caked_payload = dict(
+            dict(job_data.get("caked_views_by_background", {}) or {}).get(int(index)) or {}
+        )
+        if not caked_payload:
+            return None
+        try:
+            caked_background = np.asarray(
+                caked_payload.get("background"),
+                dtype=np.float64,
+            ).copy()
+            radial_axis = np.asarray(
+                caked_payload.get("radial_axis"),
+                dtype=np.float64,
+            ).copy()
+            azimuth_axis = np.asarray(
+                caked_payload.get("azimuth_axis"),
+                dtype=np.float64,
+            ).copy()
+        except Exception:
+            return None
+        if (
+            caked_background.ndim != 2
+            or caked_background.size <= 0
+            or radial_axis.size <= 0
+            or azimuth_axis.size <= 0
+        ):
+            return None
+        return caked_background, radial_axis, azimuth_axis
+
     def _project_source_rows(raw_rows: Sequence[object] | None) -> Sequence[object]:
         project_rows = job_data.get("project_rows")
         if callable(project_rows):
@@ -21404,11 +20812,7 @@ def _run_async_geometry_fit_worker_job(
         return raw_rows or ()
 
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
-        return [
-            dict(entry)
-            for entry in (raw_rows or ())
-            if isinstance(entry, Mapping)
-        ]
+        return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
     def _copy_optional_values(
         raw_values: Sequence[object] | None,
@@ -21424,9 +20828,7 @@ def _run_async_geometry_fit_worker_job(
         return float(job_data.get("theta_initial", 0.0))
 
     def _theta_initial_for_background_worker(background_index: int) -> float:
-        theta_initial_mapping = dict(
-            job_data.get("theta_initial_by_background", {}) or {}
-        )
+        theta_initial_mapping = dict(job_data.get("theta_initial_by_background", {}) or {})
         if int(background_index) in theta_initial_mapping:
             return float(theta_initial_mapping[int(background_index)])
         return float(job_data.get("theta_initial", 0.0))
@@ -21470,14 +20872,8 @@ def _run_async_geometry_fit_worker_job(
         cache_metadata: Mapping[str, object] | None = None,
     ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle:
         copied_stored_rows = _copy_source_rows(stored_rows)
-        copied_projected_rows = _copy_source_rows(
-            _project_source_rows(copied_stored_rows)
-        )
-        resolved_diagnostics = (
-            dict(diagnostics)
-            if isinstance(diagnostics, Mapping)
-            else {}
-        )
+        copied_projected_rows = _copy_source_rows(_project_source_rows(copied_stored_rows))
+        resolved_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
         resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
         resolved_diagnostics.setdefault(
             "cache_family",
@@ -21528,11 +20924,7 @@ def _run_async_geometry_fit_worker_job(
             peak_table_lattice=_copy_optional_values(peak_table_lattice),
             hit_tables=_copy_optional_values(hit_tables),
             intersection_cache=_copy_optional_values(intersection_cache),
-            cache_metadata=(
-                dict(cache_metadata)
-                if isinstance(cache_metadata, Mapping)
-                else None
-            ),
+            cache_metadata=(dict(cache_metadata) if isinstance(cache_metadata, Mapping) else None),
         )
 
     def _build_source_rows_for_rebuild(
@@ -21578,9 +20970,7 @@ def _run_async_geometry_fit_worker_job(
             job_data.get("requested_signature_summaries", {}) or {}
         ).get(int(background_idx))
         if requested_signature_summary is None:
-            requested_signature_summary = _live_cache_signature_summary(
-                requested_signature
-            )
+            requested_signature_summary = _live_cache_signature_summary(requested_signature)
         background_label = dict(job_data.get("background_labels", {}) or {}).get(
             int(background_idx),
             f"background {int(background_idx) + 1}",
@@ -21632,9 +21022,7 @@ def _run_async_geometry_fit_worker_job(
                 cache_source=str(snapshot.get("created_from") or "source_snapshot"),
                 diagnostics={
                     "created_from": snapshot.get("created_from"),
-                    "cache_source": str(
-                        snapshot.get("created_from") or "source_snapshot"
-                    ),
+                    "cache_source": str(snapshot.get("created_from") or "source_snapshot"),
                 },
             )
             _store_worker_background_cache_bundle(bundle)
@@ -21659,16 +21047,11 @@ def _run_async_geometry_fit_worker_job(
                 int(background_idx) == int(job_data.get("current_background_index", -1))
             ),
             build_live_rows=(
-                lambda: [
-                    dict(entry)
-                    for entry in (
-                        live_rows
-                        or ()
-                    )
-                    if isinstance(entry, Mapping)
-                ]
-                if requested_signature == live_rows_signature
-                else []
+                lambda: (
+                    [dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)]
+                    if requested_signature == live_rows_signature
+                    else []
+                )
             ),
             get_memory_intersection_cache=(
                 lambda: _copy_intersection_cache_tables(
@@ -21696,21 +21079,15 @@ def _run_async_geometry_fit_worker_job(
             project_rows=_project_source_rows,
             live_cache_inventory=job_data.get("live_cache_inventory", {}),
         )
-        _set_worker_source_snapshot_diagnostics(
-            **dict(rebuild_result.diagnostics or {})
-        )
+        _set_worker_source_snapshot_diagnostics(**dict(rebuild_result.diagnostics or {}))
         worker_simulation_diagnostics.clear()
-        worker_simulation_diagnostics.update(
-            dict(rebuild_result.diagnostics or {})
-        )
+        worker_simulation_diagnostics.update(dict(rebuild_result.diagnostics or {}))
         if rebuild_result.stored_rows:
             bundle = _build_geometry_fit_background_cache_bundle(
                 background_index=int(background_idx),
                 background_label=str(background_label),
                 requested_signature=rebuild_result.requested_signature,
-                requested_signature_summary=(
-                    rebuild_result.requested_signature_summary
-                ),
+                requested_signature_summary=(rebuild_result.requested_signature_summary),
                 theta_base=float(theta_base),
                 theta_initial=float(params_local.get("theta_initial", 0.0)),
                 stored_rows=rebuild_result.stored_rows,
@@ -21735,9 +21112,7 @@ def _run_async_geometry_fit_worker_job(
         background_idx = int(background_index)
         bundle = _prebuild_background_cache_bundle_worker(
             background_idx,
-            theta_base=float(
-                _theta_base_for_background_worker(int(background_idx))
-            ),
+            theta_base=float(_theta_base_for_background_worker(int(background_idx))),
             param_set=param_set,
             consumer=str(consumer or "geometry_fit_dataset"),
             prior_diagnostics=prior_diagnostics,
@@ -21761,9 +21136,7 @@ def _run_async_geometry_fit_worker_job(
             job_data.get("requested_signature_summaries", {}) or {}
         ).get(int(background_idx))
         if requested_signature_summary is None:
-            requested_signature_summary = _live_cache_signature_summary(
-                requested_signature
-            )
+            requested_signature_summary = _live_cache_signature_summary(requested_signature)
         background_label = dict(job_data.get("background_labels", {}) or {}).get(
             int(background_idx),
             f"background {int(background_idx) + 1}",
@@ -21788,9 +21161,7 @@ def _run_async_geometry_fit_worker_job(
             )
             return []
 
-        stored_signature_summary = _live_cache_signature_summary(
-            bundle.requested_signature
-        )
+        stored_signature_summary = _live_cache_signature_summary(bundle.requested_signature)
         if bundle.requested_signature != requested_signature:
             _set_worker_source_snapshot_diagnostics(
                 source="geometry_fit_background_cache",
@@ -21858,10 +21229,7 @@ def _run_async_geometry_fit_worker_job(
         return projected_rows
 
     def _prebuild_required_background_caches() -> None:
-        required_indices = [
-            int(idx)
-            for idx in (job_data.get("required_indices", ()) or ())
-        ]
+        required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
         for background_idx in required_indices:
             background_label = dict(job_data.get("background_labels", {}) or {}).get(
                 int(background_idx),
@@ -21873,16 +21241,13 @@ def _run_async_geometry_fit_worker_job(
                     "background_index": int(background_idx),
                     "background_label": str(background_label),
                     "message": (
-                        "preflight: building source cache for "
-                        f"background {int(background_idx) + 1}"
+                        f"preflight: building source cache for background {int(background_idx) + 1}"
                     ),
                 },
             )
             bundle = _prebuild_background_cache_bundle_worker(
                 int(background_idx),
-                theta_base=float(
-                    _theta_base_for_background_worker(int(background_idx))
-                ),
+                theta_base=float(_theta_base_for_background_worker(int(background_idx))),
             )
             if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
                 failure_status = str(
@@ -21940,35 +21305,26 @@ def _run_async_geometry_fit_worker_job(
             ]
         ),
         load_background_by_index=_load_background_by_index_snapshot,
-        apply_background_backend_orientation=job_data.get(
-            "apply_background_backend_orientation"
-        ),
+        apply_background_backend_orientation=job_data.get("apply_background_backend_orientation"),
         geometry_manual_simulated_peaks_for_params=(lambda *_args, **_kwargs: []),
-        geometry_manual_simulated_lookup=job_data.get(
-            "geometry_manual_simulated_lookup"
-        ),
+        geometry_manual_simulated_lookup=job_data.get("geometry_manual_simulated_lookup"),
         geometry_manual_source_rows_for_background=_source_rows_for_background_worker,
         geometry_manual_rebuild_source_rows_for_background=(
             _rebuild_source_rows_for_background_worker
         ),
-        geometry_manual_last_source_snapshot_diagnostics=(
-            _last_worker_source_snapshot_diagnostics
-        ),
+        geometry_manual_last_source_snapshot_diagnostics=(_last_worker_source_snapshot_diagnostics),
         geometry_manual_last_simulation_diagnostics=_last_worker_simulation_diagnostics,
         geometry_manual_match_config=(
             lambda: copy.deepcopy(job_data.get("manual_match_config", {}))
         ),
-        geometry_manual_entry_display_coords=job_data.get(
-            "geometry_manual_entry_display_coords"
-        ),
+        geometry_manual_entry_display_coords=job_data.get("geometry_manual_entry_display_coords"),
+        geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
         select_fit_orientation=job_data.get("select_fit_orientation"),
         apply_orientation_to_entries=job_data.get("apply_orientation_to_entries"),
         orient_image_for_fit=job_data.get("orient_image_for_fit"),
-        pick_uses_caked_space=(
-            lambda: bool(job_data.get("pick_uses_caked_space", False))
-        ),
+        pick_uses_caked_space=(lambda: bool(job_data.get("pick_uses_caked_space", False))),
     )
 
     def _stage_callback(stage: str, payload: Mapping[str, object]) -> None:
@@ -21989,9 +21345,7 @@ def _run_async_geometry_fit_worker_job(
             ),
             current_geometry_fit_background_indices=(
                 lambda **_kwargs: (
-                    (_ for _ in ()).throw(
-                        RuntimeError(str(job_data.get("selection_error")))
-                    )
+                    (_ for _ in ()).throw(RuntimeError(str(job_data.get("selection_error"))))
                     if job_data.get("selection_error")
                     else list(job_data.get("selected_background_indices", ()) or ())
                 )
@@ -22004,9 +21358,7 @@ def _run_async_geometry_fit_worker_job(
             ),
             current_background_theta_values=(
                 lambda **_kwargs: (
-                    (_ for _ in ()).throw(
-                        RuntimeError(str(job_data.get("background_theta_error")))
-                    )
+                    (_ for _ in ()).throw(RuntimeError(str(job_data.get("background_theta_error"))))
                     if job_data.get("background_theta_error")
                     else list(job_data.get("background_theta_values", ()) or ())
                 )
@@ -22045,9 +21397,7 @@ def _run_async_geometry_fit_worker_job(
             var_names=list(job_data.get("var_names", ()) or ()),
             dataset_infos=None,
             current_dataset=None,
-            selected_background_indices=list(
-                job_data.get("selected_background_indices", ()) or ()
-            ),
+            selected_background_indices=list(job_data.get("selected_background_indices", ()) or ()),
             joint_background_mode=bool(job_data.get("joint_background_mode", False)),
             geometry_runtime_cfg=dict(job_data.get("fit_config", {}) or {}),
         )
@@ -22075,31 +21425,25 @@ def _run_async_geometry_fit_worker_job(
 
     if prepare_result.prepared_run is None:
         should_force_preflight_log = bool(prepare_result.error_text) or bool(
-            gui_geometry_fit.geometry_fit_debug_logging_enabled(
-                job_data.get("fit_config")
-            )
+            gui_geometry_fit.geometry_fit_debug_logging_enabled(job_data.get("fit_config"))
         )
         if should_force_preflight_log:
             preflight_error_text = str(
-                prepare_result.error_text
-                or "Geometry fit aborted before solver start."
+                prepare_result.error_text or "Geometry fit aborted before solver start."
             )
-            failure_log_sections = (
-                list(prepare_result.failure_log_sections or ())
-                or gui_geometry_fit.build_geometry_fit_preflight_log_sections(
-                    error_text=preflight_error_text,
-                    params=dict(job_data.get("params", {}) or {}),
-                    var_names=list(job_data.get("var_names", ()) or ()),
-                    dataset_infos=None,
-                    current_dataset=None,
-                    selected_background_indices=list(
-                        job_data.get("selected_background_indices", ()) or ()
-                    ),
-                    joint_background_mode=bool(
-                        job_data.get("joint_background_mode", False)
-                    ),
-                    geometry_runtime_cfg=dict(job_data.get("fit_config", {}) or {}),
-                )
+            failure_log_sections = list(
+                prepare_result.failure_log_sections or ()
+            ) or gui_geometry_fit.build_geometry_fit_preflight_log_sections(
+                error_text=preflight_error_text,
+                params=dict(job_data.get("params", {}) or {}),
+                var_names=list(job_data.get("var_names", ()) or ()),
+                dataset_infos=None,
+                current_dataset=None,
+                selected_background_indices=list(
+                    job_data.get("selected_background_indices", ()) or ()
+                ),
+                joint_background_mode=bool(job_data.get("joint_background_mode", False)),
+                geometry_runtime_cfg=dict(job_data.get("fit_config", {}) or {}),
             )
             logged_path = _persist_geometry_fit_preflight_failure_log(
                 stamp=str(job_data.get("stamp", "")),
@@ -22123,6 +21467,12 @@ def _run_async_geometry_fit_worker_job(
             error_text=prepare_result.error_text,
         )
 
+    fit_solver_mosaic_params = job_data.get("fit_solver_mosaic_params")
+    if isinstance(fit_solver_mosaic_params, Mapping):
+        prepare_result.prepared_run.fit_params["mosaic_params"] = copy.deepcopy(
+            dict(fit_solver_mosaic_params)
+        )
+
     execution_result = gui_geometry_fit.execute_runtime_geometry_fit_solver_phase(
         prepared_run=prepare_result.prepared_run,
         var_names=list(job_data.get("var_names", ()) or ()),
@@ -22130,15 +21480,15 @@ def _run_async_geometry_fit_worker_job(
         solver_inputs=job_data.get("solver_inputs"),
         stamp=str(job_data.get("stamp", "")),
         log_path=job_data.get("log_path"),
-        event_callback=(
-            lambda kind, payload: _emit_worker_event(str(kind), dict(payload or {}))
-        ),
+        event_callback=(lambda kind, payload: _emit_worker_event(str(kind), dict(payload or {}))),
         live_update_callback=(
             lambda payload: _emit_worker_event(
                 "live_cache_update",
                 dict(payload or {}),
             )
-        ),
+        )
+        if bool(job_data.get("enable_live_update_events", True))
+        else None,
     )
     worker_background_cache_by_index.clear()
     return _geometry_fit_worker_action_result(
@@ -22232,11 +21582,7 @@ def _poll_async_geometry_fit_job() -> None:
     simulation_runtime_state.geometry_fit_poll_token = None
     active_job = simulation_runtime_state.geometry_fit_active_job
     future = simulation_runtime_state.geometry_fit_future
-    active_job_id = (
-        int(active_job.get("job_id", -1))
-        if isinstance(active_job, Mapping)
-        else None
-    )
+    active_job_id = int(active_job.get("job_id", -1)) if isinstance(active_job, Mapping) else None
     _drain_geometry_fit_worker_events(job_id=active_job_id)
 
     if future is None or not isinstance(active_job, Mapping):
@@ -22321,9 +21667,7 @@ def _on_fit_geometry_click_async():
                     and "theta_offset" not in current_var_names
                 ),
             },
-            prepare_result=gui_geometry_fit.GeometryFitPreparationResult(
-                error_text=error_text
-            ),
+            prepare_result=gui_geometry_fit.GeometryFitPreparationResult(error_text=error_text),
             error_text=error_text,
         )
         _show_geometry_fit_action_notice(action_result)
@@ -22333,206 +21677,174 @@ def _on_fit_geometry_click_async():
     _submit_async_geometry_fit_job(job)
     return None
 
-geometry_fit_runtime_workflow = (
-    gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
-        geometry_fit_module=gui_geometry_fit,
-        runtime_fit_analysis_module=gui_runtime_fit_analysis,
-        bootstrap_module=gui_bootstrap,
-        value_bindings=gui_geometry_fit.GeometryFitRuntimeValueBindings(
-            fit_zb_var=fit_zb_var,
-            fit_zs_var=fit_zs_var,
-            fit_theta_var=fit_theta_var,
-            fit_psi_z_var=fit_psi_z_var,
-            fit_chi_var=fit_chi_var,
-            fit_cor_var=fit_cor_var,
-            fit_gamma_var=fit_gamma_var,
-            fit_Gamma_var=fit_Gamma_var,
-            fit_dist_var=fit_dist_var,
-            fit_a_var=fit_a_var,
-            fit_c_var=fit_c_var,
-            fit_center_x_var=fit_center_x_var,
-            fit_center_y_var=fit_center_y_var,
-            zb_var=zb_var,
-            zs_var=zs_var,
-            theta_initial_var=theta_initial_var,
-            psi_z_var=psi_z_var,
-            chi_var=chi_var,
-            cor_angle_var=cor_angle_var,
-            sample_width_var=sample_width_var,
-            sample_length_var=sample_length_var,
-            sample_depth_var=sample_depth_var,
-            gamma_var=gamma_var,
-            Gamma_var=Gamma_var,
-            corto_detector_var=corto_detector_var,
-            a_var=a_var,
-            c_var=c_var,
-            center_x_var=center_x_var,
-            center_y_var=center_y_var,
-            debye_x_var=debye_x_var,
-            debye_y_var=debye_y_var,
-            geometry_theta_offset_var=geometry_theta_offset_var,
-            current_background_index=(
-                lambda: background_runtime_state.current_background_index
-            ),
-            geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
-            current_geometry_theta_offset=_current_geometry_theta_offset,
-            background_theta_for_index=_background_theta_for_index,
-            build_mosaic_params=build_mosaic_params,
-            current_optics_mode_flag=_current_optics_mode_flag,
-            lambda_value=lambda_,
-            psi=psi,
-            n2=lambda: n2,
-            pixel_size_value=float(pixel_size_m),
+
+geometry_fit_runtime_workflow = gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
+    geometry_fit_module=gui_geometry_fit,
+    runtime_fit_analysis_module=gui_runtime_fit_analysis,
+    bootstrap_module=gui_bootstrap,
+    value_bindings=gui_geometry_fit.GeometryFitRuntimeValueBindings(
+        fit_zb_var=fit_zb_var,
+        fit_zs_var=fit_zs_var,
+        fit_theta_var=fit_theta_var,
+        fit_psi_z_var=fit_psi_z_var,
+        fit_chi_var=fit_chi_var,
+        fit_cor_var=fit_cor_var,
+        fit_gamma_var=fit_gamma_var,
+        fit_Gamma_var=fit_Gamma_var,
+        fit_dist_var=fit_dist_var,
+        fit_a_var=fit_a_var,
+        fit_c_var=fit_c_var,
+        fit_center_x_var=fit_center_x_var,
+        fit_center_y_var=fit_center_y_var,
+        zb_var=zb_var,
+        zs_var=zs_var,
+        theta_initial_var=theta_initial_var,
+        psi_z_var=psi_z_var,
+        chi_var=chi_var,
+        cor_angle_var=cor_angle_var,
+        sample_width_var=sample_width_var,
+        sample_length_var=sample_length_var,
+        sample_depth_var=sample_depth_var,
+        gamma_var=gamma_var,
+        Gamma_var=Gamma_var,
+        corto_detector_var=corto_detector_var,
+        a_var=a_var,
+        c_var=c_var,
+        center_x_var=center_x_var,
+        center_y_var=center_y_var,
+        debye_x_var=debye_x_var,
+        debye_y_var=debye_y_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        current_background_index=(lambda: background_runtime_state.current_background_index),
+        geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
+        current_geometry_theta_offset=_current_geometry_theta_offset,
+        background_theta_for_index=_background_theta_for_index,
+        build_mosaic_params=build_mosaic_params,
+        current_optics_mode_flag=_current_optics_mode_flag,
+        lambda_value=lambda_,
+        psi=psi,
+        n2=lambda: n2,
+        pixel_size_value=float(pixel_size_m),
+    ),
+    manual_dataset_bindings_factory_kwargs={
+        "osc_files_factory": (lambda: tuple(background_runtime_state.osc_files)),
+        "current_background_index_factory": (
+            lambda: int(background_runtime_state.current_background_index)
         ),
-        manual_dataset_bindings_factory_kwargs={
-            "osc_files_factory": (lambda: tuple(background_runtime_state.osc_files)),
-            "current_background_index_factory": (
-                lambda: int(background_runtime_state.current_background_index)
-            ),
-            "image_size": image_size,
-            "display_rotate_k": DISPLAY_ROTATE_K,
-            "geometry_manual_pairs_for_index": _geometry_manual_pairs_for_index,
-            "load_background_by_index": _load_background_image_by_index,
-            "apply_background_backend_orientation": (
-                _apply_background_backend_orientation
-            ),
-            "geometry_manual_simulated_peaks_for_params": (
-                _geometry_manual_simulated_peaks_for_params
-            ),
-            "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
-            "geometry_manual_source_rows_for_background": (
-                _geometry_manual_source_rows_for_background
-            ),
-            "geometry_manual_rebuild_source_rows_for_background": (
-                _geometry_manual_rebuild_source_rows_for_background
-            ),
-            "geometry_manual_last_source_snapshot_diagnostics": (
-                _geometry_manual_last_source_snapshot_diagnostics
-            ),
-            "geometry_manual_last_simulation_diagnostics": (
-                _geometry_manual_last_simulation_diagnostics
-            ),
-            "geometry_manual_match_config": _current_geometry_manual_match_config,
-            "geometry_manual_entry_display_coords": (
-                _geometry_manual_entry_display_coords
-            ),
-            "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
-            "unrotate_display_peaks": _unrotate_display_peaks,
-            "display_to_native_sim_coords": _display_to_native_sim_coords,
-            "select_fit_orientation": _select_fit_orientation,
-            "apply_orientation_to_entries": _apply_orientation_to_entries,
-            "orient_image_for_fit": _orient_image_for_fit,
-        },
-        runtime_config_factory_kwargs={
-            "base_config": (
-                fit_config.get("geometry", {})
-                if isinstance(fit_config, dict)
-                else {}
-            ),
-            "current_constraint_state": _current_geometry_fit_constraint_state,
-            "current_parameter_domains": _current_geometry_fit_parameter_domains,
-            "current_candidate_param_names": _current_geometry_fit_candidate_param_names,
-        },
-        action_bootstrap_kwargs={
-            "value_callbacks_factory": _geometry_fit_runtime_values,
-            "fit_config": fit_config,
-            "theta_initial_factory": (lambda: theta_initial_var.get()),
-            "apply_geometry_fit_background_selection": (
-                _apply_geometry_fit_background_selection
-            ),
-            "current_geometry_fit_background_indices": (
-                _current_geometry_fit_background_indices
-            ),
-            "geometry_fit_uses_shared_theta_offset": (
-                _geometry_fit_uses_shared_theta_offset
-            ),
-            "apply_background_theta_metadata": _apply_background_theta_metadata,
-            "current_background_theta_values": _current_background_theta_values,
-            "current_geometry_theta_offset": _current_geometry_theta_offset,
-            "ensure_geometry_fit_caked_view": _ensure_geometry_fit_caked_view,
-            "downloads_dir": get_dir("downloads"),
-            "log_dir": get_dir("debug_log_dir"),
-            "simulation_runtime_state": simulation_runtime_state,
-            "background_runtime_state": background_runtime_state,
-            "theta_initial_var": theta_initial_var,
-            "geometry_theta_offset_var": geometry_theta_offset_var,
-            "current_ui_params": _current_geometry_fit_ui_params,
-            "background_theta_for_index": _background_theta_for_index,
-            "refresh_status": _refresh_background_status,
-            "update_manual_pick_button_label": (
-                _update_geometry_manual_pick_button_label
-            ),
-            "capture_undo_state": _capture_geometry_fit_undo_state,
-            "push_undo_state": _push_geometry_fit_undo_state,
-            "replace_dataset_cache": _set_geometry_fit_dataset_cache,
-            "request_preview_skip_once": (
-                lambda: gui_controllers.request_geometry_preview_skip_once(
-                    geometry_preview_state
-                )
-            ),
-            "schedule_update": schedule_update,
-            "draw_overlay_records": (
-                lambda records, marker_limit: _draw_geometry_fit_overlay(
-                    records,
-                    max_display_markers=marker_limit,
-                )
-            ),
-            "draw_initial_pairs_overlay": (
-                lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
-                    pairs,
-                    max_display_markers=marker_limit,
-                )
-            ),
-            "set_last_overlay_state": _set_geometry_fit_last_overlay_state,
-            "set_progress_text": (
-                lambda text: progress_label_geometry.config(text=text)
-            ),
-            "cmd_line": _geometry_fit_cmd_line,
-            "solver_inputs_factory": (
-                lambda: gui_geometry_fit.GeometryFitRuntimeSolverInputs(
-                    miller=miller,
-                    intensities=intensities,
-                    image_size=image_size,
-                )
-            ),
-            "sim_display_rotate_k": SIM_DISPLAY_ROTATE_K,
-            "background_display_rotate_k": DISPLAY_ROTATE_K,
-            "simulate_and_compare_hkl": simulate_and_compare_hkl,
-            "aggregate_match_centers": _aggregate_match_centers,
-            "build_overlay_records": build_geometry_fit_overlay_records,
-            "compute_frame_diagnostics": _geometry_overlay_frame_diagnostics,
-            "solve_fit": fit_geometry_parameters,
-            "live_update_callback": _geometry_fit_live_update_manual_peak_cache,
-            "stamp_factory": (lambda: datetime.now().strftime("%Y%m%d_%H%M%S")),
-            "flush_ui": root.update_idletasks,
-            "before_run": (
-                lambda: (
-                    _set_geometry_manual_pick_mode(False)
-                    if bool(
-                        getattr(geometry_runtime_state, "manual_pick_armed", False)
-                    )
-                    else None,
-                    _clear_geometry_preview_artists(),
-                    _clear_geometry_pick_artists(),
-                )
-            ),
-            "after_run": _show_geometry_fit_action_notice,
-        },
-    )
+        "image_size": image_size,
+        "display_rotate_k": DISPLAY_ROTATE_K,
+        "geometry_manual_pairs_for_index": _geometry_manual_pairs_for_index,
+        "load_background_by_index": _load_background_image_by_index,
+        "apply_background_backend_orientation": (_apply_background_backend_orientation),
+        "geometry_manual_simulated_peaks_for_params": (_geometry_manual_simulated_peaks_for_params),
+        "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
+        "geometry_manual_source_rows_for_background": (_geometry_manual_source_rows_for_background),
+        "geometry_manual_rebuild_source_rows_for_background": (
+            _geometry_manual_rebuild_source_rows_for_background
+        ),
+        "geometry_manual_last_source_snapshot_diagnostics": (
+            _geometry_manual_last_source_snapshot_diagnostics
+        ),
+        "geometry_manual_last_simulation_diagnostics": (
+            _geometry_manual_last_simulation_diagnostics
+        ),
+        "geometry_manual_match_config": _current_geometry_manual_match_config,
+        "geometry_manual_entry_display_coords": (_geometry_manual_entry_display_coords),
+        "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
+        "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),
+        "unrotate_display_peaks": _unrotate_display_peaks,
+        "display_to_native_sim_coords": _display_to_native_sim_coords,
+        "select_fit_orientation": _select_fit_orientation,
+        "apply_orientation_to_entries": _apply_orientation_to_entries,
+        "orient_image_for_fit": _orient_image_for_fit,
+    },
+    runtime_config_factory_kwargs={
+        "base_config": (fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}),
+        "current_constraint_state": _current_geometry_fit_constraint_state,
+        "current_parameter_domains": _current_geometry_fit_parameter_domains,
+        "current_candidate_param_names": _current_geometry_fit_candidate_param_names,
+    },
+    action_bootstrap_kwargs={
+        "value_callbacks_factory": _geometry_fit_runtime_values,
+        "fit_config": fit_config,
+        "theta_initial_factory": (lambda: theta_initial_var.get()),
+        "apply_geometry_fit_background_selection": (_apply_geometry_fit_background_selection),
+        "current_geometry_fit_background_indices": (_current_geometry_fit_background_indices),
+        "geometry_fit_uses_shared_theta_offset": (_geometry_fit_uses_shared_theta_offset),
+        "apply_background_theta_metadata": _apply_background_theta_metadata,
+        "current_background_theta_values": _current_background_theta_values,
+        "current_geometry_theta_offset": _current_geometry_theta_offset,
+        "ensure_geometry_fit_caked_view": _ensure_geometry_fit_caked_view,
+        "downloads_dir": get_dir("downloads"),
+        "log_dir": get_dir("debug_log_dir"),
+        "simulation_runtime_state": simulation_runtime_state,
+        "background_runtime_state": background_runtime_state,
+        "theta_initial_var": theta_initial_var,
+        "geometry_theta_offset_var": geometry_theta_offset_var,
+        "current_ui_params": _current_geometry_fit_ui_params,
+        "background_theta_for_index": _background_theta_for_index,
+        "refresh_status": _refresh_background_status,
+        "update_manual_pick_button_label": (_update_geometry_manual_pick_button_label),
+        "capture_undo_state": _capture_geometry_fit_undo_state,
+        "push_undo_state": _push_geometry_fit_undo_state,
+        "replace_dataset_cache": _set_geometry_fit_dataset_cache,
+        "request_preview_skip_once": (
+            lambda: gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
+        ),
+        "schedule_update": schedule_update,
+        "draw_overlay_records": (
+            lambda records, marker_limit: _draw_geometry_fit_overlay(
+                records,
+                max_display_markers=marker_limit,
+            )
+        ),
+        "draw_initial_pairs_overlay": (
+            lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
+                pairs,
+                max_display_markers=marker_limit,
+            )
+        ),
+        "set_last_overlay_state": _set_geometry_fit_last_overlay_state,
+        "set_progress_text": (lambda text: progress_label_geometry.config(text=text)),
+        "cmd_line": _geometry_fit_cmd_line,
+        "solver_inputs_factory": (
+            lambda: gui_geometry_fit.GeometryFitRuntimeSolverInputs(
+                miller=miller,
+                intensities=intensities,
+                image_size=image_size,
+            )
+        ),
+        "sim_display_rotate_k": SIM_DISPLAY_ROTATE_K,
+        "background_display_rotate_k": DISPLAY_ROTATE_K,
+        "simulate_and_compare_hkl": simulate_and_compare_hkl,
+        "aggregate_match_centers": _aggregate_match_centers,
+        "build_overlay_records": build_geometry_fit_overlay_records,
+        "compute_frame_diagnostics": _geometry_overlay_frame_diagnostics,
+        "solve_fit": fit_geometry_parameters,
+        "live_update_callback": _geometry_fit_live_update_manual_peak_cache,
+        "stamp_factory": (lambda: datetime.now().strftime("%Y%m%d_%H%M%S")),
+        "flush_ui": root.update_idletasks,
+        "before_run": (
+            lambda: (
+                _set_geometry_manual_pick_mode(False)
+                if bool(getattr(geometry_runtime_state, "manual_pick_armed", False))
+                else None,
+                _clear_geometry_preview_artists(),
+                _clear_geometry_pick_artists(),
+            )
+        ),
+        "after_run": _show_geometry_fit_action_notice,
+    },
 )
 _geometry_fit_runtime_value_callbacks = geometry_fit_runtime_workflow.value_callbacks
 _geometry_fit_var_map = geometry_fit_runtime_workflow.var_map
 geometry_fit_manual_dataset_bindings_factory = (
     geometry_fit_runtime_workflow.manual_dataset_bindings_factory
 )
-geometry_fit_runtime_config_factory = (
-    geometry_fit_runtime_workflow.runtime_config_factory
-)
+geometry_fit_runtime_config_factory = geometry_fit_runtime_workflow.runtime_config_factory
 geometry_fit_action_workflow = geometry_fit_runtime_workflow.action_workflow
 geometry_fit_action_runtime = geometry_fit_runtime_workflow.action_runtime
-geometry_fit_action_bindings_factory = (
-    geometry_fit_runtime_workflow.action_bindings_factory
-)
+geometry_fit_action_bindings_factory = geometry_fit_runtime_workflow.action_bindings_factory
 on_fit_geometry_click = _on_fit_geometry_click_async
 fit_button_geometry.config(command=on_fit_geometry_click)
 
@@ -22665,8 +21977,8 @@ def update_weights(*args):
 
 
 if has_second_cif:
-    weight1_var.trace_add('write', update_weights)
-    weight2_var.trace_add('write', update_weights)
+    weight1_var.trace_add("write", update_weights)
+    weight2_var.trace_add("write", update_weights)
 # ---------------------------------------------------------------------------
 #  OCCUPANCY CONTROLS: one control per structure site in the loaded CIF.
 # ---------------------------------------------------------------------------
@@ -22685,11 +21997,7 @@ def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
     """Build a user-facing occupancy label for a unique atom site."""
 
     idx = int(site_idx)
-    atom_name = (
-        occupancy_site_labels[idx]
-        if idx < len(occupancy_site_labels)
-        else "not in CIF"
-    )
+    atom_name = occupancy_site_labels[idx] if idx < len(occupancy_site_labels) else "not in CIF"
     prefix = "Input Occupancy" if input_label else "Occupancy"
     return f"{prefix} Site {idx + 1} ({atom_name})"
 
@@ -22868,9 +22176,7 @@ def _commit_phase_delta_expression_entry(_event=None):
 def _sync_phi_l_divisor_entry_from_var(*_):
     if finite_stack_controls_view_state.phi_l_divisor_entry_var is None:
         return
-    normalized = gui_controllers.format_finite_stack_phi_l_divisor(
-        _current_phi_l_divisor()
-    )
+    normalized = gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor())
     if finite_stack_controls_view_state.phi_l_divisor_entry_var.get().strip() != normalized:
         gui_views.set_finite_stack_phi_l_divisor_entry_text(
             finite_stack_controls_view_state,
@@ -22911,9 +22217,7 @@ def _on_layer_slider(val):
 
 
 ordered_structure_fit_cfg = (
-    fit_config.get("ordered_structure", {})
-    if isinstance(fit_config, dict)
-    else {}
+    fit_config.get("ordered_structure", {}) if isinstance(fit_config, dict) else {}
 )
 ordered_structure_fit_solver_cfg = (
     ordered_structure_fit_cfg.get("solver", {})
@@ -22921,9 +22225,7 @@ ordered_structure_fit_solver_cfg = (
     else {}
 )
 ordered_structure_fit_mask_cfg = (
-    ordered_structure_fit_cfg.get("mask", {})
-    if isinstance(ordered_structure_fit_cfg, dict)
-    else {}
+    ordered_structure_fit_cfg.get("mask", {}) if isinstance(ordered_structure_fit_cfg, dict) else {}
 )
 ordered_structure_fit_defaults_cfg = (
     ordered_structure_fit_cfg.get("defaults", {})
@@ -22942,9 +22244,7 @@ ordered_structure_coord_window_var = tk.DoubleVar(
 )
 ordered_structure_fit_debye_x_var = tk.BooleanVar(value=True)
 ordered_structure_fit_debye_y_var = tk.BooleanVar(value=True)
-ordered_structure_fit_result_var = tk.StringVar(
-    value="No ordered-structure fit run yet."
-)
+ordered_structure_fit_result_var = tk.StringVar(value="No ordered-structure fit run yet.")
 ordered_structure_fit_occ_toggle_vars: list[tk.BooleanVar] = []
 ordered_structure_fit_atom_toggle_vars: list[dict[str, tk.BooleanVar]] = []
 
@@ -23033,9 +22333,7 @@ def _rebuild_ordered_structure_fit_selection_controls() -> None:
                 "z": tk.BooleanVar(value=previous_atom.get((label, "z"), True)),
             }
         )
-    ordered_structure_fit_view_state.atom_toggle_vars = list(
-        ordered_structure_fit_atom_toggle_vars
-    )
+    ordered_structure_fit_view_state.atom_toggle_vars = list(ordered_structure_fit_atom_toggle_vars)
     gui_views.rebuild_ordered_structure_fit_atom_coordinate_controls(
         view_state=ordered_structure_fit_view_state,
         atom_toggle_vars=ordered_structure_fit_atom_toggle_vars,
@@ -23067,10 +22365,10 @@ gui_views.create_stacking_parameter_panels(
 gui_views.create_finite_stack_controls(
     parent=stacking_parameter_controls_view_state.stack_frame.frame,
     view_state=finite_stack_controls_view_state,
-    finite_stack=bool(defaults['finite_stack']),
-    stack_layers=int(defaults['stack_layers']),
-    phi_l_divisor=float(defaults['phi_l_divisor']),
-    phase_delta_expression=str(defaults['phase_delta_expression']),
+    finite_stack=bool(defaults["finite_stack"]),
+    stack_layers=int(defaults["stack_layers"]),
+    phi_l_divisor=float(defaults["phi_l_divisor"]),
+    phase_delta_expression=str(defaults["phase_delta_expression"]),
     on_toggle_finite_stack=_on_finite_toggle,
     on_layer_slider=_on_layer_slider,
     on_commit_layer_entry=_commit_layer_entry,
@@ -23488,7 +22786,9 @@ def build_runtime_controls_context(context: RuntimeContext) -> RuntimeContext:
     return context
 
 
-_STARTUP_BENCHMARK_ENABLED = str(os.environ.get("RA_SIM_STARTUP_BENCHMARK", "")).strip().lower() in {
+_STARTUP_BENCHMARK_ENABLED = str(
+    os.environ.get("RA_SIM_STARTUP_BENCHMARK", "")
+).strip().lower() in {
     "1",
     "true",
     "yes",
@@ -23529,9 +22829,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         write_excel = write_excel_flag
 
     if startup_mode not in {"prompt", "simulation", "calibrant", "mosaic"}:
-        raise ValueError(
-            "startup_mode must be one of: prompt, simulation, calibrant, mosaic"
-        )
+        raise ValueError("startup_mode must be one of: prompt, simulation, calibrant, mosaic")
 
     resolved_mode = startup_mode
     if resolved_mode == "prompt":
@@ -23619,9 +22917,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
             gui_views.set_finite_stack_phi_l_divisor_entry_text(
                 finite_stack_controls_view_state,
-                gui_controllers.format_finite_stack_phi_l_divisor(
-                    _current_phi_l_divisor()
-                ),
+                gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
             )
         _apply_rod_points_per_gz(trigger_update=False)
         ensure_valid_resolution_choice()
@@ -23670,9 +22966,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         )
 
     def _handle_post_startup_error(task_name: str, exc: Exception) -> None:
-        progress_label.config(
-            text=f"Startup post-processing failed during {task_name}: {exc}"
-        )
+        progress_label.config(text=f"Startup post-processing failed during {task_name}: {exc}")
         try:
             import traceback
 
@@ -23752,9 +23046,5 @@ if __name__ == "__main__":
     except Exception as exc:
         print("Unhandled exception during startup:", exc)
         import traceback
+
         traceback.print_exc()
-
-
-
-
-

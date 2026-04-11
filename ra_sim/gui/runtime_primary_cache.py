@@ -37,10 +37,9 @@ def _job_compatible_with_primary_cache(
         return True
     if not bool(job.get("run_primary", False)):
         return True
-    return (
-        job.get("primary_contribution_cache_signature") == cache_signature
-        and str(job.get("primary_source_mode", "")) == str(source_mode)
-    )
+    return job.get("primary_contribution_cache_signature") == cache_signature and str(
+        job.get("primary_source_mode", "")
+    ) == str(source_mode)
 
 
 def resolve_incremental_sf_prune_action(
@@ -108,9 +107,7 @@ def resolve_incremental_sf_prune_action(
 
     added_keys = tuple(key for key in current_keys if key not in previous_key_set)
     removed_keys = tuple(key for key in previous_keys if key not in current_key_set)
-    missing_keys = tuple(
-        key for key in current_keys if key not in primary_hit_table_cache
-    )
+    missing_keys = tuple(key for key in current_keys if key not in primary_hit_table_cache)
     return IncrementalSfPruneAction(
         mode=("fill" if missing_keys else "reuse"),
         added_keys=added_keys,
@@ -160,11 +157,20 @@ def build_primary_subset_payload(
             ]
             if not valid_local_indices:
                 continue
+            hk_value = entry.get("hk", (0, 0))
+            if isinstance(hk_value, (list, tuple)):
+                hk_tuple = tuple(hk_value)
+            else:
+                hk_tuple = (0, 0)
+            try:
+                deg_value = int(str(entry.get("deg", 1)))
+            except Exception:
+                deg_value = 1
             primary_data[int(m_idx)] = {
                 "L": l_vals[valid_local_indices].copy(),
                 "I": i_vals[valid_local_indices].copy(),
-                "hk": tuple(entry.get("hk", (0, 0))),
-                "deg": int(entry.get("deg", 1)),
+                "hk": hk_tuple,
+                "deg": int(deg_value),
             }
             normalized_keys.extend((int(m_idx), int(idx)) for idx in valid_local_indices)
 
@@ -185,17 +191,19 @@ def build_primary_subset_payload(
         for raw_key in ordered_keys
         if isinstance(raw_key, (int, np.integer)) and 0 <= int(raw_key) < row_count
     ]
+    miller_primary_data: np.ndarray
+    miller_primary_intensities: np.ndarray
     if row_count <= 0 or miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
         valid_indices = []
-        primary_data = np.empty((0, 3), dtype=np.float64)
-        primary_intensities = np.empty((0,), dtype=np.float64)
+        miller_primary_data = np.empty((0, 3), dtype=np.float64)
+        miller_primary_intensities = np.empty((0,), dtype=np.float64)
     else:
-        primary_data = miller_arr[valid_indices, :].copy()
-        primary_intensities = intens[valid_indices].copy()
+        miller_primary_data = miller_arr[valid_indices, :].copy()
+        miller_primary_intensities = intens[valid_indices].copy()
 
     return {
-        "primary_data": primary_data,
-        "primary_intensities": primary_intensities,
+        "primary_data": miller_primary_data,
+        "primary_intensities": miller_primary_intensities,
         "primary_contribution_keys": valid_indices,
     }
 
@@ -224,11 +232,7 @@ def rasterize_hit_tables_to_image(
             continue
 
         for intensity, col_f, row_f in hits[:, :3]:
-            if not (
-                np.isfinite(intensity)
-                and np.isfinite(col_f)
-                and np.isfinite(row_f)
-            ):
+            if not (np.isfinite(intensity) and np.isfinite(col_f) and np.isfinite(row_f)):
                 continue
             row0 = int(np.floor(row_f))
             col0 = int(np.floor(col_f))
@@ -293,9 +297,7 @@ def rematerialize_primary_artifacts(
         "intersection_cache": [
             np.asarray(table, dtype=np.float64).copy() for table in intersection_cache
         ],
-        "peak_tables": [
-            np.asarray(table, dtype=np.float64).copy() for table in peak_tables
-        ],
+        "peak_tables": [np.asarray(table, dtype=np.float64).copy() for table in peak_tables],
         "peak_table_lattice": [
             (float(a_primary), float(c_primary), str(lattice_label))
             for _ in range(len(peak_tables))

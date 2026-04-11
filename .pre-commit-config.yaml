@@ -1,0 +1,18 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ra-sim-ruff-format
+        name: ra-sim-ruff-format
+        entry: python -m ruff format
+        language: system
+        types_or: [python]
+      - id: ra-sim-ruff-check
+        name: ra-sim-ruff-check
+        entry: python -m ruff check
+        language: system
+        types_or: [python]
+      - id: ra-sim-mypy-frontier
+        name: ra-sim-mypy-frontier
+        entry: python -m ra_sim.dev typecheck
+        language: system
+        pass_filenames: false

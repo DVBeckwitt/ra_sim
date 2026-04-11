@@ -1,8 +1,7 @@
 """Optimization routines for fitting simulated data to experiments."""
 
 import copy
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 from threading import Lock
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
@@ -17,7 +16,9 @@ from scipy.optimize import (
 from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
-from ra_sim.debug_controls import retain_optional_cache
+from ra_sim.fitting import optimization_mosaic_profiles as _mosaic_profiles
+from ra_sim.fitting import optimization_runtime as _runtime
+from ra_sim.fitting.optimization_runtime import SimulationCache
 from ra_sim.simulation.diffraction import (
     get_last_process_peaks_safe_stats,
     hit_tables_to_max_positions,
@@ -25,40 +26,42 @@ from ra_sim.simulation.diffraction import (
 )
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.utils.parallel import (
-    call_with_numba_thread_limit as _shared_call_with_numba_thread_limit,
-    current_parallel_thread_budget,
     numba_threads_per_worker as _shared_numba_threads_per_worker,
     reserved_worker_count,
 )
 
 RNG = np.random.default_rng(42)
 
-process_peaks_parallel = _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER
-
-_USE_NUMBA_PROCESS_PEAKS = True
-_NUMBA_PROCESS_PEAKS_WARMED = False
-_NUMBA_PROCESS_PEAKS_WARMUP_LOCK = Lock()
+process_peaks_parallel = getattr(
+    _runtime,
+    "process_peaks_parallel",
+    _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
+)
+_USE_NUMBA_PROCESS_PEAKS = bool(getattr(_runtime, "_USE_NUMBA_PROCESS_PEAKS", True))
+_NUMBA_PROCESS_PEAKS_WARMED = bool(getattr(_runtime, "_NUMBA_PROCESS_PEAKS_WARMED", False))
+_NUMBA_PROCESS_PEAKS_WARMUP_LOCK = getattr(
+    _runtime,
+    "_NUMBA_PROCESS_PEAKS_WARMUP_LOCK",
+    Lock(),
+)
 
 
 def _retain_fit_simulation_cache() -> bool:
-    return retain_optional_cache("fit_simulation", feature_needed=True)
+    """Compatibility shim around extracted fit-simulation cache helper."""
+
+    return _runtime.retain_fit_simulation_cache()
 
 
 def _available_parallel_thread_budget() -> int:
-    """Return the CPU thread budget available to outer geometry-fit workers."""
+    """Compatibility shim around extracted parallel-budget helper."""
 
-    return int(current_parallel_thread_budget())
+    return _runtime.available_parallel_thread_budget()
 
 
 def _coerce_sequence_items(values: Optional[Sequence[object]]) -> List[object]:
-    """Return sequence contents without relying on ambiguous truthiness."""
+    """Compatibility shim around extracted sequence-normalization helper."""
 
-    if values is None:
-        return []
-    try:
-        return list(values)
-    except TypeError:
-        return []
+    return _runtime.coerce_sequence_items(values)
 
 
 def _resolve_parallel_worker_count(
@@ -66,7 +69,7 @@ def _resolve_parallel_worker_count(
     *,
     max_tasks: int,
 ) -> int:
-    """Normalize one worker-count config value against a concrete task count."""
+    """Resolve worker count while preserving local monkeypatch seams."""
 
     if max_tasks <= 1:
         return 1
@@ -83,9 +86,11 @@ def _resolve_parallel_worker_count(
                 requested = 1
     elif raw_value is None:
         requested = 0
+    elif isinstance(raw_value, (int, float)):
+        requested = int(raw_value)
     else:
         try:
-            requested = int(raw_value)
+            requested = int(str(raw_value).strip())
         except Exception:
             requested = 1
 
@@ -100,7 +105,7 @@ def _resolve_numba_threads_per_worker(
     worker_count: int,
     raw_value: object,
 ) -> Optional[int]:
-    """Return the Numba thread mask to use inside each outer worker."""
+    """Resolve per-worker numba thread mask with local patchable budget."""
 
     if worker_count <= 1:
         return None
@@ -113,9 +118,11 @@ def _resolve_numba_threads_per_worker(
                 requested = int(float(text))
             except Exception:
                 requested = 0
+    elif isinstance(raw_value, (int, float)):
+        requested = int(raw_value)
     elif raw_value is not None:
         try:
-            requested = int(raw_value)
+            requested = int(str(raw_value).strip())
         except Exception:
             requested = 0
 
@@ -128,22 +135,6 @@ def _resolve_numba_threads_per_worker(
     )
 
 
-def _call_with_numba_thread_limit(
-    fn: Callable[..., object],
-    *args,
-    numba_threads: Optional[int] = None,
-    **kwargs,
-):
-    """Run *fn* while temporarily masking Numba's worker thread count."""
-
-    return _shared_call_with_numba_thread_limit(
-        fn,
-        *args,
-        numba_threads=numba_threads,
-        **kwargs,
-    )
-
-
 def _threaded_map(
     fn: Callable[[object], object],
     items: Sequence[object],
@@ -151,38 +142,36 @@ def _threaded_map(
     max_workers: int,
     numba_threads: Optional[int] = None,
 ) -> List[object]:
-    """Map *fn* over *items* using a thread pool while preserving order."""
+    """Compatibility shim around extracted threaded-map helper."""
 
-    if max_workers <= 1 or len(items) <= 1:
-        return [fn(item) for item in items]
-
-    def _run(item: object) -> object:
-        return _call_with_numba_thread_limit(
-            fn,
-            item,
-            numba_threads=numba_threads,
-        )
-
-    with ThreadPoolExecutor(max_workers=int(max_workers)) as executor:
-        return list(executor.map(_run, items))
+    return _runtime.threaded_map(
+        fn,
+        items,
+        max_workers=max_workers,
+        numba_threads=numba_threads,
+    )
 
 
 def _set_numba_usage_from_config(
     refinement_config: Optional[Dict[str, Dict[str, float]]],
 ) -> None:
-    """Apply per-fit config flags (e.g., disable numba for fitting)."""
+    """Apply runtime numba flag while keeping local compatibility globals."""
 
     global _USE_NUMBA_PROCESS_PEAKS
     global _NUMBA_PROCESS_PEAKS_WARMED
+
     if isinstance(refinement_config, dict):
         use_numba = refinement_config.get("use_numba", True)
         _USE_NUMBA_PROCESS_PEAKS = bool(use_numba)
         if not _USE_NUMBA_PROCESS_PEAKS:
             _NUMBA_PROCESS_PEAKS_WARMED = False
 
+    _runtime._USE_NUMBA_PROCESS_PEAKS = bool(_USE_NUMBA_PROCESS_PEAKS)
+    _runtime._NUMBA_PROCESS_PEAKS_WARMED = bool(_NUMBA_PROCESS_PEAKS_WARMED)
+
 
 def _last_process_peaks_used_python_runner() -> Optional[bool]:
-    """Return whether the last safe-wrapper call fell back to its Python runner."""
+    """Return whether last safe-wrapper call fell back to Python runner."""
 
     if process_peaks_parallel is not _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER:
         return None
@@ -196,36 +185,60 @@ def _last_process_peaks_used_python_runner() -> Optional[bool]:
 
 
 def _process_peaks_parallel_safe(*args, **kwargs):
-    """Call the numba-compiled process_peaks_parallel with a python fallback."""
+    """Call numba-backed process-peaks wrapper with Python fallback."""
 
     global _USE_NUMBA_PROCESS_PEAKS
     global _NUMBA_PROCESS_PEAKS_WARMED
 
+    def _coerce_python_runner_args(call_args: Tuple[object, ...]) -> Tuple[object, ...]:
+        if len(call_args) < 24:
+            return call_args
+
+        coerced_args = list(call_args)
+        zero_ray = np.zeros(1, dtype=np.float64)
+        coerced_args[16] = zero_ray.copy()
+        coerced_args[17] = zero_ray.copy()
+        coerced_args[18] = zero_ray.copy()
+        coerced_args[19] = zero_ray.copy()
+
+        wavelength_scalar = 1.0
+        try:
+            wavelength_values = np.asarray(call_args[5], dtype=np.float64).reshape(-1)
+        except Exception:
+            wavelength_values = np.asarray([], dtype=np.float64)
+        if (
+            wavelength_values.size == 1
+            and np.isfinite(wavelength_values[0])
+            and wavelength_values[0] > 0.0
+        ):
+            wavelength_scalar = float(wavelength_values[0])
+        wavelength_array = np.asarray([wavelength_scalar], dtype=np.float64)
+        coerced_args[5] = wavelength_array.copy()
+        coerced_args[23] = wavelength_array.copy()
+        return tuple(coerced_args)
+
     def _invoke(fn, *, prefer_python_runner: bool = False):
         call_kwargs = dict(kwargs)
+        call_args = args
         if prefer_python_runner:
             call_kwargs["prefer_python_runner"] = True
+            call_args = _coerce_python_runner_args(call_args)
 
         try:
-            return fn(*args, **call_kwargs)
+            return fn(*call_args, **call_kwargs)
         except TypeError as exc:
-            # Test doubles and older callsites may not accept the new keyword.
             if (
-                (
-                    "optics_mode" in call_kwargs
-                    or
-                    "solve_q_steps" in call_kwargs
-                    or "solve_q_rel_tol" in call_kwargs
-                    or "solve_q_mode" in call_kwargs
-                    or "thickness" in call_kwargs
-                    or "pixel_size_m" in call_kwargs
-                    or "sample_width_m" in call_kwargs
-                    or "sample_length_m" in call_kwargs
-                    or "n2_sample_array_override" in call_kwargs
-                    or "prefer_python_runner" in call_kwargs
-                )
-                and "unexpected keyword" in str(exc)
-            ):
+                "optics_mode" in call_kwargs
+                or "solve_q_steps" in call_kwargs
+                or "solve_q_rel_tol" in call_kwargs
+                or "solve_q_mode" in call_kwargs
+                or "thickness" in call_kwargs
+                or "pixel_size_m" in call_kwargs
+                or "sample_width_m" in call_kwargs
+                or "sample_length_m" in call_kwargs
+                or "n2_sample_array_override" in call_kwargs
+                or "prefer_python_runner" in call_kwargs
+            ) and "unexpected keyword" in str(exc):
                 reduced_kwargs = dict(call_kwargs)
                 reduced_kwargs.pop("optics_mode", None)
                 reduced_kwargs.pop("solve_q_steps", None)
@@ -237,25 +250,26 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 reduced_kwargs.pop("sample_length_m", None)
                 reduced_kwargs.pop("n2_sample_array_override", None)
                 reduced_kwargs.pop("prefer_python_runner", None)
-                return fn(*args, **reduced_kwargs)
+                return fn(*call_args, **reduced_kwargs)
             raise
 
     def _invoke_numba_path():
         global _USE_NUMBA_PROCESS_PEAKS
         global _NUMBA_PROCESS_PEAKS_WARMED
+
         result = _invoke(process_peaks_parallel)
         if _last_process_peaks_used_python_runner() is True:
             _USE_NUMBA_PROCESS_PEAKS = False
             _NUMBA_PROCESS_PEAKS_WARMED = False
         else:
             _NUMBA_PROCESS_PEAKS_WARMED = True
+        _runtime._USE_NUMBA_PROCESS_PEAKS = bool(_USE_NUMBA_PROCESS_PEAKS)
+        _runtime._NUMBA_PROCESS_PEAKS_WARMED = bool(_NUMBA_PROCESS_PEAKS_WARMED)
         return result
 
     if _USE_NUMBA_PROCESS_PEAKS:
         try:
             if not _NUMBA_PROCESS_PEAKS_WARMED:
-                # Serialize the first JIT-backed call so multi-dataset fits do not
-                # trigger concurrent first-use compilation across worker threads.
                 with _NUMBA_PROCESS_PEAKS_WARMUP_LOCK:
                     if _USE_NUMBA_PROCESS_PEAKS and not _NUMBA_PROCESS_PEAKS_WARMED:
                         return _invoke_numba_path()
@@ -264,6 +278,8 @@ def _process_peaks_parallel_safe(*args, **kwargs):
         except Exception:
             _USE_NUMBA_PROCESS_PEAKS = False
             _NUMBA_PROCESS_PEAKS_WARMED = False
+            _runtime._USE_NUMBA_PROCESS_PEAKS = False
+            _runtime._NUMBA_PROCESS_PEAKS_WARMED = False
     return _invoke(process_peaks_parallel, prefer_python_runner=True)
 
 
@@ -341,100 +357,8 @@ class MosaicShapeDatasetContext:
     measured_peak_count: int
 
 
-@dataclass
-class MosaicProfileROI:
-    """Prepared fixed-window angular profile extracted around one measured peak."""
-
-    dataset_index: int
-    dataset_label: str
-    reflection_index: int
-    hkl: Tuple[int, int, int]
-    family: str
-    axis_name: str
-    center_row: float
-    center_col: float
-    row_bounds: Tuple[int, int]
-    col_bounds: Tuple[int, int]
-    flat_indices: np.ndarray
-    axis_bin_indices: np.ndarray
-    signal_mask: np.ndarray
-    side_mask: np.ndarray
-    signal_counts: np.ndarray
-    side_counts: np.ndarray
-    axis_bin_centers: np.ndarray
-    axis_half_span_deg: float
-    orthogonal_half_window_deg: float
-    measured_two_theta_deg: float
-    measured_phi_deg: float
-    measured_profile: np.ndarray
-    measured_area: float
-    measured_shape_profile: np.ndarray
-
-
-@dataclass
-class MosaicProfileDatasetContext:
-    """Prepared per-dataset inputs for profile-based mosaic fitting."""
-
-    dataset_index: int
-    label: str
-    theta_initial: float
-    experimental_image: np.ndarray
-    miller: np.ndarray
-    intensities: np.ndarray
-    rois: List[MosaicProfileROI]
-    measured_peak_count: int
-    in_plane_roi_count: int
-    specular_roi_count: int
-
-
-@dataclass
-class SimulationCache:
-    """Simple cache for simulated detector images keyed by parameter vectors."""
-
-    keys: Sequence[str]
-    images: Dict[Tuple[float, ...], np.ndarray] = field(default_factory=dict)
-    max_positions: Dict[Tuple[float, ...], np.ndarray] = field(default_factory=dict)
-
-    def _flatten_value(self, value: np.ndarray) -> Iterable[float]:
-        if isinstance(value, np.ndarray):
-            return value.ravel()
-        if isinstance(value, (list, tuple)):
-            return np.asarray(value, dtype=float).ravel()
-        return (float(value),)
-
-    def key_for(self, params: Dict[str, float]) -> Tuple[float, ...]:
-        parts: List[float] = []
-        for key in self.keys:
-            value = params[key]
-            parts.extend(float(f"{v:.8f}") for v in self._flatten_value(value))
-        return tuple(parts)
-
-    def get(
-        self,
-        params: Dict[str, float],
-    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        if not _retain_fit_simulation_cache():
-            self.images.clear()
-            self.max_positions.clear()
-            return None
-        key = self.key_for(params)
-        if key in self.images:
-            return self.images[key], self.max_positions[key]
-        return None
-
-    def store(
-        self,
-        params: Dict[str, float],
-        image: np.ndarray,
-        max_positions: np.ndarray,
-    ) -> None:
-        if not _retain_fit_simulation_cache():
-            self.images.clear()
-            self.max_positions.clear()
-            return
-        key = self.key_for(params)
-        self.images[key] = image
-        self.max_positions[key] = max_positions
+MosaicProfileROI = _mosaic_profiles.MosaicProfileROI
+MosaicProfileDatasetContext = _mosaic_profiles.MosaicProfileDatasetContext
 
 
 @dataclass
@@ -487,7 +411,9 @@ def _update_params(
 ) -> Dict[str, float]:
     updated = dict(params)
     try:
-        center_seed = updated.get("center", (updated.get("center_x", 0.0), updated.get("center_y", 0.0)))
+        center_seed = updated.get(
+            "center", (updated.get("center_x", 0.0), updated.get("center_y", 0.0))
+        )
         center_row = float(center_seed[0])
         center_col = float(center_seed[1])
     except Exception:
@@ -658,10 +584,14 @@ def _entry_has_geometry_source_identity(entry: Mapping[str, object]) -> bool:
     """Return whether one measured entry can be resolved back to a cached sim peak."""
 
     try:
+        reflection_idx = int(entry.get("source_reflection_index", -1))
+    except Exception:
+        reflection_idx = -1
+    try:
         table_idx = int(entry.get("source_table_index", -1))
     except Exception:
         table_idx = -1
-    if table_idx < 0:
+    if reflection_idx < 0 and table_idx < 0:
         return False
 
     try:
@@ -711,9 +641,7 @@ def _dataset_specs_have_geometry_source_identities(
         if not isinstance(spec, Mapping):
             return False
         saw_dataset = True
-        if not _measured_entries_have_geometry_source_identities(
-            spec.get("measured_peaks")
-        ):
+        if not _measured_entries_have_geometry_source_identities(spec.get("measured_peaks")):
             return False
     return saw_dataset
 
@@ -771,25 +699,16 @@ def _measured_entry_sigma_components(
         )
     )
 
-    has_custom_anisotropy = bool(
-        np.isfinite(sigma_radial)
-        or np.isfinite(sigma_tangential)
-    )
+    has_custom_anisotropy = bool(np.isfinite(sigma_radial) or np.isfinite(sigma_tangential))
     radial_scale = float(radial_scale) if np.isfinite(radial_scale) else 1.0
-    tangential_scale = (
-        float(tangential_scale) if np.isfinite(tangential_scale) else 1.0
-    )
+    tangential_scale = float(tangential_scale) if np.isfinite(tangential_scale) else 1.0
     radial_scale = max(radial_scale, 1.0e-6)
     tangential_scale = max(tangential_scale, 1.0e-6)
 
     if not np.isfinite(sigma_radial) or sigma_radial <= 0.0:
-        sigma_radial = float(sigma_px) * (
-            radial_scale if anisotropic_enabled else 1.0
-        )
+        sigma_radial = float(sigma_px) * (radial_scale if anisotropic_enabled else 1.0)
     if not np.isfinite(sigma_tangential) or sigma_tangential <= 0.0:
-        sigma_tangential = float(sigma_px) * (
-            tangential_scale if anisotropic_enabled else 1.0
-        )
+        sigma_tangential = float(sigma_px) * (tangential_scale if anisotropic_enabled else 1.0)
 
     sigma_radial = max(float(sigma_radial), 1.0e-6)
     sigma_tangential = max(float(sigma_tangential), 1.0e-6)
@@ -899,9 +818,7 @@ def _weight_measurement_residual(
             radial_component = float(np.dot(radial_unit, residual_vec))
             tangential_component = float(np.dot(tangential_unit, residual_vec))
             weighted_radial = float(effective_distance_weight * radial_component)
-            weighted_tangential = float(
-                effective_distance_weight * tangential_component
-            )
+            weighted_tangential = float(effective_distance_weight * tangential_component)
         else:
             weighted_radial = float(weighted_vec[0])
             weighted_tangential = float(weighted_vec[1])
@@ -927,12 +844,8 @@ def _weight_measurement_residual(
         radial_component = float(np.dot(radial_unit, residual_vec))
         tangential_component = float(np.dot(tangential_unit, residual_vec))
         weighted_radial = float(distance_weight * radial_component / sigma_radial)
-        weighted_tangential = float(
-            distance_weight * tangential_component / sigma_tangential
-        )
-        inv_sqrt_cov = basis @ np.diag(
-            [1.0 / sigma_radial, 1.0 / sigma_tangential]
-        ) @ basis.T
+        weighted_tangential = float(distance_weight * tangential_component / sigma_tangential)
+        inv_sqrt_cov = basis @ np.diag([1.0 / sigma_radial, 1.0 / sigma_tangential]) @ basis.T
         weighted_vec = float(distance_weight) * (inv_sqrt_cov @ residual_vec)
     else:
         scalar_sigma_weight = 1.0 / float(sigma_px)
@@ -1021,11 +934,7 @@ def _default_scale(
 ) -> float:
     """Choose one local normalized-variable scale."""
 
-    if (
-        prior_sigma is not None
-        and np.isfinite(float(prior_sigma))
-        and float(prior_sigma) > 0.0
-    ):
+    if prior_sigma is not None and np.isfinite(float(prior_sigma)) and float(prior_sigma) > 0.0:
         return float(prior_sigma)
     span = float(upper) - float(lower)
     if np.isfinite(span) and span > 0.0:
@@ -1383,9 +1292,7 @@ def _transform_points_orientation_local(
         if mode == "yx":
             col_t, row_t = row_t, col_t
         col_t, row_t = flipper(col_t, row_t)
-        transformed.append(
-            _rotate_point_orientation(col_t, row_t, (height, width), int(k))
-        )
+        transformed.append(_rotate_point_orientation(col_t, row_t, (height, width), int(k)))
     return transformed
 
 
@@ -1532,8 +1439,7 @@ def _apply_discrete_mode_to_dataset_contexts(
                 ),
                 dynamic_reanchor_callback=(
                     dataset_ctx.dynamic_reanchor_callback
-                    if preserve_dynamic_reanchor
-                    and callable(dataset_ctx.dynamic_reanchor_callback)
+                    if preserve_dynamic_reanchor and callable(dataset_ctx.dynamic_reanchor_callback)
                     else None
                 ),
             )
@@ -1666,9 +1572,7 @@ def _svd_summary(
 
     warning_flags: List[str] = []
     underconstrained = bool(
-        rank < len(names)
-        or not np.isfinite(condition_number)
-        or jacobian.shape[0] < len(names)
+        rank < len(names) or not np.isfinite(condition_number) or jacobian.shape[0] < len(names)
     )
     if underconstrained:
         warning_flags.append("underconstrained")
@@ -1798,12 +1702,10 @@ def recommend_next_stage(
             compute_uv=False,
         )
         rank_gain = int(
-            _matrix_rank_from_singular_values(block_singular_values, rcond=rcond)
-            - base_rank
+            _matrix_rank_from_singular_values(block_singular_values, rcond=rcond) - base_rank
         )
         min_sv_gain = float(
-            _min_nonzero_singular_value(block_singular_values, rcond=rcond)
-            / (base_min_sv + eps)
+            _min_nonzero_singular_value(block_singular_values, rcond=rcond) / (base_min_sv + eps)
         )
         weak_block = bool(
             all(
@@ -1854,194 +1756,13 @@ def recommend_next_stage(
     return recommendations
 
 
-def _miller_key_from_row(row: Sequence[float]) -> Optional[Tuple[int, int, int]]:
-    """Return an integer HKL tuple from a Miller-array row."""
-
-    try:
-        return (
-            int(round(float(row[0]))),
-            int(round(float(row[1]))),
-            int(round(float(row[2]))),
-        )
-    except Exception:
-        return None
-
-
-def _normalized_q_group_key(
-    value: object,
-) -> Optional[Tuple[object, ...]]:
-    """Return a hashable Qr/Qz group key when one is present."""
-
-    if isinstance(value, tuple):
-        return value
-    if isinstance(value, list):
-        return tuple(value)
-    return None
-
-
-def _normalized_hkl_key(
-    value: object,
-) -> Optional[Tuple[int, int, int]]:
-    """Return one integer HKL tuple from a stored entry value."""
-
-    if not isinstance(value, (list, tuple)) or len(value) != 3:
-        return None
-    try:
-        return (
-            int(value[0]),
-            int(value[1]),
-            int(value[2]),
-        )
-    except Exception:
-        return None
-
-
-def _mosaic_profile_group_key(
-    entry: Mapping[str, object] | None,
-    *,
-    hkl: Optional[Tuple[int, int, int]] = None,
-) -> Optional[Tuple[object, ...]]:
-    """Return the stable in-plane grouping key used by focused mosaic fitting."""
-
-    if isinstance(entry, Mapping):
-        q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
-        if q_group_key is not None:
-            return ("q_group",) + tuple(q_group_key)
-    if hkl is None and isinstance(entry, Mapping):
-        hkl = _normalized_hkl_key(entry.get("hkl", entry.get("label")))
-    if hkl is None:
-        return None
-    return ("hkl", int(hkl[0]), int(hkl[1]), int(hkl[2]))
-
-
-def _mosaic_profile_intensity_lookup(
-    miller: np.ndarray,
-    intensities: np.ndarray,
-) -> Dict[Tuple[int, int, int], float]:
-    """Return the strongest absolute intensity recorded for each HKL."""
-
-    lookup: Dict[Tuple[int, int, int], float] = {}
-    miller_arr = np.asarray(miller, dtype=np.float64)
-    intensities_arr = np.asarray(intensities, dtype=np.float64).reshape(-1)
-    row_count = min(
-        int(miller_arr.shape[0]) if miller_arr.ndim == 2 else 0,
-        int(intensities_arr.shape[0]),
-    )
-    for idx in range(max(row_count, 0)):
-        hkl_key = _miller_key_from_row(miller_arr[idx])
-        if hkl_key is None:
-            continue
-        try:
-            intensity_value = float(abs(float(intensities_arr[idx])))
-        except Exception:
-            continue
-        if not np.isfinite(intensity_value):
-            continue
-        lookup[hkl_key] = max(float(lookup.get(hkl_key, 0.0)), intensity_value)
-    return lookup
-
-
-def _mosaic_profile_peak_score(
-    entry: Mapping[str, object] | None,
-    *,
-    miller: np.ndarray,
-    intensities: np.ndarray,
-    intensity_lookup: Mapping[Tuple[int, int, int], float],
-) -> float:
-    """Return the ranking score for one focused mosaic-profile peak candidate."""
-
-    if not isinstance(entry, Mapping):
-        return 0.0
-
-    for key in ("weight", "background_intensity", "prominence_sigma", "confidence"):
-        try:
-            value = float(entry.get(key, np.nan))
-        except Exception:
-            value = float("nan")
-        if np.isfinite(value) and value > 0.0:
-            return float(value)
-
-    hkl_key = _normalized_hkl_key(entry.get("hkl", entry.get("label")))
-    miller_arr = np.asarray(miller, dtype=np.float64)
-    intensities_arr = np.asarray(intensities, dtype=np.float64).reshape(-1)
-    try:
-        table_idx = int(entry.get("source_table_index"))
-    except Exception:
-        table_idx = -1
-    if (
-        hkl_key is not None
-        and miller_arr.ndim == 2
-        and 0 <= table_idx < miller_arr.shape[0]
-        and table_idx < intensities_arr.shape[0]
-    ):
-        source_hkl = _miller_key_from_row(miller_arr[table_idx])
-        if source_hkl == hkl_key:
-            try:
-                score = float(abs(float(intensities_arr[table_idx])))
-            except Exception:
-                score = float("nan")
-            if np.isfinite(score) and score > 0.0:
-                return float(score)
-
-    if hkl_key is not None:
-        try:
-            score = float(intensity_lookup.get(hkl_key, 0.0))
-        except Exception:
-            score = 0.0
-        if np.isfinite(score) and score > 0.0:
-            return float(score)
-    return 0.0
-
-
-def _mosaic_profile_entry_priority(
-    entry: Mapping[str, object] | None,
-    *,
-    miller: np.ndarray,
-    intensities: np.ndarray,
-    intensity_lookup: Mapping[Tuple[int, int, int], float],
-) -> Tuple[object, ...]:
-    """Return a stable ordering tuple for focused mosaic-profile candidates."""
-
-    score = _mosaic_profile_peak_score(
-        entry,
-        miller=miller,
-        intensities=intensities,
-        intensity_lookup=intensity_lookup,
-    )
-    try:
-        source_peak_index = (
-            int(entry.get("source_peak_index"))
-            if isinstance(entry, Mapping)
-            else math.inf
-        )
-    except Exception:
-        source_peak_index = math.inf
-    try:
-        source_row_index = (
-            int(entry.get("source_row_index"))
-            if isinstance(entry, Mapping)
-            else math.inf
-        )
-    except Exception:
-        source_row_index = math.inf
-    hkl_key = (
-        _normalized_hkl_key(entry.get("hkl", entry.get("label")))
-        if isinstance(entry, Mapping)
-        else None
-    )
-    group_key = (
-        _normalized_q_group_key(entry.get("q_group_key"))
-        if isinstance(entry, Mapping)
-        else None
-    )
-    return (
-        -float(score),
-        int(source_peak_index) if np.isfinite(source_peak_index) else math.inf,
-        int(source_row_index) if np.isfinite(source_row_index) else math.inf,
-        str(group_key) if group_key is not None else "",
-        str(hkl_key) if hkl_key is not None else "",
-        str(entry.get("label", "")) if isinstance(entry, Mapping) else "",
-    )
+_miller_key_from_row = _mosaic_profiles._miller_key_from_row
+_normalized_q_group_key = _mosaic_profiles._normalized_q_group_key
+_normalized_hkl_key = _mosaic_profiles._normalized_hkl_key
+_mosaic_profile_group_key = _mosaic_profiles._mosaic_profile_group_key
+_mosaic_profile_intensity_lookup = _mosaic_profiles._mosaic_profile_intensity_lookup
+_mosaic_profile_peak_score = _mosaic_profiles._mosaic_profile_peak_score
+_mosaic_profile_entry_priority = _mosaic_profiles._mosaic_profile_entry_priority
 
 
 def focus_mosaic_profile_dataset_specs(
@@ -2054,229 +1775,14 @@ def focus_mosaic_profile_dataset_specs(
 ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
     """Reduce mosaic-fit datasets to all 00L peaks plus the top in-plane groups."""
 
-    dataset_entries = [
-        dict(spec)
-        for spec in _coerce_sequence_items(dataset_specs)
-        if isinstance(spec, Mapping)
-    ]
-    max_groups = max(int(max_in_plane_groups), 0)
-    summary: Dict[str, object] = {
-        "mode": "focused",
-        "max_in_plane_groups": int(max_groups),
-        "reference_dataset_index": None,
-        "reference_dataset_label": None,
-        "selected_specular_hkls": [],
-        "selected_in_plane_hkls": [],
-        "selected_in_plane_groups": [],
-        "input_peak_count_by_dataset": {},
-        "selected_peak_count_by_dataset": {},
-    }
-    if not dataset_entries:
-        return [], summary
-
-    source_miller_arr = np.asarray(source_miller, dtype=np.float64)
-    source_intensities_arr = np.asarray(source_intensities, dtype=np.float64)
-    intensity_lookup = _mosaic_profile_intensity_lookup(
-        source_miller_arr,
-        source_intensities_arr,
+    return _mosaic_profiles.focus_mosaic_profile_dataset_specs(
+        dataset_specs,
+        source_miller=source_miller,
+        source_intensities=source_intensities,
+        reference_dataset_index=reference_dataset_index,
+        max_in_plane_groups=max_in_plane_groups,
+        coerce_sequence_items=_coerce_sequence_items,
     )
-
-    reference_pos = 0
-    try:
-        reference_idx = int(reference_dataset_index)
-    except Exception:
-        reference_idx = None
-    if reference_idx is not None:
-        for idx, spec in enumerate(dataset_entries):
-            try:
-                if int(spec.get("dataset_index", idx)) == reference_idx:
-                    reference_pos = idx
-                    break
-            except Exception:
-                continue
-
-    reference_spec = dict(dataset_entries[reference_pos])
-    summary["reference_dataset_index"] = reference_spec.get(
-        "dataset_index",
-        reference_pos,
-    )
-    summary["reference_dataset_label"] = reference_spec.get(
-        "label",
-        f"dataset_{reference_pos}",
-    )
-
-    specular_order: List[Tuple[int, int, int]] = []
-    seen_specular: Set[Tuple[int, int, int]] = set()
-    in_plane_groups: Dict[Tuple[object, ...], Dict[str, object]] = {}
-
-    for raw_entry in _coerce_sequence_items(reference_spec.get("measured_peaks")):
-        if not isinstance(raw_entry, Mapping):
-            continue
-        entry = dict(raw_entry)
-        hkl_key = _normalized_hkl_key(entry.get("hkl", entry.get("label")))
-        family_info = (
-            _classify_mosaic_profile_family(hkl_key)
-            if hkl_key is not None
-            else None
-        )
-        if family_info is None or hkl_key is None:
-            continue
-        family, _ = family_info
-        if family == "specular":
-            if hkl_key not in seen_specular:
-                seen_specular.add(hkl_key)
-                specular_order.append(hkl_key)
-            continue
-
-        group_key = _mosaic_profile_group_key(entry, hkl=hkl_key)
-        if group_key is None:
-            continue
-        group_info = in_plane_groups.setdefault(
-            group_key,
-            {
-                "entries": [],
-                "score": 0.0,
-            },
-        )
-        group_info["entries"].append(dict(entry))
-        group_info["score"] = float(group_info.get("score", 0.0)) + _mosaic_profile_peak_score(
-            entry,
-            miller=source_miller_arr,
-            intensities=source_intensities_arr,
-            intensity_lookup=intensity_lookup,
-        )
-
-    ranked_group_items = sorted(
-        in_plane_groups.items(),
-        key=lambda item: (
-            -float(item[1].get("score", 0.0)),
-            min(
-                _mosaic_profile_entry_priority(
-                    entry,
-                    miller=source_miller_arr,
-                    intensities=source_intensities_arr,
-                    intensity_lookup=intensity_lookup,
-                )
-                for entry in item[1].get("entries", [])
-                if isinstance(entry, Mapping)
-            )
-            if item[1].get("entries")
-            else (math.inf,),
-        ),
-    )
-
-    selected_in_plane_group_order: List[Tuple[object, ...]] = []
-    selected_in_plane_hkls: List[Tuple[int, int, int]] = []
-    for group_key, group_info in ranked_group_items[:max_groups]:
-        entries = [
-            dict(entry)
-            for entry in group_info.get("entries", [])
-            if isinstance(entry, Mapping)
-        ]
-        if not entries:
-            continue
-        representative = min(
-            entries,
-            key=lambda entry: _mosaic_profile_entry_priority(
-                entry,
-                miller=source_miller_arr,
-                intensities=source_intensities_arr,
-                intensity_lookup=intensity_lookup,
-            ),
-        )
-        representative_hkl = _normalized_hkl_key(
-            representative.get("hkl", representative.get("label"))
-        )
-        if representative_hkl is None:
-            continue
-        selected_in_plane_group_order.append(group_key)
-        selected_in_plane_hkls.append(representative_hkl)
-
-    allowed_specular = set(specular_order)
-    allowed_in_plane_groups = set(selected_in_plane_group_order)
-    summary["selected_specular_hkls"] = [
-        [int(v) for v in hkl]
-        for hkl in specular_order
-    ]
-    summary["selected_in_plane_hkls"] = [
-        [int(v) for v in hkl]
-        for hkl in selected_in_plane_hkls
-    ]
-    summary["selected_in_plane_groups"] = [
-        list(group_key)
-        for group_key in selected_in_plane_group_order
-    ]
-
-    focused_specs: List[Dict[str, object]] = []
-    for spec_idx, raw_spec in enumerate(dataset_entries):
-        spec = dict(raw_spec)
-        dataset_key = str(spec.get("dataset_index", spec_idx))
-        raw_measured = _coerce_sequence_items(spec.get("measured_peaks"))
-        summary["input_peak_count_by_dataset"][dataset_key] = int(len(raw_measured))
-
-        best_specular_entries: Dict[Tuple[int, int, int], Dict[str, object]] = {}
-        best_in_plane_entries: Dict[Tuple[object, ...], Dict[str, object]] = {}
-        for raw_entry in raw_measured:
-            if not isinstance(raw_entry, Mapping):
-                continue
-            entry = dict(raw_entry)
-            hkl_key = _normalized_hkl_key(entry.get("hkl", entry.get("label")))
-            family_info = (
-                _classify_mosaic_profile_family(hkl_key)
-                if hkl_key is not None
-                else None
-            )
-            if family_info is None or hkl_key is None:
-                continue
-            family, _ = family_info
-            priority = _mosaic_profile_entry_priority(
-                entry,
-                miller=source_miller_arr,
-                intensities=source_intensities_arr,
-                intensity_lookup=intensity_lookup,
-            )
-            if family == "specular":
-                if hkl_key not in allowed_specular:
-                    continue
-                previous = best_specular_entries.get(hkl_key)
-                if previous is None or priority < _mosaic_profile_entry_priority(
-                    previous,
-                    miller=source_miller_arr,
-                    intensities=source_intensities_arr,
-                    intensity_lookup=intensity_lookup,
-                ):
-                    best_specular_entries[hkl_key] = dict(entry)
-                continue
-
-            group_key = _mosaic_profile_group_key(entry, hkl=hkl_key)
-            if group_key is None or group_key not in allowed_in_plane_groups:
-                continue
-            previous = best_in_plane_entries.get(group_key)
-            if previous is None or priority < _mosaic_profile_entry_priority(
-                previous,
-                miller=source_miller_arr,
-                intensities=source_intensities_arr,
-                intensity_lookup=intensity_lookup,
-            ):
-                best_in_plane_entries[group_key] = dict(entry)
-
-        focused_measured: List[Dict[str, object]] = []
-        for hkl_key in specular_order:
-            selected_entry = best_specular_entries.get(hkl_key)
-            if selected_entry is not None:
-                focused_measured.append(dict(selected_entry))
-        for group_key in selected_in_plane_group_order:
-            selected_entry = best_in_plane_entries.get(group_key)
-            if selected_entry is not None:
-                focused_measured.append(dict(selected_entry))
-
-        spec["measured_peaks"] = focused_measured
-        summary["selected_peak_count_by_dataset"][dataset_key] = int(
-            len(focused_measured)
-        )
-        focused_specs.append(spec)
-
-    return focused_specs, summary
 
 
 def _geometry_peak_priority_metadata(
@@ -2490,12 +1996,8 @@ def _build_geometry_line_constraint_residuals_from_detector_matches(
     resolved_spans_deg: List[float] = []
 
     def _assign_missing(slot: int) -> None:
-        residual_components[int(slot), 0] = (
-            float(angle_weight) * float(missing_penalty_px)
-        )
-        residual_components[int(slot), 1] = (
-            float(offset_weight) * float(missing_penalty_px)
-        )
+        residual_components[int(slot), 0] = float(angle_weight) * float(missing_penalty_px)
+        residual_components[int(slot), 1] = float(offset_weight) * float(missing_penalty_px)
         summary["missing_line_group_count"] = int(summary["missing_line_group_count"]) + 1
 
     for slot, group_id in enumerate(eligible_group_ids):
@@ -2599,16 +2101,12 @@ def _build_geometry_line_constraint_residuals_from_detector_matches(
             continue
 
         detector_span_px = (
-            float(detector_model["span"])
-            if detector_model is not None
-            else float("nan")
+            float(detector_model["span"]) if detector_model is not None else float("nan")
         )
         if not np.isfinite(detector_span_px) or detector_span_px <= 1.0e-9:
             centered_detector = np.column_stack((meas_cols, meas_rows))
             centered_detector = centered_detector - np.mean(centered_detector, axis=0)
-            detector_span_px = float(
-                2.0 * np.max(np.linalg.norm(centered_detector, axis=1))
-            )
+            detector_span_px = float(2.0 * np.max(np.linalg.norm(centered_detector, axis=1)))
         if not np.isfinite(detector_span_px) or detector_span_px <= 1.0e-9:
             _assign_missing(slot)
             continue
@@ -2616,17 +2114,14 @@ def _build_geometry_line_constraint_residuals_from_detector_matches(
         px_per_fit_deg = float(detector_span_px / max(fit_span_deg, 1.0e-9))
         measured_direction = np.asarray(measured_model["direction"], dtype=np.float64)
         simulated_direction = np.asarray(simulated_model["direction"], dtype=np.float64)
-        dot_abs = float(
-            abs(np.clip(np.dot(measured_direction, simulated_direction), -1.0, 1.0))
-        )
+        dot_abs = float(abs(np.clip(np.dot(measured_direction, simulated_direction), -1.0, 1.0)))
         angle_diff_rad = float(math.acos(dot_abs))
         measured_normal = np.array(
             [-float(measured_direction[1]), float(measured_direction[0])],
             dtype=np.float64,
         )
-        centroid_delta = (
-            np.asarray(simulated_model["centroid"], dtype=np.float64)
-            - np.asarray(measured_model["centroid"], dtype=np.float64)
+        centroid_delta = np.asarray(simulated_model["centroid"], dtype=np.float64) - np.asarray(
+            measured_model["centroid"], dtype=np.float64
         )
         offset_deg = float(np.dot(centroid_delta, measured_normal))
 
@@ -2696,12 +2191,8 @@ def _build_geometry_line_constraint_residuals_from_fit_space_matches(
     resolved_spans_deg: List[float] = []
 
     def _assign_missing(slot: int) -> None:
-        residual_components[int(slot), 0] = (
-            float(angle_weight) * float(missing_penalty_deg)
-        )
-        residual_components[int(slot), 1] = (
-            float(offset_weight) * float(missing_penalty_deg)
-        )
+        residual_components[int(slot), 0] = float(angle_weight) * float(missing_penalty_deg)
+        residual_components[int(slot), 1] = float(offset_weight) * float(missing_penalty_deg)
         summary["missing_line_group_count"] = int(summary["missing_line_group_count"]) + 1
 
     for slot, group_id in enumerate(eligible_group_ids):
@@ -2765,17 +2256,14 @@ def _build_geometry_line_constraint_residuals_from_fit_space_matches(
 
         measured_direction = np.asarray(measured_model["direction"], dtype=np.float64)
         simulated_direction = np.asarray(simulated_model["direction"], dtype=np.float64)
-        dot_abs = float(
-            abs(np.clip(np.dot(measured_direction, simulated_direction), -1.0, 1.0))
-        )
+        dot_abs = float(abs(np.clip(np.dot(measured_direction, simulated_direction), -1.0, 1.0)))
         angle_diff_rad = float(math.acos(dot_abs))
         measured_normal = np.array(
             [-float(measured_direction[1]), float(measured_direction[0])],
             dtype=np.float64,
         )
-        centroid_delta = (
-            np.asarray(simulated_model["centroid"], dtype=np.float64)
-            - np.asarray(measured_model["centroid"], dtype=np.float64)
+        centroid_delta = np.asarray(simulated_model["centroid"], dtype=np.float64) - np.asarray(
+            measured_model["centroid"], dtype=np.float64
         )
         offset_deg = float(np.dot(centroid_delta, measured_normal))
 
@@ -2822,11 +2310,7 @@ def _prepare_reflection_subset(
                 **dict(entry),
                 **(
                     {"q_group_key": group_key}
-                    if (
-                        group_key := _normalized_q_group_key(
-                            dict(entry).get("q_group_key")
-                        )
-                    )
+                    if (group_key := _normalized_q_group_key(dict(entry).get("q_group_key")))
                     is not None
                     else {}
                 ),
@@ -2855,7 +2339,8 @@ def _prepare_reflection_subset(
 
     selected_original_indices: List[int] = []
     selected_lookup: set[int] = set()
-    for entry in normalized_measured:
+    fixed_source_entry_indices: set[int] = set()
+    for entry_index, entry in enumerate(normalized_measured):
         source_key = _measured_source_indices(entry)
         if source_key is None:
             continue
@@ -2877,16 +2362,14 @@ def _prepare_reflection_subset(
                 continue
         selected_lookup.add(table_idx)
         selected_original_indices.append(int(table_idx))
+        fixed_source_entry_indices.add(int(entry_index))
 
     fixed_source_reflection_count = int(len(selected_original_indices))
 
     fallback_hkl_keys: set[Tuple[int, int, int]] = set()
-    for entry in normalized_measured:
-        # Always retain the HKL-based fallback path, even when source-table
-        # indices are present. Manual geometry picks can carry stale source
-        # indices after the user clears/readds points or after the underlying
-        # reflection ordering changes, and relying on indices alone can reduce
-        # the simulation subset to the wrong reflections.
+    for entry_index, entry in enumerate(normalized_measured):
+        if entry_index in fixed_source_entry_indices:
+            continue
         raw_hkl = entry.get("hkl")
         if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
             continue
@@ -2928,9 +2411,11 @@ def _prepare_reflection_subset(
             local_idx = local_index_map.get(int(table_idx))
             if local_idx is not None:
                 remapped_entry["source_table_index"] = int(local_idx)
+                remapped_entry["source_reflection_index"] = int(local_idx)
                 remapped_entry["source_row_index"] = int(row_idx)
             else:
                 remapped_entry.pop("source_table_index", None)
+                remapped_entry.pop("source_reflection_index", None)
                 remapped_entry.pop("source_row_index", None)
         remapped_measured.append(remapped_entry)
 
@@ -2964,9 +2449,7 @@ def _build_geometry_fit_dataset_contexts(
     if dataset_spec_entries:
         for dataset_index, raw_entry in enumerate(dataset_spec_entries):
             if not isinstance(raw_entry, dict):
-                raise TypeError(
-                    "geometry fit dataset_specs entries must be dictionaries"
-                )
+                raise TypeError("geometry fit dataset_specs entries must be dictionaries")
             entry = dict(raw_entry)
             entry.setdefault("dataset_index", int(dataset_index))
             entry.setdefault("label", f"dataset_{dataset_index}")
@@ -3103,6 +2586,48 @@ def _build_greedy_point_matches(
     )
 
 
+def _uses_central_geometry_ray(
+    mosaic_params: Mapping[str, object] | None,
+    *,
+    single_ray_indices: np.ndarray | None = None,
+) -> bool:
+    """Return whether one fit is effectively using only central geometry ray."""
+
+    if isinstance(single_ray_indices, np.ndarray) and np.any(single_ray_indices >= 0):
+        return False
+    if not isinstance(mosaic_params, Mapping):
+        return True
+
+    def _as_array(key: str, *, default: float = 0.0) -> np.ndarray:
+        raw = mosaic_params.get(key, None)
+        if raw is None:
+            return np.asarray([default], dtype=np.float64)
+        try:
+            return np.asarray(raw, dtype=np.float64).reshape(-1)
+        except Exception:
+            return np.asarray([], dtype=np.float64)
+
+    beam_x = _as_array("beam_x_array")
+    beam_y = _as_array("beam_y_array")
+    theta = _as_array("theta_array")
+    phi = _as_array("phi_array")
+    if any(arr.size != 1 for arr in (beam_x, beam_y, theta, phi)):
+        return False
+    if not (
+        np.all(np.isfinite(beam_x))
+        and np.all(np.isfinite(beam_y))
+        and np.all(np.isfinite(theta))
+        and np.all(np.isfinite(phi))
+    ):
+        return False
+    return bool(
+        np.allclose(beam_x, 0.0)
+        and np.allclose(beam_y, 0.0)
+        and np.allclose(theta, 0.0)
+        and np.allclose(phi, 0.0)
+    )
+
+
 def _evaluate_geometry_fit_dataset_point_matches(
     local: Dict[str, object],
     dataset_ctx: GeometryFitDatasetContext,
@@ -3132,38 +2657,23 @@ def _evaluate_geometry_fit_dataset_point_matches(
     ]
     single_ray_indices = dataset_ctx.single_ray_indices
     try:
-        hk0_peak_priority_weight = float(
-            local.get("_hk0_peak_priority_weight", 1.0)
-        )
+        hk0_peak_priority_weight = float(local.get("_hk0_peak_priority_weight", 1.0))
     except Exception:
         hk0_peak_priority_weight = 1.0
-    if (
-        not np.isfinite(hk0_peak_priority_weight)
-        or hk0_peak_priority_weight < 1.0
-    ):
+    if not np.isfinite(hk0_peak_priority_weight) or hk0_peak_priority_weight < 1.0:
         hk0_peak_priority_weight = 1.0
     line_constraints_enabled = bool(local.get("_q_group_line_constraints_enabled", False))
     try:
-        q_group_line_angle_weight = float(
-            local.get("_q_group_line_angle_weight", 0.6)
-        )
+        q_group_line_angle_weight = float(local.get("_q_group_line_angle_weight", 0.6))
     except Exception:
         q_group_line_angle_weight = 0.6
-    if (
-        not np.isfinite(q_group_line_angle_weight)
-        or q_group_line_angle_weight < 0.0
-    ):
+    if not np.isfinite(q_group_line_angle_weight) or q_group_line_angle_weight < 0.0:
         q_group_line_angle_weight = 0.6
     try:
-        q_group_line_offset_weight = float(
-            local.get("_q_group_line_offset_weight", 1.0)
-        )
+        q_group_line_offset_weight = float(local.get("_q_group_line_offset_weight", 1.0))
     except Exception:
         q_group_line_offset_weight = 1.0
-    if (
-        not np.isfinite(q_group_line_offset_weight)
-        or q_group_line_offset_weight < 0.0
-    ):
+    if not np.isfinite(q_group_line_offset_weight) or q_group_line_offset_weight < 0.0:
         q_group_line_offset_weight = 1.0
     try:
         q_group_line_missing_penalty_scale = float(
@@ -3176,29 +2686,38 @@ def _evaluate_geometry_fit_dataset_point_matches(
         or q_group_line_missing_penalty_scale < 0.0
     ):
         q_group_line_missing_penalty_scale = 0.35
+    central_ray_mode = _uses_central_geometry_ray(
+        local.get("mosaic_params"),
+        single_ray_indices=single_ray_indices,
+    )
 
     if not normalized_measured:
-        return np.array([], dtype=float), [], {
-            "dataset_index": int(dataset_ctx.dataset_index),
-            "dataset_label": str(dataset_ctx.label),
-            "theta_initial_deg": float(theta_value),
-            "measured_count": 0,
-            "fixed_source_resolved_count": 0,
-            "fallback_entry_count": 0,
-            "missing_pair_count": 0,
-            "simulated_reflection_count": int(fit_miller.shape[0]),
-            "total_reflection_count": int(simulation_subset.total_reflection_count),
-            "subset_reduced": bool(simulation_subset.reduced),
-            "single_ray_enabled": bool(use_single_ray),
-            "single_ray_forced_count": 0,
-            "line_group_count": 0,
-            "resolved_line_group_count": 0,
-            "missing_line_group_count": 0,
-            "line_angle_rms_px": float("nan"),
-            "line_offset_rms_px": float("nan"),
-            "line_fit_space_span_deg_mean": float("nan"),
-            "line_constraints_enabled": bool(line_constraints_enabled),
-        }
+        return (
+            np.array([], dtype=float),
+            [],
+            {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "dataset_label": str(dataset_ctx.label),
+                "theta_initial_deg": float(theta_value),
+                "measured_count": 0,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "missing_pair_count": 0,
+                "simulated_reflection_count": int(fit_miller.shape[0]),
+                "total_reflection_count": int(simulation_subset.total_reflection_count),
+                "subset_reduced": bool(simulation_subset.reduced),
+                "central_ray_mode": bool(central_ray_mode),
+                "single_ray_enabled": bool(use_single_ray),
+                "single_ray_forced_count": 0,
+                "line_group_count": 0,
+                "resolved_line_group_count": 0,
+                "missing_line_group_count": 0,
+                "line_angle_rms_px": float("nan"),
+                "line_offset_rms_px": float("nan"),
+                "line_fit_space_span_deg_mean": float("nan"),
+                "line_constraints_enabled": bool(line_constraints_enabled),
+            },
+        )
 
     mosaic = local["mosaic_params"]
     wavelength_array = mosaic.get("wavelength_array")
@@ -3207,11 +2726,22 @@ def _evaluate_geometry_fit_dataset_point_matches(
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
     _, hit_tables, *_ = _process_peaks_parallel_safe(
-        fit_miller, fit_intensities, image_size,
-        local["a"], local["c"], wavelength_array,
-        sim_buffer, local["corto_detector"],
-        local["gamma"], local["Gamma"], local["chi"], local.get("psi", 0.0), local.get("psi_z", 0.0),
-        local["zs"], local["zb"], local["n2"],
+        fit_miller,
+        fit_intensities,
+        image_size,
+        local["a"],
+        local["c"],
+        wavelength_array,
+        sim_buffer,
+        local["corto_detector"],
+        local["gamma"],
+        local["Gamma"],
+        local["chi"],
+        local.get("psi", 0.0),
+        local.get("psi_z", 0.0),
+        local["zs"],
+        local["zb"],
+        local["n2"],
         mosaic["beam_x_array"],
         mosaic["beam_y_array"],
         mosaic["theta_array"],
@@ -3220,8 +2750,11 @@ def _evaluate_geometry_fit_dataset_point_matches(
         mosaic["gamma_mosaic_deg"],
         mosaic["eta"],
         wavelength_array,
-        local["debye_x"], local["debye_y"],
-        local["center"], theta_value, local.get("cor_angle", 0.0),
+        local["debye_x"],
+        local["debye_y"],
+        local["center"],
+        theta_value,
+        local.get("cor_angle", 0.0),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
@@ -3245,9 +2778,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
 
     maxpos = hit_tables_to_max_positions(hit_tables)
-    measured_index_lookup = {
-        id(entry): int(idx) for idx, entry in enumerate(normalized_measured)
-    }
+    measured_index_lookup = {id(entry): int(idx) for idx, entry in enumerate(normalized_measured)}
     # Keep one fixed two-component residual block per measured point. SciPy's
     # finite-difference Jacobian estimation requires a stable residual shape
     # even when one point flips between matched and missing.
@@ -3357,8 +2888,10 @@ def _evaluate_geometry_fit_dataset_point_matches(
         except Exception:
             continue
         if not (
-            np.isfinite(sim_pt[0]) and np.isfinite(sim_pt[1])
-            and np.isfinite(meas_pt[0]) and np.isfinite(meas_pt[1])
+            np.isfinite(sim_pt[0])
+            and np.isfinite(sim_pt[1])
+            and np.isfinite(meas_pt[0])
+            and np.isfinite(meas_pt[1])
         ):
             continue
         dx = float(sim_pt[0] - meas_pt[0])
@@ -3486,7 +3019,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "placement_error_px": _placement_error_px(entry),
                         "distance_weight": 1.0,
                         "weight": float(penalty_weight),
-                        "weighted_missing_penalty_px": float(missing_pair_penalty) * float(penalty_weight),
+                        "weighted_missing_penalty_px": float(missing_pair_penalty)
+                        * float(penalty_weight),
                         "measured_radius_px": _point_radius_px(measured_point),
                         "simulated_radius_px": float("nan"),
                         **weight_fields,
@@ -3528,9 +3062,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 )
             if 0 <= meas_idx < len(valid_entries_hkl):
                 sim_candidate = (
-                    sim_candidates[sim_idx]
-                    if 0 <= sim_idx < len(sim_candidates)
-                    else {}
+                    sim_candidates[sim_idx] if 0 <= sim_idx < len(sim_candidates) else {}
                 )
                 _add_diag(
                     dict(resolution_lookup.get(id(entry), {})),
@@ -3541,6 +3073,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "sim_list_index": int(sim_idx),
                         "meas_list_index": int(meas_idx),
                         "source_table_index": sim_candidate.get("source_table_index"),
+                        "source_reflection_index": sim_candidate.get("source_reflection_index"),
                         "source_peak_index": sim_candidate.get("source_peak_index"),
                         "measured_x": float(meas_pt[0]),
                         "measured_y": float(meas_pt[1]),
@@ -3556,13 +3089,19 @@ def _evaluate_geometry_fit_dataset_point_matches(
                             * float(weight_fields.get("sigma_weight", 1.0))
                             * float(weight_fields.get("priority_weight", 1.0))
                         ),
-                        "measured_radius_px": _point_radius_px((float(meas_pt[0]), float(meas_pt[1]))),
-                        "simulated_radius_px": _point_radius_px((float(sim_pt[0]), float(sim_pt[1]))),
+                        "measured_radius_px": _point_radius_px(
+                            (float(meas_pt[0]), float(meas_pt[1]))
+                        ),
+                        "simulated_radius_px": _point_radius_px(
+                            (float(sim_pt[0]), float(sim_pt[1]))
+                        ),
                         **weight_fields,
                     },
                 )
 
-        unmatched_meas_indices = [idx for idx in range(len(valid_entries_hkl)) if idx not in matched_meas_indices]
+        unmatched_meas_indices = [
+            idx for idx in range(len(valid_entries_hkl)) if idx not in matched_meas_indices
+        ]
         missing_pairs += len(unmatched_meas_indices)
         for meas_idx in unmatched_meas_indices:
             entry = valid_entries_hkl[meas_idx]
@@ -3603,7 +3142,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
                     "placement_error_px": _placement_error_px(entry),
                     "distance_weight": 1.0,
                     "weight": float(penalty_weight),
-                    "weighted_missing_penalty_px": float(missing_pair_penalty) * float(penalty_weight),
+                    "weighted_missing_penalty_px": float(missing_pair_penalty)
+                    * float(penalty_weight),
                     "measured_radius_px": _point_radius_px(measured_point),
                     "simulated_radius_px": float("nan"),
                     **weight_fields,
@@ -3625,8 +3165,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
         )
         penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
         penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
-        residual_components[int(unresolved_idx), 0] = (
-            float(missing_pair_penalty) * float(penalty_weight)
+        residual_components[int(unresolved_idx), 0] = float(missing_pair_penalty) * float(
+            penalty_weight
         )
         residual_components[int(unresolved_idx), 1] = 0.0
         missing_pairs += 1
@@ -3715,12 +3255,17 @@ def _evaluate_geometry_fit_dataset_point_matches(
         "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
         "subset_reduced": bool(simulation_subset.reduced),
+        "central_ray_mode": bool(central_ray_mode),
         "single_ray_enabled": bool(use_single_ray),
         "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
         if isinstance(single_ray_indices, np.ndarray)
         else 0,
-        "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
-        "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+        "center_row": float(local["center"][0])
+        if len(local.get("center", [])) >= 2
+        else float("nan"),
+        "center_col": float(local["center"][1])
+        if len(local.get("center", [])) >= 2
+        else float("nan"),
     }
     summary["anisotropic_sigma_count"] = int(anisotropic_sigma_count)
     if custom_sigma_values:
@@ -3754,9 +3299,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         summary["unweighted_peak_max_px"] = float("nan")
     if anisotropic_sigma_count > 0:
         summary["peak_weighting_mode"] = (
-            "measurement_covariance+distance"
-            if weighted_matching
-            else "measurement_covariance"
+            "measurement_covariance+distance" if weighted_matching else "measurement_covariance"
         )
     elif summary.get("custom_sigma_count", 0):
         summary["peak_weighting_mode"] = (
@@ -3782,43 +3325,29 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     simulation_subset = dataset_ctx.subset
     fit_miller = simulation_subset.miller
     fit_intensities = simulation_subset.intensities
-    normalized_measured = simulation_subset.measured_entries
+    normalized_measured = [
+        dict(entry) if isinstance(entry, Mapping) else entry
+        for entry in (simulation_subset.measured_entries or [])
+    ]
     single_ray_indices = dataset_ctx.single_ray_indices
     try:
-        hk0_peak_priority_weight = float(
-            local.get("_hk0_peak_priority_weight", 1.0)
-        )
+        hk0_peak_priority_weight = float(local.get("_hk0_peak_priority_weight", 1.0))
     except Exception:
         hk0_peak_priority_weight = 1.0
-    if (
-        not np.isfinite(hk0_peak_priority_weight)
-        or hk0_peak_priority_weight < 1.0
-    ):
+    if not np.isfinite(hk0_peak_priority_weight) or hk0_peak_priority_weight < 1.0:
         hk0_peak_priority_weight = 1.0
-    line_constraints_enabled = bool(
-        local.get("_q_group_line_constraints_enabled", False)
-    )
+    line_constraints_enabled = bool(local.get("_q_group_line_constraints_enabled", False))
     try:
-        q_group_line_angle_weight = float(
-            local.get("_q_group_line_angle_weight", 0.6)
-        )
+        q_group_line_angle_weight = float(local.get("_q_group_line_angle_weight", 0.6))
     except Exception:
         q_group_line_angle_weight = 0.6
-    if (
-        not np.isfinite(q_group_line_angle_weight)
-        or q_group_line_angle_weight < 0.0
-    ):
+    if not np.isfinite(q_group_line_angle_weight) or q_group_line_angle_weight < 0.0:
         q_group_line_angle_weight = 0.6
     try:
-        q_group_line_offset_weight = float(
-            local.get("_q_group_line_offset_weight", 1.0)
-        )
+        q_group_line_offset_weight = float(local.get("_q_group_line_offset_weight", 1.0))
     except Exception:
         q_group_line_offset_weight = 1.0
-    if (
-        not np.isfinite(q_group_line_offset_weight)
-        or q_group_line_offset_weight < 0.0
-    ):
+    if not np.isfinite(q_group_line_offset_weight) or q_group_line_offset_weight < 0.0:
         q_group_line_offset_weight = 1.0
     try:
         q_group_line_missing_penalty_scale = float(
@@ -3833,34 +3362,43 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         q_group_line_missing_penalty_scale = 0.35
 
     fit_space_summary_defaults = _fit_space_provenance_summary(local)
+    central_ray_mode = _uses_central_geometry_ray(
+        local.get("mosaic_params"),
+        single_ray_indices=single_ray_indices,
+    )
 
     if not normalized_measured:
-        return np.array([], dtype=float), [], {
-            "dataset_index": int(dataset_ctx.dataset_index),
-            "dataset_label": str(dataset_ctx.label),
-            "theta_initial_deg": float(theta_value),
-            "measured_count": 0,
-            "fixed_source_resolved_count": 0,
-            "fallback_entry_count": 0,
-            "missing_pair_count": 0,
-            "simulated_reflection_count": int(fit_miller.shape[0]),
-            "total_reflection_count": int(simulation_subset.total_reflection_count),
-            "subset_reduced": bool(simulation_subset.reduced),
-            "single_ray_enabled": False,
-            "single_ray_forced_count": 0,
-            "peak_weighting_mode": "uniform",
-            "line_group_count": 0,
-            "resolved_line_group_count": 0,
-            "missing_line_group_count": 0,
-            "line_angle_rms_px": float("nan"),
-            "line_offset_rms_px": float("nan"),
-            "line_angle_rms_deg": float("nan"),
-            "line_offset_rms_deg": float("nan"),
-            "line_fit_space_span_deg_mean": float("nan"),
-            "line_constraints_enabled": bool(line_constraints_enabled),
-            "_live_cache_records": [],
-            **fit_space_summary_defaults,
-        }
+        return (
+            np.array([], dtype=float),
+            [],
+            {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "dataset_label": str(dataset_ctx.label),
+                "theta_initial_deg": float(theta_value),
+                "measured_count": 0,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "missing_pair_count": 0,
+                "simulated_reflection_count": int(fit_miller.shape[0]),
+                "total_reflection_count": int(simulation_subset.total_reflection_count),
+                "subset_reduced": bool(simulation_subset.reduced),
+                "central_ray_mode": bool(central_ray_mode),
+                "single_ray_enabled": False,
+                "single_ray_forced_count": 0,
+                "peak_weighting_mode": "uniform",
+                "line_group_count": 0,
+                "resolved_line_group_count": 0,
+                "missing_line_group_count": 0,
+                "line_angle_rms_px": float("nan"),
+                "line_offset_rms_px": float("nan"),
+                "line_angle_rms_deg": float("nan"),
+                "line_offset_rms_deg": float("nan"),
+                "line_fit_space_span_deg_mean": float("nan"),
+                "line_constraints_enabled": bool(line_constraints_enabled),
+                "_live_cache_records": [],
+                **fit_space_summary_defaults,
+            },
+        )
 
     mosaic = local["mosaic_params"]
     wavelength_array = mosaic.get("wavelength_array")
@@ -3942,8 +3480,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     line_match_records: List[Dict[str, object]] = []
     live_cache_records: List[Dict[str, object]] = []
     dynamic_reanchor_enabled = bool(
-        dataset_ctx.dynamic_reanchor_enabled
-        and callable(dataset_ctx.dynamic_reanchor_callback)
+        dataset_ctx.dynamic_reanchor_enabled and callable(dataset_ctx.dynamic_reanchor_callback)
     )
     measured_anchor_reanchor_attempt_count = 0
     measured_anchor_reanchor_count = 0
@@ -3960,6 +3497,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             else entry.get("hkl"),
             "q_group_key": entry.get("q_group_key"),
             "source_table_index": entry.get("source_table_index"),
+            "source_reflection_index": entry.get("source_reflection_index"),
             "source_row_index": entry.get("source_row_index"),
             "source_peak_index": entry.get("source_peak_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
@@ -4008,48 +3546,52 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             except Exception:
                 rebuilt_entry = None
             if isinstance(rebuilt_entry, Mapping):
-                old_detector_anchor, _old_reason = _measured_detector_anchor(
-                    measured_entry
-                )
                 updated_entry = dict(measured_entry)
                 updated_entry.update(dict(rebuilt_entry))
-                new_detector_anchor, _new_reason = _measured_detector_anchor(
-                    updated_entry
-                )
-                if old_detector_anchor is not None and new_detector_anchor is not None:
+                try:
                     reanchor_motion_px = float(
-                        math.hypot(
-                            float(new_detector_anchor[0]) - float(old_detector_anchor[0]),
-                            float(new_detector_anchor[1]) - float(old_detector_anchor[1]),
-                        )
+                        rebuilt_entry.get("measured_reanchor_motion_px", np.nan)
                     )
-                    if np.isfinite(reanchor_motion_px):
-                        measured_anchor_motion_px.append(float(reanchor_motion_px))
+                except Exception:
+                    reanchor_motion_px = float("nan")
+                if not np.isfinite(reanchor_motion_px):
+                    old_detector_anchor, _old_reason = _measured_detector_anchor(measured_entry)
+                    new_detector_anchor, _new_reason = _measured_detector_anchor(updated_entry)
+                    if old_detector_anchor is not None and new_detector_anchor is not None:
+                        reanchor_motion_px = float(
+                            math.hypot(
+                                float(new_detector_anchor[0]) - float(old_detector_anchor[0]),
+                                float(new_detector_anchor[1]) - float(old_detector_anchor[1]),
+                            )
+                        )
+                if np.isfinite(reanchor_motion_px):
+                    measured_anchor_motion_px.append(float(reanchor_motion_px))
                 measured_entry = updated_entry
-                normalized_measured[idx] = updated_entry
                 diag = _entry_diag(measured_entry, idx)
                 measured_anchor_reanchor_count += 1
                 reanchor_status = "updated"
             else:
                 measured_anchor_reanchor_fail_count += 1
 
-        measured_fit_anchor, measured_reason, measured_anchor_metadata = (
-            _measured_fit_space_anchor(
-                measured_entry,
-                center=fit_center,
-                detector_distance=detector_distance,
-                pixel_size=pixel_size,
-                gamma_deg=gamma_deg,
-                Gamma_deg=Gamma_deg,
-                a_lattice=a_lattice,
-                c_lattice=c_lattice,
-                wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
-            )
+        measured_fit_anchor, measured_reason, measured_anchor_metadata = _measured_fit_space_anchor(
+            measured_entry,
+            center=fit_center,
+            detector_distance=detector_distance,
+            pixel_size=pixel_size,
+            gamma_deg=gamma_deg,
+            Gamma_deg=Gamma_deg,
+            a_lattice=a_lattice,
+            c_lattice=c_lattice,
+            wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
         )
         if measured_fit_anchor is not None:
             if measured_reason == "cached_fit_space_anchor":
                 fit_space_anchor_count_cached += 1
-            elif measured_reason == "detector_fit_space_anchor":
+            elif measured_reason in {
+                "detector_fit_space_anchor",
+                "display_fit_space_anchor",
+                "background_detector_fit_space_anchor",
+            }:
                 fit_space_anchor_count_detector += 1
         try:
             two_theta_adjustment_deg = float(
@@ -4059,13 +3601,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             two_theta_adjustment_deg = float("nan")
         if np.isfinite(two_theta_adjustment_deg) and abs(two_theta_adjustment_deg) > 1.0e-12:
             fit_space_two_theta_adjustments.append(float(two_theta_adjustment_deg))
-        measured_detector_anchor, detector_reason = _measured_detector_anchor(
-            measured_entry
-        )
+        measured_detector_anchor, detector_reason = _measured_detector_anchor(measured_entry)
         if measured_fit_anchor is None:
-            residual_components[idx, 0] = (
-                float(missing_pair_penalty_deg) * float(priority_weight)
-            )
+            residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
             if collect_diagnostics:
@@ -4116,9 +3654,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         measured_two_theta = float(measured_fit_anchor[0])
         measured_phi = float(measured_fit_anchor[1])
         if sim_point is None:
-            residual_components[idx, 0] = (
-                float(missing_pair_penalty_deg) * float(priority_weight)
-            )
+            residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
             if collect_diagnostics:
@@ -4184,9 +3720,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             or not np.isfinite(sim_two_theta_arr[0])
             or not np.isfinite(sim_phi_arr[0])
         ):
-            residual_components[idx, 0] = (
-                float(missing_pair_penalty_deg) * float(priority_weight)
-            )
+            residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
             if collect_diagnostics:
@@ -4285,21 +3819,21 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 {
                     **diag,
                     "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "theta_initial_deg": float(theta_value),
-                        "match_kind": "fixed_source",
-                        "match_status": "matched",
-                        "resolution_kind": "fixed_source",
-                        "resolution_reason": str(sim_reason),
-                        "measured_resolution_reason": str(measured_reason),
-                        "detector_resolution_reason": str(detector_reason),
-                        "measured_anchor_source": str(
-                            measured_anchor_metadata.get("anchor_source", measured_reason)
-                        ),
-                        "measured_reanchor_attempted": bool(reanchor_attempted),
-                        "measured_reanchor_status": str(reanchor_status),
-                        "measured_reanchor_motion_px": float(reanchor_motion_px),
-                        "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
+                    "dataset_label": str(dataset_ctx.label),
+                    "theta_initial_deg": float(theta_value),
+                    "match_kind": "fixed_source",
+                    "match_status": "matched",
+                    "resolution_kind": "fixed_source",
+                    "resolution_reason": str(sim_reason),
+                    "measured_resolution_reason": str(measured_reason),
+                    "detector_resolution_reason": str(detector_reason),
+                    "measured_anchor_source": str(
+                        measured_anchor_metadata.get("anchor_source", measured_reason)
+                    ),
+                    "measured_reanchor_attempted": bool(reanchor_attempted),
+                    "measured_reanchor_status": str(reanchor_status),
+                    "measured_reanchor_motion_px": float(reanchor_motion_px),
+                    "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                     "measured_x": (
                         float(measured_detector_anchor[0])
                         if measured_detector_anchor is not None
@@ -4366,22 +3900,23 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
         "subset_reduced": bool(simulation_subset.reduced),
+        "central_ray_mode": bool(central_ray_mode),
         "single_ray_enabled": False,
         "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
         if isinstance(single_ray_indices, np.ndarray)
         else 0,
-        "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
-        "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+        "center_row": float(local["center"][0])
+        if len(local.get("center", [])) >= 2
+        else float("nan"),
+        "center_col": float(local["center"][1])
+        if len(local.get("center", [])) >= 2
+        else float("nan"),
         "peak_weighting_mode": "uniform",
         "custom_sigma_count": 0,
         "anisotropic_sigma_count": 0,
         "line_group_count": int(line_summary.get("line_group_count", 0)),
-        "resolved_line_group_count": int(
-            line_summary.get("resolved_line_group_count", 0)
-        ),
-        "missing_line_group_count": int(
-            line_summary.get("missing_line_group_count", 0)
-        ),
+        "resolved_line_group_count": int(line_summary.get("resolved_line_group_count", 0)),
+        "missing_line_group_count": int(line_summary.get("missing_line_group_count", 0)),
         "line_angle_rms_px": float(line_summary.get("line_angle_rms_px", np.nan)),
         "line_offset_rms_px": float(line_summary.get("line_offset_rms_px", np.nan)),
         "line_angle_rms_deg": float(line_summary.get("line_angle_rms_deg", np.nan)),
@@ -4393,13 +3928,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             line_summary.get("line_constraints_enabled", line_constraints_enabled)
         ),
         "measured_anchor_reanchor_enabled": bool(dynamic_reanchor_enabled),
-        "measured_anchor_reanchor_attempt_count": int(
-            measured_anchor_reanchor_attempt_count
-        ),
+        "measured_anchor_reanchor_attempt_count": int(measured_anchor_reanchor_attempt_count),
         "measured_anchor_reanchor_count": int(measured_anchor_reanchor_count),
-        "measured_anchor_reanchor_fail_count": int(
-            measured_anchor_reanchor_fail_count
-        ),
+        "measured_anchor_reanchor_fail_count": int(measured_anchor_reanchor_fail_count),
         "_live_cache_records": live_cache_records,
         **_fit_space_provenance_summary(
             local,
@@ -4482,33 +4013,34 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
     """Evaluate one dataset using frozen per-point correspondences."""
 
     normalized_entries = [dict(entry) for entry in correspondences or ()]
+    central_ray_mode = _uses_central_geometry_ray(local.get("mosaic_params"))
     if not normalized_entries:
-        return np.array([], dtype=float), [], {
-            "dataset_index": int(dataset_ctx.dataset_index),
-            "dataset_label": str(dataset_ctx.label),
-            "theta_initial_deg": float(theta_value),
-            "measured_count": 0,
-            "fixed_source_resolved_count": 0,
-            "fallback_entry_count": 0,
-            "matched_pair_count": 0,
-            "missing_pair_count": 0,
-            "simulated_reflection_count": int(dataset_ctx.subset.miller.shape[0]),
-            "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
-            "subset_reduced": bool(dataset_ctx.subset.reduced),
-            "single_ray_enabled": False,
-            "single_ray_forced_count": 0,
-            "match_radius_px": float(match_radius_px),
-        }
-    try:
-        hk0_peak_priority_weight = float(
-            local.get("_hk0_peak_priority_weight", 1.0)
+        return (
+            np.array([], dtype=float),
+            [],
+            {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "dataset_label": str(dataset_ctx.label),
+                "theta_initial_deg": float(theta_value),
+                "measured_count": 0,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "matched_pair_count": 0,
+                "missing_pair_count": 0,
+                "simulated_reflection_count": int(dataset_ctx.subset.miller.shape[0]),
+                "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
+                "subset_reduced": bool(dataset_ctx.subset.reduced),
+                "central_ray_mode": bool(central_ray_mode),
+                "single_ray_enabled": False,
+                "single_ray_forced_count": 0,
+                "match_radius_px": float(match_radius_px),
+            },
         )
+    try:
+        hk0_peak_priority_weight = float(local.get("_hk0_peak_priority_weight", 1.0))
     except Exception:
         hk0_peak_priority_weight = 1.0
-    if (
-        not np.isfinite(hk0_peak_priority_weight)
-        or hk0_peak_priority_weight < 1.0
-    ):
+    if not np.isfinite(hk0_peak_priority_weight) or hk0_peak_priority_weight < 1.0:
         hk0_peak_priority_weight = 1.0
 
     fit_miller = dataset_ctx.subset.miller
@@ -4520,11 +4052,22 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
     _, hit_tables, *_ = _process_peaks_parallel_safe(
-        fit_miller, fit_intensities, image_size,
-        local["a"], local["c"], wavelength_array,
-        sim_buffer, local["corto_detector"],
-        local["gamma"], local["Gamma"], local["chi"], local.get("psi", 0.0), local.get("psi_z", 0.0),
-        local["zs"], local["zb"], local["n2"],
+        fit_miller,
+        fit_intensities,
+        image_size,
+        local["a"],
+        local["c"],
+        wavelength_array,
+        sim_buffer,
+        local["corto_detector"],
+        local["gamma"],
+        local["Gamma"],
+        local["chi"],
+        local.get("psi", 0.0),
+        local.get("psi_z", 0.0),
+        local["zs"],
+        local["zb"],
+        local["n2"],
         mosaic["beam_x_array"],
         mosaic["beam_y_array"],
         mosaic["theta_array"],
@@ -4533,8 +4076,11 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         mosaic["gamma_mosaic_deg"],
         mosaic["eta"],
         wavelength_array,
-        local["debye_x"], local["debye_y"],
-        local["center"], theta_value, local.get("cor_angle", 0.0),
+        local["debye_x"],
+        local["debye_y"],
+        local["center"],
+        theta_value,
+        local.get("cor_angle", 0.0),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
@@ -4654,8 +4200,8 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             )
             priority_weight = float(priority_fields["priority_weight"])
             missing_pairs += 1
-            residual_components[entry_index, 0] = (
-                float(missing_pair_penalty) * float(priority_weight)
+            residual_components[entry_index, 0] = float(missing_pair_penalty) * float(
+                priority_weight
             )
             _add_diag(
                 entry,
@@ -4699,9 +4245,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             pair_dist = float(math.hypot(dx, dy))
             if np.isfinite(pair_dist) and pair_dist <= effective_match_radius:
                 if weighted_matching:
-                    distance_weight = 1.0 / math.sqrt(
-                        1.0 + (pair_dist / solver_f_scale) ** 2
-                    )
+                    distance_weight = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
                 else:
                     distance_weight = 1.0
                 weight_fields = _weight_fields(
@@ -4711,12 +4255,8 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                     dy=dy,
                     distance_weight=float(distance_weight),
                 )
-                residual_components[entry_index, 0] = float(
-                    weight_fields["weighted_dx_px"]
-                )
-                residual_components[entry_index, 1] = float(
-                    weight_fields["weighted_dy_px"]
-                )
+                residual_components[entry_index, 0] = float(weight_fields["weighted_dx_px"])
+                residual_components[entry_index, 1] = float(weight_fields["weighted_dy_px"])
                 matched_pair_count += 1
                 matched_distances.append(float(pair_dist))
                 _add_diag(
@@ -4805,10 +4345,15 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         "fixed_source_reflection_count": int(dataset_ctx.subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(dataset_ctx.subset.fallback_hkl_count),
         "subset_reduced": bool(dataset_ctx.subset.reduced),
+        "central_ray_mode": bool(central_ray_mode),
         "single_ray_enabled": False,
         "single_ray_forced_count": 0,
-        "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
-        "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+        "center_row": float(local["center"][0])
+        if len(local.get("center", [])) >= 2
+        else float("nan"),
+        "center_col": float(local["center"][1])
+        if len(local.get("center", [])) >= 2
+        else float("nan"),
         "match_radius_px": float(effective_match_radius),
         "line_group_count": 0,
         "resolved_line_group_count": 0,
@@ -4850,9 +4395,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         summary["unweighted_peak_max_px"] = float("nan")
     if anisotropic_sigma_count > 0:
         summary["peak_weighting_mode"] = (
-            "measurement_covariance+distance"
-            if weighted_matching
-            else "measurement_covariance"
+            "measurement_covariance+distance" if weighted_matching else "measurement_covariance"
         )
     elif summary.get("custom_sigma_count", 0):
         summary["peak_weighting_mode"] = (
@@ -4936,31 +4479,45 @@ def _simulate_with_cache(
 
     buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
-    mosaic = params['mosaic_params']
-    wavelength_array = mosaic.get('wavelength_array')
+    mosaic = params["mosaic_params"]
+    wavelength_array = mosaic.get("wavelength_array")
     if wavelength_array is None:
-        wavelength_array = mosaic.get('wavelength_i_array')
+        wavelength_array = mosaic.get("wavelength_i_array")
     if wavelength_array is None:
-        wavelength_array = params.get('lambda')
+        wavelength_array = params.get("lambda")
 
     image, hit_tables, *_ = _process_peaks_parallel_safe(
-        miller, intensities, image_size,
-        params['a'], params['c'], wavelength_array,
-        buffer, params['corto_detector'],
-        params['gamma'], params['Gamma'], params['chi'], params.get('psi', 0.0), params.get('psi_z', 0.0),
-        params['zs'], params['zb'], params['n2'],
-        mosaic['beam_x_array'],
-        mosaic['beam_y_array'],
-        mosaic['theta_array'],
-        mosaic['phi_array'],
-        mosaic['sigma_mosaic_deg'],
-        mosaic['gamma_mosaic_deg'],
-        mosaic['eta'],
+        miller,
+        intensities,
+        image_size,
+        params["a"],
+        params["c"],
         wavelength_array,
-        params['debye_x'], params['debye_y'],
-        params['center'], params['theta_initial'], params.get('cor_angle', 0.0),
-        params.get('uv1', np.array([1.0, 0.0, 0.0])),
-        params.get('uv2', np.array([0.0, 1.0, 0.0])),
+        buffer,
+        params["corto_detector"],
+        params["gamma"],
+        params["Gamma"],
+        params["chi"],
+        params.get("psi", 0.0),
+        params.get("psi_z", 0.0),
+        params["zs"],
+        params["zb"],
+        params["n2"],
+        mosaic["beam_x_array"],
+        mosaic["beam_y_array"],
+        mosaic["theta_array"],
+        mosaic["phi_array"],
+        mosaic["sigma_mosaic_deg"],
+        mosaic["gamma_mosaic_deg"],
+        mosaic["eta"],
+        wavelength_array,
+        params["debye_x"],
+        params["debye_y"],
+        params["center"],
+        params["theta_initial"],
+        params.get("cor_angle", 0.0),
+        params.get("uv1", np.array([1.0, 0.0, 0.0])),
+        params.get("uv2", np.array([0.0, 1.0, 0.0])),
         save_flag=0,
         **_simulation_kernel_kwargs(params, mosaic),
     )
@@ -5053,9 +4610,7 @@ def fit_mosaic_widths_separable(
 
     experimental_image = np.asarray(experimental_image, dtype=np.float64)
     if experimental_image.shape != (image_size, image_size):
-        raise ValueError(
-            "experimental_image shape must match the provided image_size"
-        )
+        raise ValueError("experimental_image shape must match the provided image_size")
 
     peak_source_key = str(peak_source).strip().lower()
     if peak_source_key not in {"geometry", "auto", "hybrid"}:
@@ -5077,9 +4632,7 @@ def fit_mosaic_widths_separable(
     allowed_mask = _allowed_reflection_mask(miller)
     allowed_indices = np.flatnonzero(allowed_mask)
     if allowed_indices.size == 0:
-        raise RuntimeError(
-            "No reflections satisfy 2h + k ≡ 0 (mod 3) for mosaic-width fitting"
-        )
+        raise RuntimeError("No reflections satisfy 2h + k ≡ 0 (mod 3) for mosaic-width fitting")
 
     mosaic_params = dict(params.get("mosaic_params", {}))
     if not mosaic_params:
@@ -5216,9 +4769,7 @@ def fit_mosaic_widths_separable(
         return image, hits_py
 
     allowed_miller = np.ascontiguousarray(miller[allowed_indices], dtype=np.float64)
-    allowed_intensities = np.ascontiguousarray(
-        intensities[allowed_indices], dtype=np.float64
-    )
+    allowed_intensities = np.ascontiguousarray(intensities[allowed_indices], dtype=np.float64)
 
     two_theta_limit = 65.0
     kept_rows: List[int] = []
@@ -5238,9 +4789,7 @@ def fit_mosaic_widths_separable(
         allowed_two_theta.append(float(tth_val) if tth_val is not None else float("nan"))
 
     if not kept_rows:
-        raise RuntimeError(
-            "No reflections satisfy the 2h + k ≡ 0 constraint within 65° 2θ"
-        )
+        raise RuntimeError("No reflections satisfy the 2h + k ≡ 0 constraint within 65° 2θ")
 
     allowed_indices = allowed_indices[kept_rows]
     allowed_miller = allowed_miller[kept_rows]
@@ -5710,7 +5259,9 @@ def fit_mosaic_widths_separable(
         trial_start = anchor + restart_rng.uniform(-1.0, 1.0, size=3) * span
         trial_start = np.clip(trial_start, lower, upper)
         trial = _run_solver(trial_start)
-        trial_cost = _robust_cost(np.asarray(trial.fun, dtype=np.float64), loss=loss, f_scale=f_scale)
+        trial_cost = _robust_cost(
+            np.asarray(trial.fun, dtype=np.float64), loss=loss, f_scale=f_scale
+        )
         restart_history.append(
             {
                 "restart": restart_idx + 1,
@@ -6109,21 +5660,15 @@ def _fit_mosaic_shape_parameters_legacy(
     if int(image_size) <= 0:
         raise ValueError("image_size must be positive")
     if not dataset_spec_entries:
-        raise RuntimeError(
-            "Mosaic shape fit requires at least one prepared dataset_spec."
-        )
+        raise RuntimeError("Mosaic shape fit requires at least one prepared dataset_spec.")
 
     mosaic_params = dict(params.get("mosaic_params", {}))
     if not mosaic_params:
         raise ValueError("params['mosaic_params'] is required")
     required_keys = ("beam_x_array", "beam_y_array", "theta_array", "phi_array")
-    missing_keys = [
-        key for key in required_keys if not np.asarray(mosaic_params.get(key)).size
-    ]
+    missing_keys = [key for key in required_keys if not np.asarray(mosaic_params.get(key)).size]
     if missing_keys:
-        raise ValueError(
-            "mosaic_params must include beam and divergence samples for shape fitting"
-        )
+        raise ValueError("mosaic_params must include beam and divergence samples for shape fitting")
 
     wavelength_array = mosaic_params.get("wavelength_array")
     if wavelength_array is None:
@@ -6216,9 +5761,7 @@ def _fit_mosaic_shape_parameters_legacy(
         if len(dataset_ctx.rois) < int(min_per_dataset_rois)
     ]
     if dataset_failures:
-        dataset_text = ", ".join(
-            f"{ctx.label}={len(ctx.rois)}" for ctx in dataset_failures
-        )
+        dataset_text = ", ".join(f"{ctx.label}={len(ctx.rois)}" for ctx in dataset_failures)
         rejection_text = ", ".join(
             f"{ctx.label}["
             + ", ".join(
@@ -6330,13 +5873,9 @@ def _fit_mosaic_shape_parameters_legacy(
                 "y": _json_safe(entry.get("y")),
             }
             if "source_table_index" in entry:
-                peak_summary["source_table_index"] = _json_safe(
-                    entry.get("source_table_index")
-                )
+                peak_summary["source_table_index"] = _json_safe(entry.get("source_table_index"))
             if "source_row_index" in entry:
-                peak_summary["source_row_index"] = _json_safe(
-                    entry.get("source_row_index")
-                )
+                peak_summary["source_row_index"] = _json_safe(entry.get("source_row_index"))
             out.append(peak_summary)
         return out
 
@@ -6349,17 +5888,13 @@ def _fit_mosaic_shape_parameters_legacy(
         input_dataset_summaries.append(
             {
                 "dataset_index": _json_safe(spec.get("dataset_index")),
-                "dataset_label": _json_safe(
-                    spec.get("label", spec.get("dataset_index", "?"))
-                ),
+                "dataset_label": _json_safe(spec.get("label", spec.get("dataset_index", "?"))),
                 "theta_initial_deg": _json_safe(spec.get("theta_initial")),
                 "measured_peak_count": int(
                     len(measured_peaks) if isinstance(measured_peaks, (list, tuple)) else 0
                 ),
                 "experimental_image": (
-                    _image_summary(experimental_image)
-                    if experimental_image is not None
-                    else None
+                    _image_summary(experimental_image) if experimental_image is not None else None
                 ),
                 "measured_peaks": _measured_peak_summaries(measured_peaks),
             }
@@ -6399,14 +5934,11 @@ def _fit_mosaic_shape_parameters_legacy(
     for rejected in rejected_rois:
         if not isinstance(rejected, Mapping):
             continue
-        dataset_key = str(
-            rejected.get("dataset_label", rejected.get("dataset_index", "?"))
-        )
+        dataset_key = str(rejected.get("dataset_label", rejected.get("dataset_index", "?")))
         reason_key = str(rejected.get("reason", "unknown"))
         stage_key = str(rejected.get("stage", "unknown"))
         rejected_roi_reason_counts[f"{dataset_key}:{stage_key}:{reason_key}"] = (
-            rejected_roi_reason_counts.get(f"{dataset_key}:{stage_key}:{reason_key}", 0)
-            + 1
+            rejected_roi_reason_counts.get(f"{dataset_key}:{stage_key}:{reason_key}", 0) + 1
         )
         rejected_roi_counts_by_dataset[dataset_key] = (
             rejected_roi_counts_by_dataset.get(dataset_key, 0) + 1
@@ -6457,9 +5989,7 @@ def _fit_mosaic_shape_parameters_legacy(
         "configured_workers": int(configured_parallel_workers),
         "dataset_workers": int(dataset_parallel_workers),
         "restart_workers": int(restart_parallel_workers),
-        "worker_numba_threads": (
-            None if numba_threads is None else int(numba_threads)
-        ),
+        "worker_numba_threads": (None if numba_threads is None else int(numba_threads)),
         "numba_thread_budget": int(_available_parallel_thread_budget()),
     }
 
@@ -6497,15 +6027,10 @@ def _fit_mosaic_shape_parameters_legacy(
         else:
             theta_bound_lower = float(theta_bounds[0])
             theta_bound_upper = float(theta_bounds[1])
-        if not (
-            np.isfinite(theta_bound_lower)
-            and np.isfinite(theta_bound_upper)
-        ):
+        if not (np.isfinite(theta_bound_lower) and np.isfinite(theta_bound_upper)):
             raise ValueError("theta_bounds must be finite when refine_theta is enabled")
         if theta_bound_lower >= theta_bound_upper:
-            raise ValueError(
-                "theta_bounds lower bound must be strictly less than the upper bound"
-            )
+            raise ValueError("theta_bounds lower bound must be strictly less than the upper bound")
 
         theta_seeds: List[float] = []
         theta_lowers: List[float] = []
@@ -6514,9 +6039,7 @@ def _fit_mosaic_shape_parameters_legacy(
             theta_seed = _safe_float(params.get("theta_offset", 0.0), 0.0)
             theta_param_names.append("theta_offset")
             theta_param_dataset_indices.append(None)
-            theta_seeds.append(
-                float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper))
-            )
+            theta_seeds.append(float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper)))
             theta_lowers.append(float(theta_bound_lower))
             theta_uppers.append(float(theta_bound_upper))
         elif resolved_theta_mode == "single":
@@ -6526,15 +6049,11 @@ def _fit_mosaic_shape_parameters_legacy(
             )
             theta_param_names.append("theta_initial")
             theta_param_dataset_indices.append(int(prepared_datasets[0].dataset_index))
-            theta_seeds.append(
-                float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper))
-            )
+            theta_seeds.append(float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper)))
             theta_lowers.append(float(theta_bound_lower))
             theta_uppers.append(float(theta_bound_upper))
         else:
-            theta_seed_map = dict(
-                base_params.get("_mosaic_theta_initials_by_dataset", {})
-            )
+            theta_seed_map = dict(base_params.get("_mosaic_theta_initials_by_dataset", {}))
             for dataset_ctx in prepared_datasets:
                 dataset_idx = int(dataset_ctx.dataset_index)
                 dataset_theta = float(dataset_ctx.theta_initial)
@@ -6635,7 +6154,9 @@ def _fit_mosaic_shape_parameters_legacy(
             return _safe_float(local.get("theta_initial", theta_base), theta_base)
         theta_map = local.get("_mosaic_theta_initials_by_dataset", {})
         if isinstance(theta_map, Mapping):
-            return _safe_float(theta_map.get(int(dataset_ctx.dataset_index), theta_base), theta_base)
+            return _safe_float(
+                theta_map.get(int(dataset_ctx.dataset_index), theta_base), theta_base
+            )
         return float(theta_base)
 
     def _simulate_dataset_image(
@@ -6715,14 +6236,14 @@ def _fit_mosaic_shape_parameters_legacy(
                 )
                 measured_term = roi.measured_mask.astype(np.float64) * sim_distance
                 sim_term = sim_mask.astype(np.float64) * roi.measured_distance
-                residual_raw = np.concatenate(
-                    [measured_term.ravel(), sim_term.ravel()]
-                ).astype(np.float64, copy=False)
+                residual_raw = np.concatenate([measured_term.ravel(), sim_term.ravel()]).astype(
+                    np.float64, copy=False
+                )
                 sim_active_pixels = int(np.count_nonzero(sim_mask))
                 active_pixels = int(roi.measured_active_pixels + sim_active_pixels)
-                residual_normed = (
-                    residual_raw / math.sqrt(max(active_pixels, 1))
-                ) * float(ridge_weight)
+                residual_normed = (residual_raw / math.sqrt(max(active_pixels, 1))) * float(
+                    ridge_weight
+                )
                 roi_blocks.append(np.asarray(residual_normed, dtype=np.float64))
 
                 if collect_diagnostics:
@@ -6763,9 +6284,9 @@ def _fit_mosaic_shape_parameters_legacy(
             )
             point_residual = np.asarray(point_residual_raw, dtype=np.float64)
             if point_residual.size:
-                point_residual = (
-                    point_residual / math.sqrt(max(point_residual.size, 1))
-                ) * float(point_match_weight)
+                point_residual = (point_residual / math.sqrt(max(point_residual.size, 1))) * float(
+                    point_match_weight
+                )
 
         residual_blocks: List[np.ndarray] = []
         if roi_blocks:
@@ -6774,14 +6295,10 @@ def _fit_mosaic_shape_parameters_legacy(
             residual_blocks.append(point_residual)
 
         dataset_residual = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.zeros(0, dtype=np.float64)
+            np.concatenate(residual_blocks) if residual_blocks else np.zeros(0, dtype=np.float64)
         )
         dataset_weight = (
-            1.0 / math.sqrt(max(len(dataset_ctx.rois), 1))
-            if bool(equal_dataset_weights)
-            else 1.0
+            1.0 / math.sqrt(max(len(dataset_ctx.rois), 1)) if bool(equal_dataset_weights) else 1.0
         )
         dataset_residual = np.asarray(dataset_residual, dtype=np.float64) * dataset_weight
 
@@ -6799,12 +6316,8 @@ def _fit_mosaic_shape_parameters_legacy(
         if point_summary:
             dataset_summary.update(
                 {
-                    "matched_pair_count": int(
-                        point_summary.get("matched_pair_count", 0)
-                    ),
-                    "missing_pair_count": int(
-                        point_summary.get("missing_pair_count", 0)
-                    ),
+                    "matched_pair_count": int(point_summary.get("matched_pair_count", 0)),
+                    "missing_pair_count": int(point_summary.get("missing_pair_count", 0)),
                     "fixed_source_resolved_count": int(
                         point_summary.get("fixed_source_resolved_count", 0)
                     ),
@@ -6825,17 +6338,12 @@ def _fit_mosaic_shape_parameters_legacy(
             dataset_summary.update(
                 {
                     "residual_norm": float(np.linalg.norm(dataset_residual)),
-                    "cost": float(
-                        _robust_cost(dataset_residual, loss=loss, f_scale=f_scale)
-                    ),
+                    "cost": float(_robust_cost(dataset_residual, loss=loss, f_scale=f_scale)),
                     "worst_hkls": [
-                        tuple(int(v) for v in diag["hkl"])
-                        for diag in ordered_roi_diags[:3]
+                        tuple(int(v) for v in diag["hkl"]) for diag in ordered_roi_diags[:3]
                     ],
                     "max_roi_rms_px": (
-                        float(ordered_roi_diags[0]["rms"])
-                        if ordered_roi_diags
-                        else 0.0
+                        float(ordered_roi_diags[0]["rms"]) if ordered_roi_diags else 0.0
                     ),
                 }
             )
@@ -6853,8 +6361,7 @@ def _fit_mosaic_shape_parameters_legacy(
     ]:
         local = _apply_trial_params(theta)
         dataset_items = [
-            (local, dataset_ctx, bool(collect_diagnostics))
-            for dataset_ctx in prepared_datasets
+            (local, dataset_ctx, bool(collect_diagnostics)) for dataset_ctx in prepared_datasets
         ]
         if dataset_parallel_workers > 1 and len(dataset_items) > 1:
             results = _threaded_map(
@@ -6946,8 +6453,7 @@ def _fit_mosaic_shape_parameters_legacy(
         )
         restart_starts = [
             np.clip(
-                anchor
-                + restart_rng.uniform(-1.0, 1.0, size=anchor.size).astype(np.float64) * span,
+                anchor + restart_rng.uniform(-1.0, 1.0, size=anchor.size).astype(np.float64) * span,
                 active_lower,
                 active_upper,
             )
@@ -6995,8 +6501,8 @@ def _fit_mosaic_shape_parameters_legacy(
                 best_cost = float(trial_cost)
 
     best_full_x = _expand_active_vector(np.asarray(best_result.x, dtype=np.float64))
-    final_residual, roi_diagnostics, dataset_diagnostics, roi_count_by_dataset = (
-        _evaluate_residual(best_full_x, collect_diagnostics=True)
+    final_residual, roi_diagnostics, dataset_diagnostics, roi_count_by_dataset = _evaluate_residual(
+        best_full_x, collect_diagnostics=True
     )
     best_result.x = np.asarray(best_full_x, dtype=np.float64)
     best_result.fun = np.asarray(final_residual, dtype=np.float64)
@@ -7044,8 +6550,8 @@ def _fit_mosaic_shape_parameters_legacy(
         elif resolved_theta_mode == "single" and theta_slice.size >= 1:
             refined_theta = float(theta_slice[0])
             best_params["theta_initial"] = float(refined_theta)
-            refined_theta_values_by_dataset[int(prepared_datasets[0].dataset_index)] = (
-                float(refined_theta)
+            refined_theta_values_by_dataset[int(prepared_datasets[0].dataset_index)] = float(
+                refined_theta
             )
         elif resolved_theta_mode == "per_dataset" and theta_slice.size:
             theta_map = {
@@ -7067,8 +6573,8 @@ def _fit_mosaic_shape_parameters_legacy(
     ]
     boundary_warning = None
     if bound_hits:
-        boundary_warning = (
-            "Parameters finished on bounds: " + ", ".join(str(name) for name in bound_hits)
+        boundary_warning = "Parameters finished on bounds: " + ", ".join(
+            str(name) for name in bound_hits
         )
 
     ordered_roi_diagnostics = sorted(
@@ -7079,8 +6585,7 @@ def _fit_mosaic_shape_parameters_legacy(
     point_match_pairs_ok = True
     if point_match_term_enabled:
         point_match_pairs_ok = all(
-            int(diag.get("matched_pair_count", 0)) > 0
-            for diag in (dataset_diagnostics or [])
+            int(diag.get("matched_pair_count", 0)) > 0 for diag in (dataset_diagnostics or [])
         )
     best_result.best_params = best_params
     best_result.initial_cost = float(initial_cost)
@@ -7108,9 +6613,7 @@ def _fit_mosaic_shape_parameters_legacy(
     best_result.fit_eta = bool(fit_eta)
     best_result.theta_refinement_mode = str(resolved_theta_mode) if optimize_theta else None
     best_result.theta_param_name = (
-        str(theta_param_names[0])
-        if optimize_theta and len(theta_param_names) == 1
-        else None
+        str(theta_param_names[0]) if optimize_theta and len(theta_param_names) == 1 else None
     )
     best_result.theta_param_names = list(theta_param_names)
     best_result.refined_theta_value = (
@@ -7118,7 +6621,9 @@ def _fit_mosaic_shape_parameters_legacy(
         if optimize_theta and len(theta_param_names) == 1 and best_result.x.size >= 4
         else None
     )
-    best_result.refined_theta_offset = float(refined_theta_offset) if refined_theta_offset is not None else None
+    best_result.refined_theta_offset = (
+        float(refined_theta_offset) if refined_theta_offset is not None else None
+    )
     best_result.refined_theta_values_by_dataset = dict(refined_theta_values_by_dataset)
     best_result.ridge_weight = float(ridge_weight)
     best_result.point_match_weight = float(point_match_weight)
@@ -7189,8 +6694,7 @@ def _fit_mosaic_shape_parameters_legacy(
         "min_per_dataset_rois": int(min_per_dataset_rois),
         "total_roi_count": int(total_rois),
         "roi_count_by_dataset": {
-            str(key): int(val)
-            for key, val in dict(roi_count_by_dataset or {}).items()
+            str(key): int(val) for key, val in dict(roi_count_by_dataset or {}).items()
         },
     }
     mosaic_fit_debug_summary = {
@@ -7204,9 +6708,7 @@ def _fit_mosaic_shape_parameters_legacy(
             "prepared_datasets": prepared_dataset_summaries,
             "rejected_rois": _json_safe(rejected_rois),
             "rejected_roi_reason_counts": _json_safe(rejected_roi_reason_counts),
-            "rejected_roi_counts_by_dataset": _json_safe(
-                rejected_roi_counts_by_dataset
-            ),
+            "rejected_roi_counts_by_dataset": _json_safe(rejected_roi_counts_by_dataset),
             "geometry_parameters": geometry_parameter_summary,
             "mosaic_samples": mosaic_sample_summary,
         },
@@ -7243,9 +6745,7 @@ def _fit_mosaic_shape_parameters_legacy(
             "point_match_weight": float(point_match_weight),
             "point_match_f_scale": float(point_match_f_scale),
             "point_match_weighted_matching": bool(point_match_weighted_matching),
-            "point_match_missing_pair_penalty_px": float(
-                point_match_missing_pair_penalty
-            ),
+            "point_match_missing_pair_penalty_px": float(point_match_missing_pair_penalty),
             "equal_dataset_weights": bool(equal_dataset_weights),
         },
         "theta": {
@@ -7256,9 +6756,7 @@ def _fit_mosaic_shape_parameters_legacy(
             "theta_parameter_names": list(theta_param_names),
             "refined_theta_value": _json_safe(best_result.refined_theta_value),
             "refined_theta_offset": _json_safe(best_result.refined_theta_offset),
-            "refined_theta_values_by_dataset": _json_safe(
-                refined_theta_values_by_dataset
-            ),
+            "refined_theta_values_by_dataset": _json_safe(refined_theta_values_by_dataset),
         },
         "diagnostics": {
             "parallelization": _json_safe(parallelization_summary),
@@ -7292,171 +6790,13 @@ def _fit_mosaic_shape_parameters_legacy(
     return best_result
 
 
-def _angular_difference_array_deg(
-    values: Sequence[float] | np.ndarray,
-    reference: float,
-) -> np.ndarray:
-    """Return wrapped angular deltas relative to one reference angle."""
-
-    arr = np.asarray(values, dtype=np.float64)
-    return np.mod(arr - float(reference) + 180.0, 360.0) - 180.0
-
-
-def _classify_mosaic_profile_family(
-    hkl: Tuple[int, int, int],
-) -> Optional[Tuple[str, str]]:
-    """Classify one reflection into the supported mosaic-profile families."""
-
-    h, k, _ = (int(hkl[0]), int(hkl[1]), int(hkl[2]))
-    if h == 0 and k == 0:
-        return "specular", "two_theta"
-    if h != 0 or k != 0:
-        return "in_plane", "phi"
-    return None
-
-
-def _profile_half_span_deg(
-    values: Sequence[float] | np.ndarray,
-    *,
-    min_half_span: float,
-    max_half_span: float,
-) -> float:
-    """Choose one robust symmetric half-span for a fixed profile window."""
-
-    finite = np.abs(np.asarray(values, dtype=np.float64))
-    finite = finite[np.isfinite(finite)]
-    if finite.size == 0:
-        return float(min_half_span)
-    try:
-        span = float(np.percentile(finite, 98.0))
-    except Exception:
-        span = float(np.max(finite))
-    if not np.isfinite(span) or span <= 0.0:
-        span = float(np.max(finite))
-    return float(np.clip(span, float(min_half_span), float(max_half_span)))
-
-
-def _profile_bin_indices(
-    values: Sequence[float] | np.ndarray,
-    *,
-    half_span_deg: float,
-    bin_count: int,
-) -> np.ndarray:
-    """Return fixed symmetric profile-bin indices for one angular axis."""
-
-    arr = np.asarray(values, dtype=np.float64)
-    out = np.full(arr.shape, -1, dtype=np.int64)
-    if int(bin_count) <= 0 or not np.isfinite(float(half_span_deg)) or float(half_span_deg) <= 0.0:
-        return out
-    half_span = float(half_span_deg)
-    valid = np.isfinite(arr) & (arr >= -half_span) & (arr <= half_span)
-    if not np.any(valid):
-        return out
-    scaled = (
-        (arr[valid] + half_span)
-        / max(2.0 * half_span, 1.0e-12)
-        * float(bin_count)
-    )
-    scaled = np.minimum(scaled, float(bin_count) - 1.0e-12)
-    out[valid] = np.floor(scaled).astype(np.int64)
-    return out
-
-
-def _extract_profile_from_flat_image(
-    flat_image: np.ndarray,
-    roi: MosaicProfileROI,
-) -> np.ndarray:
-    """Extract one background-subtracted 1D profile from a flat image buffer."""
-
-    values = np.asarray(flat_image[roi.flat_indices], dtype=np.float64)
-    values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
-    profile = np.zeros_like(roi.signal_counts, dtype=np.float64)
-    if np.any(roi.signal_mask):
-        profile = np.bincount(
-            roi.axis_bin_indices[roi.signal_mask],
-            weights=values[roi.signal_mask],
-            minlength=roi.signal_counts.size,
-        ).astype(np.float64, copy=False)
-
-    if np.any(roi.side_mask):
-        side_sums = np.bincount(
-            roi.axis_bin_indices[roi.side_mask],
-            weights=values[roi.side_mask],
-            minlength=roi.side_counts.size,
-        ).astype(np.float64, copy=False)
-        bg_level = np.full(
-            roi.side_counts.shape,
-            float(np.mean(values[roi.side_mask])),
-            dtype=np.float64,
-        )
-        valid_side = roi.side_counts > 0
-        bg_level[valid_side] = side_sums[valid_side] / roi.side_counts[valid_side]
-    else:
-        fallback = float(np.median(values)) if values.size else 0.0
-        bg_level = np.full(roi.side_counts.shape, fallback, dtype=np.float64)
-
-    corrected = profile - bg_level * roi.signal_counts.astype(np.float64)
-    corrected = np.nan_to_num(corrected, nan=0.0, posinf=0.0, neginf=0.0)
-    return np.clip(corrected, 0.0, None)
-
-
-def _estimate_pixel_size(params: Dict[str, float]) -> float:
-    provenance = _fit_space_pixel_size_provenance(params)
-    try:
-        return float(provenance.get("value", np.nan))
-    except Exception:
-        return float("nan")
-
-
-def _fit_space_pixel_size_provenance(
-    params: Mapping[str, object],
-) -> Dict[str, float | str]:
-    """Return the chosen fit-space pixel size together with its raw candidates."""
-
-    def _raw_value(key: str) -> float:
-        try:
-            return float(params.get(key, np.nan))
-        except Exception:
-            return float("nan")
-
-    raw_pixel_size = _raw_value("pixel_size")
-    raw_pixel_size_m = _raw_value("pixel_size_m")
-    raw_debye_x = _raw_value("debye_x")
-    raw_debye_y = _raw_value("debye_y")
-
-    for key, value in (
-        ("pixel_size", raw_pixel_size),
-        ("pixel_size_m", raw_pixel_size_m),
-        ("debye_x", raw_debye_x),
-    ):
-        if np.isfinite(value) and value > 0.0:
-            return {
-                "source": str(key),
-                "value": float(value),
-                "raw_pixel_size": float(raw_pixel_size),
-                "raw_pixel_size_m": float(raw_pixel_size_m),
-                "raw_debye_x": float(raw_debye_x),
-                "raw_debye_y": float(raw_debye_y),
-            }
-
-    try:
-        fallback = float(params.get("corto_detector", 1.0)) / 4096.0
-    except Exception:
-        fallback = float("nan")
-    try:
-        pixel_value = float(fallback)
-    except Exception:
-        pixel_value = float("nan")
-    if not np.isfinite(pixel_value) or pixel_value <= 0.0:
-        pixel_value = 1.0e-6
-    return {
-        "source": "fallback",
-        "value": float(pixel_value),
-        "raw_pixel_size": float(raw_pixel_size),
-        "raw_pixel_size_m": float(raw_pixel_size_m),
-        "raw_debye_x": float(raw_debye_x),
-        "raw_debye_y": float(raw_debye_y),
-    }
+_angular_difference_array_deg = _mosaic_profiles._angular_difference_array_deg
+_classify_mosaic_profile_family = _mosaic_profiles._classify_mosaic_profile_family
+_profile_half_span_deg = _mosaic_profiles._profile_half_span_deg
+_profile_bin_indices = _mosaic_profiles._profile_bin_indices
+_extract_profile_from_flat_image = _mosaic_profiles._extract_profile_from_flat_image
+_estimate_pixel_size = _mosaic_profiles._estimate_pixel_size
+_fit_space_pixel_size_provenance = _mosaic_profiles._fit_space_pixel_size_provenance
 
 
 def _build_mosaic_profile_dataset_contexts(
@@ -7470,368 +6810,19 @@ def _build_mosaic_profile_dataset_contexts(
 ) -> Tuple[List[MosaicProfileDatasetContext], List[Dict[str, object]]]:
     """Prepare fixed angular-profile windows for the sigma/gamma/eta fitter."""
 
-    contexts = _build_geometry_fit_dataset_contexts(
+    return _mosaic_profiles._build_mosaic_profile_dataset_contexts(
         miller,
         intensities,
+        image_size,
         params,
-        measured_peaks=None,
-        experimental_image=None,
-        dataset_specs=dataset_specs,
+        dataset_specs,
+        roi_half_width=roi_half_width,
+        build_geometry_fit_dataset_contexts=_build_geometry_fit_dataset_contexts,
+        miller_key_from_row=_miller_key_from_row,
+        normalized_hkl_key=_normalized_hkl_key,
+        measured_detector_anchor=_measured_detector_anchor,
+        detector_pixels_to_fit_space=_detector_pixels_to_fit_space,
     )
-
-    detector_distance = float(params.get("corto_detector", 0.0))
-    pixel_size = _estimate_pixel_size(params)
-    centre = params.get("center")
-    gamma_deg = float(params.get("gamma", 0.0))
-    Gamma_deg = float(params.get("Gamma", 0.0))
-    image_size = int(image_size)
-    roi_half_width = max(int(roi_half_width), 1)
-    prepared: List[MosaicProfileDatasetContext] = []
-    rejected_rois: List[Dict[str, object]] = []
-
-    for dataset_ctx in contexts:
-        experimental_image = (
-            np.asarray(dataset_ctx.experimental_image, dtype=np.float64)
-            if dataset_ctx.experimental_image is not None
-            else None
-        )
-        if experimental_image is None or experimental_image.size == 0:
-            rejected_rois.append(
-                {
-                    "dataset_index": int(dataset_ctx.dataset_index),
-                    "dataset_label": str(dataset_ctx.label),
-                    "stage": "dataset_prep",
-                    "reason": "missing_experimental_image",
-                }
-            )
-            continue
-
-        subset_miller = np.asarray(dataset_ctx.subset.miller, dtype=np.float64)
-        subset_intensities = np.asarray(dataset_ctx.subset.intensities, dtype=np.float64)
-        measured_entries = list(dataset_ctx.subset.measured_entries or [])
-        hkl_to_reflection_index = {
-            _miller_key_from_row(row): int(idx)
-            for idx, row in enumerate(subset_miller)
-            if _miller_key_from_row(row) is not None
-        }
-        rois: List[MosaicProfileROI] = []
-        in_plane_count = 0
-        specular_count = 0
-        flat_experimental = np.asarray(experimental_image, dtype=np.float64).ravel()
-
-        for measured_entry in measured_entries:
-            if not isinstance(measured_entry, Mapping):
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "stage": "profile_prep",
-                        "reason": "invalid_measured_entry",
-                    }
-                )
-                continue
-
-            hkl_key = _normalized_hkl_key(measured_entry.get("hkl"))
-            if hkl_key is None:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "stage": "profile_prep",
-                        "reason": "missing_hkl",
-                    }
-                )
-                continue
-
-            family_info = _classify_mosaic_profile_family(hkl_key)
-            if family_info is None:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "unsupported_peak_family",
-                    }
-                )
-                continue
-            family, axis_name = family_info
-
-            reflection_index = hkl_to_reflection_index.get(hkl_key)
-            if reflection_index is None:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "hkl_not_in_subset",
-                    }
-                )
-                continue
-
-            anchor, anchor_reason = _measured_detector_anchor(measured_entry)
-            if anchor is None:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": anchor_reason,
-                    }
-                )
-                continue
-
-            center_col = float(anchor[0])
-            center_row = float(anchor[1])
-            row0 = max(int(math.floor(center_row)) - roi_half_width, 0)
-            row1 = min(int(math.floor(center_row)) + roi_half_width + 1, image_size)
-            col0 = max(int(math.floor(center_col)) - roi_half_width, 0)
-            col1 = min(int(math.floor(center_col)) + roi_half_width + 1, image_size)
-            if row1 <= row0 or col1 <= col0:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "degenerate_roi",
-                    }
-                )
-                continue
-
-            rows = np.arange(row0, row1, dtype=np.int64)
-            cols = np.arange(col0, col1, dtype=np.int64)
-            yy, xx = np.meshgrid(rows, cols, indexing="ij")
-            flat_indices = (yy * image_size + xx).reshape(-1)
-            two_theta_deg, phi_deg = _detector_pixels_to_fit_space(
-                xx.reshape(-1),
-                yy.reshape(-1),
-                center=centre,
-                detector_distance=detector_distance,
-                pixel_size=pixel_size,
-                gamma_deg=gamma_deg,
-                Gamma_deg=Gamma_deg,
-            )
-            peak_two_theta, peak_phi = _detector_pixels_to_fit_space(
-                np.asarray([center_col], dtype=np.float64),
-                np.asarray([center_row], dtype=np.float64),
-                center=centre,
-                detector_distance=detector_distance,
-                pixel_size=pixel_size,
-                gamma_deg=gamma_deg,
-                Gamma_deg=Gamma_deg,
-            )
-            if (
-                peak_two_theta.size == 0
-                or peak_phi.size == 0
-                or not np.isfinite(float(peak_two_theta[0]))
-                or not np.isfinite(float(peak_phi[0]))
-            ):
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "invalid_peak_angles",
-                    }
-                )
-                continue
-
-            measured_two_theta_deg = float(peak_two_theta[0])
-            measured_phi_deg = float(peak_phi[0])
-            if family == "in_plane":
-                axis_delta = _angular_difference_array_deg(phi_deg, measured_phi_deg)
-                orth_delta = two_theta_deg - measured_two_theta_deg
-                axis_half_span_deg = _profile_half_span_deg(
-                    axis_delta,
-                    min_half_span=0.35,
-                    max_half_span=20.0,
-                )
-                orth_half_span_deg = _profile_half_span_deg(
-                    orth_delta,
-                    min_half_span=0.03,
-                    max_half_span=5.0,
-                )
-                orthogonal_half_window_deg = float(
-                    np.clip(
-                        0.35 * orth_half_span_deg,
-                        0.04,
-                        max(orth_half_span_deg, 0.15),
-                    )
-                )
-            else:
-                axis_delta = two_theta_deg - measured_two_theta_deg
-                orth_delta = _angular_difference_array_deg(phi_deg, measured_phi_deg)
-                axis_half_span_deg = _profile_half_span_deg(
-                    axis_delta,
-                    min_half_span=0.15,
-                    max_half_span=15.0,
-                )
-                orth_half_span_deg = _profile_half_span_deg(
-                    orth_delta,
-                    min_half_span=0.15,
-                    max_half_span=15.0,
-                )
-                orthogonal_half_window_deg = float(
-                    np.clip(
-                        0.35 * orth_half_span_deg,
-                        0.15,
-                        max(orth_half_span_deg, 0.75),
-                    )
-                )
-
-            finite_orth = orth_delta[np.isfinite(orth_delta)]
-            max_abs_orth = (
-                float(np.max(np.abs(finite_orth))) if finite_orth.size else 0.0
-            )
-            if not np.isfinite(max_abs_orth) or max_abs_orth <= 0.0:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "invalid_orthogonal_span",
-                    }
-                )
-                continue
-
-            orthogonal_half_window_deg = min(
-                float(orthogonal_half_window_deg),
-                max_abs_orth,
-            )
-            side_inner = min(max_abs_orth, 1.5 * orthogonal_half_window_deg)
-            side_outer = min(
-                max_abs_orth,
-                max(side_inner + 0.05, 3.0 * orthogonal_half_window_deg),
-            )
-
-            axis_bin_count = 41
-            axis_bin_indices = _profile_bin_indices(
-                axis_delta,
-                half_span_deg=axis_half_span_deg,
-                bin_count=axis_bin_count,
-            )
-            valid = (
-                np.isfinite(axis_delta)
-                & np.isfinite(orth_delta)
-                & (axis_bin_indices >= 0)
-            )
-            signal_mask = valid & (np.abs(orth_delta) <= orthogonal_half_window_deg)
-            side_mask = valid & (np.abs(orth_delta) >= side_inner) & (np.abs(orth_delta) <= side_outer)
-            if int(np.count_nonzero(signal_mask)) < 5:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "insufficient_support_pixels",
-                    }
-                )
-                continue
-
-            signal_counts = np.bincount(
-                axis_bin_indices[signal_mask],
-                minlength=axis_bin_count,
-            ).astype(np.float64, copy=False)
-            side_counts = np.bincount(
-                axis_bin_indices[side_mask],
-                minlength=axis_bin_count,
-            ).astype(np.float64, copy=False)
-            axis_bin_centers = np.linspace(
-                -axis_half_span_deg,
-                axis_half_span_deg,
-                axis_bin_count,
-                dtype=np.float64,
-            )
-
-            roi = MosaicProfileROI(
-                dataset_index=int(dataset_ctx.dataset_index),
-                dataset_label=str(dataset_ctx.label),
-                reflection_index=int(reflection_index),
-                hkl=tuple(int(v) for v in hkl_key),
-                family=str(family),
-                axis_name=str(axis_name),
-                center_row=float(center_row),
-                center_col=float(center_col),
-                row_bounds=(int(row0), int(row1)),
-                col_bounds=(int(col0), int(col1)),
-                flat_indices=np.asarray(flat_indices, dtype=np.int64),
-                axis_bin_indices=np.asarray(axis_bin_indices, dtype=np.int64),
-                signal_mask=np.asarray(signal_mask, dtype=bool),
-                side_mask=np.asarray(side_mask, dtype=bool),
-                signal_counts=np.asarray(signal_counts, dtype=np.float64),
-                side_counts=np.asarray(side_counts, dtype=np.float64),
-                axis_bin_centers=np.asarray(axis_bin_centers, dtype=np.float64),
-                axis_half_span_deg=float(axis_half_span_deg),
-                orthogonal_half_window_deg=float(orthogonal_half_window_deg),
-                measured_two_theta_deg=float(measured_two_theta_deg),
-                measured_phi_deg=float(measured_phi_deg),
-                measured_profile=np.zeros(axis_bin_count, dtype=np.float64),
-                measured_area=0.0,
-                measured_shape_profile=np.zeros(axis_bin_count, dtype=np.float64),
-            )
-            measured_profile = _extract_profile_from_flat_image(flat_experimental, roi)
-            measured_area = float(np.sum(measured_profile))
-            if not np.isfinite(measured_area) or measured_area <= 0.0:
-                rejected_rois.append(
-                    {
-                        "dataset_index": int(dataset_ctx.dataset_index),
-                        "dataset_label": str(dataset_ctx.label),
-                        "hkl": [int(v) for v in hkl_key],
-                        "stage": "profile_prep",
-                        "reason": "empty_measured_profile",
-                    }
-                )
-                continue
-
-            roi.measured_profile = np.asarray(measured_profile, dtype=np.float64)
-            roi.measured_area = float(measured_area)
-            roi.measured_shape_profile = (
-                np.asarray(measured_profile, dtype=np.float64) / measured_area
-            )
-            rois.append(roi)
-            if family == "in_plane":
-                in_plane_count += 1
-            else:
-                specular_count += 1
-
-        selected_reflection_indices = sorted(
-            {int(roi.reflection_index) for roi in rois}
-        )
-        if selected_reflection_indices:
-            selected_miller = np.asarray(
-                subset_miller[selected_reflection_indices],
-                dtype=np.float64,
-            )
-            selected_intensities = np.asarray(
-                subset_intensities[selected_reflection_indices],
-                dtype=np.float64,
-            )
-        else:
-            selected_miller = np.empty((0, 3), dtype=np.float64)
-            selected_intensities = np.empty((0,), dtype=np.float64)
-
-        prepared.append(
-            MosaicProfileDatasetContext(
-                dataset_index=int(dataset_ctx.dataset_index),
-                label=str(dataset_ctx.label),
-                theta_initial=float(dataset_ctx.theta_initial),
-                experimental_image=np.asarray(experimental_image, dtype=np.float64),
-                miller=np.asarray(selected_miller, dtype=np.float64),
-                intensities=np.asarray(selected_intensities, dtype=np.float64),
-                rois=rois,
-                measured_peak_count=int(len(measured_entries)),
-                in_plane_roi_count=int(in_plane_count),
-                specular_roi_count=int(specular_count),
-            )
-        )
-
-    return prepared, rejected_rois
 
 
 def _fit_mosaic_shape_parameters_profiles(
@@ -7881,21 +6872,15 @@ def _fit_mosaic_shape_parameters_profiles(
     if int(image_size) <= 0:
         raise ValueError("image_size must be positive")
     if not dataset_spec_entries:
-        raise RuntimeError(
-            "Mosaic shape fit requires at least one prepared dataset_spec."
-        )
+        raise RuntimeError("Mosaic shape fit requires at least one prepared dataset_spec.")
 
     mosaic_params = dict(params.get("mosaic_params", {}))
     if not mosaic_params:
         raise ValueError("params['mosaic_params'] is required")
     required_keys = ("beam_x_array", "beam_y_array", "theta_array", "phi_array")
-    missing_keys = [
-        key for key in required_keys if not np.asarray(mosaic_params.get(key)).size
-    ]
+    missing_keys = [key for key in required_keys if not np.asarray(mosaic_params.get(key)).size]
     if missing_keys:
-        raise ValueError(
-            "mosaic_params must include beam and divergence samples for shape fitting"
-        )
+        raise ValueError("mosaic_params must include beam and divergence samples for shape fitting")
 
     wavelength_array = mosaic_params.get("wavelength_array")
     if wavelength_array is None:
@@ -7997,9 +6982,7 @@ def _fit_mosaic_shape_parameters_profiles(
         if len(dataset_ctx.rois) < int(min_per_dataset_rois)
     ]
     if dataset_failures:
-        dataset_text = ", ".join(
-            f"{ctx.label}={len(ctx.rois)}" for ctx in dataset_failures
-        )
+        dataset_text = ", ".join(f"{ctx.label}={len(ctx.rois)}" for ctx in dataset_failures)
         rejection_text = ", ".join(
             f"{ctx.label}["
             + ", ".join(
@@ -8029,13 +7012,9 @@ def _fit_mosaic_shape_parameters_profiles(
     total_in_plane = int(sum(ctx.in_plane_roi_count for ctx in prepared_datasets))
     total_specular = int(sum(ctx.specular_roi_count for ctx in prepared_datasets))
     if total_in_plane <= 0:
-        raise RuntimeError(
-            "Mosaic shape fit needs at least one usable off-specular profile."
-        )
+        raise RuntimeError("Mosaic shape fit needs at least one usable off-specular profile.")
     if total_specular <= 0:
-        raise RuntimeError(
-            "Mosaic shape fit needs at least one usable specular (00l) profile."
-        )
+        raise RuntimeError("Mosaic shape fit needs at least one usable specular (00l) profile.")
     if specular_ratio_weight > 0.0 and total_specular < 2:
         raise RuntimeError(
             "Mosaic shape fit needs at least two specular (00l) profiles when relative-intensity fitting is enabled."
@@ -8126,13 +7105,9 @@ def _fit_mosaic_shape_parameters_profiles(
                 "y": _json_safe(entry.get("y")),
             }
             if "source_table_index" in entry:
-                peak_summary["source_table_index"] = _json_safe(
-                    entry.get("source_table_index")
-                )
+                peak_summary["source_table_index"] = _json_safe(entry.get("source_table_index"))
             if "source_row_index" in entry:
-                peak_summary["source_row_index"] = _json_safe(
-                    entry.get("source_row_index")
-                )
+                peak_summary["source_row_index"] = _json_safe(entry.get("source_row_index"))
             out.append(peak_summary)
         return out
 
@@ -8145,17 +7120,13 @@ def _fit_mosaic_shape_parameters_profiles(
         input_dataset_summaries.append(
             {
                 "dataset_index": _json_safe(spec.get("dataset_index")),
-                "dataset_label": _json_safe(
-                    spec.get("label", spec.get("dataset_index", "?"))
-                ),
+                "dataset_label": _json_safe(spec.get("label", spec.get("dataset_index", "?"))),
                 "theta_initial_deg": _json_safe(spec.get("theta_initial")),
                 "measured_peak_count": int(
                     len(measured_peaks) if isinstance(measured_peaks, (list, tuple)) else 0
                 ),
                 "experimental_image": (
-                    _image_summary(experimental_image)
-                    if experimental_image is not None
-                    else None
+                    _image_summary(experimental_image) if experimental_image is not None else None
                 ),
                 "measured_peaks": _measured_peak_summaries(measured_peaks),
             }
@@ -8200,14 +7171,11 @@ def _fit_mosaic_shape_parameters_profiles(
     for rejected in rejected_rois:
         if not isinstance(rejected, Mapping):
             continue
-        dataset_key = str(
-            rejected.get("dataset_label", rejected.get("dataset_index", "?"))
-        )
+        dataset_key = str(rejected.get("dataset_label", rejected.get("dataset_index", "?")))
         reason_key = str(rejected.get("reason", "unknown"))
         stage_key = str(rejected.get("stage", "unknown"))
         rejected_roi_reason_counts[f"{dataset_key}:{stage_key}:{reason_key}"] = (
-            rejected_roi_reason_counts.get(f"{dataset_key}:{stage_key}:{reason_key}", 0)
-            + 1
+            rejected_roi_reason_counts.get(f"{dataset_key}:{stage_key}:{reason_key}", 0) + 1
         )
         rejected_roi_counts_by_dataset[dataset_key] = (
             rejected_roi_counts_by_dataset.get(dataset_key, 0) + 1
@@ -8233,8 +7201,7 @@ def _fit_mosaic_shape_parameters_profiles(
     theta_mode_key = str(theta_i_mode).strip().lower()
     if theta_mode_key not in {"auto", "single", "shared_offset", "per_dataset"}:
         raise ValueError(
-            "theta_i_mode must be one of "
-            "{'auto', 'single', 'shared_offset', 'per_dataset'}"
+            "theta_i_mode must be one of {'auto', 'single', 'shared_offset', 'per_dataset'}"
         )
     if theta_mode_key == "auto":
         resolved_theta_mode = "single" if dataset_count == 1 else "per_dataset"
@@ -8264,10 +7231,7 @@ def _fit_mosaic_shape_parameters_profiles(
         else:
             theta_bound_lower = float(theta_i_bounds_deg[0])
             theta_bound_upper = float(theta_i_bounds_deg[1])
-        if not (
-            np.isfinite(theta_bound_lower)
-            and np.isfinite(theta_bound_upper)
-        ):
+        if not (np.isfinite(theta_bound_lower) and np.isfinite(theta_bound_upper)):
             raise ValueError("theta_i_bounds_deg must be finite when fit_theta_i is enabled")
         if theta_bound_lower >= theta_bound_upper:
             raise ValueError(
@@ -8281,9 +7245,7 @@ def _fit_mosaic_shape_parameters_profiles(
             theta_seed = _safe_float(params.get("theta_offset", 0.0), 0.0)
             theta_param_names.append("theta_offset")
             theta_param_dataset_indices.append(None)
-            theta_seeds.append(
-                float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper))
-            )
+            theta_seeds.append(float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper)))
             theta_lowers.append(float(theta_bound_lower))
             theta_uppers.append(float(theta_bound_upper))
         elif resolved_theta_mode == "single":
@@ -8293,15 +7255,11 @@ def _fit_mosaic_shape_parameters_profiles(
             )
             theta_param_names.append("theta_initial")
             theta_param_dataset_indices.append(int(prepared_datasets[0].dataset_index))
-            theta_seeds.append(
-                float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper))
-            )
+            theta_seeds.append(float(np.clip(theta_seed, theta_bound_lower, theta_bound_upper)))
             theta_lowers.append(float(theta_bound_lower))
             theta_uppers.append(float(theta_bound_upper))
         else:
-            theta_seed_map = dict(
-                base_params.get("_mosaic_theta_initials_by_dataset", {})
-            )
+            theta_seed_map = dict(base_params.get("_mosaic_theta_initials_by_dataset", {}))
             for dataset_ctx in prepared_datasets:
                 dataset_idx = int(dataset_ctx.dataset_index)
                 dataset_theta = float(dataset_ctx.theta_initial)
@@ -8379,9 +7337,7 @@ def _fit_mosaic_shape_parameters_profiles(
         "configured_workers": int(configured_parallel_workers),
         "dataset_workers": int(dataset_parallel_workers),
         "restart_workers": int(restart_parallel_workers),
-        "worker_numba_threads": (
-            None if numba_threads is None else int(numba_threads)
-        ),
+        "worker_numba_threads": (None if numba_threads is None else int(numba_threads)),
         "numba_thread_budget": int(_available_parallel_thread_budget()),
     }
 
@@ -8447,14 +7403,10 @@ def _fit_mosaic_shape_parameters_profiles(
             f"reflections={int(dataset_ctx.miller.shape[0])}"
         )
     if rejected_rois:
-        preview_text = ", ".join(
-            f"{key}={count}" for key, count in rejection_preview[:6]
-        )
+        preview_text = ", ".join(f"{key}={count}" for key, count in rejection_preview[:6])
         if len(rejection_preview) > 6:
             preview_text += ", ..."
-        _emit_progress(
-            f"ROI rejections during prep: count={len(rejected_rois)} [{preview_text}]"
-        )
+        _emit_progress(f"ROI rejections during prep: count={len(rejected_rois)} [{preview_text}]")
     _emit_progress(
         "Parallel plan: "
         f"mode={parallel_mode_key}, dataset_workers={int(dataset_parallel_workers)}, "
@@ -8647,7 +7599,9 @@ def _fit_mosaic_shape_parameters_profiles(
                         }
                     )
             else:
-                specular_bundle.append((roi, np.asarray(sim_profile, dtype=np.float64), float(sim_area)))
+                specular_bundle.append(
+                    (roi, np.asarray(sim_profile, dtype=np.float64), float(sim_area))
+                )
 
         shared_specular_scale = float("nan")
         ratio_term_count = 0
@@ -8720,19 +7674,14 @@ def _fit_mosaic_shape_parameters_profiles(
                 ratio_term_count = int(len(ratio_terms))
                 if ratio_terms:
                     residual_blocks.append(
-                        np.asarray(ratio_terms, dtype=np.float64)
-                        * float(specular_ratio_weight)
+                        np.asarray(ratio_terms, dtype=np.float64) * float(specular_ratio_weight)
                     )
 
         dataset_residual = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.zeros(0, dtype=np.float64)
+            np.concatenate(residual_blocks) if residual_blocks else np.zeros(0, dtype=np.float64)
         )
         dataset_weight = (
-            1.0 / math.sqrt(max(len(dataset_ctx.rois), 1))
-            if bool(equal_dataset_weights)
-            else 1.0
+            1.0 / math.sqrt(max(len(dataset_ctx.rois), 1)) if bool(equal_dataset_weights) else 1.0
         )
         dataset_residual = np.asarray(dataset_residual, dtype=np.float64) * dataset_weight
 
@@ -8754,27 +7703,18 @@ def _fit_mosaic_shape_parameters_profiles(
             "profile_weight": float(profile_weight),
             "specular_ratio_weight": float(specular_ratio_weight),
             "shared_specular_scale": (
-                float(shared_specular_scale)
-                if np.isfinite(shared_specular_scale)
-                else None
+                float(shared_specular_scale) if np.isfinite(shared_specular_scale) else None
             ),
             "relative_intensity_term_count": int(ratio_term_count),
-            "worst_hkls": [
-                tuple(int(v) for v in diag["hkl"])
-                for diag in ordered_roi_diags[:3]
-            ],
+            "worst_hkls": [tuple(int(v) for v in diag["hkl"]) for diag in ordered_roi_diags[:3]],
         }
         if collect_diagnostics:
             dataset_summary.update(
                 {
                     "residual_norm": float(np.linalg.norm(dataset_residual)),
-                    "cost": float(
-                        _robust_cost(dataset_residual, loss=loss, f_scale=f_scale)
-                    ),
+                    "cost": float(_robust_cost(dataset_residual, loss=loss, f_scale=f_scale)),
                     "max_roi_rms": (
-                        float(ordered_roi_diags[0]["rms"])
-                        if ordered_roi_diags
-                        else 0.0
+                        float(ordered_roi_diags[0]["rms"]) if ordered_roi_diags else 0.0
                     ),
                 }
             )
@@ -8792,8 +7732,7 @@ def _fit_mosaic_shape_parameters_profiles(
     ]:
         local = _apply_trial_params(theta)
         dataset_items = [
-            (local, dataset_ctx, bool(collect_diagnostics))
-            for dataset_ctx in prepared_datasets
+            (local, dataset_ctx, bool(collect_diagnostics)) for dataset_ctx in prepared_datasets
         ]
         if dataset_parallel_workers > 1 and len(dataset_items) > 1:
             dataset_results = _threaded_map(
@@ -8815,13 +7754,9 @@ def _fit_mosaic_shape_parameters_profiles(
             if collect_diagnostics:
                 all_roi_diags.extend(list(roi_diags))
                 dataset_diagnostics.append(dict(dataset_summary))
-            roi_count_by_dataset[int(dataset_ctx.dataset_index)] = int(
-                len(dataset_ctx.rois)
-            )
+            roi_count_by_dataset[int(dataset_ctx.dataset_index)] = int(len(dataset_ctx.rois))
         residual = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.zeros(0, dtype=np.float64)
+            np.concatenate(residual_blocks) if residual_blocks else np.zeros(0, dtype=np.float64)
         )
         return (
             np.asarray(residual, dtype=np.float64),
@@ -8888,10 +7823,7 @@ def _fit_mosaic_shape_parameters_profiles(
         }
         return result, meta
 
-    _emit_progress(
-        "Primary solve start: "
-        f"max_nfev={int(max_nfev)}, {_format_params(full_x0)}"
-    )
+    _emit_progress(f"Primary solve start: max_nfev={int(max_nfev)}, {_format_params(full_x0)}")
     best_result, primary_meta = _run_solver(
         active_x0,
         attempt_label="Primary",
@@ -9013,8 +7945,8 @@ def _fit_mosaic_shape_parameters_profiles(
                 best_cost = float(trial_cost)
 
     best_full_x = _expand_active_vector(np.asarray(best_result.x, dtype=np.float64))
-    final_residual, roi_diagnostics, dataset_diagnostics, roi_count_by_dataset = (
-        _evaluate_residual(best_full_x, collect_diagnostics=True)
+    final_residual, roi_diagnostics, dataset_diagnostics, roi_count_by_dataset = _evaluate_residual(
+        best_full_x, collect_diagnostics=True
     )
     best_result.x = np.asarray(best_full_x, dtype=np.float64)
     best_result.fun = np.asarray(final_residual, dtype=np.float64)
@@ -9063,8 +7995,8 @@ def _fit_mosaic_shape_parameters_profiles(
         elif resolved_theta_mode == "single" and theta_slice.size >= 1:
             refined_theta = float(theta_slice[0])
             best_params["theta_initial"] = float(refined_theta)
-            refined_theta_values_by_dataset[int(prepared_datasets[0].dataset_index)] = (
-                float(refined_theta)
+            refined_theta_values_by_dataset[int(prepared_datasets[0].dataset_index)] = float(
+                refined_theta
             )
         elif resolved_theta_mode == "per_dataset" and theta_slice.size:
             theta_map = {
@@ -9077,9 +8009,7 @@ def _fit_mosaic_shape_parameters_profiles(
 
     cost_reduction = 0.0
     if initial_cost > 1.0e-12 and np.isfinite(initial_cost):
-        cost_reduction = float(
-            (float(initial_cost) - float(final_cost)) / float(initial_cost)
-        )
+        cost_reduction = float((float(initial_cost) - float(final_cost)) / float(initial_cost))
     bound_hits = [
         str(param_names[idx])
         for idx in active_indices.tolist()
@@ -9088,8 +8018,8 @@ def _fit_mosaic_shape_parameters_profiles(
     ]
     boundary_warning = None
     if bound_hits:
-        boundary_warning = (
-            "Parameters finished on bounds: " + ", ".join(str(name) for name in bound_hits)
+        boundary_warning = "Parameters finished on bounds: " + ", ".join(
+            str(name) for name in bound_hits
         )
 
     ordered_roi_diagnostics = sorted(
@@ -9122,13 +8052,9 @@ def _fit_mosaic_shape_parameters_profiles(
     best_result.fit_gamma_mosaic = bool(fit_gamma_mosaic)
     best_result.fit_eta = bool(fit_eta)
     best_result.fit_theta_i = bool(optimize_theta)
-    best_result.theta_refinement_mode = (
-        str(resolved_theta_mode) if optimize_theta else None
-    )
+    best_result.theta_refinement_mode = str(resolved_theta_mode) if optimize_theta else None
     best_result.theta_param_name = (
-        str(theta_param_names[0])
-        if optimize_theta and len(theta_param_names) == 1
-        else None
+        str(theta_param_names[0]) if optimize_theta and len(theta_param_names) == 1 else None
     )
     best_result.theta_param_names = list(theta_param_names)
     best_result.refined_theta_value = (
@@ -9212,8 +8138,7 @@ def _fit_mosaic_shape_parameters_profiles(
         "min_per_dataset_rois": int(min_per_dataset_rois),
         "total_roi_count": int(total_rois),
         "roi_count_by_dataset": {
-            str(key): int(val)
-            for key, val in dict(roi_count_by_dataset or {}).items()
+            str(key): int(val) for key, val in dict(roi_count_by_dataset or {}).items()
         },
         "total_in_plane_roi_count": int(total_in_plane),
         "total_specular_roi_count": int(total_specular),
@@ -9270,9 +8195,7 @@ def _fit_mosaic_shape_parameters_profiles(
         "theta": {
             "optimize_theta": bool(optimize_theta),
             "requested_mode": str(theta_i_mode),
-            "resolved_mode": (
-                str(resolved_theta_mode) if optimize_theta else None
-            ),
+            "resolved_mode": (str(resolved_theta_mode) if optimize_theta else None),
             "theta_i_bounds_deg": _json_safe(theta_i_bounds_deg),
             "theta_parameter_names": list(theta_param_names),
             "refined_theta_value": _json_safe(best_result.refined_theta_value),
@@ -9476,12 +8399,12 @@ def build_tube_rois(
     """Construct tube-shaped ROIs following the manuscript guidance."""
 
     pixel_size = _estimate_pixel_size(params)
-    mosaic = params['mosaic_params']
-    sigma_deg = float(mosaic.get('sigma_mosaic_deg', 0.3))
+    mosaic = params["mosaic_params"]
+    sigma_deg = float(mosaic.get("sigma_mosaic_deg", 0.3))
     mosaic_fwhm_rad = math.radians(sigma_deg) * 2.0 * math.sqrt(2.0 * math.log(2.0))
-    divergence_rad = math.radians(float(mosaic.get('gamma_mosaic_deg', 0.3)))
-    bandwidth_rad = float(params.get('bandwidth_rad', 0.0))
-    detector_length = float(params.get('corto_detector', 1.0))
+    divergence_rad = math.radians(float(mosaic.get("gamma_mosaic_deg", 0.3)))
+    bandwidth_rad = float(params.get("bandwidth_rad", 0.0))
+    detector_length = float(params.get("corto_detector", 1.0))
 
     nominal_width = mosaic_fwhm_rad * detector_length / pixel_size
     nominal_width += divergence_rad * detector_length / pixel_size
@@ -9525,7 +8448,7 @@ def build_tube_rois(
             continue
 
         bounds = (min_x, max_x, min_y, max_y)
-        grid_y, grid_x = np.mgrid[min_y:max_y + 1, min_x:max_x + 1]
+        grid_y, grid_x = np.mgrid[min_y : max_y + 1, min_x : max_x + 1]
         query_points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
         tree = cKDTree(dense_centerline)
         distances, _ = tree.query(query_points, k=1)
@@ -9604,7 +8527,7 @@ def compute_sensitivity_weights(
 
     for roi in rois:
         min_x, max_x, min_y, max_y = roi.bounds
-        weights_map = upsampled[min_y:max_y + 1, min_x:max_x + 1]
+        weights_map = upsampled[min_y : max_y + 1, min_x : max_x + 1]
         weights_map = np.where(roi.mask, weights_map, 0.0)
         if not np.any(weights_map):
             weights_map = np.where(roi.mask, 1.0, 0.0)
@@ -9730,9 +8653,13 @@ def fit_local_background(
 
     for roi in rois:
         min_x, max_x, min_y, max_y = roi.bounds
-        patch = experimental_image[min_y:max_y + 1, min_x:max_x + 1]
+        patch = experimental_image[min_y : max_y + 1, min_x : max_x + 1]
         mask = roi.mask
-        center_mask = roi.centerline_mask if roi.centerline_mask is not None else np.zeros_like(mask, dtype=bool)
+        center_mask = (
+            roi.centerline_mask
+            if roi.centerline_mask is not None
+            else np.zeros_like(mask, dtype=bool)
+        )
         sample_mask = mask & ~center_mask
         if not np.any(sample_mask):
             sample_mask = mask
@@ -9746,14 +8673,16 @@ def fit_local_background(
 
         xx = xs.astype(np.float64)
         yy = ys.astype(np.float64)
-        A = np.column_stack([
-            np.ones_like(xx),
-            xx,
-            yy,
-            xx * xx,
-            xx * yy,
-            yy * yy,
-        ])
+        A = np.column_stack(
+            [
+                np.ones_like(xx),
+                xx,
+                yy,
+                xx * xx,
+                xx * yy,
+                yy * yy,
+            ]
+        )
         b = patch[ys, xs]
         coeffs, *_ = np.linalg.lstsq(A, b, rcond=None)
 
@@ -9774,9 +8703,9 @@ def fit_local_background(
         if roi.centerline_mask is not None:
             fitted = np.where(roi.centerline_mask, np.minimum(fitted, patch), fitted)
 
-        background[min_y:max_y + 1, min_x:max_x + 1] += fitted
-        coverage[min_y:max_y + 1, min_x:max_x + 1] += 1.0
-        global_mask[min_y:max_y + 1, min_x:max_x + 1] |= mask
+        background[min_y : max_y + 1, min_x : max_x + 1] += fitted
+        coverage[min_y : max_y + 1, min_x : max_x + 1] += 1.0
+        global_mask[min_y : max_y + 1, min_x : max_x + 1] |= mask
 
     mask = coverage > 0
     if np.any(mask):
@@ -9828,7 +8757,9 @@ def robust_residuals(
     ans_res = _anscombe(obs) - _anscombe(pred)
     huber_res = _huber(ans_res, huber_delta)
     mixture = np.clip(mixture, 0.0, 1.0)
-    mixture_weight = (1.0 - mixture) + mixture * np.exp(-0.5 * (ans_res / (huber_delta + 1e-6)) ** 2)
+    mixture_weight = (1.0 - mixture) + mixture * np.exp(
+        -0.5 * (ans_res / (huber_delta + 1e-6)) ** 2
+    )
     combined = 0.5 * np.sqrt(np.abs(dev)) + 0.5 * huber_res
     scaling = np.sqrt(np.maximum(weights, 1e-8)) / max(sampling_probability, 1e-3)
     return combined * scaling * np.sqrt(mixture_weight)
@@ -9840,10 +8771,7 @@ def _select_active_reflections(
     max_reflections: int,
     random_fraction: float,
 ) -> List[TubeROI]:
-    scored = [
-        (float(np.sum(roi.weights)) if roi.weights is not None else 0.0, roi)
-        for roi in rois
-    ]
+    scored = [(float(np.sum(roi.weights)) if roi.weights is not None else 0.0, roi) for roi in rois]
     scored.sort(key=lambda t: t[0], reverse=True)
 
     selected = [roi for _, roi in scored[:max_reflections]]
@@ -9894,8 +8822,8 @@ def _refresh_rois_if_needed(
         else:
             # rebuild ROI when shift significant
             rebuilt = build_tube_rois(
-                miller[idx:idx + 1],
-                max_positions[idx:idx + 1],
+                miller[idx : idx + 1],
+                max_positions[idx : idx + 1],
                 params,
                 image_size,
                 measured_dict=measured_dict,
@@ -9950,9 +8878,7 @@ def _stage_one_initialize(
         lsq_kwargs["x_scale"] = np.asarray(x_scale, dtype=np.float64)
     result = least_squares(residual, x0, **lsq_kwargs)
     result.initial_cost = 0.5 * float(np.sum(initial_residual * initial_residual))
-    result.final_cost = 0.5 * float(
-        np.sum(np.asarray(result.fun, dtype=np.float64) ** 2)
-    )
+    result.final_cost = 0.5 * float(np.sum(np.asarray(result.fun, dtype=np.float64) ** 2))
     result.cost_reduction = (
         float((result.initial_cost - result.final_cost) / result.initial_cost)
         if np.isfinite(float(result.initial_cost)) and float(result.initial_cost) > 1.0e-12
@@ -9973,7 +8899,9 @@ def _stage_two_refinement(
     measured_dict: Dict[Tuple[int, int, int], List[Tuple[float, float]]],
     *,
     cfg: Dict[str, float],
-) -> Tuple[Dict[str, float], OptimizeResult, List[TubeROI], np.ndarray, Callable[[np.ndarray], np.ndarray]]:
+) -> Tuple[
+    Dict[str, float], OptimizeResult, List[TubeROI], np.ndarray, Callable[[np.ndarray], np.ndarray]
+]:
     """Stage 2 refinement using Poisson deviance on active pixels."""
 
     base_sim, maxpos = simulator(params)
@@ -9991,12 +8919,12 @@ def _stage_two_refinement(
         var_names,
         rois,
         simulator,
-        downsample_factor=int(cfg.get('downsample_factor', 4)),
-        percentile=float(cfg.get('percentile', 90.0)),
-        huber_percentile=float(cfg.get('huber_percentile', 97.0)),
-        per_reflection_quota=int(cfg.get('per_reflection_quota', 200)),
-        off_tube_fraction=float(cfg.get('off_tube_fraction', 0.05)),
-        normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
+        downsample_factor=int(cfg.get("downsample_factor", 4)),
+        percentile=float(cfg.get("percentile", 90.0)),
+        huber_percentile=float(cfg.get("huber_percentile", 97.0)),
+        per_reflection_quota=int(cfg.get("per_reflection_quota", 200)),
+        off_tube_fraction=float(cfg.get("off_tube_fraction", 0.05)),
+        normalize_per_roi=bool(cfg.get("equal_peak_weights", False)),
     )
 
     rois_state = rois
@@ -10012,7 +8940,7 @@ def _stage_two_refinement(
             trial,
             image_size,
             measured_dict=measured_dict,
-            threshold=float(cfg.get('roi_refresh_threshold', 1.0)),
+            threshold=float(cfg.get("roi_refresh_threshold", 1.0)),
         )
 
         missing = [roi for roi in rois_state if roi.weights is None]
@@ -10023,30 +8951,30 @@ def _stage_two_refinement(
                 var_names,
                 rois_state,
                 simulator,
-                downsample_factor=int(cfg.get('downsample_factor', 4)),
-                percentile=float(cfg.get('percentile', 90.0)),
-                huber_percentile=float(cfg.get('huber_percentile', 97.0)),
-                per_reflection_quota=int(cfg.get('per_reflection_quota', 200)),
-                off_tube_fraction=float(cfg.get('off_tube_fraction', 0.05)),
-                normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
+                downsample_factor=int(cfg.get("downsample_factor", 4)),
+                percentile=float(cfg.get("percentile", 90.0)),
+                huber_percentile=float(cfg.get("huber_percentile", 97.0)),
+                per_reflection_quota=int(cfg.get("per_reflection_quota", 200)),
+                off_tube_fraction=float(cfg.get("off_tube_fraction", 0.05)),
+                normalize_per_roi=bool(cfg.get("equal_peak_weights", False)),
             )
 
         max_reflections = (
             len(rois_state)
-            if bool(cfg.get('equal_peak_weights', False))
-            else int(cfg.get('max_reflections', 12))
+            if bool(cfg.get("equal_peak_weights", False))
+            else int(cfg.get("max_reflections", 12))
         )
         active = _select_active_reflections(
             rois_state,
             max_reflections=max(1, int(max_reflections)),
-            random_fraction=float(cfg.get('random_reflection_fraction', 0.15)),
+            random_fraction=float(cfg.get("random_reflection_fraction", 0.15)),
         )
 
         background = fit_local_background(experimental_image, rois_state)
         sampled = sample_tiles(
             active,
-            temperature=float(cfg.get('sampling_temperature', 1.0)),
-            explore_fraction=float(cfg.get('explore_fraction', 0.15)),
+            temperature=float(cfg.get("sampling_temperature", 1.0)),
+            explore_fraction=float(cfg.get("explore_fraction", 0.15)),
         )
 
         residuals_list: List[np.ndarray] = []
@@ -10062,8 +8990,8 @@ def _stage_two_refinement(
                 model,
                 weights,
                 sampling_prob,
-                huber_delta=float(cfg.get('huber_delta', 2.5)),
-                mixture=float(cfg.get('outlier_mixture', 0.1)),
+                huber_delta=float(cfg.get("huber_delta", 2.5)),
+                mixture=float(cfg.get("outlier_mixture", 0.1)),
             )
             residuals_list.append(res)
 
@@ -10074,7 +9002,7 @@ def _stage_two_refinement(
     x0 = np.array([params[name] for name in var_names], dtype=float)
     initial_residual = np.asarray(residual(x0), dtype=np.float64)
     initial_cost = 0.5 * float(np.sum(initial_residual * initial_residual))
-    result = least_squares(residual, x0, max_nfev=int(cfg.get('max_nfev', 25)))
+    result = least_squares(residual, x0, max_nfev=int(cfg.get("max_nfev", 25)))
     updated_params = _update_params(params, var_names, result.x)
     final_sim, _ = simulator(updated_params)
     final_residual = np.asarray(result.fun, dtype=np.float64)
@@ -10086,7 +9014,7 @@ def _stage_two_refinement(
         updated_params,
         image_size,
         measured_dict=measured_dict,
-        threshold=float(cfg.get('roi_refresh_threshold', 1.0)),
+        threshold=float(cfg.get("roi_refresh_threshold", 1.0)),
     )
     result.initial_cost = float(initial_cost)
     result.final_cost = float(final_cost)
@@ -10120,12 +9048,12 @@ def _stage_three_refinement(
         var_names,
         rois,
         simulator,
-        downsample_factor=int(cfg.get('downsample_factor', 1)),
-        percentile=float(cfg.get('percentile', 85.0)),
-        huber_percentile=float(cfg.get('huber_percentile', 98.0)),
-        per_reflection_quota=int(cfg.get('per_reflection_quota', 400)),
-        off_tube_fraction=float(cfg.get('off_tube_fraction', 0.1)),
-        normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
+        downsample_factor=int(cfg.get("downsample_factor", 1)),
+        percentile=float(cfg.get("percentile", 85.0)),
+        huber_percentile=float(cfg.get("huber_percentile", 98.0)),
+        per_reflection_quota=int(cfg.get("per_reflection_quota", 400)),
+        off_tube_fraction=float(cfg.get("off_tube_fraction", 0.1)),
+        normalize_per_roi=bool(cfg.get("equal_peak_weights", False)),
     )
 
     rois_state = rois
@@ -10141,7 +9069,7 @@ def _stage_three_refinement(
             trial,
             image_size,
             measured_dict=measured_dict,
-            threshold=float(cfg.get('roi_refresh_threshold', 0.5)),
+            threshold=float(cfg.get("roi_refresh_threshold", 0.5)),
         )
 
         compute_sensitivity_weights(
@@ -10150,30 +9078,30 @@ def _stage_three_refinement(
             var_names,
             rois_state,
             simulator,
-            downsample_factor=int(cfg.get('downsample_factor', 1)),
-            percentile=float(cfg.get('percentile', 85.0)),
-            huber_percentile=float(cfg.get('huber_percentile', 98.0)),
-            per_reflection_quota=int(cfg.get('per_reflection_quota', 400)),
-            off_tube_fraction=float(cfg.get('off_tube_fraction', 0.1)),
-            normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
+            downsample_factor=int(cfg.get("downsample_factor", 1)),
+            percentile=float(cfg.get("percentile", 85.0)),
+            huber_percentile=float(cfg.get("huber_percentile", 98.0)),
+            per_reflection_quota=int(cfg.get("per_reflection_quota", 400)),
+            off_tube_fraction=float(cfg.get("off_tube_fraction", 0.1)),
+            normalize_per_roi=bool(cfg.get("equal_peak_weights", False)),
         )
 
         max_reflections = (
             len(rois_state)
-            if bool(cfg.get('equal_peak_weights', False))
-            else int(cfg.get('max_reflections', len(rois_state)))
+            if bool(cfg.get("equal_peak_weights", False))
+            else int(cfg.get("max_reflections", len(rois_state)))
         )
         active = _select_active_reflections(
             rois_state,
             max_reflections=max(1, int(max_reflections)),
-            random_fraction=float(cfg.get('random_reflection_fraction', 0.1)),
+            random_fraction=float(cfg.get("random_reflection_fraction", 0.1)),
         )
 
         background = fit_local_background(experimental_image, rois_state)
         sampled = sample_tiles(
             active,
-            temperature=float(cfg.get('sampling_temperature', 0.7)),
-            explore_fraction=float(cfg.get('explore_fraction', 0.1)),
+            temperature=float(cfg.get("sampling_temperature", 0.7)),
+            explore_fraction=float(cfg.get("explore_fraction", 0.1)),
         )
 
         residuals_list: List[np.ndarray] = []
@@ -10189,8 +9117,8 @@ def _stage_three_refinement(
                 model,
                 weights,
                 sampling_prob,
-                huber_delta=float(cfg.get('huber_delta', 2.0)),
-                mixture=float(cfg.get('outlier_mixture', 0.05)),
+                huber_delta=float(cfg.get("huber_delta", 2.0)),
+                mixture=float(cfg.get("outlier_mixture", 0.05)),
             )
             residuals_list.append(res)
 
@@ -10199,7 +9127,7 @@ def _stage_three_refinement(
         return np.concatenate(residuals_list)
 
     x0 = np.array([params[name] for name in var_names], dtype=float)
-    result = least_squares(residual, x0, max_nfev=int(cfg.get('max_nfev', 35)))
+    result = least_squares(residual, x0, max_nfev=int(cfg.get("max_nfev", 35)))
     updated_params = _update_params(params, var_names, result.x)
     final_sim, _ = simulator(updated_params)
     return updated_params, result, final_sim, residual
@@ -10219,14 +9147,22 @@ def iterative_refinement(
     """Run the multi-stage refinement described in the manuscript."""
 
     if var_names is None:
-        var_names = ('zb', 'zs', 'theta_initial', 'chi')
+        var_names = ("zb", "zs", "theta_initial", "chi")
     var_names = list(var_names)
 
     measured_dict = build_measured_dict(measured_peaks or [])
 
     cache_keys = [
-        'gamma', 'Gamma', 'corto_detector', 'theta_initial',
-        'zs', 'zb', 'chi', 'a', 'c', 'center'
+        "gamma",
+        "Gamma",
+        "corto_detector",
+        "theta_initial",
+        "zs",
+        "zb",
+        "chi",
+        "a",
+        "c",
+        "center",
     ]
     cache = SimulationCache(cache_keys)
 
@@ -10236,40 +9172,40 @@ def iterative_refinement(
         return _simulate_with_cache(merged, miller, intensities, image_size, cache)
 
     config = config or {}
-    stage1_cfg = {'downsample_factor': 8, 'max_nfev': 20}
-    stage1_cfg.update(config.get('stage1', {}))
+    stage1_cfg = {"downsample_factor": 8, "max_nfev": 20}
+    stage1_cfg.update(config.get("stage1", {}))
     stage2_cfg = {
-        'downsample_factor': 4,
-        'percentile': 90.0,
-        'huber_percentile': 97.0,
-        'per_reflection_quota': 200,
-        'off_tube_fraction': 0.05,
-        'max_reflections': 12,
-        'random_reflection_fraction': 0.15,
-        'sampling_temperature': 1.0,
-        'explore_fraction': 0.15,
-        'huber_delta': 2.5,
-        'outlier_mixture': 0.1,
-        'max_nfev': 25,
-        'roi_refresh_threshold': 1.0,
+        "downsample_factor": 4,
+        "percentile": 90.0,
+        "huber_percentile": 97.0,
+        "per_reflection_quota": 200,
+        "off_tube_fraction": 0.05,
+        "max_reflections": 12,
+        "random_reflection_fraction": 0.15,
+        "sampling_temperature": 1.0,
+        "explore_fraction": 0.15,
+        "huber_delta": 2.5,
+        "outlier_mixture": 0.1,
+        "max_nfev": 25,
+        "roi_refresh_threshold": 1.0,
     }
-    stage2_cfg.update(config.get('stage2', {}))
+    stage2_cfg.update(config.get("stage2", {}))
     stage3_cfg = {
-        'downsample_factor': 1,
-        'percentile': 85.0,
-        'huber_percentile': 98.0,
-        'per_reflection_quota': 400,
-        'off_tube_fraction': 0.1,
-        'max_reflections': len(miller),
-        'random_reflection_fraction': 0.1,
-        'sampling_temperature': 0.7,
-        'explore_fraction': 0.1,
-        'huber_delta': 2.0,
-        'outlier_mixture': 0.05,
-        'max_nfev': 35,
-        'roi_refresh_threshold': 0.5,
+        "downsample_factor": 1,
+        "percentile": 85.0,
+        "huber_percentile": 98.0,
+        "per_reflection_quota": 400,
+        "off_tube_fraction": 0.1,
+        "max_reflections": len(miller),
+        "random_reflection_fraction": 0.1,
+        "sampling_temperature": 0.7,
+        "explore_fraction": 0.1,
+        "huber_delta": 2.0,
+        "outlier_mixture": 0.05,
+        "max_nfev": 35,
+        "roi_refresh_threshold": 0.5,
     }
-    stage3_cfg.update(config.get('stage3', {}))
+    stage3_cfg.update(config.get("stage3", {}))
 
     history: List[Dict[str, float]] = []
     stage_summaries: List[Dict[str, float]] = []
@@ -10280,15 +9216,17 @@ def iterative_refinement(
         current_params,
         var_names,
         simulator,
-        downsample_factor=stage1_cfg['downsample_factor'],
-        max_nfev=stage1_cfg['max_nfev'],
+        downsample_factor=stage1_cfg["downsample_factor"],
+        max_nfev=stage1_cfg["max_nfev"],
     )
     history.append({name: current_params[name] for name in var_names})
-    stage_summaries.append({
-        'stage': 'level1',
-        'cost': float(np.sum(stage1_result.fun ** 2)),
-        'nfev': stage1_result.nfev,
-    })
+    stage_summaries.append(
+        {
+            "stage": "level1",
+            "cost": float(np.sum(stage1_result.fun**2)),
+            "nfev": stage1_result.nfev,
+        }
+    )
 
     current_params, stage2_result, rois, stage2_sim, stage2_residual = _stage_two_refinement(
         experimental_image,
@@ -10302,11 +9240,13 @@ def iterative_refinement(
         cfg=stage2_cfg,
     )
     history.append({name: current_params[name] for name in var_names})
-    stage_summaries.append({
-        'stage': 'level2',
-        'cost': float(np.sum(stage2_result.fun ** 2)),
-        'nfev': stage2_result.nfev,
-    })
+    stage_summaries.append(
+        {
+            "stage": "level2",
+            "cost": float(np.sum(stage2_result.fun**2)),
+            "nfev": stage2_result.nfev,
+        }
+    )
 
     current_params, stage3_result, stage3_sim, stage3_residual = _stage_three_refinement(
         experimental_image,
@@ -10321,11 +9261,13 @@ def iterative_refinement(
         cfg=stage3_cfg,
     )
     history.append({name: current_params[name] for name in var_names})
-    stage_summaries.append({
-        'stage': 'level3',
-        'cost': float(np.sum(stage3_result.fun ** 2)),
-        'nfev': stage3_result.nfev,
-    })
+    stage_summaries.append(
+        {
+            "stage": "level3",
+            "cost": float(np.sum(stage3_result.fun**2)),
+            "nfev": stage3_result.nfev,
+        }
+    )
 
     final_residual = stage3_residual(np.array([current_params[name] for name in var_names]))
 
@@ -10333,7 +9275,9 @@ def iterative_refinement(
         x=np.array([current_params[name] for name in var_names], dtype=float),
         fun=final_residual,
         success=bool(stage1_result.success and stage2_result.success and stage3_result.success),
-        message='; '.join(filter(None, [stage1_result.message, stage2_result.message, stage3_result.message])),
+        message="; ".join(
+            filter(None, [stage1_result.message, stage2_result.message, stage3_result.message])
+        ),
         best_params=dict(current_params),
         history=history,
         stage_summaries=stage_summaries,
@@ -10394,7 +9338,12 @@ def _measured_source_indices(
     """Return the stored hit-table indices for a measured entry when present."""
 
     try:
-        table_idx = int(entry.get("source_table_index"))  # type: ignore[arg-type]
+        table_idx = int(
+            entry.get(
+                "source_reflection_index",
+                entry.get("source_table_index"),
+            )
+        )  # type: ignore[arg-type]
         row_idx = int(entry.get("source_row_index"))  # type: ignore[arg-type]
     except Exception:
         return None
@@ -10414,9 +9363,7 @@ def _resolve_fixed_source_matches(
     """Resolve measured peaks back to their original simulated hit-table rows."""
 
     filtered_rows_cache: Dict[int, List[np.ndarray]] = {}
-    resolved: List[
-        Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]
-    ] = []
+    resolved: List[Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]] = []
     fallback_entries: List[Dict[str, object]] = []
     resolution_lookup: Dict[int, Dict[str, object]] = {}
     used_source_keys: set[Tuple[int, int]] = set()
@@ -10436,9 +9383,12 @@ def _resolve_fixed_source_matches(
             "match_input_index": int(match_input_index),
             "overlay_match_index": int(overlay_match_index),
             "label": str(entry.get("label", "")),
-            "hkl": tuple(entry.get("hkl", ())) if isinstance(entry.get("hkl"), tuple) else entry.get("hkl"),
+            "hkl": tuple(entry.get("hkl", ()))
+            if isinstance(entry.get("hkl"), tuple)
+            else entry.get("hkl"),
             "q_group_key": entry.get("q_group_key"),
             "source_table_index": entry.get("source_table_index"),
+            "source_reflection_index": entry.get("source_reflection_index"),
             "source_row_index": entry.get("source_row_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
@@ -10551,10 +9501,12 @@ def _collect_geometry_fit_simulated_candidates(
         if measured_hkls is not None and hkl_key not in measured_hkls:
             continue
         try:
-            _, x0, y0, _, x1, y1 = max_positions[table_idx]
+            i0, x0, y0, i1, x1, y1 = max_positions[table_idx]
         except Exception:
             continue
-        for peak_index, (col, row) in enumerate(((x0, y0), (x1, y1))):
+        for peak_index, (intensity, col, row) in enumerate(((i0, x0, y0), (i1, x1, y1))):
+            if not np.isfinite(intensity) or float(intensity) <= 0.0:
+                continue
             if not (np.isfinite(col) and np.isfinite(row)):
                 continue
             simulated_by_hkl.setdefault(hkl_key, []).append(
@@ -10563,6 +9515,7 @@ def _collect_geometry_fit_simulated_candidates(
                     "simulated_x": float(col),
                     "simulated_y": float(row),
                     "source_table_index": int(table_idx),
+                    "source_reflection_index": int(table_idx),
                     "source_peak_index": int(peak_index),
                 }
             )
@@ -10611,7 +9564,12 @@ def _geometry_fit_correspondence_simulated_point(
     """Resolve one frozen correspondence back to the current simulated point."""
 
     try:
-        table_idx = int(correspondence.get("source_table_index", -1))
+        table_idx = int(
+            correspondence.get(
+                "source_reflection_index",
+                correspondence.get("source_table_index", -1),
+            )
+        )
     except Exception:
         table_idx = -1
     if table_idx < 0:
@@ -10643,9 +9601,19 @@ def _geometry_fit_correspondence_simulated_point(
     except Exception:
         peak_index = -1
     if peak_index == 0:
+        if (
+            not np.isfinite(max_positions[table_idx, 0])
+            or float(max_positions[table_idx, 0]) <= 0.0
+        ):
+            return None, "missing_source_peak"
         sim_col = float(max_positions[table_idx, 1])
         sim_row = float(max_positions[table_idx, 2])
     elif peak_index == 1:
+        if (
+            not np.isfinite(max_positions[table_idx, 3])
+            or float(max_positions[table_idx, 3]) <= 0.0
+        ):
+            return None, "missing_source_peak"
         sim_col = float(max_positions[table_idx, 4])
         sim_row = float(max_positions[table_idx, 5])
     else:
@@ -10743,28 +9711,25 @@ def _detector_pixels_to_fit_space(
     x_det = (cols_arr[valid_mask] - centre_col) * float(pixel_size)
     y_det = (centre_row - rows_arr[valid_mask]) * float(pixel_size)
     world_points = (
-        detector_pos[None, :]
-        + x_det[:, None] * e1_det[None, :]
-        + y_det[:, None] * e2_det[None, :]
+        detector_pos[None, :] + x_det[:, None] * e1_det[None, :] + y_det[:, None] * e2_det[None, :]
     )
-    radial = np.hypot(world_points[:, 0], world_points[:, 1])
-    two_theta_valid = np.degrees(np.arctan2(world_points[:, 2], radial))
-    phi_valid = np.degrees(np.arctan2(world_points[:, 0], world_points[:, 1]))
+    radial = np.hypot(world_points[:, 0], world_points[:, 2])
+    two_theta_valid = np.degrees(np.arctan2(radial, world_points[:, 1]))
+    phi_valid = np.degrees(np.arctan2(world_points[:, 0], world_points[:, 2]))
+    phi_valid = (phi_valid + 180.0) % 360.0 - 180.0
 
     two_theta[valid_mask] = two_theta_valid
     phi[valid_mask] = phi_valid
     return two_theta, phi
 
 
-def _measured_detector_anchor(
+def _detector_anchor_from_entry(
     entry: Mapping[str, object],
+    *anchor_keys: tuple[str, str, str],
 ) -> Tuple[Optional[Tuple[float, float]], str]:
-    """Return one measured detector anchor in native/oriented detector pixels."""
+    """Return one finite detector anchor from the requested entry key pairs."""
 
-    for x_key, y_key, reason in (
-        ("detector_x", "detector_y", "resolved_detector_anchor"),
-        ("x", "y", "resolved_display_anchor"),
-    ):
+    for x_key, y_key, reason in anchor_keys:
         try:
             col = float(entry.get(x_key, np.nan))
             row = float(entry.get(y_key, np.nan))
@@ -10773,6 +9738,18 @@ def _measured_detector_anchor(
         if np.isfinite(col) and np.isfinite(row):
             return (float(col), float(row)), reason
     return None, "missing_detector_anchor"
+
+
+def _measured_detector_anchor(
+    entry: Mapping[str, object],
+) -> Tuple[Optional[Tuple[float, float]], str]:
+    """Return one measured detector anchor in native/oriented detector pixels."""
+
+    return _detector_anchor_from_entry(
+        entry,
+        ("detector_x", "detector_y", "resolved_detector_anchor"),
+        ("x", "y", "resolved_display_anchor"),
+    )
 
 
 def _wavelength_scalar_from_local(
@@ -10883,36 +9860,18 @@ def _fit_space_provenance_summary(
     adjustment_values = adjustment_values[np.isfinite(adjustment_values)]
     abs_adjustments = np.abs(adjustment_values)
     adjustment_count = int(abs_adjustments.size)
-    total_abs_deg = (
-        float(np.sum(abs_adjustments))
-        if adjustment_count > 0
-        else 0.0
-    )
-    max_abs_deg = (
-        float(np.max(abs_adjustments))
-        if adjustment_count > 0
-        else float("nan")
-    )
+    total_abs_deg = float(np.sum(abs_adjustments)) if adjustment_count > 0 else 0.0
+    max_abs_deg = float(np.max(abs_adjustments)) if adjustment_count > 0 else float("nan")
     mean_abs_deg = (
-        float(total_abs_deg / float(adjustment_count))
-        if adjustment_count > 0
-        else float("nan")
+        float(total_abs_deg / float(adjustment_count)) if adjustment_count > 0 else float("nan")
     )
     return {
         "fit_space_pixel_size_source": str(provenance.get("source", "fallback")),
         "fit_space_pixel_size_value": float(provenance.get("value", np.nan)),
-        "fit_space_pixel_size_raw": float(
-            provenance.get("raw_pixel_size", np.nan)
-        ),
-        "fit_space_pixel_size_m_raw": float(
-            provenance.get("raw_pixel_size_m", np.nan)
-        ),
-        "fit_space_debye_x_raw": float(
-            provenance.get("raw_debye_x", np.nan)
-        ),
-        "fit_space_debye_y_raw": float(
-            provenance.get("raw_debye_y", np.nan)
-        ),
+        "fit_space_pixel_size_raw": float(provenance.get("raw_pixel_size", np.nan)),
+        "fit_space_pixel_size_m_raw": float(provenance.get("raw_pixel_size_m", np.nan)),
+        "fit_space_debye_x_raw": float(provenance.get("raw_debye_x", np.nan)),
+        "fit_space_debye_y_raw": float(provenance.get("raw_debye_y", np.nan)),
         "fit_space_anchor_count_cached": int(cached_anchor_count),
         "fit_space_anchor_count_detector": int(detector_anchor_count),
         "fit_space_anchor_source_counts": {
@@ -10966,95 +9925,107 @@ def _measured_fit_space_anchor(
         base_two_theta = float("nan")
         base_phi = float("nan")
 
-    if np.isfinite(base_two_theta) and np.isfinite(base_phi):
+    try:
+        reference_two_theta = float(entry.get("background_reference_two_theta_deg", np.nan))
+    except Exception:
+        reference_two_theta = float("nan")
+    if not np.isfinite(reference_two_theta):
+        try:
+            ref_a = float(entry.get("background_reference_a", np.nan))
+        except Exception:
+            ref_a = float("nan")
+        try:
+            ref_c = float(entry.get("background_reference_c", np.nan))
+        except Exception:
+            ref_c = float("nan")
+        try:
+            ref_lambda = float(entry.get("background_reference_lambda", np.nan))
+        except Exception:
+            ref_lambda = float("nan")
+        theoretical_ref = _entry_theoretical_two_theta_deg(
+            entry,
+            a_lattice=float(ref_a),
+            c_lattice=float(ref_c),
+            wavelength=float(ref_lambda),
+        )
+        if theoretical_ref is not None:
+            reference_two_theta = float(theoretical_ref)
+    if np.isfinite(reference_two_theta):
+        metadata["reference_two_theta_deg"] = float(reference_two_theta)
+    if a_lattice is not None and c_lattice is not None and wavelength is not None:
+        current_theoretical = _entry_theoretical_two_theta_deg(
+            entry,
+            a_lattice=float(a_lattice),
+            c_lattice=float(c_lattice),
+            wavelength=float(wavelength),
+        )
+        if current_theoretical is not None and np.isfinite(current_theoretical):
+            metadata["current_theoretical_two_theta_deg"] = float(current_theoretical)
+
+    if (
+        bool(entry.get("fit_space_anchor_override", False))
+        and np.isfinite(base_two_theta)
+        and np.isfinite(base_phi)
+    ):
         metadata["anchor_source"] = "cached_fit_space_anchor"
         metadata["cached_two_theta_deg"] = float(base_two_theta)
         metadata["cached_phi_deg"] = float(base_phi)
-        adjusted_two_theta = float(base_two_theta)
-        try:
-            reference_two_theta = float(
-                entry.get("background_reference_two_theta_deg", np.nan)
-            )
-        except Exception:
-            reference_two_theta = float("nan")
-        if not np.isfinite(reference_two_theta):
-            try:
-                ref_a = float(entry.get("background_reference_a", np.nan))
-            except Exception:
-                ref_a = float("nan")
-            try:
-                ref_c = float(entry.get("background_reference_c", np.nan))
-            except Exception:
-                ref_c = float("nan")
-            try:
-                ref_lambda = float(entry.get("background_reference_lambda", np.nan))
-            except Exception:
-                ref_lambda = float("nan")
-            theoretical_ref = _entry_theoretical_two_theta_deg(
-                entry,
-                a_lattice=float(ref_a),
-                c_lattice=float(ref_c),
-                wavelength=float(ref_lambda),
-            )
-            if theoretical_ref is not None:
-                reference_two_theta = float(theoretical_ref)
-        if np.isfinite(reference_two_theta):
-            metadata["reference_two_theta_deg"] = float(reference_two_theta)
-        if (
-            np.isfinite(reference_two_theta)
-            and a_lattice is not None
-            and c_lattice is not None
-            and wavelength is not None
-        ):
-            current_theoretical = _entry_theoretical_two_theta_deg(
-                entry,
-                a_lattice=float(a_lattice),
-                c_lattice=float(c_lattice),
-                wavelength=float(wavelength),
-            )
-            if current_theoretical is not None and np.isfinite(current_theoretical):
-                metadata["current_theoretical_two_theta_deg"] = float(
-                    current_theoretical
-                )
-                adjusted_two_theta = float(
-                    base_two_theta + (float(current_theoretical) - float(reference_two_theta))
-                )
-        metadata["two_theta_adjustment_deg"] = float(
-            adjusted_two_theta - float(base_two_theta)
-        )
+        metadata["two_theta_adjustment_deg"] = 0.0
         return (
-            (float(adjusted_two_theta), float(base_phi)),
+            (float(base_two_theta), float(base_phi)),
             "cached_fit_space_anchor",
             metadata,
         )
 
-    measured_anchor, measured_reason = _measured_detector_anchor(entry)
-    if measured_anchor is None:
+    measured_anchor, measured_reason = _detector_anchor_from_entry(
+        entry,
+        ("detector_x", "detector_y", "detector_fit_space_anchor"),
+        ("x", "y", "display_fit_space_anchor"),
+        (
+            "background_detector_x",
+            "background_detector_y",
+            "background_detector_fit_space_anchor",
+        ),
+    )
+    if measured_anchor is not None:
+        two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
+            np.array([measured_anchor[0]], dtype=np.float64),
+            np.array([measured_anchor[1]], dtype=np.float64),
+            center=center,
+            detector_distance=float(detector_distance),
+            pixel_size=float(pixel_size),
+            gamma_deg=float(gamma_deg),
+            Gamma_deg=float(Gamma_deg),
+        )
+        if (
+            two_theta_arr.size < 1
+            or phi_arr.size < 1
+            or not np.isfinite(two_theta_arr[0])
+            or not np.isfinite(phi_arr[0])
+        ):
+            metadata["anchor_source"] = "invalid_fit_space_anchor"
+            return None, "invalid_fit_space_anchor", metadata
         metadata["anchor_source"] = str(measured_reason)
-        return None, measured_reason, metadata
-    two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
-        np.array([measured_anchor[0]], dtype=np.float64),
-        np.array([measured_anchor[1]], dtype=np.float64),
-        center=center,
-        detector_distance=float(detector_distance),
-        pixel_size=float(pixel_size),
-        gamma_deg=float(gamma_deg),
-        Gamma_deg=float(Gamma_deg),
-    )
-    if (
-        two_theta_arr.size < 1
-        or phi_arr.size < 1
-        or not np.isfinite(two_theta_arr[0])
-        or not np.isfinite(phi_arr[0])
-    ):
-        metadata["anchor_source"] = "invalid_fit_space_anchor"
-        return None, "invalid_fit_space_anchor", metadata
-    metadata["anchor_source"] = "detector_fit_space_anchor"
-    return (
-        (float(two_theta_arr[0]), float(phi_arr[0])),
-        "detector_fit_space_anchor",
-        metadata,
-    )
+        metadata["two_theta_adjustment_deg"] = 0.0
+        return (
+            (float(two_theta_arr[0]), float(phi_arr[0])),
+            str(measured_reason),
+            metadata,
+        )
+
+    if np.isfinite(base_two_theta) and np.isfinite(base_phi):
+        metadata["anchor_source"] = "cached_fit_space_anchor"
+        metadata["cached_two_theta_deg"] = float(base_two_theta)
+        metadata["cached_phi_deg"] = float(base_phi)
+        metadata["two_theta_adjustment_deg"] = 0.0
+        return (
+            (float(base_two_theta), float(base_phi)),
+            "cached_fit_space_anchor",
+            metadata,
+        )
+
+    metadata["anchor_source"] = str(measured_reason)
+    return None, measured_reason, metadata
 
 
 def _pixel_to_angles(
@@ -11081,29 +10052,21 @@ def _pixel_to_angles(
         Pixel size in metres.
     """
 
-    if center is None or len(center) < 2:
+    two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
+        np.array([col], dtype=np.float64),
+        np.array([row], dtype=np.float64),
+        center=center,
+        detector_distance=float(detector_distance),
+        pixel_size=float(pixel_size),
+    )
+    if (
+        two_theta_arr.size < 1
+        or phi_arr.size < 1
+        or not np.isfinite(two_theta_arr[0])
+        or not np.isfinite(phi_arr[0])
+    ):
         return None, None
-    if not np.isfinite(detector_distance) or detector_distance <= 0:
-        return None, None
-    if not np.isfinite(pixel_size) or pixel_size <= 0:
-        return None, None
-
-    try:
-        centre_row = float(center[0])
-        centre_col = float(center[1])
-    except (TypeError, ValueError, IndexError):
-        return None, None
-
-    if not (np.isfinite(col) and np.isfinite(row)):
-        return None, None
-
-    dx = (float(col) - centre_col) * pixel_size
-    dy = (centre_row - float(row)) * pixel_size
-    radius = math.hypot(dx, dy)
-
-    two_theta = math.degrees(math.atan2(radius, detector_distance))
-    phi = math.degrees(math.atan2(dx, dy))
-    return two_theta, phi
+    return float(two_theta_arr[0]), float(phi_arr[0])
 
 
 def _angular_difference_deg(a: float, b: float) -> float:
@@ -11158,39 +10121,59 @@ def simulate_and_compare_hkl(
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
     # Unpack geometry & mosaic parameters
-    a = params['a']; c = params['c']
-    dist = params['corto_detector']
-    gamma = params['gamma']; Gamma = params['Gamma']
-    chi   = params['chi']; psi = params.get('psi', 0.0); psi_z = params.get('psi_z', 0.0)
-    zs    = params['zs']; zb    = params['zb']
-    debye_x = params['debye_x']; debye_y = params['debye_y']
-    n2    = params['n2']
-    center = params['center']
-    theta_initial = params['theta_initial']
-    cor_angle = params.get('cor_angle', 0.0)
+    a = params["a"]
+    c = params["c"]
+    dist = params["corto_detector"]
+    gamma = params["gamma"]
+    Gamma = params["Gamma"]
+    chi = params["chi"]
+    psi = params.get("psi", 0.0)
+    psi_z = params.get("psi_z", 0.0)
+    zs = params["zs"]
+    zb = params["zb"]
+    debye_x = params["debye_x"]
+    debye_y = params["debye_y"]
+    n2 = params["n2"]
+    center = params["center"]
+    theta_initial = params["theta_initial"]
+    cor_angle = params.get("cor_angle", 0.0)
 
-    mosaic = params['mosaic_params']
-    wavelength_array = mosaic.get('wavelength_array')
+    mosaic = params["mosaic_params"]
+    wavelength_array = mosaic.get("wavelength_array")
     if wavelength_array is None:
-        wavelength_array = mosaic.get('wavelength_i_array')
+        wavelength_array = mosaic.get("wavelength_i_array")
 
     # Full-pattern simulation
     updated_image, hit_tables, *_ = _process_peaks_parallel_safe(
-        sim_miller, sim_intensities, image_size,
-        a, c, wavelength_array,
-        sim_buffer, dist,
-        gamma, Gamma, chi, psi, psi_z,
-        zs, zb, n2,
-        mosaic['beam_x_array'],
-        mosaic['beam_y_array'],
-        mosaic['theta_array'],
-        mosaic['phi_array'],
-        mosaic['sigma_mosaic_deg'],
-        mosaic['gamma_mosaic_deg'],
-        mosaic['eta'],
+        sim_miller,
+        sim_intensities,
+        image_size,
+        a,
+        c,
         wavelength_array,
-        debye_x, debye_y,
-        center, theta_initial, cor_angle,
+        sim_buffer,
+        dist,
+        gamma,
+        Gamma,
+        chi,
+        psi,
+        psi_z,
+        zs,
+        zb,
+        n2,
+        mosaic["beam_x_array"],
+        mosaic["beam_y_array"],
+        mosaic["theta_array"],
+        mosaic["phi_array"],
+        mosaic["sigma_mosaic_deg"],
+        mosaic["gamma_mosaic_deg"],
+        mosaic["eta"],
+        wavelength_array,
+        debye_x,
+        debye_y,
+        center,
+        theta_initial,
+        cor_angle,
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
@@ -11205,9 +10188,9 @@ def simulate_and_compare_hkl(
     sim_millers: list[tuple[int, int, int]] = []
     meas_millers: list[tuple[int, int, int]] = []
 
-    detector_distance = float(params.get('corto_detector', 0.0))
+    detector_distance = float(params.get("corto_detector", 0.0))
     pixel_size = _estimate_pixel_size(params)
-    centre = params.get('center')
+    centre = params.get("center")
 
     def _match_points(
         simulated_points: list[tuple[float, float]],
@@ -11251,12 +10234,7 @@ def simulate_and_compare_hkl(
         meas_two_theta, meas_phi = _pixel_to_angles(
             meas_center_col, meas_center_row, centre, detector_distance, pixel_size
         )
-        if (
-            sim_two_theta is None
-            or sim_phi is None
-            or meas_two_theta is None
-            or meas_phi is None
-        ):
+        if sim_two_theta is None or sim_phi is None or meas_two_theta is None or meas_phi is None:
             continue
 
         radial_diff = abs(sim_two_theta - meas_two_theta)
@@ -11337,7 +10315,12 @@ def simulate_and_compare_hkl(
             meas_two_theta, meas_phi = _pixel_to_angles(
                 meas_center_col, meas_center_row, centre, detector_distance, pixel_size
             )
-            if sim_two_theta is None or sim_phi is None or meas_two_theta is None or meas_phi is None:
+            if (
+                sim_two_theta is None
+                or sim_phi is None
+                or meas_two_theta is None
+                or meas_phi is None
+            ):
                 continue
 
             radial_diff = abs(sim_two_theta - meas_two_theta)
@@ -11361,34 +10344,55 @@ def simulate_and_compare_hkl(
 
 
 def compute_peak_position_error_geometry_local(
-    gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c,
-    center_x, center_y, measured_peaks,
-    miller, intensities, image_size, mosaic_params, n2,
-    psi, psi_z, debye_x, debye_y, wavelength, pixel_tol=np.inf, optics_mode=0
+    gamma,
+    Gamma,
+    dist,
+    theta_initial,
+    cor_angle,
+    zs,
+    zb,
+    chi,
+    a,
+    c,
+    center_x,
+    center_y,
+    measured_peaks,
+    miller,
+    intensities,
+    image_size,
+    mosaic_params,
+    n2,
+    psi,
+    psi_z,
+    debye_x,
+    debye_y,
+    wavelength,
+    pixel_tol=np.inf,
+    optics_mode=0,
 ):
     """
     Objective for DE: returns the 1D array of distances for all matched peaks.
     """
     params = {
-        'gamma': gamma,
-        'Gamma': Gamma,
-        'corto_detector': dist,
-        'theta_initial': theta_initial,
-        'cor_angle': cor_angle,
-        'zs': zs,
-        'zb': zb,
-        'chi': chi,
-        'a': a,
-        'c': c,
-        'center': (center_x, center_y),
-        'lambda': wavelength,
-        'n2': n2,
-        'psi': psi,
-        'psi_z': psi_z,
-        'debye_x': debye_x,
-        'debye_y': debye_y,
-        'mosaic_params': mosaic_params,
-        'optics_mode': int(optics_mode),
+        "gamma": gamma,
+        "Gamma": Gamma,
+        "corto_detector": dist,
+        "theta_initial": theta_initial,
+        "cor_angle": cor_angle,
+        "zs": zs,
+        "zb": zb,
+        "chi": chi,
+        "a": a,
+        "c": c,
+        "center": (center_x, center_y),
+        "lambda": wavelength,
+        "n2": n2,
+        "psi": psi,
+        "psi_z": psi_z,
+        "debye_x": debye_x,
+        "debye_y": debye_y,
+        "mosaic_params": mosaic_params,
+        "optics_mode": int(optics_mode),
     }
     D, *_ = simulate_and_compare_hkl(
         miller,
@@ -11402,9 +10406,15 @@ def compute_peak_position_error_geometry_local(
 
 
 def fit_geometry_parameters(
-    miller, intensities, image_size,
-    params, measured_peaks, var_names, pixel_tol=np.inf,
-    *, experimental_image: Optional[np.ndarray] = None,
+    miller,
+    intensities,
+    image_size,
+    params,
+    measured_peaks,
+    var_names,
+    pixel_tol=np.inf,
+    *,
+    experimental_image: Optional[np.ndarray] = None,
     dataset_specs: Optional[Sequence[Dict[str, object]]] = None,
     candidate_param_names: Optional[Sequence[str]] = None,
     refinement_config: Optional[Dict[str, Dict[str, float]]] = None,
@@ -11440,9 +10450,7 @@ def fit_geometry_parameters(
     optimizer_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
         optimizer_cfg = (
-            refinement_config.get("optimizer")
-            or refinement_config.get("solver", {})
-            or {}
+            refinement_config.get("optimizer") or refinement_config.get("solver", {}) or {}
         )
     if not isinstance(optimizer_cfg, dict):
         optimizer_cfg = {}
@@ -11496,9 +10504,7 @@ def fit_geometry_parameters(
         )
     )
 
-    solver_loss = str(
-        solver_cfg.get("loss", "linear")
-    ).strip().lower()
+    solver_loss = str(solver_cfg.get("loss", "linear")).strip().lower()
     if solver_loss not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
         solver_loss = "linear"
 
@@ -11524,18 +10530,11 @@ def fit_geometry_parameters(
     )
     full_beam_polish_max_nfev = int(full_beam_polish_cfg.get("max_nfev", 40))
     full_beam_polish_max_nfev = max(5, full_beam_polish_max_nfev)
-    full_beam_polish_match_radius_px = float(
-        full_beam_polish_cfg.get("match_radius_px", 24.0)
-    )
-    if (
-        not np.isfinite(full_beam_polish_match_radius_px)
-        or full_beam_polish_match_radius_px <= 0.0
-    ):
+    full_beam_polish_match_radius_px = float(full_beam_polish_cfg.get("match_radius_px", 24.0))
+    if not np.isfinite(full_beam_polish_match_radius_px) or full_beam_polish_match_radius_px <= 0.0:
         full_beam_polish_match_radius_px = 24.0
 
-    solver_parallel_mode = str(
-        solver_cfg.get("parallel_mode", "auto")
-    ).strip().lower()
+    solver_parallel_mode = str(solver_cfg.get("parallel_mode", "auto")).strip().lower()
     if solver_parallel_mode in {"false", "none", "disabled"}:
         solver_parallel_mode = "off"
     if solver_parallel_mode not in {"auto", "off", "datasets", "restarts"}:
@@ -11561,27 +10560,40 @@ def fit_geometry_parameters(
     trusted_prior_fraction_of_span = float(
         seed_search_cfg.get("trusted_prior_fraction_of_span", 0.15)
     )
-    if (
-        not np.isfinite(trusted_prior_fraction_of_span)
-        or trusted_prior_fraction_of_span < 0.0
-    ):
+    if not np.isfinite(trusted_prior_fraction_of_span) or trusted_prior_fraction_of_span < 0.0:
         trusted_prior_fraction_of_span = 0.15
-    solver_restarts = max(seed_prescore_top_k, 1) if point_match_mode else seed_prescore_top_k
+    raw_solver_restarts = solver_cfg.get("restarts", None)
+    try:
+        requested_solver_restarts = (
+            None if raw_solver_restarts is None else int(raw_solver_restarts)
+        )
+    except Exception:
+        requested_solver_restarts = None
+    zero_seed_only_solver = bool(
+        requested_solver_restarts == 0 and bool(full_beam_polish_cfg.get("enabled", False))
+    )
+    if requested_solver_restarts is None:
+        solver_restarts = max(seed_prescore_top_k, 1) if point_match_mode else seed_prescore_top_k
+    else:
+        solver_restarts = max(int(requested_solver_restarts), 0)
+        if zero_seed_only_solver:
+            solver_restarts = 1
+            seed_prescore_top_k = 1
+            seed_n_global = 0
+            seed_n_jitter = 0
+    solver_restart_jitter = float(seed_search_cfg.get("restart_jitter", 0.15))
+    if not np.isfinite(solver_restart_jitter) or solver_restart_jitter < 0.0:
+        solver_restart_jitter = 0.15
+    restart_selection_tol = float(seed_search_cfg.get("restart_selection_tol", 1.0e-12))
+    if not np.isfinite(restart_selection_tol) or restart_selection_tol < 0.0:
+        restart_selection_tol = 1.0e-12
 
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
-    dynamic_point_geometry_fit = bool(
-        solver_cfg.get("dynamic_point_geometry_fit", False)
-    )
-    if (
-        manual_point_fit_mode
-        and point_match_mode
-        and manual_point_fit_has_cached_sources
-    ):
+    dynamic_point_geometry_fit = bool(solver_cfg.get("dynamic_point_geometry_fit", False))
+    if manual_point_fit_mode and point_match_mode and manual_point_fit_has_cached_sources:
         dynamic_point_geometry_fit = True
-    missing_pair_penalty_deg = float(
-        solver_cfg.get("missing_pair_penalty_deg", 5.0)
-    )
+    missing_pair_penalty_deg = float(solver_cfg.get("missing_pair_penalty_deg", 5.0))
     if not np.isfinite(missing_pair_penalty_deg) or missing_pair_penalty_deg < 0.0:
         missing_pair_penalty_deg = 5.0
     q_group_line_constraints_enabled = bool(
@@ -11590,14 +10602,10 @@ def fit_geometry_parameters(
             solver_cfg.get("q_group_line_constraints_enabled", manual_point_fit_mode),
         )
     )
-    q_group_line_angle_weight = float(
-        solver_cfg.get("q_group_line_angle_weight", 0.6)
-    )
+    q_group_line_angle_weight = float(solver_cfg.get("q_group_line_angle_weight", 0.6))
     if not np.isfinite(q_group_line_angle_weight) or q_group_line_angle_weight < 0.0:
         q_group_line_angle_weight = 0.6
-    q_group_line_offset_weight = float(
-        solver_cfg.get("q_group_line_offset_weight", 1.0)
-    )
+    q_group_line_offset_weight = float(solver_cfg.get("q_group_line_offset_weight", 1.0))
     if not np.isfinite(q_group_line_offset_weight) or q_group_line_offset_weight < 0.0:
         q_group_line_offset_weight = 1.0
     q_group_line_missing_penalty_scale = float(
@@ -11614,10 +10622,7 @@ def fit_geometry_parameters(
             6.0 if manual_point_fit_mode else 1.0,
         )
     )
-    if (
-        not np.isfinite(hk0_peak_priority_weight)
-        or hk0_peak_priority_weight < 1.0
-    ):
+    if not np.isfinite(hk0_peak_priority_weight) or hk0_peak_priority_weight < 1.0:
         hk0_peak_priority_weight = 1.0
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", False))
@@ -11654,21 +10659,12 @@ def fit_geometry_parameters(
     )
     if not point_match_mode:
         manual_fail_fast_enabled = False
-    manual_fail_fast_eval_window = int(
-        solver_cfg.get("manual_fail_fast_eval_window", 30)
-    )
+    manual_fail_fast_eval_window = int(solver_cfg.get("manual_fail_fast_eval_window", 30))
     manual_fail_fast_eval_window = max(5, manual_fail_fast_eval_window)
-    manual_fail_fast_probe_period = int(
-        solver_cfg.get("manual_fail_fast_probe_period", 10)
-    )
+    manual_fail_fast_probe_period = int(solver_cfg.get("manual_fail_fast_probe_period", 10))
     manual_fail_fast_probe_period = max(1, manual_fail_fast_probe_period)
-    manual_fail_fast_peak_rms_px = float(
-        solver_cfg.get("manual_fail_fast_peak_rms_px", 250.0)
-    )
-    if (
-        not np.isfinite(manual_fail_fast_peak_rms_px)
-        or manual_fail_fast_peak_rms_px <= 0.0
-    ):
+    manual_fail_fast_peak_rms_px = float(solver_cfg.get("manual_fail_fast_peak_rms_px", 250.0))
+    if not np.isfinite(manual_fail_fast_peak_rms_px) or manual_fail_fast_peak_rms_px <= 0.0:
         manual_fail_fast_peak_rms_px = 250.0
     manual_fail_fast_min_bound_parameters = int(
         solver_cfg.get("manual_fail_fast_min_bound_parameters", 2)
@@ -11679,9 +10675,7 @@ def fit_geometry_parameters(
     )
     staged_release_cfg_raw = solver_cfg.get("staged_release", {})
     if isinstance(staged_release_cfg_raw, bool):
-        staged_release_cfg: Dict[str, object] = {
-            "enabled": bool(staged_release_cfg_raw)
-        }
+        staged_release_cfg: Dict[str, object] = {"enabled": bool(staged_release_cfg_raw)}
     elif isinstance(staged_release_cfg_raw, dict):
         staged_release_cfg = dict(staged_release_cfg_raw)
     else:
@@ -11703,9 +10697,7 @@ def fit_geometry_parameters(
     staged_release_blocks_cfg = staged_release_cfg.get("blocks", None)
     reparameterize_cfg_raw = solver_cfg.get("reparameterize_pairs", {})
     if isinstance(reparameterize_cfg_raw, bool):
-        reparameterize_cfg: Dict[str, object] = {
-            "enabled": bool(reparameterize_cfg_raw)
-        }
+        reparameterize_cfg: Dict[str, object] = {"enabled": bool(reparameterize_cfg_raw)}
     elif isinstance(reparameterize_cfg_raw, dict):
         reparameterize_cfg = dict(reparameterize_cfg_raw)
     else:
@@ -11757,38 +10749,17 @@ def fit_geometry_parameters(
         ["lattice", "other"],
     ]
 
-    image_refinement_enabled = bool(
-        image_refinement_cfg.get("enabled", False)
-    )
-    ridge_refinement_enabled = bool(
-        ridge_refinement_cfg.get("enabled", False)
-    )
-    identifiability_enabled = bool(
-        identifiability_cfg.get("enabled", point_match_mode)
-    )
-    identifiability_fd_step_fraction = float(
-        identifiability_cfg.get("fd_step_fraction", 0.02)
-    )
-    if (
-        not np.isfinite(identifiability_fd_step_fraction)
-        or identifiability_fd_step_fraction <= 0.0
-    ):
+    image_refinement_enabled = bool(image_refinement_cfg.get("enabled", False))
+    ridge_refinement_enabled = bool(ridge_refinement_cfg.get("enabled", False))
+    identifiability_enabled = bool(identifiability_cfg.get("enabled", point_match_mode))
+    identifiability_fd_step_fraction = float(identifiability_cfg.get("fd_step_fraction", 0.02))
+    if not np.isfinite(identifiability_fd_step_fraction) or identifiability_fd_step_fraction <= 0.0:
         identifiability_fd_step_fraction = 0.02
-    identifiability_fd_min_step = float(
-        identifiability_cfg.get("fd_min_step", 1.0e-4)
-    )
-    if (
-        not np.isfinite(identifiability_fd_min_step)
-        or identifiability_fd_min_step <= 0.0
-    ):
+    identifiability_fd_min_step = float(identifiability_cfg.get("fd_min_step", 1.0e-4))
+    if not np.isfinite(identifiability_fd_min_step) or identifiability_fd_min_step <= 0.0:
         identifiability_fd_min_step = 1.0e-4
-    identifiability_condition_warn = float(
-        identifiability_cfg.get("condition_number_warn", 1.0e8)
-    )
-    if (
-        not np.isfinite(identifiability_condition_warn)
-        or identifiability_condition_warn <= 1.0
-    ):
+    identifiability_condition_warn = float(identifiability_cfg.get("condition_number_warn", 1.0e8))
+    if not np.isfinite(identifiability_condition_warn) or identifiability_condition_warn <= 1.0:
         identifiability_condition_warn = 1.0e8
     identifiability_top_peaks_per_parameter = int(
         identifiability_cfg.get("top_peaks_per_parameter", 3)
@@ -11797,13 +10768,8 @@ def fit_geometry_parameters(
         1,
         identifiability_top_peaks_per_parameter,
     )
-    identifiability_correlation_warn = float(
-        identifiability_cfg.get("correlation_warn", 0.95)
-    )
-    if (
-        not np.isfinite(identifiability_correlation_warn)
-        or identifiability_correlation_warn < 0.0
-    ):
+    identifiability_correlation_warn = float(identifiability_cfg.get("correlation_warn", 0.95))
+    if not np.isfinite(identifiability_correlation_warn) or identifiability_correlation_warn < 0.0:
         identifiability_correlation_warn = 0.95
     identifiability_correlation_warn = min(
         max(identifiability_correlation_warn, 0.0),
@@ -11812,44 +10778,28 @@ def fit_geometry_parameters(
     identifiability_weak_norm_ratio = float(
         identifiability_cfg.get("weak_column_norm_ratio", 1.0e-6)
     )
-    if (
-        not np.isfinite(identifiability_weak_norm_ratio)
-        or identifiability_weak_norm_ratio < 0.0
-    ):
+    if not np.isfinite(identifiability_weak_norm_ratio) or identifiability_weak_norm_ratio < 0.0:
         identifiability_weak_norm_ratio = 1.0e-6
-    identifiability_fd_abs_step_u = float(
-        identifiability_cfg.get("fd_abs_step_u", 1.0e-3)
-    )
-    if (
-        not np.isfinite(identifiability_fd_abs_step_u)
-        or identifiability_fd_abs_step_u <= 0.0
-    ):
+    identifiability_fd_abs_step_u = float(identifiability_cfg.get("fd_abs_step_u", 1.0e-3))
+    if not np.isfinite(identifiability_fd_abs_step_u) or identifiability_fd_abs_step_u <= 0.0:
         identifiability_fd_abs_step_u = 1.0e-3
     identifiability_sv_rcond = float(identifiability_cfg.get("sv_rcond", 1.0e-8))
     if not np.isfinite(identifiability_sv_rcond) or identifiability_sv_rcond <= 0.0:
         identifiability_sv_rcond = 1.0e-8
-    identifiability_weak_singular_rel = float(
-        identifiability_cfg.get("weak_singular_rel", 1.0e-3)
-    )
+    identifiability_weak_singular_rel = float(identifiability_cfg.get("weak_singular_rel", 1.0e-3))
     if (
         not np.isfinite(identifiability_weak_singular_rel)
         or identifiability_weak_singular_rel <= 0.0
     ):
         identifiability_weak_singular_rel = 1.0e-3
-    identifiability_combo_thresh = float(
-        identifiability_cfg.get("combo_thresh", 0.2)
-    )
+    identifiability_combo_thresh = float(identifiability_cfg.get("combo_thresh", 0.2))
     if not np.isfinite(identifiability_combo_thresh) or identifiability_combo_thresh <= 0.0:
         identifiability_combo_thresh = 0.2
-    identifiability_block_corr_abs = float(
-        identifiability_cfg.get("block_corr_abs", 0.90)
-    )
+    identifiability_block_corr_abs = float(identifiability_cfg.get("block_corr_abs", 0.90))
     if not np.isfinite(identifiability_block_corr_abs) or identifiability_block_corr_abs < 0.0:
         identifiability_block_corr_abs = 0.90
     identifiability_block_corr_abs = min(max(identifiability_block_corr_abs, 0.0), 0.999999)
-    identifiability_weak_column_rel = float(
-        identifiability_cfg.get("weak_column_rel", 0.10)
-    )
+    identifiability_weak_column_rel = float(identifiability_cfg.get("weak_column_rel", 0.10))
     if not np.isfinite(identifiability_weak_column_rel) or identifiability_weak_column_rel < 0.0:
         identifiability_weak_column_rel = 0.10
     identifiability_single_release_min_indep = float(
@@ -11875,10 +10825,7 @@ def fit_geometry_parameters(
             identifiability_condition_warn,
         )
     )
-    if (
-        not np.isfinite(auto_freeze_condition_number)
-        or auto_freeze_condition_number <= 1.0
-    ):
+    if not np.isfinite(auto_freeze_condition_number) or auto_freeze_condition_number <= 1.0:
         auto_freeze_condition_number = identifiability_condition_warn
     auto_freeze_correlation = float(
         identifiability_cfg.get(
@@ -11889,9 +10836,7 @@ def fit_geometry_parameters(
     if not np.isfinite(auto_freeze_correlation) or auto_freeze_correlation < 0.0:
         auto_freeze_correlation = max(identifiability_correlation_warn, 0.98)
     auto_freeze_correlation = min(max(auto_freeze_correlation, 0.0), 0.999999)
-    auto_freeze_max_parameters = int(
-        identifiability_cfg.get("auto_freeze_max_parameters", 2)
-    )
+    auto_freeze_max_parameters = int(identifiability_cfg.get("auto_freeze_max_parameters", 2))
     auto_freeze_max_parameters = max(0, auto_freeze_max_parameters)
     auto_freeze_max_nfev = int(
         identifiability_cfg.get(
@@ -11911,9 +10856,7 @@ def fit_geometry_parameters(
     )
     selective_thaw_cfg_raw = identifiability_cfg.get("selective_thaw", {})
     if isinstance(selective_thaw_cfg_raw, bool):
-        selective_thaw_cfg: Dict[str, object] = {
-            "enabled": bool(selective_thaw_cfg_raw)
-        }
+        selective_thaw_cfg: Dict[str, object] = {"enabled": bool(selective_thaw_cfg_raw)}
     elif isinstance(selective_thaw_cfg_raw, dict):
         selective_thaw_cfg = dict(selective_thaw_cfg_raw)
     else:
@@ -11939,10 +10882,7 @@ def fit_geometry_parameters(
             identifiability_condition_warn,
         )
     )
-    if (
-        not np.isfinite(selective_thaw_condition_number)
-        or selective_thaw_condition_number <= 1.0
-    ):
+    if not np.isfinite(selective_thaw_condition_number) or selective_thaw_condition_number <= 1.0:
         selective_thaw_condition_number = identifiability_condition_warn
     adaptive_regularization_cfg_raw = identifiability_cfg.get(
         "adaptive_regularization",
@@ -11956,9 +10896,7 @@ def fit_geometry_parameters(
         adaptive_regularization_cfg = dict(adaptive_regularization_cfg_raw)
     else:
         adaptive_regularization_cfg = {}
-    adaptive_regularization_enabled = bool(
-        adaptive_regularization_cfg.get("enabled", False)
-    )
+    adaptive_regularization_enabled = bool(adaptive_regularization_cfg.get("enabled", False))
     adaptive_regularization_max_parameters = int(
         adaptive_regularization_cfg.get(
             "max_parameters",
@@ -12015,17 +10953,13 @@ def fit_geometry_parameters(
         max(adaptive_regularization_correlation, 0.0),
         0.999999,
     )
-    adaptive_regularization_sigma_scale = float(
-        adaptive_regularization_cfg.get("sigma_scale", 0.5)
-    )
+    adaptive_regularization_sigma_scale = float(adaptive_regularization_cfg.get("sigma_scale", 0.5))
     if (
         not np.isfinite(adaptive_regularization_sigma_scale)
         or adaptive_regularization_sigma_scale <= 0.0
     ):
         adaptive_regularization_sigma_scale = 0.5
-    adaptive_regularization_min_sigma = float(
-        adaptive_regularization_cfg.get("min_sigma", 0.05)
-    )
+    adaptive_regularization_min_sigma = float(adaptive_regularization_cfg.get("min_sigma", 0.05))
     if (
         not np.isfinite(adaptive_regularization_min_sigma)
         or adaptive_regularization_min_sigma <= 0.0
@@ -12063,9 +10997,7 @@ def fit_geometry_parameters(
         center_col_default = 0.0
 
     params = dict(params)
-    full_beam_mosaic_params = copy.deepcopy(
-        dict(params.get("mosaic_params", {}) or {})
-    )
+    full_beam_mosaic_params = copy.deepcopy(dict(params.get("mosaic_params", {}) or {}))
     params["center"] = [center_row_default, center_col_default]
     params.setdefault("center_x", center_row_default)
     params.setdefault("center_y", center_col_default)
@@ -12088,18 +11020,12 @@ def fit_geometry_parameters(
         max_tasks=max(len(dataset_contexts), solver_restarts, 1),
     )
     if configured_parallel_workers > 1 and solver_parallel_mode != "off":
-        if (
-            solver_parallel_mode in {"auto", "datasets"}
-            and len(dataset_contexts) > 1
-        ):
+        if solver_parallel_mode in {"auto", "datasets"} and len(dataset_contexts) > 1:
             dataset_parallel_workers = min(
                 configured_parallel_workers,
                 len(dataset_contexts),
             )
-        elif (
-            solver_parallel_mode in {"auto", "restarts"}
-            and solver_restarts > 1
-        ):
+        elif solver_parallel_mode in {"auto", "restarts"} and solver_restarts > 1:
             restart_parallel_workers = min(
                 configured_parallel_workers,
                 solver_restarts,
@@ -12197,9 +11123,8 @@ def fit_geometry_parameters(
                 and np.isfinite(base_lambda_scalar)
                 and base_lambda_scalar > 0.0
             ):
-                scaled_wavelength = (
-                    np.asarray(base_wavelength_template, dtype=np.float64)
-                    * (float(lambda_trial) / float(base_lambda_scalar))
+                scaled_wavelength = np.asarray(base_wavelength_template, dtype=np.float64) * (
+                    float(lambda_trial) / float(base_lambda_scalar)
                 )
                 local_mosaic["wavelength_array"] = np.asarray(
                     scaled_wavelength,
@@ -12227,14 +11152,10 @@ def fit_geometry_parameters(
         local["center"] = [float(center_row), float(center_col)]
         local["center_x"] = float(center_row)
         local["center_y"] = float(center_col)
-        local["_q_group_line_constraints_enabled"] = bool(
-            q_group_line_constraints_enabled
-        )
+        local["_q_group_line_constraints_enabled"] = bool(q_group_line_constraints_enabled)
         local["_q_group_line_angle_weight"] = float(q_group_line_angle_weight)
         local["_q_group_line_offset_weight"] = float(q_group_line_offset_weight)
-        local["_q_group_line_missing_penalty_scale"] = float(
-            q_group_line_missing_penalty_scale
-        )
+        local["_q_group_line_missing_penalty_scale"] = float(q_group_line_missing_penalty_scale)
         local["_hk0_peak_priority_weight"] = float(hk0_peak_priority_weight)
         return local
 
@@ -12253,414 +11174,25 @@ def fit_geometry_parameters(
         )
 
     def _legacy_cost_fn_unused(x):
-        local = _apply_trial_params(x)
-        args = [
-            local['gamma'], local['Gamma'], local['corto_detector'],
-            local['theta_initial'], local.get('cor_angle', 0.0), local['zs'], local['zb'],
-            local['chi'], local['a'], local['c'],
-            local['center'][0], local['center'][1]
-        ]
-        D = compute_peak_position_error_geometry_local(
-            *args,
-            measured_peaks=measured_peaks,
-            miller=miller,
-            intensities=intensities,
-            image_size=image_size,
-            mosaic_params=local['mosaic_params'],
-            n2=local['n2'],
-            psi=local.get('psi', 0.0),
-            psi_z=local.get('psi_z', 0.0),
-            debye_x=local['debye_x'],
-            debye_y=local['debye_y'],
-            wavelength=local['lambda'],
-            pixel_tol=pixel_tol,
-            optics_mode=local.get('optics_mode', 0),
-        )
-        return D
+        """Retained only as an inert compatibility shim for old notebooks."""
+
+        return np.asarray(cost_fn(x), dtype=float)
 
     def _legacy_evaluate_pixel_matches_unused(
         local: Dict[str, object],
         *,
         collect_diagnostics: bool = False,
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
-        normalized_measured = fit_measured_peaks
-        if not normalized_measured:
-            return np.array([], dtype=float), [], {
-                "measured_count": 0,
-                "fixed_source_resolved_count": 0,
-                "fallback_entry_count": 0,
-                "missing_pair_count": 0,
-                "simulated_reflection_count": int(fit_miller.shape[0]),
-                "total_reflection_count": int(simulation_subset.total_reflection_count),
-                "subset_reduced": bool(simulation_subset.reduced),
-                "single_ray_enabled": bool(use_single_ray),
-            }
+        """Legacy shim. Real geometry point matching lives in `_evaluate_pixel_matches`."""
 
-        mosaic = local['mosaic_params']
-        wavelength_array = mosaic.get('wavelength_array')
-        if wavelength_array is None:
-            wavelength_array = mosaic.get('wavelength_i_array')
-
-        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-        _, hit_tables, *_ = _process_peaks_parallel_safe(
-            fit_miller, fit_intensities, image_size,
-            local['a'], local['c'], wavelength_array,
-            sim_buffer, local['corto_detector'],
-            local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
-            local['zs'], local['zb'], local['n2'],
-            mosaic['beam_x_array'],
-            mosaic['beam_y_array'],
-            mosaic['theta_array'],
-            mosaic['phi_array'],
-            mosaic['sigma_mosaic_deg'],
-            mosaic['gamma_mosaic_deg'],
-            mosaic['eta'],
-            wavelength_array,
-            local['debye_x'], local['debye_y'],
-            local['center'], local['theta_initial'], local.get('cor_angle', 0.0),
-            np.array([1.0, 0.0, 0.0]),
-            np.array([0.0, 1.0, 0.0]),
-            save_flag=0,
-            **_simulation_kernel_kwargs(local, mosaic),
-            single_sample_indices=single_ray_indices,
+        del local, collect_diagnostics
+        return (
+            np.array([], dtype=float),
+            [],
+            {
+                "status": "legacy_pixel_match_path_retired",
+            },
         )
-
-        def _point_radius_px(point: Tuple[float, float]) -> float:
-            try:
-                center_row = float(local['center'][0])
-                center_col = float(local['center'][1])
-            except Exception:
-                return float("nan")
-            if not (
-                np.isfinite(point[0])
-                and np.isfinite(point[1])
-                and np.isfinite(center_row)
-                and np.isfinite(center_col)
-            ):
-                return float("nan")
-            return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
-
-        maxpos = hit_tables_to_max_positions(hit_tables)
-        residuals: list[float] = []
-        diagnostics: List[Dict[str, object]] = []
-        fixed_matches, fallback_measured, resolution_lookup = _resolve_fixed_source_matches(
-            normalized_measured,
-            hit_tables,
-        )
-        fallback_entries_by_hkl: Dict[Tuple[int, int, int], List[Dict[str, object]]] = {}
-        for entry in fallback_measured:
-            raw_hkl = entry.get("hkl")
-            if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
-                continue
-            hkl_key = (
-                int(raw_hkl[0]),
-                int(raw_hkl[1]),
-                int(raw_hkl[2]),
-            )
-            fallback_entries_by_hkl.setdefault(hkl_key, []).append(entry)
-
-        for measured_entry, sim_pt, _sim_hkl in fixed_matches:
-            try:
-                meas_pt = (
-                    float(measured_entry["x"]),
-                    float(measured_entry["y"]),
-                )
-            except Exception:
-                continue
-            if not (
-                np.isfinite(sim_pt[0])
-                and np.isfinite(sim_pt[1])
-                and np.isfinite(meas_pt[0])
-                and np.isfinite(meas_pt[1])
-            ):
-                continue
-            dx = float(sim_pt[0] - meas_pt[0])
-            dy = float(sim_pt[1] - meas_pt[1])
-            pair_dist = math.hypot(dx, dy)
-            if weighted_matching:
-                w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
-                dx *= w
-                dy *= w
-            else:
-                w = 1.0
-            residuals.extend([dx, dy])
-            if collect_diagnostics:
-                entry_diag = dict(resolution_lookup.get(id(measured_entry), {}))
-                entry_diag.update(
-                    {
-                        "match_kind": "fixed_source",
-                        "match_status": "matched",
-                        "measured_x": float(meas_pt[0]),
-                        "measured_y": float(meas_pt[1]),
-                        "simulated_x": float(sim_pt[0]),
-                        "simulated_y": float(sim_pt[1]),
-                        "dx_px": float(sim_pt[0] - meas_pt[0]),
-                        "dy_px": float(sim_pt[1] - meas_pt[1]),
-                        "distance_px": float(pair_dist),
-                        "weight": float(w),
-                        "weighted_dx_px": float(dx),
-                        "weighted_dy_px": float(dy),
-                        "measured_radius_px": _point_radius_px(meas_pt),
-                        "simulated_radius_px": _point_radius_px(sim_pt),
-                    }
-                )
-                diagnostics.append(entry_diag)
-
-        measured_dict = build_measured_dict(fallback_measured)
-
-        simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
-        for idx, (H, K, L) in enumerate(fit_miller):
-            key = (int(round(H)), int(round(K)), int(round(L)))
-            if key not in measured_dict:
-                continue
-            _, x0, y0, _, x1, y1 = maxpos[idx]
-            for col, row in ((x0, y0), (x1, y1)):
-                if np.isfinite(col) and np.isfinite(row):
-                    simulated_by_hkl.setdefault(key, []).append((float(col), float(row)))
-
-        missing_pairs = 0
-        for hkl_key, measured_list in measured_dict.items():
-            sim_list = simulated_by_hkl.get(hkl_key, [])
-            measured_entries_hkl = fallback_entries_by_hkl.get(hkl_key, [])
-            valid_entries_hkl: List[Dict[str, object]] = []
-            measured_points: List[Tuple[float, float]] = []
-            for entry in measured_entries_hkl:
-                try:
-                    mx = float(entry["x"])
-                    my = float(entry["y"])
-                except Exception:
-                    continue
-                if not (np.isfinite(mx) and np.isfinite(my)):
-                    continue
-                valid_entries_hkl.append(entry)
-                measured_points.append((mx, my))
-            if not measured_points:
-                continue
-            if not sim_list:
-                missing_pairs += len(valid_entries_hkl)
-                if collect_diagnostics:
-                    for entry in valid_entries_hkl:
-                        entry_diag = dict(resolution_lookup.get(id(entry), {}))
-                        entry_diag.update(
-                            {
-                                "match_kind": "hkl_fallback",
-                                "match_status": "missing_pair",
-                                "hkl": tuple(int(v) for v in hkl_key),
-                                "resolution_kind": str(
-                                    entry_diag.get("resolution_kind", "hkl_fallback")
-                                ),
-                                "resolution_reason": str(
-                                    entry_diag.get("resolution_reason", "no_simulated_candidates")
-                                ),
-                                "measured_x": float(entry["x"]),
-                                "measured_y": float(entry["y"]),
-                                "simulated_x": float("nan"),
-                                "simulated_y": float("nan"),
-                                "dx_px": float("nan"),
-                                "dy_px": float("nan"),
-                                "distance_px": float("nan"),
-                                "weight": 0.0,
-                                "weighted_dx_px": float("nan"),
-                                "weighted_dy_px": float("nan"),
-                                "measured_radius_px": _point_radius_px(
-                                    (float(entry["x"]), float(entry["y"]))
-                                ),
-                                "simulated_radius_px": float("nan"),
-                            }
-                        )
-                        diagnostics.append(entry_diag)
-                continue
-
-            matches = _build_point_matches(
-                sim_list,
-                measured_points,
-                max_distance=pixel_tol,
-            )
-            matched_meas_indices: set[int] = set()
-            for sim_pt, meas_pt, pair_dist, sim_idx, meas_idx in matches:
-                matched_meas_indices.add(int(meas_idx))
-                dx = float(sim_pt[0] - meas_pt[0])
-                dy = float(sim_pt[1] - meas_pt[1])
-                if weighted_matching:
-                    w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
-                    dx *= w
-                    dy *= w
-                else:
-                    w = 1.0
-                residuals.extend([dx, dy])
-                if collect_diagnostics and 0 <= meas_idx < len(valid_entries_hkl):
-                    entry = valid_entries_hkl[meas_idx]
-                    entry_diag = dict(resolution_lookup.get(id(entry), {}))
-                    entry_diag.update(
-                        {
-                            "match_kind": "hkl_fallback",
-                            "match_status": "matched",
-                            "hkl": tuple(int(v) for v in hkl_key),
-                            "sim_list_index": int(sim_idx),
-                            "meas_list_index": int(meas_idx),
-                            "measured_x": float(meas_pt[0]),
-                            "measured_y": float(meas_pt[1]),
-                            "simulated_x": float(sim_pt[0]),
-                            "simulated_y": float(sim_pt[1]),
-                            "dx_px": float(sim_pt[0] - meas_pt[0]),
-                            "dy_px": float(sim_pt[1] - meas_pt[1]),
-                            "distance_px": float(pair_dist),
-                            "weight": float(w),
-                            "weighted_dx_px": float(dx),
-                            "weighted_dy_px": float(dy),
-                            "measured_radius_px": _point_radius_px(
-                                (float(meas_pt[0]), float(meas_pt[1]))
-                            ),
-                            "simulated_radius_px": _point_radius_px(
-                                (float(sim_pt[0]), float(sim_pt[1]))
-                            ),
-                        }
-                    )
-                    diagnostics.append(entry_diag)
-
-            unmatched_meas_indices = [
-                idx for idx in range(len(valid_entries_hkl)) if idx not in matched_meas_indices
-            ]
-            missing_pairs += len(unmatched_meas_indices)
-            if collect_diagnostics:
-                for meas_idx in unmatched_meas_indices:
-                    entry = valid_entries_hkl[meas_idx]
-                    entry_diag = dict(resolution_lookup.get(id(entry), {}))
-                    entry_diag.update(
-                        {
-                            "match_kind": "hkl_fallback",
-                            "match_status": "missing_pair",
-                            "hkl": tuple(int(v) for v in hkl_key),
-                            "resolution_kind": str(
-                                entry_diag.get("resolution_kind", "hkl_fallback")
-                            ),
-                            "resolution_reason": str(
-                                entry_diag.get("resolution_reason", "unmatched_after_assignment")
-                            ),
-                            "measured_x": float(entry["x"]),
-                            "measured_y": float(entry["y"]),
-                            "simulated_x": float("nan"),
-                            "simulated_y": float("nan"),
-                            "dx_px": float("nan"),
-                            "dy_px": float("nan"),
-                            "distance_px": float("nan"),
-                            "weight": 0.0,
-                            "weighted_dx_px": float("nan"),
-                            "weighted_dy_px": float("nan"),
-                            "measured_radius_px": _point_radius_px(
-                                (float(entry["x"]), float(entry["y"]))
-                            ),
-                            "simulated_radius_px": float("nan"),
-                        }
-                    )
-                    diagnostics.append(entry_diag)
-
-        if missing_pairs > 0 and missing_pair_penalty > 0.0:
-            residuals.extend([missing_pair_penalty] * missing_pairs)
-
-        residual_arr = (
-            np.asarray(residuals, dtype=float)
-            if residuals
-            else np.array([max(1.0, missing_pair_penalty)], dtype=float)
-        )
-        summary: Dict[str, object] = {
-            "measured_count": int(len(normalized_measured)),
-            "fixed_source_resolved_count": int(len(fixed_matches)),
-            "fallback_entry_count": int(len(fallback_measured)),
-            "fallback_hkl_count": int(len(measured_dict)),
-            "missing_pair_count": int(missing_pairs),
-            "simulated_reflection_count": int(fit_miller.shape[0]),
-            "total_reflection_count": int(simulation_subset.total_reflection_count),
-            "fixed_source_reflection_count": int(
-                simulation_subset.fixed_source_reflection_count
-            ),
-            "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
-            "subset_reduced": bool(simulation_subset.reduced),
-            "single_ray_enabled": bool(use_single_ray),
-            "single_ray_forced_count": int(
-                np.count_nonzero(single_ray_indices >= 0)
-            )
-            if isinstance(single_ray_indices, np.ndarray)
-            else 0,
-            "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
-            "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
-        }
-        if diagnostics:
-            sim_radius = np.asarray(
-                [
-                    float(entry.get("simulated_radius_px", np.nan))
-                    for entry in diagnostics
-                ],
-                dtype=float,
-            )
-            meas_radius = np.asarray(
-                [
-                    float(entry.get("measured_radius_px", np.nan))
-                    for entry in diagnostics
-                ],
-                dtype=float,
-            )
-            finite_sim_radius = sim_radius[np.isfinite(sim_radius)]
-            finite_meas_radius = meas_radius[np.isfinite(meas_radius)]
-            if finite_sim_radius.size:
-                summary.update(
-                    {
-                        "sim_radius_min_px": float(np.min(finite_sim_radius)),
-                        "sim_radius_median_px": float(np.median(finite_sim_radius)),
-                        "sim_radius_lt_10px": int(np.count_nonzero(finite_sim_radius < 10.0)),
-                        "sim_radius_lt_25px": int(np.count_nonzero(finite_sim_radius < 25.0)),
-                    }
-                )
-            if finite_meas_radius.size:
-                summary.update(
-                    {
-                        "meas_radius_min_px": float(np.min(finite_meas_radius)),
-                        "meas_radius_median_px": float(np.median(finite_meas_radius)),
-                        "meas_radius_lt_10px": int(np.count_nonzero(finite_meas_radius < 10.0)),
-                        "meas_radius_lt_25px": int(np.count_nonzero(finite_meas_radius < 25.0)),
-                    }
-                )
-            matched_distances = np.asarray(
-                [
-                    float(entry.get("distance_px", np.nan))
-                    for entry in diagnostics
-                    if str(entry.get("match_status", "")).lower() == "matched"
-                ],
-                dtype=float,
-            )
-            matched_distances = matched_distances[np.isfinite(matched_distances)]
-            summary["matched_pair_count"] = int(matched_distances.size)
-            if matched_distances.size:
-                summary.update(
-                    {
-                        "unweighted_peak_rms_px": float(
-                            np.sqrt(np.mean(matched_distances * matched_distances))
-                        ),
-                        "unweighted_peak_mean_px": float(np.mean(matched_distances)),
-                        "unweighted_peak_max_px": float(np.max(matched_distances)),
-                        "peak_weighting_mode": "uniform",
-                    }
-                )
-            else:
-                summary.update(
-                    {
-                        "unweighted_peak_rms_px": float("nan"),
-                        "unweighted_peak_mean_px": float("nan"),
-                        "unweighted_peak_max_px": float("nan"),
-                        "peak_weighting_mode": "uniform",
-                    }
-                )
-        else:
-            summary.update(
-                {
-                    "matched_pair_count": 0,
-                    "unweighted_peak_rms_px": float("nan"),
-                    "unweighted_peak_mean_px": float("nan"),
-                    "unweighted_peak_max_px": float("nan"),
-                    "peak_weighting_mode": "uniform",
-                }
-            )
-        return residual_arr, diagnostics, summary
 
     def _theta_initial_for_dataset(
         local: Dict[str, object],
@@ -12678,10 +11210,18 @@ def fit_geometry_parameters(
         local, dataset_ctx = item
         theta_value = _theta_initial_for_dataset(local, dataset_ctx)
         args = [
-            local['gamma'], local['Gamma'], local['corto_detector'],
-            theta_value, local.get('cor_angle', 0.0), local['zs'], local['zb'],
-            local['chi'], local['a'], local['c'],
-            local['center'][0], local['center'][1]
+            local["gamma"],
+            local["Gamma"],
+            local["corto_detector"],
+            theta_value,
+            local.get("cor_angle", 0.0),
+            local["zs"],
+            local["zb"],
+            local["chi"],
+            local["a"],
+            local["c"],
+            local["center"][0],
+            local["center"][1],
         ]
         residual = compute_peak_position_error_geometry_local(
             *args,
@@ -12689,15 +11229,15 @@ def fit_geometry_parameters(
             miller=dataset_ctx.subset.miller,
             intensities=dataset_ctx.subset.intensities,
             image_size=image_size,
-            mosaic_params=local['mosaic_params'],
-            n2=local['n2'],
-            psi=local.get('psi', 0.0),
-            psi_z=local.get('psi_z', 0.0),
-            debye_x=local['debye_x'],
-            debye_y=local['debye_y'],
-            wavelength=local['lambda'],
+            mosaic_params=local["mosaic_params"],
+            n2=local["n2"],
+            psi=local.get("psi", 0.0),
+            psi_z=local.get("psi_z", 0.0),
+            debye_x=local["debye_x"],
+            debye_y=local["debye_y"],
+            wavelength=local["lambda"],
             pixel_tol=pixel_tol,
-            optics_mode=local.get('optics_mode', 0),
+            optics_mode=local.get("optics_mode", 0),
         )
         return np.asarray(residual, dtype=float)
 
@@ -12713,20 +11253,14 @@ def fit_geometry_parameters(
                 numba_threads=worker_numba_threads,
             )
         else:
-            residual_results = [
-                _cost_fn_for_dataset(item) for item in dataset_items
-            ]
+            residual_results = [_cost_fn_for_dataset(item) for item in dataset_items]
         for residual_arr in residual_results:
             if residual_arr.size:
                 residual_blocks.append(residual_arr)
         prior_residual = _parameter_prior_residuals(x)
         if prior_residual.size:
             residual_blocks.append(np.asarray(prior_residual, dtype=float))
-        return (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.array([], dtype=float)
-        )
+        return np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
 
     def _evaluate_pixel_matches(
         local: Dict[str, object],
@@ -12734,21 +11268,25 @@ def fit_geometry_parameters(
         collect_diagnostics: bool = False,
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
         if not dataset_contexts:
-            return np.array([], dtype=float), [], {
-                "dataset_count": 0,
-                "measured_count": 0,
-                "fixed_source_resolved_count": 0,
-                "fallback_entry_count": 0,
-                "missing_pair_count": 0,
-                "simulated_reflection_count": 0,
-                "total_reflection_count": 0,
-                "fixed_source_reflection_count": 0,
-                "subset_fallback_hkl_count": 0,
-                "subset_reduced": False,
-                "central_ray_mode": False,
-                "single_ray_enabled": bool(use_single_ray),
-                "single_ray_forced_count": 0,
-            }
+            return (
+                np.array([], dtype=float),
+                [],
+                {
+                    "dataset_count": 0,
+                    "measured_count": 0,
+                    "fixed_source_resolved_count": 0,
+                    "fallback_entry_count": 0,
+                    "missing_pair_count": 0,
+                    "simulated_reflection_count": 0,
+                    "total_reflection_count": 0,
+                    "fixed_source_reflection_count": 0,
+                    "subset_fallback_hkl_count": 0,
+                    "subset_reduced": False,
+                    "central_ray_mode": False,
+                    "single_ray_enabled": bool(use_single_ray),
+                    "single_ray_forced_count": 0,
+                },
+            )
 
         residual_blocks: List[np.ndarray] = []
         diagnostics: List[Dict[str, object]] = []
@@ -12765,10 +11303,15 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
+            "central_ray_mode": False,
             "single_ray_enabled": bool(use_single_ray),
             "single_ray_forced_count": 0,
-            "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
-            "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
+            "center_row": float(local["center"][0])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
+            "center_col": float(local["center"][1])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
             "line_group_count": 0,
             "resolved_line_group_count": 0,
             "missing_line_group_count": 0,
@@ -12809,10 +11352,7 @@ def fit_geometry_parameters(
                 numba_threads=worker_numba_threads,
             )
         else:
-            dataset_results = [
-                _evaluate_pixel_matches_for_dataset(item)
-                for item in dataset_items
-            ]
+            dataset_results = [_evaluate_pixel_matches_for_dataset(item) for item in dataset_items]
 
         for residual_i, diagnostics_i, summary_i in dataset_results:
             residual_i = np.asarray(residual_i, dtype=float)
@@ -12852,9 +11392,7 @@ def fit_geometry_parameters(
                 diagnostics.extend(diagnostics_i)
 
         residual_arr = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.array([], dtype=float)
+            np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
 
@@ -12881,7 +11419,10 @@ def fit_geometry_parameters(
         matched_distances = matched_distances[np.isfinite(matched_distances)]
         summary["custom_sigma_count"] = int(custom_sigma_values.size)
         anisotropic_count = int(
-            sum(int(summary_i.get("anisotropic_sigma_count", 0)) for summary_i in per_dataset_summaries)
+            sum(
+                int(summary_i.get("anisotropic_sigma_count", 0))
+                for summary_i in per_dataset_summaries
+            )
         )
         summary["anisotropic_sigma_count"] = int(anisotropic_count)
         if anisotropic_count > 0:
@@ -12892,9 +11433,7 @@ def fit_geometry_parameters(
             )
         elif custom_sigma_values.size:
             summary["peak_weighting_mode"] = (
-                "measurement_sigma+distance"
-                if bool(weighted_matching)
-                else "measurement_sigma"
+                "measurement_sigma+distance" if bool(weighted_matching) else "measurement_sigma"
             )
         else:
             summary["peak_weighting_mode"] = "uniform"
@@ -12947,9 +11486,7 @@ def fit_geometry_parameters(
             else:
                 summary["unweighted_peak_rms_px"] = float("nan")
             if matched_count > 0 and has_mean_stat:
-                summary["unweighted_peak_mean_px"] = float(
-                    matched_sum / float(matched_count)
-                )
+                summary["unweighted_peak_mean_px"] = float(matched_sum / float(matched_count))
             else:
                 summary["unweighted_peak_mean_px"] = float("nan")
             summary["unweighted_peak_max_px"] = float(matched_max)
@@ -12969,14 +11506,10 @@ def fit_geometry_parameters(
                 dataset_count = int(summary_i.get(count_key, 0))
                 if dataset_count <= 0 or not np.isfinite(dataset_rms):
                     continue
-                weighted_sq_sum += (
-                    float(dataset_count) * float(dataset_rms) * float(dataset_rms)
-                )
+                weighted_sq_sum += float(dataset_count) * float(dataset_rms) * float(dataset_rms)
                 has_sq_stat = True
             if line_resolved_total > 0 and has_sq_stat:
-                summary[rms_key] = float(
-                    np.sqrt(weighted_sq_sum / float(line_resolved_total))
-                )
+                summary[rms_key] = float(np.sqrt(weighted_sq_sum / float(line_resolved_total)))
             else:
                 summary[rms_key] = float("nan")
 
@@ -12993,9 +11526,7 @@ def fit_geometry_parameters(
             line_span_sum += float(dataset_count) * float(dataset_span)
             line_span_count += int(dataset_count)
         if line_span_count > 0:
-            summary["line_fit_space_span_deg_mean"] = float(
-                line_span_sum / float(line_span_count)
-            )
+            summary["line_fit_space_span_deg_mean"] = float(line_span_sum / float(line_span_count))
         else:
             summary["line_fit_space_span_deg_mean"] = float("nan")
         return residual_arr, diagnostics, summary
@@ -13007,34 +11538,38 @@ def fit_geometry_parameters(
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
         fit_space_summary_defaults = _fit_space_provenance_summary(local)
         if not dataset_contexts:
-            return np.array([], dtype=float), [], {
-                "dataset_count": 0,
-                "measured_count": 0,
-                "fixed_source_resolved_count": 0,
-                "fallback_entry_count": 0,
-                "matched_pair_count": 0,
-                "missing_pair_count": 0,
-                "simulated_reflection_count": 0,
-                "total_reflection_count": 0,
-                "fixed_source_reflection_count": 0,
-                "subset_fallback_hkl_count": 0,
-                "subset_reduced": False,
-                "central_ray_mode": False,
-                "single_ray_enabled": False,
-                "single_ray_forced_count": 0,
-                "peak_weighting_mode": "uniform",
-                "line_group_count": 0,
-                "resolved_line_group_count": 0,
-                "missing_line_group_count": 0,
-                "line_angle_rms_px": float("nan"),
-                "line_offset_rms_px": float("nan"),
-                "line_angle_rms_deg": float("nan"),
-                "line_offset_rms_deg": float("nan"),
-                "line_fit_space_span_deg_mean": float("nan"),
-                "line_constraints_enabled": bool(q_group_line_constraints_enabled),
-                "_live_cache_records": [],
-                **fit_space_summary_defaults,
-            }
+            return (
+                np.array([], dtype=float),
+                [],
+                {
+                    "dataset_count": 0,
+                    "measured_count": 0,
+                    "fixed_source_resolved_count": 0,
+                    "fallback_entry_count": 0,
+                    "matched_pair_count": 0,
+                    "missing_pair_count": 0,
+                    "simulated_reflection_count": 0,
+                    "total_reflection_count": 0,
+                    "fixed_source_reflection_count": 0,
+                    "subset_fallback_hkl_count": 0,
+                    "subset_reduced": False,
+                    "central_ray_mode": False,
+                    "single_ray_enabled": False,
+                    "single_ray_forced_count": 0,
+                    "peak_weighting_mode": "uniform",
+                    "line_group_count": 0,
+                    "resolved_line_group_count": 0,
+                    "missing_line_group_count": 0,
+                    "line_angle_rms_px": float("nan"),
+                    "line_offset_rms_px": float("nan"),
+                    "line_angle_rms_deg": float("nan"),
+                    "line_offset_rms_deg": float("nan"),
+                    "line_fit_space_span_deg_mean": float("nan"),
+                    "line_constraints_enabled": bool(q_group_line_constraints_enabled),
+                    "_live_cache_records": [],
+                    **fit_space_summary_defaults,
+                },
+            )
 
         residual_blocks: List[np.ndarray] = []
         diagnostics: List[Dict[str, object]] = []
@@ -13051,10 +11586,15 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
+            "central_ray_mode": False,
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
-            "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
-            "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+            "center_row": float(local["center"][0])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
+            "center_col": float(local["center"][1])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
             "peak_weighting_mode": "uniform",
             "custom_sigma_count": 0,
             "anisotropic_sigma_count": 0,
@@ -13095,8 +11635,7 @@ def fit_geometry_parameters(
             )
         else:
             dataset_results = [
-                _evaluate_dynamic_matches_for_dataset(item)
-                for item in dataset_items
+                _evaluate_dynamic_matches_for_dataset(item) for item in dataset_items
             ]
 
         for residual_i, diagnostics_i, summary_i in dataset_results:
@@ -13121,8 +11660,11 @@ def fit_geometry_parameters(
             ):
                 summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
             summary["subset_reduced"] = bool(
-                summary.get("subset_reduced", False)
-                or bool(summary_i.get("subset_reduced", False))
+                summary.get("subset_reduced", False) or bool(summary_i.get("subset_reduced", False))
+            )
+            summary["central_ray_mode"] = bool(
+                summary.get("central_ray_mode", False)
+                or bool(summary_i.get("central_ray_mode", False))
             )
             summary["line_constraints_enabled"] = bool(
                 summary.get("line_constraints_enabled", False)
@@ -13135,9 +11677,7 @@ def fit_geometry_parameters(
                 diagnostics.extend(diagnostics_i)
 
         residual_arr = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.array([], dtype=float)
+            np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
 
@@ -13220,14 +11760,10 @@ def fit_geometry_parameters(
                 dataset_count = int(summary_i.get("resolved_line_group_count", 0))
                 if dataset_count <= 0 or not np.isfinite(dataset_rms):
                     continue
-                weighted_sq_sum += (
-                    float(dataset_count) * float(dataset_rms) * float(dataset_rms)
-                )
+                weighted_sq_sum += float(dataset_count) * float(dataset_rms) * float(dataset_rms)
                 has_sq_stat = True
             if line_resolved_total > 0 and has_sq_stat:
-                summary[rms_key] = float(
-                    np.sqrt(weighted_sq_sum / float(line_resolved_total))
-                )
+                summary[rms_key] = float(np.sqrt(weighted_sq_sum / float(line_resolved_total)))
             else:
                 summary[rms_key] = float("nan")
         line_span_sum = 0.0
@@ -13243,9 +11779,7 @@ def fit_geometry_parameters(
             line_span_sum += float(dataset_count) * float(dataset_span)
             line_span_count += int(dataset_count)
         if line_span_count > 0:
-            summary["line_fit_space_span_deg_mean"] = float(
-                line_span_sum / float(line_span_count)
-            )
+            summary["line_fit_space_span_deg_mean"] = float(line_span_sum / float(line_span_count))
         else:
             summary["line_fit_space_span_deg_mean"] = float("nan")
         fit_space_anchor_count_cached = int(
@@ -13288,16 +11822,12 @@ def fit_geometry_parameters(
             ):
                 fit_space_two_theta_adjustment_max_abs_deg = float(dataset_max)
         summary["fit_space_anchor_count_cached"] = int(fit_space_anchor_count_cached)
-        summary["fit_space_anchor_count_detector"] = int(
-            fit_space_anchor_count_detector
-        )
+        summary["fit_space_anchor_count_detector"] = int(fit_space_anchor_count_detector)
         summary["fit_space_anchor_source_counts"] = {
             "cached_fit_space_anchor": int(fit_space_anchor_count_cached),
             "detector_fit_space_anchor": int(fit_space_anchor_count_detector),
         }
-        summary["fit_space_two_theta_adjustment_count"] = int(
-            fit_space_two_theta_adjustment_count
-        )
+        summary["fit_space_two_theta_adjustment_count"] = int(fit_space_two_theta_adjustment_count)
         summary["fit_space_two_theta_adjustment_total_abs_deg"] = float(
             fit_space_two_theta_adjustment_total_abs_deg
         )
@@ -13323,23 +11853,27 @@ def fit_geometry_parameters(
         collect_diagnostics: bool = False,
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
         if not dataset_contexts:
-            return np.array([], dtype=float), [], {
-                "dataset_count": 0,
-                "measured_count": 0,
-                "fixed_source_resolved_count": 0,
-                "fallback_entry_count": 0,
-                "matched_pair_count": 0,
-                "missing_pair_count": 0,
-                "simulated_reflection_count": 0,
-                "total_reflection_count": 0,
-                "fixed_source_reflection_count": 0,
-                "subset_fallback_hkl_count": 0,
-                "subset_reduced": False,
-                "central_ray_mode": False,
-                "single_ray_enabled": False,
-                "single_ray_forced_count": 0,
-                "match_radius_px": float(full_beam_polish_match_radius_px),
-            }
+            return (
+                np.array([], dtype=float),
+                [],
+                {
+                    "dataset_count": 0,
+                    "measured_count": 0,
+                    "fixed_source_resolved_count": 0,
+                    "fallback_entry_count": 0,
+                    "matched_pair_count": 0,
+                    "missing_pair_count": 0,
+                    "simulated_reflection_count": 0,
+                    "total_reflection_count": 0,
+                    "fixed_source_reflection_count": 0,
+                    "subset_fallback_hkl_count": 0,
+                    "subset_reduced": False,
+                    "central_ray_mode": False,
+                    "single_ray_enabled": False,
+                    "single_ray_forced_count": 0,
+                    "match_radius_px": float(full_beam_polish_match_radius_px),
+                },
+            )
 
         residual_blocks: List[np.ndarray] = []
         diagnostics: List[Dict[str, object]] = []
@@ -13356,30 +11890,37 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
+            "central_ray_mode": False,
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
-            "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
-            "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+            "center_row": float(local["center"][0])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
+            "center_col": float(local["center"][1])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
             "match_radius_px": float(full_beam_polish_match_radius_px),
         }
 
         for dataset_ctx in dataset_contexts:
             theta_value = _theta_initial_for_dataset(local, dataset_ctx)
-            residual_i, diagnostics_i, summary_i = _evaluate_geometry_fit_dataset_fixed_correspondences(
-                local,
-                dataset_ctx,
-                fixed_correspondence_groups.get(int(dataset_ctx.dataset_index), []),
-                image_size=image_size,
-                weighted_matching=bool(weighted_matching),
-                solver_f_scale=float(solver_f_scale),
-                missing_pair_penalty=float(missing_pair_penalty),
-                theta_value=float(theta_value),
-                use_measurement_uncertainty=bool(use_measurement_uncertainty),
-                anisotropic_uncertainty=bool(anisotropic_uncertainty_enabled),
-                radial_sigma_scale=float(radial_sigma_scale),
-                tangential_sigma_scale=float(tangential_sigma_scale),
-                match_radius_px=float(full_beam_polish_match_radius_px),
-                collect_diagnostics=collect_diagnostics,
+            residual_i, diagnostics_i, summary_i = (
+                _evaluate_geometry_fit_dataset_fixed_correspondences(
+                    local,
+                    dataset_ctx,
+                    fixed_correspondence_groups.get(int(dataset_ctx.dataset_index), []),
+                    image_size=image_size,
+                    weighted_matching=bool(weighted_matching),
+                    solver_f_scale=float(solver_f_scale),
+                    missing_pair_penalty=float(missing_pair_penalty),
+                    theta_value=float(theta_value),
+                    use_measurement_uncertainty=bool(use_measurement_uncertainty),
+                    anisotropic_uncertainty=bool(anisotropic_uncertainty_enabled),
+                    radial_sigma_scale=float(radial_sigma_scale),
+                    tangential_sigma_scale=float(tangential_sigma_scale),
+                    match_radius_px=float(full_beam_polish_match_radius_px),
+                    collect_diagnostics=collect_diagnostics,
+                )
             )
             residual_i = np.asarray(residual_i, dtype=float)
             if residual_i.size:
@@ -13404,9 +11945,7 @@ def fit_geometry_parameters(
                 diagnostics.extend(diagnostics_i)
 
         residual_arr = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.array([], dtype=float)
+            np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
 
@@ -13432,7 +11971,10 @@ def fit_geometry_parameters(
         matched_distances = matched_distances[np.isfinite(matched_distances)]
         summary["custom_sigma_count"] = int(custom_sigma_values.size)
         anisotropic_count = int(
-            sum(int(summary_i.get("anisotropic_sigma_count", 0)) for summary_i in per_dataset_summaries)
+            sum(
+                int(summary_i.get("anisotropic_sigma_count", 0))
+                for summary_i in per_dataset_summaries
+            )
         )
         summary["anisotropic_sigma_count"] = int(anisotropic_count)
         if anisotropic_count > 0:
@@ -13443,9 +11985,7 @@ def fit_geometry_parameters(
             )
         elif custom_sigma_values.size:
             summary["peak_weighting_mode"] = (
-                "measurement_sigma+distance"
-                if bool(weighted_matching)
-                else "measurement_sigma"
+                "measurement_sigma+distance" if bool(weighted_matching) else "measurement_sigma"
             )
         else:
             summary["peak_weighting_mode"] = "uniform"
@@ -13466,9 +12006,7 @@ def fit_geometry_parameters(
         return residual_arr, diagnostics, summary
 
     point_match_evaluator = (
-        _evaluate_dynamic_point_matches
-        if dynamic_point_geometry_fit
-        else _evaluate_pixel_matches
+        _evaluate_dynamic_point_matches if dynamic_point_geometry_fit else _evaluate_pixel_matches
     )
 
     def _public_point_match_summary(
@@ -13588,12 +12126,16 @@ def fit_geometry_parameters(
     def _initial_value(name: str) -> float:
         if name == "center_x":
             return _safe_float(
-                params.get("center_x", params.get("center", [center_row_default, center_col_default])[0]),
+                params.get(
+                    "center_x", params.get("center", [center_row_default, center_col_default])[0]
+                ),
                 center_row_default,
             )
         if name == "center_y":
             return _safe_float(
-                params.get("center_y", params.get("center", [center_row_default, center_col_default])[1]),
+                params.get(
+                    "center_y", params.get("center", [center_row_default, center_col_default])[1]
+                ),
                 center_col_default,
             )
         return _safe_float(params.get(name, 0.0), 0.0)
@@ -13720,19 +12262,16 @@ def fit_geometry_parameters(
         )
 
     prior_active_mask = (
-        np.isfinite(prior_centers)
-        & np.isfinite(prior_sigmas)
-        & (prior_sigmas > 0.0)
+        np.isfinite(prior_centers) & np.isfinite(prior_sigmas) & (prior_sigmas > 0.0)
     )
 
     def _parameter_prior_residuals(x_trial: Sequence[float]) -> np.ndarray:
         if not np.any(prior_active_mask):
             return np.array([], dtype=float)
         x_arr = np.asarray(x_trial, dtype=float)
-        return (
-            (x_arr[prior_active_mask] - prior_centers[prior_active_mask])
-            / prior_sigmas[prior_active_mask]
-        )
+        return (x_arr[prior_active_mask] - prior_centers[prior_active_mask]) / prior_sigmas[
+            prior_active_mask
+        ]
 
     span = upper_bounds - lower_bounds
     finite_span = np.isfinite(span) & (span > 1e-12)
@@ -13821,9 +12360,7 @@ def fit_geometry_parameters(
             self.x_trial = np.asarray(x_trial, dtype=float)
             self.residual_arr = np.asarray(residual_arr, dtype=float)
             self.point_match_summary = (
-                dict(point_match_summary)
-                if isinstance(point_match_summary, Mapping)
-                else {}
+                dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
             )
             self.bound_proximity_summary = (
                 dict(bound_proximity_summary)
@@ -13838,9 +12375,15 @@ def fit_geometry_parameters(
             {
                 "name": str(name),
                 "group": _parameter_group(str(name)),
-                "start": float(requested_x0_arr[idx]) if idx < requested_x0_arr.size else float("nan"),
-                "lower_bound": float(lower_bounds[idx]) if idx < lower_bounds.size else float("nan"),
-                "upper_bound": float(upper_bounds[idx]) if idx < upper_bounds.size else float("nan"),
+                "start": float(requested_x0_arr[idx])
+                if idx < requested_x0_arr.size
+                else float("nan"),
+                "lower_bound": float(lower_bounds[idx])
+                if idx < lower_bounds.size
+                else float("nan"),
+                "upper_bound": float(upper_bounds[idx])
+                if idx < upper_bounds.size
+                else float("nan"),
                 "scale": float(x_scale[idx]) if idx < x_scale.size else float("nan"),
                 "prior_enabled": bool(prior_enabled),
                 "prior_center": float(prior_centers[idx]) if prior_enabled else float("nan"),
@@ -13882,9 +12425,7 @@ def fit_geometry_parameters(
             "q_group_line_constraints": bool(q_group_line_constraints_enabled),
             "q_group_line_angle_weight": float(q_group_line_angle_weight),
             "q_group_line_offset_weight": float(q_group_line_offset_weight),
-            "q_group_line_missing_penalty_scale": float(
-                q_group_line_missing_penalty_scale
-            ),
+            "q_group_line_missing_penalty_scale": float(q_group_line_missing_penalty_scale),
             "hk0_peak_priority_weight": float(hk0_peak_priority_weight),
             "use_measurement_uncertainty": bool(use_measurement_uncertainty),
             "anisotropic_measurement_uncertainty": bool(anisotropic_uncertainty_enabled),
@@ -13895,9 +12436,7 @@ def fit_geometry_parameters(
             "manual_fail_fast_eval_window": int(manual_fail_fast_eval_window),
             "manual_fail_fast_probe_period": int(manual_fail_fast_probe_period),
             "manual_fail_fast_peak_rms_px": float(manual_fail_fast_peak_rms_px),
-            "manual_fail_fast_min_bound_parameters": int(
-                manual_fail_fast_min_bound_parameters
-            ),
+            "manual_fail_fast_min_bound_parameters": int(manual_fail_fast_min_bound_parameters),
         },
         "parallelization": dict(parallelization_summary),
         "parameter_entries": parameter_debug_entries,
@@ -13906,11 +12445,7 @@ def fit_geometry_parameters(
 
     all_candidate_param_names = [
         str(name)
-        for name in (
-            candidate_param_names
-            if candidate_param_names is not None
-            else var_names
-        )
+        for name in (candidate_param_names if candidate_param_names is not None else var_names)
     ]
     if not all_candidate_param_names:
         all_candidate_param_names = [str(name) for name in var_names]
@@ -13972,11 +12507,7 @@ def fit_geometry_parameters(
             return None, None
         if prior_mean is None or not np.isfinite(float(prior_mean)):
             prior_mean = float(ref_value)
-        if (
-            prior_sigma is None
-            or not np.isfinite(float(prior_sigma))
-            or float(prior_sigma) <= 0.0
-        ):
+        if prior_sigma is None or not np.isfinite(float(prior_sigma)) or float(prior_sigma) <= 0.0:
             return float(prior_mean), None
         return float(prior_mean), float(prior_sigma)
 
@@ -14001,7 +12532,9 @@ def fit_geometry_parameters(
             if explicit_group in {"trusted", "uncertain"}:
                 seed_group = explicit_group
         if seed_group not in {"trusted", "uncertain"}:
-            span_value = float(upper - lower) if np.isfinite(lower) and np.isfinite(upper) else float("nan")
+            span_value = (
+                float(upper - lower) if np.isfinite(lower) and np.isfinite(upper) else float("nan")
+            )
             if (
                 prior_sigma is not None
                 and np.isfinite(float(prior_sigma))
@@ -14211,9 +12744,7 @@ def fit_geometry_parameters(
             f_scale=solver_f_scale,
         )
         try:
-            point_rms_before = float(
-                point_summary_before.get("unweighted_peak_rms_px", np.nan)
-            )
+            point_rms_before = float(point_summary_before.get("unweighted_peak_rms_px", np.nan))
         except Exception:
             point_rms_before = float("nan")
         matched_before = int(point_summary_before.get("matched_pair_count", 0))
@@ -14267,9 +12798,7 @@ def fit_geometry_parameters(
             f_scale=solver_f_scale,
         )
         try:
-            point_rms_after = float(
-                point_summary_after.get("unweighted_peak_rms_px", np.nan)
-            )
+            point_rms_after = float(point_summary_after.get("unweighted_peak_rms_px", np.nan))
         except Exception:
             point_rms_after = float("nan")
         matched_after = int(point_summary_after.get("matched_pair_count", 0))
@@ -14295,9 +12824,7 @@ def fit_geometry_parameters(
 
         if np.isfinite(point_cost_before):
             if point_cost_before > 1.0e-12:
-                point_cost_limit = point_cost_before * (
-                    1.0 + max_point_cost_increase_fraction
-                )
+                point_cost_limit = point_cost_before * (1.0 + max_point_cost_increase_fraction)
             else:
                 point_cost_limit = point_cost_before + max(
                     max_point_cost_increase_fraction,
@@ -14315,19 +12842,11 @@ def fit_geometry_parameters(
             and np.isfinite(ridge_final_cost)
             and ridge_final_cost + min_ridge_cost_reduction < ridge_initial_cost
         )
-        point_cost_ok = (
-            not np.isfinite(point_cost_limit)
-            or (
-                np.isfinite(point_cost_after)
-                and point_cost_after <= point_cost_limit + 1.0e-12
-            )
+        point_cost_ok = not np.isfinite(point_cost_limit) or (
+            np.isfinite(point_cost_after) and point_cost_after <= point_cost_limit + 1.0e-12
         )
-        point_rms_ok = (
-            not np.isfinite(point_rms_limit)
-            or (
-                np.isfinite(point_rms_after)
-                and point_rms_after <= point_rms_limit + 1.0e-12
-            )
+        point_rms_ok = not np.isfinite(point_rms_limit) or (
+            np.isfinite(point_rms_after) and point_rms_after <= point_rms_limit + 1.0e-12
         )
         matched_ok = matched_after >= matched_before
         accepted = bool(ridge_improved and point_cost_ok and point_rms_ok and matched_ok)
@@ -14411,9 +12930,7 @@ def fit_geometry_parameters(
             f_scale=solver_f_scale,
         )
         try:
-            point_rms_before = float(
-                point_summary_before.get("unweighted_peak_rms_px", np.nan)
-            )
+            point_rms_before = float(point_summary_before.get("unweighted_peak_rms_px", np.nan))
         except Exception:
             point_rms_before = float("nan")
         matched_before = int(point_summary_before.get("matched_pair_count", 0))
@@ -14445,22 +12962,16 @@ def fit_geometry_parameters(
             "per_reflection_quota": int(image_refinement_cfg.get("per_reflection_quota", 200)),
             "off_tube_fraction": float(image_refinement_cfg.get("off_tube_fraction", 0.05)),
             "max_reflections": int(image_refinement_cfg.get("max_reflections", 12)),
-            "equal_peak_weights": bool(
-                image_refinement_cfg.get("equal_peak_weights", True)
-            ),
+            "equal_peak_weights": bool(image_refinement_cfg.get("equal_peak_weights", True)),
             "random_reflection_fraction": float(
                 image_refinement_cfg.get("random_reflection_fraction", 0.15)
             ),
-            "sampling_temperature": float(
-                image_refinement_cfg.get("sampling_temperature", 1.0)
-            ),
+            "sampling_temperature": float(image_refinement_cfg.get("sampling_temperature", 1.0)),
             "explore_fraction": float(image_refinement_cfg.get("explore_fraction", 0.15)),
             "huber_delta": float(image_refinement_cfg.get("huber_delta", 2.5)),
             "outlier_mixture": float(image_refinement_cfg.get("outlier_mixture", 0.1)),
             "max_nfev": int(image_refinement_cfg.get("max_nfev", 25)),
-            "roi_refresh_threshold": float(
-                image_refinement_cfg.get("roi_refresh_threshold", 1.0)
-            ),
+            "roi_refresh_threshold": float(image_refinement_cfg.get("roi_refresh_threshold", 1.0)),
         }
         stage_cfg["downsample_factor"] = max(1, int(stage_cfg["downsample_factor"]))
         stage_cfg["per_reflection_quota"] = max(1, int(stage_cfg["per_reflection_quota"]))
@@ -14523,9 +13034,7 @@ def fit_geometry_parameters(
             f_scale=solver_f_scale,
         )
         try:
-            point_rms_after = float(
-                point_summary_after.get("unweighted_peak_rms_px", np.nan)
-            )
+            point_rms_after = float(point_summary_after.get("unweighted_peak_rms_px", np.nan))
         except Exception:
             point_rms_after = float("nan")
         matched_after = int(point_summary_after.get("matched_pair_count", 0))
@@ -14567,19 +13076,11 @@ def fit_geometry_parameters(
             and np.isfinite(image_final_cost)
             and image_final_cost + min_image_cost_reduction < image_initial_cost
         )
-        point_cost_ok = (
-            not np.isfinite(point_cost_limit)
-            or (
-                np.isfinite(point_cost_after)
-                and point_cost_after <= point_cost_limit + 1.0e-12
-            )
+        point_cost_ok = not np.isfinite(point_cost_limit) or (
+            np.isfinite(point_cost_after) and point_cost_after <= point_cost_limit + 1.0e-12
         )
-        point_rms_ok = (
-            not np.isfinite(point_rms_limit)
-            or (
-                np.isfinite(point_rms_after)
-                and point_rms_after <= point_rms_limit + 1.0e-12
-            )
+        point_rms_ok = not np.isfinite(point_rms_limit) or (
+            np.isfinite(point_rms_after) and point_rms_after <= point_rms_limit + 1.0e-12
         )
         matched_ok = matched_after >= matched_before
         accepted = bool(image_improved and point_cost_ok and point_rms_ok and matched_ok)
@@ -14848,18 +13349,14 @@ def fit_geometry_parameters(
                 for j_local, j_global in enumerate(valid_indices.tolist()):
                     denom = float(std[i_local] * std[j_local])
                     if denom > 1.0e-12:
-                        correlation[i_global, j_global] = float(
-                            cov_valid[i_local, j_local] / denom
-                        )
+                        correlation[i_global, j_global] = float(cov_valid[i_local, j_local] / denom)
 
         group_sensitivity: Dict[str, float] = {}
         for entry in param_entries:
             group = _parameter_group(str(entry["name"]))
             column_norm = float(entry.get("column_norm", np.nan))
             if np.isfinite(column_norm):
-                group_sensitivity[group] = float(
-                    group_sensitivity.get(group, 0.0) + column_norm
-                )
+                group_sensitivity[group] = float(group_sensitivity.get(group, 0.0) + column_norm)
         dominant_group = "mixed"
         underconstrained = bool(
             rank < int(np.count_nonzero(valid_columns))
@@ -14888,17 +13385,17 @@ def fit_geometry_parameters(
                 diag_minus_map = diagnostics_minus_cache.get(idx, {})
                 for key, base_vec in base_diag_map.items():
                     if key in diag_plus_map and key in diag_minus_map:
-                        delta_vec = (
-                            diag_plus_map[key] - diag_minus_map[key]
-                        ) / max(float(steps[idx]) * 2.0, 1.0e-12)
+                        delta_vec = (diag_plus_map[key] - diag_minus_map[key]) / max(
+                            float(steps[idx]) * 2.0, 1.0e-12
+                        )
                     elif key in diag_plus_map:
-                        delta_vec = (
-                            diag_plus_map[key] - base_vec
-                        ) / max(float(steps[idx]), 1.0e-12)
+                        delta_vec = (diag_plus_map[key] - base_vec) / max(
+                            float(steps[idx]), 1.0e-12
+                        )
                     elif key in diag_minus_map:
-                        delta_vec = (
-                            base_vec - diag_minus_map[key]
-                        ) / max(float(steps[idx]), 1.0e-12)
+                        delta_vec = (base_vec - diag_minus_map[key]) / max(
+                            float(steps[idx]), 1.0e-12
+                        )
                     else:
                         continue
                     sensitivity_val = float(np.linalg.norm(delta_vec))
@@ -14939,9 +13436,7 @@ def fit_geometry_parameters(
                 "index": int(idx),
                 "reasons": [],
                 "column_norm": float(param_entry.get("column_norm", np.nan)),
-                "relative_sensitivity": float(
-                    param_entry.get("relative_sensitivity", np.nan)
-                ),
+                "relative_sensitivity": float(param_entry.get("relative_sensitivity", np.nan)),
                 "valid": bool(param_entry.get("valid", False)),
                 "partners": [],
                 "max_abs_correlation": float("nan"),
@@ -14951,12 +13446,8 @@ def fit_geometry_parameters(
 
         for idx, entry in enumerate(param_entries):
             column_norm = float(entry.get("column_norm", np.nan))
-            is_weak = (
-                not bool(entry.get("valid", False))
-                or (
-                    np.isfinite(column_norm)
-                    and column_norm <= weak_norm_threshold
-                )
+            is_weak = not bool(entry.get("valid", False)) or (
+                np.isfinite(column_norm) and column_norm <= weak_norm_threshold
             )
             if not is_weak:
                 continue
@@ -14971,9 +13462,7 @@ def fit_geometry_parameters(
                     "index": int(idx),
                     "reason": weak_reason,
                     "column_norm": column_norm,
-                    "relative_sensitivity": float(
-                        entry.get("relative_sensitivity", np.nan)
-                    ),
+                    "relative_sensitivity": float(entry.get("relative_sensitivity", np.nan)),
                     "valid": bool(entry.get("valid", False)),
                 }
             )
@@ -15018,14 +13507,10 @@ def fit_geometry_parameters(
                 recommendation = _ensure_freeze_recommendation(preferred_idx)
                 if "high_correlation" not in recommendation["reasons"]:
                     recommendation["reasons"].append("high_correlation")
-                partner_name = str(
-                    param_entries[partner_idx].get("name", var_names[partner_idx])
-                )
+                partner_name = str(param_entries[partner_idx].get("name", var_names[partner_idx]))
                 if partner_name not in recommendation["partners"]:
                     recommendation["partners"].append(partner_name)
-                current_max_corr = float(
-                    recommendation.get("max_abs_correlation", np.nan)
-                )
+                current_max_corr = float(recommendation.get("max_abs_correlation", np.nan))
                 if not np.isfinite(current_max_corr) or abs_corr > current_max_corr:
                     recommendation["max_abs_correlation"] = float(abs_corr)
 
@@ -15098,12 +13583,10 @@ def fit_geometry_parameters(
                 "high_correlation_pairs": high_correlation_pairs,
                 "freeze_recommendations": freeze_recommendations,
                 "recommended_fixed_parameters": [
-                    str(entry.get("name", ""))
-                    for entry in freeze_recommendations
+                    str(entry.get("name", "")) for entry in freeze_recommendations
                 ],
                 "recommended_fixed_indices": [
-                    int(entry.get("index", 0))
-                    for entry in freeze_recommendations
+                    int(entry.get("index", 0)) for entry in freeze_recommendations
                 ],
                 "warning_flags": warning_flags,
             }
@@ -15191,12 +13674,11 @@ def fit_geometry_parameters(
                 return
             if eval_count < manual_fail_fast_eval_window:
                 return
-            last_probe_eval = int(
-                progress_state.get("manual_fail_fast_last_probe_eval", 0)
-            )
-            if last_probe_eval > 0 and (
-                eval_count - last_probe_eval
-            ) < manual_fail_fast_probe_period:
+            last_probe_eval = int(progress_state.get("manual_fail_fast_last_probe_eval", 0))
+            if (
+                last_probe_eval > 0
+                and (eval_count - last_probe_eval) < manual_fail_fast_probe_period
+            ):
                 return
             progress_state["manual_fail_fast_last_probe_eval"] = int(eval_count)
 
@@ -15206,18 +13688,14 @@ def fit_geometry_parameters(
                 collect_diagnostics=False,
             )
             probe_summary = (
-                dict(point_match_summary)
-                if isinstance(point_match_summary, Mapping)
-                else {}
+                dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
             )
             try:
                 matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
             except Exception:
                 matched_pair_count = 0
             try:
-                current_peak_rms = float(
-                    probe_summary.get("unweighted_peak_rms_px", np.nan)
-                )
+                current_peak_rms = float(probe_summary.get("unweighted_peak_rms_px", np.nan))
             except Exception:
                 current_peak_rms = float("nan")
             if matched_pair_count > 0 and np.isfinite(current_peak_rms):
@@ -15228,12 +13706,8 @@ def fit_geometry_parameters(
                     )
                 )
                 if not np.isfinite(best_peak_rms) or current_peak_rms < best_peak_rms:
-                    progress_state["best_unweighted_peak_rms_px"] = float(
-                        current_peak_rms
-                    )
-                progress_state["last_unweighted_peak_rms_px"] = float(
-                    current_peak_rms
-                )
+                    progress_state["best_unweighted_peak_rms_px"] = float(current_peak_rms)
+                progress_state["last_unweighted_peak_rms_px"] = float(current_peak_rms)
 
             if matched_pair_count <= 0 or not np.isfinite(current_peak_rms):
                 return
@@ -15243,18 +13717,12 @@ def fit_geometry_parameters(
                     current_peak_rms,
                 )
             )
-            if (
-                current_peak_rms < manual_fail_fast_peak_rms_px
-                or (
-                    np.isfinite(best_peak_rms)
-                    and best_peak_rms < manual_fail_fast_peak_rms_px
-                )
+            if current_peak_rms < manual_fail_fast_peak_rms_px or (
+                np.isfinite(best_peak_rms) and best_peak_rms < manual_fail_fast_peak_rms_px
             ):
                 return
 
-            bound_summary = _build_bound_proximity_summary(
-                np.asarray(x_trial, dtype=float)
-            )
+            bound_summary = _build_bound_proximity_summary(np.asarray(x_trial, dtype=float))
             hugging_parameters = list(bound_summary.get("hugging_parameters", []))
             progress_state["last_bound_hugging_parameters"] = list(hugging_parameters)
             if len(hugging_parameters) < manual_fail_fast_min_bound_parameters:
@@ -15480,9 +13948,7 @@ def fit_geometry_parameters(
             prior_mean = spec.prior_mean
             if prior_mean is None or not np.isfinite(float(prior_mean)):
                 prior_mean = float(spec.ref_value)
-            terms.append(
-                float((theta_values[idx] - float(prior_mean)) / float(prior_sigma))
-            )
+            terms.append(float((theta_values[idx] - float(prior_mean)) / float(prior_sigma)))
         return np.asarray(terms, dtype=float)
 
     def _residual_u(
@@ -15564,12 +14030,11 @@ def fit_geometry_parameters(
                 return
             if eval_count < manual_fail_fast_eval_window:
                 return
-            last_probe_eval = int(
-                progress_state.get("manual_fail_fast_last_probe_eval", 0)
-            )
-            if last_probe_eval > 0 and (
-                eval_count - last_probe_eval
-            ) < manual_fail_fast_probe_period:
+            last_probe_eval = int(progress_state.get("manual_fail_fast_last_probe_eval", 0))
+            if (
+                last_probe_eval > 0
+                and (eval_count - last_probe_eval) < manual_fail_fast_probe_period
+            ):
                 return
             progress_state["manual_fail_fast_last_probe_eval"] = int(eval_count)
 
@@ -15580,18 +14045,14 @@ def fit_geometry_parameters(
                 collect_diagnostics=False,
             )
             probe_summary = (
-                dict(point_match_summary)
-                if isinstance(point_match_summary, Mapping)
-                else {}
+                dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
             )
             try:
                 matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
             except Exception:
                 matched_pair_count = 0
             try:
-                current_peak_rms = float(
-                    probe_summary.get("unweighted_peak_rms_px", np.nan)
-                )
+                current_peak_rms = float(probe_summary.get("unweighted_peak_rms_px", np.nan))
             except Exception:
                 current_peak_rms = float("nan")
             if matched_pair_count > 0 and np.isfinite(current_peak_rms):
@@ -15602,12 +14063,8 @@ def fit_geometry_parameters(
                     )
                 )
                 if not np.isfinite(best_peak_rms) or current_peak_rms < best_peak_rms:
-                    progress_state["best_unweighted_peak_rms_px"] = float(
-                        current_peak_rms
-                    )
-                progress_state["last_unweighted_peak_rms_px"] = float(
-                    current_peak_rms
-                )
+                    progress_state["best_unweighted_peak_rms_px"] = float(current_peak_rms)
+                progress_state["last_unweighted_peak_rms_px"] = float(current_peak_rms)
 
             if matched_pair_count <= 0 or not np.isfinite(current_peak_rms):
                 return
@@ -15617,12 +14074,8 @@ def fit_geometry_parameters(
                     current_peak_rms,
                 )
             )
-            if (
-                current_peak_rms < manual_fail_fast_peak_rms_px
-                or (
-                    np.isfinite(best_peak_rms)
-                    and best_peak_rms < manual_fail_fast_peak_rms_px
-                )
+            if current_peak_rms < manual_fail_fast_peak_rms_px or (
+                np.isfinite(best_peak_rms) and best_peak_rms < manual_fail_fast_peak_rms_px
             ):
                 return
 
@@ -15826,9 +14279,7 @@ def fit_geometry_parameters(
             grouped.setdefault(int(dataset_index), {})[int(overlay_match_index)] = {
                 "dataset_index": int(dataset_index),
                 "overlay_match_index": int(overlay_match_index),
-                "match_input_index": int(
-                    entry.get("match_input_index", overlay_match_index)
-                ),
+                "match_input_index": int(entry.get("match_input_index", overlay_match_index)),
                 "label": str(entry.get("label", "")),
                 "hkl": normalized_hkl,
                 "q_group_key": entry.get("q_group_key"),
@@ -15837,10 +14288,9 @@ def fit_geometry_parameters(
                 "match_kind": str(entry.get("match_kind", "")),
                 "resolution_kind": str(entry.get("resolution_kind", "")),
                 "resolution_reason": str(entry.get("resolution_reason", "")),
-                "fit_source_resolution_kind": entry.get(
-                    "fit_source_resolution_kind"
-                ),
+                "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
                 "source_table_index": entry.get("source_table_index"),
+                "source_reflection_index": entry.get("source_reflection_index"),
                 "source_row_index": entry.get("source_row_index"),
                 "source_peak_index": entry.get(
                     "source_peak_index",
@@ -15856,9 +14306,7 @@ def fit_geometry_parameters(
                 ),
                 "measured_x": float(entry.get("measured_x", np.nan)),
                 "measured_y": float(entry.get("measured_y", np.nan)),
-                "placement_error_px": float(
-                    entry.get("placement_error_px", np.nan)
-                ),
+                "placement_error_px": float(entry.get("placement_error_px", np.nan)),
                 "sigma_is_custom": bool(entry.get("sigma_is_custom", False)),
                 "seed_distance_px": float(entry.get("distance_px", np.nan)),
             }
@@ -15875,8 +14323,8 @@ def fit_geometry_parameters(
                 grouped[int(dataset_index)][int(overlay_match_index)]["sigma_radial_px"] = float(
                     entry.get("sigma_radial_px", np.nan)
                 )
-                grouped[int(dataset_index)][int(overlay_match_index)]["sigma_tangential_px"] = float(
-                    entry.get("sigma_tangential_px", np.nan)
+                grouped[int(dataset_index)][int(overlay_match_index)]["sigma_tangential_px"] = (
+                    float(entry.get("sigma_tangential_px", np.nan))
                 )
 
         out: Dict[int, List[Dict[str, object]]] = {}
@@ -15895,23 +14343,27 @@ def fit_geometry_parameters(
         collect_diagnostics: bool = False,
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
         if not dataset_contexts:
-            return np.array([], dtype=float), [], {
-                "dataset_count": 0,
-                "measured_count": 0,
-                "fixed_source_resolved_count": 0,
-                "fallback_entry_count": 0,
-                "matched_pair_count": 0,
-                "missing_pair_count": 0,
-                "simulated_reflection_count": 0,
-                "total_reflection_count": 0,
-                "fixed_source_reflection_count": 0,
-                "subset_fallback_hkl_count": 0,
-                "subset_reduced": False,
-                "central_ray_mode": False,
-                "single_ray_enabled": False,
-                "single_ray_forced_count": 0,
-                "match_radius_px": float(full_beam_polish_match_radius_px),
-            }
+            return (
+                np.array([], dtype=float),
+                [],
+                {
+                    "dataset_count": 0,
+                    "measured_count": 0,
+                    "fixed_source_resolved_count": 0,
+                    "fallback_entry_count": 0,
+                    "matched_pair_count": 0,
+                    "missing_pair_count": 0,
+                    "simulated_reflection_count": 0,
+                    "total_reflection_count": 0,
+                    "fixed_source_reflection_count": 0,
+                    "subset_fallback_hkl_count": 0,
+                    "subset_reduced": False,
+                    "central_ray_mode": False,
+                    "single_ray_enabled": False,
+                    "single_ray_forced_count": 0,
+                    "match_radius_px": float(full_beam_polish_match_radius_px),
+                },
+            )
 
         def _evaluate_full_beam_for_dataset(
             item: Tuple[Dict[str, object], GeometryFitDatasetContext],
@@ -15924,38 +14376,39 @@ def fit_geometry_parameters(
                 if isinstance(entry, Mapping)
             ]
             if not correspondence_entries:
-                return np.array([], dtype=float), [], {
-                    "dataset_index": int(dataset_ctx.dataset_index),
-                    "dataset_label": str(dataset_ctx.label),
-                    "theta_initial_deg": float(theta_value),
-                    "measured_count": 0,
-                    "fixed_source_resolved_count": 0,
-                    "fallback_entry_count": 0,
-                    "matched_pair_count": 0,
-                    "missing_pair_count": 0,
-                    "simulated_reflection_count": int(dataset_ctx.subset.miller.shape[0]),
-                    "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
-                    "fixed_source_reflection_count": int(dataset_ctx.subset.fixed_source_reflection_count),
-                    "subset_fallback_hkl_count": int(dataset_ctx.subset.fallback_hkl_count),
-                    "subset_reduced": bool(dataset_ctx.subset.reduced),
-                    "central_ray_mode": False,
-                    "single_ray_enabled": False,
-                    "single_ray_forced_count": 0,
-                    "match_radius_px": float(full_beam_polish_match_radius_px),
-                }
+                return (
+                    np.array([], dtype=float),
+                    [],
+                    {
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "theta_initial_deg": float(theta_value),
+                        "measured_count": 0,
+                        "fixed_source_resolved_count": 0,
+                        "fallback_entry_count": 0,
+                        "matched_pair_count": 0,
+                        "missing_pair_count": 0,
+                        "simulated_reflection_count": int(dataset_ctx.subset.miller.shape[0]),
+                        "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
+                        "fixed_source_reflection_count": int(
+                            dataset_ctx.subset.fixed_source_reflection_count
+                        ),
+                        "subset_fallback_hkl_count": int(dataset_ctx.subset.fallback_hkl_count),
+                        "subset_reduced": bool(dataset_ctx.subset.reduced),
+                        "central_ray_mode": False,
+                        "single_ray_enabled": False,
+                        "single_ray_forced_count": 0,
+                        "match_radius_px": float(full_beam_polish_match_radius_px),
+                    },
+                )
 
             local_full = dict(local_item)
             local_full["mosaic_params"] = full_beam_mosaic_params
             try:
-                hk0_peak_priority_weight = float(
-                    local_full.get("_hk0_peak_priority_weight", 1.0)
-                )
+                hk0_peak_priority_weight = float(local_full.get("_hk0_peak_priority_weight", 1.0))
             except Exception:
                 hk0_peak_priority_weight = 1.0
-            if (
-                not np.isfinite(hk0_peak_priority_weight)
-                or hk0_peak_priority_weight < 1.0
-            ):
+            if not np.isfinite(hk0_peak_priority_weight) or hk0_peak_priority_weight < 1.0:
                 hk0_peak_priority_weight = 1.0
             fit_miller = dataset_ctx.subset.miller
             fit_intensities = dataset_ctx.subset.intensities
@@ -15966,11 +14419,22 @@ def fit_geometry_parameters(
 
             sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
             _, hit_tables, *_ = _process_peaks_parallel_safe(
-                fit_miller, fit_intensities, image_size,
-                local_full["a"], local_full["c"], wavelength_array,
-                sim_buffer, local_full["corto_detector"],
-                local_full["gamma"], local_full["Gamma"], local_full["chi"], local_full.get("psi", 0.0), local_full.get("psi_z", 0.0),
-                local_full["zs"], local_full["zb"], local_full["n2"],
+                fit_miller,
+                fit_intensities,
+                image_size,
+                local_full["a"],
+                local_full["c"],
+                wavelength_array,
+                sim_buffer,
+                local_full["corto_detector"],
+                local_full["gamma"],
+                local_full["Gamma"],
+                local_full["chi"],
+                local_full.get("psi", 0.0),
+                local_full.get("psi_z", 0.0),
+                local_full["zs"],
+                local_full["zb"],
+                local_full["n2"],
                 mosaic["beam_x_array"],
                 mosaic["beam_y_array"],
                 mosaic["theta_array"],
@@ -15979,8 +14443,11 @@ def fit_geometry_parameters(
                 mosaic["gamma_mosaic_deg"],
                 mosaic["eta"],
                 wavelength_array,
-                local_full["debye_x"], local_full["debye_y"],
-                local_full["center"], theta_value, local_full.get("cor_angle", 0.0),
+                local_full["debye_x"],
+                local_full["debye_y"],
+                local_full["center"],
+                theta_value,
+                local_full.get("cor_angle", 0.0),
                 np.array([1.0, 0.0, 0.0]),
                 np.array([0.0, 1.0, 0.0]),
                 save_flag=0,
@@ -16016,8 +14483,10 @@ def fit_geometry_parameters(
                 except Exception:
                     return float("nan")
                 if not (
-                    np.isfinite(point[0]) and np.isfinite(point[1])
-                    and np.isfinite(center_row) and np.isfinite(center_col)
+                    np.isfinite(point[0])
+                    and np.isfinite(point[1])
+                    and np.isfinite(center_row)
+                    and np.isfinite(center_col)
                 ):
                     return float("nan")
                 return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
@@ -16085,17 +14554,18 @@ def fit_geometry_parameters(
 
                 if str(entry.get("resolution_kind", "")) == "fixed_source":
                     try:
-                        table_idx = int(entry.get("source_table_index"))
+                        table_idx = int(
+                            entry.get(
+                                "source_reflection_index",
+                                entry.get("source_table_index"),
+                            )
+                        )
                         row_idx = int(entry.get("source_row_index"))
                     except Exception:
-                        return None, {
-                            "resolution_reason": "fixed_source_indices_missing"
-                        }
+                        return None, {"resolution_reason": "fixed_source_indices_missing"}
                     if table_idx not in filtered_rows_cache:
                         if 0 <= table_idx < len(hit_tables):
-                            filtered_rows_cache[table_idx] = _valid_hit_rows(
-                                hit_tables[table_idx]
-                            )
+                            filtered_rows_cache[table_idx] = _valid_hit_rows(hit_tables[table_idx])
                         else:
                             filtered_rows_cache[table_idx] = []
                     rows = filtered_rows_cache.get(table_idx, [])
@@ -16114,17 +14584,11 @@ def fit_geometry_parameters(
                             int(round(float(row[6]))),
                         )
                     except Exception:
-                        return None, {
-                            "resolution_reason": "source_row_parse_failed"
-                        }
+                        return None, {"resolution_reason": "source_row_parse_failed"}
                     if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-                        return None, {
-                            "resolution_reason": "invalid_simulated_point"
-                        }
+                        return None, {"resolution_reason": "invalid_simulated_point"}
                     return (float(sim_col), float(sim_row)), {
-                        "resolution_reason": str(
-                            entry.get("resolution_reason") or "resolved"
-                        ),
+                        "resolution_reason": str(entry.get("resolution_reason") or "resolved"),
                         "resolved_table_index": int(table_idx),
                         "resolved_peak_index": None,
                         "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
@@ -16144,22 +14608,20 @@ def fit_geometry_parameters(
                         )
                     )
                 except Exception:
-                    return None, {
-                        "resolution_reason": "fallback_peak_identity_missing"
-                    }
+                    return None, {"resolution_reason": "fallback_peak_identity_missing"}
                 if table_idx < 0 or table_idx >= maxpos.shape[0]:
-                    return None, {
-                        "resolution_reason": "fallback_table_out_of_range"
-                    }
+                    return None, {"resolution_reason": "fallback_table_out_of_range"}
                 if peak_index not in {0, 1}:
-                    return None, {
-                        "resolution_reason": "fallback_peak_index_invalid"
-                    }
+                    return None, {"resolution_reason": "fallback_peak_index_invalid"}
                 row = maxpos[table_idx]
                 if int(peak_index) == 0:
+                    if not np.isfinite(row[0]) or float(row[0]) <= 0.0:
+                        return None, {"resolution_reason": "fallback_peak_missing"}
                     sim_col = float(row[1])
                     sim_row = float(row[2])
                 else:
+                    if not np.isfinite(row[3]) or float(row[3]) <= 0.0:
+                        return None, {"resolution_reason": "fallback_peak_missing"}
                     sim_col = float(row[4])
                     sim_row = float(row[5])
                 if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
@@ -16167,15 +14629,11 @@ def fit_geometry_parameters(
                 resolved_sim_hkl: object = None
                 if 0 <= table_idx < fit_miller.shape[0]:
                     try:
-                        resolved_sim_hkl = tuple(
-                            int(round(v)) for v in fit_miller[table_idx]
-                        )
+                        resolved_sim_hkl = tuple(int(round(v)) for v in fit_miller[table_idx])
                     except Exception:
                         resolved_sim_hkl = None
                 return (float(sim_col), float(sim_row)), {
-                    "resolution_reason": str(
-                        entry.get("resolution_reason") or "resolved"
-                    ),
+                    "resolution_reason": str(entry.get("resolution_reason") or "resolved"),
                     "resolved_table_index": int(table_idx),
                     "resolved_peak_index": int(peak_index),
                     "resolved_sim_hkl": resolved_sim_hkl,
@@ -16193,32 +14651,29 @@ def fit_geometry_parameters(
                     "label": str(entry.get("label", "")),
                     "hkl": entry.get("hkl"),
                     "source_table_index": entry.get("source_table_index"),
+                    "source_reflection_index": entry.get("source_reflection_index"),
                     "source_row_index": entry.get("source_row_index"),
                     "source_peak_index": entry.get(
                         "source_peak_index",
                         entry.get("resolved_peak_index"),
                     ),
                     "resolution_kind": str(entry.get("resolution_kind", "")),
-                    "fit_source_resolution_kind": entry.get(
-                        "fit_source_resolution_kind"
-                    ),
+                    "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
                     "correspondence_resolution_reason": (
                         None
                         if entry.get("resolution_reason") in ("", None)
                         else str(entry.get("resolution_reason"))
                     ),
                 }
-                if not (
-                    np.isfinite(measured_point[0]) and np.isfinite(measured_point[1])
-                ):
+                if not (np.isfinite(measured_point[0]) and np.isfinite(measured_point[1])):
                     priority_fields = _geometry_peak_priority_metadata(
                         entry,
                         hk0_peak_priority_weight=float(hk0_peak_priority_weight),
                     )
                     priority_weight = float(priority_fields["priority_weight"])
                     missing_pair_count_local += 1
-                    residual_components[slot, 0] = (
-                        float(missing_pair_penalty) * float(priority_weight)
+                    residual_components[slot, 0] = float(missing_pair_penalty) * float(
+                        priority_weight
                     )
                     _add_diag(
                         base_diag,
@@ -16235,9 +14690,7 @@ def fit_geometry_parameters(
                             "distance_px": float("nan"),
                             "measured_radius_px": float("nan"),
                             "simulated_radius_px": float("nan"),
-                            "weighted_missing_penalty_px": float(
-                                missing_pair_penalty
-                            )
+                            "weighted_missing_penalty_px": float(missing_pair_penalty)
                             * float(priority_weight),
                             "weight": float(priority_weight),
                             **priority_fields,
@@ -16266,21 +14719,15 @@ def fit_geometry_parameters(
                             dy=dy,
                             distance_weight=float(distance_weight),
                         )
-                        residual_components[slot, 0] = float(
-                            weight_fields["weighted_dx_px"]
-                        )
-                        residual_components[slot, 1] = float(
-                            weight_fields["weighted_dy_px"]
-                        )
+                        residual_components[slot, 0] = float(weight_fields["weighted_dx_px"])
+                        residual_components[slot, 1] = float(weight_fields["weighted_dy_px"])
                         _add_diag(
                             base_diag,
                             {
                                 "match_kind": "full_beam_fixed",
                                 "match_status": "matched",
                                 "resolution_reason": str(
-                                    resolution_payload.get(
-                                        "resolution_reason", "resolved"
-                                    )
+                                    resolution_payload.get("resolution_reason", "resolved")
                                 ),
                                 "resolved_table_index": resolution_payload.get(
                                     "resolved_table_index"
@@ -16288,9 +14735,7 @@ def fit_geometry_parameters(
                                 "resolved_peak_index": resolution_payload.get(
                                     "resolved_peak_index"
                                 ),
-                                "resolved_sim_hkl": resolution_payload.get(
-                                    "resolved_sim_hkl"
-                                ),
+                                "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
                                 "measured_x": float(measured_point[0]),
                                 "measured_y": float(measured_point[1]),
                                 "simulated_x": float(sim_point[0]),
@@ -16307,9 +14752,7 @@ def fit_geometry_parameters(
                                     * float(weight_fields.get("sigma_weight", 1.0))
                                     * float(weight_fields.get("priority_weight", 1.0))
                                 ),
-                                "measured_radius_px": _point_radius_px(
-                                    measured_point
-                                ),
+                                "measured_radius_px": _point_radius_px(measured_point),
                                 "simulated_radius_px": _point_radius_px(sim_point),
                                 **weight_fields,
                             },
@@ -16326,9 +14769,7 @@ def fit_geometry_parameters(
                 )
                 penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
                 penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
-                residual_components[slot, 0] = (
-                    float(missing_pair_penalty) * penalty_weight
-                )
+                residual_components[slot, 0] = float(missing_pair_penalty) * penalty_weight
                 residual_components[slot, 1] = 0.0
                 _add_diag(
                     base_diag,
@@ -16336,19 +14777,11 @@ def fit_geometry_parameters(
                         "match_kind": "full_beam_fixed",
                         "match_status": "missing_pair",
                         "resolution_reason": str(
-                            resolution_payload.get(
-                                "resolution_reason", "missing_pair"
-                            )
+                            resolution_payload.get("resolution_reason", "missing_pair")
                         ),
-                        "resolved_table_index": resolution_payload.get(
-                            "resolved_table_index"
-                        ),
-                        "resolved_peak_index": resolution_payload.get(
-                            "resolved_peak_index"
-                        ),
-                        "resolved_sim_hkl": resolution_payload.get(
-                            "resolved_sim_hkl"
-                        ),
+                        "resolved_table_index": resolution_payload.get("resolved_table_index"),
+                        "resolved_peak_index": resolution_payload.get("resolved_peak_index"),
+                        "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
                         "measured_x": float(measured_point[0]),
                         "measured_y": float(measured_point[1]),
                         "simulated_x": float("nan"),
@@ -16356,14 +14789,10 @@ def fit_geometry_parameters(
                         "dx_px": float("nan"),
                         "dy_px": float("nan"),
                         "distance_px": float("nan"),
-                        "placement_error_px": float(
-                            entry.get("placement_error_px", np.nan)
-                        ),
+                        "placement_error_px": float(entry.get("placement_error_px", np.nan)),
                         "distance_weight": 1.0,
                         "weight": float(penalty_weight),
-                        "weighted_missing_penalty_px": float(
-                            missing_pair_penalty
-                        )
+                        "weighted_missing_penalty_px": float(missing_pair_penalty)
                         * float(penalty_weight),
                         "measured_radius_px": _point_radius_px(measured_point),
                         "simulated_radius_px": float("nan"),
@@ -16378,22 +14807,26 @@ def fit_geometry_parameters(
                 "theta_initial_deg": float(theta_value),
                 "measured_count": int(len(correspondence_entries)),
                 "fixed_source_resolved_count": int(fixed_source_count_local),
-                "fallback_entry_count": int(
-                    len(correspondence_entries) - fixed_source_count_local
-                ),
+                "fallback_entry_count": int(len(correspondence_entries) - fixed_source_count_local),
                 "fallback_hkl_count": int(len(fallback_hkls)),
                 "matched_pair_count": int(matched_pair_count_local),
                 "missing_pair_count": int(missing_pair_count_local),
                 "simulated_reflection_count": int(fit_miller.shape[0]),
                 "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
-                "fixed_source_reflection_count": int(dataset_ctx.subset.fixed_source_reflection_count),
+                "fixed_source_reflection_count": int(
+                    dataset_ctx.subset.fixed_source_reflection_count
+                ),
                 "subset_fallback_hkl_count": int(dataset_ctx.subset.fallback_hkl_count),
                 "subset_reduced": bool(dataset_ctx.subset.reduced),
-                "central_ray_mode": False,
+                "central_ray_mode": bool(_uses_central_geometry_ray(full_beam_mosaic_params)),
                 "single_ray_enabled": False,
                 "single_ray_forced_count": 0,
-                "center_row": float(local_full["center"][0]) if len(local_full.get("center", [])) >= 2 else float("nan"),
-                "center_col": float(local_full["center"][1]) if len(local_full.get("center", [])) >= 2 else float("nan"),
+                "center_row": float(local_full["center"][0])
+                if len(local_full.get("center", [])) >= 2
+                else float("nan"),
+                "center_col": float(local_full["center"][1])
+                if len(local_full.get("center", [])) >= 2
+                else float("nan"),
                 "match_radius_px": float(full_beam_polish_match_radius_px),
                 "anisotropic_sigma_count": int(anisotropic_sigma_count),
             }
@@ -16402,15 +14835,9 @@ def fit_geometry_parameters(
                 sigma_arr = sigma_arr[np.isfinite(sigma_arr) & (sigma_arr > 0.0)]
                 if sigma_arr.size:
                     summary_local["custom_sigma_count"] = int(sigma_arr.size)
-                    summary_local["measurement_sigma_median_px"] = float(
-                        np.median(sigma_arr)
-                    )
-                    summary_local["measurement_sigma_mean_px"] = float(
-                        np.mean(sigma_arr)
-                    )
-                    summary_local["measurement_sigma_max_px"] = float(
-                        np.max(sigma_arr)
-                    )
+                    summary_local["measurement_sigma_median_px"] = float(np.median(sigma_arr))
+                    summary_local["measurement_sigma_mean_px"] = float(np.mean(sigma_arr))
+                    summary_local["measurement_sigma_max_px"] = float(np.max(sigma_arr))
                 else:
                     summary_local["custom_sigma_count"] = 0
             else:
@@ -16422,12 +14849,8 @@ def fit_geometry_parameters(
                     summary_local["unweighted_peak_rms_px"] = float(
                         np.sqrt(np.mean(matched_dist_arr * matched_dist_arr))
                     )
-                    summary_local["unweighted_peak_mean_px"] = float(
-                        np.mean(matched_dist_arr)
-                    )
-                    summary_local["unweighted_peak_max_px"] = float(
-                        np.max(matched_dist_arr)
-                    )
+                    summary_local["unweighted_peak_mean_px"] = float(np.mean(matched_dist_arr))
+                    summary_local["unweighted_peak_max_px"] = float(np.max(matched_dist_arr))
                 else:
                     summary_local["unweighted_peak_rms_px"] = float("nan")
                     summary_local["unweighted_peak_mean_px"] = float("nan")
@@ -16444,9 +14867,7 @@ def fit_geometry_parameters(
                 )
             elif summary_local.get("custom_sigma_count", 0):
                 summary_local["peak_weighting_mode"] = (
-                    "measurement_sigma+distance"
-                    if weighted_matching
-                    else "measurement_sigma"
+                    "measurement_sigma+distance" if weighted_matching else "measurement_sigma"
                 )
             else:
                 summary_local["peak_weighting_mode"] = "uniform"
@@ -16470,16 +14891,18 @@ def fit_geometry_parameters(
             "central_ray_mode": False,
             "single_ray_enabled": False,
             "single_ray_forced_count": 0,
-            "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
-            "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+            "center_row": float(local["center"][0])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
+            "center_col": float(local["center"][1])
+            if len(local.get("center", [])) >= 2
+            else float("nan"),
             "match_radius_px": float(full_beam_polish_match_radius_px),
         }
         dataset_items = [(local, dataset_ctx) for dataset_ctx in dataset_contexts]
         # Keep full-beam polish sequential across datasets so the final metric
         # matches the conservative GUI multi-background safety profile.
-        dataset_results = [
-            _evaluate_full_beam_for_dataset(item) for item in dataset_items
-        ]
+        dataset_results = [_evaluate_full_beam_for_dataset(item) for item in dataset_items]
         for residual_i, diagnostics_i, summary_i in dataset_results:
             residual_i = np.asarray(residual_i, dtype=float)
             if residual_i.size:
@@ -16497,19 +14920,18 @@ def fit_geometry_parameters(
                 "subset_fallback_hkl_count",
                 "single_ray_forced_count",
             ):
-                summary[key] = int(summary.get(key, 0)) + int(
-                    summary_i.get(key, 0)
-                )
+                summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
             summary["subset_reduced"] = bool(
-                summary.get("subset_reduced", False)
-                or bool(summary_i.get("subset_reduced", False))
+                summary.get("subset_reduced", False) or bool(summary_i.get("subset_reduced", False))
+            )
+            summary["central_ray_mode"] = bool(
+                summary.get("central_ray_mode", False)
+                or bool(summary_i.get("central_ray_mode", False))
             )
             if collect_diagnostics and diagnostics_i:
                 diagnostics.extend(diagnostics_i)
         residual_arr = (
-            np.concatenate(residual_blocks)
-            if residual_blocks
-            else np.array([], dtype=float)
+            np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
         custom_sigma_values = np.asarray(
@@ -16539,9 +14961,7 @@ def fit_geometry_parameters(
             )
         elif custom_sigma_values.size:
             summary["peak_weighting_mode"] = (
-                "measurement_sigma+distance"
-                if bool(weighted_matching)
-                else "measurement_sigma"
+                "measurement_sigma+distance" if bool(weighted_matching) else "measurement_sigma"
             )
         else:
             summary["peak_weighting_mode"] = "uniform"
@@ -16589,9 +15009,7 @@ def fit_geometry_parameters(
                 if dataset_count <= 0:
                     continue
                 if np.isfinite(dataset_rms):
-                    matched_sq_sum += (
-                        float(dataset_count) * float(dataset_rms) * float(dataset_rms)
-                    )
+                    matched_sq_sum += float(dataset_count) * float(dataset_rms) * float(dataset_rms)
                     has_sq_stat = True
                 if np.isfinite(dataset_mean):
                     matched_sum += float(dataset_count) * float(dataset_mean)
@@ -16606,9 +15024,7 @@ def fit_geometry_parameters(
             else:
                 summary["unweighted_peak_rms_px"] = float("nan")
             if matched_count > 0 and has_mean_stat:
-                summary["unweighted_peak_mean_px"] = float(
-                    matched_sum / float(matched_count)
-                )
+                summary["unweighted_peak_mean_px"] = float(matched_sum / float(matched_count))
             else:
                 summary["unweighted_peak_mean_px"] = float("nan")
             summary["unweighted_peak_max_px"] = float(matched_max)
@@ -16662,21 +15078,13 @@ def fit_geometry_parameters(
                 {
                     "status": "skipped",
                     "reason": "disabled_by_config",
-                    "matched_pair_count_before": int(
-                        seed_summary.get("matched_pair_count", 0)
-                    ),
-                    "matched_pair_count_after": int(
-                        seed_summary.get("matched_pair_count", 0)
-                    ),
+                    "matched_pair_count_before": int(seed_summary.get("matched_pair_count", 0)),
+                    "matched_pair_count_after": int(seed_summary.get("matched_pair_count", 0)),
                     "fixed_source_resolved_count": int(
                         seed_summary.get("fixed_source_resolved_count", 0)
                     ),
-                    "start_rms_px": float(
-                        seed_summary.get("unweighted_peak_rms_px", np.nan)
-                    ),
-                    "final_rms_px": float(
-                        seed_summary.get("unweighted_peak_rms_px", np.nan)
-                    ),
+                    "start_rms_px": float(seed_summary.get("unweighted_peak_rms_px", np.nan)),
+                    "final_rms_px": float(seed_summary.get("unweighted_peak_rms_px", np.nan)),
                 }
             )
             return summary
@@ -16702,7 +15110,10 @@ def fit_geometry_parameters(
             if prior_residual.size:
                 if residual_arr.size:
                     return np.concatenate(
-                        [np.asarray(residual_arr, dtype=float), np.asarray(prior_residual, dtype=float)]
+                        [
+                            np.asarray(residual_arr, dtype=float),
+                            np.asarray(prior_residual, dtype=float),
+                        ]
                     )
                 return np.asarray(prior_residual, dtype=float)
             return np.asarray(residual_arr, dtype=float)
@@ -16733,15 +15144,11 @@ def fit_geometry_parameters(
             start_pm_summary.get("fixed_source_resolved_count", 0)
         )
         try:
-            start_point_rms = float(
-                start_pm_summary.get("unweighted_peak_rms_px", np.nan)
-            )
+            start_point_rms = float(start_pm_summary.get("unweighted_peak_rms_px", np.nan))
         except Exception:
             start_point_rms = float("nan")
         try:
-            start_peak_max = float(
-                start_pm_summary.get("unweighted_peak_max_px", np.nan)
-            )
+            start_peak_max = float(start_pm_summary.get("unweighted_peak_max_px", np.nan))
         except Exception:
             start_peak_max = float("nan")
         summary["start_rms_px"] = float(start_point_rms)
@@ -16757,7 +15164,9 @@ def fit_geometry_parameters(
                     "reason": "no_seed_matches",
                     "start_cost": float(start_cost),
                     "final_cost": float(start_cost),
-                    "matched_pair_count_after": int(selected_pm_summary.get("matched_pair_count", 0)),
+                    "matched_pair_count_after": int(
+                        selected_pm_summary.get("matched_pair_count", 0)
+                    ),
                     "point_match_diagnostics": selected_pm_diagnostics,
                     "point_match_summary": selected_pm_summary,
                     "fun": selected_fun,
@@ -16778,15 +15187,20 @@ def fit_geometry_parameters(
                 upper_bounds,
             )
             trial_local = _apply_trial_params(trial_x)
-            trial_residual, trial_pm_diagnostics, trial_pm_summary = _full_beam_point_match_evaluator(
-                trial_local,
-                collect_diagnostics=True,
+            trial_residual, trial_pm_diagnostics, trial_pm_summary = (
+                _full_beam_point_match_evaluator(
+                    trial_local,
+                    collect_diagnostics=True,
+                )
             )
             trial_prior = _parameter_prior_residuals(trial_x)
             if trial_prior.size:
                 if trial_residual.size:
                     trial_fun = np.concatenate(
-                        [np.asarray(trial_residual, dtype=float), np.asarray(trial_prior, dtype=float)]
+                        [
+                            np.asarray(trial_residual, dtype=float),
+                            np.asarray(trial_prior, dtype=float),
+                        ]
                     )
                 else:
                     trial_fun = np.asarray(trial_prior, dtype=float)
@@ -16800,7 +15214,9 @@ def fit_geometry_parameters(
                     "reason": f"unexpected_exception: {exc}",
                     "start_cost": float(start_cost),
                     "final_cost": float(start_cost),
-                    "matched_pair_count_after": int(selected_pm_summary.get("matched_pair_count", 0)),
+                    "matched_pair_count_after": int(
+                        selected_pm_summary.get("matched_pair_count", 0)
+                    ),
                     "point_match_diagnostics": selected_pm_diagnostics,
                     "point_match_summary": selected_pm_summary,
                     "fun": selected_fun,
@@ -16811,15 +15227,11 @@ def fit_geometry_parameters(
         improvement_tol = max(1.0e-9 * max(abs(float(start_cost)), 1.0), 1.0e-12)
         trial_matched = int(trial_pm_summary.get("matched_pair_count", 0))
         try:
-            trial_point_rms = float(
-                trial_pm_summary.get("unweighted_peak_rms_px", np.nan)
-            )
+            trial_point_rms = float(trial_pm_summary.get("unweighted_peak_rms_px", np.nan))
         except Exception:
             trial_point_rms = float("nan")
         try:
-            trial_peak_max = float(
-                trial_pm_summary.get("unweighted_peak_max_px", np.nan)
-            )
+            trial_peak_max = float(trial_pm_summary.get("unweighted_peak_max_px", np.nan))
         except Exception:
             trial_peak_max = float("nan")
         point_rms_tol = max(
@@ -16877,13 +15289,9 @@ def fit_geometry_parameters(
                 "final_cost": float(selected_cost),
                 "candidate_cost": float(trial_cost),
                 "start_rms_px": float(start_point_rms),
-                "final_rms_px": float(
-                    trial_point_rms if accepted else start_point_rms
-                ),
+                "final_rms_px": float(trial_point_rms if accepted else start_point_rms),
                 "start_peak_max_px": float(start_peak_max),
-                "final_peak_max_px": float(
-                    trial_peak_max if accepted else start_peak_max
-                ),
+                "final_peak_max_px": float(trial_peak_max if accepted else start_peak_max),
                 "nfev": int(getattr(polish_result, "nfev", 0)),
                 "success": bool(getattr(polish_result, "success", False)),
                 "message": str(getattr(polish_result, "message", "")),
@@ -17043,13 +15451,9 @@ def fit_geometry_parameters(
                     "index_j": int(idx_j),
                     "name_i": str(var_names[int(idx_i)]),
                     "name_j": str(var_names[int(idx_j)]),
-                    "mean_name": (
-                        f"{str(var_names[int(idx_i)])}+{str(var_names[int(idx_j)])}"
-                        "/2"
-                    ),
+                    "mean_name": (f"{str(var_names[int(idx_i)])}+{str(var_names[int(idx_j)])}/2"),
                     "half_delta_name": (
-                        f"{str(var_names[int(idx_i)])}-{str(var_names[int(idx_j)])}"
-                        "/2"
+                        f"{str(var_names[int(idx_i)])}-{str(var_names[int(idx_j)])}/2"
                     ),
                 }
             )
@@ -17172,16 +15576,11 @@ def fit_geometry_parameters(
             return summary
 
         summary["pairs"] = [
-            [str(pair_spec["name_i"]), str(pair_spec["name_j"])]
-            for pair_spec in pair_specs
+            [str(pair_spec["name_i"]), str(pair_spec["name_j"])] for pair_spec in pair_specs
         ]
         summary["transformed_parameters"] = [
-            str(pair_spec["mean_name"])
-            for pair_spec in pair_specs
-        ] + [
-            str(pair_spec["half_delta_name"])
-            for pair_spec in pair_specs
-        ]
+            str(pair_spec["mean_name"]) for pair_spec in pair_specs
+        ] + [str(pair_spec["half_delta_name"]) for pair_spec in pair_specs]
 
         start_residual = np.asarray(residual_fn(start_x), dtype=float)
         if start_residual.ndim != 1 or start_residual.size == 0:
@@ -17198,10 +15597,7 @@ def fit_geometry_parameters(
         reparam_lower_bounds, reparam_upper_bounds, reparam_x_scale = (
             _build_reparameterized_geometry(pair_specs)
         )
-        _emit_status(
-            "Geometry fit: reparameterizing pairs "
-            f"{summary['pairs']}"
-        )
+        _emit_status(f"Geometry fit: reparameterizing pairs {summary['pairs']}")
 
         def _reparameterized_residual(x_trial: np.ndarray) -> np.ndarray:
             physical_trial = _reparameterized_to_physical_vector(
@@ -17261,9 +15657,7 @@ def fit_geometry_parameters(
             1.0e-12,
         )
         if np.isfinite(start_cost) and start_cost > 1.0e-12:
-            cost_limit = float(
-                start_cost * (1.0 + reparameterize_max_cost_increase_fraction)
-            )
+            cost_limit = float(start_cost * (1.0 + reparameterize_max_cost_increase_fraction))
         else:
             cost_limit = float(start_cost + cost_tol)
         accepted = bool(np.isfinite(final_cost) and final_cost <= cost_limit + cost_tol)
@@ -17285,13 +15679,11 @@ def fit_geometry_parameters(
         if accepted:
             summary["x"] = np.asarray(final_physical, dtype=float)
             _emit_status(
-                "Geometry fit: pair reparameterization accepted "
-                f"(cost={float(final_cost):.6f})"
+                f"Geometry fit: pair reparameterization accepted (cost={float(final_cost):.6f})"
             )
         else:
             _emit_status(
-                "Geometry fit: pair reparameterization rejected "
-                f"(cost={float(final_cost):.6f})"
+                f"Geometry fit: pair reparameterization rejected (cost={float(final_cost):.6f})"
             )
         return summary
 
@@ -17367,12 +15759,8 @@ def fit_geometry_parameters(
                 {
                     "active_indices": active_indices,
                     "fixed_indices": fixed_indices,
-                    "active_parameters": [
-                        str(var_names[idx]) for idx in active_indices.tolist()
-                    ],
-                    "fixed_parameters": [
-                        str(var_names[idx]) for idx in fixed_indices.tolist()
-                    ],
+                    "active_parameters": [str(var_names[idx]) for idx in active_indices.tolist()],
+                    "fixed_parameters": [str(var_names[idx]) for idx in fixed_indices.tolist()],
                     "label": ", ".join(label_tokens) if label_tokens else "auto",
                 }
             )
@@ -17404,9 +15792,7 @@ def fit_geometry_parameters(
             summary["reason"] = "no_reduced_stage_blocks"
             return summary
 
-        _emit_status(
-            f"Geometry fit: staged release enabled ({len(stage_specs)} stage(s))"
-        )
+        _emit_status(f"Geometry fit: staged release enabled ({len(stage_specs)} stage(s))")
         current_x = np.asarray(x_seed, dtype=float).copy()
         accepted_stage_count = 0
         any_failed = False
@@ -17429,18 +15815,12 @@ def fit_geometry_parameters(
                         "status": "failed",
                         "reason": "empty_residual",
                         "accepted": False,
-                        "active_parameters": list(
-                            stage_spec.get("active_parameters", [])
-                        ),
-                        "fixed_parameters": list(
-                            stage_spec.get("fixed_parameters", [])
-                        ),
+                        "active_parameters": list(stage_spec.get("active_parameters", [])),
+                        "fixed_parameters": list(stage_spec.get("fixed_parameters", [])),
                     }
                 )
                 any_failed = True
-                _emit_status(
-                    f"Geometry fit: staged stage {stage_number} failed (empty residual)"
-                )
+                _emit_status(f"Geometry fit: staged stage {stage_number} failed (empty residual)")
                 continue
 
             start_cost = _robust_cost(
@@ -17475,18 +15855,12 @@ def fit_geometry_parameters(
                         "status": "failed",
                         "reason": f"stage_failed: {exc}",
                         "accepted": False,
-                        "active_parameters": list(
-                            stage_spec.get("active_parameters", [])
-                        ),
-                        "fixed_parameters": list(
-                            stage_spec.get("fixed_parameters", [])
-                        ),
+                        "active_parameters": list(stage_spec.get("active_parameters", [])),
+                        "fixed_parameters": list(stage_spec.get("fixed_parameters", [])),
                     }
                 )
                 any_failed = True
-                _emit_status(
-                    f"Geometry fit: staged stage {stage_number} failed ({exc})"
-                )
+                _emit_status(f"Geometry fit: staged stage {stage_number} failed ({exc})")
                 continue
 
             trial_x = np.asarray(stage_start, dtype=float).copy()
@@ -17503,9 +15877,7 @@ def fit_geometry_parameters(
                 1.0e-12,
             )
             if np.isfinite(start_cost) and start_cost > 1.0e-12:
-                cost_limit = float(
-                    start_cost * (1.0 + staged_release_max_cost_increase_fraction)
-                )
+                cost_limit = float(start_cost * (1.0 + staged_release_max_cost_increase_fraction))
             else:
                 cost_limit = float(start_cost + cost_tol)
             accepted = bool(np.isfinite(final_cost) and final_cost <= cost_limit + cost_tol)
@@ -17633,17 +16005,12 @@ def fit_geometry_parameters(
         summary["underconstrained_before"] = bool(
             start_ident_summary.get("underconstrained", False)
         )
-        summary["warning_flags_before"] = list(
-            start_ident_summary.get("warning_flags", [])
-        )
+        summary["warning_flags_before"] = list(start_ident_summary.get("warning_flags", []))
         summary["recommended_fixed_parameters_before"] = list(
             start_ident_summary.get("recommended_fixed_parameters", [])
         )
         if str(start_ident_summary.get("status", "")) != "ok":
-            summary["reason"] = (
-                "identifiability_"
-                f"{start_ident_summary.get('reason', 'failed')}"
-            )
+            summary["reason"] = f"identifiability_{start_ident_summary.get('reason', 'failed')}"
             return summary
 
         candidate_entries: List[Dict[str, object]] = []
@@ -17653,9 +16020,7 @@ def fit_geometry_parameters(
                 continue
             reasons = {str(reason) for reason in entry.get("reasons", [])}
             max_abs_correlation = float(entry.get("max_abs_correlation", np.nan))
-            is_weak = bool(
-                reasons.intersection({"weak_sensitivity", "invalid_jacobian_column"})
-            )
+            is_weak = bool(reasons.intersection({"weak_sensitivity", "invalid_jacobian_column"}))
             is_high_corr = bool(
                 np.isfinite(max_abs_correlation)
                 and max_abs_correlation >= adaptive_regularization_correlation
@@ -17673,8 +16038,7 @@ def fit_geometry_parameters(
         condition_triggered = bool(
             summary["underconstrained_before"]
             or not np.isfinite(summary["condition_number_before"])
-            or float(summary["condition_number_before"])
-            >= adaptive_regularization_condition_number
+            or float(summary["condition_number_before"]) >= adaptive_regularization_condition_number
             or has_high_correlation_candidate
         )
         if not condition_triggered:
@@ -17710,33 +16074,25 @@ def fit_geometry_parameters(
                     "sigma": float(sigma),
                     "reasons": [str(reason) for reason in entry.get("reasons", [])],
                     "partners": [str(name) for name in entry.get("partners", [])],
-                    "max_abs_correlation": float(
-                        entry.get("max_abs_correlation", np.nan)
-                    ),
+                    "max_abs_correlation": float(entry.get("max_abs_correlation", np.nan)),
                 }
             )
 
         adaptive_mask = (
-            np.isfinite(prior_centers)
-            & np.isfinite(prior_sigmas)
-            & (prior_sigmas > 0.0)
+            np.isfinite(prior_centers) & np.isfinite(prior_sigmas) & (prior_sigmas > 0.0)
         )
         if not np.any(adaptive_mask):
             summary["reason"] = "no_valid_regularization_entries"
             return summary
         summary["applied_parameters"] = applied_parameters
         summary["prior_entries"] = prior_entries
-        _emit_status(
-            "Geometry fit: adaptive regularization evaluating "
-            f"{applied_parameters}"
-        )
+        _emit_status(f"Geometry fit: adaptive regularization evaluating {applied_parameters}")
 
         def _adaptive_prior_residuals(x_trial: np.ndarray) -> np.ndarray:
             x_arr = np.asarray(x_trial, dtype=float)
-            return (
-                (x_arr[adaptive_mask] - prior_centers[adaptive_mask])
-                / prior_sigmas[adaptive_mask]
-            )
+            return (x_arr[adaptive_mask] - prior_centers[adaptive_mask]) / prior_sigmas[
+                adaptive_mask
+            ]
 
         def _regularized_residual(x_trial: np.ndarray) -> np.ndarray:
             base_residual = np.asarray(residual_fn(np.asarray(x_trial, dtype=float)), dtype=float)
@@ -17766,25 +16122,18 @@ def fit_geometry_parameters(
                 )
             )
             cost_ok = bool(
-                np.isfinite(trial_cost)
-                and float(trial_cost) <= float(cost_limit) + float(cost_tol)
+                np.isfinite(trial_cost) and float(trial_cost) <= float(cost_limit) + float(cost_tol)
             )
             return {
                 "label": str(label),
                 "x": np.asarray(trial_x, dtype=float),
                 "cost": float(trial_cost),
-                "condition_number": float(
-                    trial_ident_summary.get("condition_number", np.nan)
-                ),
-                "underconstrained": bool(
-                    trial_ident_summary.get("underconstrained", False)
-                ),
+                "condition_number": float(trial_ident_summary.get("condition_number", np.nan)),
+                "underconstrained": bool(trial_ident_summary.get("underconstrained", False)),
                 "recommended_fixed_parameters": list(
                     trial_ident_summary.get("recommended_fixed_parameters", [])
                 ),
-                "identifiability_status": str(
-                    trial_ident_summary.get("status", "unknown")
-                ),
+                "identifiability_status": str(trial_ident_summary.get("status", "unknown")),
                 "progress": bool(progress),
                 "cost_ok": bool(cost_ok),
                 "accepted": bool(progress and cost_ok),
@@ -17803,9 +16152,7 @@ def fit_geometry_parameters(
         except Exception as exc:
             summary["status"] = "failed"
             summary["reason"] = f"adaptive_regularization_failed: {exc}"
-            _emit_status(
-                f"Geometry fit: adaptive regularization failed ({exc})"
-            )
+            _emit_status(f"Geometry fit: adaptive regularization failed ({exc})")
             return summary
 
         regularized_x = np.minimum(
@@ -17825,15 +16172,9 @@ def fit_geometry_parameters(
             regularized_result,
         )
         summary["regularized_cost"] = float(regularized_cost)
-        summary["regularized_condition_number"] = float(
-            regularized_candidate["condition_number"]
-        )
+        summary["regularized_condition_number"] = float(regularized_candidate["condition_number"])
         summary["candidates"].append(
-            {
-                key: value
-                for key, value in regularized_candidate.items()
-                if key != "x"
-            }
+            {key: value for key, value in regularized_candidate.items() if key != "x"}
         )
 
         accepted_candidates: List[Dict[str, object]] = []
@@ -17868,15 +16209,9 @@ def fit_geometry_parameters(
                 release_result,
             )
             summary["released_cost"] = float(release_cost)
-            summary["released_condition_number"] = float(
-                release_candidate["condition_number"]
-            )
+            summary["released_condition_number"] = float(release_candidate["condition_number"])
             summary["candidates"].append(
-                {
-                    key: value
-                    for key, value in release_candidate.items()
-                    if key != "x"
-                }
+                {key: value for key, value in release_candidate.items() if key != "x"}
             )
             if bool(release_candidate.get("accepted", False)):
                 accepted_candidates.append(release_candidate)
@@ -17900,16 +16235,10 @@ def fit_geometry_parameters(
         summary["accepted"] = True
         summary["status"] = "accepted"
         summary["reason"] = f"{best_candidate['label']}_seed_accepted"
-        summary["release_accepted"] = bool(
-            str(best_candidate.get("label", "")) == "released"
-        )
+        summary["release_accepted"] = bool(str(best_candidate.get("label", "")) == "released")
         summary["final_cost"] = float(best_candidate["cost"])
-        summary["final_condition_number"] = float(
-            best_candidate["condition_number"]
-        )
-        summary["underconstrained_after"] = bool(
-            best_candidate.get("underconstrained", False)
-        )
+        summary["final_condition_number"] = float(best_candidate["condition_number"])
+        summary["underconstrained_after"] = bool(best_candidate.get("underconstrained", False))
         summary["recommended_fixed_parameters_after"] = list(
             best_candidate.get("recommended_fixed_parameters", [])
         )
@@ -17959,13 +16288,9 @@ def fit_geometry_parameters(
 
         if finite_indices.size > 0:
             midpoint = np.asarray(clipped_initial, dtype=float)
-            midpoint[finite_indices] = (
-                lower_bounds[finite_indices] + 0.5 * span[finite_indices]
-            )
+            midpoint[finite_indices] = lower_bounds[finite_indices] + 0.5 * span[finite_indices]
             relative = np.clip(
-                (
-                    clipped_initial[finite_indices] - lower_bounds[finite_indices]
-                )
+                (clipped_initial[finite_indices] - lower_bounds[finite_indices])
                 / np.maximum(span[finite_indices], 1e-12),
                 0.0,
                 1.0,
@@ -17987,9 +16312,7 @@ def fit_geometry_parameters(
                 seed_label="box-center",
             )
 
-            ranked_finite = finite_indices[
-                np.argsort(local_scale[finite_indices])[::-1]
-            ]
+            ranked_finite = finite_indices[np.argsort(local_scale[finite_indices])[::-1]]
             axis_limit = min(max(2, solver_restarts), ranked_finite.size)
             for idx in ranked_finite[:axis_limit]:
                 lower_seed = np.asarray(clipped_initial, dtype=float)
@@ -18008,9 +16331,7 @@ def fit_geometry_parameters(
                     seed_label=f"{var_names[int(idx)]}-upper",
                 )
 
-        irrational_steps = np.modf(
-            np.sqrt(np.arange(2, x0_arr.size + 2, dtype=float))
-        )[0]
+        irrational_steps = np.modf(np.sqrt(np.arange(2, x0_arr.size + 2, dtype=float)))[0]
         irrational_steps = np.where(
             np.abs(irrational_steps) > 1e-12,
             irrational_steps,
@@ -18021,8 +16342,7 @@ def fit_geometry_parameters(
             sample = np.asarray(clipped_initial, dtype=float)
             if finite_indices.size > 0:
                 sample[finite_indices] = (
-                    lower_bounds[finite_indices]
-                    + unit[finite_indices] * span[finite_indices]
+                    lower_bounds[finite_indices] + unit[finite_indices] * span[finite_indices]
                 )
             infinite_indices = np.flatnonzero(~finite_span)
             if infinite_indices.size > 0:
@@ -18179,15 +16499,15 @@ def fit_geometry_parameters(
         "min_seed_separation_u": float(seed_min_separation_u),
         "trusted_prior_fraction_of_span": float(trusted_prior_fraction_of_span),
     }
-    geometry_fit_debug_summary["discrete_modes"] = [
-        dict(mode) for mode in discrete_modes
-    ]
+    geometry_fit_debug_summary["discrete_modes"] = [dict(mode) for mode in discrete_modes]
 
     def _seed_entry_distance(
         first: np.ndarray,
         second: np.ndarray,
     ) -> float:
-        return float(np.linalg.norm(np.asarray(first, dtype=float) - np.asarray(second, dtype=float)))
+        return float(
+            np.linalg.norm(np.asarray(first, dtype=float) - np.asarray(second, dtype=float))
+        )
 
     def _build_mode_seeds(
         specs: Sequence[ParamSpec],
@@ -18264,15 +16584,17 @@ def fit_geometry_parameters(
     restart_history: List[Dict[str, object]] = []
     best_result: OptimizeResult | None = None
     best_cost = float("inf")
-    best_mode: Dict[str, object] = dict(discrete_modes[0]) if discrete_modes else {
-        "label": "identity"
-    }
+    best_mode: Dict[str, object] = (
+        dict(discrete_modes[0]) if discrete_modes else {"label": "identity"}
+    )
     best_mode_contexts = list(base_dataset_contexts)
     solve_record_count = 0
     prescore_record_count = 0
 
     if not active_specs:
-        mode_results: List[Tuple[Dict[str, object], OptimizeResult, float, List[GeometryFitDatasetContext]]] = []
+        mode_results: List[
+            Tuple[Dict[str, object], OptimizeResult, float, List[GeometryFitDatasetContext]]
+        ] = []
         for mode in discrete_modes:
             dataset_contexts = _apply_discrete_mode_to_dataset_contexts(
                 base_dataset_contexts,
@@ -18314,6 +16636,10 @@ def fit_geometry_parameters(
                 u_upper_bounds,
                 rng=rng,
             )
+            if zero_seed_only_solver:
+                mode_seeds = [
+                    dict(entry) for entry in mode_seeds if str(entry.get("seed_kind", "")) == "zero"
+                ] or mode_seeds[:1]
             scored_seeds: List[Dict[str, object]] = []
             for seed_entry in mode_seeds:
                 seed_u = np.asarray(seed_entry["u"], dtype=float)
@@ -18503,9 +16829,7 @@ def fit_geometry_parameters(
         if active_arr.size == 0:
             raise ValueError("active_indices must not be empty")
         active_arr = np.unique(active_arr)
-        active_arr = active_arr[
-            (active_arr >= 0) & (active_arr < len(var_names))
-        ]
+        active_arr = active_arr[(active_arr >= 0) & (active_arr < len(var_names))]
         if active_arr.size == 0:
             raise ValueError("active_indices must include at least one valid index")
 
@@ -18607,16 +16931,10 @@ def fit_geometry_parameters(
             f_scale=solver_f_scale,
         )
         ident_summary = _build_identifiability_summary_for_x(start_x, current_result)
-        summary["condition_number"] = float(
-            ident_summary.get("condition_number", np.nan)
-        )
-        summary["underconstrained"] = bool(
-            ident_summary.get("underconstrained", False)
-        )
+        summary["condition_number"] = float(ident_summary.get("condition_number", np.nan))
+        summary["underconstrained"] = bool(ident_summary.get("underconstrained", False))
         summary["warning_flags"] = list(ident_summary.get("warning_flags", []))
-        summary["freeze_recommendations"] = list(
-            ident_summary.get("freeze_recommendations", [])
-        )
+        summary["freeze_recommendations"] = list(ident_summary.get("freeze_recommendations", []))
         if str(ident_summary.get("status", "")) != "ok":
             summary["reason"] = f"identifiability_{ident_summary.get('reason', 'failed')}"
             return summary
@@ -18627,12 +16945,9 @@ def fit_geometry_parameters(
                 continue
             reasons = {str(reason) for reason in entry.get("reasons", [])}
             max_abs_correlation = float(entry.get("max_abs_correlation", np.nan))
-            is_weak = bool(
-                reasons.intersection({"weak_sensitivity", "invalid_jacobian_column"})
-            )
+            is_weak = bool(reasons.intersection({"weak_sensitivity", "invalid_jacobian_column"}))
             is_high_corr = (
-                np.isfinite(max_abs_correlation)
-                and max_abs_correlation >= auto_freeze_correlation
+                np.isfinite(max_abs_correlation) and max_abs_correlation >= auto_freeze_correlation
             )
             if not (is_weak or is_high_corr):
                 continue
@@ -18648,10 +16963,9 @@ def fit_geometry_parameters(
             return summary
         if not condition_triggered:
             has_weak_candidate = any(
-                {
-                    str(reason)
-                    for reason in entry.get("reasons", [])
-                }.intersection({"weak_sensitivity", "invalid_jacobian_column"})
+                {str(reason) for reason in entry.get("reasons", [])}.intersection(
+                    {"weak_sensitivity", "invalid_jacobian_column"}
+                )
                 for entry in candidate_entries
             )
             if not has_weak_candidate:
@@ -18667,9 +16981,7 @@ def fit_geometry_parameters(
             [int(entry.get("index", -1)) for entry in selected_entries],
             dtype=np.int64,
         )
-        fixed_indices = fixed_indices[
-            (fixed_indices >= 0) & (fixed_indices < len(var_names))
-        ]
+        fixed_indices = fixed_indices[(fixed_indices >= 0) & (fixed_indices < len(var_names))]
         if fixed_indices.size == 0:
             summary["reason"] = "no_valid_fixed_indices"
             return summary
@@ -18689,10 +17001,7 @@ def fit_geometry_parameters(
         summary["selected_count"] = int(fixed_indices.size)
         summary["truncated"] = bool(len(candidate_entries) > fixed_indices.size)
         summary["start_cost"] = float(start_cost)
-        _emit_status(
-            "Geometry fit: auto-freeze evaluating "
-            f"{summary['fixed_parameters']}"
-        )
+        _emit_status(f"Geometry fit: auto-freeze evaluating {summary['fixed_parameters']}")
 
         try:
             reduced_summary = _run_reduced_solver(
@@ -18713,9 +17022,7 @@ def fit_geometry_parameters(
             1.0e-12,
         )
         if np.isfinite(start_cost) and start_cost > 1.0e-12:
-            cost_limit = float(
-                start_cost * (1.0 + auto_freeze_max_cost_increase_fraction)
-            )
+            cost_limit = float(start_cost * (1.0 + auto_freeze_max_cost_increase_fraction))
         else:
             cost_limit = float(start_cost + cost_tol)
         accepted = bool(final_cost <= cost_limit + cost_tol)
@@ -18777,18 +17084,12 @@ def fit_geometry_parameters(
 
         fixed_indices_raw = freeze_summary.get("fixed_indices", [])
         fixed_indices = np.asarray(fixed_indices_raw, dtype=np.int64).reshape(-1)
-        fixed_indices = fixed_indices[
-            (fixed_indices >= 0) & (fixed_indices < len(var_names))
-        ]
+        fixed_indices = fixed_indices[(fixed_indices >= 0) & (fixed_indices < len(var_names))]
         if fixed_indices.size == 0:
             fixed_names = [str(name) for name in freeze_summary.get("fixed_parameters", [])]
             fixed_lookup = {str(name): idx for idx, name in enumerate(var_names)}
             fixed_indices = np.asarray(
-                [
-                    fixed_lookup[name]
-                    for name in fixed_names
-                    if name in fixed_lookup
-                ],
+                [fixed_lookup[name] for name in fixed_names if name in fixed_lookup],
                 dtype=np.int64,
             )
         if fixed_indices.size == 0:
@@ -18822,8 +17123,7 @@ def fit_geometry_parameters(
             )
             if str(current_ident_summary.get("status", "")) != "ok":
                 summary["reason"] = (
-                    "identifiability_"
-                    f"{current_ident_summary.get('reason', 'failed')}"
+                    f"identifiability_{current_ident_summary.get('reason', 'failed')}"
                 )
                 break
 
@@ -18888,9 +17188,7 @@ def fit_geometry_parameters(
                                 int(pair_key[0]) in recommended_indices
                                 or int(pair_key[1]) in recommended_indices
                             ),
-                            "max_abs_correlation": float(
-                                pair_entry.get("abs_correlation", np.nan)
-                            ),
+                            "max_abs_correlation": float(pair_entry.get("abs_correlation", np.nan)),
                             "column_norm": float(
                                 sum(
                                     float(
@@ -18976,20 +17274,14 @@ def fit_geometry_parameters(
                 if trial_fixed.size == len(var_names):
                     continue
                 trial_active = np.asarray(
-                    [
-                        idx
-                        for idx in range(len(var_names))
-                        if idx not in set(trial_fixed.tolist())
-                    ],
+                    [idx for idx in range(len(var_names)) if idx not in set(trial_fixed.tolist())],
                     dtype=np.int64,
                 )
                 attempt_entry: Dict[str, object] = {
                     "kind": str(candidate.get("kind", "single")),
                     "candidate_parameters": list(candidate.get("parameters", [])),
                     "candidate_indices": candidate_indices.tolist(),
-                    "still_recommended": bool(
-                        candidate.get("still_recommended", False)
-                    ),
+                    "still_recommended": bool(candidate.get("still_recommended", False)),
                     "start_cost": float(current_cost),
                 }
                 try:
@@ -19015,17 +17307,14 @@ def fit_geometry_parameters(
                     trial_x,
                     trial_result,
                 )
-                trial_condition = float(
-                    trial_ident_summary.get("condition_number", np.nan)
-                )
+                trial_condition = float(trial_ident_summary.get("condition_number", np.nan))
                 condition_ok = bool(
                     np.isfinite(trial_condition)
                     and trial_condition <= selective_thaw_condition_number
                 )
                 ident_ok = str(trial_ident_summary.get("status", "")) == "ok"
                 cost_improved = bool(
-                    np.isfinite(trial_cost)
-                    and trial_cost + cost_tol < float(current_cost)
+                    np.isfinite(trial_cost) and trial_cost + cost_tol < float(current_cost)
                 )
                 accepted = bool(ident_ok and condition_ok and cost_improved)
                 attempt_entry.update(
@@ -19074,8 +17363,7 @@ def fit_geometry_parameters(
                 if accepted_any:
                     summary["reason"] = "no_additional_acceptable_candidate"
                     _emit_status(
-                        "Geometry fit: selective thaw stopped "
-                        "(no additional acceptable candidate)"
+                        "Geometry fit: selective thaw stopped (no additional acceptable candidate)"
                     )
                 else:
                     summary["reason"] = "no_acceptable_candidate"
@@ -19083,9 +17371,7 @@ def fit_geometry_parameters(
                 break
 
             accepted_any = True
-            accepted_group = [
-                str(name) for name in best_accept["candidate_parameters"]
-            ]
+            accepted_group = [str(name) for name in best_accept["candidate_parameters"]]
             thawed_groups.append(accepted_group)
             thawed_parameters.extend(accepted_group)
             thawed_count += len(accepted_group)
@@ -19151,9 +17437,7 @@ def fit_geometry_parameters(
                 f"Pair reparameterization seed accepted ({reparam_pairs})",
             )
     if staged_release_summary.get("accepted"):
-        accepted_stage_count = int(
-            staged_release_summary.get("accepted_stage_count", 0)
-        )
+        accepted_stage_count = int(staged_release_summary.get("accepted_stage_count", 0))
         if accepted_stage_count > 0:
             _append_result_message(
                 result,
@@ -19282,7 +17566,8 @@ def fit_geometry_parameters(
         if (
             isinstance(final_metric_fun, np.ndarray)
             and isinstance(final_metric_x, np.ndarray)
-            and np.asarray(final_metric_x, dtype=float).shape == np.asarray(result.x, dtype=float).shape
+            and np.asarray(final_metric_x, dtype=float).shape
+            == np.asarray(result.x, dtype=float).shape
             and np.allclose(
                 np.asarray(final_metric_x, dtype=float),
                 np.asarray(result.x, dtype=float),
@@ -19410,9 +17695,7 @@ def fit_geometry_parameters(
     result.boundary_warning = (
         "Possible identifiability issue: parameters finished near bounds ("
         + ", ".join(
-            f"{entry['name']}={entry['side']}"
-            for entry in bound_entries
-            if entry.get("name")
+            f"{entry['name']}={entry['side']}" for entry in bound_entries if entry.get("name")
         )
         + ")."
         if bound_entries
@@ -19653,9 +17936,7 @@ def fit_geometry_parameters(
             final_value = float(final_x_arr[idx])
             entry["final"] = float(final_value)
             entry["delta"] = (
-                float(final_value - start_value)
-                if np.isfinite(start_value)
-                else float("nan")
+                float(final_value - start_value) if np.isfinite(start_value) else float("nan")
             )
     debug_summary_result["final"] = {
         "cost": float(getattr(result, "cost", np.nan)),
@@ -19686,9 +17967,7 @@ def fit_geometry_parameters(
         else []
     )
     result.next_stage_recommendation = (
-        dict(result.next_stage_recommendations[0])
-        if result.next_stage_recommendations
-        else None
+        dict(result.next_stage_recommendations[0]) if result.next_stage_recommendations else None
     )
     point_match_summary = getattr(result, "point_match_summary", None)
     matched_pair_count_text = ""
@@ -19712,30 +17991,44 @@ def fit_geometry_parameters(
 
 
 def run_optimization_positions_geometry_local(
-    miller, intensities, image_size,
-    initial_params, bounds, measured_peaks
+    miller, intensities, image_size, initial_params, bounds, measured_peaks
 ):
     """
     Global optimization (Differential Evolution) over geometry + beam center.
     bounds is list of (min,max) for [gamma, Gamma, dist, theta_i, cor_angle,
     zs, zb, chi, a, c, center_x, center_y].
     """
+
     def obj_glob(x):
         gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c, center_x, center_y = x
-        return np.sum(compute_peak_position_error_geometry_local(
-            gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c,
-            center_x, center_y,
-            measured_peaks,
-            miller, intensities, image_size,
-            initial_params['mosaic_params'],
-            initial_params['n2'],
-            initial_params.get('psi', 0.0),
-            initial_params.get('psi_z', 0.0),
-            initial_params['debye_x'],
-            initial_params['debye_y'],
-            initial_params['lambda'],
-            pixel_tol=np.inf
-        ))
+        return np.sum(
+            compute_peak_position_error_geometry_local(
+                gamma,
+                Gamma,
+                dist,
+                theta_initial,
+                cor_angle,
+                zs,
+                zb,
+                chi,
+                a,
+                c,
+                center_x,
+                center_y,
+                measured_peaks,
+                miller,
+                intensities,
+                image_size,
+                initial_params["mosaic_params"],
+                initial_params["n2"],
+                initial_params.get("psi", 0.0),
+                initial_params.get("psi_z", 0.0),
+                initial_params["debye_x"],
+                initial_params["debye_y"],
+                initial_params["lambda"],
+                pixel_tol=np.inf,
+            )
+        )
+
     res = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
     return res
-

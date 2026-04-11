@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 from ra_sim.gui import runtime_primary_cache
+from ra_sim.gui._runtime import primary_cache_helpers
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
 from ra_sim.simulation.engine import simulate
 from ra_sim.simulation.types import (
@@ -281,3 +284,44 @@ def test_rematerialize_primary_artifacts_matches_full_simulation_artifacts() -> 
     assert len(payload["peak_tables"]) == len(expected_peak_tables)
     for rebuilt, expected in zip(payload["peak_tables"], expected_peak_tables):
         assert np.allclose(rebuilt, expected)
+
+
+def test_copy_hit_tables_returns_independent_arrays() -> None:
+    original = [np.array([[1.0, 2.0, 3.0]], dtype=np.float64)]
+
+    copied = primary_cache_helpers.copy_hit_tables(original)
+    copied[0][0, 0] = 99.0
+
+    assert original[0][0, 0] == 1.0
+
+
+def test_store_primary_cache_payload_handles_discard_path() -> None:
+    state = SimpleNamespace(
+        primary_contribution_cache_signature=("sig", 1),
+        primary_source_mode="miller",
+        primary_active_contribution_keys=[0],
+        primary_hit_table_cache={0: np.ones((1, 7), dtype=np.float64)},
+        primary_filter_signature=None,
+    )
+    events: list[dict[str, object]] = []
+
+    def trace_live_cache_event(family: str, action: str, **fields: object) -> None:
+        events.append({"family": family, "action": action, **fields})
+
+    primary_cache_helpers.store_primary_cache_payload(
+        state,
+        cache_signature=("sig", 1),
+        source_mode="miller",
+        active_keys=[1],
+        contribution_keys=[1],
+        raw_hit_tables=[np.ones((1, 7), dtype=np.float64)],
+        retain_runtime_optional_cache=lambda *_args, **_kwargs: False,
+        trace_live_cache_event=trace_live_cache_event,
+        live_cache_count=lambda value: len(value) if value is not None else 0,
+        live_cache_signature_summary=lambda value: str(value),
+    )
+
+    assert state.primary_hit_table_cache == {}
+    assert state.primary_active_contribution_keys == [1]
+    assert events[-1]["outcome"] == "discarded"
+    assert events[-1]["stored_table_count"] == 0

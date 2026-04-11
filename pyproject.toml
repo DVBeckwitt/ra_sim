@@ -45,6 +45,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy",
+  "pre-commit",
+  "pytest",
+  "ruff",
+]
+
+[dependency-groups]
+dev = [
+  "mypy",
+  "pre-commit",
   "pytest",
   "ruff",
 ]
@@ -55,6 +64,7 @@ Repository = "https://github.com/DVBeckwitt/ra_sim"
 
 [project.scripts]
 ra-sim = "ra_sim.cli:main"
+ra-sim-dev = "ra_sim.dev:main"
 
 [tool.setuptools.packages.find]
 include = ["ra_sim*"]
@@ -64,6 +74,11 @@ include = ["ra_sim*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "fast: quick local-feedback tier used by ra-sim-dev check",
+  "integration: slower end-to-end or workflow-heavy tests",
+  "benchmark: benchmark-oriented regression tests excluded from fast tier",
+]
 
 [tool.ruff]
 target-version = "py311"
