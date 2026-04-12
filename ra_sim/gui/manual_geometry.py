@@ -463,7 +463,12 @@ def normalize_geometry_manual_pair_entry(
     elif isinstance(raw_group_key, list):
         normalized["q_group_key"] = tuple(raw_group_key)
 
-    for key in ("source_table_index", "source_row_index", "source_peak_index"):
+    for key in (
+        "source_table_index",
+        "source_reflection_index",
+        "source_row_index",
+        "source_peak_index",
+    ):
         if key not in entry:
             continue
         try:
@@ -488,7 +493,10 @@ def normalize_geometry_manual_pair_entry(
         normalized["raw_x"] = float(raw_x_val)
         normalized["raw_y"] = float(raw_y_val)
 
-    for x_key, y_key in (("detector_x", "detector_y"),):
+    for x_key, y_key in (
+        ("detector_x", "detector_y"),
+        ("background_detector_x", "background_detector_y"),
+    ):
         raw_x_local = entry.get(x_key)
         raw_y_local = entry.get(y_key)
         try:
@@ -674,6 +682,7 @@ def peak_maximum_near_in_image(
     row: float,
     *,
     search_radius: int = 5,
+    display_extent: Sequence[float] | None = None,
 ) -> tuple[float, float]:
     """Return the brightest local pixel near ``(col, row)`` in display coordinates."""
 
@@ -686,12 +695,64 @@ def peak_maximum_near_in_image(
     if image_arr.ndim < 2 or image_arr.size == 0:
         return float(col), float(row)
 
-    r = int(round(float(row)))
-    c = int(round(float(col)))
+    height = int(image_arr.shape[0])
+    width = int(image_arr.shape[1])
+
+    extent: tuple[float, float, float, float] | None = None
+    if display_extent is not None:
+        try:
+            normalized_extent = tuple(float(value) for value in display_extent)
+        except Exception:
+            normalized_extent = ()
+        if len(normalized_extent) == 4 and all(np.isfinite(value) for value in normalized_extent):
+            extent = normalized_extent
+
+    def _display_axis_to_index(value: float, *, axis_start: float, axis_end: float, size: int) -> float:
+        span = float(axis_end) - float(axis_start)
+        if int(size) <= 0 or not np.isfinite(span) or abs(span) <= 1.0e-12:
+            return float(value)
+        return float(
+            np.clip(
+                ((float(value) - float(axis_start)) / span) * float(size) - 0.5,
+                0.0,
+                float(size - 1),
+            )
+        )
+
+    def _index_to_display_axis(index_value: float, *, axis_start: float, axis_end: float, size: int) -> float:
+        span = float(axis_end) - float(axis_start)
+        if int(size) <= 0 or not np.isfinite(span) or abs(span) <= 1.0e-12:
+            return float(index_value)
+        return float(axis_start) + ((float(index_value) + 0.5) / float(size)) * span
+
+    if extent is None:
+        c = int(round(float(col)))
+        r = int(round(float(row)))
+    else:
+        c = int(
+            round(
+                _display_axis_to_index(
+                    float(col),
+                    axis_start=float(extent[0]),
+                    axis_end=float(extent[1]),
+                    size=width,
+                )
+            )
+        )
+        r = int(
+            round(
+                _display_axis_to_index(
+                    float(row),
+                    axis_start=float(extent[2]),
+                    axis_end=float(extent[3]),
+                    size=height,
+                )
+            )
+        )
     r0 = max(0, r - int(search_radius))
-    r1 = min(int(image_arr.shape[0]), r + int(search_radius) + 1)
+    r1 = min(height, r + int(search_radius) + 1)
     c0 = max(0, c - int(search_radius))
-    c1 = min(int(image_arr.shape[1]), c + int(search_radius) + 1)
+    c1 = min(width, c + int(search_radius) + 1)
 
     window = image_arr[r0:r1, c0:c1]
     if window.size == 0 or not np.isfinite(window).any():
@@ -699,7 +760,24 @@ def peak_maximum_near_in_image(
 
     max_idx = int(np.nanargmax(window))
     win_r, win_c = np.unravel_index(max_idx, window.shape)
-    return float(c0 + win_c), float(r0 + win_r)
+    peak_col = float(c0 + win_c)
+    peak_row = float(r0 + win_r)
+    if extent is None:
+        return peak_col, peak_row
+    return (
+        _index_to_display_axis(
+            peak_col,
+            axis_start=float(extent[0]),
+            axis_end=float(extent[1]),
+            size=width,
+        ),
+        _index_to_display_axis(
+            peak_row,
+            axis_start=float(extent[2]),
+            axis_end=float(extent[3]),
+            size=height,
+        ),
+    )
 
 
 def geometry_manual_apply_refined_simulated_override(
@@ -719,6 +797,7 @@ def geometry_manual_apply_refined_simulated_override(
             "hkl",
             "label",
             "source_table_index",
+            "source_reflection_index",
             "source_row_index",
             "source_peak_index",
             "source_label",
@@ -1105,7 +1184,7 @@ def geometry_manual_candidate_source_key(
     try:
         return (
             "source_peak",
-            int(entry.get("source_table_index")),
+            int(entry.get("source_reflection_index", entry.get("source_table_index"))),
             int(entry.get("source_peak_index")),
         )
     except Exception:
@@ -2215,6 +2294,7 @@ def geometry_manual_pair_entry_from_candidate(
         "x": float(peak_col),
         "y": float(peak_row),
         "source_table_index": candidate.get("source_table_index"),
+        "source_reflection_index": candidate.get("source_reflection_index"),
         "source_row_index": candidate.get("source_row_index"),
         "source_peak_index": candidate.get("source_peak_index"),
         "source_label": candidate.get("source_label"),
@@ -2328,6 +2408,20 @@ def geometry_manual_refine_preview_point(
     if background_local is None:
         return float(raw_col), float(raw_row)
 
+    def _preserve_sim_seed(
+        seed_entry: dict[str, object],
+        key: str,
+        fallback: float,
+    ) -> float:
+        try:
+            current = float(seed_entry.get(key, np.nan))
+        except Exception:
+            current = float("nan")
+        if np.isfinite(current):
+            return float(current)
+        seed_entry[key] = float(fallback)
+        return float(fallback)
+
     state = cache_data if isinstance(cache_data, dict) else {}
     if not state and callable(build_cache_data):
         try:
@@ -2360,12 +2454,12 @@ def geometry_manual_refine_preview_point(
             and np.isfinite(raw_row_local)
         ):
             seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
-            seed_entry["sim_col"] = float(raw_col)
-            seed_entry["sim_row"] = float(raw_row)
-            seed_entry["sim_col_global"] = float(raw_col)
-            seed_entry["sim_row_global"] = float(raw_row)
-            seed_entry["sim_col_local"] = float(raw_col_local)
-            seed_entry["sim_row_local"] = float(raw_row_local)
+            _preserve_sim_seed(seed_entry, "sim_col", float(raw_col))
+            _preserve_sim_seed(seed_entry, "sim_row", float(raw_row))
+            _preserve_sim_seed(seed_entry, "sim_col_global", float(raw_col))
+            _preserve_sim_seed(seed_entry, "sim_row_global", float(raw_row))
+            _preserve_sim_seed(seed_entry, "sim_col_local", float(raw_col_local))
+            _preserve_sim_seed(seed_entry, "sim_row_local", float(raw_row_local))
             try:
                 manual_matches, _manual_stats = match_simulated_peaks_to_peak_context(
                     [seed_entry],
@@ -2408,8 +2502,8 @@ def geometry_manual_refine_preview_point(
         and callable(match_simulated_peaks_to_peak_context)
     ):
         seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
-        seed_entry["sim_col"] = float(raw_col)
-        seed_entry["sim_row"] = float(raw_row)
+        _preserve_sim_seed(seed_entry, "sim_col", float(raw_col))
+        _preserve_sim_seed(seed_entry, "sim_row", float(raw_row))
         try:
             manual_matches, _manual_stats = match_simulated_peaks_to_peak_context(
                 [seed_entry],
@@ -4957,6 +5051,8 @@ def geometry_manual_pair_entry_to_jsonable(
         "raw_y",
         "detector_x",
         "detector_y",
+        "background_detector_x",
+        "background_detector_y",
         "caked_x",
         "caked_y",
         "raw_caked_x",
@@ -4991,7 +5087,12 @@ def geometry_manual_pair_entry_to_jsonable(
     if serialized_group_key is not None:
         row["q_group_key"] = serialized_group_key
 
-    for key in ("source_table_index", "source_row_index", "source_peak_index"):
+    for key in (
+        "source_table_index",
+        "source_reflection_index",
+        "source_row_index",
+        "source_peak_index",
+    ):
         if key in normalized:
             try:
                 row[key] = int(normalized[key])

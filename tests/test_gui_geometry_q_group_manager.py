@@ -111,6 +111,7 @@ def test_geometry_q_group_manager_nominal_hkl_grouping_supports_cache_rows() -> 
     assert peaks[0]["hkl"] == (1, 0, 1)
     assert peaks[0]["q_group_key"] == ("q_group", "primary", 1, 1)
     assert peaks[0]["q_group_nominal_hkl"] is True
+    assert peaks[0]["source_reflection_index"] == 0
     assert len(entries) == 1
     assert entries[0]["key"] == ("q_group", "primary", 1, 1)
     assert entries[0]["hkl_preview"] == [(1, 0, 1)]
@@ -253,8 +254,10 @@ def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> No
     assert peaks[0]["sim_row"] == 22.8
     assert peaks[0]["source_label"] == "primary"
     assert peaks[0]["source_peak_index"] == 0
+    assert peaks[0]["source_reflection_index"] == 0
     assert peaks[1]["q_group_key"] == ("q_group", "primary", 1, 1)
     assert peaks[1]["source_row_index"] == 1
+    assert peaks[1]["source_peak_index"] == 1
 
     fallback_peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         [

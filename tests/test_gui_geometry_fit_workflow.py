@@ -488,7 +488,10 @@ def test_prepare_geometry_fit_run_blocks_lattice_refinement_by_default() -> None
 
     assert allowed.error_text is None
     assert allowed.prepared_run is not None
-    assert allowed.prepared_run.start_log_sections[2][1][0] == "a=4.200000"
+    assert any(
+        title == "Fitting variables (start values):" and "a=4.200000" in lines
+        for title, lines in allowed.prepared_run.start_log_sections
+    )
 
 
 def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindings() -> None:
@@ -588,6 +591,8 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "y": 41.0,
                     "detector_x": 31.0,
                     "detector_y": 41.0,
+                    "background_detector_x": 31.0,
+                    "background_detector_y": 41.0,
                     "fit_source_identity_only": True,
                     "overlay_match_index": 0,
                     "q_group_key": ("q", 1),
@@ -596,6 +601,8 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                 }
             ],
             "experimental_image": "fit-image",
+            "dynamic_reanchor_callback": None,
+            "dynamic_reanchor_enabled": False,
         }
     ]
     assert prepared.max_display_markers == 90
@@ -737,6 +744,8 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "y": 41.0,
             "detector_x": 31.0,
             "detector_y": 41.0,
+            "background_detector_x": 31.0,
+            "background_detector_y": 41.0,
             "fit_source_identity_only": True,
             "overlay_match_index": 0,
             "q_group_key": ("q", 1),
@@ -1028,6 +1037,7 @@ def test_build_geometry_manual_fit_dataset_rebinds_legacy_dense_source_ids() -> 
             {
                 "q_group_key": ("q", 1),
                 "source_table_index": 7,
+                "source_reflection_index": 7,
                 "source_row_index": 0,
                 "source_peak_index": 7,
                 "hkl": (1, 1, 0),
@@ -1082,12 +1092,15 @@ def test_build_geometry_manual_fit_dataset_rebinds_legacy_dense_source_ids() -> 
     assert dataset["measured_for_fit"][0]["source_table_index"] == 200
     assert dataset["measured_for_fit"][0]["source_row_index"] == 0
     assert dataset["measured_for_fit"][0]["source_peak_index"] == 133
+    assert "source_reflection_index" not in dataset["measured_for_fit"][0]
     assert dataset["initial_pairs_display"][0]["source_table_index"] == 200
     assert dataset["initial_pairs_display"][0]["source_row_index"] == 0
     assert dataset["initial_pairs_display"][0]["source_peak_index"] == 133
+    assert "source_reflection_index" not in dataset["initial_pairs_display"][0]
     assert dataset["source_resolution_diagnostics"][0]["strict_resolved"] is False
     assert dataset["source_resolution_diagnostics"][0]["fit_resolved"] is True
     assert dataset["source_resolution_diagnostics"][0]["saved_source_table_index"] == 7
+    assert dataset["source_resolution_diagnostics"][0]["saved_source_reflection_index"] == 7
     assert dataset["source_resolution_diagnostics"][0]["saved_source_row_index"] == 0
     assert dataset["source_resolution_diagnostics"][0]["saved_source_peak_index"] == 7
     assert (
@@ -1358,8 +1371,291 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
     assert dataset["resolved_source_pair_count"] == 1
     assert dataset["spec"]["dynamic_reanchor_enabled"] is True
     assert callable(dataset["spec"]["dynamic_reanchor_callback"])
+    assert dataset["measured_for_fit"][0]["background_detector_x"] == 30.0
+    assert dataset["measured_for_fit"][0]["background_detector_y"] == 40.0
     assert dataset["cache_metadata"]["cache_source"] == "source_snapshot_rebuild"
     assert "rebuild_source:test_rebuild" in dataset["cache_metadata"]["cache_provenance"]
+
+
+def test_geometry_fit_dynamic_reanchor_uses_background_detector_cache_as_raw_seed(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def _fake_refine(
+        candidate,
+        raw_col,
+        raw_row,
+        *,
+        display_background,
+        cache_data,
+        use_caked_space,
+        radial_axis=None,
+        azimuth_axis=None,
+        match_simulated_peaks_to_peak_context,
+    ):
+        calls["candidate"] = dict(candidate)
+        calls["raw"] = (float(raw_col), float(raw_row))
+        calls["shape"] = tuple(np.asarray(display_background).shape)
+        calls["cache_data"] = dict(cache_data)
+        calls["use_caked_space"] = bool(use_caked_space)
+        calls["radial_axis"] = radial_axis
+        calls["azimuth_axis"] = azimuth_axis
+        calls["matcher"] = match_simulated_peaks_to_peak_context
+        return 44.0, 45.0
+
+    monkeypatch.setattr(
+        geometry_fit.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        _fake_refine,
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_background_peak_context",
+        lambda image, cfg: {"img_valid": True, "shape": tuple(np.asarray(image).shape), "cfg": dict(cfg)},
+    )
+
+    valid_source_row = {
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "hkl": (1, 1, 0),
+        "sim_col": 18.0,
+        "sim_row": 19.0,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((6, 7), dtype=np.float64),
+            np.zeros((6, 7), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [dict(valid_source_row)],
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(valid_source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda peaks: {
+            (1, 2): dict(valid_source_row)
+        },
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "xy",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: np.asarray(image, dtype=np.float64),
+        geometry_manual_match_config=lambda: {"search_radius": 4.0},
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+    callback = dataset["spec"]["dynamic_reanchor_callback"]
+    result = callback(
+        dict(dataset["measured_for_fit"][0]),
+        (50.0, 51.0),
+        local_params={"gamma": 0.0},
+        dataset_ctx=SimpleNamespace(dataset_index=0),
+    )
+
+    assert result["detector_x"] == 44.0
+    assert result["detector_y"] == 45.0
+    assert calls["raw"] == (30.0, 40.0)
+    assert calls["candidate"]["sim_col"] == 50.0
+    assert calls["candidate"]["sim_row"] == 51.0
+    assert calls["candidate"]["sim_col_local"] == 50.0
+    assert calls["candidate"]["sim_row_local"] == 51.0
+    assert calls["candidate"]["sim_col_global"] == 50.0
+    assert calls["candidate"]["sim_row_global"] == 51.0
+    assert calls["shape"] == (6, 7)
+    assert calls["use_caked_space"] is False
+    assert calls["radial_axis"] is None
+    assert calls["azimuth_axis"] is None
+    assert callable(calls["matcher"])
+
+
+def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_but_keeps_detector_anchor(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+    radial_axis = np.linspace(20.0, 26.0, 7, dtype=np.float64)
+    azimuth_axis = np.linspace(-40.0, -35.0, 6, dtype=np.float64)
+
+    def _fake_refine(
+        candidate,
+        raw_col,
+        raw_row,
+        *,
+        display_background,
+        cache_data,
+        use_caked_space,
+        radial_axis=None,
+        azimuth_axis=None,
+        match_simulated_peaks_to_peak_context,
+    ):
+        calls["candidate"] = dict(candidate)
+        calls["raw"] = (float(raw_col), float(raw_row))
+        calls["shape"] = tuple(np.asarray(display_background).shape)
+        calls["cache_data"] = dict(cache_data)
+        calls["use_caked_space"] = bool(use_caked_space)
+        calls["radial_axis"] = np.asarray(radial_axis, dtype=np.float64)
+        calls["azimuth_axis"] = np.asarray(azimuth_axis, dtype=np.float64)
+        calls["matcher"] = match_simulated_peaks_to_peak_context
+        return 22.5, -35.5
+
+    monkeypatch.setattr(
+        geometry_fit.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        _fake_refine,
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_background_peak_context",
+        lambda image, cfg: {
+            "img_valid": True,
+            "shape": tuple(np.asarray(image).shape),
+            "cfg": dict(cfg),
+        },
+    )
+
+    valid_source_row = {
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "hkl": (1, 1, 0),
+        "sim_col": 18.0,
+        "sim_row": 19.0,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+                "background_two_theta_deg": 23.0,
+                "background_phi_deg": -36.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((6, 7), dtype=np.float64),
+            np.zeros((6, 7), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [
+            dict(valid_source_row)
+        ],
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(valid_source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda peaks: {
+            (1, 2): dict(valid_source_row)
+        },
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "xy",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: np.asarray(image, dtype=np.float64),
+        geometry_manual_match_config=lambda: {"search_radius": 4.0},
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background": np.zeros((6, 7), dtype=np.float64),
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+    callback = dataset["spec"]["dynamic_reanchor_callback"]
+    local_params = {
+        "center": [32.0, 32.0],
+        "corto_detector": 100.0,
+        "pixel_size": 1.0,
+        "gamma": 0.0,
+        "Gamma": 0.0,
+    }
+    result = callback(
+        dict(dataset["measured_for_fit"][0]),
+        (50.0, 51.0),
+        local_params=local_params,
+        dataset_ctx=SimpleNamespace(dataset_index=0),
+    )
+    expected_two_theta, expected_phi = geometry_fit._detector_pixels_to_fit_space(
+        np.array([50.0], dtype=np.float64),
+        np.array([51.0], dtype=np.float64),
+        center=local_params["center"],
+        detector_distance=float(local_params["corto_detector"]),
+        pixel_size=float(local_params["pixel_size"]),
+        gamma_deg=float(local_params["gamma"]),
+        Gamma_deg=float(local_params["Gamma"]),
+    )
+
+    assert calls["raw"] == (23.0, -36.0)
+    assert calls["shape"] == (6, 7)
+    assert calls["use_caked_space"] is True
+    assert np.allclose(calls["radial_axis"], radial_axis)
+    assert np.allclose(calls["azimuth_axis"], azimuth_axis)
+    assert calls["candidate"]["sim_col"] == pytest.approx(float(expected_two_theta[0]))
+    assert calls["candidate"]["sim_row"] == pytest.approx(float(expected_phi[0]))
+    assert np.isfinite(float(calls["candidate"]["sim_col_local"]))
+    assert np.isfinite(float(calls["candidate"]["sim_row_local"]))
+    assert callable(calls["matcher"])
+    assert result["detector_x"] == pytest.approx(30.0)
+    assert result["detector_y"] == pytest.approx(40.0)
+    assert "fit_space_anchor_override" not in result
+    assert result["measured_reanchor_motion_px"] == pytest.approx(0.0)
 
 
 def test_rebuild_geometry_fit_source_rows_preserves_runtime_failure_status() -> None:
@@ -2917,9 +3213,12 @@ def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() ->
             "parallel_mode": "auto",
             "worker_numba_threads": 0,
         },
-        "use_numba": False,
+        "use_numba": True,
     }
-    assert note is not None
+    assert note == (
+        "Windows/Python 3.13 runtime guard enabled: "
+        "unsafe runtime disabled, safe-wrapper Numba allowed."
+    )
 
 
 def test_apply_geometry_fit_runtime_safety_overrides_updates_optimizer_alias() -> None:
@@ -2942,14 +3241,17 @@ def test_apply_geometry_fit_runtime_safety_overrides_updates_optimizer_alias() -
         env={},
     )
 
-    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["use_numba"] is True
     assert runtime_cfg["optimizer"] == {
         "workers": "auto",
         "parallel_mode": "auto",
         "worker_numba_threads": 0,
     }
     assert runtime_cfg["solver"] == runtime_cfg["optimizer"]
-    assert note is not None
+    assert note == (
+        "Windows/Python 3.13 runtime guard enabled: "
+        "unsafe runtime disabled, safe-wrapper Numba allowed."
+    )
 
 
 def test_apply_geometry_fit_runtime_safety_overrides_honors_opt_out_env() -> None:
@@ -3111,7 +3413,7 @@ def test_apply_joint_geometry_fit_runtime_safety_overrides_only_changes_joint_ru
             "stagnation_probe_random_directions": 0,
         },
         "identifiability": {"enabled": False},
-        "use_numba": False,
+        "use_numba": True,
         "bounds": {"gamma": [0.0, 1.0]},
     }
     assert base_cfg["solver"]["workers"] == "auto"
@@ -3222,6 +3524,7 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     }
     assert changed["use_numba"] is False
     assert changed["allow_unsafe_runtime"] is False
+    assert changed["sampling"] == {"fit_sample_count": 8}
     assert changed["discrete_modes"] == {
         "enabled": False,
         "rot90": [0, 1, 2, 3],
@@ -3261,6 +3564,28 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_preserves_unsafe_para
     assert changed["solver"]["loss"] == "linear"
     assert changed["use_numba"] is True
     assert changed["allow_unsafe_runtime"] is True
+    assert changed["sampling"] == {"fit_sample_count": 8}
+
+
+def test_apply_manual_point_geometry_fit_runtime_overrides_preserves_safe_wrapper_numba() -> None:
+    base_cfg = {
+        "solver": {
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
+        },
+        "use_numba": True,
+        "allow_unsafe_runtime": False,
+    }
+
+    changed = geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
+        base_cfg,
+        joint_background_mode=False,
+    )
+
+    assert changed["use_numba"] is True
+    assert changed["allow_unsafe_runtime"] is False
+    assert changed["sampling"] == {"fit_sample_count": 8}
 
 
 def test_prepare_geometry_fit_run_rejects_dataset_without_orientation_anchor_pairs() -> None:
@@ -4997,6 +5322,139 @@ def test_run_runtime_geometry_fit_action_prepares_builds_setup_and_executes(
     }
     assert progress_texts == []
     assert cmd_events == []
+
+
+def test_run_runtime_geometry_fit_action_uses_fit_only_mosaic_samples_for_solver(
+    tmp_path,
+) -> None:
+    prepared_run, _ = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+        stamp="20260328_130004",
+    )
+    prepared_run = replace(
+        prepared_run,
+        geometry_runtime_cfg={
+            "bounds": {"gamma": [0.0, 1.0]},
+            "sampling": {"fit_sample_count": 8},
+        },
+    )
+    progress_texts: list[str] = []
+    cmd_events: list[str] = []
+    build_mosaic_calls: list[int] = []
+    calls: dict[str, object] = {}
+    solve_fit = lambda *_args, **_kwargs: None
+    execution_bindings = _make_runtime_action_execution_bindings(
+        tmp_path,
+        progress_texts,
+        cmd_events,
+    )
+
+    def _build_mosaic_params(*, sample_count=32):
+        build_mosaic_calls.append(int(sample_count))
+        return {
+            "sigma_mosaic_deg": 0.2,
+            "sample_count": int(sample_count),
+        }
+
+    def _prepare_run(*, params, var_names, preserve_live_theta, bindings):
+        calls["prepare_run"] = {
+            "params": dict(params),
+            "var_names": list(var_names),
+            "preserve_live_theta": preserve_live_theta,
+            "bindings": bindings,
+        }
+        return geometry_fit.GeometryFitPreparationResult(prepared_run=prepared_run)
+
+    def _build_execution_setup(*, prepared_run, mosaic_params, stamp, bindings):
+        calls["build_execution_setup"] = {
+            "prepared_run": prepared_run,
+            "mosaic_params": dict(mosaic_params),
+            "stamp": stamp,
+            "bindings": bindings,
+        }
+        return "setup-token"
+
+    def _execute_run(
+        *,
+        prepared_run,
+        var_names,
+        preserve_live_theta,
+        solve_fit,
+        setup,
+        flush_ui=None,
+    ):
+        calls["execute_run"] = {
+            "prepared_run": prepared_run,
+            "var_names": list(var_names),
+            "preserve_live_theta": preserve_live_theta,
+            "solve_fit": solve_fit,
+            "setup": setup,
+            "flush_ui": flush_ui,
+            "solver_mosaic_params": dict(prepared_run.fit_params["mosaic_params"]),
+        }
+        return geometry_fit.GeometryFitRuntimeExecutionResult(
+            log_path=tmp_path / "geometry_fit_log_20260328_130004.txt"
+        )
+
+    action = geometry_fit.run_runtime_geometry_fit_action(
+        bindings=geometry_fit.GeometryFitRuntimeActionBindings(
+            value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+                current_var_names=lambda: ["gamma", "a"],
+                current_params=lambda: {
+                    "theta_initial": 3.0,
+                    "gamma": 0.2,
+                    "a": 4.1,
+                    "mosaic_params": {
+                        "sigma_mosaic_deg": 0.2,
+                        "sample_count": 32,
+                    },
+                },
+                current_ui_params=lambda: {},
+                var_map={},
+                build_mosaic_params=_build_mosaic_params,
+            ),
+            prepare_bindings_factory=lambda _var_names: (
+                _make_runtime_action_prepare_bindings()
+            ),
+            execution_bindings=execution_bindings,
+            solve_fit=solve_fit,
+            stamp_factory=lambda: "20260328_130004",
+        ),
+        prepare_run=_prepare_run,
+        build_execution_setup=_build_execution_setup,
+        execute_run=_execute_run,
+    )
+
+    assert action.error_text is None
+    assert build_mosaic_calls == [8]
+    assert calls["build_execution_setup"] == {
+        "prepared_run": prepared_run,
+        "mosaic_params": {
+            "sigma_mosaic_deg": 0.2,
+            "sample_count": 32,
+        },
+        "stamp": "20260328_130004",
+        "bindings": execution_bindings,
+    }
+    assert calls["execute_run"] == {
+        "prepared_run": prepared_run,
+        "var_names": ["gamma", "a"],
+        "preserve_live_theta": True,
+        "solve_fit": solve_fit,
+        "setup": "setup-token",
+        "flush_ui": None,
+        "solver_mosaic_params": {
+            "sigma_mosaic_deg": 0.2,
+            "sample_count": 8,
+        },
+    }
+    assert prepared_run.fit_params["mosaic_params"] == {
+        "sigma_mosaic_deg": 0.2,
+        "sample_count": 8,
+    }
+    assert progress_texts == []
+    assert cmd_events == ["Geometry fit: solver sample count=8"]
 
 
 def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> None:

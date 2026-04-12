@@ -2337,19 +2337,62 @@ def _prepare_reflection_subset(
             reduced=False,
         )
 
+    hkl_to_reflection_indices: Dict[Tuple[int, int, int], List[int]] = {}
+    for reflection_idx, row in enumerate(miller_arr):
+        hkl_key = _miller_key_from_row(row)
+        if hkl_key is None:
+            continue
+        hkl_to_reflection_indices.setdefault(hkl_key, []).append(int(reflection_idx))
+
+    def _entry_hkl_key(entry: Mapping[str, object]) -> Optional[Tuple[int, int, int]]:
+        raw_hkl = entry.get("hkl")
+        if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+            return None
+        try:
+            return (int(raw_hkl[0]), int(raw_hkl[1]), int(raw_hkl[2]))
+        except Exception:
+            return None
+
+    def _coerce_index(value: object) -> Optional[int]:
+        try:
+            idx = int(value)
+        except Exception:
+            return None
+        return int(idx) if idx >= 0 else None
+
+    def _resolve_reflection_index(entry: Mapping[str, object]) -> Optional[int]:
+        measured_hkl = _entry_hkl_key(entry)
+        reflection_idx = _coerce_index(entry.get("source_reflection_index"))
+        table_idx = _coerce_index(entry.get("source_table_index"))
+        if reflection_idx is None and table_idx is None:
+            return None
+
+        if measured_hkl is not None:
+            matching_indices = hkl_to_reflection_indices.get(measured_hkl, [])
+            if reflection_idx is not None and reflection_idx in matching_indices:
+                return int(reflection_idx)
+            if table_idx is not None and table_idx in matching_indices:
+                return int(table_idx)
+            if len(matching_indices) == 1:
+                return int(matching_indices[0])
+
+        for candidate in (reflection_idx, table_idx):
+            if candidate is not None and candidate < total_reflections:
+                return int(candidate)
+        return None
+
     selected_original_indices: List[int] = []
     selected_lookup: set[int] = set()
     fixed_source_entry_indices: set[int] = set()
+    resolved_reflection_indices: Dict[int, int] = {}
     for entry_index, entry in enumerate(normalized_measured):
-        source_key = _measured_source_indices(entry)
-        if source_key is None:
+        reflection_idx = _resolve_reflection_index(entry)
+        if reflection_idx is None:
             continue
-        table_idx, _ = source_key
-        if table_idx < 0 or table_idx >= total_reflections or table_idx in selected_lookup:
-            continue
+        resolved_reflection_indices[int(entry_index)] = int(reflection_idx)
         raw_hkl = entry.get("hkl")
         if isinstance(raw_hkl, tuple) and len(raw_hkl) == 3:
-            source_hkl = _miller_key_from_row(miller_arr[table_idx])
+            source_hkl = _miller_key_from_row(miller_arr[reflection_idx])
             try:
                 measured_hkl = (
                     int(raw_hkl[0]),
@@ -2360,8 +2403,9 @@ def _prepare_reflection_subset(
                 measured_hkl = None
             if measured_hkl is not None and source_hkl != measured_hkl:
                 continue
-        selected_lookup.add(table_idx)
-        selected_original_indices.append(int(table_idx))
+        if reflection_idx not in selected_lookup:
+            selected_lookup.add(int(reflection_idx))
+            selected_original_indices.append(int(reflection_idx))
         fixed_source_entry_indices.add(int(entry_index))
 
     fixed_source_reflection_count = int(len(selected_original_indices))
@@ -2403,19 +2447,34 @@ def _prepare_reflection_subset(
     }
 
     remapped_measured: List[Dict[str, object]] = []
-    for entry in normalized_measured:
+    for entry_index, entry in enumerate(normalized_measured):
         remapped_entry = dict(entry)
-        source_key = _measured_source_indices(entry)
-        if source_key is not None:
-            table_idx, row_idx = source_key
-            local_idx = local_index_map.get(int(table_idx))
+        reflection_idx = resolved_reflection_indices.get(int(entry_index))
+        if reflection_idx is not None:
+            remapped_entry["source_reflection_index"] = int(reflection_idx)
+            local_idx = local_index_map.get(int(reflection_idx))
             if local_idx is not None:
-                remapped_entry["source_table_index"] = int(local_idx)
-                remapped_entry["source_reflection_index"] = int(local_idx)
-                remapped_entry["source_row_index"] = int(row_idx)
+                remapped_entry["resolved_table_index"] = int(local_idx)
+                try:
+                    row_idx = int(entry.get("source_row_index"))
+                except Exception:
+                    row_idx = -1
+                if row_idx >= 0:
+                    remapped_entry["source_row_index"] = int(row_idx)
+                else:
+                    remapped_entry.pop("source_row_index", None)
+                try:
+                    peak_idx = int(entry.get("source_peak_index"))
+                except Exception:
+                    peak_idx = -1
+                if peak_idx in {0, 1}:
+                    remapped_entry["resolved_peak_index"] = int(peak_idx)
+                    remapped_entry["source_peak_index"] = int(peak_idx)
+                else:
+                    remapped_entry.pop("resolved_peak_index", None)
             else:
-                remapped_entry.pop("source_table_index", None)
-                remapped_entry.pop("source_reflection_index", None)
+                remapped_entry.pop("resolved_table_index", None)
+                remapped_entry.pop("resolved_peak_index", None)
                 remapped_entry.pop("source_row_index", None)
         remapped_measured.append(remapped_entry)
 
@@ -9332,24 +9391,77 @@ def _valid_hit_rows(hit_table: object) -> List[np.ndarray]:
     return rows
 
 
+def _nonnegative_index(value: object) -> Optional[int]:
+    try:
+        idx = int(value)
+    except Exception:
+        return None
+    return int(idx) if idx >= 0 else None
+
+
+def _measured_source_table_index(entry: Mapping[str, object]) -> Optional[int]:
+    for key in ("resolved_table_index", "source_reflection_index", "source_table_index"):
+        idx = _nonnegative_index(entry.get(key))
+        if idx is not None:
+            return int(idx)
+    return None
+
+
+def _measured_source_peak_index(entry: Mapping[str, object]) -> Optional[int]:
+    for key in ("resolved_peak_index", "source_peak_index"):
+        peak_idx = _nonnegative_index(entry.get(key))
+        if peak_idx in {0, 1}:
+            return int(peak_idx)
+    return None
+
+
+def _resolve_max_position_peak(
+    max_positions: np.ndarray,
+    *,
+    table_idx: int,
+    peak_index: int,
+) -> Tuple[Optional[Tuple[float, float]], str]:
+    if table_idx < 0 or table_idx >= int(max_positions.shape[0]):
+        return None, "source_table_out_of_range"
+    if peak_index not in {0, 1}:
+        return None, "missing_source_peak_index"
+    if int(peak_index) == 0:
+        if not np.isfinite(max_positions[table_idx, 0]) or float(max_positions[table_idx, 0]) <= 0.0:
+            return None, "missing_source_peak"
+        sim_col = float(max_positions[table_idx, 1])
+        sim_row = float(max_positions[table_idx, 2])
+    else:
+        if not np.isfinite(max_positions[table_idx, 3]) or float(max_positions[table_idx, 3]) <= 0.0:
+            return None, "missing_source_peak"
+        sim_col = float(max_positions[table_idx, 4])
+        sim_row = float(max_positions[table_idx, 5])
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None, "invalid_source_peak_point"
+    return (float(sim_col), float(sim_row)), "resolved_source_peak"
+
+
 def _measured_source_indices(
     entry: Dict[str, object],
 ) -> Optional[Tuple[int, int]]:
-    """Return the stored hit-table indices for a measured entry when present."""
+    """Return the current hit-table row identity for a measured entry when present."""
 
-    try:
-        table_idx = int(
-            entry.get(
-                "source_reflection_index",
-                entry.get("source_table_index"),
-            )
-        )  # type: ignore[arg-type]
-        row_idx = int(entry.get("source_row_index"))  # type: ignore[arg-type]
-    except Exception:
+    table_idx = _measured_source_table_index(entry)
+    row_idx = _nonnegative_index(entry.get("source_row_index"))
+    if table_idx is None or row_idx is None:
         return None
-    if table_idx < 0 or row_idx < 0:
+    return int(table_idx), int(row_idx)
+
+
+def _measured_source_peak_indices(
+    entry: Dict[str, object],
+) -> Optional[Tuple[int, int]]:
+    """Return the current hit-table branch identity for a measured entry when present."""
+
+    table_idx = _measured_source_table_index(entry)
+    peak_idx = _measured_source_peak_index(entry)
+    if table_idx is None or peak_idx is None:
         return None
-    return table_idx, row_idx
+    return int(table_idx), int(peak_idx)
 
 
 def _resolve_fixed_source_matches(
@@ -9363,10 +9475,14 @@ def _resolve_fixed_source_matches(
     """Resolve measured peaks back to their original simulated hit-table rows."""
 
     filtered_rows_cache: Dict[int, List[np.ndarray]] = {}
+    try:
+        max_positions = np.asarray(hit_tables_to_max_positions(hit_tables), dtype=np.float64)
+    except Exception:
+        max_positions = np.empty((0, 6), dtype=np.float64)
     resolved: List[Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]] = []
     fallback_entries: List[Dict[str, object]] = []
     resolution_lookup: Dict[int, Dict[str, object]] = {}
-    used_source_keys: set[Tuple[int, int]] = set()
+    used_source_keys: set[Tuple[object, ...]] = set()
 
     def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
         try:
@@ -9390,9 +9506,22 @@ def _resolve_fixed_source_matches(
             "source_table_index": entry.get("source_table_index"),
             "source_reflection_index": entry.get("source_reflection_index"),
             "source_row_index": entry.get("source_row_index"),
+            "source_peak_index": entry.get("source_peak_index"),
+            "resolved_table_index": entry.get("resolved_table_index"),
+            "resolved_peak_index": entry.get("resolved_peak_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
-        source_key = _measured_source_indices(entry)
+        source_peak_key = _measured_source_peak_indices(entry)
+        source_row_key = _measured_source_indices(entry)
+        source_key = (
+            ("peak", int(source_peak_key[0]), int(source_peak_key[1]))
+            if source_peak_key is not None
+            else (
+                ("row", int(source_row_key[0]), int(source_row_key[1]))
+                if source_row_key is not None
+                else None
+            )
+        )
         if source_key is None:
             fallback_entries.append(entry)
             resolution_lookup[id(entry)] = {
@@ -9410,7 +9539,7 @@ def _resolve_fixed_source_matches(
             }
             continue
 
-        table_idx, row_idx = source_key
+        table_idx = int(source_key[1])
         if table_idx not in filtered_rows_cache:
             if table_idx < 0 or table_idx >= len(hit_tables):
                 filtered_rows_cache[table_idx] = []
@@ -9418,41 +9547,85 @@ def _resolve_fixed_source_matches(
                 filtered_rows_cache[table_idx] = _valid_hit_rows(hit_tables[table_idx])
 
         rows = filtered_rows_cache.get(table_idx, [])
-        if row_idx < 0 or row_idx >= len(rows):
-            fallback_entries.append(entry)
-            resolution_lookup[id(entry)] = {
-                **base_diag,
-                "resolution_kind": "hkl_fallback",
-                "resolution_reason": "source_row_out_of_range",
-                "source_row_count": int(len(rows)),
-            }
-            continue
-
-        row = rows[row_idx]
-        try:
-            sim_col = float(row[1])
-            sim_row = float(row[2])
-            sim_hkl = (
-                int(round(float(row[4]))),
-                int(round(float(row[5]))),
-                int(round(float(row[6]))),
+        resolved_from_peak = False
+        sim_col = float("nan")
+        sim_row = float("nan")
+        sim_hkl: Tuple[int, int, int] | None = None
+        if source_peak_key is not None:
+            peak_idx = int(source_peak_key[1])
+            peak_point, peak_reason = _resolve_max_position_peak(
+                max_positions,
+                table_idx=int(table_idx),
+                peak_index=int(peak_idx),
             )
-        except Exception:
-            fallback_entries.append(entry)
-            resolution_lookup[id(entry)] = {
-                **base_diag,
-                "resolution_kind": "hkl_fallback",
-                "resolution_reason": "source_row_parse_failed",
-            }
-            continue
-        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-            fallback_entries.append(entry)
-            resolution_lookup[id(entry)] = {
-                **base_diag,
-                "resolution_kind": "hkl_fallback",
-                "resolution_reason": "invalid_simulated_point",
-            }
-            continue
+            if peak_point is not None:
+                sim_col = float(peak_point[0])
+                sim_row = float(peak_point[1])
+                resolved_from_peak = True
+                if rows:
+                    try:
+                        row0 = rows[0]
+                        sim_hkl = (
+                            int(round(float(row0[4]))),
+                            int(round(float(row0[5]))),
+                            int(round(float(row0[6]))),
+                        )
+                    except Exception:
+                        sim_hkl = None
+            elif source_row_key is None:
+                fallback_entries.append(entry)
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": str(peak_reason),
+                }
+                continue
+
+        if not resolved_from_peak:
+            if source_row_key is None:
+                fallback_entries.append(entry)
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "missing_source_indices",
+                }
+                continue
+            row_idx = int(source_row_key[1])
+            if row_idx < 0 or row_idx >= len(rows):
+                fallback_entries.append(entry)
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "source_row_out_of_range",
+                    "source_row_count": int(len(rows)),
+                }
+                continue
+
+            row = rows[row_idx]
+            try:
+                sim_col = float(row[1])
+                sim_row = float(row[2])
+                sim_hkl = (
+                    int(round(float(row[4]))),
+                    int(round(float(row[5]))),
+                    int(round(float(row[6]))),
+                )
+            except Exception:
+                fallback_entries.append(entry)
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "source_row_parse_failed",
+                }
+                continue
+            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+                fallback_entries.append(entry)
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "invalid_simulated_point",
+                }
+                continue
         measured_hkl = entry.get("hkl")
         if isinstance(measured_hkl, tuple) and len(measured_hkl) == 3:
             try:
@@ -9463,7 +9636,9 @@ def _resolve_fixed_source_matches(
                 )
             except Exception:
                 measured_hkl_key = None
-            if measured_hkl_key is not None and measured_hkl_key != sim_hkl:
+            if measured_hkl_key is not None and sim_hkl is None:
+                sim_hkl = tuple(int(v) for v in measured_hkl_key)
+            if measured_hkl_key is not None and sim_hkl is not None and measured_hkl_key != sim_hkl:
                 fallback_entries.append(entry)
                 resolution_lookup[id(entry)] = {
                     **base_diag,
@@ -9473,14 +9648,14 @@ def _resolve_fixed_source_matches(
                 }
                 continue
 
-        resolved.append((entry, (sim_col, sim_row), sim_hkl))
+        resolved.append((entry, (sim_col, sim_row), tuple(int(v) for v in sim_hkl or (0, 0, 0))))
         resolution_lookup[id(entry)] = {
             **base_diag,
             "resolution_kind": "fixed_source",
             "resolution_reason": "resolved",
             "sim_x": float(sim_col),
             "sim_y": float(sim_row),
-            "sim_hkl": tuple(int(v) for v in sim_hkl),
+            "sim_hkl": tuple(int(v) for v in sim_hkl or (0, 0, 0)),
         }
         used_source_keys.add(source_key)
 
@@ -9563,14 +9738,8 @@ def _geometry_fit_correspondence_simulated_point(
 ) -> Tuple[Optional[Tuple[float, float]], str]:
     """Resolve one frozen correspondence back to the current simulated point."""
 
-    try:
-        table_idx = int(
-            correspondence.get(
-                "source_reflection_index",
-                correspondence.get("source_table_index", -1),
-            )
-        )
-    except Exception:
+    table_idx = _measured_source_table_index(correspondence)
+    if table_idx is None:
         table_idx = -1
     if table_idx < 0:
         return None, "missing_source_table_index"
@@ -9578,11 +9747,18 @@ def _geometry_fit_correspondence_simulated_point(
     if table_idx >= len(hit_tables) or table_idx >= int(max_positions.shape[0]):
         return None, "source_table_out_of_range"
 
-    try:
-        row_idx = int(correspondence.get("source_row_index", -1))
-    except Exception:
-        row_idx = -1
-    if row_idx >= 0:
+    peak_index = _measured_source_peak_index(correspondence)
+    if peak_index is not None:
+        peak_point, peak_reason = _resolve_max_position_peak(
+            max_positions,
+            table_idx=int(table_idx),
+            peak_index=int(peak_index),
+        )
+        if peak_point is not None:
+            return peak_point, peak_reason
+
+    row_idx = _nonnegative_index(correspondence.get("source_row_index", -1))
+    if row_idx is not None:
         rows = _valid_hit_rows(hit_tables[table_idx])
         if row_idx >= len(rows):
             return None, "source_row_out_of_range"
@@ -9595,32 +9771,7 @@ def _geometry_fit_correspondence_simulated_point(
         if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
             return None, "invalid_source_row_point"
         return (float(sim_col), float(sim_row)), "resolved_source_row"
-
-    try:
-        peak_index = int(correspondence.get("source_peak_index", -1))
-    except Exception:
-        peak_index = -1
-    if peak_index == 0:
-        if (
-            not np.isfinite(max_positions[table_idx, 0])
-            or float(max_positions[table_idx, 0]) <= 0.0
-        ):
-            return None, "missing_source_peak"
-        sim_col = float(max_positions[table_idx, 1])
-        sim_row = float(max_positions[table_idx, 2])
-    elif peak_index == 1:
-        if (
-            not np.isfinite(max_positions[table_idx, 3])
-            or float(max_positions[table_idx, 3]) <= 0.0
-        ):
-            return None, "missing_source_peak"
-        sim_col = float(max_positions[table_idx, 4])
-        sim_row = float(max_positions[table_idx, 5])
-    else:
-        return None, "missing_source_peak_index"
-    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-        return None, "invalid_source_peak_point"
-    return (float(sim_col), float(sim_row)), "resolved_source_peak"
+    return None, "missing_source_peak_index"
 
 
 def _detector_pixels_to_fit_space(
@@ -14553,15 +14704,8 @@ def fit_geometry_parameters(
                     return None, {"resolution_reason": "seed_missing_pair"}
 
                 if str(entry.get("resolution_kind", "")) == "fixed_source":
-                    try:
-                        table_idx = int(
-                            entry.get(
-                                "source_reflection_index",
-                                entry.get("source_table_index"),
-                            )
-                        )
-                        row_idx = int(entry.get("source_row_index"))
-                    except Exception:
+                    table_idx = _measured_source_table_index(entry)
+                    if table_idx is None:
                         return None, {"resolution_reason": "fixed_source_indices_missing"}
                     if table_idx not in filtered_rows_cache:
                         if 0 <= table_idx < len(hit_tables):
@@ -14569,6 +14713,33 @@ def fit_geometry_parameters(
                         else:
                             filtered_rows_cache[table_idx] = []
                     rows = filtered_rows_cache.get(table_idx, [])
+                    peak_index = _measured_source_peak_index(entry)
+                    if peak_index is not None:
+                        peak_point, peak_reason = _resolve_max_position_peak(
+                            maxpos,
+                            table_idx=int(table_idx),
+                            peak_index=int(peak_index),
+                        )
+                        if peak_point is not None:
+                            resolved_sim_hkl: object = None
+                            if rows:
+                                try:
+                                    resolved_sim_hkl = tuple(
+                                        int(round(float(v))) for v in rows[0][4:7]
+                                    )
+                                except Exception:
+                                    resolved_sim_hkl = None
+                            return (float(peak_point[0]), float(peak_point[1])), {
+                                "resolution_reason": str(entry.get("resolution_reason") or "resolved"),
+                                "resolved_table_index": int(table_idx),
+                                "resolved_peak_index": int(peak_index),
+                                "resolved_sim_hkl": resolved_sim_hkl,
+                            }
+                        if _nonnegative_index(entry.get("source_row_index")) is None:
+                            return None, {"resolution_reason": str(peak_reason)}
+                    row_idx = _nonnegative_index(entry.get("source_row_index"))
+                    if row_idx is None:
+                        return None, {"resolution_reason": "fixed_source_indices_missing"}
                     if row_idx < 0 or row_idx >= len(rows):
                         return None, {
                             "resolution_reason": "source_row_out_of_range",
@@ -14590,7 +14761,7 @@ def fit_geometry_parameters(
                     return (float(sim_col), float(sim_row)), {
                         "resolution_reason": str(entry.get("resolution_reason") or "resolved"),
                         "resolved_table_index": int(table_idx),
-                        "resolved_peak_index": None,
+                        "resolved_peak_index": peak_index,
                         "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
                     }
 

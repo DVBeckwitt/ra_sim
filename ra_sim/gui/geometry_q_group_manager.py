@@ -13,6 +13,9 @@ from typing import Any
 import numpy as np
 
 from ra_sim.simulation.diffraction import (
+    hit_tables_to_max_positions as diffraction_hit_tables_to_max_positions,
+)
+from ra_sim.simulation.diffraction import (
     process_peaks_parallel as diffraction_process_peaks_parallel,
 )
 from ra_sim.simulation.diffraction import (
@@ -382,6 +385,71 @@ def geometry_reference_hit_rows(table: object) -> list[np.ndarray]:
     return rows
 
 
+def _geometry_hit_row_peak_indices(
+    rows: Sequence[np.ndarray] | None,
+) -> list[int | None]:
+    """Assign each filtered hit row to detector-side branch ``0`` or ``1``."""
+
+    filtered_rows = [np.asarray(row, dtype=float) for row in (rows or ())]
+    if not filtered_rows:
+        return []
+
+    try:
+        max_positions = np.asarray(
+            diffraction_hit_tables_to_max_positions(
+                [np.asarray(filtered_rows, dtype=np.float64)]
+            ),
+            dtype=np.float64,
+        )
+    except Exception:
+        max_positions = np.empty((0, 6), dtype=np.float64)
+
+    if max_positions.ndim != 2 or max_positions.shape[0] <= 0:
+        return [None] * len(filtered_rows)
+
+    branch_centers: list[tuple[int, float, float]] = []
+    try:
+        i0, x0, y0, i1, x1, y1 = max_positions[0]
+    except Exception:
+        return [None] * len(filtered_rows)
+    for peak_index, intensity, col, row in (
+        (0, i0, x0, y0),
+        (1, i1, x1, y1),
+    ):
+        if not np.isfinite(intensity) or float(intensity) <= 0.0:
+            continue
+        if not (np.isfinite(col) and np.isfinite(row)):
+            continue
+        branch_centers.append((int(peak_index), float(col), float(row)))
+
+    if not branch_centers:
+        return [None] * len(filtered_rows)
+    if len(branch_centers) == 1:
+        return [int(branch_centers[0][0])] * len(filtered_rows)
+
+    assignments: list[int | None] = []
+    for row in filtered_rows:
+        try:
+            col = float(row[1])
+            row_px = float(row[2])
+        except Exception:
+            assignments.append(None)
+            continue
+        if not (np.isfinite(col) and np.isfinite(row_px)):
+            assignments.append(None)
+            continue
+        best_branch = min(
+            branch_centers,
+            key=lambda item: (
+                (float(item[1]) - float(col)) ** 2
+                + (float(item[2]) - float(row_px)) ** 2,
+                int(item[0]),
+            ),
+        )
+        assignments.append(int(best_branch[0]))
+    return assignments
+
+
 def _reflection_q_group_components(
     hkl_value: object,
     *,
@@ -698,6 +766,7 @@ def build_geometry_fit_simulated_peaks(
         rows = geometry_reference_hit_rows(tbl)
         if not rows:
             continue
+        row_peak_indices = _geometry_hit_row_peak_indices(rows)
 
         source_label = (
             str(default_source_label)
@@ -756,9 +825,15 @@ def build_geometry_fit_simulated_peaks(
                 "sim_col": float(display_col),
                 "sim_row": float(display_row),
                 "weight": max(0.0, float(abs(intensity))),
-                "source_peak_index": int(len(simulated_peaks)),
+                "source_peak_index": int(
+                    row_peak_indices[row_idx]
+                    if row_idx < len(row_peak_indices)
+                    and row_peak_indices[row_idx] is not None
+                    else 0
+                ),
                 "source_label": str(source_label),
                 "source_table_index": int(table_idx),
+                "source_reflection_index": int(table_idx),
                 "source_row_index": int(row_idx),
                 "hkl_raw": hkl_raw,
                 "av": float(av_used),
@@ -2143,7 +2218,10 @@ def live_geometry_preview_match_key(
         entry.get("hkl", entry.get("label"))
     )
     source_label = entry.get("source_label")
-    source_table_index = entry.get("source_table_index")
+    source_table_index = entry.get(
+        "source_reflection_index",
+        entry.get("source_table_index"),
+    )
     source_row_index = entry.get("source_row_index")
     if (
         hkl_key is not None

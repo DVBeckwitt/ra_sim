@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 
 import numpy as np
+import pytest
 
 from ra_sim.fitting import optimization as opt
 
@@ -261,6 +262,238 @@ def test_dynamic_point_match_reanchors_measured_anchor_and_reports_motion(
     assert summary["measured_anchor_reanchor_count"] == 1
     assert summary["measured_anchor_reanchor_fail_count"] == 0
     assert summary["measured_anchor_motion_max_px"] > 0.0
+
+
+def test_detector_pixels_to_fit_space_matches_zero_tilt_geometry() -> None:
+    cols = np.array([10.0, 13.0, 10.0], dtype=np.float64)
+    rows = np.array([7.0, 10.0, 13.0], dtype=np.float64)
+    center = [10.0, 10.0]
+    detector_distance = 5.0
+    pixel_size = 2.0
+
+    two_theta, phi = opt._detector_pixels_to_fit_space(
+        cols,
+        rows,
+        center=center,
+        detector_distance=detector_distance,
+        pixel_size=pixel_size,
+    )
+
+    x = (cols - float(center[1])) * pixel_size
+    z = (float(center[0]) - rows) * pixel_size
+    expected_two_theta = np.degrees(
+        np.arctan2(np.hypot(x, z), np.full_like(x, detector_distance))
+    )
+    expected_phi = np.degrees(np.arctan2(x, z))
+    expected_phi = (expected_phi + 180.0) % 360.0 - 180.0
+
+    assert np.allclose(two_theta, expected_two_theta, atol=1.0e-12)
+    assert np.allclose(phi, expected_phi, atol=1.0e-12)
+    assert phi[-1] == -180.0
+
+    single_two_theta, single_phi = opt._pixel_to_angles(
+        float(cols[1]),
+        float(rows[1]),
+        center,
+        detector_distance,
+        pixel_size,
+    )
+    assert single_two_theta == pytest.approx(float(expected_two_theta[1]))
+    assert single_phi == pytest.approx(float(expected_phi[1]))
+
+
+def test_measured_fit_space_anchor_prefers_detector_anchor_over_cached_fit_space() -> None:
+    center = [10.0, 10.0]
+    entry = {
+        "detector_x": 13.0,
+        "detector_y": 7.0,
+        "background_detector_x": 14.0,
+        "background_detector_y": 6.0,
+        "background_two_theta_deg": 91.0,
+        "background_phi_deg": -42.0,
+    }
+
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        entry,
+        center=center,
+        detector_distance=5.0,
+        pixel_size=2.0,
+    )
+    expected = opt._pixel_to_angles(13.0, 7.0, center, 5.0, 2.0)
+
+    assert reason == "detector_fit_space_anchor"
+    assert anchor == pytest.approx(expected)
+    assert metadata["anchor_source"] == "detector_fit_space_anchor"
+
+    fallback_entry = {
+        "background_detector_x": 14.0,
+        "background_detector_y": 6.0,
+        "background_two_theta_deg": 91.0,
+        "background_phi_deg": -42.0,
+    }
+    fallback_anchor, fallback_reason, fallback_metadata = opt._measured_fit_space_anchor(
+        fallback_entry,
+        center=center,
+        detector_distance=5.0,
+        pixel_size=2.0,
+    )
+    expected_fallback = opt._pixel_to_angles(14.0, 6.0, center, 5.0, 2.0)
+
+    assert fallback_reason == "background_detector_fit_space_anchor"
+    assert fallback_anchor == pytest.approx(expected_fallback)
+    assert fallback_metadata["anchor_source"] == "background_detector_fit_space_anchor"
+
+
+def test_measured_fit_space_anchor_keeps_cached_fit_space_stable_when_wavelength_changes(
+    monkeypatch,
+) -> None:
+    def fake_theoretical_two_theta(entry, *, a_lattice, c_lattice, wavelength):
+        del entry, a_lattice, c_lattice
+        if wavelength == pytest.approx(1.0):
+            return 21.0
+        return 33.0
+
+    monkeypatch.setattr(
+        opt,
+        "_entry_theoretical_two_theta_deg",
+        fake_theoretical_two_theta,
+    )
+
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        {
+            "background_two_theta_deg": 20.0,
+            "background_phi_deg": 5.0,
+            "background_reference_a": 4.0,
+            "background_reference_c": 7.0,
+            "background_reference_lambda": 1.0,
+        },
+        center=[10.0, 10.0],
+        detector_distance=5.0,
+        pixel_size=2.0,
+        a_lattice=4.0,
+        c_lattice=7.0,
+        wavelength=1.3,
+    )
+
+    assert reason == "cached_fit_space_anchor"
+    assert anchor == pytest.approx((20.0, 5.0))
+    assert metadata["two_theta_adjustment_deg"] == 0.0
+    assert metadata["reference_two_theta_deg"] == pytest.approx(21.0)
+    assert metadata["current_theoretical_two_theta_deg"] == pytest.approx(33.0)
+
+
+def test_measured_fit_space_anchor_prefers_explicit_fit_space_override_over_detector_anchor() -> None:
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        {
+            "detector_x": 13.0,
+            "detector_y": 7.0,
+            "background_two_theta_deg": 20.0,
+            "background_phi_deg": 5.0,
+            "fit_space_anchor_override": True,
+        },
+        center=[10.0, 10.0],
+        detector_distance=5.0,
+        pixel_size=2.0,
+    )
+
+    assert reason == "cached_fit_space_anchor"
+    assert anchor == pytest.approx((20.0, 5.0))
+    assert metadata["anchor_source"] == "cached_fit_space_anchor"
+    assert metadata["cached_two_theta_deg"] == pytest.approx(20.0)
+    assert metadata["cached_phi_deg"] == pytest.approx(5.0)
+
+
+def test_dynamic_point_match_reanchor_does_not_mutate_measured_entries(monkeypatch):
+    callback_entries: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_reanchor(
+        measured_entry,
+        simulated_detector_point,
+        *,
+        local_params=None,
+        dataset_ctx=None,
+    ):
+        del local_params, dataset_ctx
+        callback_entries.append(dict(measured_entry))
+        return {
+            "x": float(simulated_detector_point[0]),
+            "y": float(simulated_detector_point[1]),
+            "detector_x": float(simulated_detector_point[0]),
+            "detector_y": float(simulated_detector_point[1]),
+            "measured_reanchor_motion_px": 3.0,
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    original_entry = {
+        "label": "peak-0",
+        "hkl": (1, 0, 0),
+        "overlay_match_index": 0,
+        "source_table_index": 0,
+        "source_row_index": 0,
+        "detector_x": 6.0,
+        "detector_y": 6.0,
+        "background_detector_x": 6.0,
+        "background_detector_y": 6.0,
+        "x": 6.0,
+        "y": 6.0,
+    }
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[dict(original_entry)],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        dynamic_reanchor_enabled=True,
+        dynamic_reanchor_callback=fake_reanchor,
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+
+    for _ in range(2):
+        residual, diagnostics, summary = (
+            opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+                local,
+                dataset_ctx,
+                image_size=32,
+                missing_pair_penalty_deg=5.0,
+                theta_value=0.0,
+                collect_diagnostics=True,
+            )
+        )
+        assert residual.shape == (2,)
+        assert diagnostics[0]["measured_reanchor_status"] == "updated"
+        assert summary["matched_pair_count"] == 1
+        assert summary["measured_anchor_motion_mean_px"] == pytest.approx(3.0)
+        assert summary["measured_anchor_motion_rms_px"] == pytest.approx(3.0)
+        assert summary["measured_anchor_motion_max_px"] == pytest.approx(3.0)
+
+    assert len(callback_entries) == 2
+    assert callback_entries[0]["detector_x"] == 6.0
+    assert callback_entries[1]["detector_x"] == 6.0
+    assert subset.measured_entries[0] == original_entry
 
 
 def test_resolve_parallel_worker_count_auto_reserves_two_threads(monkeypatch):
@@ -827,7 +1060,7 @@ def test_prepare_reflection_subset_preserves_distinct_reflections_within_one_q_g
     ]
 
 
-def test_prepare_reflection_subset_keeps_hkl_fallback_for_stale_source_identity_only() -> None:
+def test_prepare_reflection_subset_rebinds_stale_source_identity_by_hkl() -> None:
     miller = np.array(
         [
             [5.0, 0.0, 0.0],
@@ -852,12 +1085,91 @@ def test_prepare_reflection_subset_keeps_hkl_fallback_for_stale_source_identity_
     subset = opt._prepare_reflection_subset(miller, intensities, measured)
 
     assert subset.reduced is True
-    assert subset.fixed_source_reflection_count == 0
-    assert subset.fallback_hkl_count == 1
+    assert subset.fixed_source_reflection_count == 1
+    assert subset.fallback_hkl_count == 0
     assert np.array_equal(subset.original_indices, np.array([1], dtype=np.int64))
     assert np.allclose(subset.miller, np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
-    assert "source_table_index" not in subset.measured_entries[0]
-    assert "source_row_index" not in subset.measured_entries[0]
+    assert subset.measured_entries[0]["source_table_index"] == 0
+    assert subset.measured_entries[0]["source_reflection_index"] == 1
+    assert subset.measured_entries[0]["resolved_table_index"] == 0
+    assert subset.measured_entries[0]["source_row_index"] == 0
+
+
+def test_prepare_reflection_subset_prefers_source_reflection_index_over_stale_table_index() -> None:
+    miller = np.array(
+        [
+            [5.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 2.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+        }
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.reduced is True
+    assert subset.fixed_source_reflection_count == 1
+    assert subset.fallback_hkl_count == 0
+    assert np.array_equal(subset.original_indices, np.array([1], dtype=np.int64))
+    assert np.allclose(subset.miller, np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
+    assert subset.measured_entries[0]["source_table_index"] == 0
+    assert subset.measured_entries[0]["source_reflection_index"] == 1
+    assert subset.measured_entries[0]["resolved_table_index"] == 0
+    assert subset.measured_entries[0]["source_row_index"] == 0
+
+
+def test_prepare_reflection_subset_keeps_duplicate_fixed_source_rows_out_of_hkl_fallback() -> None:
+    miller = np.array(
+        [
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([2.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0-a",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+        },
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0-b",
+            "x": 5.0,
+            "y": 5.0,
+            "source_table_index": 9,
+            "source_row_index": 1,
+            "fit_source_identity_only": True,
+        },
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.fixed_source_reflection_count == 1
+    assert subset.fallback_hkl_count == 0
+    assert np.array_equal(subset.original_indices, np.array([0], dtype=np.int64))
+    assert [entry["source_table_index"] for entry in subset.measured_entries] == [9, 9]
+    assert [entry["source_reflection_index"] for entry in subset.measured_entries] == [0, 0]
+    assert [entry["resolved_table_index"] for entry in subset.measured_entries] == [0, 0]
+    assert [entry["source_row_index"] for entry in subset.measured_entries] == [0, 1]
 
 
 def test_fit_geometry_parameters_pixel_path_keeps_residual_size_when_pair_status_changes(
@@ -1163,29 +1475,29 @@ def test_fit_geometry_parameters_dynamic_point_path_records_fit_space_provenance
         float(result.point_match_summary["fit_space_debye_y_raw"]),
         0.0,
     )
-    assert int(result.point_match_summary["fit_space_anchor_count_cached"]) == 1
-    assert int(result.point_match_summary["fit_space_anchor_count_detector"]) == 1
+    assert int(result.point_match_summary["fit_space_anchor_count_cached"]) == 0
+    assert int(result.point_match_summary["fit_space_anchor_count_detector"]) == 2
     assert result.point_match_summary["fit_space_anchor_source_counts"] == {
-        "cached_fit_space_anchor": 1,
-        "detector_fit_space_anchor": 1,
+        "cached_fit_space_anchor": 0,
+        "detector_fit_space_anchor": 2,
     }
-    assert int(result.point_match_summary["fit_space_two_theta_adjustment_count"]) == 1
+    assert int(result.point_match_summary["fit_space_two_theta_adjustment_count"]) == 0
     assert float(
         result.point_match_summary["fit_space_two_theta_adjustment_total_abs_deg"]
-    ) > 0.0
-    assert float(
-        result.point_match_summary["fit_space_two_theta_adjustment_mean_abs_deg"]
-    ) > 0.0
-    assert float(
-        result.point_match_summary["fit_space_two_theta_adjustment_max_abs_deg"]
-    ) > 0.0
+    ) == 0.0
+    assert np.isnan(
+        float(result.point_match_summary["fit_space_two_theta_adjustment_mean_abs_deg"])
+    )
+    assert np.isnan(
+        float(result.point_match_summary["fit_space_two_theta_adjustment_max_abs_deg"])
+    )
     assert len(result.point_match_summary["per_dataset"]) == 1
     assert int(
         result.point_match_summary["per_dataset"][0]["fit_space_anchor_count_cached"]
-    ) == 1
+    ) == 0
     assert int(
         result.point_match_summary["per_dataset"][0]["fit_space_anchor_count_detector"]
-    ) == 1
+    ) == 2
 
 
 def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
@@ -1438,7 +1750,110 @@ def test_simulate_and_compare_hkl_falls_back_when_in_range_source_indices_point_
     assert meas_millers == [(2, 0, 0)]
 
 
-def test_fit_geometry_parameters_pixel_path_tolerates_stale_in_range_source_indices(
+def test_resolve_fixed_source_matches_prefers_source_reflection_index() -> None:
+    entry = {
+        "hkl": (2, 0, 0),
+        "label": "2,0,0",
+        "x": 4.0,
+        "y": 4.0,
+        "source_table_index": 0,
+        "source_reflection_index": 1,
+        "source_row_index": 0,
+    }
+    hit_tables = [
+        np.asarray([[1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float64),
+        np.asarray([[1.0, 4.0, 4.0, 0.0, 2.0, 0.0, 0.0]], dtype=np.float64),
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert fallback_entries == []
+    assert resolved[0][1] == (4.0, 4.0)
+    assert resolved[0][2] == (2, 0, 0)
+    assert resolution_lookup[id(entry)]["resolution_kind"] == "fixed_source"
+    assert resolution_lookup[id(entry)]["resolution_reason"] == "resolved"
+
+
+def test_resolve_fixed_source_matches_keeps_distinct_branches(monkeypatch) -> None:
+    monkeypatch.setattr(
+        opt,
+        "hit_tables_to_max_positions",
+        lambda hit_tables: np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+    )
+    entries = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0-left",
+            "x": 2.0,
+            "y": 2.0,
+            "source_reflection_index": 0,
+            "resolved_table_index": 0,
+            "source_peak_index": 0,
+            "source_row_index": 0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0-right",
+            "x": 8.0,
+            "y": 8.0,
+            "source_reflection_index": 0,
+            "resolved_table_index": 0,
+            "source_peak_index": 1,
+            "source_row_index": 0,
+        },
+    ]
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                [1.0, 8.0, 8.0, 0.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, _resolution_lookup = opt._resolve_fixed_source_matches(
+        entries,
+        hit_tables,
+    )
+
+    assert fallback_entries == []
+    assert [item[1] for item in resolved] == [(2.0, 2.0), (8.0, 8.0)]
+
+
+def test_geometry_fit_correspondence_simulated_point_prefers_branch_identity() -> None:
+    correspondence = {
+        "source_reflection_index": 0,
+        "resolved_table_index": 0,
+        "source_row_index": 0,
+        "source_peak_index": 1,
+    }
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                [1.0, 8.0, 8.0, 0.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+    max_positions = np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64)
+
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=max_positions,
+    )
+
+    assert point == (8.0, 8.0)
+    assert reason == "resolved_source_peak"
+
+
+def test_fit_geometry_parameters_pixel_path_rebinds_stale_in_range_source_indices(
     monkeypatch,
 ):
     process_millers = []
@@ -1524,14 +1939,11 @@ def test_fit_geometry_parameters_pixel_path_tolerates_stale_in_range_source_indi
     assert result.fun.size == 2
     assert np.allclose(result.fun, np.zeros(2, dtype=np.float64))
     assert isinstance(result.point_match_summary, dict)
-    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 0
-    assert int(result.point_match_summary["fallback_entry_count"]) == 1
+    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 1
+    assert int(result.point_match_summary["fallback_entry_count"]) == 0
     assert isinstance(result.point_match_diagnostics, list)
     assert len(result.point_match_diagnostics) == 1
-    assert result.point_match_diagnostics[0]["resolution_reason"] in {
-        "missing_source_indices",
-        "source_hkl_mismatch",
-    }
+    assert result.point_match_diagnostics[0]["resolution_reason"] == "resolved"
     assert result.point_match_diagnostics[0]["match_status"] == "matched"
 
 
