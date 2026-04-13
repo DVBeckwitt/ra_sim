@@ -1143,7 +1143,7 @@ def rebuild_geometry_fit_source_rows(
     requested_signature: object,
     requested_signature_summary: object,
     can_use_live_runtime_cache: bool,
-    build_live_rows: Callable[[], Sequence[object]] | None,
+    build_live_rows: Callable[[], object] | None,
     get_memory_intersection_cache: Callable[[], Sequence[object]] | None,
     memory_cache_signature: object | None = None,
     load_logged_intersection_cache: Callable[
@@ -1188,6 +1188,7 @@ def rebuild_geometry_fit_source_rows(
     normalized_params = dict(params_local or {})
     rebuild_attempts: list[str] = []
     live_cache_validation: dict[str, object] | None = None
+    live_runtime_cache_metadata: dict[str, object] = {}
 
     def _copy_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [
@@ -1195,6 +1196,20 @@ def rebuild_geometry_fit_source_rows(
             for entry in (raw_rows or ())
             if isinstance(entry, Mapping)
         ]
+
+    def _resolve_live_rows_payload(
+        raw_payload: object,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        rows_source = raw_payload
+        cache_metadata_local: dict[str, object] = {}
+        if isinstance(raw_payload, Mapping) and "rows" in raw_payload:
+            rows_source = raw_payload.get("rows")
+            raw_cache_metadata = raw_payload.get("cache_metadata")
+            if isinstance(raw_cache_metadata, Mapping):
+                cache_metadata_local = copy.deepcopy(dict(raw_cache_metadata))
+        if isinstance(rows_source, Mapping):
+            rows_source = ()
+        return _copy_rows(rows_source), cache_metadata_local
 
     def _copy_optional_sequence(
         raw_values: Sequence[object] | None,
@@ -1289,6 +1304,11 @@ def rebuild_geometry_fit_source_rows(
         stored_rows = _copy_rows(raw_rows)
         projected_rows = _project_copied_rows(stored_rows)
         cache_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        if live_runtime_cache_metadata:
+            cache_metadata.setdefault(
+                "live_runtime_cache_metadata",
+                copy.deepcopy(dict(live_runtime_cache_metadata)),
+            )
         if isinstance(live_cache_validation, Mapping) and live_cache_validation:
             cache_metadata.setdefault(
                 "live_runtime_cache_validation",
@@ -1360,7 +1380,9 @@ def rebuild_geometry_fit_source_rows(
 
     if can_use_live_runtime_cache and callable(build_live_rows):
         rebuild_attempts.append("live_runtime_cache")
-        live_rows = _copy_rows(build_live_rows())
+        live_rows, live_runtime_cache_metadata = _resolve_live_rows_payload(
+            build_live_rows()
+        )
         if live_rows:
             live_cache_validation = validate_geometry_fit_live_source_rows(
                 live_rows,
@@ -1370,6 +1392,13 @@ def rebuild_geometry_fit_source_rows(
                 return _success_result(
                     live_rows,
                     rebuild_source="live_runtime_cache",
+                )
+            if (
+                str(live_runtime_cache_metadata.get("cache_source", "")).strip()
+                == "peak_records_fallback"
+            ):
+                rebuild_attempts.append(
+                    "live_runtime_cache_peak_records_fallback_rejected"
                 )
             rebuild_attempts.append("live_runtime_cache_validation_failed")
 

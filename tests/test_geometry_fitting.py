@@ -1142,6 +1142,52 @@ def test_prepare_reflection_subset_prefers_source_reflection_index_over_stale_ta
     assert subset.measured_entries[0]["source_row_index"] == 0
 
 
+def test_prepare_reflection_subset_preserves_trusted_identity_and_only_remaps_local_lookup_ids() -> None:
+    miller = np.array(
+        [
+            [5.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 2.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_reflection_index": 1,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "resolved_table_index": 99,
+            "resolved_peak_index": 99,
+            "fit_source_identity_only": True,
+        }
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.reduced is True
+    assert subset.fixed_source_reflection_count == 1
+    assert subset.fallback_hkl_count == 0
+    entry = subset.measured_entries[0]
+    assert entry["source_reflection_index"] == 1
+    assert entry["source_reflection_namespace"] == "full_reflection"
+    assert entry["source_reflection_is_full"] is True
+    assert entry["source_branch_index"] == 1
+    assert entry["source_peak_index"] == 1
+    assert entry["source_table_index"] == 0
+    assert entry["source_row_index"] == 0
+    assert entry["resolved_table_index"] == 0
+    assert entry["resolved_peak_index"] == 1
+
+
 def test_prepare_reflection_subset_keeps_duplicate_fixed_source_rows_out_of_hkl_fallback() -> None:
     miller = np.array(
         [

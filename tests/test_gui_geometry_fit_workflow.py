@@ -1,11 +1,12 @@
 import json
+import hashlib
 from dataclasses import replace
 import numpy as np
 from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
-from ra_sim.gui import geometry_fit, geometry_overlay
+from ra_sim.gui import geometry_fit, geometry_overlay, manual_geometry
 
 
 class _DummyVar:
@@ -1918,6 +1919,146 @@ def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_require
             "after_reason": None,
         }
     ]
+
+
+def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_active_pairs() -> None:
+    peak_records = [
+        {
+            "display_col": 10.0,
+            "display_row": 20.0,
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_peak_index": 13,
+            "phi": 15.0,
+        }
+    ]
+    rebuilt_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        }
+    ]
+    required_pairs = [
+        {
+            "pair_id": "bg0:pair0",
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        }
+    ]
+
+    broken_rows = manual_geometry.geometry_manual_live_peak_candidates_from_records(
+        peak_records,
+        source_reflection_indices_local=[7],
+        active_signature_matches=False,
+    )
+    fixed_rows = manual_geometry.geometry_manual_live_peak_candidates_from_records(
+        peak_records,
+        source_reflection_indices_local=[7],
+        source_row_hkl_lookup={(0, 0): (1, 0, 0)},
+        active_signature_matches=True,
+    )
+    broken_validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        broken_rows,
+        required_pairs=required_pairs,
+    )
+    fixed_validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        fixed_rows,
+        required_pairs=required_pairs,
+    )
+    rebuild_validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        rebuilt_rows,
+        required_pairs=required_pairs,
+    )
+
+    def _digest(value) -> str:
+        payload = json.dumps(value, sort_keys=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    assert _digest(broken_validation["resolved_pairs"]) != _digest(
+        rebuild_validation["resolved_pairs"]
+    )
+    assert _digest(fixed_validation["resolved_pairs"]) == _digest(
+        rebuild_validation["resolved_pairs"]
+    )
+    assert len(fixed_validation["resolved_pairs"]) == len(rebuild_validation["resolved_pairs"]) == 1
+    assert geometry_fit._geometry_fit_required_pair_dual_path_diff(
+        fixed_validation,
+        rebuild_validation,
+    ) == []
+    assert geometry_fit._geometry_fit_required_pair_dual_path_diff(
+        broken_validation,
+        rebuild_validation,
+    ) == [
+        {
+            "pair_id": "bg0:pair0",
+            "before_status": "failed",
+            "after_status": "resolved",
+            "before_canonical_identity": None,
+            "after_canonical_identity": [7, 1],
+            "before_simulated_point": None,
+            "after_simulated_point": [10.0, 20.0],
+            "before_reason": "missing_trusted_reflection_row",
+            "after_reason": None,
+        }
+    ]
+
+    accepted = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_hit"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=True,
+        build_live_rows=lambda: {
+            "rows": list(fixed_rows),
+            "cache_metadata": {
+                "cache_source": "peak_records_fallback",
+                "active_signature_matches": True,
+                "source_snapshot_row_count": 1,
+            },
+        },
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache=lambda: ([], None),
+        logged_cache_matches_params=lambda _meta, _params: False,
+        build_source_rows_from_hit_tables=lambda _tables: (
+            list(rebuilt_rows),
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=None,
+        required_pairs=required_pairs,
+        live_cache_inventory={"source_snapshot_count": 1},
+    )
+
+    assert accepted.rebuild_source == "live_runtime_cache"
+    assert accepted.metadata["live_runtime_cache_metadata"]["cache_source"] == (
+        "peak_records_fallback"
+    )
+    assert accepted.metadata["live_runtime_cache_metadata"]["active_signature_matches"] is True
 
 
 def test_build_geometry_manual_fit_dataset_includes_runtime_exception_details_in_failure() -> None:

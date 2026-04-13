@@ -1053,6 +1053,66 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
 
 
+def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenance_for_matching_snapshot() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 1.5,
+                "display_row": 2.5,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "phi": 15.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "source_peak_index": 13,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_max_positions_local=None,
+        stored_source_reflection_indices_local=[7],
+        stored_hit_table_signature=("sig", 0),
+        source_row_snapshots={
+            0: {
+                "background_index": 0,
+                "simulation_signature": ("sig", 0),
+                "rows": [
+                    {
+                        "hkl": (1, 0, 0),
+                        "source_table_index": 0,
+                        "source_row_index": 1,
+                    }
+                ],
+                "row_count": 1,
+                "created_from": "fresh_simulation",
+            }
+        },
+    )
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 11.0,
+        primary_c_factory=lambda: 13.0,
+        image_size_factory=lambda: 48,
+        native_sim_to_display_coords="native-to-display",
+    )
+
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["source_reflection_index"] == 7
+    assert cached_preview_peaks[0]["source_reflection_namespace"] == "full_reflection"
+    assert cached_preview_peaks[0]["source_reflection_is_full"] is True
+    assert cached_preview_peaks[0]["source_branch_index"] == 1
+    assert cached_preview_peaks[0]["source_peak_index"] == 1
+    assert callable(bundle.last_live_preview_cache_metadata)
+    assert bundle.last_live_preview_cache_metadata()["cache_source"] == "peak_records_fallback"
+    assert bundle.last_live_preview_cache_metadata()["active_signature_matches"] is True
+
+
 def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_nominal_cache_grouping() -> None:
     runtime_state = state.SimulationRuntimeState(
         stored_max_positions_local=[

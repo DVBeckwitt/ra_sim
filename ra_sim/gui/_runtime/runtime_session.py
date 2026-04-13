@@ -13004,6 +13004,9 @@ geometry_q_group_runtime_value_callbacks = (
 _build_live_preview_simulated_peaks_from_cache = (
     geometry_q_group_runtime_value_callbacks.build_live_preview_simulated_peaks_from_cache
 )
+_last_live_preview_cache_metadata = (
+    geometry_q_group_runtime_value_callbacks.last_live_preview_cache_metadata
+)
 _filter_geometry_fit_simulated_peaks = (
     geometry_q_group_runtime_value_callbacks.filter_simulated_peaks
 )
@@ -13591,6 +13594,26 @@ def _geometry_manual_rebuild_source_rows_for_background(
             allow_nominal_hkl_indices=True,
         )
 
+    def _build_geometry_fit_live_rows_payload_from_cache() -> (
+        dict[str, object] | list[dict[str, object]]
+    ):
+        live_rows = [
+            dict(entry)
+            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
+            if isinstance(entry, Mapping)
+        ]
+        cache_metadata = (
+            dict(_last_live_preview_cache_metadata())
+            if callable(_last_live_preview_cache_metadata)
+            else {}
+        )
+        if cache_metadata:
+            return {
+                "rows": live_rows,
+                "cache_metadata": cache_metadata,
+            }
+        return live_rows
+
     rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
         background_index=int(background_idx),
         background_label=background_label,
@@ -13600,13 +13623,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
         requested_signature=requested_signature,
         requested_signature_summary=requested_signature_summary,
         can_use_live_runtime_cache=can_use_live_runtime_cache,
-        build_live_rows=(
-            lambda: [
-                dict(entry)
-                for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
-                if isinstance(entry, Mapping)
-            ]
-        ),
+        build_live_rows=_build_geometry_fit_live_rows_payload_from_cache,
         get_memory_intersection_cache=get_last_intersection_cache,
         memory_cache_signature=simulation_runtime_state.last_simulation_signature,
         load_logged_intersection_cache=(lambda: load_most_recent_logged_intersection_cache()),
@@ -20646,12 +20663,18 @@ def _build_geometry_fit_async_job(
         pick_uses_caked_space = False
 
     live_rows_by_background: dict[int, list[dict[str, object]]] = {}
+    live_rows_cache_metadata_by_background: dict[int, dict[str, object]] = {}
     if int(current_background_index) in set(required_indices):
         live_rows_by_background[int(current_background_index)] = [
             dict(entry)
             for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
             if isinstance(entry, Mapping)
         ]
+        live_rows_cache_metadata_by_background[int(current_background_index)] = (
+            dict(_last_live_preview_cache_metadata())
+            if callable(_last_live_preview_cache_metadata)
+            else {}
+        )
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
         if isinstance(caked_view_payload, tuple) and len(caked_view_payload) >= 3:
             try:
@@ -20722,6 +20745,7 @@ def _build_geometry_fit_async_job(
         "memory_intersection_cache": _copy_intersection_cache_tables(get_last_intersection_cache()),
         "memory_intersection_cache_signature": (simulation_runtime_state.last_simulation_signature),
         "live_rows_by_background": live_rows_by_background,
+        "live_rows_cache_metadata_by_background": live_rows_cache_metadata_by_background,
         "live_rows_signature": simulation_runtime_state.last_simulation_signature,
         "manual_match_config": manual_match_config,
         "pick_uses_caked_space": bool(pick_uses_caked_space),
@@ -21082,6 +21106,15 @@ def _run_async_geometry_fit_worker_job(
             f"background {int(background_idx) + 1}",
         )
         live_rows_signature = job_data.get("live_rows_signature")
+        live_rows_cache_metadata = dict(
+            copy.deepcopy(
+                dict(job_data.get("live_rows_cache_metadata_by_background", {}) or {}).get(
+                    int(background_idx),
+                    {},
+                )
+            )
+            or {}
+        )
         live_rows = _copy_source_rows(
             dict(job_data.get("live_rows_by_background", {}) or {}).get(
                 int(background_idx),
@@ -21146,6 +21179,24 @@ def _run_async_geometry_fit_worker_job(
                 live_runtime_cache_validation=snapshot_validation,
             )
 
+        def _worker_live_rows_payload() -> dict[str, object] | list[dict[str, object]]:
+            if requested_signature != live_rows_signature:
+                return []
+            if live_rows_cache_metadata:
+                return {
+                    "rows": [
+                        dict(entry)
+                        for entry in (live_rows or ())
+                        if isinstance(entry, Mapping)
+                    ],
+                    "cache_metadata": dict(live_rows_cache_metadata),
+                }
+            return [
+                dict(entry)
+                for entry in (live_rows or ())
+                if isinstance(entry, Mapping)
+            ]
+
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
             background_label=str(background_label),
@@ -21161,13 +21212,7 @@ def _run_async_geometry_fit_worker_job(
             can_use_live_runtime_cache=(
                 int(background_idx) == int(job_data.get("current_background_index", -1))
             ),
-            build_live_rows=(
-                lambda: (
-                    [dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)]
-                    if requested_signature == live_rows_signature
-                    else []
-                )
-            ),
+            build_live_rows=_worker_live_rows_payload,
             get_memory_intersection_cache=(
                 lambda: _copy_intersection_cache_tables(
                     job_data.get("memory_intersection_cache", [])

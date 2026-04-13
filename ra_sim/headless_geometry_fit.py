@@ -1482,20 +1482,71 @@ def run_headless_geometry_fit(
         source_snapshot_diagnostics_state.clear()
         source_snapshot_diagnostics_state.update(fields)
 
-    def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
+    def _build_live_preview_simulated_peaks_from_cache() -> (
+        dict[str, object] | list[dict[str, object]]
+    ):
         max_positions_local = simulation_runtime_state.stored_max_positions_local
+        current_signature = getattr(
+            simulation_runtime_state,
+            "stored_hit_table_signature",
+            None,
+        )
+        if current_signature is None:
+            current_signature = getattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        source_reflection_indices_local = (
+            simulation_runtime_state.stored_source_reflection_indices_local
+        )
+        peak_record_count = int(len(simulation_runtime_state.peak_records or ()))
+        max_positions_row_count = (
+            int(len(max_positions_local))
+            if isinstance(max_positions_local, Sequence)
+            and not isinstance(max_positions_local, (str, bytes))
+            else 0
+        )
         if not isinstance(max_positions_local, Sequence) or isinstance(
             max_positions_local,
             (str, bytes),
         ):
+            provenance = (
+                gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
+                    simulation_runtime_state,
+                    signature=current_signature,
+                    background_index=int(background_state.current_background_index),
+                    source_reflection_indices_local=source_reflection_indices_local,
+                )
+            )
             live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
                 simulation_runtime_state.peak_records,
-                source_reflection_indices_local=(
-                    simulation_runtime_state.stored_source_reflection_indices_local
+                source_reflection_indices_local=source_reflection_indices_local,
+                source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
+                active_signature_matches=bool(
+                    provenance.get("active_signature_matches", False)
                 ),
-                active_signature_matches=False,
             )
-            return [dict(entry) for entry in live_rows if isinstance(entry, Mapping)]
+            return {
+                "rows": [
+                    dict(entry) for entry in live_rows if isinstance(entry, Mapping)
+                ],
+                "cache_metadata": {
+                    "cache_source": "peak_records_fallback",
+                    "fallback_used": True,
+                    "max_positions_row_count": int(max_positions_row_count),
+                    "peak_record_count": int(peak_record_count),
+                    "active_signature_matches": bool(
+                        provenance.get("active_signature_matches", False)
+                    ),
+                    "source_snapshot_row_count": int(
+                        provenance.get("source_snapshot_row_count", 0) or 0
+                    ),
+                    "source_snapshot_background_index": provenance.get(
+                        "source_snapshot_background_index"
+                    ),
+                },
+            }
 
         stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
         if stored_sim_image is not None:
@@ -1539,15 +1590,52 @@ def run_headless_geometry_fit(
             **peak_kwargs,
         )
         if rows:
-            return [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+            return {
+                "rows": [
+                    dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
+                ],
+                "cache_metadata": {
+                    "cache_source": "max_positions",
+                    "fallback_used": False,
+                    "max_positions_row_count": int(max_positions_row_count),
+                    "peak_record_count": int(peak_record_count),
+                    "active_signature_matches": None,
+                    "source_snapshot_row_count": 0,
+                    "source_snapshot_background_index": None,
+                },
+            }
+        provenance = gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
+            simulation_runtime_state,
+            signature=current_signature,
+            background_index=int(background_state.current_background_index),
+            source_reflection_indices_local=source_reflection_indices_local,
+        )
         live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
             simulation_runtime_state.peak_records,
-            source_reflection_indices_local=(
-                simulation_runtime_state.stored_source_reflection_indices_local
+            source_reflection_indices_local=source_reflection_indices_local,
+            source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
+            active_signature_matches=bool(
+                provenance.get("active_signature_matches", False)
             ),
-            active_signature_matches=False,
         )
-        return [dict(entry) for entry in live_rows if isinstance(entry, Mapping)]
+        return {
+            "rows": [dict(entry) for entry in live_rows if isinstance(entry, Mapping)],
+            "cache_metadata": {
+                "cache_source": "peak_records_fallback",
+                "fallback_used": True,
+                "max_positions_row_count": int(max_positions_row_count),
+                "peak_record_count": int(peak_record_count),
+                "active_signature_matches": bool(
+                    provenance.get("active_signature_matches", False)
+                ),
+                "source_snapshot_row_count": int(
+                    provenance.get("source_snapshot_row_count", 0) or 0
+                ),
+                "source_snapshot_background_index": provenance.get(
+                    "source_snapshot_background_index"
+                ),
+            },
+        }
 
     def _simulate_hit_tables_for_fit(
         miller_array: np.ndarray,

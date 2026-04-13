@@ -10078,7 +10078,7 @@ def _resolve_geometry_fit_correspondence(
             if peak_idx not in {0, 1}:
                 return None, _payload("missing_source_peak_index", table_idx=table_idx)
         elif frozen_kind == "local_branch":
-            if frozen_namespace not in {"subset_local", "current_full_local"}:
+            if frozen_namespace != "current_full_local":
                 return None, _payload("invalid_frozen_locator")
             if (
                 current_local_table_signature is not None
@@ -10096,7 +10096,7 @@ def _resolve_geometry_fit_correspondence(
             if peak_idx not in {0, 1}:
                 return None, _payload("missing_source_peak_index", table_idx=table_idx)
         elif frozen_kind == "local_row":
-            if frozen_namespace not in {"subset_local", "current_full_local"}:
+            if frozen_namespace != "current_full_local":
                 return None, _payload("invalid_frozen_locator")
             if (
                 current_local_table_signature is not None
