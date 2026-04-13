@@ -1996,6 +1996,76 @@ def test_geometry_fit_correspondence_simulated_point_rejects_legacy_branch_alias
     assert reason == "missing_source_peak_index"
 
 
+def test_measured_source_peak_index_with_source_forwards_legacy_fallback(
+    monkeypatch,
+) -> None:
+    seen: list[bool] = []
+
+    def fake_resolve(entry, *, allow_legacy_peak_fallback=False):
+        seen.append(bool(allow_legacy_peak_fallback))
+        return None, None, None
+
+    monkeypatch.setattr(opt, "resolve_canonical_branch", fake_resolve)
+
+    peak_idx, peak_source = opt._measured_source_peak_index_with_source(
+        {"source_peak_index": 1},
+        allow_legacy_peak_fallback=True,
+    )
+
+    assert seen == [True]
+    assert peak_idx == 1
+    assert peak_source == "source_peak_index"
+
+
+def test_geometry_fit_correspondence_simulated_point_allows_untrusted_local_row_locator() -> None:
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        {
+            "resolved_table_index": 0,
+            "source_row_index": 1,
+            "hkl": (1, 0, 0),
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, -22.0, 1.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 22.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+    )
+
+    assert point == (8.0, 8.0)
+    assert reason == "resolved_source_row"
+
+
+def test_resolve_geometry_fit_correspondence_rejects_mismatched_local_table_signature() -> None:
+    point, payload = opt._resolve_geometry_fit_correspondence(
+        {
+            "frozen_locator_kind": "local_row",
+            "frozen_table_namespace": "current_full_local",
+            "frozen_table_index": 0,
+            "frozen_row_index": 1,
+            "frozen_table_signature": "seed-signature",
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, -22.0, 1.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 22.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+        current_local_table_signature="current-signature",
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "frozen_table_signature_mismatch"
+
+
 def test_fit_geometry_parameters_pixel_path_falls_back_from_stale_in_range_source_indices(
     monkeypatch,
 ):
@@ -2734,7 +2804,7 @@ def test_fit_geometry_parameters_records_bound_proximity_summary(monkeypatch):
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.array([1.0], dtype=float)
+        x = np.asarray(kwargs["bounds"][1], dtype=float)
         return opt.OptimizeResult(
             x=x,
             fun=np.asarray(residual_fn(x), dtype=float),
@@ -3033,6 +3103,151 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
     assert np.isclose(float(result.full_beam_polish_summary["start_rms_px"]), 1.0)
     assert np.isclose(float(result.full_beam_polish_summary["candidate_rms_px"]), np.sqrt(8.0))
     assert int(result.point_match_summary["matched_pair_count"]) == 2
+
+
+def test_full_beam_polish_rejection_preserves_central_point_match_result(monkeypatch):
+    def fake_process(*args, **kwargs):
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        image_size = int(args[2])
+        hit_tables = []
+        coord_map = {
+            (1, 0, 0): (1.0, 1.0),
+            (2, 0, 0): (4.0, 4.0),
+            (3, 0, 0): (7.0, 7.0),
+        }
+        best_sample_indices_out = kwargs.get("best_sample_indices_out")
+        if isinstance(best_sample_indices_out, np.ndarray):
+            best_sample_indices_out[:] = 0
+        for row in miller_arg:
+            hkl = tuple(int(round(v)) for v in row)
+            col, row_px = coord_map[hkl]
+            hit_tables.append(
+                np.array(
+                    [[1.0, col, row_px, 0.0, row[0], row[1], row[2]]],
+                    dtype=np.float64,
+                )
+            )
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        }
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    baseline = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {"restarts": 0, "weighted_matching": False},
+            "full_beam_polish": {"enabled": False},
+            "identifiability": {"enabled": False},
+        },
+    )
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {"restarts": 0, "weighted_matching": False},
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert baseline.success
+    assert result.success
+    assert result.final_metric_name == baseline.final_metric_name == "central_point_match"
+    assert np.allclose(result.fun, baseline.fun)
+    assert result.point_match_summary["matched_pair_count"] == baseline.point_match_summary[
+        "matched_pair_count"
+    ]
+    assert np.isclose(
+        float(result.point_match_summary["unweighted_peak_rms_px"]),
+        float(baseline.point_match_summary["unweighted_peak_rms_px"]),
+        equal_nan=True,
+    )
+    assert len(result.point_match_diagnostics) == len(baseline.point_match_diagnostics)
+    for result_entry, baseline_entry in zip(
+        result.point_match_diagnostics,
+        baseline.point_match_diagnostics,
+    ):
+        for key in (
+            "match_status",
+            "match_kind",
+            "resolution_reason",
+            "resolution_kind",
+            "source_table_index",
+            "source_row_index",
+            "resolved_table_index",
+            "resolved_peak_index",
+            "source_branch_index",
+        ):
+            assert result_entry.get(key) == baseline_entry.get(key)
+        for key in (
+            "measured_x",
+            "measured_y",
+            "simulated_x",
+            "simulated_y",
+            "dx_px",
+            "dy_px",
+            "distance_px",
+        ):
+            assert np.isclose(
+                float(result_entry.get(key, np.nan)),
+                float(baseline_entry.get(key, np.nan)),
+                equal_nan=True,
+            )
+    assert int(result.point_match_summary["matched_pair_count"]) == 1
+    assert int(result.point_match_summary["matched_pair_count"]) == int(
+        baseline.point_match_summary["matched_pair_count"]
+    )
+    assert isinstance(result.full_beam_polish_summary, dict)
+    assert bool(result.full_beam_polish_summary["accepted"]) is False
+    assert str(result.full_beam_polish_summary["reason"]) == "no_seed_correspondences"
 
 
 def test_fit_geometry_parameters_uses_manual_peak_sigma_by_default(monkeypatch):
