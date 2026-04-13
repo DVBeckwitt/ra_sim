@@ -859,16 +859,26 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
             "source_peak_index": 3,
             "raw_x": 9.0,
             "raw_y": 11.0,
+            "caked_x": 23.0,
+            "caked_y": -17.5,
+            "raw_caked_x": 22.75,
+            "raw_caked_y": -17.25,
             "placement_error_px": 1.25,
             "sigma_px": 1.46,
+            "stale_caked_fields": True,
         },
         sigma_floor_px=0.75,
     )
 
     assert serialized["hkl"] == [1, 0, 2]
     assert serialized["q_group_key"] == ["q_group", "primary", 1.0, 2]
+    assert serialized["caked_x"] == 23.0
+    assert serialized["caked_y"] == -17.5
+    assert serialized["raw_caked_x"] == 22.75
+    assert serialized["raw_caked_y"] == -17.25
     assert serialized["placement_error_px"] == 1.25
     assert serialized["sigma_px"] == 1.46
+    assert "stale_caked_fields" not in serialized
 
     restored = mg.geometry_manual_pair_entry_from_jsonable(serialized, sigma_floor_px=0.75)
 
@@ -883,8 +893,33 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
     assert restored["source_peak_index"] == 3
     assert restored["raw_x"] == 9.0
     assert restored["raw_y"] == 11.0
+    assert restored["caked_x"] == 23.0
+    assert restored["caked_y"] == -17.5
+    assert restored["raw_caked_x"] == 22.75
+    assert restored["raw_caked_y"] == -17.25
     assert restored["placement_error_px"] == 1.25
     assert restored["sigma_px"] == 1.46
+    assert "stale_caked_fields" not in restored
+
+
+def test_geometry_manual_pair_from_jsonable_accepts_legacy_stale_caked_field() -> None:
+    restored = mg.geometry_manual_pair_entry_from_jsonable(
+        {
+            "label": "1,0,2",
+            "hkl": [1, 0, 2],
+            "x": 10.5,
+            "y": 12.25,
+            "caked_x": 23.0,
+            "caked_y": -17.5,
+            "stale_caked_fields": True,
+        },
+        sigma_floor_px=0.75,
+    )
+
+    assert restored is not None
+    assert restored["caked_x"] == 23.0
+    assert restored["caked_y"] == -17.5
+    assert restored["stale_caked_fields"] is True
 
 
 def test_geometry_manual_pairs_export_rows_include_background_metadata() -> None:

@@ -4778,14 +4778,14 @@ def build_geometry_manual_fit_dataset(
         background_angles = _caked_angle_pair(
             entry,
             x_keys=(
-                "background_two_theta_deg",
                 "caked_x",
                 "raw_caked_x",
+                "background_two_theta_deg",
             ),
             y_keys=(
-                "background_phi_deg",
                 "caked_y",
                 "raw_caked_y",
+                "background_phi_deg",
             ),
         )
         if background_angles is not None:
@@ -5246,14 +5246,14 @@ def build_geometry_manual_fit_dataset(
                     seed_entry["sim_row_local"] = float(sim_row_local)
                     raw_col = _finite_float(
                         measured_entry.get(
-                            "background_two_theta_deg",
-                            measured_entry.get("caked_x"),
+                            "caked_x",
+                            measured_entry.get("background_two_theta_deg"),
                         )
                     )
                     raw_row = _finite_float(
                         measured_entry.get(
-                            "background_phi_deg",
-                            measured_entry.get("caked_y"),
+                            "caked_y",
+                            measured_entry.get("background_phi_deg"),
                         )
                     )
             if raw_col is None or raw_row is None:

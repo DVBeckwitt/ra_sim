@@ -380,7 +380,7 @@ def test_geometry_manual_canonicalize_live_source_entry_only_repairs_trust_from_
     assert "source_reflection_is_full" not in unrepaired
 
 
-def test_refresh_geometry_manual_pair_entry_recomputes_stale_caked_cache() -> None:
+def test_refresh_geometry_manual_pair_entry_keeps_saved_caked_angles_as_truth() -> None:
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {
             "label": "0,0,3",
@@ -412,18 +412,18 @@ def test_refresh_geometry_manual_pair_entry_recomputes_stale_caked_cache() -> No
     )
 
     assert refreshed is not None
-    assert refreshed["detector_x"] == 30.0
-    assert refreshed["detector_y"] == 40.0
-    assert refreshed["x"] == 30.0
-    assert refreshed["y"] == 40.0
-    assert refreshed["caked_x"] == 40.0
-    assert refreshed["caked_y"] == 60.0
-    assert refreshed["raw_caked_x"] == 40.0
-    assert refreshed["raw_caked_y"] == 60.0
-    assert refreshed["stale_caked_fields"] is True
+    assert refreshed["detector_x"] == 140.0
+    assert refreshed["detector_y"] == 140.0
+    assert refreshed["x"] == 140.0
+    assert refreshed["y"] == 140.0
+    assert refreshed["caked_x"] == 150.0
+    assert refreshed["caked_y"] == 160.0
+    assert refreshed["raw_caked_x"] == 151.0
+    assert refreshed["raw_caked_y"] == 161.0
+    assert "stale_caked_fields" not in refreshed
 
     display_point = (float(refreshed["caked_x"]) - 10.0, float(refreshed["caked_y"]) - 20.0)
-    assert display_point == (30.0, 40.0)
+    assert display_point == (140.0, 140.0)
 
 
 def test_refresh_geometry_manual_pair_entry_migrates_legacy_peak_branch_once() -> None:

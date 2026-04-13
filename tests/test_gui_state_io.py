@@ -168,3 +168,42 @@ def test_save_and_load_geometry_placements_file_round_trip(tmp_path):
     assert loaded["state"]["background_files"] == ["a.osc", "b.osc"]
     assert loaded["state"]["manual_pairs"][0]["background_name"] == "b.osc"
     assert loaded["state"]["manual_pairs"][0]["entries"][0]["x"] == 12.5
+
+
+def test_save_and_load_geometry_placements_file_preserves_caked_angles(
+    tmp_path,
+):
+    file_path = tmp_path / "placements_angles.json"
+    save_geometry_placements_file(
+        file_path,
+        {
+            "background_files": ["a.osc"],
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "background_name": "a.osc",
+                    "entries": [
+                        {
+                            "label": "1,0,0",
+                            "x": 140.0,
+                            "y": 141.0,
+                            "caked_x": 23.0,
+                            "caked_y": -17.5,
+                            "raw_caked_x": 22.75,
+                            "raw_caked_y": -17.25,
+                            "stale_caked_fields": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    loaded = load_geometry_placements_file(file_path)
+
+    entry = loaded["state"]["manual_pairs"][0]["entries"][0]
+    assert entry["caked_x"] == 23.0
+    assert entry["caked_y"] == -17.5
+    assert entry["raw_caked_x"] == 22.75
+    assert entry["raw_caked_y"] == -17.25
+    assert entry["stale_caked_fields"] is True

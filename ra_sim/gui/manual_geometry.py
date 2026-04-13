@@ -352,7 +352,7 @@ def refresh_geometry_manual_pair_entry(
     stale_caked_tolerance_px: float = 0.5,
     allow_legacy_peak_fallback: bool = True,
 ) -> dict[str, object] | None:
-    """Refresh cached display/caked fields from canonical detector coordinates."""
+    """Refresh cached display/detector fields from angle-first manual geometry."""
 
     normalized = normalize_geometry_manual_pair_entry(
         dict(entry) if isinstance(entry, Mapping) else None,
@@ -367,6 +367,7 @@ def refresh_geometry_manual_pair_entry(
         allow_legacy_peak_fallback=allow_legacy_peak_fallback,
         preserve_legacy_peak_when_unresolved=False,
     )
+    normalized.pop("stale_caked_fields", None)
 
     def _finite_pair(
         x_key: str,
@@ -389,7 +390,53 @@ def refresh_geometry_manual_pair_entry(
     except Exception:
         shape = ()
 
-    detector_point = _finite_pair("detector_x", "detector_y")
+    caked_point = _finite_pair("caked_x", "caked_y")
+    if caked_point is None:
+        caked_point = _finite_pair("raw_caked_x", "raw_caked_y")
+    if caked_point is not None:
+        normalized["caked_x"] = float(caked_point[0])
+        normalized["caked_y"] = float(caked_point[1])
+        if _finite_pair("raw_caked_x", "raw_caked_y") is None:
+            normalized["raw_caked_x"] = float(caked_point[0])
+            normalized["raw_caked_y"] = float(caked_point[1])
+
+    display_point = None
+    detector_point = None
+    if caked_point is not None and callable(caked_angles_to_background_display_coords):
+        mapped_display_point = caked_angles_to_background_display_coords(
+            float(caked_point[0]),
+            float(caked_point[1]),
+        )
+        if (
+            isinstance(mapped_display_point, tuple)
+            and len(mapped_display_point) >= 2
+            and np.isfinite(float(mapped_display_point[0]))
+            and np.isfinite(float(mapped_display_point[1]))
+        ):
+            display_point = (
+                float(mapped_display_point[0]),
+                float(mapped_display_point[1]),
+            )
+            normalized["x"] = float(display_point[0])
+            normalized["y"] = float(display_point[1])
+            if callable(background_display_to_native_detector_coords):
+                mapped_detector_point = background_display_to_native_detector_coords(
+                    float(display_point[0]),
+                    float(display_point[1]),
+                )
+                if (
+                    isinstance(mapped_detector_point, tuple)
+                    and len(mapped_detector_point) >= 2
+                    and np.isfinite(float(mapped_detector_point[0]))
+                    and np.isfinite(float(mapped_detector_point[1]))
+                ):
+                    detector_point = (
+                        float(mapped_detector_point[0]),
+                        float(mapped_detector_point[1]),
+                    )
+
+    if detector_point is None:
+        detector_point = _finite_pair("detector_x", "detector_y")
     if detector_point is None:
         detector_point = _finite_pair(
             "background_detector_x",
@@ -400,33 +447,21 @@ def refresh_geometry_manual_pair_entry(
         detector_point is None
         and callable(background_display_to_native_detector_coords)
     ):
-        display_point = _finite_pair("x", "y")
-        if display_point is not None:
-            detector_point = background_display_to_native_detector_coords(
-                float(display_point[0]),
-                float(display_point[1]),
-            )
-
-    if (
-        detector_point is None
-        and callable(caked_angles_to_background_display_coords)
-        and callable(background_display_to_native_detector_coords)
-    ):
-        caked_point = _finite_pair("caked_x", "caked_y")
-        if caked_point is not None:
-            display_point = caked_angles_to_background_display_coords(
-                float(caked_point[0]),
-                float(caked_point[1]),
+        fallback_display_point = _finite_pair("x", "y")
+        if fallback_display_point is not None:
+            mapped_detector_point = background_display_to_native_detector_coords(
+                float(fallback_display_point[0]),
+                float(fallback_display_point[1]),
             )
             if (
-                isinstance(display_point, tuple)
-                and len(display_point) >= 2
-                and np.isfinite(float(display_point[0]))
-                and np.isfinite(float(display_point[1]))
+                isinstance(mapped_detector_point, tuple)
+                and len(mapped_detector_point) >= 2
+                and np.isfinite(float(mapped_detector_point[0]))
+                and np.isfinite(float(mapped_detector_point[1]))
             ):
-                detector_point = background_display_to_native_detector_coords(
-                    float(display_point[0]),
-                    float(display_point[1]),
+                detector_point = (
+                    float(mapped_detector_point[0]),
+                    float(mapped_detector_point[1]),
                 )
 
     if (
@@ -442,7 +477,7 @@ def refresh_geometry_manual_pair_entry(
         normalized["background_detector_x"] = float(detector_col)
         normalized["background_detector_y"] = float(detector_row)
 
-        if len(shape) >= 2:
+        if display_point is None and len(shape) >= 2:
             try:
                 display_col, display_row = rotate_point_for_display(
                     float(detector_col),
@@ -458,7 +493,10 @@ def refresh_geometry_manual_pair_entry(
                 normalized["y"] = float(display_row)
 
         recomputed_caked = None
-        if callable(native_detector_coords_to_caked_display_coords):
+        if (
+            caked_point is None
+            and callable(native_detector_coords_to_caked_display_coords)
+        ):
             recomputed_caked = native_detector_coords_to_caked_display_coords(
                 float(detector_col),
                 float(detector_row),
@@ -469,47 +507,6 @@ def refresh_geometry_manual_pair_entry(
             and np.isfinite(float(recomputed_caked[0]))
             and np.isfinite(float(recomputed_caked[1]))
         ):
-            stale_caked_fields = False
-            saved_caked = _finite_pair("caked_x", "caked_y", source=entry)
-            if (
-                saved_caked is not None
-                and callable(caked_angles_to_background_display_coords)
-                and callable(background_display_to_native_detector_coords)
-            ):
-                saved_display = caked_angles_to_background_display_coords(
-                    float(saved_caked[0]),
-                    float(saved_caked[1]),
-                )
-                saved_native = (
-                    background_display_to_native_detector_coords(
-                        float(saved_display[0]),
-                        float(saved_display[1]),
-                    )
-                    if isinstance(saved_display, tuple)
-                    and len(saved_display) >= 2
-                    and np.isfinite(float(saved_display[0]))
-                    and np.isfinite(float(saved_display[1]))
-                    else None
-                )
-                if (
-                    isinstance(saved_native, tuple)
-                    and len(saved_native) >= 2
-                    and np.isfinite(float(saved_native[0]))
-                    and np.isfinite(float(saved_native[1]))
-                ):
-                    stale_caked_fields = (
-                        float(
-                            np.hypot(
-                                float(saved_native[0]) - float(detector_col),
-                                float(saved_native[1]) - float(detector_row),
-                            )
-                        )
-                        > float(stale_caked_tolerance_px)
-                    )
-            if stale_caked_fields:
-                normalized["stale_caked_fields"] = True
-            else:
-                normalized.pop("stale_caked_fields", None)
             normalized["caked_x"] = float(recomputed_caked[0])
             normalized["caked_y"] = float(recomputed_caked[1])
             normalized["raw_caked_x"] = float(recomputed_caked[0])
@@ -5561,10 +5558,6 @@ def geometry_manual_pair_entry_to_jsonable(
 
     if normalized.get("source_label") is not None:
         row["source_label"] = str(normalized.get("source_label"))
-    if "stale_caked_fields" in normalized:
-        row["stale_caked_fields"] = bool(
-            normalized.get("stale_caked_fields", False)
-        )
 
     return row
 

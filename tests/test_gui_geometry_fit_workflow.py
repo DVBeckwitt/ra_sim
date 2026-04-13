@@ -1946,6 +1946,111 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
     assert dataset["initial_pairs_display"][0]["bg_caked_display"] == (150.0, 160.0)
 
 
+def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_caked_angles() -> None:
+    def _refresh_entry(entry):
+        return manual_geometry.refresh_geometry_manual_pair_entry(
+            entry,
+            background_display_shape=(4, 5),
+            background_display_to_native_detector_coords=lambda col, row: (
+                float(col),
+                float(row),
+            ),
+            caked_angles_to_background_display_coords=lambda two_theta, phi: (
+                float(two_theta) - 10.0,
+                float(phi) - 20.0,
+            ),
+            native_detector_coords_to_caked_display_coords=lambda col, row: (
+                float(col) + 10.0,
+                float(row) + 20.0,
+            ),
+            rotate_point_for_display=lambda col, row, _shape, _k: (
+                float(col),
+                float(row),
+            ),
+            display_rotate_k=0,
+        )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+                "detector_x": 30.0,
+                "detector_y": 40.0,
+                "background_two_theta_deg": 23.0,
+                "background_phi_deg": -36.0,
+                "caked_x": 150.0,
+                "caked_y": 160.0,
+                "raw_caked_x": 151.0,
+                "raw_caked_y": 161.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [{"dummy": True}]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {
+            (1, 2): {
+                "sim_col": 91.0,
+                "sim_row": 82.0,
+                "sim_col_raw": 9.0,
+                "sim_row_raw": 8.0,
+            }
+        },
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry["x"]),
+            float(entry["y"]),
+        ),
+        geometry_manual_refresh_pair_entry=_refresh_entry,
+        unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
+        display_to_native_sim_coords=lambda col, row, shape: (11.0, 12.0),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["initial_pairs_display"][0]["bg_display"] == (140.0, 140.0)
+    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 150.0
+    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == 160.0
+    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 150.0
+    assert dataset["measured_for_fit"][0]["background_phi_deg"] == 160.0
+    assert dataset["measured_for_fit"][0]["background_detector_x"] == 140.0
+    assert dataset["measured_for_fit"][0]["background_detector_y"] == 140.0
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 150.0
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == 160.0
+
+
 def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
@@ -2353,6 +2458,8 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_but_keeps_detec
                 "hkl": (1, 1, 0),
                 "x": 30.0,
                 "y": 40.0,
+                "caked_x": 150.0,
+                "caked_y": 160.0,
                 "background_two_theta_deg": 23.0,
                 "background_phi_deg": -36.0,
             }
@@ -2428,7 +2535,7 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_but_keeps_detec
         Gamma_deg=float(local_params["Gamma"]),
     )
 
-    assert calls["raw"] == (23.0, -36.0)
+    assert calls["raw"] == (150.0, 160.0)
     assert calls["shape"] == (6, 7)
     assert calls["use_caked_space"] is True
     assert np.allclose(calls["radial_axis"], radial_axis)
