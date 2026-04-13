@@ -3958,6 +3958,12 @@ def build_geometry_manual_fit_dataset(
         if entry_group_key is not None and overlay_group_key != entry_group_key:
             return None, None
         promoted = dict(overlay_source_entry)
+        promoted = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+            promoted,
+            preserve_existing_trusted_identity=False,
+        )
+        if promoted is None:
+            return None, None
         promoted_kind = (
             "legacy_dense_q_group_rebind"
             if overlay_kind == "q_group_fallback"
@@ -6203,20 +6209,19 @@ def build_geometry_fit_live_cache_log_lines(
                 ),
             )
         )
-        lines.append(
-            (
-                "{label}: source_snapshot requested_signature={requested} "
-                "stored_signature={stored}"
-            ).format(
-                label=label,
-                requested=_geometry_fit_debug_value_text(
-                    diagnostics.get("requested_signature_summary")
-                ),
-                stored=_geometry_fit_debug_value_text(
-                    diagnostics.get("stored_signature_summary")
-                ),
+        requested_signature = diagnostics.get("requested_signature_summary")
+        stored_signature = diagnostics.get("stored_signature_summary")
+        if requested_signature is not None or stored_signature is not None:
+            lines.append(
+                (
+                    "{label}: source_snapshot requested_signature={requested} "
+                    "stored_signature={stored}"
+                ).format(
+                    label=label,
+                    requested=_geometry_fit_debug_value_text(requested_signature),
+                    stored=_geometry_fit_debug_value_text(stored_signature),
+                )
             )
-        )
         inventory_raw = diagnostics.get("live_cache_inventory")
         if inventory is None and isinstance(inventory_raw, Mapping):
             inventory = dict(inventory_raw)
@@ -6281,25 +6286,14 @@ def build_geometry_fit_live_cache_log_lines(
     if not source_snapshots:
         lines.append("inventory: source_snapshots=<none>")
     else:
-        for snapshot in source_snapshots:
-            lines.append(
-                (
-                    "inventory: snapshot bg[{background}] rows={rows} "
-                    "created_from={created_from} signature={signature}"
-                ).format(
-                    background=int(snapshot.get("background_index", -1) or -1),
-                    rows=_geometry_fit_debug_value_text(
-                        snapshot.get("row_count", 0),
-                        float_digits=0,
-                    ),
-                    created_from=_geometry_fit_debug_value_text(
-                        snapshot.get("created_from")
-                    ),
-                    signature=_geometry_fit_debug_value_text(
-                        snapshot.get("signature_summary")
-                    ),
+        lines.append(
+            "inventory: source_snapshots={count}".format(
+                count=_geometry_fit_debug_value_text(
+                    len(source_snapshots),
+                    float_digits=0,
                 )
             )
+        )
     return lines
 
 

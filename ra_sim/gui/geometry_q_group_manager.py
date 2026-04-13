@@ -18,7 +18,7 @@ from ra_sim.simulation.diffraction import (
 from ra_sim.simulation.diffraction import (
     process_peaks_parallel_safe as diffraction_process_peaks_parallel_safe,
 )
-from ra_sim.utils.calculations import source_branch_index_from_phi_deg
+from ra_sim.utils.calculations import resolve_canonical_branch, source_branch_index_from_phi_deg
 
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
@@ -781,6 +781,14 @@ def build_geometry_fit_simulated_peaks(
             if q_group_key is None:
                 continue
 
+            try:
+                trusted_reflection_index = (
+                    int(source_reflection_indices_local[table_idx])
+                    if table_idx < len(source_reflection_indices_local)
+                    else None
+                )
+            except Exception:
+                trusted_reflection_index = None
             peak_record = {
                 "hkl": hkl,
                 "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
@@ -807,20 +815,42 @@ def build_geometry_fit_simulated_peaks(
             if branch_index in {0, 1}:
                 peak_record["source_branch_index"] = int(branch_index)
                 peak_record["source_peak_index"] = int(branch_index)
-            if table_idx < len(source_reflection_indices_local):
-                try:
-                    reflection_idx = int(source_reflection_indices_local[table_idx])
-                except Exception:
-                    reflection_idx = -1
-                if reflection_idx >= 0:
-                    peak_record["source_reflection_index"] = int(reflection_idx)
-                    peak_record["source_reflection_namespace"] = "full_reflection"
-                    peak_record["source_reflection_is_full"] = True
+            peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+                peak_record,
+                normalize_hkl_key=(
+                    gui_geometry_overlay.normalize_hkl_key
+                    if callable(getattr(gui_geometry_overlay, "normalize_hkl_key", None))
+                    else None
+                )
+                or (lambda value: hkl if value is not None else None),
+                allow_legacy_peak_fallback=False,
+                preserve_existing_trusted_identity=False,
+                trusted_reflection_index=trusted_reflection_index,
+            )
+            if peak_record is None:
+                continue
             if allow_nominal_hkl_indices:
                 peak_record["q_group_nominal_hkl"] = True
             simulated_peaks.append(peak_record)
 
     return simulated_peaks
+
+
+def audited_full_order_source_reflection_indices(
+    hit_tables: Sequence[object] | None,
+    *,
+    owner: str,
+    start_index: int = 0,
+) -> list[int]:
+    """Return full-order reflection ids for callers that own exact table ordering."""
+
+    if not str(owner or "").strip():
+        raise ValueError("owner is required for audited full-order reflection ids")
+    table_count = int(len(hit_tables or ()))
+    if table_count <= 0:
+        return []
+    base_index = max(0, int(start_index))
+    return list(range(base_index, base_index + table_count))
 
 
 def _source_row_hkl_lookup_from_rows(
@@ -853,10 +883,18 @@ def _source_row_hkl_lookup_from_rows(
     return lookup
 
 
+def _signature_summary(signature: object) -> str | None:
+    if signature is None:
+        return None
+    text = repr(signature)
+    return text if len(text) <= 240 else text[:237] + "..."
+
+
 def _matching_source_row_snapshot_payload(
     simulation_runtime_state,
     *,
     signature: object = None,
+    signature_summary: object = None,
     background_index: int | None = None,
 ) -> dict[str, object]:
     """Return the unique current snapshot payload that can prove cached peak provenance."""
@@ -872,11 +910,24 @@ def _matching_source_row_snapshot_payload(
             if isinstance(entry, Mapping)
         ]
 
+    def _match_kind(snapshot: Mapping[str, object]) -> str | None:
+        if signature is not None and snapshot.get("simulation_signature") == signature:
+            return "exact_signature"
+        if (
+            signature_summary not in (None, "")
+            and snapshot.get("simulation_signature_summary") == signature_summary
+        ):
+            return "signature_summary"
+        if signature is None and signature_summary in (None, ""):
+            return "unspecified"
+        return None
+
     if background_index is not None:
         snapshot = raw_snapshots.get(int(background_index))
         if not isinstance(snapshot, Mapping):
             return {}
-        if signature is not None and snapshot.get("simulation_signature") != signature:
+        match_kind = _match_kind(snapshot)
+        if match_kind is None:
             return {}
         rows = _rows_from_snapshot(snapshot)
         if not rows:
@@ -884,16 +935,19 @@ def _matching_source_row_snapshot_payload(
         return {
             "background_index": int(background_index),
             "rows": rows,
+            "match_kind": str(match_kind),
+            "source_reflection_index_count": snapshot.get("source_reflection_index_count"),
         }
 
-    if signature is None:
+    if signature is None and signature_summary in (None, ""):
         return {}
 
     matches: list[dict[str, object]] = []
     for raw_key, raw_snapshot in raw_snapshots.items():
         if not isinstance(raw_snapshot, Mapping):
             continue
-        if raw_snapshot.get("simulation_signature") != signature:
+        match_kind = _match_kind(raw_snapshot)
+        if match_kind is None:
             continue
         rows = _rows_from_snapshot(raw_snapshot)
         if not rows:
@@ -906,6 +960,10 @@ def _matching_source_row_snapshot_payload(
             {
                 "background_index": int(snapshot_background_index),
                 "rows": rows,
+                "match_kind": str(match_kind),
+                "source_reflection_index_count": raw_snapshot.get(
+                    "source_reflection_index_count"
+                ),
             }
         )
     if len(matches) != 1:
@@ -917,6 +975,7 @@ def _resolve_live_peak_record_fallback_provenance(
     simulation_runtime_state,
     *,
     signature: object = None,
+    signature_summary: object = None,
     background_index: int | None = None,
     source_reflection_indices_local: Sequence[object] | None = None,
 ) -> dict[str, object]:
@@ -925,6 +984,7 @@ def _resolve_live_peak_record_fallback_provenance(
     snapshot_payload = _matching_source_row_snapshot_payload(
         simulation_runtime_state,
         signature=signature,
+        signature_summary=signature_summary,
         background_index=background_index,
     )
     snapshot_rows = list(snapshot_payload.get("rows", ()) or ())
@@ -935,13 +995,31 @@ def _resolve_live_peak_record_fallback_provenance(
         else []
     )
     source_row_hkl_lookup = _source_row_hkl_lookup_from_rows(snapshot_rows)
-    active_signature_matches = bool(
+    table_count = None
+    try:
+        raw_count = snapshot_payload.get("source_reflection_index_count")
+        table_count = int(raw_count) if raw_count is not None else None
+    except Exception:
+        table_count = None
+    if table_count is None and source_row_hkl_lookup:
+        try:
+            table_count = 1 + max(int(key[0]) for key in source_row_hkl_lookup)
+        except Exception:
+            table_count = None
+    provenance_ready = bool(
         snapshot_rows
         and reflection_index_map
         and source_row_hkl_lookup
     )
+    match_kind = str(snapshot_payload.get("match_kind", "") or "")
     return {
-        "active_signature_matches": bool(active_signature_matches),
+        "active_signature_matches": bool(
+            provenance_ready and match_kind == "exact_signature"
+        ),
+        "active_revision_matches": bool(
+            provenance_ready and match_kind == "signature_summary"
+        ),
+        "expected_table_count": table_count,
         "source_row_hkl_lookup": source_row_hkl_lookup,
         "source_snapshot_row_count": int(len(snapshot_rows)),
         "source_snapshot_background_index": snapshot_payload.get("background_index"),
@@ -1268,7 +1346,10 @@ def simulate_geometry_fit_preview_style_peaks(
             image_shape=(int(image_size), int(image_size)),
             native_sim_to_display_coords=native_sim_to_display_coords,
             peak_table_lattice=peak_table_lattice,
-            source_reflection_indices=list(range(len(hit_tables or ()))),
+            source_reflection_indices=audited_full_order_source_reflection_indices(
+                hit_tables,
+                owner="simulate_geometry_fit_preview_style_peaks",
+            ),
             primary_a=primary_a,
             primary_c=primary_c,
             default_source_label=default_source_label,
@@ -1624,9 +1705,11 @@ def make_runtime_geometry_q_group_value_callbacks(
                 "last_simulation_signature",
                 None,
             )
+        current_signature_summary = _signature_summary(current_signature)
         provenance = _resolve_live_peak_record_fallback_provenance(
             simulation_runtime_state,
             signature=current_signature,
+            signature_summary=current_signature_summary,
             source_reflection_indices_local=(
                 getattr(
                     simulation_runtime_state,
@@ -1646,9 +1729,13 @@ def make_runtime_geometry_q_group_value_callbacks(
                 )
             ),
             source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-            active_signature_matches=bool(
+            provenance_signature_matches=bool(
                 provenance.get("active_signature_matches", False)
             ),
+            provenance_revision_matches=bool(
+                provenance.get("active_revision_matches", False)
+            ),
+            expected_table_count=provenance.get("expected_table_count"),
         )
         for entry in cached_peaks:
             if _has_intersection_cache() and "q_group_nominal_hkl" not in entry:
@@ -1878,10 +1965,12 @@ def _geometry_fit_seed_representative_sort_key(
 
     if not isinstance(entry, Mapping):
         return (2, "")
-    try:
-        return (0, int(entry.get("source_peak_index")))
-    except Exception:
-        pass
+    branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
+    )
+    if branch_idx in {0, 1}:
+        return (0, int(branch_idx))
     hkl_key = gui_geometry_overlay.normalize_hkl_key(
         entry.get("hkl", entry.get("label"))
     )
@@ -2562,18 +2651,18 @@ def live_geometry_preview_match_key(
         except Exception:
             pass
 
-    source_peak_index = entry.get("source_peak_index")
-    if hkl_key is not None and source_peak_index is not None:
-        try:
-            return (
-                "peak_index",
-                int(source_peak_index),
-                int(hkl_key[0]),
-                int(hkl_key[1]),
-                int(hkl_key[2]),
-            )
-        except Exception:
-            pass
+    branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
+    )
+    if hkl_key is not None and branch_idx in {0, 1}:
+        return (
+            "peak_index",
+            int(branch_idx),
+            int(hkl_key[0]),
+            int(hkl_key[1]),
+            int(hkl_key[2]),
+        )
 
     if hkl_key is None:
         return None

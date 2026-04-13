@@ -8995,11 +8995,17 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_secondary_intersection_cache,
         result.get("secondary_max_positions", []),
     )
-    primary_source_reflection_indices = list(range(len(resolved_primary_peak_tables)))
-    secondary_source_reflection_indices = list(
-        range(
-            len(resolved_primary_peak_tables),
-            len(resolved_primary_peak_tables) + len(resolved_secondary_peak_tables),
+    primary_source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            resolved_primary_peak_tables,
+            owner="runtime_session.store_primary_secondary_peak_tables.primary",
+        )
+    )
+    secondary_source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            resolved_secondary_peak_tables,
+            owner="runtime_session.store_primary_secondary_peak_tables.secondary",
+            start_index=len(primary_source_reflection_indices),
         )
     )
     simulation_runtime_state.stored_primary_peak_table_lattice = list(
@@ -13268,9 +13274,15 @@ def _capture_geometry_source_snapshot() -> None:
     snapshot_payload = {
         "background_index": int(background_index),
         "simulation_signature": simulation_runtime_state.last_simulation_signature,
+        "simulation_signature_summary": _live_cache_signature_summary(
+            simulation_runtime_state.last_simulation_signature
+        ),
         "rows": rows,
         "row_count": int(len(rows)),
         "created_from": created_from,
+        "source_reflection_index_count": int(
+            len(simulation_runtime_state.stored_source_reflection_indices_local or ())
+        ),
     }
     retain_snapshot_cache = _retain_runtime_optional_cache(
         "source_snapshots",
@@ -13337,7 +13349,14 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        peak_record = dict(entry)
+        peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+            entry,
+            normalize_hkl_key=_normalize_hkl_key,
+            allow_legacy_peak_fallback=False,
+            preserve_existing_trusted_identity=True,
+        )
+        if peak_record is None:
+            continue
         peak_record["display_col"] = float(display_col)
         peak_record["display_row"] = float(display_row)
         peak_record["intensity"] = float(intensity)
@@ -13399,7 +13418,12 @@ def _geometry_manual_build_source_rows_from_hit_tables(
     peak_table_lattice = [
         (float(primary_a), float(primary_c), "primary") for _ in copied_hit_tables
     ]
-    source_reflection_indices = list(range(len(copied_hit_tables)))
+    source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            copied_hit_tables,
+            owner="runtime_session._geometry_manual_build_source_rows_from_hit_tables",
+        )
+    )
     raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         copied_hit_tables,
         image_shape=(int(image_size_value), int(image_size_value)),
@@ -13514,9 +13538,15 @@ def _commit_geometry_manual_source_row_rebuild_result(
         snapshot_payload = {
             "background_index": int(background_idx),
             "simulation_signature": rebuild_result.requested_signature,
+            "simulation_signature_summary": _live_cache_signature_summary(
+                rebuild_result.requested_signature
+            ),
             "rows": [dict(entry) for entry in stored_rows],
             "row_count": int(len(stored_rows)),
             "created_from": str(rebuild_result.rebuild_source or "unknown"),
+            "source_reflection_index_count": int(
+                len(rebuild_result.source_reflection_indices or ())
+            ),
         }
         if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
             simulation_runtime_state.source_row_snapshots[int(background_idx)] = snapshot_payload
@@ -21185,17 +21215,11 @@ def _run_async_geometry_fit_worker_job(
             if live_rows_cache_metadata:
                 return {
                     "rows": [
-                        dict(entry)
-                        for entry in (live_rows or ())
-                        if isinstance(entry, Mapping)
+                        dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)
                     ],
                     "cache_metadata": dict(live_rows_cache_metadata),
                 }
-            return [
-                dict(entry)
-                for entry in (live_rows or ())
-                if isinstance(entry, Mapping)
-            ]
+            return [dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)]
 
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),

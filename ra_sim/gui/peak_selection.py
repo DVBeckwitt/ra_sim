@@ -10,6 +10,7 @@ import numpy as np
 
 from ra_sim.debug_controls import retain_optional_cache
 from . import views as gui_views
+from . import manual_geometry as gui_manual_geometry
 from ra_sim.utils.calculations import source_branch_index_from_phi_deg
 
 
@@ -1664,13 +1665,17 @@ def ensure_runtime_peak_overlay_data(
                     record["source_table_index"] = int(source_table_index)
                 if source_row_index is not None:
                     record["source_row_index"] = int(source_row_index)
-                if source_reflection_index is not None and int(source_reflection_index) >= 0:
-                    record["source_reflection_index"] = int(source_reflection_index)
-                    record["source_reflection_namespace"] = "full_reflection"
-                    record["source_reflection_is_full"] = True
                 if source_branch_index in {0, 1}:
                     record["source_branch_index"] = int(source_branch_index)
                     record["source_peak_index"] = int(source_branch_index)
+                record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+                    record,
+                    allow_legacy_peak_fallback=False,
+                    preserve_existing_trusted_identity=False,
+                    trusted_reflection_index=source_reflection_index,
+                )
+                if record is None:
+                    continue
                 simulation_runtime_state.peak_records.append(record)
 
         if retain_cache:
@@ -1829,15 +1834,23 @@ def ensure_runtime_peak_overlay_data(
                     source_reflection_index = int(source_reflection_indices_local[int(table_idx)])
                 except Exception:
                     source_reflection_index = -1
-                if source_reflection_index >= 0:
-                    record["source_reflection_index"] = int(source_reflection_index)
-                    record["source_reflection_namespace"] = "full_reflection"
-                    record["source_reflection_is_full"] = True
+            else:
+                source_reflection_index = -1
             if source_branch_index in {0, 1}:
                 record["source_branch_index"] = int(source_branch_index)
                 record["source_peak_index"] = int(source_branch_index)
             if use_nominal_cache_grouping:
                 record["q_group_nominal_hkl"] = True
+            record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+                record,
+                allow_legacy_peak_fallback=False,
+                preserve_existing_trusted_identity=False,
+                trusted_reflection_index=(
+                    int(source_reflection_index) if int(source_reflection_index) >= 0 else None
+                ),
+            )
+            if record is None:
+                continue
             simulation_runtime_state.peak_records.append(record)
 
     if retain_cache:

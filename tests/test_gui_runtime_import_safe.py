@@ -1,3 +1,4 @@
+import ast
 import importlib
 import py_compile
 import sys
@@ -17,6 +18,20 @@ RUNTIME_SESSION_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_session.py"
 )
 CLI_SOURCE_PATH = Path(__file__).resolve().parent.parent / "ra_sim" / "cli.py"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GUI_SOURCE_ROOT = REPO_ROOT / "ra_sim" / "gui"
+RA_SIM_SOURCE_ROOT = REPO_ROOT / "ra_sim"
+OPTIMIZATION_MOSAIC_PROFILES_SOURCE_PATH = (
+    REPO_ROOT / "ra_sim" / "fitting" / "optimization_mosaic_profiles.py"
+)
+RAW_SOURCE_PEAK_READ_ALLOWLIST = {
+    GUI_SOURCE_ROOT / "_runtime" / "runtime_session.py",
+    GUI_SOURCE_ROOT / "geometry_fit.py",
+    GUI_SOURCE_ROOT / "manual_geometry.py",
+}
+TRUST_FIELD_ASSIGNMENT_ALLOWLIST = {
+    GUI_SOURCE_ROOT / "manual_geometry.py",
+}
 
 
 def test_runtime_import_is_lazy() -> None:
@@ -524,3 +539,140 @@ def test_runtime_impl_lazy_mounts_analysis_surfaces() -> None:
     assert "_show_analysis_tab_lazy_placeholders()" in source
     assert "_mount_analysis_figure(app_shell_view_state.plot_frame_1d)" not in source
     assert "ensure_analysis_surfaces_initialized()" in source
+
+
+def _mapping_field_name(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return str(node.value)
+    return None
+
+
+def _subscript_field_name(node: ast.Subscript) -> str | None:
+    return _mapping_field_name(node.slice)
+
+
+def _mapping_call_field_name(node: ast.Call) -> tuple[str | None, str | None]:
+    if not isinstance(node.func, ast.Attribute) or not node.args:
+        return None, None
+    return _mapping_field_name(node.args[0]), str(node.func.attr)
+
+
+def _python_sources(root: Path) -> list[Path]:
+    return sorted(path for path in root.rglob("*.py") if path.is_file())
+
+
+def _raw_field_reads(path: Path, *, field_name: str) -> list[int]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    line_numbers: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            mapped_field, method_name = _mapping_call_field_name(node)
+            if mapped_field == field_name and method_name == "get":
+                line_numbers.add(int(node.lineno))
+        elif isinstance(node, ast.Subscript):
+            mapped_field = _subscript_field_name(node)
+            if mapped_field == field_name and isinstance(node.ctx, ast.Load):
+                line_numbers.add(int(node.lineno))
+    return sorted(line_numbers)
+
+
+def _expr_contains_len_range(expr: ast.AST | None) -> bool:
+    if expr is None:
+        return False
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
+            for arg in node.args:
+                for nested in ast.walk(arg):
+                    if (
+                        isinstance(nested, ast.Call)
+                        and isinstance(nested.func, ast.Name)
+                        and nested.func.id == "len"
+                    ):
+                        return True
+    return False
+
+
+def _assigned_names(node: ast.AST | None) -> list[str]:
+    if isinstance(node, ast.Name):
+        return [str(node.id)]
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for element in node.elts:
+            names.extend(_assigned_names(element))
+        return names
+    return []
+
+
+def _trust_field_assignment_lines(path: Path) -> list[tuple[str, int]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    field_names = {
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+    }
+    hits: set[tuple[str, int]] = set()
+    for node in ast.walk(tree):
+        target_nodes: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            target_nodes = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            target_nodes = [node.target]
+        for target in target_nodes:
+            if isinstance(target, ast.Subscript):
+                mapped_field = _subscript_field_name(target)
+                if mapped_field in field_names and isinstance(target.ctx, ast.Store):
+                    hits.add((str(mapped_field), int(target.lineno)))
+    return sorted(hits, key=lambda item: (item[1], item[0]))
+
+
+def test_runtime_source_peak_alias_reads_stay_in_boundary_modules() -> None:
+    offenders: list[str] = []
+    inspected_paths = _python_sources(GUI_SOURCE_ROOT) + [OPTIMIZATION_MOSAIC_PROFILES_SOURCE_PATH]
+    for path in inspected_paths:
+        if path in RAW_SOURCE_PEAK_READ_ALLOWLIST:
+            continue
+        line_numbers = _raw_field_reads(path, field_name="source_peak_index")
+        if line_numbers:
+            rel_path = path.relative_to(REPO_ROOT)
+            offenders.append(f"{rel_path}:{','.join(str(line) for line in line_numbers)}")
+
+    assert offenders == []
+
+
+def test_source_reflection_index_arrays_are_not_minted_from_len_ranges() -> None:
+    offenders: list[str] = []
+    for path in _python_sources(RA_SIM_SOURCE_ROOT):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            targets: list[ast.AST] = []
+            value: ast.AST | None = None
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            if not _expr_contains_len_range(value):
+                continue
+            assigned_names = {name for target in targets for name in _assigned_names(target)}
+            if not any("source_reflection_indices" in name for name in assigned_names):
+                continue
+            rel_path = path.relative_to(REPO_ROOT)
+            offenders.append(f"{rel_path}:{int(node.lineno)}")
+
+    assert offenders == []
+
+
+def test_runtime_trust_field_assignments_stay_in_manual_geometry() -> None:
+    offenders: list[str] = []
+    for path in _python_sources(GUI_SOURCE_ROOT):
+        if path in TRUST_FIELD_ASSIGNMENT_ALLOWLIST:
+            continue
+        hits = _trust_field_assignment_lines(path)
+        if hits:
+            rel_path = path.relative_to(REPO_ROOT)
+            offenders.extend(
+                f"{rel_path}:{line}:{field_name}" for field_name, line in hits
+            )
+
+    assert offenders == []

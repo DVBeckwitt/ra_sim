@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
+from ra_sim.fitting import optimization as opt
 from ra_sim.gui import geometry_fit, geometry_overlay, manual_geometry
 
 
@@ -3661,6 +3662,178 @@ def test_build_geometry_fit_solver_request_preserves_preflight_pair_identity_fie
         "source_peak_index",
     ):
         assert solver_pair[field] == preflight_pair[field]
+
+
+def test_solver_request_to_subset_mapping_and_seed_correspondence_preserves_trusted_identity(
+    monkeypatch,
+) -> None:
+    def _base_params(image_size: int) -> dict[str, object]:
+        return {
+            "gamma": 0.0,
+            "Gamma": 0.0,
+            "corto_detector": 0.1,
+            "theta_initial": 0.0,
+            "theta_offset": 0.0,
+            "cor_angle": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+            "chi": 0.0,
+            "a": 4.0,
+            "c": 7.0,
+            "center": [image_size / 2.0, image_size / 2.0],
+            "lambda": 1.0,
+            "n2": 1.0,
+            "psi": 0.0,
+            "psi_z": 0.0,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+            "optics_mode": 1,
+            "mosaic_params": {
+                "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+                "beam_y_array": np.zeros(2, dtype=np.float64),
+                "theta_array": np.zeros(2, dtype=np.float64),
+                "phi_array": np.zeros(2, dtype=np.float64),
+                "sigma_mosaic_deg": 0.2,
+                "gamma_mosaic_deg": 0.1,
+                "eta": 0.05,
+                "wavelength_array": np.ones(2, dtype=np.float64),
+            },
+        }
+
+    def _fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        miller_local = np.asarray(args[0], dtype=np.float64)
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = []
+        for row in miller_local:
+            h, k, l = (int(round(float(v))) for v in row[:3])
+            if (h, k, l) == (1, 0, 0):
+                hit_tables.append(
+                    np.asarray(
+                        [
+                            [1.0, 2.0, 2.0, -10.0, 1.0, 0.0, 0.0],
+                            [1.0, 8.0, 8.0, 10.0, 1.0, 0.0, 0.0],
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+            else:
+                hit_tables.append(
+                    np.asarray(
+                        [[1.0, 50.0, 50.0, 0.0, float(h), float(k), float(l)]],
+                        dtype=np.float64,
+                    )
+                )
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def _fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "apply_geometry_fit_runtime_safety_overrides",
+        lambda cfg, **kwargs: (dict(cfg), None),
+    )
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process)
+    monkeypatch.setattr(opt, "least_squares", _fake_least_squares)
+
+    image_size = 20
+    miller = np.array(
+        [[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 10.0, 7.0], dtype=np.float64)
+    trusted_pair = {
+        "pair_id": "bg0:pair0",
+        "fit_run_id": "fit-123",
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "x": 8.0,
+        "y": 8.0,
+        "sigma_px": 1.0,
+        "source_table_index": 99,
+        "source_reflection_index": 1,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=False)
+    prepared_run = replace(
+        prepared_run,
+        fit_params=_base_params(image_size),
+        current_dataset={
+            **prepared_run.current_dataset,
+            "measured_for_fit": [dict(trusted_pair)],
+            "experimental_image_for_fit": np.zeros(
+                (image_size, image_size),
+                dtype=np.float64,
+            ),
+        },
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "label": "bg[0]",
+                "theta_initial": 0.0,
+                "experimental_image": np.zeros((image_size, image_size), dtype=np.float64),
+            }
+        ],
+    )
+    postprocess_config = replace(
+        postprocess_config,
+        solver_inputs=geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller=miller,
+            intensities=intensities,
+            image_size=image_size,
+        ),
+    )
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["gamma"],
+        solver_inputs=postprocess_config.solver_inputs,
+    )
+    solver_pair = dict(request.measured_peaks[0])
+    dataset_contexts = opt._build_geometry_fit_dataset_contexts(
+        request.miller,
+        request.intensities,
+        request.params,
+        request.measured_peaks,
+        None,
+        request.dataset_specs,
+    )
+    subset_entry = dict(dataset_contexts[0].subset.measured_entries[0])
+
+    result = geometry_fit.solve_geometry_fit_request(
+        request,
+        solve_fit=opt.fit_geometry_parameters,
+    )
+
+    seed_record = dict(result.full_beam_polish_summary["seed_correspondence_records"][0])
+    for record in (subset_entry, seed_record):
+        for field in (
+            "pair_id",
+            "hkl",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_branch_index",
+            "source_peak_index",
+        ):
+            assert record.get(field) == solver_pair[field]
+    assert seed_record["frozen_locator_kind"] == "trusted_branch"
+    assert seed_record["frozen_table_namespace"] == "full_reflection"
 
 
 def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() -> None:

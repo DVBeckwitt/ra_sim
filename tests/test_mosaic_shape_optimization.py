@@ -8,6 +8,7 @@ from ra_sim.fitting.optimization import (
     fit_mosaic_shape_parameters,
     focus_mosaic_profile_dataset_specs,
 )
+from ra_sim.fitting.optimization_mosaic_profiles import _mosaic_profile_entry_priority
 
 TT_SCALE = 0.06
 PHI_SCALE = 0.08
@@ -722,6 +723,39 @@ def test_focus_mosaic_profile_dataset_specs_uses_source_intensity_when_weight_mi
     assert summary["selected_in_plane_hkls"] == [[1, 0, 0], [1, 1, 0], [2, -1, 0]]
     kept_hkls = [tuple(entry["hkl"]) for entry in focused_specs[0]["measured_peaks"]]
     assert kept_hkls == [(0, 0, 1), (1, 0, 0), (1, 1, 0), (2, -1, 0)]
+
+
+def test_mosaic_profile_entry_priority_prefers_canonical_branch_over_dense_peak_alias():
+    miller = np.asarray([(1, 0, 0)], dtype=np.float64)
+    intensities = np.asarray([5.0], dtype=np.float64)
+    intensity_lookup = {(1, 0, 0): 5.0}
+
+    branch_zero = {
+        "hkl": (1, 0, 0),
+        "weight": 1.0,
+        "source_branch_index": 0,
+        "source_peak_index": 9,
+        "source_row_index": 4,
+    }
+    branch_one = {
+        "hkl": (1, 0, 0),
+        "weight": 1.0,
+        "source_branch_index": 1,
+        "source_peak_index": 2,
+        "source_row_index": 4,
+    }
+
+    assert _mosaic_profile_entry_priority(
+        branch_zero,
+        miller=miller,
+        intensities=intensities,
+        intensity_lookup=intensity_lookup,
+    ) < _mosaic_profile_entry_priority(
+        branch_one,
+        miller=miller,
+        intensities=intensities,
+        intensity_lookup=intensity_lookup,
+    )
 
 
 def test_fit_mosaic_shape_parameters_accepts_generic_off_specular_peak_families(

@@ -937,7 +937,14 @@ def _set_runtime_peak_cache_from_source_rows(
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        peak_record = dict(entry)
+        peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+            entry,
+            normalize_hkl_key=gui_geometry_overlay.normalize_hkl_key,
+            allow_legacy_peak_fallback=False,
+            preserve_existing_trusted_identity=True,
+        )
+        if peak_record is None:
+            continue
         peak_record["display_col"] = float(display_col)
         peak_record["display_row"] = float(display_row)
         peak_record["intensity"] = float(intensity)
@@ -998,7 +1005,12 @@ def _build_source_rows_from_hit_tables(
         (float(primary_a), float(primary_c), "primary")
         for _ in copied_hit_tables
     ]
-    source_reflection_indices = list(range(len(copied_hit_tables)))
+    source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            copied_hit_tables,
+            owner="headless_geometry_fit._build_source_rows_from_hit_tables",
+        )
+    )
     raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         copied_hit_tables,
         image_shape=(int(image_size_value), int(image_size_value)),
@@ -1497,6 +1509,7 @@ def run_headless_geometry_fit(
                 "last_simulation_signature",
                 None,
             )
+        current_signature_summary = _signature_summary(current_signature)
         source_reflection_indices_local = (
             simulation_runtime_state.stored_source_reflection_indices_local
         )
@@ -1515,6 +1528,7 @@ def run_headless_geometry_fit(
                 gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
                     simulation_runtime_state,
                     signature=current_signature,
+                    signature_summary=current_signature_summary,
                     background_index=int(background_state.current_background_index),
                     source_reflection_indices_local=source_reflection_indices_local,
                 )
@@ -1523,9 +1537,13 @@ def run_headless_geometry_fit(
                 simulation_runtime_state.peak_records,
                 source_reflection_indices_local=source_reflection_indices_local,
                 source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-                active_signature_matches=bool(
+                provenance_signature_matches=bool(
                     provenance.get("active_signature_matches", False)
                 ),
+                provenance_revision_matches=bool(
+                    provenance.get("active_revision_matches", False)
+                ),
+                expected_table_count=provenance.get("expected_table_count"),
             )
             return {
                 "rows": [
@@ -1607,6 +1625,7 @@ def run_headless_geometry_fit(
         provenance = gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
             simulation_runtime_state,
             signature=current_signature,
+            signature_summary=current_signature_summary,
             background_index=int(background_state.current_background_index),
             source_reflection_indices_local=source_reflection_indices_local,
         )
@@ -1614,9 +1633,13 @@ def run_headless_geometry_fit(
             simulation_runtime_state.peak_records,
             source_reflection_indices_local=source_reflection_indices_local,
             source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-            active_signature_matches=bool(
+            provenance_signature_matches=bool(
                 provenance.get("active_signature_matches", False)
             ),
+            provenance_revision_matches=bool(
+                provenance.get("active_revision_matches", False)
+            ),
+            expected_table_count=provenance.get("expected_table_count"),
         )
         return {
             "rows": [dict(entry) for entry in live_rows if isinstance(entry, Mapping)],
@@ -1724,9 +1747,15 @@ def run_headless_geometry_fit(
             simulation_runtime_state.source_row_snapshots[int(background_idx)] = {
                 "background_index": int(background_idx),
                 "simulation_signature": rebuild_result.requested_signature,
+                "simulation_signature_summary": _signature_summary(
+                    rebuild_result.requested_signature
+                ),
                 "rows": [dict(entry) for entry in stored_rows],
                 "row_count": int(len(stored_rows)),
                 "created_from": str(rebuild_result.rebuild_source or "unknown"),
+                "source_reflection_index_count": int(
+                    len(rebuild_result.source_reflection_indices or ())
+                ),
             }
 
         if diagnostics:

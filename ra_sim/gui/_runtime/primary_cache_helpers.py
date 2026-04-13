@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 import numpy as np
 
 from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
+from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
 
 
@@ -221,8 +222,11 @@ def apply_primary_cache_artifacts(
     simulation_runtime_state.stored_primary_max_positions = copy_hit_tables(
         payload.get("peak_tables", [])
     )
-    simulation_runtime_state.stored_primary_source_reflection_indices = list(
-        range(len(simulation_runtime_state.stored_primary_max_positions or ()))
+    simulation_runtime_state.stored_primary_source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            simulation_runtime_state.stored_primary_max_positions or (),
+            owner="primary_cache_helpers.apply_primary_cache_artifacts",
+        )
     )
     peak_table_lattice = payload.get("peak_table_lattice", [])
     simulation_runtime_state.stored_primary_peak_table_lattice = (

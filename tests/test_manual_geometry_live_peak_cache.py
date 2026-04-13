@@ -235,6 +235,151 @@ def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_n
     assert "source_reflection_is_full" not in candidates[0]
 
 
+def test_geometry_manual_live_peak_candidates_restore_trust_on_revision_match() -> None:
+    candidates = mg.geometry_manual_live_peak_candidates_from_records(
+        [
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
+                "source_peak_index": 13,
+                "phi": 15.0,
+            }
+        ],
+        source_reflection_indices_local=[7],
+        source_row_hkl_lookup={(0, 8): (1, 0, 2)},
+        provenance_signature_matches=False,
+        provenance_revision_matches=True,
+        expected_table_count=1,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_branch_index"] == 1
+    assert candidates[0]["source_peak_index"] == 1
+    assert candidates[0]["source_reflection_index"] == 7
+    assert candidates[0]["source_reflection_namespace"] == "full_reflection"
+    assert candidates[0]["source_reflection_is_full"] is True
+
+
+def test_geometry_manual_live_peak_candidates_drop_trust_when_map_length_mismatches() -> None:
+    candidates = mg.geometry_manual_live_peak_candidates_from_records(
+        [
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
+                "source_peak_index": 13,
+                "phi": 15.0,
+            }
+        ],
+        source_reflection_indices_local=[7],
+        source_row_hkl_lookup={(0, 8): (1, 0, 2)},
+        provenance_signature_matches=True,
+        expected_table_count=2,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_branch_index"] == 1
+    assert candidates[0]["source_peak_index"] == 1
+    assert "source_reflection_index" not in candidates[0]
+    assert "source_reflection_namespace" not in candidates[0]
+    assert "source_reflection_is_full" not in candidates[0]
+
+
+def test_geometry_manual_live_peak_candidates_are_permutation_invariant() -> None:
+    records = [
+        {
+            "display_col": 21.0,
+            "display_row": 34.0,
+            "hkl": (1, 0, 2),
+            "q_group_key": ("q_group", "primary", 1, 2),
+            "source_table_index": 0,
+            "source_row_index": 8,
+            "source_peak_index": 13,
+            "phi": 15.0,
+        },
+        {
+            "display_col": 25.0,
+            "display_row": 31.0,
+            "hkl": (1, 0, 1),
+            "q_group_key": ("q_group", "primary", 1, 1),
+            "source_table_index": 1,
+            "source_row_index": 4,
+            "source_peak_index": 18,
+            "phi": -15.0,
+        },
+    ]
+
+    def _digest(entries):
+        return sorted(
+            [
+                {
+                    "hkl": tuple(entry["hkl"]),
+                    "source_table_index": entry.get("source_table_index"),
+                    "source_row_index": entry.get("source_row_index"),
+                    "source_branch_index": entry.get("source_branch_index"),
+                    "source_peak_index": entry.get("source_peak_index"),
+                    "source_reflection_index": entry.get("source_reflection_index"),
+                    "source_reflection_namespace": entry.get("source_reflection_namespace"),
+                    "source_reflection_is_full": entry.get("source_reflection_is_full"),
+                }
+                for entry in entries
+            ],
+            key=lambda item: (int(item["source_table_index"]), int(item["source_row_index"])),
+        )
+
+    forward = mg.geometry_manual_live_peak_candidates_from_records(
+        records,
+        source_reflection_indices_local=[7, 8],
+        source_row_hkl_lookup={(0, 8): (1, 0, 2), (1, 4): (1, 0, 1)},
+        provenance_signature_matches=True,
+        expected_table_count=2,
+    )
+    reversed_order = mg.geometry_manual_live_peak_candidates_from_records(
+        list(reversed(records)),
+        source_reflection_indices_local=[7, 8],
+        source_row_hkl_lookup={(0, 8): (1, 0, 2), (1, 4): (1, 0, 1)},
+        provenance_signature_matches=True,
+        expected_table_count=2,
+    )
+
+    assert _digest(forward) == _digest(reversed_order)
+
+
+def test_geometry_manual_canonicalize_live_source_entry_only_repairs_trust_from_explicit_proof() -> None:
+    entry = {
+        "display_col": 21.0,
+        "display_row": 34.0,
+        "hkl": (1, 0, 2),
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "source_table_index": 0,
+        "source_row_index": 8,
+        "source_peak_index": 13,
+        "phi": 15.0,
+    }
+
+    repaired = mg.geometry_manual_canonicalize_live_source_entry(
+        entry,
+        trusted_reflection_index=7,
+    )
+    unrepaired = mg.geometry_manual_canonicalize_live_source_entry(entry)
+
+    assert repaired is not None
+    assert repaired["source_reflection_index"] == 7
+    assert repaired["source_reflection_namespace"] == "full_reflection"
+    assert repaired["source_reflection_is_full"] is True
+    assert unrepaired is not None
+    assert "source_reflection_index" not in unrepaired
+    assert "source_reflection_namespace" not in unrepaired
+    assert "source_reflection_is_full" not in unrepaired
+
+
 def test_refresh_geometry_manual_pair_entry_recomputes_stale_caked_cache() -> None:
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {

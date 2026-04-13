@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import logging
 from dataclasses import dataclass
 import math
 from threading import Lock
@@ -37,6 +38,7 @@ from ra_sim.utils.parallel import (
 )
 
 RNG = np.random.default_rng(42)
+LOGGER = logging.getLogger(__name__)
 
 process_peaks_parallel = getattr(
     _runtime,
@@ -9549,12 +9551,8 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
         return {}
 
     normalized_hkl = _normalized_hkl_key(entry.get("hkl"))
-    source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
-        entry
-    )
-    source_peak_index = entry.get("source_peak_index")
-    if source_peak_index is None and source_branch_index in {0, 1}:
-        source_peak_index = int(source_branch_index)
+    source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
+    source_peak_index = _nonnegative_index(entry.get("source_peak_index"))
     source_reflection_index = _nonnegative_index(entry.get("source_reflection_index"))
     source_reflection_namespace = entry.get("source_reflection_namespace")
     trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
@@ -9604,11 +9602,73 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
         "source_row_index": entry.get("source_row_index"),
         "source_row_index_namespace": str(table_row_namespace_label),
         "source_branch_index": source_branch_index,
-        "source_branch_resolution_source": source_branch_source,
         "source_branch_index_namespace": str(branch_namespace_label),
         "source_peak_index": source_peak_index,
         "source_peak_index_namespace": str(peak_namespace_label),
     }
+
+
+def _entry_explicit_trusted_full_reflection_identity(
+    entry: Mapping[str, object],
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
+    return namespace == "full_reflection" and bool(
+        entry.get("source_reflection_is_full", False)
+    )
+
+
+def _assert_source_identity_bridge_invariant(
+    input_entry: Mapping[str, object],
+    output_entry: Mapping[str, object],
+    *,
+    seam: str,
+) -> None:
+    """Fail loudly in debug mode when bridge code drops or invents trust."""
+
+    if not __debug__:
+        return
+
+    input_payload = _copy_source_identity_payload(input_entry)
+    output_payload = _copy_source_identity_payload(output_entry)
+    input_explicit_trusted = _entry_explicit_trusted_full_reflection_identity(input_entry)
+    output_explicit_trusted = _entry_explicit_trusted_full_reflection_identity(output_entry)
+
+    mismatches: List[str] = []
+    if input_explicit_trusted:
+        for field_name in (
+            "pair_id",
+            "fit_run_id",
+            "hkl",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_branch_index",
+            "source_peak_index",
+        ):
+            if input_payload.get(field_name) != output_payload.get(field_name):
+                mismatches.append(str(field_name))
+    elif output_explicit_trusted:
+        mismatches.append("unexpected_trusted_identity")
+
+    if mismatches:
+        LOGGER.error(
+            "GEOMETRY FIT SEAM FAILURE [%s] mismatches=%s input=%r output=%r",
+            str(seam),
+            list(mismatches),
+            input_payload,
+            output_payload,
+        )
+        raise AssertionError(
+            "GEOMETRY FIT SEAM FAILURE [{seam}] mismatches={mismatches} "
+            "input={input_payload!r} output={output_payload!r}".format(
+                seam=str(seam),
+                mismatches=list(mismatches),
+                input_payload=input_payload,
+                output_payload=output_payload,
+            )
+        )
 
 
 def _branch_representative_row(
@@ -9724,6 +9784,18 @@ def _resolve_fixed_source_matches(
             return int(fallback)
         return int(out)
 
+    def _store_resolution_diag(
+        entry: Dict[str, object],
+        payload: Mapping[str, object],
+    ) -> None:
+        diag = dict(payload)
+        resolution_lookup[id(entry)] = diag
+        _assert_source_identity_bridge_invariant(
+            entry,
+            diag,
+            seam="_resolve_fixed_source_matches",
+        )
+
     for match_input_index, entry in enumerate(measured_entries):
         overlay_match_index = _overlay_index(entry, match_input_index)
         base_diag = {
@@ -9750,28 +9822,37 @@ def _resolve_fixed_source_matches(
         )
         if source_key is None:
             if trusted_full_reflection:
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": "fixed_source",
                     "resolution_reason": "missing_source_peak_index",
-                }
+                    },
+                )
                 continue
             fallback_entries.append(entry)
-            resolution_lookup[id(entry)] = {
+            _store_resolution_diag(
+                entry,
+                {
                 **base_diag,
                 "resolution_kind": "hkl_fallback",
                 "resolution_reason": "missing_source_indices",
-            }
+                },
+            )
             continue
         if source_key in used_source_keys:
             fallback_entries.append(entry)
-            resolution_lookup[id(entry)] = {
+            _store_resolution_diag(
+                entry,
+                {
                 **base_diag,
                 "resolution_kind": (
                     "fixed_source" if trusted_full_reflection else "hkl_fallback"
                 ),
                 "resolution_reason": "duplicate_source_key",
-            }
+                },
+            )
             if trusted_full_reflection:
                 continue
             continue
@@ -9820,31 +9901,39 @@ def _resolve_fixed_source_matches(
                     sim_row = float(legacy_peak_point[1])
                     resolved_from_peak = True
                 elif source_row_key is None or trusted_full_reflection:
-                    resolution_lookup[id(entry)] = {
+                    _store_resolution_diag(
+                        entry,
+                        {
                         **base_diag,
                         "resolution_kind": (
                             "fixed_source" if trusted_full_reflection else "hkl_fallback"
                         ),
                         "resolution_reason": str(legacy_peak_reason),
-                    }
+                        },
+                    )
                     if not trusted_full_reflection:
                         fallback_entries.append(entry)
                     continue
             if not resolved_from_peak and (source_row_key is None or trusted_full_reflection):
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": (
                         "fixed_source" if trusted_full_reflection else "hkl_fallback"
                     ),
                     "resolution_reason": "missing_source_peak_index",
-                }
+                    },
+                )
                 if not trusted_full_reflection:
                     fallback_entries.append(entry)
                 continue
 
         if not resolved_from_peak:
             if source_row_key is None or trusted_full_reflection:
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": (
                         "fixed_source" if trusted_full_reflection else "hkl_fallback"
@@ -9854,18 +9943,22 @@ def _resolve_fixed_source_matches(
                         if trusted_full_reflection
                         else "missing_source_indices"
                     ),
-                }
+                    },
+                )
                 if not trusted_full_reflection:
                     fallback_entries.append(entry)
                 continue
             row_idx = int(source_row_key[1])
             if row_idx < 0 or row_idx >= len(rows):
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
                     "resolution_reason": "source_row_out_of_range",
                     "source_row_count": int(len(rows)),
-                }
+                    },
+                )
                 fallback_entries.append(entry)
                 continue
 
@@ -9879,19 +9972,25 @@ def _resolve_fixed_source_matches(
                     int(round(float(row[6]))),
                 )
             except Exception:
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
                     "resolution_reason": "source_row_parse_failed",
-                }
+                    },
+                )
                 fallback_entries.append(entry)
                 continue
             if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
                     "resolution_reason": "invalid_simulated_point",
-                }
+                    },
+                )
                 fallback_entries.append(entry)
                 continue
         measured_hkl = entry.get("hkl")
@@ -9907,27 +10006,33 @@ def _resolve_fixed_source_matches(
             if measured_hkl_key is not None and sim_hkl is None:
                 sim_hkl = tuple(int(v) for v in measured_hkl_key)
             if measured_hkl_key is not None and sim_hkl is not None and measured_hkl_key != sim_hkl:
-                resolution_lookup[id(entry)] = {
+                _store_resolution_diag(
+                    entry,
+                    {
                     **base_diag,
                     "resolution_kind": (
                         "fixed_source" if trusted_full_reflection else "hkl_fallback"
                     ),
                     "resolution_reason": "source_hkl_mismatch",
                     "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
-                }
+                    },
+                )
                 if not trusted_full_reflection:
                     fallback_entries.append(entry)
                 continue
 
         resolved.append((entry, (sim_col, sim_row), tuple(int(v) for v in sim_hkl or (0, 0, 0))))
-        resolution_lookup[id(entry)] = {
+        _store_resolution_diag(
+            entry,
+            {
             **base_diag,
             "resolution_kind": "fixed_source",
             "resolution_reason": "resolved",
             "sim_x": float(sim_col),
             "sim_y": float(sim_row),
             "sim_hkl": tuple(int(v) for v in sim_hkl or (0, 0, 0)),
-        }
+            },
+        )
         used_source_keys.add(source_key)
 
     return resolved, fallback_entries, resolution_lookup
@@ -14998,7 +15103,6 @@ def fit_geometry_parameters(
                 "hkl": normalized_hkl,
                 "source_table_index": _diagnostic_source_table_index(entry),
                 "source_reflection_index": source_reflection_index,
-                "source_branch_index": source_branch_index,
                 "source_branch_resolution_source": source_branch_source,
                 "resolved_table_index": resolved_table_index,
                 "resolved_peak_index": entry.get(
@@ -15284,7 +15388,6 @@ def fit_geometry_parameters(
                     **_copy_source_identity_payload(entry),
                     "hkl": entry.get("hkl"),
                     "source_table_index": _diagnostic_source_table_index(entry),
-                    "source_branch_index": source_branch_index,
                     "source_branch_resolution_source": source_branch_source,
                     "resolved_table_index": entry.get("resolved_table_index"),
                     "resolved_peak_index": entry.get("resolved_peak_index"),

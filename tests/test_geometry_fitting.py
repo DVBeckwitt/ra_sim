@@ -2042,9 +2042,7 @@ def test_geometry_fit_correspondence_simulated_point_rejects_legacy_branch_alias
     assert reason == "missing_source_peak_index"
 
 
-def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
-    monkeypatch,
-) -> None:
+def _install_identity_bridge_solver_stubs(monkeypatch) -> None:
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
         miller_local = np.asarray(args[0], dtype=np.float64)
@@ -2087,33 +2085,43 @@ def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
 
+
+def _run_identity_bridge_case(
+    monkeypatch,
+    *,
+    trusted: bool,
+) -> dict[str, object]:
+    _install_identity_bridge_solver_stubs(monkeypatch)
+
     image_size = 20
     miller = np.array(
         [[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0]],
         dtype=np.float64,
     )
     intensities = np.array([5.0, 10.0, 7.0], dtype=np.float64)
-    trusted_pair = {
+    input_pair = {
         "pair_id": "bg0:pair0",
         "fit_run_id": "fit-123",
         "label": "1,0,0",
         "hkl": (1, 0, 0),
         "x": 8.0,
         "y": 8.0,
-        "source_table_index": 99,
-        "source_reflection_index": 1,
-        "source_reflection_namespace": "full_reflection",
-        "source_reflection_is_full": True,
-        "source_row_index": 0,
-        "source_branch_index": 1,
-        "source_peak_index": 1,
         "sigma_px": 1.0,
     }
+    if trusted:
+        input_pair.update(
+            {
+                "source_table_index": 99,
+                "source_reflection_index": 1,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        )
 
-    subset = opt._prepare_reflection_subset(miller, intensities, [dict(trusted_pair)])
-    assert subset.reduced is True
-    assert len(subset.measured_entries) == 1
-
+    subset = opt._prepare_reflection_subset(miller, intensities, [dict(input_pair)])
     subset_hit_tables = [
         np.asarray(
             [
@@ -2123,26 +2131,10 @@ def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
             dtype=np.float64,
         )
     ]
-    full_hit_tables = [
-        np.asarray([[1.0, 50.0, 50.0, 0.0, 5.0, 0.0, 0.0]], dtype=np.float64),
-        np.asarray(
-            [
-                [1.0, 2.0, 2.0, -10.0, 1.0, 0.0, 0.0],
-                [1.0, 8.0, 8.0, 10.0, 1.0, 0.0, 0.0],
-            ],
-            dtype=np.float64,
-        ),
-        np.asarray([[1.0, 50.0, 50.0, 0.0, 7.0, 0.0, 0.0]], dtype=np.float64),
-    ]
     resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
         subset.measured_entries,
         subset_hit_tables,
     )
-
-    assert len(resolved) == 1
-    assert fallback_entries == []
-    resolved_diag = resolution_lookup[id(subset.measured_entries[0])]
-
     params = _base_params(image_size, optics_mode=1)
     params["mosaic_params"] = {
         "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
@@ -2159,7 +2151,7 @@ def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
         intensities,
         image_size,
         params,
-        measured_peaks=[dict(trusted_pair)],
+        measured_peaks=[dict(input_pair)],
         var_names=["gamma"],
         experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
         refinement_config={
@@ -2169,24 +2161,29 @@ def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
         },
     )
 
-    assert result.success
-    point_diag = dict(result.point_match_diagnostics[0])
-    seed_record = dict(result.full_beam_polish_summary["seed_correspondence_records"][0])
+    return {
+        "input_pair": dict(input_pair),
+        "subset_output_pair": dict(subset.measured_entries[0]),
+        "resolved_entries": list(resolved),
+        "fallback_entries": list(fallback_entries),
+        "resolved_diag": dict(resolution_lookup[id(subset.measured_entries[0])]),
+        "point_diag": dict(result.point_match_diagnostics[0]),
+        "seed_record": dict(result.full_beam_polish_summary["seed_correspondence_records"][0]),
+        "result": result,
+    }
 
-    subset_entry = dict(subset.measured_entries[0])
-    for field in (
-        "pair_id",
-        "fit_run_id",
-        "hkl",
-        "source_reflection_index",
-        "source_reflection_namespace",
-        "source_reflection_is_full",
-        "source_branch_index",
-        "source_peak_index",
-    ):
-        assert subset_entry.get(field) == trusted_pair.get(field)
 
-    for record in (dict(resolved_diag), point_diag, seed_record):
+def test_resolve_fixed_source_matches_preserves_trusted_identity_payload(
+    monkeypatch,
+) -> None:
+    case = _run_identity_bridge_case(monkeypatch, trusted=True)
+    trusted_pair = dict(case["input_pair"])
+    subset_output_pair = dict(case["subset_output_pair"])
+    resolved_diag = dict(case["resolved_diag"])
+
+    assert len(case["resolved_entries"]) == 1
+    assert case["fallback_entries"] == []
+    for record in (subset_output_pair, resolved_diag):
         for field in (
             "pair_id",
             "fit_run_id",
@@ -2198,14 +2195,83 @@ def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
             "source_peak_index",
         ):
             assert record.get(field) == trusted_pair.get(field)
-        assert record.get("source_reflection_index_namespace") == "full_reflection"
-        assert record.get("source_table_index_namespace") == "full_hit_table"
-        assert record.get("source_row_index_namespace") == "full_hit_table"
-        assert record.get("source_peak_index_namespace") == "branch_index"
-        assert record.get("source_branch_index_namespace") == "branch_index"
+    assert resolved_diag.get("source_reflection_index_namespace") == "full_reflection"
+    assert resolved_diag.get("source_table_index_namespace") == "full_hit_table"
+    assert resolved_diag.get("source_row_index_namespace") == "full_hit_table"
+    assert resolved_diag.get("source_peak_index_namespace") == "branch_index"
+    assert resolved_diag.get("source_branch_index_namespace") == "branch_index"
 
+
+def test_point_match_diagnostics_preserve_trusted_identity_payload(
+    monkeypatch,
+) -> None:
+    case = _run_identity_bridge_case(monkeypatch, trusted=True)
+    trusted_pair = dict(case["input_pair"])
+    point_diag = dict(case["point_diag"])
+
+    assert bool(case["result"].success) is True
+    for field in (
+        "pair_id",
+        "fit_run_id",
+        "hkl",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+        "source_branch_index",
+        "source_peak_index",
+    ):
+        assert point_diag.get(field) == trusted_pair.get(field)
+    assert point_diag.get("source_reflection_index_namespace") == "full_reflection"
+    assert point_diag.get("source_table_index_namespace") == "full_hit_table"
+    assert point_diag.get("source_row_index_namespace") == "full_hit_table"
+    assert point_diag.get("source_peak_index_namespace") == "branch_index"
+    assert point_diag.get("source_branch_index_namespace") == "branch_index"
+
+
+def test_seed_correspondence_records_preserve_trusted_identity_payload(
+    monkeypatch,
+) -> None:
+    case = _run_identity_bridge_case(monkeypatch, trusted=True)
+    trusted_pair = dict(case["input_pair"])
+    seed_record = dict(case["seed_record"])
+
+    for field in (
+        "pair_id",
+        "fit_run_id",
+        "hkl",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+        "source_branch_index",
+        "source_peak_index",
+    ):
+        assert seed_record.get(field) == trusted_pair.get(field)
+    assert seed_record.get("source_reflection_index_namespace") == "full_reflection"
+    assert seed_record.get("source_table_index_namespace") == "full_hit_table"
+    assert seed_record.get("source_row_index_namespace") == "full_hit_table"
+    assert seed_record.get("source_peak_index_namespace") == "branch_index"
+    assert seed_record.get("source_branch_index_namespace") == "branch_index"
     assert seed_record["frozen_locator_kind"] == "trusted_branch"
     assert seed_record["frozen_table_namespace"] == "full_reflection"
+
+
+def test_hkl_fallback_bridge_does_not_retrust_identity(monkeypatch) -> None:
+    case = _run_identity_bridge_case(monkeypatch, trusted=False)
+    resolved_diag = dict(case["resolved_diag"])
+    point_diag = dict(case["point_diag"])
+    seed_record = dict(case["seed_record"])
+
+    assert case["resolved_entries"] == []
+    assert len(case["fallback_entries"]) == 1
+    assert resolved_diag["resolution_kind"] == "hkl_fallback"
+    for record in (resolved_diag, point_diag, seed_record):
+        assert record.get("pair_id") == "bg0:pair0"
+        assert record.get("fit_run_id") == "fit-123"
+        assert record.get("source_reflection_namespace") in (None, "")
+        assert record.get("source_reflection_is_full") in (None, False)
+    assert point_diag["resolution_kind"] == "hkl_fallback"
+    assert seed_record["frozen_locator_kind"] == "local_branch"
+    assert seed_record["frozen_table_namespace"] == "current_full_local"
 
 
 def test_measured_source_peak_index_with_source_forwards_legacy_fallback(

@@ -8,6 +8,8 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
+from ra_sim.utils.calculations import resolve_canonical_branch
+
 
 def _coerce_sequence_items(values: Optional[Sequence[object]]) -> List[object]:
     if values is None:
@@ -232,9 +234,14 @@ def _mosaic_profile_entry_priority(
         intensities=intensities,
         intensity_lookup=intensity_lookup,
     )
-    source_peak_index = (
-        _safe_int(entry.get("source_peak_index")) if isinstance(entry, Mapping) else math.inf
-    )
+    source_branch_index = math.inf
+    if isinstance(entry, Mapping):
+        branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+            entry,
+            allow_legacy_peak_fallback=False,
+        )
+        if branch_idx in {0, 1}:
+            source_branch_index = int(branch_idx)
     source_row_index = (
         _safe_int(entry.get("source_row_index")) if isinstance(entry, Mapping) else math.inf
     )
@@ -248,7 +255,7 @@ def _mosaic_profile_entry_priority(
     )
     return (
         -float(score),
-        int(source_peak_index) if np.isfinite(source_peak_index) else math.inf,
+        int(source_branch_index) if np.isfinite(source_branch_index) else math.inf,
         int(source_row_index) if np.isfinite(source_row_index) else math.inf,
         str(group_key) if group_key is not None else "",
         str(hkl_key) if hkl_key is not None else "",

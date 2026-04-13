@@ -182,6 +182,147 @@ def _canonicalize_manual_entry_branch_fields(
         entry.pop("source_peak_index", None)
 
 
+def _coerce_nonnegative_index(value: object) -> int | None:
+    try:
+        idx = int(value)
+    except Exception:
+        return None
+    return int(idx) if idx >= 0 else None
+
+
+def _entry_has_explicit_trusted_reflection_identity(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    reflection_idx = _coerce_nonnegative_index(entry.get("source_reflection_index"))
+    namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
+    return reflection_idx is not None and namespace == "full_reflection" and bool(
+        entry.get("source_reflection_is_full", False)
+    )
+
+
+def _strip_live_source_trust_fields(entry: dict[str, object]) -> None:
+    entry.pop("source_reflection_index", None)
+    entry.pop("source_reflection_namespace", None)
+    entry.pop("source_reflection_is_full", None)
+
+
+def _set_live_source_trust_fields(
+    entry: dict[str, object],
+    *,
+    reflection_index: int,
+) -> None:
+    entry["source_reflection_index"] = int(reflection_index)
+    entry["source_reflection_namespace"] = "full_reflection"
+    entry["source_reflection_is_full"] = True
+
+
+def geometry_manual_canonicalize_live_source_entry(
+    entry: Mapping[str, object] | None,
+    *,
+    normalize_hkl_key: Callable[
+        [object],
+        tuple[int, int, int] | None,
+    ] = _default_normalize_hkl_key,
+    allow_legacy_peak_fallback: bool = False,
+    preserve_existing_trusted_identity: bool = False,
+    trusted_reflection_index: object = None,
+    source_reflection_indices_local: Sequence[object] | None = None,
+    source_row_hkl_lookup: Mapping[tuple[int, int], tuple[int, int, int]] | None = None,
+    provenance_signature_matches: bool = False,
+    provenance_revision_matches: bool = False,
+    expected_table_count: int | None = None,
+) -> dict[str, object] | None:
+    """Canonicalize one live/source row using single-source branch/trust rules."""
+
+    if not isinstance(entry, Mapping):
+        return None
+
+    normalized = dict(entry)
+    hkl_key = normalize_hkl_key(
+        normalized.get("hkl_raw", normalized.get("hkl", normalized.get("label")))
+    )
+    if hkl_key is not None:
+        normalized["hkl"] = hkl_key
+        if not str(normalized.get("label", "") or "").strip():
+            normalized["label"] = f"{hkl_key[0]},{hkl_key[1]},{hkl_key[2]}"
+
+    raw_group_key = normalized.get("q_group_key")
+    if isinstance(raw_group_key, list):
+        normalized["q_group_key"] = tuple(raw_group_key)
+    elif not isinstance(raw_group_key, tuple):
+        normalized.pop("q_group_key", None)
+
+    _canonicalize_manual_entry_branch_fields(
+        normalized,
+        allow_legacy_peak_fallback=bool(allow_legacy_peak_fallback),
+        preserve_legacy_peak_when_unresolved=True,
+    )
+
+    trusted_restore_idx = _coerce_nonnegative_index(trusted_reflection_index)
+    if trusted_restore_idx is not None:
+        _set_live_source_trust_fields(
+            normalized,
+            reflection_index=int(trusted_restore_idx),
+        )
+        return normalized
+
+    if preserve_existing_trusted_identity and _entry_has_explicit_trusted_reflection_identity(
+        normalized
+    ):
+        return normalized
+
+    reflection_index_map = (
+        list(source_reflection_indices_local or ())
+        if isinstance(source_reflection_indices_local, Sequence)
+        and not isinstance(source_reflection_indices_local, (str, bytes))
+        else []
+    )
+    expected_count = (
+        int(expected_table_count)
+        if isinstance(expected_table_count, int) and expected_table_count >= 0
+        else None
+    )
+    table_idx = _coerce_nonnegative_index(normalized.get("source_table_index"))
+    row_idx = _coerce_nonnegative_index(normalized.get("source_row_index"))
+    trust_proven = bool(provenance_signature_matches or provenance_revision_matches)
+    map_len_matches = (
+        bool(reflection_index_map)
+        and (expected_count is None or int(len(reflection_index_map)) == int(expected_count))
+    )
+    if (
+        trust_proven
+        and map_len_matches
+        and table_idx is not None
+        and row_idx is not None
+        and table_idx < len(reflection_index_map)
+        and isinstance(source_row_hkl_lookup, Mapping)
+    ):
+        reflection_idx = _coerce_nonnegative_index(reflection_index_map[int(table_idx)])
+        active_hkl_value = source_row_hkl_lookup.get((int(table_idx), int(row_idx)))
+        active_hkl = (
+            tuple(int(v) for v in active_hkl_value[:3])
+            if isinstance(active_hkl_value, (list, tuple, np.ndarray))
+            and len(active_hkl_value) >= 3
+            else None
+        )
+        if (
+            reflection_idx is not None
+            and hkl_key is not None
+            and isinstance(active_hkl, tuple)
+            and tuple(int(v) for v in active_hkl) == tuple(int(v) for v in hkl_key)
+        ):
+            _set_live_source_trust_fields(
+                normalized,
+                reflection_index=int(reflection_idx),
+            )
+            return normalized
+
+    _strip_live_source_trust_fields(normalized)
+    return normalized
+
+
 def refresh_geometry_manual_pair_entry(
     entry: Mapping[str, object] | None,
     *,
@@ -1920,33 +2061,17 @@ def geometry_manual_live_peak_candidates_from_records(
     normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
     source_reflection_indices_local: Sequence[object] | None = None,
     source_row_hkl_lookup: Mapping[tuple[int, int], tuple[int, int, int]] | None = None,
-    active_signature_matches: bool = False,
+    provenance_signature_matches: bool = False,
+    provenance_revision_matches: bool = False,
+    expected_table_count: int | None = None,
+    active_signature_matches: bool | None = None,
 ) -> list[dict[str, object]]:
     """Normalize live HKL-pick peak records into manual-pick candidate rows."""
 
     if not isinstance(peak_records, Sequence) or isinstance(peak_records, (str, bytes)):
         return []
-
-    reflection_index_map = (
-        list(source_reflection_indices_local or ())
-        if isinstance(source_reflection_indices_local, Sequence)
-        and not isinstance(source_reflection_indices_local, (str, bytes))
-        else []
-    )
-
-    def _coerce_nonnegative_index(value: object) -> int | None:
-        try:
-            idx = int(value)
-        except Exception:
-            return None
-        return int(idx) if idx >= 0 else None
-
-    def _branch_from_entry(entry: Mapping[str, object]) -> tuple[int | None, str | None]:
-        branch_idx, branch_source, _branch_reason = resolve_canonical_branch(
-            entry,
-            allow_legacy_peak_fallback=False,
-        )
-        return branch_idx, branch_source
+    if active_signature_matches is not None:
+        provenance_signature_matches = bool(active_signature_matches)
 
     candidates: list[dict[str, object]] = []
     for raw_record in peak_records:
@@ -1968,66 +2093,19 @@ def geometry_manual_live_peak_candidates_from_records(
                 entry["weight"] = max(0.0, float(entry.get("intensity", 0.0)))
             except Exception:
                 pass
-
-        hkl_key = normalize_hkl_key(entry.get("hkl_raw", entry.get("hkl")))
-        if hkl_key is not None:
-            entry["hkl"] = hkl_key
-            if not str(entry.get("label", "") or "").strip():
-                entry["label"] = f"{hkl_key[0]},{hkl_key[1]},{hkl_key[2]}"
-
-        raw_group_key = entry.get("q_group_key")
-        if isinstance(raw_group_key, list):
-            entry["q_group_key"] = tuple(raw_group_key)
-        elif not isinstance(raw_group_key, tuple):
-            entry.pop("q_group_key", None)
-
-        branch_idx, _branch_source = _branch_from_entry(entry)
-        if branch_idx in {0, 1}:
-            entry["source_branch_index"] = int(branch_idx)
-            entry["source_peak_index"] = int(branch_idx)
-        else:
-            entry.pop("source_branch_index", None)
-            entry.pop("source_peak_index", None)
-
-        trusted_full_identity = False
-        table_idx = _coerce_nonnegative_index(entry.get("source_table_index"))
-        row_idx = _coerce_nonnegative_index(entry.get("source_row_index"))
-        if (
-            bool(active_signature_matches)
-            and table_idx is not None
-            and table_idx < len(reflection_index_map)
-            and isinstance(source_row_hkl_lookup, Mapping)
-        ):
-            reflection_idx = _coerce_nonnegative_index(reflection_index_map[int(table_idx)])
-            active_hkl_value = (
-                source_row_hkl_lookup.get((int(table_idx), int(row_idx)))
-                if row_idx is not None
-                else None
-            )
-            active_hkl = (
-                tuple(active_hkl_value)
-                if isinstance(active_hkl_value, (list, tuple, np.ndarray))
-                and len(active_hkl_value) >= 3
-                else ()
-            )
-            if (
-                reflection_idx is not None
-                and isinstance(active_hkl, tuple)
-                and len(active_hkl) == 3
-                and hkl_key is not None
-                and tuple(int(v) for v in active_hkl) == tuple(int(v) for v in hkl_key)
-            ):
-                entry["source_reflection_index"] = int(reflection_idx)
-                entry["source_reflection_namespace"] = "full_reflection"
-                entry["source_reflection_is_full"] = True
-                trusted_full_identity = True
-
-        if not trusted_full_identity:
-            entry.pop("source_reflection_index", None)
-            entry.pop("source_reflection_namespace", None)
-            entry.pop("source_reflection_is_full", None)
-
-        candidates.append(entry)
+        normalized_entry = geometry_manual_canonicalize_live_source_entry(
+            entry,
+            normalize_hkl_key=normalize_hkl_key,
+            allow_legacy_peak_fallback=False,
+            preserve_existing_trusted_identity=False,
+            source_reflection_indices_local=source_reflection_indices_local,
+            source_row_hkl_lookup=source_row_hkl_lookup,
+            provenance_signature_matches=bool(provenance_signature_matches),
+            provenance_revision_matches=bool(provenance_revision_matches),
+            expected_table_count=expected_table_count,
+        )
+        if normalized_entry is not None:
+            candidates.append(normalized_entry)
     return candidates
 
 
