@@ -13321,16 +13321,23 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
     for raw_entry in source_rows or ():
         if not isinstance(raw_entry, Mapping):
             continue
-        entry = dict(raw_entry)
+        peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+            raw_entry,
+            normalize_hkl_key=_normalize_hkl_key,
+            allow_legacy_peak_fallback=False,
+            preserve_existing_trusted_identity=True,
+        )
+        if peak_record is None:
+            continue
         try:
-            display_col = float(entry.get("sim_col", np.nan))
-            display_row = float(entry.get("sim_row", np.nan))
+            display_col = float(peak_record.get("sim_col", np.nan))
+            display_row = float(peak_record.get("sim_row", np.nan))
         except Exception:
             continue
         if not (np.isfinite(display_col) and np.isfinite(display_row)):
             continue
 
-        hkl_value = entry.get("hkl")
+        hkl_value = peak_record.get("hkl")
         if not isinstance(hkl_value, tuple) or len(hkl_value) < 3:
             continue
         try:
@@ -13343,20 +13350,12 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
             continue
 
         try:
-            intensity = float(entry.get("weight", entry.get("intensity", 0.0)))
+            intensity = float(peak_record.get("weight", peak_record.get("intensity", 0.0)))
         except Exception:
             intensity = 0.0
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
-            entry,
-            normalize_hkl_key=_normalize_hkl_key,
-            allow_legacy_peak_fallback=False,
-            preserve_existing_trusted_identity=True,
-        )
-        if peak_record is None:
-            continue
         peak_record["display_col"] = float(display_col)
         peak_record["display_row"] = float(display_row)
         peak_record["intensity"] = float(intensity)

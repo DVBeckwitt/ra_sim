@@ -151,7 +151,7 @@ def _ensure_triplet(raw_value: object, fallback: list[float]) -> list[float]:
             except (TypeError, ValueError):
                 continue
     if len(values) < 3:
-        values.extend(float(item) for item in fallback[len(values):3])
+        values.extend(float(item) for item in fallback[len(values) : 3])
     return [float(values[idx]) for idx in range(3)]
 
 
@@ -360,7 +360,9 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         ),
         "center_x": float(center_default[0]),
         "center_y": float(center_default[1]),
-        "bandwidth_percent": float(np.clip(float(beam_cfg.get("bandwidth_percent", 0.7)), 0.0, 10.0)),
+        "bandwidth_percent": float(
+            np.clip(float(beam_cfg.get("bandwidth_percent", 0.7)), 0.0, 10.0)
+        ),
         "solve_q_steps": int(beam_cfg.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
         "solve_q_rel_tol": float(beam_cfg.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
         "solve_q_mode": _resolve_solve_q_mode(beam_cfg.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
@@ -407,7 +409,9 @@ def _build_var_store(
     saved_state: dict[str, object],
     defaults: _RuntimeDefaults,
 ) -> dict[str, _HeadlessVar]:
-    saved_variables = saved_state.get("variables", {}) if isinstance(saved_state.get("variables"), dict) else {}
+    saved_variables = (
+        saved_state.get("variables", {}) if isinstance(saved_state.get("variables"), dict) else {}
+    )
     geometry_fit_selection_default = gui_background_theta.default_geometry_fit_background_selection(
         osc_files=defaults.osc_files,
     )
@@ -511,7 +515,11 @@ def _load_structure_model(
     var_store: dict[str, _HeadlessVar],
     simulation_runtime_state: SimulationRuntimeState,
 ) -> tuple[object, AtomSiteOverrideState, str, complex]:
-    dynamic_lists = saved_state.get("dynamic_lists", {}) if isinstance(saved_state.get("dynamic_lists"), dict) else {}
+    dynamic_lists = (
+        saved_state.get("dynamic_lists", {})
+        if isinstance(saved_state.get("dynamic_lists"), dict)
+        else {}
+    )
     cf = CifFile.ReadCif(defaults.primary_cif_path)
     blk = cf[list(cf.keys())[0]]
     occupancy_site_labels, occupancy_site_expanded_map = (
@@ -536,7 +544,9 @@ def _load_structure_model(
 
     atom_site_fractional_metadata = gui_structure_model.extract_atom_site_fractional_metadata(blk)
     saved_atom_sites = dynamic_lists.get("atom_site_fractional_values")
-    if isinstance(saved_atom_sites, list) and len(saved_atom_sites) == len(atom_site_fractional_metadata):
+    if isinstance(saved_atom_sites, list) and len(saved_atom_sites) == len(
+        atom_site_fractional_metadata
+    ):
         atom_site_values: list[tuple[float, float, float]] = []
         for idx, row in enumerate(saved_atom_sites):
             row_default = atom_site_fractional_metadata[idx]
@@ -819,9 +829,7 @@ def _restore_gui_state_peak_record(
             if not isinstance(entry, (list, tuple)) or len(entry) < 3:
                 continue
             try:
-                normalized_deg_hkls.append(
-                    (int(entry[0]), int(entry[1]), int(entry[2]))
-                )
+                normalized_deg_hkls.append((int(entry[0]), int(entry[1]), int(entry[2])))
             except Exception:
                 continue
         record["degenerate_hkls"] = normalized_deg_hkls
@@ -909,16 +917,23 @@ def _set_runtime_peak_cache_from_source_rows(
     for raw_entry in source_rows or ():
         if not isinstance(raw_entry, Mapping):
             continue
-        entry = dict(raw_entry)
+        peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
+            raw_entry,
+            normalize_hkl_key=gui_geometry_overlay.normalize_hkl_key,
+            allow_legacy_peak_fallback=False,
+            preserve_existing_trusted_identity=True,
+        )
+        if peak_record is None:
+            continue
         try:
-            display_col = float(entry.get("sim_col", np.nan))
-            display_row = float(entry.get("sim_row", np.nan))
+            display_col = float(peak_record.get("sim_col", np.nan))
+            display_row = float(peak_record.get("sim_row", np.nan))
         except Exception:
             continue
         if not (np.isfinite(display_col) and np.isfinite(display_row)):
             continue
 
-        hkl_value = entry.get("hkl")
+        hkl_value = peak_record.get("hkl")
         if not isinstance(hkl_value, tuple) or len(hkl_value) < 3:
             continue
         try:
@@ -931,20 +946,12 @@ def _set_runtime_peak_cache_from_source_rows(
             continue
 
         try:
-            intensity = float(entry.get("weight", entry.get("intensity", 0.0)))
+            intensity = float(peak_record.get("weight", peak_record.get("intensity", 0.0)))
         except Exception:
             intensity = 0.0
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
-            entry,
-            normalize_hkl_key=gui_geometry_overlay.normalize_hkl_key,
-            allow_legacy_peak_fallback=False,
-            preserve_existing_trusted_identity=True,
-        )
-        if peak_record is None:
-            continue
         peak_record["display_col"] = float(display_col)
         peak_record["display_row"] = float(display_row)
         peak_record["intensity"] = float(intensity)
@@ -1002,8 +1009,7 @@ def _build_source_rows_from_hit_tables(
         primary_c = float("nan")
 
     peak_table_lattice = [
-        (float(primary_a), float(primary_c), "primary")
-        for _ in copied_hit_tables
+        (float(primary_a), float(primary_c), "primary") for _ in copied_hit_tables
     ]
     source_reflection_indices = (
         gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
@@ -1023,11 +1029,7 @@ def _build_source_rows_from_hit_tables(
         round_pixel_centers=False,
         allow_nominal_hkl_indices=bool(allow_nominal_hkl_indices),
     )
-    raw_rows = [
-        dict(entry)
-        for entry in (raw_rows or ())
-        if isinstance(entry, Mapping)
-    ]
+    raw_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
     return raw_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices
 
 
@@ -1074,7 +1076,9 @@ def run_headless_geometry_fit(
 
     defaults = _build_runtime_defaults(saved_state)
     var_store = _build_var_store(saved_state, defaults)
-    geometry_state = saved_state.get("geometry", {}) if isinstance(saved_state.get("geometry"), dict) else {}
+    geometry_state = (
+        saved_state.get("geometry", {}) if isinstance(saved_state.get("geometry"), dict) else {}
+    )
     pairs_by_background = _restore_manual_pairs(
         defaults.osc_files,
         geometry_state.get("manual_pairs", []),
@@ -1086,9 +1090,7 @@ def run_headless_geometry_fit(
         background_images_native=[None] * len(defaults.osc_files),
         background_images_display=[None] * len(defaults.osc_files),
         current_background_index=int(defaults.current_background_index),
-        visible=bool(
-            (saved_state.get("flags", {}) or {}).get("background_visible", True)
-        ),
+        visible=bool((saved_state.get("flags", {}) or {}).get("background_visible", True)),
         backend_rotation_k=int(defaults.background_flags["backend_rotation_k"]),
         backend_flip_x=bool(defaults.background_flags["backend_flip_x"]),
         backend_flip_y=bool(defaults.background_flags["backend_flip_y"]),
@@ -1134,7 +1136,10 @@ def run_headless_geometry_fit(
         background_state.current_background_index = int(index)
         background_state.current_background_image = np.asarray(loaded["background_image"])
         background_state.current_background_display = np.asarray(loaded["background_display"])
-        return background_state.current_background_image, background_state.current_background_display
+        return (
+            background_state.current_background_image,
+            background_state.current_background_display,
+        )
 
     _load_background_by_index(background_state.current_background_index)
 
@@ -1340,25 +1345,31 @@ def run_headless_geometry_fit(
         )
     )
 
-    simulation_callbacks = gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-        process_peaks_parallel=process_peaks_parallel,
-        hit_tables_to_max_positions=hit_tables_to_max_positions,
-        native_sim_to_display_coords=lambda col, row, image_shape: (
-            gui_geometry_overlay.native_sim_to_display_coords(
-                col,
-                row,
-                image_shape,
-                sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-            )
-        ),
-        primary_a_factory=lambda: _coerce_float(var_store["a_var"].get(), defaults.defaults["a"]),
-        primary_c_factory=lambda: _coerce_float(var_store["c_var"].get(), defaults.defaults["c"]),
-        default_source_label="primary",
-        round_pixel_centers=True,
-        default_solve_q_steps=solve_q_steps,
-        default_solve_q_rel_tol=solve_q_rel_tol,
-        default_solve_q_mode=_resolve_solve_q_mode(var_store["solve_q_mode_var"].get()),
-        prefer_safe_python_runner=True,
+    simulation_callbacks = (
+        gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
+            process_peaks_parallel=process_peaks_parallel,
+            hit_tables_to_max_positions=hit_tables_to_max_positions,
+            native_sim_to_display_coords=lambda col, row, image_shape: (
+                gui_geometry_overlay.native_sim_to_display_coords(
+                    col,
+                    row,
+                    image_shape,
+                    sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                )
+            ),
+            primary_a_factory=lambda: _coerce_float(
+                var_store["a_var"].get(), defaults.defaults["a"]
+            ),
+            primary_c_factory=lambda: _coerce_float(
+                var_store["c_var"].get(), defaults.defaults["c"]
+            ),
+            default_source_label="primary",
+            round_pixel_centers=True,
+            default_solve_q_steps=solve_q_steps,
+            default_solve_q_rel_tol=solve_q_rel_tol,
+            default_solve_q_mode=_resolve_solve_q_mode(var_store["solve_q_mode_var"].get()),
+            prefer_safe_python_runner=True,
+        )
     )
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=False,
@@ -1471,7 +1482,9 @@ def run_headless_geometry_fit(
         stored_cache = getattr(simulation_runtime_state, "stored_intersection_cache", None)
         return {
             "preview_active": False,
-            "preview_sample_count": len(getattr(simulation_runtime_state, "peak_records", ()) or ()),
+            "preview_sample_count": len(
+                getattr(simulation_runtime_state, "peak_records", ()) or ()
+            ),
             "stored_hit_table_signature_present": bool(
                 isinstance(stored_cache, Sequence)
                 and not isinstance(stored_cache, (str, bytes))
@@ -1524,14 +1537,12 @@ def run_headless_geometry_fit(
             max_positions_local,
             (str, bytes),
         ):
-            provenance = (
-                gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
-                    simulation_runtime_state,
-                    signature=current_signature,
-                    signature_summary=current_signature_summary,
-                    background_index=int(background_state.current_background_index),
-                    source_reflection_indices_local=source_reflection_indices_local,
-                )
+            provenance = gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
+                simulation_runtime_state,
+                signature=current_signature,
+                signature_summary=current_signature_summary,
+                background_index=int(background_state.current_background_index),
+                source_reflection_indices_local=source_reflection_indices_local,
             )
             live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
                 simulation_runtime_state.peak_records,
@@ -1540,15 +1551,11 @@ def run_headless_geometry_fit(
                 provenance_signature_matches=bool(
                     provenance.get("active_signature_matches", False)
                 ),
-                provenance_revision_matches=bool(
-                    provenance.get("active_revision_matches", False)
-                ),
+                provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
                 expected_table_count=provenance.get("expected_table_count"),
             )
             return {
-                "rows": [
-                    dict(entry) for entry in live_rows if isinstance(entry, Mapping)
-                ],
+                "rows": [dict(entry) for entry in live_rows if isinstance(entry, Mapping)],
                 "cache_metadata": {
                     "cache_source": "peak_records_fallback",
                     "fallback_used": True,
@@ -1585,11 +1592,13 @@ def run_headless_geometry_fit(
         peak_kwargs: dict[str, object] = {
             "image_shape": image_shape,
             "native_sim_to_display_coords": (
-                lambda col, row, image_shape_local: gui_geometry_overlay.native_sim_to_display_coords(
-                    col,
-                    row,
-                    image_shape_local,
-                    sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                lambda col, row, image_shape_local: (
+                    gui_geometry_overlay.native_sim_to_display_coords(
+                        col,
+                        row,
+                        image_shape_local,
+                        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                    )
                 )
             ),
             "peak_table_lattice": simulation_runtime_state.stored_peak_table_lattice,
@@ -1609,9 +1618,7 @@ def run_headless_geometry_fit(
         )
         if rows:
             return {
-                "rows": [
-                    dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
-                ],
+                "rows": [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)],
                 "cache_metadata": {
                     "cache_source": "max_positions",
                     "fallback_used": False,
@@ -1633,12 +1640,8 @@ def run_headless_geometry_fit(
             simulation_runtime_state.peak_records,
             source_reflection_indices_local=source_reflection_indices_local,
             source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-            provenance_signature_matches=bool(
-                provenance.get("active_signature_matches", False)
-            ),
-            provenance_revision_matches=bool(
-                provenance.get("active_revision_matches", False)
-            ),
+            provenance_signature_matches=bool(provenance.get("active_signature_matches", False)),
+            provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
             expected_table_count=provenance.get("expected_table_count"),
         )
         return {
@@ -1648,9 +1651,7 @@ def run_headless_geometry_fit(
                 "fallback_used": True,
                 "max_positions_row_count": int(max_positions_row_count),
                 "peak_record_count": int(peak_record_count),
-                "active_signature_matches": bool(
-                    provenance.get("active_signature_matches", False)
-                ),
+                "active_signature_matches": bool(provenance.get("active_signature_matches", False)),
                 "source_snapshot_row_count": int(
                     provenance.get("source_snapshot_row_count", 0) or 0
                 ),
@@ -1709,14 +1710,10 @@ def run_headless_geometry_fit(
         if stored_rows:
             if rebuild_result.hit_tables is not None:
                 try:
-                    max_positions_local = hit_tables_to_max_positions(
-                        rebuild_result.hit_tables
-                    )
+                    max_positions_local = hit_tables_to_max_positions(rebuild_result.hit_tables)
                 except Exception:
                     max_positions_local = np.empty((0, 6), dtype=np.float64)
-                simulation_runtime_state.stored_max_positions_local = list(
-                    max_positions_local
-                )
+                simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
             if rebuild_result.peak_table_lattice is not None:
                 simulation_runtime_state.stored_peak_table_lattice = list(
                     rebuild_result.peak_table_lattice
@@ -1737,9 +1734,7 @@ def run_headless_geometry_fit(
                 simulation_runtime_state.stored_hit_table_signature = (
                     rebuild_result.requested_signature
                 )
-            simulation_runtime_state.last_simulation_signature = (
-                rebuild_result.requested_signature
-            )
+            simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature
             _set_runtime_peak_cache_from_source_rows(
                 simulation_runtime_state,
                 stored_rows,
@@ -1763,9 +1758,7 @@ def run_headless_geometry_fit(
         return [
             dict(entry)
             for entry in (
-                rebuild_result.projected_rows
-                if rebuild_result.projected_rows
-                else stored_rows
+                rebuild_result.projected_rows if rebuild_result.projected_rows else stored_rows
             )
             if isinstance(entry, Mapping)
         ]
@@ -1788,6 +1781,7 @@ def run_headless_geometry_fit(
             params_local,
         )
         requested_signature_summary = _signature_summary(requested_signature)
+
         def _build_source_rows_for_rebuild(
             source_tables: Sequence[object] | None,
         ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
@@ -1860,9 +1854,7 @@ def run_headless_geometry_fit(
             param_set,
         )
         requested_signature_summary = _signature_summary(requested_signature)
-        snapshot = dict(
-            simulation_runtime_state.source_row_snapshots.get(background_idx) or {}
-        )
+        snapshot = dict(simulation_runtime_state.source_row_snapshots.get(background_idx) or {})
         if not snapshot:
             _set_source_snapshot_diagnostics(
                 source="source_snapshot",
@@ -1893,9 +1885,7 @@ def run_headless_geometry_fit(
         stored_signature_summary = _signature_summary(snapshot_signature)
         created_from = snapshot.get("created_from")
         raw_rows = [
-            dict(entry)
-            for entry in (snapshot.get("rows", ()) or ())
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in (snapshot.get("rows", ()) or ()) if isinstance(entry, Mapping)
         ]
         if snapshot_signature != requested_signature:
             _set_source_snapshot_diagnostics(
@@ -2022,11 +2012,13 @@ def run_headless_geometry_fit(
         display_rotate_k=int(DISPLAY_ROTATE_K),
         geometry_manual_pairs_for_index=_pairs_for_index,
         load_background_by_index=_load_background_by_index,
-        apply_background_backend_orientation=lambda image: gui_background.apply_background_backend_orientation(
-            image,
-            flip_x=background_state.backend_flip_x,
-            flip_y=background_state.backend_flip_y,
-            rotation_k=background_state.backend_rotation_k,
+        apply_background_backend_orientation=lambda image: (
+            gui_background.apply_background_backend_orientation(
+                image,
+                flip_x=background_state.backend_flip_x,
+                flip_y=background_state.backend_flip_y,
+                rotation_k=background_state.backend_rotation_k,
+            )
         ),
         geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
         geometry_manual_simulated_lookup=projection_callbacks.simulated_lookup,
@@ -2037,9 +2029,7 @@ def run_headless_geometry_fit(
         geometry_manual_last_source_snapshot_diagnostics=_geometry_manual_last_source_snapshot_diagnostics,
         geometry_manual_last_simulation_diagnostics=simulation_callbacks.last_simulation_diagnostics,
         geometry_manual_match_config=lambda: (
-            gui_manual_geometry.current_geometry_manual_match_config(
-                defaults.fit_config
-            )
+            gui_manual_geometry.current_geometry_manual_match_config(defaults.fit_config)
         ),
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
         geometry_manual_refresh_pair_entry=projection_callbacks.refresh_entry_geometry,
@@ -2091,9 +2081,7 @@ def run_headless_geometry_fit(
         ),
     )
     if preparation.prepared_run is None:
-        raise RuntimeError(
-            str(preparation.error_text or "Geometry fit preparation failed.")
-        )
+        raise RuntimeError(str(preparation.error_text or "Geometry fit preparation failed."))
 
     setup = gui_geometry_fit.build_runtime_geometry_fit_execution_setup(
         prepared_run=preparation.prepared_run,
@@ -2130,10 +2118,12 @@ def run_headless_geometry_fit(
         simulate_and_compare_hkl=simulate_and_compare_hkl,
         aggregate_match_centers=gui_geometry_overlay.aggregate_match_centers,
         build_overlay_records=gui_geometry_overlay.build_geometry_fit_overlay_records,
-        compute_frame_diagnostics=lambda records: gui_geometry_overlay.compute_geometry_overlay_frame_diagnostics(
-            records,
-            show_caked_2d=False,
-            native_detector_coords_to_caked_display_coords=None,
+        compute_frame_diagnostics=lambda records: (
+            gui_geometry_overlay.compute_geometry_overlay_frame_diagnostics(
+                records,
+                show_caked_2d=False,
+                native_detector_coords_to_caked_display_coords=None,
+            )
         ),
     )
     execution = gui_geometry_fit.execute_runtime_geometry_fit(
@@ -2158,9 +2148,6 @@ def run_headless_geometry_fit(
             else None
         ),
         rms_px=(
-            float(execution.apply_result.rms)
-            if execution.apply_result.rms is not None
-            else None
+            float(execution.apply_result.rms) if execution.apply_result.rms is not None else None
         ),
     )
-

@@ -52,7 +52,9 @@ class GeometryQGroupRuntimeBindings:
     preview_toggle_max_distance_px: float = 20.0
     update_running: object | None = None
     has_cached_hit_tables: object | None = None
-    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None
+    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = (
+        None
+    )
     simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None
     miller: object | None = None
     intensities: object | None = None
@@ -74,12 +76,9 @@ class GeometryQGroupRuntimeBindings:
     geometry_preview_artists: list[object] | None = None
     draw_idle: Callable[[], None] | None = None
     normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] | None = None
-    live_preview_match_is_excluded: (
-        Callable[[dict[str, object] | None], bool] | None
-    ) = None
+    live_preview_match_is_excluded: Callable[[dict[str, object] | None], bool] | None = None
     filter_live_preview_matches: (
-        Callable[[Sequence[dict[str, object]] | None], tuple[list[dict[str, object]], int]]
-        | None
+        Callable[[Sequence[dict[str, object]] | None], tuple[list[dict[str, object]], int]] | None
     ) = None
     build_entries_snapshot: Callable[[], Sequence[dict[str, object]] | None] | None = None
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None
@@ -203,10 +202,7 @@ def _copy_simulation_diag_value(value: object) -> object:
     """Return one log-friendly deep copy of simulation diagnostics state."""
 
     if isinstance(value, Mapping):
-        return {
-            str(key): _copy_simulation_diag_value(item)
-            for key, item in value.items()
-        }
+        return {str(key): _copy_simulation_diag_value(item) for key, item in value.items()}
     if isinstance(value, np.ndarray):
         return _copy_simulation_diag_value(value.tolist())
     if isinstance(value, (list, tuple)):
@@ -267,14 +263,10 @@ def _geometry_fit_param_summary(
         "a": _copy_simulation_diag_value(params_local.get("a")),
         "c": _copy_simulation_diag_value(params_local.get("c")),
         "lambda": _copy_simulation_diag_value(params_local.get("lambda")),
-        "theta_initial": _copy_simulation_diag_value(
-            params_local.get("theta_initial")
-        ),
+        "theta_initial": _copy_simulation_diag_value(params_local.get("theta_initial")),
         "center": _copy_simulation_diag_value(params_local.get("center")),
         "n2": _copy_simulation_diag_value(params_local.get("n2")),
-        "optics_mode": _copy_simulation_diag_value(
-            params_local.get("optics_mode", 0)
-        ),
+        "optics_mode": _copy_simulation_diag_value(params_local.get("optics_mode", 0)),
     }
 
 
@@ -594,14 +586,16 @@ def build_geometry_q_group_entries(
                     "hkl_preview": [],
                 }
                 entries_by_key[group_key] = entry
-            elif not np.isfinite(_coerce_float(entry.get("qr", np.nan), np.nan)) and np.isfinite(qr_val):
+            elif not np.isfinite(_coerce_float(entry.get("qr", np.nan), np.nan)) and np.isfinite(
+                qr_val
+            ):
                 entry["qr"] = float(qr_val)
-            if not np.isfinite(_coerce_float(entry.get("qz", np.nan), np.nan)) and np.isfinite(qz_val):
+            if not np.isfinite(_coerce_float(entry.get("qz", np.nan), np.nan)) and np.isfinite(
+                qz_val
+            ):
                 entry["qz"] = float(qz_val)
 
-            entry["total_intensity"] = float(entry["total_intensity"]) + float(
-                abs(intensity)
-            )
+            entry["total_intensity"] = float(entry["total_intensity"]) + float(abs(intensity))
             entry["peak_count"] = int(entry["peak_count"]) + 1
             if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
                 entry["hkl_preview"].append(hkl_key)
@@ -611,8 +605,7 @@ def build_geometry_q_group_entries(
             max_positions_local
         ):
             peak_table_lattice_local = [
-                (default_primary_a, default_primary_c, "primary")
-                for _ in max_positions_local
+                (default_primary_a, default_primary_c, "primary") for _ in max_positions_local
             ]
 
         for table_idx, tbl in enumerate(max_positions_local):
@@ -662,9 +655,7 @@ def build_geometry_q_group_entries(
                     }
                     entries_by_key[group_key] = entry
 
-                entry["total_intensity"] = float(entry["total_intensity"]) + float(
-                    abs(intensity)
-                )
+                entry["total_intensity"] = float(entry["total_intensity"]) + float(abs(intensity))
                 entry["peak_count"] = int(entry["peak_count"]) + 1
                 if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
                     entry["hkl_preview"].append(hkl_key)
@@ -731,9 +722,7 @@ def build_geometry_fit_simulated_peaks(
         row_peak_indices = _geometry_hit_row_peak_indices(rows)
 
         source_label = (
-            str(default_source_label)
-            if default_source_label is not None
-            else f"table_{table_idx}"
+            str(default_source_label) if default_source_label is not None else f"table_{table_idx}"
         )
         av_used = default_primary_a
         cv_used = default_primary_c
@@ -791,7 +780,6 @@ def build_geometry_fit_simulated_peaks(
                 trusted_reflection_index = None
             peak_record = {
                 "hkl": hkl,
-                "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
                 "sim_col": float(display_col),
                 "sim_row": float(display_row),
                 "weight": max(0.0, float(abs(intensity))),
@@ -808,13 +796,11 @@ def build_geometry_fit_simulated_peaks(
             }
             branch_index = (
                 int(row_peak_indices[row_idx])
-                if row_idx < len(row_peak_indices)
-                and row_peak_indices[row_idx] in {0, 1}
+                if row_idx < len(row_peak_indices) and row_peak_indices[row_idx] in {0, 1}
                 else None
             )
             if branch_index in {0, 1}:
                 peak_record["source_branch_index"] = int(branch_index)
-                peak_record["source_peak_index"] = int(branch_index)
             peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
                 peak_record,
                 normalize_hkl_key=(
@@ -905,9 +891,7 @@ def _matching_source_row_snapshot_payload(
 
     def _rows_from_snapshot(snapshot: Mapping[str, object]) -> list[dict[str, object]]:
         return [
-            dict(entry)
-            for entry in (snapshot.get("rows", ()) or ())
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in (snapshot.get("rows", ()) or ()) if isinstance(entry, Mapping)
         ]
 
     def _match_kind(snapshot: Mapping[str, object]) -> str | None:
@@ -961,9 +945,7 @@ def _matching_source_row_snapshot_payload(
                 "background_index": int(snapshot_background_index),
                 "rows": rows,
                 "match_kind": str(match_kind),
-                "source_reflection_index_count": raw_snapshot.get(
-                    "source_reflection_index_count"
-                ),
+                "source_reflection_index_count": raw_snapshot.get("source_reflection_index_count"),
             }
         )
     if len(matches) != 1:
@@ -1006,19 +988,11 @@ def _resolve_live_peak_record_fallback_provenance(
             table_count = 1 + max(int(key[0]) for key in source_row_hkl_lookup)
         except Exception:
             table_count = None
-    provenance_ready = bool(
-        snapshot_rows
-        and reflection_index_map
-        and source_row_hkl_lookup
-    )
+    provenance_ready = bool(snapshot_rows and reflection_index_map and source_row_hkl_lookup)
     match_kind = str(snapshot_payload.get("match_kind", "") or "")
     return {
-        "active_signature_matches": bool(
-            provenance_ready and match_kind == "exact_signature"
-        ),
-        "active_revision_matches": bool(
-            provenance_ready and match_kind == "signature_summary"
-        ),
+        "active_signature_matches": bool(provenance_ready and match_kind == "exact_signature"),
+        "active_revision_matches": bool(provenance_ready and match_kind == "signature_summary"),
         "expected_table_count": table_count,
         "source_row_hkl_lookup": source_row_hkl_lookup,
         "source_snapshot_row_count": int(len(snapshot_rows)),
@@ -1037,9 +1011,7 @@ def geometry_fit_peak_center_from_max_position(
     primary_valid = np.isfinite(x0) and np.isfinite(y0)
     secondary_valid = np.isfinite(x1) and np.isfinite(y1)
 
-    if primary_valid and (
-        not secondary_valid or not np.isfinite(i1) or float(i0) >= float(i1)
-    ):
+    if primary_valid and (not secondary_valid or not np.isfinite(i1) or float(i0) >= float(i1)):
         return float(x0), float(y0)
     if secondary_valid:
         return float(x1), float(y1)
@@ -1073,9 +1045,7 @@ def aggregate_geometry_fit_peak_centers_from_max_positions(
         if center is None:
             continue
         centers_by_hkl.setdefault(key, []).append(center)
-        weights_by_hkl[key] = weights_by_hkl.get(key, 0.0) + float(
-            abs(intensity_arr[idx])
-        )
+        weights_by_hkl[key] = weights_by_hkl.get(key, 0.0) + float(abs(intensity_arr[idx]))
 
     simulated_peaks: list[dict[str, object]] = []
     for key, center_list in centers_by_hkl.items():
@@ -1186,9 +1156,7 @@ def simulate_geometry_fit_hit_tables(
             save_flag=0,
             optics_mode=int(params_local.get("optics_mode", 0)),
             solve_q_steps=int(mosaic.get("solve_q_steps", default_solve_q_steps)),
-            solve_q_rel_tol=float(
-                mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)
-            ),
+            solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)),
             solve_q_mode=int(mosaic.get("solve_q_mode", default_solve_q_mode)),
             sample_weights=mosaic.get("sample_weights"),
         )
@@ -1210,19 +1178,13 @@ def simulate_geometry_fit_hit_tables(
     row_count_preview = _geometry_fit_row_count_preview(hit_row_counts)
     diagnostics.update(
         {
-            "status": (
-                "success"
-                if int(sum(hit_row_counts)) > 0
-                else "empty_hit_tables"
-            ),
+            "status": ("success" if int(sum(hit_row_counts)) > 0 else "empty_hit_tables"),
             "hit_table_count": int(len(hit_table_list)),
             "hit_row_counts": hit_row_counts,
             "nonempty_hit_table_count": int(sum(1 for count in hit_row_counts if count > 0)),
             "finite_hit_row_total": int(sum(hit_row_counts)),
             "row_count_preview_per_table": row_count_preview,
-            "row_count_preview_truncated": bool(
-                len(hit_row_counts) > len(row_count_preview)
-            ),
+            "row_count_preview_truncated": bool(len(hit_row_counts) > len(row_count_preview)),
             "projected_peak_count": int(sum(hit_row_counts)),
         }
     )
@@ -1255,9 +1217,7 @@ def simulate_geometry_fit_peak_centers(
             intensity_array,
             image_size,
             param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
+            build_geometry_fit_central_mosaic_params=(build_geometry_fit_central_mosaic_params),
             process_peaks_parallel=process_peaks_parallel,
             default_solve_q_steps=default_solve_q_steps,
             default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1273,9 +1233,7 @@ def simulate_geometry_fit_peak_centers(
         diagnostics.update(
             {
                 "stage": "simulate_peak_centers",
-                "status": (
-                    "success" if peak_centers else "empty_peak_centers"
-                ),
+                "status": ("success" if peak_centers else "empty_peak_centers"),
                 "max_position_count": int(len(max_positions)),
                 "peak_center_count": int(len(peak_centers)),
                 "projected_peak_count": int(len(peak_centers)),
@@ -1333,9 +1291,7 @@ def simulate_geometry_fit_preview_style_peaks(
             intensity_array,
             image_size,
             param_set,
-            build_geometry_fit_central_mosaic_params=(
-                build_geometry_fit_central_mosaic_params
-            ),
+            build_geometry_fit_central_mosaic_params=(build_geometry_fit_central_mosaic_params),
             process_peaks_parallel=process_peaks_parallel,
             default_solve_q_steps=default_solve_q_steps,
             default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1413,16 +1369,11 @@ def make_runtime_geometry_fit_simulation_callbacks(
     process_peaks_parallel_runner = process_peaks_parallel
 
     if prefer_safe_python_runner:
-        use_diffraction_safe_runner = (
-            process_peaks_parallel is diffraction_process_peaks_parallel
-        )
+        use_diffraction_safe_runner = process_peaks_parallel is diffraction_process_peaks_parallel
 
         def _keyword_mismatch(exc: TypeError) -> bool:
             message = str(exc)
-            return (
-                "unexpected keyword" in message
-                or "some keyword arguments unexpected" in message
-            )
+            return "unexpected keyword" in message or "some keyword arguments unexpected" in message
 
         def _process_peaks_parallel_runner(*args, **kwargs):
             call_kwargs = dict(kwargs)
@@ -1436,10 +1387,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 try:
                     return process_peaks_parallel(*args, **call_kwargs)
                 except TypeError as retry_exc:
-                    if (
-                        use_diffraction_safe_runner
-                        and _keyword_mismatch(retry_exc)
-                    ):
+                    if use_diffraction_safe_runner and _keyword_mismatch(retry_exc):
                         safe_kwargs = dict(call_kwargs)
                         safe_kwargs["prefer_python_runner"] = True
                         return diffraction_process_peaks_parallel_safe(
@@ -1454,9 +1402,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
         diagnostics: Mapping[str, object] | None,
     ) -> None:
         last_simulation_diagnostics_state.clear()
-        copied = _copy_simulation_diag_value(
-            diagnostics if diagnostics is not None else {}
-        )
+        copied = _copy_simulation_diag_value(diagnostics if diagnostics is not None else {})
         if isinstance(copied, dict):
             last_simulation_diagnostics_state.update(copied)
 
@@ -1476,9 +1422,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(
-                    build_geometry_fit_central_mosaic_params
-                ),
+                build_geometry_fit_central_mosaic_params=(build_geometry_fit_central_mosaic_params),
                 process_peaks_parallel=process_peaks_parallel_runner,
                 default_solve_q_steps=default_solve_q_steps,
                 default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1506,9 +1450,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(
-                    build_geometry_fit_central_mosaic_params
-                ),
+                build_geometry_fit_central_mosaic_params=(build_geometry_fit_central_mosaic_params),
                 process_peaks_parallel=process_peaks_parallel_runner,
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
                 default_solve_q_steps=default_solve_q_steps,
@@ -1538,9 +1480,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(
-                    build_geometry_fit_central_mosaic_params
-                ),
+                build_geometry_fit_central_mosaic_params=(build_geometry_fit_central_mosaic_params),
                 process_peaks_parallel=process_peaks_parallel_runner,
                 native_sim_to_display_coords=native_sim_to_display_coords,
                 peak_table_lattice=(
@@ -1629,10 +1569,14 @@ def make_runtime_geometry_q_group_value_callbacks(
             "last_caked_intersection_cache",
         ):
             cache_tables = getattr(simulation_runtime_state, attr_name, None)
-            if isinstance(cache_tables, Sequence) and not isinstance(
-                cache_tables,
-                (str, bytes),
-            ) and len(cache_tables) > 0:
+            if (
+                isinstance(cache_tables, Sequence)
+                and not isinstance(
+                    cache_tables,
+                    (str, bytes),
+                )
+                and len(cache_tables) > 0
+            ):
                 return True
         return False
 
@@ -1670,10 +1614,7 @@ def make_runtime_geometry_q_group_value_callbacks(
                 "round_pixel_centers": True,
                 "allow_nominal_hkl_indices": use_nominal_cache_grouping,
             }
-            if (
-                simulation_runtime_state.stored_source_reflection_indices_local
-                is not None
-            ):
+            if simulation_runtime_state.stored_source_reflection_indices_local is not None:
                 peak_kwargs["source_reflection_indices"] = (
                     simulation_runtime_state.stored_source_reflection_indices_local
                 )
@@ -1729,12 +1670,8 @@ def make_runtime_geometry_q_group_value_callbacks(
                 )
             ),
             source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-            provenance_signature_matches=bool(
-                provenance.get("active_signature_matches", False)
-            ),
-            provenance_revision_matches=bool(
-                provenance.get("active_revision_matches", False)
-            ),
+            provenance_signature_matches=bool(provenance.get("active_signature_matches", False)),
+            provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
             expected_table_count=provenance.get("expected_table_count"),
         )
         for entry in cached_peaks:
@@ -1752,15 +1689,9 @@ def make_runtime_geometry_q_group_value_callbacks(
             fallback_used=True,
             max_positions_row_count=int(max_positions_row_count),
             peak_record_count=int(peak_record_count),
-            active_signature_matches=bool(
-                provenance.get("active_signature_matches", False)
-            ),
-            source_snapshot_row_count=int(
-                provenance.get("source_snapshot_row_count", 0) or 0
-            ),
-            source_snapshot_background_index=provenance.get(
-                "source_snapshot_background_index"
-            ),
+            active_signature_matches=bool(provenance.get("active_signature_matches", False)),
+            source_snapshot_row_count=int(provenance.get("source_snapshot_row_count", 0) or 0),
+            source_snapshot_background_index=provenance.get("source_snapshot_background_index"),
             simulated_peak_count=int(len(cached_peaks)),
         )
         if cached_peaks:
@@ -1771,15 +1702,9 @@ def make_runtime_geometry_q_group_value_callbacks(
             fallback_used=bool(max_positions_row_count > 0 or peak_record_count > 0),
             max_positions_row_count=int(max_positions_row_count),
             peak_record_count=int(peak_record_count),
-            active_signature_matches=bool(
-                provenance.get("active_signature_matches", False)
-            ),
-            source_snapshot_row_count=int(
-                provenance.get("source_snapshot_row_count", 0) or 0
-            ),
-            source_snapshot_background_index=provenance.get(
-                "source_snapshot_background_index"
-            ),
+            active_signature_matches=bool(provenance.get("active_signature_matches", False)),
+            source_snapshot_row_count=int(provenance.get("source_snapshot_row_count", 0) or 0),
+            source_snapshot_background_index=provenance.get("source_snapshot_background_index"),
             simulated_peak_count=0,
         )
         return []
@@ -1971,9 +1896,7 @@ def _geometry_fit_seed_representative_sort_key(
     )
     if branch_idx in {0, 1}:
         return (0, int(branch_idx))
-    hkl_key = gui_geometry_overlay.normalize_hkl_key(
-        entry.get("hkl", entry.get("label"))
-    )
+    hkl_key = gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
     if hkl_key is not None:
         return (1, int(hkl_key[0]), int(hkl_key[1]), int(hkl_key[2]))
     return (2, str(entry.get("label", "")))
@@ -2137,8 +2060,7 @@ def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
         f"Gz={gz_text}  "
         f"Qz={qz_val:8.2f}  "
         f"I={total_intensity:10.3f}  "
-        f"hits={peak_count:4d}"
-        + (f"  HKL={hkl_preview}" if hkl_preview else "")
+        f"hits={peak_count:4d}" + (f"  HKL={hkl_preview}" if hkl_preview else "")
     )
 
 
@@ -2148,10 +2070,14 @@ def current_geometry_auto_match_min_matches(
 ) -> int:
     """Return the current geometry auto-match minimum peak count."""
 
-    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(
-        fit_config,
-        Mapping,
-    ) else {}
+    geometry_refine_cfg = (
+        fit_config.get("geometry", {})
+        if isinstance(
+            fit_config,
+            Mapping,
+        )
+        else {}
+    )
     if not isinstance(geometry_refine_cfg, Mapping):
         geometry_refine_cfg = {}
     auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
@@ -2170,10 +2096,14 @@ def build_live_geometry_preview_auto_match_config(
 ) -> dict[str, object]:
     """Return the normalized auto-match config used for live preview refreshes."""
 
-    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(
-        fit_config,
-        Mapping,
-    ) else {}
+    geometry_refine_cfg = (
+        fit_config.get("geometry", {})
+        if isinstance(
+            fit_config,
+            Mapping,
+        )
+        else {}
+    )
     if not isinstance(geometry_refine_cfg, Mapping):
         geometry_refine_cfg = {}
     auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
@@ -2235,22 +2165,18 @@ def build_geometry_q_group_window_status_text(
 ) -> str:
     """Build the summary text shown above the Qr/Qz selector rows."""
 
-    rows = list(entries) if entries is not None else gui_controllers.listed_geometry_q_group_entries(
-        q_group_state
+    rows = (
+        list(entries)
+        if entries is not None
+        else gui_controllers.listed_geometry_q_group_entries(q_group_state)
     )
     excluded_q_groups = getattr(preview_state, "excluded_q_groups", set())
     total_count = len(rows)
-    included_rows = [
-        entry
-        for entry in rows
-        if entry.get("key") not in excluded_q_groups
-    ]
+    included_rows = [entry for entry in rows if entry.get("key") not in excluded_q_groups]
     selected_peak_count = int(
         sum(_coerce_int(entry.get("peak_count", 0), 0) for entry in included_rows)
     )
-    total_peak_count = int(
-        sum(_coerce_int(entry.get("peak_count", 0), 0) for entry in rows)
-    )
+    total_peak_count = int(sum(_coerce_int(entry.get("peak_count", 0), 0) for entry in rows))
     min_matches = current_geometry_auto_match_min_matches(
         fit_config,
         current_geometry_fit_var_names,
@@ -2365,11 +2291,7 @@ def set_all_geometry_q_groups_enabled(
     else:
         gui_controllers.replace_geometry_preview_excluded_q_groups(
             preview_state,
-            [
-                entry["key"]
-                for entry in entries
-                if entry.get("key") is not None
-            ],
+            [entry["key"] for entry in entries if entry.get("key") is not None],
         )
         action = "Excluded"
     return action, len(entries)
@@ -2480,8 +2402,10 @@ def build_geometry_q_group_export_rows(
     """Build JSON export rows for the current Qr/Qz selector listing."""
 
     rows: list[dict[str, object]] = []
-    source_entries = list(entries) if entries is not None else gui_controllers.listed_geometry_q_group_entries(
-        q_group_state
+    source_entries = (
+        list(entries)
+        if entries is not None
+        else gui_controllers.listed_geometry_q_group_entries(q_group_state)
     )
     excluded_q_groups = getattr(preview_state, "excluded_q_groups", set())
     for entry in source_entries:
@@ -2493,15 +2417,10 @@ def build_geometry_q_group_export_rows(
             continue
         hkl_preview = []
         for hkl_value in entry.get("hkl_preview", [])[:8]:
-            if (
-                not isinstance(hkl_value, (list, tuple, np.ndarray))
-                or len(hkl_value) < 3
-            ):
+            if not isinstance(hkl_value, (list, tuple, np.ndarray)) or len(hkl_value) < 3:
                 continue
             try:
-                hkl_preview.append(
-                    [int(hkl_value[0]), int(hkl_value[1]), int(hkl_value[2])]
-                )
+                hkl_preview.append([int(hkl_value[0]), int(hkl_value[1]), int(hkl_value[2])])
             except Exception:
                 continue
         rows.append(
@@ -2535,9 +2454,7 @@ def build_geometry_q_group_save_payload(
         "version": 1,
         "saved_at": str(saved_at),
         "row_count": int(len(export_rows)),
-        "included_count": int(
-            sum(1 for row in export_rows if bool(row.get("included", False)))
-        ),
+        "included_count": int(sum(1 for row in export_rows if bool(row.get("included", False)))),
         "rows": [dict(row) for row in export_rows],
     }
 
@@ -2608,9 +2525,7 @@ def apply_loaded_geometry_q_group_saved_state(
     )
     return {
         "matched_total": int(len(matched_keys)),
-        "included_total": int(
-            sum(1 for key in matched_keys if bool(saved_state.get(key, False)))
-        ),
+        "included_total": int(sum(1 for key in matched_keys if bool(saved_state.get(key, False)))),
         "current_only": int(sum(1 for key in current_keys if key not in saved_state)),
         "saved_only": int(sum(1 for key in saved_state if key not in current_key_set)),
     }, None
@@ -2623,9 +2538,7 @@ def live_geometry_preview_match_key(
 
     if not isinstance(entry, dict):
         return None
-    hkl_key = gui_geometry_overlay.normalize_hkl_key(
-        entry.get("hkl", entry.get("label"))
-    )
+    hkl_key = gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
     source_label = entry.get("source_label")
     source_table_index = entry.get(
         "source_reflection_index",
@@ -2689,9 +2602,7 @@ def live_geometry_preview_match_hkl(
 
     if not isinstance(entry, dict):
         return None
-    return gui_geometry_overlay.normalize_hkl_key(
-        entry.get("hkl", entry.get("label"))
-    )
+    return gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
 
 
 def live_geometry_preview_match_is_excluded(
@@ -2842,12 +2753,8 @@ def build_live_geometry_preview_overlay_state(
 ) -> dict[str, object]:
     """Return one cached live-preview overlay-state payload from match results."""
 
-    match_stats_local = (
-        match_stats if isinstance(match_stats, Mapping) else {}
-    )
-    preview_cfg = (
-        preview_auto_match_cfg if isinstance(preview_auto_match_cfg, Mapping) else {}
-    )
+    match_stats_local = match_stats if isinstance(match_stats, Mapping) else {}
+    preview_cfg = preview_auto_match_cfg if isinstance(preview_auto_match_cfg, Mapping) else {}
     matched_pairs_local = [dict(entry) for entry in matched_pairs or ()]
     attempts_local = [dict(entry) for entry in auto_match_attempts or ()]
 
@@ -2877,11 +2784,7 @@ def build_live_geometry_preview_overlay_state(
     )
     quality_fail = bool(
         (np.isfinite(max_auto_p90) and np.isfinite(p90_dist) and p90_dist > max_auto_p90)
-        or (
-            np.isfinite(max_auto_mean)
-            and np.isfinite(mean_dist)
-            and mean_dist > max_auto_mean
-        )
+        or (np.isfinite(max_auto_mean) and np.isfinite(mean_dist) and mean_dist > max_auto_mean)
     )
 
     return {
@@ -2968,9 +2871,7 @@ def build_live_geometry_preview_status_text(
     if int(excluded_count) > 0:
         summary += f" Excluded={int(excluded_count)}."
     if q_group_total > 0:
-        summary += (
-            f" Qr/Qz groups on={max(0, q_group_total - q_group_excluded)}/{q_group_total}."
-        )
+        summary += f" Qr/Qz groups on={max(0, q_group_total - q_group_excluded)}/{q_group_total}."
     if collapsed_deg > 0:
         summary += f" Degenerate collapsed={collapsed_deg}."
     if int(active_pair_count) < min_matches:
@@ -2988,7 +2889,9 @@ def render_live_geometry_preview_overlay_state(
     *,
     preview_state,
     draw_live_geometry_preview_overlay: Callable[..., None],
-    filter_live_preview_matches: Callable[[Sequence[dict[str, object]]], tuple[Sequence[dict[str, object]], int]],
+    filter_live_preview_matches: Callable[
+        [Sequence[dict[str, object]]], tuple[Sequence[dict[str, object]], int]
+    ],
     set_status_text: Callable[[str], None] | None = None,
     update_status: bool = True,
 ) -> bool:
@@ -3040,19 +2943,15 @@ def draw_runtime_live_geometry_preview_overlay(
 
     if bindings.axis is None:
         return
-    clear_geometry_preview_artists = (
-        bindings.clear_geometry_preview_artists or (lambda: None)
-    )
+    clear_geometry_preview_artists = bindings.clear_geometry_preview_artists or (lambda: None)
     draw_idle = bindings.draw_idle or (lambda: None)
     normalize_hkl_key = bindings.normalize_hkl_key or (lambda _value: None)
-    live_preview_match_is_excluded = (
-        bindings.live_preview_match_is_excluded or (lambda _entry: False)
+    live_preview_match_is_excluded = bindings.live_preview_match_is_excluded or (
+        lambda _entry: False
     )
     try:
         show_pair_connectors = bool(
-            bindings.caked_view_enabled()
-            if callable(bindings.caked_view_enabled)
-            else False
+            bindings.caked_view_enabled() if callable(bindings.caked_view_enabled) else False
         )
     except Exception:
         show_pair_connectors = False
@@ -3080,15 +2979,17 @@ def render_runtime_live_geometry_preview_state(
 ) -> bool:
     """Redraw the cached runtime live-preview overlay from bound state."""
 
-    filter_live_preview_matches = (
-        bindings.filter_live_preview_matches or (lambda pairs: (list(pairs or []), 0))
+    filter_live_preview_matches = bindings.filter_live_preview_matches or (
+        lambda pairs: (list(pairs or []), 0)
     )
     return render_live_geometry_preview_overlay_state(
         preview_state=bindings.preview_state,
-        draw_live_geometry_preview_overlay=lambda pairs, *, max_display_markers: draw_runtime_live_geometry_preview_overlay(
-            bindings,
-            pairs,
-            max_display_markers=max_display_markers,
+        draw_live_geometry_preview_overlay=lambda pairs, *, max_display_markers: (
+            draw_runtime_live_geometry_preview_overlay(
+                bindings,
+                pairs,
+                max_display_markers=max_display_markers,
+            )
         ),
         filter_live_preview_matches=filter_live_preview_matches,
         set_status_text=bindings.set_status_text,
@@ -3141,21 +3042,14 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
                 if update_status:
                     _set_status_text(
                         bindings.set_status_text,
-                        (
-                            "Live auto-match preview unavailable: "
-                            f"failed to simulate peaks ({exc})."
-                        ),
+                        (f"Live auto-match preview unavailable: failed to simulate peaks ({exc})."),
                     )
                 return None
             if simulated_peaks:
                 return simulated_peaks
 
     build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
-    simulated_peaks = (
-        list(build_cached_peaks() or [])
-        if callable(build_cached_peaks)
-        else []
-    )
+    simulated_peaks = list(build_cached_peaks() or []) if callable(build_cached_peaks) else []
     if simulated_peaks:
         return simulated_peaks
 
@@ -3227,9 +3121,7 @@ def resolve_runtime_live_geometry_preview_seed_state(
 
     filter_simulated_peaks = bindings.filter_simulated_peaks
     if callable(filter_simulated_peaks):
-        filtered_peaks, excluded_q_peaks, q_group_total = filter_simulated_peaks(
-            simulated_peaks
-        )
+        filtered_peaks, excluded_q_peaks, q_group_total = filter_simulated_peaks(simulated_peaks)
     else:
         filtered_peaks = list(simulated_peaks or [])
         excluded_q_peaks = 0
@@ -3268,9 +3160,7 @@ def resolve_runtime_live_geometry_preview_seed_state(
         )
         return None
 
-    preview_cfg = (
-        preview_auto_match_cfg if isinstance(preview_auto_match_cfg, Mapping) else {}
-    )
+    preview_cfg = preview_auto_match_cfg if isinstance(preview_auto_match_cfg, Mapping) else {}
     search_radius = _coerce_float(preview_cfg.get("search_radius_px", 24.0), 24.0)
     merge_radius_px = _coerce_float(
         preview_cfg.get(
@@ -3367,10 +3257,7 @@ def distance_point_to_segment_sq(
     if abs(dx) <= 1e-12 and abs(dy) <= 1e-12:
         return (float(px) - float(x0)) ** 2 + (float(py) - float(y0)) ** 2
 
-    t = (
-        ((float(px) - float(x0)) * dx + (float(py) - float(y0)) * dy)
-        / (dx * dx + dy * dy)
-    )
+    t = ((float(px) - float(x0)) * dx + (float(py) - float(y0)) * dy) / (dx * dx + dy * dy)
     t = min(1.0, max(0.0, float(t)))
     cx = float(x0) + t * dx
     cy = float(y0) + t * dy
@@ -3517,7 +3404,8 @@ def make_runtime_geometry_q_group_bindings_factory(
     preview_toggle_max_distance_px: float = 20.0,
     update_running_factory: object | None = None,
     has_cached_hit_tables_factory: object | None = None,
-    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None,
+    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]]
+    | None = None,
     simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None,
     miller_factory: object | None = None,
     intensities_factory: object | None = None,
@@ -3539,12 +3427,9 @@ def make_runtime_geometry_q_group_bindings_factory(
     geometry_preview_artists: list[object] | None = None,
     draw_idle_factory: object | None = None,
     normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] | None = None,
-    live_preview_match_is_excluded: (
-        Callable[[dict[str, object] | None], bool] | None
-    ) = None,
+    live_preview_match_is_excluded: (Callable[[dict[str, object] | None], bool] | None) = None,
     filter_live_preview_matches: (
-        Callable[[Sequence[dict[str, object]] | None], tuple[list[dict[str, object]], int]]
-        | None
+        Callable[[Sequence[dict[str, object]] | None], tuple[list[dict[str, object]], int]] | None
     ) = None,
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None,
     clear_last_simulation_signature: Callable[[], None] | None = None,
@@ -3681,9 +3566,7 @@ def set_all_geometry_q_groups_enabled_runtime(
         enabled=enabled,
         invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
         update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
-        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(
-            bindings
-        ),
+        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(bindings),
         live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
         refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
         set_status_text=bindings.set_status_text,
@@ -3758,13 +3641,10 @@ def load_geometry_q_group_selection_runtime(
         file_dialog_dir=bindings.file_dialog_dir,
         askopenfilename=bindings.askopenfilename,
         update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
-        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(
-            bindings
-        ),
+        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(bindings),
         live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
         refresh_live_geometry_preview=(
-            bindings.refresh_live_geometry_preview_quiet
-            or bindings.refresh_live_geometry_preview
+            bindings.refresh_live_geometry_preview_quiet or bindings.refresh_live_geometry_preview
         ),
         set_status_text=bindings.set_status_text,
     )
@@ -3865,9 +3745,7 @@ def clear_runtime_live_geometry_preview_exclusions(
         preview_state=bindings.preview_state,
         invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
         update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
-        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(
-            bindings
-        ),
+        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(bindings),
         live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
         refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
         set_status_text=bindings.set_status_text,
@@ -3952,17 +3830,13 @@ def toggle_runtime_live_geometry_preview(
             bindings,
             False,
         ),
-        clear_geometry_preview_artists=(
-            bindings.clear_geometry_preview_artists or (lambda: None)
-        ),
+        clear_geometry_preview_artists=(bindings.clear_geometry_preview_artists or (lambda: None)),
         open_geometry_q_group_window=lambda: open_runtime_geometry_q_group_window(
             root=root,
             bindings_factory=bindings_factory,
         ),
         update_running=bool(_resolve_runtime_value(bindings.update_running)),
-        has_cached_hit_tables=bool(
-            _resolve_runtime_value(bindings.has_cached_hit_tables)
-        ),
+        has_cached_hit_tables=bool(_resolve_runtime_value(bindings.has_cached_hit_tables)),
         schedule_update=bindings.schedule_update or (lambda: None),
         refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
         set_status_text=bindings.set_status_text,
@@ -3991,9 +3865,7 @@ def make_runtime_geometry_q_group_callbacks(
             bindings_factory(),
             entries=entries,
         ),
-        refresh_window=lambda: refresh_runtime_geometry_q_group_window(
-            bindings_factory()
-        ),
+        refresh_window=lambda: refresh_runtime_geometry_q_group_window(bindings_factory()),
         on_toggle=lambda group_key, row_var: on_runtime_geometry_q_group_checkbox_changed(
             bindings_factory(),
             group_key,
@@ -4010,41 +3882,41 @@ def make_runtime_geometry_q_group_callbacks(
         update_listed_peaks=lambda: request_runtime_geometry_q_group_window_update(
             bindings_factory()
         ),
-        save_selection=lambda: save_geometry_q_group_selection_runtime(
-            bindings_factory()
-        ),
-        load_selection=lambda: load_geometry_q_group_selection_runtime(
-            bindings_factory()
-        ),
+        save_selection=lambda: save_geometry_q_group_selection_runtime(bindings_factory()),
+        load_selection=lambda: load_geometry_q_group_selection_runtime(bindings_factory()),
         close_window=lambda: close_runtime_geometry_q_group_window(bindings_factory()),
         open_window=lambda: open_runtime_geometry_q_group_window(
             root=root,
             bindings_factory=bindings_factory,
         ),
-        open_preview_exclusion_window=lambda: open_runtime_geometry_q_group_preview_exclusion_window(
-            root=root,
-            bindings_factory=bindings_factory,
+        open_preview_exclusion_window=lambda: (
+            open_runtime_geometry_q_group_preview_exclusion_window(
+                root=root,
+                bindings_factory=bindings_factory,
+            )
         ),
         set_preview_exclude_mode=_set_preview_exclude_mode,
         clear_preview_exclusions=lambda: clear_runtime_live_geometry_preview_exclusions(
             bindings_factory()
         ),
-        toggle_preview_exclusion_at=lambda col, row: toggle_runtime_live_geometry_preview_exclusion_at(
-            bindings_factory(),
-            col,
-            row,
+        toggle_preview_exclusion_at=lambda col, row: (
+            toggle_runtime_live_geometry_preview_exclusion_at(
+                bindings_factory(),
+                col,
+                row,
+            )
         ),
         toggle_live_preview=lambda: toggle_runtime_live_geometry_preview(
             bindings_factory(),
             root=root,
             bindings_factory=bindings_factory,
         ),
-        live_preview_enabled=lambda: runtime_live_geometry_preview_enabled(
-            bindings_factory()
-        ),
-        render_live_preview_state=lambda update_status=True: render_runtime_live_geometry_preview_state(
-            bindings_factory(),
-            update_status=update_status,
+        live_preview_enabled=lambda: runtime_live_geometry_preview_enabled(bindings_factory()),
+        render_live_preview_state=lambda update_status=True: (
+            render_runtime_live_geometry_preview_state(
+                bindings_factory(),
+                update_status=update_status,
+            )
         ),
     )
 
@@ -4184,9 +4056,7 @@ def save_geometry_q_group_selection_with_dialog(
         initialdir=str(file_dialog_dir),
         defaultextension=".json",
         filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-        initialfile=(
-            f"geometry_q_groups_{now_value.strftime('%Y%m%d_%H%M%S')}.json"
-        ),
+        initialfile=(f"geometry_q_groups_{now_value.strftime('%Y%m%d_%H%M%S')}.json"),
     )
     if not file_path:
         _set_status_text(set_status_text, "Save Qr/Qz peak list canceled.")
@@ -4276,4 +4146,3 @@ def load_geometry_q_group_selection_with_dialog(
         ),
     )
     return True
-
