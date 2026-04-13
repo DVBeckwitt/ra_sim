@@ -3615,6 +3615,54 @@ def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
     assert request.runtime_safety_note is None
 
 
+def test_build_geometry_fit_solver_request_preserves_preflight_pair_identity_fields(
+    monkeypatch,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=False)
+    preflight_pair = {
+        "pair_id": "bg0:pair0",
+        "hkl": (1, 1, 0),
+        "x": 30.0,
+        "y": 40.0,
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    prepared_run = replace(
+        prepared_run,
+        current_dataset={
+            **prepared_run.current_dataset,
+            "measured_for_fit": [dict(preflight_pair)],
+        },
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "apply_geometry_fit_runtime_safety_overrides",
+        lambda cfg, **kwargs: (dict(cfg), None),
+    )
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["gamma"],
+        solver_inputs=postprocess_config.solver_inputs,
+    )
+
+    assert len(request.measured_peaks) == 1
+    solver_pair = dict(request.measured_peaks[0])
+    for field in (
+        "pair_id",
+        "hkl",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+        "source_branch_index",
+        "source_peak_index",
+    ):
+        assert solver_pair[field] == preflight_pair[field]
+
+
 def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() -> None:
     runtime_cfg, note = geometry_fit.apply_geometry_fit_runtime_safety_overrides(
         {

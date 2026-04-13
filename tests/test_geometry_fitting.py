@@ -2042,6 +2042,172 @@ def test_geometry_fit_correspondence_simulated_point_rejects_legacy_branch_alias
     assert reason == "missing_source_peak_index"
 
 
+def test_trusted_identity_survives_fixed_source_bridge_and_seed_correspondence(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        miller_local = np.asarray(args[0], dtype=np.float64)
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = []
+        for row in miller_local:
+            h, k, l = (int(round(float(v))) for v in row[:3])
+            if (h, k, l) == (1, 0, 0):
+                hit_tables.append(
+                    np.asarray(
+                        [
+                            [1.0, 2.0, 2.0, -10.0, 1.0, 0.0, 0.0],
+                            [1.0, 8.0, 8.0, 10.0, 1.0, 0.0, 0.0],
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+            else:
+                hit_tables.append(
+                    np.asarray(
+                        [[1.0, 50.0, 50.0, 0.0, float(h), float(k), float(l)]],
+                        dtype=np.float64,
+                    )
+                )
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array(
+        [[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 10.0, 7.0], dtype=np.float64)
+    trusted_pair = {
+        "pair_id": "bg0:pair0",
+        "fit_run_id": "fit-123",
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "x": 8.0,
+        "y": 8.0,
+        "source_table_index": 99,
+        "source_reflection_index": 1,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sigma_px": 1.0,
+    }
+
+    subset = opt._prepare_reflection_subset(miller, intensities, [dict(trusted_pair)])
+    assert subset.reduced is True
+    assert len(subset.measured_entries) == 1
+
+    subset_hit_tables = [
+        np.asarray(
+            [
+                [1.0, 2.0, 2.0, -10.0, 1.0, 0.0, 0.0],
+                [1.0, 8.0, 8.0, 10.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+    full_hit_tables = [
+        np.asarray([[1.0, 50.0, 50.0, 0.0, 5.0, 0.0, 0.0]], dtype=np.float64),
+        np.asarray(
+            [
+                [1.0, 2.0, 2.0, -10.0, 1.0, 0.0, 0.0],
+                [1.0, 8.0, 8.0, 10.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.asarray([[1.0, 50.0, 50.0, 0.0, 7.0, 0.0, 0.0]], dtype=np.float64),
+    ]
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        subset.measured_entries,
+        subset_hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert fallback_entries == []
+    resolved_diag = resolution_lookup[id(subset.measured_entries[0])]
+
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[dict(trusted_pair)],
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {"restarts": 0, "weighted_matching": False},
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    point_diag = dict(result.point_match_diagnostics[0])
+    seed_record = dict(result.full_beam_polish_summary["seed_correspondence_records"][0])
+
+    subset_entry = dict(subset.measured_entries[0])
+    for field in (
+        "pair_id",
+        "fit_run_id",
+        "hkl",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+        "source_branch_index",
+        "source_peak_index",
+    ):
+        assert subset_entry.get(field) == trusted_pair.get(field)
+
+    for record in (dict(resolved_diag), point_diag, seed_record):
+        for field in (
+            "pair_id",
+            "fit_run_id",
+            "hkl",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_branch_index",
+            "source_peak_index",
+        ):
+            assert record.get(field) == trusted_pair.get(field)
+        assert record.get("source_reflection_index_namespace") == "full_reflection"
+        assert record.get("source_table_index_namespace") == "full_hit_table"
+        assert record.get("source_row_index_namespace") == "full_hit_table"
+        assert record.get("source_peak_index_namespace") == "branch_index"
+        assert record.get("source_branch_index_namespace") == "branch_index"
+
+    assert seed_record["frozen_locator_kind"] == "trusted_branch"
+    assert seed_record["frozen_table_namespace"] == "full_reflection"
+
+
 def test_measured_source_peak_index_with_source_forwards_legacy_fallback(
     monkeypatch,
 ) -> None:

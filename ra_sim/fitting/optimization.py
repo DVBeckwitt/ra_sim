@@ -3618,27 +3618,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     measured_anchor_motion_px: List[float] = []
 
     def _entry_diag(entry: Dict[str, object], idx: int) -> Dict[str, object]:
-        source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
-            entry
-        )
         return {
             "match_input_index": int(idx),
             "overlay_match_index": int(_overlay_index(entry, idx)),
-            "pair_id": entry.get("pair_id"),
-            "fit_run_id": entry.get("fit_run_id"),
             "label": str(entry.get("label", "")),
-            "hkl": tuple(entry.get("hkl", ()))
-            if isinstance(entry.get("hkl"), tuple)
-            else entry.get("hkl"),
             "q_group_key": entry.get("q_group_key"),
-            "source_table_index": entry.get("source_table_index"),
-            "source_reflection_index": entry.get("source_reflection_index"),
-            "source_reflection_namespace": entry.get("source_reflection_namespace"),
-            "source_reflection_is_full": entry.get("source_reflection_is_full"),
-            "source_row_index": entry.get("source_row_index"),
-            "source_branch_index": source_branch_index,
-            "source_branch_resolution_source": source_branch_source,
-            "source_peak_index": entry.get("source_peak_index"),
+            **_copy_source_identity_payload(entry),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
 
@@ -9557,6 +9542,75 @@ def _measured_source_peak_index(
     return peak_idx
 
 
+def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, object]:
+    """Copy the canonical source-identity fields used across bridge diagnostics."""
+
+    if not isinstance(entry, Mapping):
+        return {}
+
+    normalized_hkl = _normalized_hkl_key(entry.get("hkl"))
+    source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
+        entry
+    )
+    source_peak_index = entry.get("source_peak_index")
+    if source_peak_index is None and source_branch_index in {0, 1}:
+        source_peak_index = int(source_branch_index)
+    source_reflection_index = _nonnegative_index(entry.get("source_reflection_index"))
+    source_reflection_namespace = entry.get("source_reflection_namespace")
+    trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
+
+    reflection_namespace_label = source_reflection_namespace
+    if reflection_namespace_label in (None, ""):
+        reflection_namespace_label = (
+            "full_reflection"
+            if trusted_full_reflection and source_reflection_index is not None
+            else "unset"
+        )
+
+    table_row_namespace_label = "unset"
+    if trusted_full_reflection:
+        table_row_namespace_label = "full_hit_table"
+    elif any(
+        _nonnegative_index(entry.get(key)) is not None
+        for key in ("resolved_table_index", "source_table_index", "source_row_index")
+    ):
+        table_row_namespace_label = "subset_hit_table"
+
+    branch_namespace_label = (
+        "branch_index" if source_branch_index in {0, 1} else "unset"
+    )
+    peak_namespace_label = (
+        "branch_index"
+        if _nonnegative_index(source_peak_index) in {0, 1}
+        else "unset"
+    )
+
+    return {
+        "pair_id": entry.get("pair_id"),
+        "fit_run_id": entry.get("fit_run_id"),
+        "hkl": (
+            tuple(int(v) for v in normalized_hkl)
+            if isinstance(normalized_hkl, tuple) and len(normalized_hkl) == 3
+            else entry.get("hkl")
+        ),
+        "source_reflection_index": source_reflection_index,
+        "source_reflection_namespace": source_reflection_namespace,
+        "source_reflection_is_full": entry.get("source_reflection_is_full"),
+        "source_reflection_index_namespace": str(
+            reflection_namespace_label or "unset"
+        ),
+        "source_table_index": entry.get("source_table_index"),
+        "source_table_index_namespace": str(table_row_namespace_label),
+        "source_row_index": entry.get("source_row_index"),
+        "source_row_index_namespace": str(table_row_namespace_label),
+        "source_branch_index": source_branch_index,
+        "source_branch_resolution_source": source_branch_source,
+        "source_branch_index_namespace": str(branch_namespace_label),
+        "source_peak_index": source_peak_index,
+        "source_peak_index_namespace": str(peak_namespace_label),
+    }
+
+
 def _branch_representative_row(
     rows: Sequence[np.ndarray],
     *,
@@ -9676,18 +9730,11 @@ def _resolve_fixed_source_matches(
             "match_input_index": int(match_input_index),
             "overlay_match_index": int(overlay_match_index),
             "label": str(entry.get("label", "")),
-            "hkl": tuple(entry.get("hkl", ()))
-            if isinstance(entry.get("hkl"), tuple)
-            else entry.get("hkl"),
             "q_group_key": entry.get("q_group_key"),
-            "source_table_index": entry.get("source_table_index"),
-            "source_reflection_index": entry.get("source_reflection_index"),
-            "source_row_index": entry.get("source_row_index"),
-            "source_branch_index": entry.get("source_branch_index"),
-            "source_peak_index": entry.get("source_peak_index"),
             "resolved_table_index": entry.get("resolved_table_index"),
             "resolved_peak_index": entry.get("resolved_peak_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+            **_copy_source_identity_payload(entry),
         }
         trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
         source_peak_key = _measured_source_peak_indices(entry)
@@ -14931,8 +14978,6 @@ def fit_geometry_parameters(
             source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
                 entry
             )
-            source_reflection_namespace = entry.get("source_reflection_namespace")
-            source_reflection_is_full = entry.get("source_reflection_is_full")
             resolved_table_index = entry.get("resolved_table_index")
             frozen_locator = _frozen_locator_fields(entry, dataset_index=int(dataset_index))
             if not isinstance(frozen_locator, dict):
@@ -14941,10 +14986,7 @@ def fit_geometry_parameters(
                 "dataset_index": int(dataset_index),
                 "overlay_match_index": int(overlay_match_index),
                 "match_input_index": int(entry.get("match_input_index", overlay_match_index)),
-                "pair_id": entry.get("pair_id"),
-                "fit_run_id": entry.get("fit_run_id"),
                 "label": str(entry.get("label", "")),
-                "hkl": normalized_hkl,
                 "q_group_key": entry.get("q_group_key"),
                 "seed_match_status": str(entry.get("match_status", "")),
                 "match_status": str(entry.get("match_status", "")),
@@ -14952,17 +14994,12 @@ def fit_geometry_parameters(
                 "resolution_kind": str(entry.get("resolution_kind", "")),
                 "resolution_reason": str(entry.get("resolution_reason", "")),
                 "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+                **_copy_source_identity_payload(entry),
+                "hkl": normalized_hkl,
                 "source_table_index": _diagnostic_source_table_index(entry),
                 "source_reflection_index": source_reflection_index,
-                "source_reflection_namespace": source_reflection_namespace,
-                "source_reflection_is_full": source_reflection_is_full,
-                "source_row_index": entry.get("source_row_index"),
                 "source_branch_index": source_branch_index,
                 "source_branch_resolution_source": source_branch_source,
-                "source_peak_index": entry.get(
-                    "source_peak_index",
-                    entry.get("resolved_peak_index"),
-                ),
                 "resolved_table_index": resolved_table_index,
                 "resolved_peak_index": entry.get(
                     "resolved_peak_index",
@@ -15243,28 +15280,15 @@ def fit_geometry_parameters(
                 base_diag = {
                     "match_input_index": int(entry.get("match_input_index", slot)),
                     "overlay_match_index": int(entry.get("overlay_match_index", slot)),
-                    "pair_id": entry.get("pair_id"),
-                    "fit_run_id": entry.get("fit_run_id"),
                     "label": str(entry.get("label", "")),
-                "hkl": entry.get("hkl"),
-                "source_table_index": _diagnostic_source_table_index(entry),
-                "source_reflection_index": entry.get("source_reflection_index"),
-                "source_reflection_namespace": entry.get(
-                    "source_reflection_namespace"
-                ),
-                "source_reflection_is_full": entry.get(
-                    "source_reflection_is_full"
-                ),
-                "source_row_index": entry.get("source_row_index"),
-                "source_branch_index": source_branch_index,
-                "source_branch_resolution_source": source_branch_source,
-                "source_peak_index": entry.get(
-                    "source_peak_index",
-                    entry.get("resolved_peak_index"),
-                ),
-                "resolved_table_index": entry.get("resolved_table_index"),
-                "resolved_peak_index": entry.get("resolved_peak_index"),
-                "resolution_kind": str(entry.get("resolution_kind", "")),
+                    **_copy_source_identity_payload(entry),
+                    "hkl": entry.get("hkl"),
+                    "source_table_index": _diagnostic_source_table_index(entry),
+                    "source_branch_index": source_branch_index,
+                    "source_branch_resolution_source": source_branch_source,
+                    "resolved_table_index": entry.get("resolved_table_index"),
+                    "resolved_peak_index": entry.get("resolved_peak_index"),
+                    "resolution_kind": str(entry.get("resolution_kind", "")),
                     "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
                     "correspondence_resolution_reason": (
                         None
