@@ -999,6 +999,91 @@ def test_build_geometry_manual_fit_dataset_preserves_branch_and_full_reflection_
     assert initial_entry["source_branch_index"] == 0
     assert dataset["source_rows_for_trace"][0]["source_reflection_index"] == 7
     assert dataset["source_rows_for_trace"][0]["source_peak_index"] == 0
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert diag["fit_resolution_kind"] in {"source_row", "source_peak"}
+    assert diag["raw_saved_entry"]["source_reflection_index"] == 7
+    assert diag["normalized_saved_entry"]["source_reflection_index"] == 7
+
+
+def _refresh_legacy_dense_pair_entry(entry):
+    refreshed = dict(entry)
+    caked_y = refreshed.get(
+        "refined_sim_caked_y",
+        refreshed.get("caked_y", refreshed.get("raw_caked_y")),
+    )
+    try:
+        signed_value = float(caked_y)
+    except Exception:
+        return refreshed
+    if not np.isfinite(signed_value) or abs(float(signed_value)) <= 1.0e-3:
+        refreshed.pop("source_branch_index", None)
+        return refreshed
+    branch_idx = 0 if float(signed_value) < 0.0 else 1
+    refreshed["source_branch_index"] = int(branch_idx)
+    refreshed["source_peak_index"] = int(branch_idx)
+    return refreshed
+
+
+def _make_legacy_dense_manual_dataset_bindings(
+    *,
+    saved_entries,
+    simulated_rows,
+    refresh_pairs=True,
+):
+    def _lookup(_simulated_peaks):
+        lookup = {}
+        for row in simulated_rows:
+            try:
+                table_idx = int(row.get("source_table_index"))
+                row_idx = int(row.get("source_row_index"))
+            except Exception:
+                continue
+            lookup[(table_idx, row_idx)] = dict(row)
+        return lookup
+
+    def _rows(*args, **kwargs):
+        return [dict(row) for row in simulated_rows]
+
+    return geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [dict(entry) for entry in saved_entries],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
+            dict(row) for row in simulated_rows
+        ],
+        geometry_manual_simulated_lookup=_lookup,
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("x", 0.0)),
+            float(entry.get("y", 0.0)),
+        ),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        orient_image_for_fit=lambda image, **kwargs: image,
+        geometry_manual_source_rows_for_background=_rows,
+        geometry_manual_rebuild_source_rows_for_background=_rows,
+        geometry_manual_refresh_pair_entry=(
+            _refresh_legacy_dense_pair_entry if refresh_pairs else None
+        ),
+    )
 
 
 def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coords() -> None:
@@ -1129,57 +1214,42 @@ def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_re
     assert "source_peak_index" not in dataset["measured_for_fit"][0]
 
 
-def test_build_geometry_manual_fit_dataset_rebinds_legacy_dense_source_ids() -> None:
-    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
-        osc_files=["C:/tmp/bg0.osc"],
-        current_background_index=0,
-        image_size=64,
-        display_rotate_k=0,
-        geometry_manual_pairs_for_index=lambda idx: [
-            {
-                "q_group_key": ("q", 1),
-                "source_table_index": 7,
-                "source_reflection_index": 7,
-                "source_row_index": 0,
-                "source_peak_index": 7,
-                "hkl": (1, 1, 0),
-                "x": 30.0,
-                "y": 40.0,
-            }
-        ],
-        load_background_by_index=lambda idx: (
-            np.zeros((4, 5), dtype=np.float64),
-            np.zeros((4, 5), dtype=np.float64),
-        ),
-        apply_background_backend_orientation=lambda image: image,
-        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
-            {
-                "q_group_key": ("q", 1),
-                "source_table_index": 200,
-                "source_row_index": 0,
-                "source_peak_index": 133,
-                "hkl": (1, 1, 0),
-                "sim_col": 50.0,
-                "sim_row": 60.0,
-            }
-        ],
-        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
-        geometry_manual_entry_display_coords=lambda entry: (48.0, 59.0),
-        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
-        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
-        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
-            {
-                "indexing_mode": "xy",
-                "k": 0,
-                "flip_x": False,
-                "flip_y": False,
-                "flip_order": "yx",
-                "label": "identity",
-            },
-            {"pairs": len(sim_pts)},
-        ),
-        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
-        orient_image_for_fit=lambda image, **kwargs: image,
+def test_build_geometry_manual_fit_dataset_copyback_preserves_canonical_identity_after_legacy_dense_rebind() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q", 1),
+            "source_table_index": 7,
+            "source_reflection_index": 7,
+            "source_row_index": 0,
+            "source_peak_index": 7,
+            "hkl": (1, 1, 0),
+            "x": 48.0,
+            "y": 59.0,
+            "caked_y": 12.0,
+            "refined_sim_caked_y": 12.0,
+            "refined_sim_x": 50.0,
+            "refined_sim_y": 60.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 200,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (1, 1, 0),
+            "sim_col": 50.0,
+            "sim_row": 60.0,
+        }
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
     )
 
     dataset = geometry_fit.build_geometry_manual_fit_dataset(
@@ -1190,30 +1260,625 @@ def test_build_geometry_manual_fit_dataset_rebinds_legacy_dense_source_ids() -> 
         orientation_cfg={"mode": "auto"},
     )
 
+    measured_entry = dataset["measured_for_fit"][0]
+    initial_entry = dataset["initial_pairs_display"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+
     assert dataset["resolved_source_pair_count"] == 1
-    assert dataset["measured_for_fit"][0]["source_table_index"] == 200
-    assert dataset["measured_for_fit"][0]["source_row_index"] == 0
-    assert dataset["measured_for_fit"][0]["source_peak_index"] == 133
+    for payload in (measured_entry, initial_entry):
+        assert payload["pair_id"] == "bg0:pair0"
+        assert payload["hkl"] == (1, 1, 0)
+        assert payload["source_reflection_index"] == 200
+        assert payload["source_reflection_namespace"] == "full_reflection"
+        assert payload["source_reflection_is_full"] is True
+        assert payload["source_branch_index"] == 1
+        assert payload["source_peak_index"] == 1
+    assert diag["strict_resolved"] is False
+    assert diag["fit_resolved"] is True
+    assert diag["fit_resolution_kind"] == "legacy_dense_q_group_rebind"
+    assert diag["failure_reason"] is None
+    assert diag["raw_saved_entry"]["source_reflection_index"] == 7
+    assert diag["raw_saved_entry"]["source_peak_index"] == 7
+    assert diag["normalized_saved_entry"]["source_peak_index"] == 1
+    assert diag["legacy_branch_hint_source"] == "refined_sim_caked_y"
+    assert diag["legacy_fit_bound_entry"]["source_reflection_index"] == 200
+    assert diag["legacy_fit_bound_entry"]["source_branch_index"] == 1
+
+
+def test_build_geometry_manual_fit_dataset_rebinds_mirrored_legacy_dense_pairs_by_branch_and_geometry() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q", 5),
+            "source_table_index": 12,
+            "source_reflection_index": 12,
+            "source_row_index": 0,
+            "source_peak_index": 12,
+            "hkl": (-1, 0, 5),
+            "x": 110.0,
+            "y": 100.0,
+            "caked_y": -8.0,
+            "refined_sim_caked_y": -8.0,
+            "refined_sim_x": 110.0,
+            "refined_sim_y": 100.0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "q_group_key": ("q", 5),
+            "source_table_index": 13,
+            "source_reflection_index": 13,
+            "source_row_index": 0,
+            "source_peak_index": 13,
+            "hkl": (-1, 0, 5),
+            "x": 189.5,
+            "y": 97.0,
+            "caked_y": 9.0,
+            "refined_sim_caked_y": 9.0,
+            "refined_sim_x": 189.5,
+            "refined_sim_y": 97.0,
+        },
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 0,
+            "source_reflection_index": 202,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (-1, 0, 5),
+            "sim_col": 110.0,
+            "sim_row": 100.0,
+        },
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 182.0,
+            "sim_row": 98.0,
+        },
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 2
+    measured_entries = dataset["measured_for_fit"]
+    initial_entries = dataset["initial_pairs_display"]
+    assert [entry["source_reflection_index"] for entry in measured_entries] == [202, 204]
+    assert [entry["source_branch_index"] for entry in measured_entries] == [0, 1]
+    assert [entry["source_peak_index"] for entry in measured_entries] == [0, 1]
+    assert [entry["source_reflection_index"] for entry in initial_entries] == [202, 204]
+    assert [entry["source_branch_index"] for entry in initial_entries] == [0, 1]
+    assert all(entry["source_reflection_namespace"] == "full_reflection" for entry in measured_entries)
+    assert all(entry["source_reflection_is_full"] is True for entry in measured_entries)
+    diag0, diag1 = dataset["source_resolution_diagnostics"]
+    assert diag0["fit_resolution_kind"] == "legacy_dense_q_group_rebind"
+    assert diag0["legacy_branch_hint_source"] == "refined_sim_caked_y"
+    assert diag1["fit_resolution_kind"] == "legacy_dense_q_group_rebind"
+    assert diag1["legacy_branch_hint_source"] == "refined_sim_caked_y"
+    assert diag1["legacy_geometry_hint_source"] == "refined_sim_display"
+    assert diag1["legacy_candidate_count_initial"] == 3
+    assert diag1["legacy_candidate_count_after_branch"] == 2
+    assert diag1["legacy_chosen_live_row"]["source_reflection_index"] == 204
+
+
+def test_build_geometry_manual_fit_dataset_fails_closed_on_legacy_dense_geometry_tie() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q", 2),
+            "source_table_index": 9,
+            "source_reflection_index": 9,
+            "source_row_index": 0,
+            "source_peak_index": 9,
+            "hkl": (2, 0, 1),
+            "x": 100.0,
+            "y": 80.0,
+            "caked_y": 4.0,
+            "refined_sim_caked_y": 4.0,
+            "refined_sim_x": 100.0,
+            "refined_sim_y": 80.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 2),
+            "source_table_index": 0,
+            "source_reflection_index": 300,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (2, 0, 1),
+            "sim_col": 100.0,
+            "sim_row": 80.0,
+        },
+        {
+            "q_group_key": ("q", 2),
+            "source_table_index": 1,
+            "source_reflection_index": 301,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (2, 0, 1),
+            "sim_col": 100.0000005,
+            "sim_row": 80.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 0
     assert "source_reflection_index" not in dataset["measured_for_fit"][0]
-    assert dataset["initial_pairs_display"][0]["source_table_index"] == 200
-    assert dataset["initial_pairs_display"][0]["source_row_index"] == 0
-    assert dataset["initial_pairs_display"][0]["source_peak_index"] == 133
     assert "source_reflection_index" not in dataset["initial_pairs_display"][0]
-    assert dataset["source_resolution_diagnostics"][0]["strict_resolved"] is False
-    assert dataset["source_resolution_diagnostics"][0]["fit_resolved"] is True
-    assert dataset["source_resolution_diagnostics"][0]["saved_source_table_index"] == 7
-    assert dataset["source_resolution_diagnostics"][0]["saved_source_reflection_index"] == 7
-    assert dataset["source_resolution_diagnostics"][0]["saved_source_row_index"] == 0
-    assert dataset["source_resolution_diagnostics"][0]["saved_source_peak_index"] == 7
-    assert (
-        dataset["source_resolution_diagnostics"][0]["fit_resolution_kind"]
-        == "legacy_dense_q_group_rebind"
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert diag["fit_resolved"] is False
+    assert diag["fit_resolution_kind"] is None
+    assert diag["failure_reason"] == "legacy_rebind_ambiguous_geometry_tie"
+    assert diag["legacy_geometry_hint_source"] == "refined_sim_display"
+    assert diag["legacy_candidate_count_after_branch"] == 2
+    assert diag["legacy_best_score"] == pytest.approx(0.0)
+    assert diag["legacy_second_best_score"] == pytest.approx(5.0e-7)
+
+
+def test_headless_geometry_fit_legacy_dense_rebind_matches_shared_preflight(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q", 5),
+            "source_table_index": 12,
+            "source_reflection_index": 12,
+            "source_row_index": 0,
+            "source_peak_index": 12,
+            "hkl": (-1, 0, 5),
+            "x": 110.0,
+            "y": 100.0,
+            "caked_y": -8.0,
+            "refined_sim_caked_y": -8.0,
+            "refined_sim_x": 110.0,
+            "refined_sim_y": 100.0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "q_group_key": ("q", 5),
+            "source_table_index": 13,
+            "source_reflection_index": 13,
+            "source_row_index": 0,
+            "source_peak_index": 13,
+            "hkl": (-1, 0, 5),
+            "x": 189.5,
+            "y": 97.0,
+            "caked_y": 9.0,
+            "refined_sim_caked_y": 9.0,
+            "refined_sim_x": 189.5,
+            "refined_sim_y": 97.0,
+        },
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 0,
+            "source_reflection_index": 202,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (-1, 0, 5),
+            "sim_col": 110.0,
+            "sim_row": 100.0,
+        },
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 182.0,
+            "sim_row": 98.0,
+        },
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+        },
+    ]
+    workflow_dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=_make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=simulated_rows,
+        ),
+        orientation_cfg={"mode": "auto"},
     )
-    assert (
-        dataset["source_resolution_diagnostics"][0]["resolution_kind"]
-        == "legacy_dense_q_group_rebind"
+
+    defaults = headless_geometry_fit._RuntimeDefaults(
+        primary_cif_path="C:/tmp/primary.cif",
+        secondary_cif_path=None,
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        pixel_size_m=1.0,
+        lambda_angstrom=1.54,
+        psi_deg=0.0,
+        defaults={
+            "theta_initial": 1.5,
+            "cor_angle": 0.0,
+            "gamma": 0.0,
+            "Gamma": 0.0,
+            "chi": 0.0,
+            "psi_z": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+            "sample_width_m": 0.0,
+            "sample_length_m": 0.0,
+            "sample_depth_m": 0.0,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+            "corto_detector": 0.075,
+            "a": 4.0,
+            "b": 4.0,
+            "c": 10.0,
+            "a2": None,
+            "c2": None,
+            "center_x": 32.0,
+            "center_y": 32.0,
+            "sigma_mosaic_deg": 1.0,
+            "gamma_mosaic_deg": 1.0,
+            "eta": 0.0,
+            "bandwidth_percent": 0.0,
+            "solve_q_steps": 64,
+            "solve_q_rel_tol": 1.0e-4,
+            "solve_q_mode": 1,
+            "optics_mode": 0,
+            "p0": 0.0,
+            "p1": 0.0,
+            "p2": 0.0,
+            "w0": 1.0,
+            "w1": 0.0,
+            "w2": 0.0,
+            "finite_stack": False,
+            "stack_layers": 1,
+            "phase_delta_expression": "0.0",
+            "phi_l_divisor": 1.0,
+            "weight1": 1.0,
+            "weight2": 1.0,
+        },
+        fit_config={},
+        intensity_threshold=0.0,
+        include_rods_flag=False,
+        two_theta_range=(0.0, 90.0),
+        mx=4,
+        background_flags={
+            "backend_rotation_k": 0,
+            "backend_flip_x": False,
+            "backend_flip_y": False,
+        },
     )
-    assert dataset["source_resolution_diagnostics"][0]["failure_reason"] is None
+
+    captured = {}
+
+    monkeypatch.setattr(headless_geometry_fit, "_build_runtime_defaults", lambda saved_state: defaults)
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_restore_manual_pairs",
+        lambda osc_files, saved_rows: {0: [dict(entry) for entry in saved_entries]},
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_manual_geometry,
+        "geometry_manual_pairs_for_index",
+        lambda index, *, pairs_by_background: [
+            dict(entry) for entry in pairs_by_background.get(int(index), ())
+        ],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_load_structure_model",
+        lambda defaults, saved_state, var_store, simulation_runtime_state: (
+            SimpleNamespace(
+                miller=np.asarray([[0, 0, 1]], dtype=np.int64),
+                intensities=np.asarray([1.0], dtype=np.float64),
+            ),
+            None,
+            "C:/tmp/primary.cif",
+            complex(1.0, 0.0),
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background,
+        "load_background_image_by_index",
+        lambda index, **kwargs: {
+            "background_images": [np.zeros((4, 5), dtype=np.float64)],
+            "background_images_native": [np.zeros((4, 5), dtype=np.float64)],
+            "background_images_display": [np.zeros((4, 5), dtype=np.float64)],
+            "background_image": np.zeros((4, 5), dtype=np.float64),
+            "background_display": np.zeros((4, 5), dtype=np.float64),
+        },
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "current_geometry_fit_background_indices",
+        lambda **kwargs: [0],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "geometry_fit_uses_shared_theta_offset",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "current_geometry_theta_offset",
+        lambda **kwargs: 0.0,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "current_background_theta_values",
+        lambda **kwargs: [1.5],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "background_theta_for_index",
+        lambda index, **kwargs: 1.5,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "apply_background_theta_metadata",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "apply_geometry_fit_background_selection",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "build_runtime_geometry_fit_value_callbacks",
+        lambda bindings: SimpleNamespace(
+            current_var_names=lambda: ["gamma"],
+            current_params=lambda: {
+                "a": 4.0,
+                "c": 10.0,
+                "lambda": 1.54,
+                "theta_initial": 1.5,
+                "theta_offset": 0.0,
+                "corto_detector": 0.075,
+                "gamma": 0.0,
+                "Gamma": 0.0,
+                "chi": 0.0,
+                "cor_angle": 0.0,
+                "zb": 0.0,
+                "zs": 0.0,
+                "center": [32.0, 32.0],
+            },
+            current_ui_params=lambda: {},
+            var_map={},
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_q_group_manager,
+        "make_runtime_geometry_fit_simulation_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            simulate_hit_tables=lambda *args, **kwargs: [],
+            last_simulation_diagnostics=lambda: {},
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+            simulated_lookup=lambda simulated_peaks: {},
+            entry_display_coords=lambda entry: (
+                float(entry.get("x", 0.0)),
+                float(entry.get("y", 0.0)),
+            ),
+            refresh_entry_geometry=_refresh_legacy_dense_pair_entry,
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_manual_geometry,
+        "geometry_manual_live_peak_candidates_from_records",
+        lambda records, **kwargs: [dict(row) for row in simulated_rows],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_q_group_manager,
+        "_resolve_live_peak_record_fallback_provenance",
+        lambda *args, **kwargs: {
+            "active_signature_matches": True,
+            "active_revision_matches": False,
+            "expected_table_count": len(simulated_rows),
+            "source_snapshot_row_count": len(simulated_rows),
+            "source_snapshot_background_index": 0,
+            "source_row_hkl_lookup": {
+                (int(row["source_table_index"]), int(row["source_row_index"])): tuple(
+                    int(v) for v in row["hkl"]
+                )
+                for row in simulated_rows
+            },
+        },
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "rebuild_geometry_fit_source_rows",
+        lambda **kwargs: geometry_fit.GeometryFitSourceRowRebuildResult(
+            background_index=0,
+            requested_signature=("sig",),
+            requested_signature_summary="sig",
+            projected_rows=[dict(row) for row in simulated_rows],
+            stored_rows=[dict(row) for row in simulated_rows],
+            rebuild_source="peak_records_fallback",
+            rebuild_attempts=["live_preview"],
+            diagnostics={"status": "rebuild_ok"},
+            source_reflection_indices=[
+                int(row["source_reflection_index"]) for row in simulated_rows
+            ],
+            metadata={},
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "select_fit_orientation",
+        lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "apply_orientation_to_entries",
+        lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "orient_image_for_fit",
+        lambda image, **kwargs: image,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "unrotate_display_peaks",
+        lambda entries, rotated_shape, *, k=None, default_display_rotate_k=0: [
+            dict(entry) for entry in entries
+        ],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "display_to_native_sim_coords",
+        lambda col, row, image_shape, sim_display_rotate_k=0: (float(col), float(row)),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "native_sim_to_display_coords",
+        lambda col, row, image_shape, sim_display_rotate_k=0: (float(col), float(row)),
+    )
+    monkeypatch.setattr(headless_geometry_fit, "get_dir", lambda name: str(tmp_path))
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "build_runtime_geometry_fit_execution_setup",
+        lambda **kwargs: SimpleNamespace(),
+    )
+
+    def _fake_execute_runtime_geometry_fit(*, prepared_run, **kwargs):
+        captured["dataset"] = prepared_run.current_dataset
+        return geometry_fit.GeometryFitRuntimeExecutionResult(
+            log_path=tmp_path / "headless_geometry_fit.log",
+            apply_result=geometry_fit.GeometryFitRuntimeApplyResult(
+                accepted=True,
+                rejection_reason=None,
+                rms=0.0,
+                fitted_params=None,
+                postprocess=None,
+            ),
+        )
+
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "execute_runtime_geometry_fit",
+        _fake_execute_runtime_geometry_fit,
+    )
+
+    saved_state = {
+        "files": {
+            "background_files": ["C:/tmp/bg0.osc"],
+            "current_background_index": 0,
+        },
+        "geometry": {
+            "manual_pairs": [
+                {"background_index": 0, "entries": [dict(entry) for entry in saved_entries]}
+            ],
+            "peak_records": [{"dummy": True}],
+        },
+    }
+
+    result = headless_geometry_fit.run_headless_geometry_fit(
+        saved_state,
+        state_path=tmp_path / "saved_state.json",
+        downloads_dir=tmp_path,
+        stamp="headless_test",
+    )
+
+    assert result.accepted is True
+    assert result.rms_px == 0.0
+    headless_dataset = captured["dataset"]
+    assert headless_dataset["resolved_source_pair_count"] == workflow_dataset["resolved_source_pair_count"]
+    assert [
+        entry["source_reflection_index"] for entry in headless_dataset["measured_for_fit"]
+    ] == [entry["source_reflection_index"] for entry in workflow_dataset["measured_for_fit"]]
+    assert [
+        entry["source_branch_index"] for entry in headless_dataset["measured_for_fit"]
+    ] == [entry["source_branch_index"] for entry in workflow_dataset["measured_for_fit"]]
+    assert [
+        entry["fit_source_resolution_kind"] for entry in headless_dataset["measured_for_fit"]
+    ] == [entry["fit_source_resolution_kind"] for entry in workflow_dataset["measured_for_fit"]]
 
 
 def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> None:
