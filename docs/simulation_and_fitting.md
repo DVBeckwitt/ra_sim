@@ -18,6 +18,17 @@ The scope is the current live pipeline:
 
 No new API is defined here. All names, defaults, equations, and file paths below are taken from the current code. The older standalone notes for GUI views, logging/debug controls, and CoR math are now folded into this file.
 
+## Focused Guides
+
+Use the shorter docs first when you need routing rather than full detail:
+
+- [docs index](index.md)
+- [GUI workflow guide](gui-workflow.md)
+- [Architecture guide](architecture.md)
+- [Debug and cache guide](debug-and-cache.md)
+- [Troubleshooting guide](troubleshooting.md)
+- [Contributing guide](../CONTRIBUTING.md)
+
 ## Index
 
 - [GUI workflow and views](#gui-workflow-and-views)

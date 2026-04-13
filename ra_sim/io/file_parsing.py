@@ -2,11 +2,13 @@
 
 import json
 import numpy as np
+from ra_sim.debug_controls import register_run_input_paths
 from ra_sim.utils.tools import detect_blobs
 
 def parse_poni_file(file_path):
     # Dictionary to hold the values
     parameters = {}
+    register_run_input_paths(file_path)
     # Read the file and extract parameters
     with open(file_path) as file:
         for line in file:
@@ -21,6 +23,7 @@ def parse_poni_file(file_path):
     return parameters
 
 def Open_ASC(file_path):
+    register_run_input_paths(file_path)
     with open(file_path) as file:
         lines = file.readlines()
         pixel_lines = lines[6:]

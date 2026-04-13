@@ -1014,6 +1014,8 @@ def test_prepare_reflection_subset_preserves_distinct_reflections_within_one_q_g
             "y": 4.0,
             "q_group_key": ["q", 1],
             "source_table_index": 0,
+            "source_reflection_index": 0,
+            "source_reflection_is_full": True,
             "source_row_index": 0,
         },
         {
@@ -1023,6 +1025,8 @@ def test_prepare_reflection_subset_preserves_distinct_reflections_within_one_q_g
             "y": 4.1,
             "q_group_key": ("q", 1),
             "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_reflection_is_full": True,
             "source_row_index": 0,
         },
         {
@@ -1032,6 +1036,8 @@ def test_prepare_reflection_subset_preserves_distinct_reflections_within_one_q_g
             "y": 5.0,
             "q_group_key": ("q", 2),
             "source_table_index": 2,
+            "source_reflection_index": 2,
+            "source_reflection_is_full": True,
             "source_row_index": 0,
         },
     ]
@@ -1085,14 +1091,18 @@ def test_prepare_reflection_subset_rebinds_stale_source_identity_by_hkl() -> Non
     subset = opt._prepare_reflection_subset(miller, intensities, measured)
 
     assert subset.reduced is True
-    assert subset.fixed_source_reflection_count == 1
-    assert subset.fallback_hkl_count == 0
+    assert subset.fixed_source_reflection_count == 0
+    assert subset.fallback_hkl_count == 1
     assert np.array_equal(subset.original_indices, np.array([1], dtype=np.int64))
     assert np.allclose(subset.miller, np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
-    assert subset.measured_entries[0]["source_table_index"] == 0
-    assert subset.measured_entries[0]["source_reflection_index"] == 1
-    assert subset.measured_entries[0]["resolved_table_index"] == 0
-    assert subset.measured_entries[0]["source_row_index"] == 0
+    for key in (
+        "source_table_index",
+        "source_reflection_index",
+        "resolved_table_index",
+        "source_row_index",
+        "source_peak_index",
+    ):
+        assert key not in subset.measured_entries[0]
 
 
 def test_prepare_reflection_subset_prefers_source_reflection_index_over_stale_table_index() -> None:
@@ -1113,6 +1123,7 @@ def test_prepare_reflection_subset_prefers_source_reflection_index_over_stale_ta
             "y": 4.0,
             "source_table_index": 0,
             "source_reflection_index": 1,
+            "source_reflection_is_full": True,
             "source_row_index": 0,
             "fit_source_identity_only": True,
         }
@@ -1163,13 +1174,18 @@ def test_prepare_reflection_subset_keeps_duplicate_fixed_source_rows_out_of_hkl_
 
     subset = opt._prepare_reflection_subset(miller, intensities, measured)
 
-    assert subset.fixed_source_reflection_count == 1
-    assert subset.fallback_hkl_count == 0
+    assert subset.fixed_source_reflection_count == 0
+    assert subset.fallback_hkl_count == 1
     assert np.array_equal(subset.original_indices, np.array([0], dtype=np.int64))
-    assert [entry["source_table_index"] for entry in subset.measured_entries] == [9, 9]
-    assert [entry["source_reflection_index"] for entry in subset.measured_entries] == [0, 0]
-    assert [entry["resolved_table_index"] for entry in subset.measured_entries] == [0, 0]
-    assert [entry["source_row_index"] for entry in subset.measured_entries] == [0, 1]
+    for entry in subset.measured_entries:
+        for key in (
+            "source_table_index",
+            "source_reflection_index",
+            "resolved_table_index",
+            "source_row_index",
+            "source_peak_index",
+        ):
+            assert key not in entry
 
 
 def test_fit_geometry_parameters_pixel_path_keeps_residual_size_when_pair_status_changes(
@@ -1758,6 +1774,7 @@ def test_resolve_fixed_source_matches_prefers_source_reflection_index() -> None:
         "y": 4.0,
         "source_table_index": 0,
         "source_reflection_index": 1,
+        "resolved_table_index": 1,
         "source_row_index": 0,
     }
     hit_tables = [
@@ -1853,7 +1870,74 @@ def test_geometry_fit_correspondence_simulated_point_prefers_branch_identity() -
     assert reason == "resolved_source_peak"
 
 
-def test_fit_geometry_parameters_pixel_path_rebinds_stale_in_range_source_indices(
+def test_prepare_reflection_subset_clears_stale_local_source_ids() -> None:
+    miller = np.array(
+        [
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([2.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 13,
+            "source_reflection_index": 13,
+            "source_row_index": 0,
+            "source_peak_index": 1,
+            "fit_source_identity_only": True,
+        }
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.fixed_source_reflection_count == 0
+    assert subset.fallback_hkl_count == 1
+    assert np.array_equal(subset.original_indices, np.array([0], dtype=np.int64))
+    for key in (
+        "source_table_index",
+        "source_reflection_index",
+        "source_row_index",
+        "source_peak_index",
+        "resolved_table_index",
+        "resolved_peak_index",
+    ):
+        assert key not in subset.measured_entries[0]
+
+
+def test_geometry_fit_correspondence_simulated_point_ignores_stale_source_table_ids() -> None:
+    correspondence = {
+        "source_table_index": 13,
+        "source_reflection_index": 13,
+        "source_row_index": 0,
+        "source_peak_index": 1,
+    }
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                [1.0, 8.0, 8.0, 0.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+    max_positions = np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64)
+
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=max_positions,
+    )
+
+    assert point is None
+    assert reason == "missing_source_table_index"
+
+
+def test_fit_geometry_parameters_pixel_path_falls_back_from_stale_in_range_source_indices(
     monkeypatch,
 ):
     process_millers = []
@@ -1939,11 +2023,23 @@ def test_fit_geometry_parameters_pixel_path_rebinds_stale_in_range_source_indice
     assert result.fun.size == 2
     assert np.allclose(result.fun, np.zeros(2, dtype=np.float64))
     assert isinstance(result.point_match_summary, dict)
-    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 1
-    assert int(result.point_match_summary["fallback_entry_count"]) == 0
+    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 0
+    assert int(result.point_match_summary["fixed_source_reflection_count"]) == 0
+    assert int(result.point_match_summary["fallback_entry_count"]) == 1
+    assert int(result.point_match_summary["matched_pair_count"]) == 1
     assert isinstance(result.point_match_diagnostics, list)
     assert len(result.point_match_diagnostics) == 1
-    assert result.point_match_diagnostics[0]["resolution_reason"] == "resolved"
+    assert result.point_match_diagnostics[0]["resolution_kind"] == "hkl_fallback"
+    assert result.point_match_diagnostics[0]["source_table_index"] is None
+    assert result.point_match_diagnostics[0].get("source_reflection_namespace") in (
+        None,
+        "",
+    )
+    assert result.point_match_diagnostics[0].get("source_reflection_is_full") in (
+        None,
+        False,
+    )
+    assert int(result.point_match_diagnostics[0]["resolved_table_index"]) == 0
     assert result.point_match_diagnostics[0]["match_status"] == "matched"
 
 

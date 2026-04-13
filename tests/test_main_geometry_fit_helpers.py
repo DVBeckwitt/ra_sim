@@ -87,7 +87,7 @@ def test_main_build_geometry_fit_runtime_config_ignores_unsafe_numba_opt_ins() -
         "parallel_mode": "datasets",
         "worker_numba_threads": 3,
     }
-    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["use_numba"] is True
     assert runtime_cfg["allow_unsafe_runtime"] is False
 
 
@@ -114,5 +114,5 @@ def test_main_build_geometry_fit_runtime_config_keeps_parallel_settings_while_fo
         "parallel_mode": "auto",
         "worker_numba_threads": 0,
     }
-    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["use_numba"] is True
     assert runtime_cfg["allow_unsafe_runtime"] is False

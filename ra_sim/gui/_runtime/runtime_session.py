@@ -8995,11 +8995,24 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_secondary_intersection_cache,
         result.get("secondary_max_positions", []),
     )
+    primary_source_reflection_indices = list(range(len(resolved_primary_peak_tables)))
+    secondary_source_reflection_indices = list(
+        range(
+            len(resolved_primary_peak_tables),
+            len(resolved_primary_peak_tables) + len(resolved_secondary_peak_tables),
+        )
+    )
     simulation_runtime_state.stored_primary_peak_table_lattice = list(
         result.get("primary_peak_table_lattice", [])
     )
     simulation_runtime_state.stored_secondary_peak_table_lattice = list(
         result.get("secondary_peak_table_lattice", [])
+    )
+    simulation_runtime_state.stored_primary_source_reflection_indices = (
+        primary_source_reflection_indices
+    )
+    simulation_runtime_state.stored_secondary_source_reflection_indices = (
+        secondary_source_reflection_indices
     )
     if (
         bool(result.get("collected_hit_tables", False))
@@ -9576,12 +9589,15 @@ simulation_runtime_state.last_analysis_signature = None
 simulation_runtime_state.analysis_preview_active = False
 simulation_runtime_state.analysis_preview_bins = None
 simulation_runtime_state.stored_max_positions_local = None
+simulation_runtime_state.stored_source_reflection_indices_local = None
 simulation_runtime_state.stored_sim_image = None
 simulation_runtime_state.stored_peak_table_lattice = None
 simulation_runtime_state.stored_primary_sim_image = None
 simulation_runtime_state.stored_secondary_sim_image = None
 simulation_runtime_state.stored_primary_max_positions = None
 simulation_runtime_state.stored_secondary_max_positions = None
+simulation_runtime_state.stored_primary_source_reflection_indices = None
+simulation_runtime_state.stored_secondary_source_reflection_indices = None
 simulation_runtime_state.stored_primary_peak_table_lattice = None
 simulation_runtime_state.stored_secondary_peak_table_lattice = None
 simulation_runtime_state.stored_primary_intersection_cache = None
@@ -10392,21 +10408,35 @@ def do_update():
 
     updated_image = w1 * img1 + w2 * img2
     max_positions_local = []
+    source_reflection_indices_local = []
     peak_table_lattice_local = []
     if run_primary and simulation_runtime_state.stored_primary_max_positions is not None:
         max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
+        if simulation_runtime_state.stored_primary_source_reflection_indices is not None:
+            source_reflection_indices_local.extend(
+                simulation_runtime_state.stored_primary_source_reflection_indices
+            )
         if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
             peak_table_lattice_local.extend(
                 simulation_runtime_state.stored_primary_peak_table_lattice
             )
     if run_secondary and simulation_runtime_state.stored_secondary_max_positions is not None:
         max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
+        if simulation_runtime_state.stored_secondary_source_reflection_indices is not None:
+            source_reflection_indices_local.extend(
+                simulation_runtime_state.stored_secondary_source_reflection_indices
+            )
         if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
             peak_table_lattice_local.extend(
                 simulation_runtime_state.stored_secondary_peak_table_lattice
             )
 
     simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+    simulation_runtime_state.stored_source_reflection_indices_local = (
+        list(source_reflection_indices_local)
+        if len(source_reflection_indices_local) == len(max_positions_local)
+        else None
+    )
     simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
     intersection_cache_local = []
     if run_primary and simulation_runtime_state.stored_primary_intersection_cache is not None:
@@ -13344,10 +13374,15 @@ def _geometry_manual_build_source_rows_from_hit_tables(
     image_size_value: int,
     params_local: Mapping[str, object],
     allow_nominal_hkl_indices: bool,
-) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
+) -> tuple[
+    list[dict[str, object]],
+    list[tuple[float, float, str]],
+    list[object],
+    list[int],
+]:
     copied_hit_tables = _copy_hit_tables(hit_tables)
     if not copied_hit_tables:
-        return [], [], []
+        return [], [], [], []
 
     try:
         primary_a = float(params_local.get("a", np.nan))
@@ -13361,11 +13396,13 @@ def _geometry_manual_build_source_rows_from_hit_tables(
     peak_table_lattice = [
         (float(primary_a), float(primary_c), "primary") for _ in copied_hit_tables
     ]
+    source_reflection_indices = list(range(len(copied_hit_tables)))
     raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         copied_hit_tables,
         image_shape=(int(image_size_value), int(image_size_value)),
         native_sim_to_display_coords=_native_sim_to_display_coords,
         peak_table_lattice=peak_table_lattice,
+        source_reflection_indices=source_reflection_indices,
         primary_a=primary_a,
         primary_c=primary_c,
         default_source_label="primary",
@@ -13373,7 +13410,7 @@ def _geometry_manual_build_source_rows_from_hit_tables(
         allow_nominal_hkl_indices=bool(allow_nominal_hkl_indices),
     )
     raw_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
-    return raw_rows, peak_table_lattice, copied_hit_tables
+    return raw_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices
 
 
 def _geometry_manual_logged_cache_matches_params(
@@ -13451,6 +13488,11 @@ def _commit_geometry_manual_source_row_rebuild_result(
             except Exception:
                 max_positions_local = np.empty((0, 6), dtype=np.float64)
             simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+        simulation_runtime_state.stored_source_reflection_indices_local = (
+            list(rebuild_result.source_reflection_indices)
+            if isinstance(rebuild_result.source_reflection_indices, list)
+            else None
+        )
         if rebuild_result.peak_table_lattice is not None:
             simulation_runtime_state.stored_peak_table_lattice = list(
                 rebuild_result.peak_table_lattice
@@ -13512,6 +13554,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
     *,
     consumer: str | None = None,
     prior_diagnostics: Mapping[str, object] | None = None,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     background_idx = int(background_index)
     lookup_context = str(consumer or "unspecified")
@@ -13583,6 +13626,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
             if callable(_project_geometry_manual_peaks_to_current_view)
             else None
         ),
+        required_pairs=required_pairs,
         live_cache_inventory=live_cache_inventory,
     )
     return _commit_geometry_manual_source_row_rebuild_result(
@@ -13596,6 +13640,7 @@ def _geometry_manual_source_rows_for_background(
     param_set: dict[str, object] | None = None,
     *,
     consumer: str | None = None,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     background_idx = int(background_index)
     lookup_context = str(consumer or "unspecified")
@@ -13642,6 +13687,7 @@ def _geometry_manual_source_rows_for_background(
                 param_set,
                 consumer=lookup_context,
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
             )
             if rebuilt_rows:
                 return rebuilt_rows
@@ -13691,6 +13737,7 @@ def _geometry_manual_source_rows_for_background(
                 param_set,
                 consumer=lookup_context,
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
             )
             if rebuilt_rows:
                 return rebuilt_rows
@@ -13734,6 +13781,60 @@ def _geometry_manual_source_rows_for_background(
                 param_set,
                 consumer=lookup_context,
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
+        return []
+    snapshot_validation = (
+        gui_geometry_fit.validate_geometry_fit_live_source_rows(
+            raw_rows,
+            required_pairs=required_pairs,
+        )
+        if required_pairs
+        else {}
+    )
+    if required_pairs and not bool(snapshot_validation.get("valid", False)):
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status="snapshot_pair_validation_failed",
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=0,
+            created_from=created_from,
+            signature_match=True,
+            live_cache_inventory=live_cache_inventory,
+            live_runtime_cache_validation=snapshot_validation,
+        )
+        _trace_live_cache_event(
+            "source_snapshot",
+            "lookup",
+            background_index=int(background_idx),
+            outcome="validation_failed",
+            consumer=lookup_context,
+            status="snapshot_pair_validation_failed",
+            requested_signature_summary=requested_signature_summary,
+            stored_signature_summary=stored_signature_summary,
+            created_from=created_from,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=0,
+            signature_match=True,
+        )
+        if allow_source_snapshot_rebuild:
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
             )
             if rebuilt_rows:
                 return rebuilt_rows
@@ -13761,6 +13862,7 @@ def _geometry_manual_source_rows_for_background(
         created_from=created_from,
         signature_match=True,
         live_cache_inventory=live_cache_inventory,
+        live_runtime_cache_validation=snapshot_validation,
     )
     _trace_live_cache_event(
         "source_snapshot",
@@ -20954,6 +21056,7 @@ def _run_async_geometry_fit_worker_job(
         param_set: Mapping[str, object] | None = None,
         consumer: str = "geometry_fit_preflight_cache",
         prior_diagnostics: Mapping[str, object] | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle | None:
         background_idx = int(background_index)
         params_local = dict(job_data.get("params", {}) or {})
@@ -20982,35 +21085,23 @@ def _run_async_geometry_fit_worker_job(
                 (),
             )
         )
-        if (
-            int(background_idx) == int(job_data.get("current_background_index", -1))
-            and requested_signature == live_rows_signature
-            and live_rows
-        ):
-            bundle = _build_geometry_fit_background_cache_bundle(
-                background_index=int(background_idx),
-                background_label=str(background_label),
-                requested_signature=requested_signature,
-                requested_signature_summary=requested_signature_summary,
-                theta_base=float(theta_base),
-                theta_initial=float(params_local.get("theta_initial", 0.0)),
-                stored_rows=live_rows,
-                cache_source="live_runtime_cache",
-                diagnostics={
-                    "created_from": "live_runtime_cache",
-                    "cache_source": "live_runtime_cache",
-                },
-            )
-            _store_worker_background_cache_bundle(bundle)
-            _set_worker_source_snapshot_diagnostics(**dict(bundle.diagnostics))
-            worker_simulation_diagnostics.clear()
-            worker_simulation_diagnostics.update(dict(bundle.diagnostics))
-            return bundle
 
         snapshot = dict(worker_source_row_snapshots.get(int(background_idx)) or {})
         snapshot_signature = snapshot.get("simulation_signature")
         snapshot_rows = _copy_source_rows(snapshot.get("rows"))
-        if snapshot_signature == requested_signature and snapshot_rows:
+        snapshot_validation = (
+            gui_geometry_fit.validate_geometry_fit_live_source_rows(
+                snapshot_rows,
+                required_pairs=required_pairs,
+            )
+            if required_pairs
+            else {}
+        )
+        if (
+            snapshot_signature == requested_signature
+            and snapshot_rows
+            and (not required_pairs or bool(snapshot_validation.get("valid", False)))
+        ):
             bundle = _build_geometry_fit_background_cache_bundle(
                 background_index=int(background_idx),
                 background_label=str(background_label),
@@ -21023,6 +21114,7 @@ def _run_async_geometry_fit_worker_job(
                 diagnostics={
                     "created_from": snapshot.get("created_from"),
                     "cache_source": str(snapshot.get("created_from") or "source_snapshot"),
+                    "live_runtime_cache_validation": snapshot_validation,
                 },
             )
             _store_worker_background_cache_bundle(bundle)
@@ -21030,6 +21122,26 @@ def _run_async_geometry_fit_worker_job(
             worker_simulation_diagnostics.clear()
             worker_simulation_diagnostics.update(dict(bundle.diagnostics))
             return bundle
+        if required_pairs and snapshot_signature == requested_signature and snapshot_rows:
+            _set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=str(consumer or "geometry_fit_preflight_cache"),
+                status="background_cache_pair_validation_failed",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=snapshot_signature,
+                stored_signature_summary=_live_cache_signature_summary(snapshot_signature),
+                raw_peak_count=int(len(snapshot_rows)),
+                projected_peak_count=0,
+                created_from=snapshot.get("created_from"),
+                signature_match=True,
+                live_cache_inventory=copy.deepcopy(job_data.get("live_cache_inventory", {})),
+                live_runtime_cache_validation=snapshot_validation,
+            )
 
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
@@ -21077,6 +21189,7 @@ def _run_async_geometry_fit_worker_job(
             ),
             last_runtime_simulation_diagnostics=_last_worker_simulation_diagnostics,
             project_rows=_project_source_rows,
+            required_pairs=required_pairs,
             live_cache_inventory=job_data.get("live_cache_inventory", {}),
         )
         _set_worker_source_snapshot_diagnostics(**dict(rebuild_result.diagnostics or {}))
@@ -21108,6 +21221,7 @@ def _run_async_geometry_fit_worker_job(
         *,
         consumer: str | None = None,
         prior_diagnostics: Mapping[str, object] | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         background_idx = int(background_index)
         bundle = _prebuild_background_cache_bundle_worker(
@@ -21116,6 +21230,7 @@ def _run_async_geometry_fit_worker_job(
             param_set=param_set,
             consumer=str(consumer or "geometry_fit_dataset"),
             prior_diagnostics=prior_diagnostics,
+            required_pairs=required_pairs,
         )
         if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
             return []
@@ -21126,6 +21241,7 @@ def _run_async_geometry_fit_worker_job(
         param_set: dict[str, object] | None = None,
         *,
         consumer: str | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         background_idx = int(background_index)
         lookup_context = str(consumer or "unspecified")
@@ -21204,6 +21320,47 @@ def _run_async_geometry_fit_worker_job(
                 live_cache_inventory=live_cache_inventory,
             )
             return []
+        bundle_validation = (
+            gui_geometry_fit.validate_geometry_fit_live_source_rows(
+                bundle.stored_rows,
+                required_pairs=required_pairs,
+            )
+            if required_pairs
+            else {}
+        )
+        if required_pairs and not bool(bundle_validation.get("valid", False)):
+            _set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=lookup_context,
+                status="background_cache_pair_validation_failed",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=bundle.requested_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=int(len(bundle.stored_rows or ())),
+                projected_peak_count=0,
+                created_from=bundle.cache_source,
+                cache_source=bundle.cache_source,
+                signature_match=True,
+                theta_base=float(bundle.theta_base),
+                theta_initial=float(bundle.theta_initial),
+                live_cache_inventory=live_cache_inventory,
+                live_runtime_cache_validation=bundle_validation,
+            )
+            rebuilt_rows = _rebuild_source_rows_for_background_worker(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
+            return []
 
         _set_worker_source_snapshot_diagnostics(
             source="geometry_fit_background_cache",
@@ -21225,6 +21382,7 @@ def _run_async_geometry_fit_worker_job(
             theta_base=float(bundle.theta_base),
             theta_initial=float(bundle.theta_initial),
             live_cache_inventory=live_cache_inventory,
+            live_runtime_cache_validation=bundle_validation,
         )
         return projected_rows
 
@@ -21248,6 +21406,13 @@ def _run_async_geometry_fit_worker_job(
             bundle = _prebuild_background_cache_bundle_worker(
                 int(background_idx),
                 theta_base=float(_theta_base_for_background_worker(int(background_idx))),
+                required_pairs=list(
+                    dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                        int(background_idx),
+                        (),
+                    )
+                    or ()
+                ),
             )
             if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
                 failure_status = str(

@@ -44,6 +44,7 @@ from ra_sim import launcher
 from ra_sim import headless_geometry_fit as shared_headless_geometry_fit
 from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.debug_controls import mosaic_fit_log_files_enabled
+from ra_sim.debug_controls import register_run_output_path, start_run_bundle
 from ra_sim.fitting.optimization import (
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
@@ -1962,6 +1963,7 @@ def write_headless_simulation_image(
     sim_clip = np.clip(image, 0, render_vmax)
     sim_u16 = np.round((sim_clip / render_vmax) * 65535.0).astype(np.uint16)
     Image.fromarray(sim_u16, mode="I;16").save(out_path)
+    register_run_output_path(out_path)
     return str(out_path)
 
 
@@ -2407,6 +2409,9 @@ def main(argv: list[str] | None = None) -> None:
         ap.print_help()
         return
 
+    start_run_bundle(
+        entrypoint=f"cli:{getattr(args, 'command', None) or argv[0]}",
+    )
     handler(args)
 
 

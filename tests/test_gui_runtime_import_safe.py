@@ -175,6 +175,28 @@ def test_runtime_impl_preserves_wrapped_phi_ranges_for_detector_drags() -> None:
     assert "if phi_max < phi_min and azimuth_sub.size:" in source
 
 
+def test_runtime_impl_tracks_detector_source_geometry_for_projected_rasters() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '_MAIN_RASTER_SOURCE_EXTENT_ATTR = "_ra_sim_source_extent"' in source
+    assert '_MAIN_RASTER_SOURCE_ORIGIN_ATTR = "_ra_sim_source_origin"' in source
+    assert 'image_geometry = ("upper", detector_extent)' in source
+    assert 'overlay_geometry = ("upper", detector_extent)' in source
+    assert "setattr(artist, _MAIN_RASTER_SOURCE_EXTENT_ATTR, normalized_extent)" in source
+    assert "setattr(artist, _MAIN_RASTER_SOURCE_ORIGIN_ATTR, str(origin))" in source
+    assert "store_geometry(artist, origin=origin, extent=extent)" in source
+
+
+def test_runtime_impl_overlay_refresh_copies_image_source_geometry() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "_image_source, image_extent, image_origin = _primary_raster_source_payload(" in source
+    assert "if image_extent is not None:" in source
+    assert "origin=image_origin," in source
+    assert "extent=image_extent," in source
+    assert "_apply_projected_primary_raster_to_artist(overlay_artist)" in source
+
+
 def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

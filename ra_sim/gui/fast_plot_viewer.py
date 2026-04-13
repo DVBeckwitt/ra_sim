@@ -1544,6 +1544,54 @@ class FastPlotViewer:
         except Exception:
             return None
 
+    def _map_viewport_pixels_via_view_range(
+        self,
+        x_pixel: float,
+        y_pixel: float,
+    ) -> tuple[float, float, bool] | None:
+        """Map viewport-local pixels through the current plot view range.
+
+        This keeps mouse coordinates aligned with upper-origin rasters even when
+        the scene/view transform mirrors the image vertically.
+        """
+
+        view_range = self._current_view_range()
+        viewport = self._plot_viewport()
+        if view_range is None or viewport is None:
+            return None
+
+        try:
+            x_value = float(x_pixel)
+            y_value = float(y_pixel)
+        except Exception:
+            return None
+
+        try:
+            rect = viewport.rect()
+            width_value = float(rect.width())
+            height_value = float(rect.height())
+        except Exception:
+            return None
+        if not (
+            np.isfinite(width_value)
+            and np.isfinite(height_value)
+            and width_value > 0.0
+            and height_value > 0.0
+        ):
+            return None
+
+        x_denominator = max(width_value - 1.0, 1.0)
+        y_denominator = max(height_value - 1.0, 1.0)
+        x_fraction = float(np.clip(x_value / x_denominator, 0.0, 1.0))
+        y_fraction = float(np.clip(y_value / y_denominator, 0.0, 1.0))
+        x0, x1, y0, y1 = view_range
+        x_data = float(x0 + ((x1 - x0) * x_fraction))
+        y_data = float(y0 + ((y1 - y0) * y_fraction))
+        if not (np.isfinite(x_data) and np.isfinite(y_data)):
+            return None
+        in_plot = bool(0.0 <= x_value <= width_value and 0.0 <= y_value <= height_value)
+        return x_data, y_data, in_plot
+
     def map_viewport_pixels_to_view_coords(
         self,
         x_pixel: float,
@@ -1553,6 +1601,10 @@ class FastPlotViewer:
 
         if self._plot_widget is None or self._plot_item is None:
             return None
+
+        mapped = self._map_viewport_pixels_via_view_range(x_pixel, y_pixel)
+        if mapped is not None:
+            return mapped
 
         try:
             x_value = int(round(float(x_pixel)))
@@ -1776,6 +1828,23 @@ class FastPlotViewer:
         ):
             return
         try:
+            mapped = self._map_viewport_pixels_via_view_range(
+                float(qpoint.x()),
+                float(qpoint.y()),
+            )
+            if mapped is not None:
+                x_data, y_data, in_plot = mapped
+                self._mouse_event_callback(
+                    event_name,
+                    float(x_data),
+                    float(y_data),
+                    float(qpoint.x()),
+                    float(qpoint.y()),
+                    _qt_mouse_button_to_mpl(button),
+                    bool(dblclick),
+                    bool(in_plot),
+                )
+                return
             view_box = getattr(self._plot_item, "vb", None)
             if view_box is None:
                 return

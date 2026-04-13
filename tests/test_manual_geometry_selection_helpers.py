@@ -138,6 +138,22 @@ def test_peak_maximum_near_in_image_returns_local_brightest_pixel() -> None:
     assert mg.peak_maximum_near_in_image(image, 4.9, 5.8, search_radius=2) == (5.0, 6.0)
 
 
+def test_peak_maximum_near_in_image_respects_inverted_display_extent() -> None:
+    image = np.zeros((3, 3), dtype=float)
+    image[0, 0] = 9.0
+    image[2, 0] = 1.0
+
+    peak = mg.peak_maximum_near_in_image(
+        image,
+        0.2,
+        2.8,
+        search_radius=1,
+        display_extent=(0.0, 3.0, 3.0, 0.0),
+    )
+
+    assert peak == (0.5, 2.5)
+
+
 def test_caked_axis_index_helpers_round_trip() -> None:
     axis = np.linspace(-30.0, 30.0, 121)
     idx = mg.caked_axis_to_image_index(7.5, axis)
@@ -835,6 +851,8 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
             "y": 12.25,
             "detector_x": 10.0,
             "detector_y": 12.0,
+            "background_detector_x": 9.5,
+            "background_detector_y": 11.5,
             "q_group_key": ("q_group", "primary", 1.0, 2),
             "source_table_index": 4,
             "source_row_index": 7,
@@ -858,6 +876,8 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
     assert restored["q_group_key"] == ("q_group", "primary", 1.0, 2)
     assert restored["detector_x"] == 10.0
     assert restored["detector_y"] == 12.0
+    assert restored["background_detector_x"] == 9.5
+    assert restored["background_detector_y"] == 11.5
     assert restored["source_table_index"] == 4
     assert restored["source_row_index"] == 7
     assert restored["source_peak_index"] == 3
@@ -1091,6 +1111,35 @@ def test_geometry_manual_refine_preview_point_falls_back_to_local_peak_maximum()
     )
 
     assert refined == (5.0, 6.0)
+
+
+def test_geometry_manual_refine_preview_point_uses_candidate_sim_seed_for_peak_context() -> None:
+    seen: dict[str, object] = {}
+
+    def _fake_match(candidates, background_context, match_cfg):
+        seen["candidate"] = dict(candidates[0])
+        seen["background_context"] = dict(background_context)
+        seen["match_cfg"] = dict(match_cfg)
+        return ([{"x": 11.0, "y": 12.0}], {"status": "ok"})
+
+    refined = mg.geometry_manual_refine_preview_point(
+        {"sim_col": 30.0, "sim_row": 31.0},
+        10.0,
+        20.0,
+        display_background=np.zeros((8, 8), dtype=float),
+        cache_data={
+            "match_config": {"search_radius_px": 6.0},
+            "background_context": {"img_valid": True},
+        },
+        use_caked_space=False,
+        match_simulated_peaks_to_peak_context=_fake_match,
+    )
+
+    assert refined == (11.0, 12.0)
+    assert seen["candidate"]["sim_col"] == 30.0
+    assert seen["candidate"]["sim_row"] == 31.0
+    assert seen["background_context"] == {"img_valid": True}
+    assert seen["match_cfg"] == {"search_radius_px": 6.0}
 
 
 def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> None:

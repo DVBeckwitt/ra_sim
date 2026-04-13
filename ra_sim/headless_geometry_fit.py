@@ -975,10 +975,15 @@ def _build_source_rows_from_hit_tables(
     params_local: Mapping[str, object],
     native_sim_to_display_coords,
     allow_nominal_hkl_indices: bool,
-) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[np.ndarray]]:
+) -> tuple[
+    list[dict[str, object]],
+    list[tuple[float, float, str]],
+    list[np.ndarray],
+    list[int],
+]:
     copied_hit_tables = _copy_hit_tables(hit_tables)
     if not copied_hit_tables:
-        return [], [], []
+        return [], [], [], []
 
     try:
         primary_a = float(params_local.get("a", np.nan))
@@ -993,11 +998,13 @@ def _build_source_rows_from_hit_tables(
         (float(primary_a), float(primary_c), "primary")
         for _ in copied_hit_tables
     ]
+    source_reflection_indices = list(range(len(copied_hit_tables)))
     raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         copied_hit_tables,
         image_shape=(int(image_size_value), int(image_size_value)),
         native_sim_to_display_coords=native_sim_to_display_coords,
         peak_table_lattice=peak_table_lattice,
+        source_reflection_indices=source_reflection_indices,
         primary_a=primary_a,
         primary_c=primary_c,
         default_source_label="primary",
@@ -1009,7 +1016,7 @@ def _build_source_rows_from_hit_tables(
         for entry in (raw_rows or ())
         if isinstance(entry, Mapping)
     ]
-    return raw_rows, peak_table_lattice, copied_hit_tables
+    return raw_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices
 
 
 def _logged_cache_matches_params(
@@ -1476,18 +1483,19 @@ def run_headless_geometry_fit(
         source_snapshot_diagnostics_state.update(fields)
 
     def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
-        live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
-            simulation_runtime_state.peak_records
-        )
-        if live_rows:
-            return [dict(entry) for entry in live_rows if isinstance(entry, Mapping)]
-
         max_positions_local = simulation_runtime_state.stored_max_positions_local
         if not isinstance(max_positions_local, Sequence) or isinstance(
             max_positions_local,
             (str, bytes),
         ):
-            return []
+            live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
+                simulation_runtime_state.peak_records,
+                source_reflection_indices_local=(
+                    simulation_runtime_state.stored_source_reflection_indices_local
+                ),
+                active_signature_matches=False,
+            )
+            return [dict(entry) for entry in live_rows if isinstance(entry, Mapping)]
 
         stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
         if stored_sim_image is not None:
@@ -1505,25 +1513,41 @@ def run_headless_geometry_fit(
             )
             and len(getattr(simulation_runtime_state, "stored_intersection_cache", None) or ()) > 0
         )
-        rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
-            max_positions_local,
-            image_shape=image_shape,
-            native_sim_to_display_coords=lambda col, row, image_shape_local: (
-                gui_geometry_overlay.native_sim_to_display_coords(
+        peak_kwargs: dict[str, object] = {
+            "image_shape": image_shape,
+            "native_sim_to_display_coords": (
+                lambda col, row, image_shape_local: gui_geometry_overlay.native_sim_to_display_coords(
                     col,
                     row,
                     image_shape_local,
                     sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
                 )
             ),
-            peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-            primary_a=_coerce_float(var_store["a_var"].get(), defaults.defaults["a"]),
-            primary_c=_coerce_float(var_store["c_var"].get(), defaults.defaults["c"]),
-            default_source_label="primary",
-            round_pixel_centers=True,
-            allow_nominal_hkl_indices=allow_nominal,
+            "peak_table_lattice": simulation_runtime_state.stored_peak_table_lattice,
+            "primary_a": _coerce_float(var_store["a_var"].get(), defaults.defaults["a"]),
+            "primary_c": _coerce_float(var_store["c_var"].get(), defaults.defaults["c"]),
+            "default_source_label": "primary",
+            "round_pixel_centers": True,
+            "allow_nominal_hkl_indices": allow_nominal,
+        }
+        if simulation_runtime_state.stored_source_reflection_indices_local is not None:
+            peak_kwargs["source_reflection_indices"] = (
+                simulation_runtime_state.stored_source_reflection_indices_local
+            )
+        rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+            max_positions_local,
+            **peak_kwargs,
         )
-        return [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+        if rows:
+            return [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+        live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
+            simulation_runtime_state.peak_records,
+            source_reflection_indices_local=(
+                simulation_runtime_state.stored_source_reflection_indices_local
+            ),
+            active_signature_matches=False,
+        )
+        return [dict(entry) for entry in live_rows if isinstance(entry, Mapping)]
 
     def _simulate_hit_tables_for_fit(
         miller_array: np.ndarray,
@@ -1586,6 +1610,11 @@ def run_headless_geometry_fit(
                 simulation_runtime_state.stored_peak_table_lattice = list(
                     rebuild_result.peak_table_lattice
                 )
+            simulation_runtime_state.stored_source_reflection_indices_local = (
+                list(rebuild_result.source_reflection_indices)
+                if rebuild_result.source_reflection_indices is not None
+                else None
+            )
             simulation_runtime_state.stored_sim_image = np.zeros(
                 (int(defaults.image_size), int(defaults.image_size)),
                 dtype=np.float64,
@@ -1630,6 +1659,7 @@ def run_headless_geometry_fit(
         *,
         consumer: str | None = None,
         prior_diagnostics: Mapping[str, object] | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         background_idx = int(background_index)
         consumer_name = str(consumer or "unspecified")
@@ -1691,6 +1721,7 @@ def run_headless_geometry_fit(
                     normalized_params,
                 )
             ),
+            required_pairs=required_pairs,
             live_cache_inventory=_live_cache_inventory_snapshot(),
         )
         return _commit_source_row_rebuild_result(
@@ -1703,6 +1734,7 @@ def run_headless_geometry_fit(
         param_set: dict[str, object] | None = None,
         *,
         consumer: str | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         background_idx = int(background_index)
         consumer_name = str(consumer or "unspecified")
@@ -1734,6 +1766,7 @@ def run_headless_geometry_fit(
                 param_set,
                 consumer=consumer_name,
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
             )
             if rebuilt_rows:
                 return rebuilt_rows
@@ -1770,6 +1803,7 @@ def run_headless_geometry_fit(
                 param_set,
                 consumer=consumer_name,
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
             )
             if rebuilt_rows:
                 return rebuilt_rows
@@ -1797,6 +1831,45 @@ def run_headless_geometry_fit(
                 param_set,
                 consumer=consumer_name,
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
+            return []
+
+        snapshot_validation = (
+            gui_geometry_fit.validate_geometry_fit_live_source_rows(
+                raw_rows,
+                required_pairs=required_pairs,
+            )
+            if required_pairs
+            else {}
+        )
+        if required_pairs and not bool(snapshot_validation.get("valid", False)):
+            _set_source_snapshot_diagnostics(
+                source="source_snapshot",
+                cache_family="source_snapshot",
+                action="lookup",
+                consumer=consumer_name,
+                status="snapshot_pair_validation_failed",
+                background_index=int(background_idx),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=snapshot_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=int(len(raw_rows)),
+                projected_peak_count=0,
+                created_from=created_from,
+                signature_match=True,
+                live_cache_inventory=_live_cache_inventory_snapshot(),
+                live_runtime_cache_validation=snapshot_validation,
+            )
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=consumer_name,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
             )
             if rebuilt_rows:
                 return rebuilt_rows
@@ -1818,6 +1891,7 @@ def run_headless_geometry_fit(
             created_from=created_from,
             signature_match=True,
             live_cache_inventory=_live_cache_inventory_snapshot(),
+            live_runtime_cache_validation=snapshot_validation,
         )
         return raw_rows
 

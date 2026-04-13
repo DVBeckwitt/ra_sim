@@ -18,236 +18,545 @@
     </a>
   </p>
   <p>
-    <a href="#installation">Installation</a> •
+    <a href="#getting-started">Getting Started</a> •
     <a href="#configuration">Configuration</a> •
     <a href="#usage">Usage</a> •
-    <a href="#screenshots">Screenshots</a> •
-    <a href="#development">Development</a>
+    <a href="#documentation-map">Documentation</a> •
+    <a href="#development">Development</a> •
+    <a href="#troubleshooting">Troubleshooting</a>
   </p>
 </div>
 
 ![RA-SIM simulation view](docs/images/simulation.png)
 
 > [!NOTE]
-> RA-SIM is active research software. The repository does not bundle raw detector
-> data, so you will need to point the configuration files at local `.osc`, `.poni`,
-> `.cif`, and measured-peak inputs before launching the workflows.
+> RA-SIM does not bundle raw detector data or private experiment files. You
+> must point the configuration at local `.osc`, `.poni`, `.cif`, measured-peak,
+> and artifact paths before the GUI and headless workflows can run successfully.
 
-## Highlights
+## Table of Contents
+
+- [What RA-SIM Does](#what-ra-sim-does)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Runtime Toggles](#runtime-toggles)
+- [Architecture at a Glance](#architecture-at-a-glance)
+- [Documentation Map](#documentation-map)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Screenshots](#screenshots)
+- [Contributing](#contributing)
+- [Citation](#citation)
+- [License](#license)
+
+## What RA-SIM Does
+
+RA-SIM is a local desktop and headless toolkit for diffraction workflows built
+around 2D detector images. It combines detector-space forward simulation,
+geometry calibration, GUI-assisted fitting, and reproducible headless reruns
+from saved GUI states.
+
+The repository is shaped around three core workflows:
+
+- detector-space forward simulation for 2D grazing-incidence diffraction
+- hBN calibrant fitting to estimate beam center, tilt, and geometry hints
+- iterative geometry, mosaic-shape, and structural refinement against measured images
+
+### Highlights
 
 - Full 2D grazing-incidence forward modeling with refraction, footprint,
-  divergence, detector geometry handling, and a switch between the original fast
-  optics approximation and a more exact complex-k DWBA slab transport model.
-- Calibration workflow for fitting hBN ring ellipses and transferring detector
-  geometry into simulation runs.
-- Refinement controls for mosaic orientation distributions, stacking disorder,
-  lattice parameters, occupancies, and Debye-Waller terms.
-- Geometry-fit-cached detector-shape mosaic fitting in the main GUI so mosaic
-  broadening can be refined against the same anchored detector features used for
-  geometry fitting.
-- Desktop GUI for image-based analysis plus CLI entry points for headless
-  simulation and calibrant fitting.
+  divergence, detector geometry handling, and multiple optics transport modes.
+- Interactive Tk/Matplotlib GUI for detector-space alignment, integration
+  checks, and parameter refinement.
+- Headless CLI entry points for simulation, hBN fitting, geometry fitting, and
+  geometry-locked mosaic-shape fitting.
+- Config-driven workflow with versioned templates under `config/` and machine-local
+  overrides kept out of git.
+- Extensive regression coverage across CLI, config loading, simulation, fitting,
+  and GUI helper paths.
 
-## Installation
+## Tech Stack
 
-RA-SIM supports Python 3.11+.
+- **Language**: Python 3.11+
+- **Core numerics**: NumPy, SciPy, Numba
+- **Diffraction/science stack**: pyFAI, Dans_Diffraction, PyCifRW, spglib, xraydb
+- **GUI**: Tkinter + Matplotlib
+- **Image/data tools**: Pillow, OpenCV, scikit-image, pandas, openpyxl
+- **Optional acceleration**: Qt + PyQtGraph fast viewer path
+- **Packaging**: setuptools with console scripts for `ra-sim` and `ra-sim-dev`
+- **Validation**: pytest, ruff, mypy
+- **CI**: GitHub Actions on Python 3.11, 3.12, and 3.13
+
+## Prerequisites
+
+- Python 3.11 or newer
+- Git if you plan to clone and update the repository
+- Local experiment inputs referenced by config:
+  - detector/background `.osc` or GUI image inputs
+  - detector geometry `.poni`
+  - material `.cif`
+  - measured peaks and output artifact locations
+- Tkinter for GUI entry points
+  - Windows and macOS Python builds usually include it
+  - Linux often needs a system package such as `python3-tk` or `python3.11-tk`
+- Optional Qt binding plus `pyqtgraph` if you want the fast-viewer acceleration path
+
+## Getting Started
+
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/DVBeckwitt/ra_sim.git
 cd ra_sim
-python -m pip install -e .
 ```
 
-If you prefer the installed console script, the package also exposes `ra-sim`.
+### 2. Install RA-SIM
 
-The base install pulls in the supported Python-side dependencies for the main
-GUI, calibrant workflow, headless simulation tools, and the packaged mosaic
-launcher automatically.
-
-The install includes a pinned `mosaic_sim` dependency sourced from
-[`DVBeckwitt/2D_Mosaic_Sim`](https://github.com/DVBeckwitt/2D_Mosaic_Sim), so
-`python -m ra_sim mosaic` launches the installed visualizer directly.
-
-For local development and CI-equivalent tooling, install the `dev` extra:
+Preferred developer-friendly setup:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m ra_sim.dev bootstrap
 ```
 
-> [!TIP]
-> The GUI uses Tkinter. Windows and macOS Python distributions usually include
-> it already, but some Linux environments require installing the system Tk
-> package separately, often as `python3-tk` or `python3.11-tk`.
+That helper upgrades `pip`, installs the package in editable mode, and brings
+in the dev tooling used by CI.
 
-> [!TIP]
-> If a fresh install can run headless commands but `python -m ra_sim gui` or
-> `python -m ra_sim calibrant` reports that Tkinter is unavailable, the fix is
-> usually that missing Linux system package rather than another pip package.
+Manual fallback:
 
-> [!NOTE]
-> The optional fast-viewer acceleration path is not installed by default. It
-> still requires a separate Qt binding plus `pyqtgraph`.
+```bash
+python -m pip install --group dev -e .
+# Older pip fallback:
+# python -m pip install -e ".[dev]"
+```
 
-## Configuration
+After install, these console scripts are available:
 
-RA-SIM reads project settings from `config/`.
+- `ra-sim` for the shared launcher and headless CLI
+- `ra-sim-dev` for bootstrap, checks, tests, and lockfile refreshes
 
-1. Create local machine-specific path files from the examples.
-2. Update the file so it points at your experiment-specific data.
-3. Optionally move your config out of the repository and set `RA_SIM_CONFIG_DIR`
-   to that folder.
+### 3. Create Local Config Files
+
+Copy the versioned templates and keep the machine-local copies untracked:
 
 ```bash
 cp config/file_paths.example.yaml config/file_paths.yaml
 cp config/hbn_paths.example.yaml config/hbn_paths.yaml
-# Windows PowerShell: Copy-Item config/file_paths.example.yaml config/file_paths.yaml
-# Windows PowerShell: Copy-Item config/hbn_paths.example.yaml config/hbn_paths.yaml
+# Windows PowerShell:
+# Copy-Item config/file_paths.example.yaml config/file_paths.yaml
+# Copy-Item config/hbn_paths.example.yaml config/hbn_paths.yaml
 ```
 
-The local override files `config/file_paths.yaml` and `config/hbn_paths.yaml`
-are intended to stay untracked. The repository keeps only example templates so
-machine-specific paths, downloads, and local experiment bundles do not get
-committed accidentally.
+### 4. Point Config at Your Data
 
-At minimum, review these files:
+At minimum, update the local config with paths to your experiment files:
 
-- `config/file_paths.yaml` for detector images, `.poni` geometry, CIF input,
-  measured peaks, and output artifacts.
-- `config/hbn_paths.yaml` for the headless hBN ellipse-fit workflow.
-- `config/instrument.yaml` and `config/materials.yaml` for instrument defaults
-  and material-specific constants.
+- `config/file_paths.yaml`
+  - detector backgrounds
+  - `.poni` geometry
+  - active CIF
+  - measured peaks
+  - artifact output locations
+- `config/hbn_paths.yaml`
+  - calibrant OSC
+  - dark frame OSC
+  - optional bundle and click-profile locations
+
+### 5. Launch RA-SIM
+
+Interactive launcher dialog:
+
+```bash
+python -m ra_sim
+```
+
+Direct simulation GUI:
+
+```bash
+python -m ra_sim gui
+```
+
+Installed-script equivalent:
+
+```bash
+ra-sim gui
+```
+
+## Configuration
+
+RA-SIM resolves configuration from:
+
+1. `RA_SIM_CONFIG_DIR` when set
+2. the repository `config/` directory otherwise
+
+This matters for relative paths:
+
+- when using the repository `config/`, relative paths resolve from the repo root
+- when using `RA_SIM_CONFIG_DIR`, relative paths resolve from that custom config directory
+
+### Config Files
+
+| File | Purpose |
+| --- | --- |
+| `config/file_paths.example.yaml` | Versioned template for simulation and GUI file inputs |
+| `config/hbn_paths.example.yaml` | Versioned template for hBN calibrant CLI inputs |
+| `config/instrument.yaml` | Detector, beam, fit, and runtime defaults |
+| `config/materials.yaml` | Material definitions and shared constants |
+| `config/debug.yaml` | Debug/log/cache toggles |
+| `config/dir_paths.yaml` | Default output and working directories |
+
+### Local-Only Files
+
+These should stay untracked:
+
+- `config/file_paths.yaml`
+- `config/hbn_paths.yaml`
+
+If you need per-machine or per-dataset config outside the repository, point
+`RA_SIM_CONFIG_DIR` at another folder that contains the same config filenames.
+
+### Key Path Settings
+
+Common keys in `config/file_paths.yaml`:
+
+- `simulation_background_osc_files`
+- `geometry_poni`
+- `cif_file`
+- `measured_peaks`
+- `parameters_file`
+- `gui_background_image`
+- `overlay_output`
+
+Common keys in `config/hbn_paths.yaml`:
+
+- `calibrant`
+- `dark`
+- `beam_center`
+- `bundle`
+- `click_profile`
+- `fit_profile`
+
+### Default Output Locations
+
+From `config/dir_paths.yaml`:
+
+| Key | Default |
+| --- | --- |
+| `downloads` | `~/Downloads` |
+| `overlay_dir` | `~/.cache/ra_sim/overlays` |
+| `debug_log_dir` | `~/.cache/ra_sim/logs` |
+| `file_dialog_dir` | `~/.local/share/ra_sim` |
+| `temp_root` | `~/.cache/ra_sim` |
+
+`debug_log_dir` is also where per-run artifact bundles are written as
+`run_bundle_<stamp>.zip`.
 
 ## Usage
 
-Common entry points:
+### Launcher vs Shared CLI
 
-| Task | Command |
-| --- | --- |
-| Interactive launcher | `python -m ra_sim` |
-| Main GUI | `python -m ra_sim gui` |
-| Windows launcher | `run_ra_sim.bat` |
-| Calibrant GUI | `python -m ra_sim calibrant` |
-| 2D mosaic visualizer | `python -m ra_sim mosaic` |
-| Headless simulation | `python -m ra_sim simulate --out output.png` |
-| Headless hBN ellipse fit | `python -m ra_sim hbn-fit` |
+RA-SIM has two closely related command surfaces:
 
-The mosaic launcher uses the installed `mosaic_sim` package that ships as a
-hard dependency of RA-SIM. No sibling checkout or extra repository override is
-required.
+- `python -m ra_sim`
+  - lightweight launcher first
+  - opens the startup dialog when called without subcommands
+  - still forwards non-launcher subcommands like `simulate` and `hbn-fit` into the shared CLI
+- `ra-sim` or `python -m ra_sim.cli`
+  - exposes the full shared CLI directly
 
-A typical workflow looks like this:
+Because of that split:
 
-1. Fit detector geometry with the calibrant workflow.
-2. Launch the main GUI and load your experimental background.
-3. Match 2D detector features first, then validate radial and azimuthal
-   integrations.
-4. Refine mosaic, stacking, and structural parameters and save parameter
-   snapshots for reproducibility.
+- `python -m ra_sim --help` shows launcher-oriented help only
+- `python -m ra_sim simulate --help` works
+- `python -m ra_sim.cli --help` or `ra-sim --help` is the clearest way to inspect the full CLI
 
-### Primary 2D Viewport
+### Common Entry Points
 
-The default main detector/caked viewport now uses the Tk-native canvas renderer.
-Set `RA_SIM_PRIMARY_VIEWPORT=matplotlib` to force the legacy embedded
-Matplotlib surface.
+| Task | `python -m ra_sim ...` | Installed script |
+| --- | --- | --- |
+| Startup chooser | `python -m ra_sim` | `ra-sim` |
+| Main GUI | `python -m ra_sim gui` | `ra-sim gui` |
+| Calibrant GUI | `python -m ra_sim calibrant --bundle bundle.npz` | `ra-sim calibrant --bundle bundle.npz` |
+| Mosaic visualizer | `python -m ra_sim mosaic` | `ra-sim mosaic` |
+| Headless image render | `python -m ra_sim simulate --out output.png` | `ra-sim simulate --out output.png` |
+| Headless hBN fit | `python -m ra_sim hbn-fit --load-bundle` | `ra-sim hbn-fit --load-bundle` |
+| Headless geometry fit from saved GUI state | `python -m ra_sim fit-geometry state.json` | `ra-sim fit-geometry state.json` |
+| Headless geometry + mosaic-shape fit | `python -m ra_sim fit-mosaic-shape state.json` | `ra-sim fit-mosaic-shape state.json` |
 
-The justification is specific to the main detector/caked image, not to plotting
-in general. Matplotlib is the better tool for full plotting workflows with
-axes, colorbars, figure layout, export, and the 1D analysis views used
-throughout RA-SIM. The primary diffraction image, however, behaves more like an
-interactive image viewport than a conventional plot: users pan, zoom, drag
-integration ranges, and click simulated features at high frequency. In that
-path, Matplotlib pays for its general artist and figure machinery on every
-interaction-driven redraw. A Tk `Canvas` can instead update one raster image
-plus lightweight overlay items directly, which reduces latency for detector and
-caked interactions while keeping the existing selection logic intact. The
-Matplotlib path remains the explicit fallback and is still the reference backend
-for figure-heavy tools.
+### Typical Workflow
 
-### Optics Modes
+1. Run the calibrant workflow if detector geometry is unknown or stale.
+2. Launch the main GUI and load the experimental background.
+3. Match detector-space features first.
+4. Use radial, azimuthal, and caked views to validate the alignment.
+5. Refine mosaic, stacking, and structural parameters once geometry is stable.
+6. Save parameter snapshots or GUI state files so the run can be reproduced headlessly.
 
-RA-SIM currently exposes two optics-transport models in the GUI and headless
-paths:
-
-- `Original Fast Approx (Fresnel + Beer-Lambert)` uses a grazing-angle
-  transmitted-angle approximation, Fresnel transmission factors, and
-  exponential depth attenuation. Exit optics are cached in a lookup table, so
-  this mode is much faster and is the default for interactive fitting.
-- `Complex-k DWBA slab optics (Precise)` keeps the same reflection list,
-  `solve_q` search, structure factors, and detector projection, but replaces
-  the entry and exit transport with a complex-`k_z` slab treatment. It computes
-  the in-sample and exit wavevectors from the slab dispersion relation and uses
-  exact Fresnel power transmission at the air/sample interfaces.
-
-In other words, the "DWBA" difference here is mainly in how the beam is
-refracted, transmitted, and attenuated on the way into and out of the sample.
-It is not a separate detector model or a different structure-factor engine.
-
-Detector placement now uses the solved outgoing direction itself rather than a
-refracted exit angle. The older fast-projection path solved an in-sample
-outgoing angle `2theta_t'`, remapped it to `2theta_t = arccos(n_real cos
-2theta_t') sign(2theta_t')`, and then intersected the detector with that
-remapped ray. Because `n_real < 1` for x-rays, that remap imposed a minimum
-projected angle near the critical angle `alpha_c = arccos(n_real)`, creating a
-forbidden strip around the sample plane and the moving horizontal empty line
-seen in some backgrounds. The current path keeps Fresnel transmission,
-attenuation, and related optics weights in the intensity, but uses the
-normalized solved outgoing vector for detector geometry.
-
-The current exact path is an air/sample/air slab model rather than a general
-multilayer stack. Use the fast mode when you need throughput, and the exact
-mode when refraction and near-critical-angle transport matter more than speed.
-
-### Manual Geometry Fit
-
-The GUI manual geometry-fit path uses one objective throughout the solve.
-
-- Manual picks keep a detector-native background anchor plus the chosen
-  simulated source identity.
-- Saved/manual geometry-fit runs rebuild missing source rows automatically from
-  the live runtime cache, the last retained or logged intersection cache, or a
-  fresh simulation before failing.
-- Source identity stays pinned to the saved source row or peak when that key is
-  still valid, then falls back through q-group or HKL-based rebinding if the
-  reflection ordering changed.
-- During refinement the solver recomputes both the observed and simulated points
-  in the same detector-derived angular space, using residuals in `(2theta, phi)`.
-- Geometry, lattice, wavelength, and shared-theta updates now re-anchor both the
-  simulated source rows and the measured/background peak maxima during the solve
-  until they converge.
-- Detector-geometry variables move both sides of the comparison; shared
-  sample-rotation variables only move the simulated side.
-- The GUI disables rematching, robust weighting, and post-polish stages for
-  this path so the solve stays on the manual correspondence workflow while still
-  refreshing those anchors as the underlying geometry changes.
-
-Reference:
-
-- [RA-SIM reference](docs/simulation_and_fitting.md)
-- [GUI workflow and views](docs/simulation_and_fitting.md#gui-workflow-and-views)
-- [Center of rotation axis math](docs/simulation_and_fitting.md#appendix-a-center-of-rotation-axis-math)
-- [Logging, debug, and cache controls](docs/simulation_and_fitting.md#logging-debug-and-cache-controls)
-
-<details>
-<summary>Advanced CLI examples</summary>
+### CLI Examples
 
 ```bash
-# Launch the GUI through the installed script
-ra-sim gui
+# Launch the simulation GUI
+python -m ra_sim gui
 
 # Save a headless simulation image
 python -m ra_sim simulate --out output.png --samples 2000 --image-size 3000
 
-# Use the default hBN paths file
+# Load the calibrant GUI with an existing bundle
+python -m ra_sim calibrant --bundle artifacts/hbn_ellipse_bundle.npz
+
+# Run the hBN workflow using defaults from config/hbn_paths.yaml
 python -m ra_sim hbn-fit --load-bundle
 
-# Use a custom hBN paths file
-python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
+# Reload a specific bundle and perform a high-resolution refine pass
+python -m ra_sim hbn-fit --load-bundle artifacts/hbn_ellipse_bundle.npz --highres-refine
 
-# Refit the hBN workflow at full resolution
-python -m ra_sim hbn-fit --load-bundle --highres-refine
+# Fit detector geometry from a saved GUI state
+python -m ra_sim fit-geometry saved_state.json
+
+# Fit geometry and then mosaic shape from a saved GUI state
+python -m ra_sim fit-mosaic-shape saved_state.json
 ```
 
+<details>
+<summary>Optics transport modes</summary>
+
+RA-SIM currently exposes two optics transport models in the GUI and headless paths:
+
+- `Original Fast Approx (Fresnel + Beer-Lambert)`
+  - uses a grazing-angle transmitted-angle approximation
+  - uses Fresnel transmission factors and exponential depth attenuation
+  - caches exit optics in a lookup table
+  - is the default throughput-oriented mode for interactive fitting
+- `Complex-k DWBA slab optics (Precise)`
+  - keeps the same reflection list, `solve_q` search, structure factors, and detector projection
+  - replaces entry and exit transport with a complex-`k_z` slab treatment
+  - computes in-sample and exit wavevectors from the slab dispersion relation
+  - uses exact Fresnel power transmission at the air/sample interfaces
+
+The practical difference is mostly how the beam is refracted, transmitted, and
+attenuated on the way into and out of the sample. It is not a separate detector
+model or a different structure-factor engine.
+
+Detector placement now uses the solved outgoing direction itself rather than a
+refracted exit-angle remap. The older fast-projection path could create a
+forbidden strip near the sample plane because `n_real < 1` for x-rays. The
+current path keeps the optics weights in the intensity model while intersecting
+the detector with the normalized solved outgoing vector.
+
+The exact path is currently an air/sample/air slab model rather than a general
+multilayer stack. Use the fast mode for throughput and the exact mode when
+near-critical-angle transport matters more than speed.
+
 </details>
+
+<details>
+<summary>Manual geometry-fit behavior</summary>
+
+The GUI manual geometry-fit workflow keeps one objective throughout the solve:
+
+- manual picks keep a detector-native background anchor plus the chosen simulated source identity
+- saved or restored runs rebuild missing source rows from live caches, retained intersection caches, or a fresh simulation before failing
+- source identity stays pinned to the saved source row or peak when possible, then falls back through q-group or HKL rebinding when reflection ordering changes
+- refinement recomputes observed and simulated points in the same detector-derived angular space and minimizes residuals in `(2theta, phi)`
+- geometry, lattice, wavelength, and shared-theta updates re-anchor both simulated source rows and measured/background maxima during the solve
+- detector-geometry variables move both sides of the comparison, while shared sample-rotation variables move only the simulated side
+- rematching, robust reweighting, and post-polish stages are disabled for this path so it stays on the manual correspondence workflow
+
+</details>
+
+## Runtime Toggles
+
+| Variable | What it does | Notes |
+| --- | --- | --- |
+| `RA_SIM_CONFIG_DIR` | Use an external config directory | Relative paths resolve from that directory |
+| `RA_SIM_PRIMARY_VIEWPORT` | Choose the primary 2D viewport backend | Current default is `matplotlib`; set `tk_canvas` to request the Tk-native viewport |
+| `RA_SIM_FAST_VIEWER` | Request the Qt/PyQtGraph fast-viewer path | Defaults to enabled when available; set `0` to keep it off |
+| `RA_SIM_DEBUG` | Enable verbose diagnostics | Does not override the global logging kill switch |
+| `RA_SIM_DISABLE_ALL_LOGGING` | Disable user-facing logging/debug output | Preferred master kill switch |
+| `RA_SIM_DISABLE_LOGGING` | Legacy logging disable switch | Still honored for compatibility |
+| `RA_SIM_DISABLE_PROJECTION_DEBUG` | Disable projection-debug artifacts | Useful when trimming debug noise |
+| `RA_SIM_LOG_INTERSECTION_CACHE` | Enable retained intersection-cache logging | Separate from active runtime state |
+| `RA_SIM_INTERSECTION_CACHE_LOG_DIR` | Override the retained intersection-cache log directory | Falls back to config-controlled locations otherwise |
+
+For the exact logging, debug, and cache semantics, use
+[`docs/debug-and-cache.md`](docs/debug-and-cache.md) and the canonical
+[`docs/simulation_and_fitting.md`](docs/simulation_and_fitting.md).
+
+### Per-Run Debug Bundles
+
+Each full RA-SIM process run now writes one zip bundle into `debug_log_dir`
+when the process exits normally:
+
+- `run_bundle_<stamp>.zip`
+
+The bundle is meant to keep one run's debug/cache context together. It can
+include:
+
+- geometry-fit logs
+- mosaic-shape fit logs
+- projection-debug JSON
+- diffraction debug CSV
+- retained intersection-cache dump folders
+- tracked run inputs such as `.poni`, measured-peak, saved-state, and parameter files
+- tracked outputs such as matched-peaks exports, saved GUI states, and headless simulation images
+- `manifest.json` describing bundled files, entrypoint, and omitted inputs
+
+To avoid copying the large raw experiment sources by default, detector `.osc`
+files and material `.cif` files are tracked as omitted inputs and are not
+copied into the zip.
+
+## Architecture at a Glance
+
+### Package Layout
+
+- `ra_sim/simulation/`: forward simulation engine, diffraction kernel, detector geometry
+- `ra_sim/fitting/`: geometry fitting, mosaic fitting, objectives, peak matching
+- `ra_sim/gui/`: Tk application, controllers, overlays, runtime workflows
+- `ra_sim/io/`: GUI state persistence, file parsing, OSC readers
+- `ra_sim/config/`: config loading, validation, material/instrument accessors
+- `ra_sim/hbn.py` and `ra_sim/hbn_geometry.py`: calibrant workflow and geometry conversion helpers
+- `tests/`: regression coverage for config, CLI, simulation, fitting, and GUI helpers
+
+### System Flow
+
+1. Config is loaded from `config/` or `RA_SIM_CONFIG_DIR`.
+2. The calibrant path can estimate beam center, tilt, and geometry hints from hBN rings.
+3. The GUI or CLI assembles beam, geometry, mosaic, and material inputs.
+4. The simulation engine produces detector-space predictions.
+5. Fitting code compares predictions against measured peaks or images.
+6. GUI/runtime code manages interaction state, retained caches, and analysis views.
+
+## Documentation Map
+
+Use these entry points depending on the question:
+
+- [docs/index.md](docs/index.md): short navigation hub
+- [docs/gui-workflow.md](docs/gui-workflow.md): operator workflow and headless equivalents
+- [docs/architecture.md](docs/architecture.md): package layout and edit routing
+- [docs/debug-and-cache.md](docs/debug-and-cache.md): logging, output locations, and cache policy
+- [docs/troubleshooting.md](docs/troubleshooting.md): setup and config failures
+- [docs/simulation_and_fitting.md](docs/simulation_and_fitting.md): canonical implementation reference
+
+If you need exact defaults, equations, or code-map-level detail, the canonical
+reference in `docs/simulation_and_fitting.md` is authoritative.
+
+## Development
+
+CI runs fast checks on Python 3.11 through 3.13 and the slower integration tier
+on Python 3.11.
+
+### Developer Entry Points
+
+| Command | What it does |
+| --- | --- |
+| `python -m ra_sim.dev bootstrap` | Install editable package with dev tooling |
+| `python -m ra_sim.dev format` | Format the current formatter frontier |
+| `python -m ra_sim.dev format-check` | Check formatting on the formatter frontier |
+| `python -m ra_sim.dev hooks` | Install local pre-commit hooks |
+| `python -m ra_sim.dev lint` | Run `ruff check .` |
+| `python -m ra_sim.dev typecheck` | Run the current mypy frontier |
+| `python -m ra_sim.dev test-fast` | Run the `fast` pytest tier |
+| `python -m ra_sim.dev test-integration` | Run the slower `integration` tier |
+| `python -m ra_sim.dev test-all` | Run the full pytest suite |
+| `python -m ra_sim.dev check` | Run format-check + lint + fast tests + typecheck |
+| `python -m ra_sim.dev lock` | Refresh `pylock.toml` |
+
+Installed-script equivalents work too:
+
+```bash
+ra-sim-dev format-check
+ra-sim-dev check
+ra-sim-dev test-integration
+ra-sim-dev hooks
+ra-sim-dev lock
+```
+
+### Validation Notes
+
+- `pytest` markers:
+  - `fast`: quick local-feedback tier
+  - `integration`: slower workflow-heavy tests
+  - `benchmark`: hardware-sensitive performance coverage
+- current mypy frontier targets:
+  - `ra_sim/config/`
+  - `ra_sim/dev.py`
+  - `ra_sim/fitting/optimization_runtime.py`
+  - `ra_sim/gui/_runtime/live_cache_helpers.py`
+
+### CI and Security Automation
+
+- CI bootstrap uses `python -m ra_sim.dev bootstrap`
+- CI fast checks use `python -m ra_sim.dev check`
+- integration tests run on Python 3.11
+- security automation rejects tracked machine-local paths, runs `pip-audit`,
+  and scans the repo with `gitleaks`
+
+## Troubleshooting
+
+### Tkinter Missing
+
+Symptom:
+
+- `python -m ra_sim gui` or `python -m ra_sim calibrant` fails because Tkinter is unavailable
+
+Fix:
+
+- install the system Tk package for your Python version, commonly `python3-tk` or `python3.11-tk` on Linux
+
+### Local Path Config Missing
+
+Symptom:
+
+- startup or headless runs fail because detector images, `.poni`, CIFs, or measured peaks are not configured
+
+Fix:
+
+1. Copy `config/file_paths.example.yaml` to `config/file_paths.yaml`.
+2. Copy `config/hbn_paths.example.yaml` to `config/hbn_paths.yaml` if you use the hBN workflow.
+3. Update the local files for your machine and experiment.
+4. Keep those overrides untracked.
+
+### Config Outside the Repository
+
+Symptom:
+
+- you need different config roots per machine or dataset
+
+Fix:
+
+- move the config files into another folder and set `RA_SIM_CONFIG_DIR` to that folder
+
+### hBN Bundle or Paths Confusion
+
+Symptom:
+
+- `python -m ra_sim hbn-fit --load-bundle` cannot find the bundle you expect
+
+Fix:
+
+- pass `--load-bundle /path/to/bundle.npz`
+- or set `bundle` in your local `config/hbn_paths.yaml`
+- or pass `--paths-file /path/to/custom_hbn_paths.yaml`
+
+### Security Workflow Rejects Local Paths
+
+Symptom:
+
+- CI rejects tracked files containing `/Users/`, `/home/`, or `C:\Users\`
+
+Fix:
+
+- keep machine-local values in ignored config files
+- keep only portable examples in `config/*.example.yaml`
+- scrub local absolute paths from tracked docs and JSON/YAML before pushing
+
+Need more detail:
+
+- [docs/troubleshooting.md](docs/troubleshooting.md)
+- [docs/debug-and-cache.md](docs/debug-and-cache.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Screenshots
 
@@ -278,37 +587,10 @@ python -m ra_sim hbn-fit --load-bundle --highres-refine
   </tr>
 </table>
 
-## Project Layout
+## Contributing
 
-- `ra_sim/` contains the core simulation, fitting, GUI, and CLI code.
-- `config/` contains default instrument, material, and path configuration files.
-- `docs/` contains GUI notes, figures, and supporting technical writeups.
-- `tests/` contains regression tests for the simulation, fitting, GUI helpers,
-  and CLI behavior.
-
-## Development
-
-The CI workflow runs on Python 3.11 through 3.13. Install the dev extra, then run:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-Local checks:
-
-```bash
-ruff check .
-pytest -q
-python -m mypy ra_sim/config ra_sim/simulation ra_sim/fitting ra_sim/gui
-```
-
-Set `RA_SIM_DEBUG=1` to enable verbose debug output and extra diagnostics.
-
-Security/governance automation:
-
-- Dependabot updates Python dependencies and GitHub Actions weekly.
-- The security workflow scans for committed secrets, vulnerable Python packages,
-  and tracked machine-local paths before merge.
+Contributor workflow, validation expectations, and local-config rules live in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Citation
 

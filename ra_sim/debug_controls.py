@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import atexit
+import json
 import os
+import threading
+import zipfile
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from ra_sim.config import get_config_bundle, get_dir
+from ra_sim.config import get_config_bundle, get_config_dir, get_dir
 
 
 _DEBUG_DEFAULTS: dict[str, Any] = {
@@ -43,6 +48,24 @@ _TRUTHY_VALUES = {"1", "true", "yes", "on"}
 _FALSY_VALUES = {"", "0", "false", "no", "off"}
 _VALID_CACHE_RETENTIONS = {"never", "auto", "always"}
 _STARTUP_DEBUG_LOG_PATH: Path | None = None
+_RUN_BUNDLE_EXCLUDED_INPUT_SUFFIXES = {".osc", ".cif"}
+_RUN_BUNDLE_LOCK = threading.Lock()
+
+
+@dataclass
+class _RunBundleState:
+    stamp: str
+    started_at: datetime
+    entrypoints: list[str] = field(default_factory=list)
+    roots: dict[str, Path] = field(default_factory=dict)
+    tracked_inputs: set[Path] = field(default_factory=set)
+    tracked_outputs: set[Path] = field(default_factory=set)
+    config_dir: Path | None = None
+    final_zip_path: Path | None = None
+    finalized: bool = False
+
+
+_RUN_BUNDLE_STATE: _RunBundleState | None = None
 
 CacheRetention = Literal["never", "auto", "always"]
 CacheFamily = Literal[
@@ -399,6 +422,317 @@ def reset_startup_debug_log_path() -> None:
     _STARTUP_DEBUG_LOG_PATH = None
 
 
+def _coerce_run_bundle_path(value: object) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        path = value.expanduser()
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        path = Path(text).expanduser()
+    else:
+        return None
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+    return path
+
+
+def _iter_run_bundle_paths(value: object) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, Mapping):
+        paths: list[Path] = []
+        for item in value.values():
+            paths.extend(_iter_run_bundle_paths(item))
+        return paths
+    if isinstance(value, (list, tuple, set, frozenset)):
+        paths: list[Path] = []
+        for item in value:
+            paths.extend(_iter_run_bundle_paths(item))
+        return paths
+    path = _coerce_run_bundle_path(value)
+    return [path] if path is not None else []
+
+
+def _run_bundle_roots() -> dict[str, Path]:
+    roots: dict[str, Path] = {}
+    for key in ("debug_log_dir",):
+        try:
+            roots[key] = Path(get_dir(key)).resolve()
+        except Exception:
+            continue
+    try:
+        roots["intersection_cache_log_root"] = Path(
+            resolve_intersection_cache_log_root()
+        ).expanduser().resolve()
+    except Exception:
+        pass
+    return roots
+
+
+def _register_run_bundle_config_files(state: _RunBundleState) -> None:
+    try:
+        config_dir = get_config_dir().resolve()
+    except Exception:
+        return
+    state.config_dir = config_dir
+    for pattern in ("*.yaml", "*.yml", "*.json"):
+        for path in sorted(config_dir.glob(pattern)):
+            if path.is_file():
+                state.tracked_inputs.add(path.resolve())
+
+
+def _runtime_trace_output_path(day: datetime) -> Path | None:
+    try:
+        downloads_dir = Path(get_dir("downloads")).resolve()
+    except Exception:
+        return None
+    return downloads_dir / f"runtime_update_trace_{day.strftime('%Y%m%d')}.log"
+
+
+def start_run_bundle(*, entrypoint: str | None = None) -> None:
+    """Start one process-scoped artifact bundle session if not already active."""
+
+    global _RUN_BUNDLE_STATE
+
+    with _RUN_BUNDLE_LOCK:
+        state = _RUN_BUNDLE_STATE
+        if state is None:
+            now = datetime.now()
+            state = _RunBundleState(
+                stamp=now.strftime("%Y%m%d_%H%M%S_%f"),
+                started_at=now,
+                roots=_run_bundle_roots(),
+            )
+            _register_run_bundle_config_files(state)
+            _RUN_BUNDLE_STATE = state
+        if entrypoint:
+            label = str(entrypoint).strip()
+            if label and label not in state.entrypoints:
+                state.entrypoints.append(label)
+        trace_path = _runtime_trace_output_path(state.started_at)
+        if trace_path is not None:
+            state.tracked_outputs.add(trace_path)
+
+
+def register_run_input_paths(value: object) -> None:
+    """Track one or more input paths for the active run bundle."""
+
+    global _RUN_BUNDLE_STATE
+
+    with _RUN_BUNDLE_LOCK:
+        if _RUN_BUNDLE_STATE is None:
+            return
+        for path in _iter_run_bundle_paths(value):
+            _RUN_BUNDLE_STATE.tracked_inputs.add(path)
+
+
+def register_run_output_path(value: object) -> None:
+    """Track one output path for the active run bundle."""
+
+    global _RUN_BUNDLE_STATE
+
+    with _RUN_BUNDLE_LOCK:
+        if _RUN_BUNDLE_STATE is None:
+            return
+        path = _coerce_run_bundle_path(value)
+        if path is not None:
+            _RUN_BUNDLE_STATE.tracked_outputs.add(path)
+
+
+def _run_bundle_path_changed_since_start(
+    path: Path,
+    *,
+    started_at: datetime,
+) -> bool:
+    try:
+        return path.stat().st_mtime >= started_at.timestamp()
+    except OSError:
+        return False
+
+
+def _run_bundle_safe_zip_path(path: Path) -> str:
+    parts = list(path.parts)
+    if path.drive:
+        parts = [path.drive.rstrip(":")] + parts[1:]
+    elif path.is_absolute():
+        parts = ["root"] + parts[1:]
+    cleaned = [str(part).replace("\\", "/") for part in parts if str(part) not in {"", "\\", "/"}]
+    return "/".join(cleaned)
+
+
+def _run_bundle_collect_directory_files(
+    root: Path,
+    *,
+    archive_prefix: str,
+    started_at: datetime,
+    collected: dict[Path, str],
+) -> None:
+    if not root.exists() or not root.is_dir():
+        return
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if not _run_bundle_path_changed_since_start(path, started_at=started_at):
+            continue
+        resolved = path.resolve()
+        if resolved in collected:
+            continue
+        try:
+            rel = resolved.relative_to(root.resolve()).as_posix()
+        except ValueError:
+            rel = resolved.name
+        collected[resolved] = f"{archive_prefix}/{rel}"
+
+
+def _run_bundle_collect_registered_path(
+    path: Path,
+    *,
+    archive_prefix: str,
+    started_at: datetime,
+    collected: dict[Path, str],
+    require_change: bool,
+) -> None:
+    if not path.exists():
+        return
+    if path.is_dir():
+        _run_bundle_collect_directory_files(
+            path,
+            archive_prefix=archive_prefix,
+            started_at=started_at,
+            collected=collected,
+        )
+        return
+    if require_change and not _run_bundle_path_changed_since_start(
+        path,
+        started_at=started_at,
+    ):
+        return
+    resolved = path.resolve()
+    if resolved not in collected:
+        collected[resolved] = f"{archive_prefix}/{_run_bundle_safe_zip_path(resolved)}"
+
+
+def _run_bundle_manifest(
+    state: _RunBundleState,
+    *,
+    zip_path: Path,
+    bundled_files: dict[Path, str],
+    omitted_inputs: list[str],
+) -> dict[str, object]:
+    return {
+        "started_at": state.started_at.isoformat(),
+        "finalized_at": datetime.now().isoformat(),
+        "entrypoints": list(state.entrypoints),
+        "config_dir": str(state.config_dir) if state.config_dir is not None else None,
+        "zip_path": str(zip_path),
+        "roots": {name: str(path) for name, path in sorted(state.roots.items())},
+        "tracked_inputs": [str(path) for path in sorted(state.tracked_inputs, key=str)],
+        "tracked_outputs": [str(path) for path in sorted(state.tracked_outputs, key=str)],
+        "excluded_input_suffixes": sorted(_RUN_BUNDLE_EXCLUDED_INPUT_SUFFIXES),
+        "omitted_inputs": sorted(omitted_inputs),
+        "bundled_files": [
+            {"path": str(path), "archive_path": arcname}
+            for path, arcname in sorted(bundled_files.items(), key=lambda item: item[1])
+        ],
+    }
+
+
+def finalize_run_bundle() -> Path | None:
+    """Write one per-run zip bundle into ``debug_log_dir`` and return its path."""
+
+    global _RUN_BUNDLE_STATE
+
+    with _RUN_BUNDLE_LOCK:
+        state = _RUN_BUNDLE_STATE
+        if state is None:
+            return None
+        if state.finalized:
+            return state.final_zip_path
+
+        debug_log_dir = state.roots.get("debug_log_dir")
+        if debug_log_dir is None:
+            try:
+                debug_log_dir = Path(get_dir("debug_log_dir")).resolve()
+            except Exception:
+                debug_log_dir = (Path.cwd() / "logs").resolve()
+                debug_log_dir.mkdir(parents=True, exist_ok=True)
+
+        bundled_files: dict[Path, str] = {}
+        roots = sorted(
+            state.roots.items(),
+            key=lambda item: (-len(str(item[1])), item[0]),
+        )
+        for root_name, root in roots:
+            _run_bundle_collect_directory_files(
+                root,
+                archive_prefix=f"roots/{root_name}",
+                started_at=state.started_at,
+                collected=bundled_files,
+            )
+
+        omitted_inputs: list[str] = []
+        for path in sorted(state.tracked_inputs, key=str):
+            if path.suffix.lower() in _RUN_BUNDLE_EXCLUDED_INPUT_SUFFIXES:
+                omitted_inputs.append(str(path))
+                continue
+            _run_bundle_collect_registered_path(
+                path,
+                archive_prefix="inputs",
+                started_at=state.started_at,
+                collected=bundled_files,
+                require_change=False,
+            )
+
+        trace_path = _runtime_trace_output_path(datetime.now())
+        if trace_path is not None:
+            state.tracked_outputs.add(trace_path)
+        for path in sorted(state.tracked_outputs, key=str):
+            _run_bundle_collect_registered_path(
+                path,
+                archive_prefix="outputs",
+                started_at=state.started_at,
+                collected=bundled_files,
+                require_change=True,
+            )
+
+        zip_path = debug_log_dir / f"run_bundle_{state.stamp}.zip"
+        manifest = _run_bundle_manifest(
+            state,
+            zip_path=zip_path,
+            bundled_files=bundled_files,
+            omitted_inputs=omitted_inputs,
+        )
+
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "manifest.json",
+                json.dumps(manifest, indent=2, sort_keys=True),
+            )
+            for path, arcname in sorted(bundled_files.items(), key=lambda item: item[1]):
+                if path.resolve() == zip_path.resolve():
+                    continue
+                if path.exists() and path.is_file():
+                    archive.write(path, arcname)
+
+        state.final_zip_path = zip_path
+        state.finalized = True
+        return zip_path
+
+
+def reset_run_bundle_state() -> None:
+    """Clear the process-scoped run bundle session."""
+
+    global _RUN_BUNDLE_STATE
+    with _RUN_BUNDLE_LOCK:
+        _RUN_BUNDLE_STATE = None
+
+
 def cache_retention_mode(
     family: CacheFamily | str,
     *,
@@ -445,15 +779,23 @@ __all__ = [
     "console_debug_enabled",
     "diffraction_debug_csv_logging_enabled",
     "env_flag_enabled",
+    "finalize_run_bundle",
     "geometry_fit_extra_sections_enabled",
     "geometry_fit_log_files_enabled",
     "intersection_cache_logging_enabled",
     "is_logging_disabled",
     "mosaic_fit_log_files_enabled",
     "projection_debug_logging_enabled",
+    "register_run_input_paths",
+    "register_run_output_path",
+    "reset_run_bundle_state",
     "reset_startup_debug_log_path",
     "retain_optional_cache",
     "resolve_intersection_cache_log_root",
     "resolve_startup_debug_log_path",
+    "start_run_bundle",
     "runtime_update_trace_logging_enabled",
 ]
+
+
+atexit.register(finalize_run_bundle)

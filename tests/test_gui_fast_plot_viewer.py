@@ -318,6 +318,59 @@ def test_forward_mouse_event_from_qpoint_dispatches_normalized_callback_payload(
     ]
 
 
+def test_forward_mouse_event_from_qpoint_prefers_view_range_mapping_for_upper_origin_view() -> None:
+    class _FakePoint:
+        def __init__(self, x: float, y: float) -> None:
+            self._x = float(x)
+            self._y = float(y)
+
+        def x(self):
+            return self._x
+
+        def y(self):
+            return self._y
+
+    class _FakeRect:
+        def width(self):
+            return 101.0
+
+        def height(self):
+            return 51.0
+
+    received = []
+    viewer = fast_plot_viewer.FastPlotViewer.__new__(fast_plot_viewer.FastPlotViewer)
+    viewer._mouse_event_callback = lambda *args: received.append(args)
+    viewer._plot_widget = SimpleNamespace(
+        viewport=lambda: SimpleNamespace(rect=lambda: _FakeRect()),
+        mapToScene=lambda _point: (_ for _ in ()).throw(
+            AssertionError("scene mapping should not be used")
+        ),
+    )
+    viewer._plot_item = SimpleNamespace(vb=SimpleNamespace())
+    viewer._current_view_range = lambda: (0.0, 100.0, 200.0, 0.0)
+    viewer._plot_viewport = lambda: viewer._plot_widget.viewport()
+
+    viewer._forward_mouse_event_from_qpoint(
+        "motion_notify_event",
+        _FakePoint(50.0, 25.0),
+        button=None,
+        dblclick=False,
+    )
+
+    assert received == [
+        (
+            "motion_notify_event",
+            50.0,
+            100.0,
+            50.0,
+            25.0,
+            None,
+            False,
+            True,
+        )
+    ]
+
+
 def test_handle_embedded_native_mouse_message_consumes_left_drag_sequence() -> None:
     class _FakePoint:
         def __init__(self, x: int, y: int) -> None:
@@ -1006,6 +1059,30 @@ def test_fast_viewer_maps_viewport_pixels_into_plot_view_coordinates() -> None:
     mapped = viewer.map_viewport_pixels_to_view_coords(10.2, 20.7)
 
     assert mapped == (30.0, 84.0, True)
+
+
+def test_fast_viewer_maps_viewport_pixels_via_current_view_range_for_upper_origin_view() -> None:
+    class _FakeRect:
+        def width(self):
+            return 101.0
+
+        def height(self):
+            return 51.0
+
+    viewer = fast_plot_viewer.FastPlotViewer.__new__(fast_plot_viewer.FastPlotViewer)
+    viewer._plot_widget = SimpleNamespace(
+        viewport=lambda: SimpleNamespace(rect=lambda: _FakeRect()),
+        mapToScene=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("scene mapping should not be used")
+        ),
+    )
+    viewer._plot_item = SimpleNamespace(vb=SimpleNamespace())
+    viewer._current_view_range = lambda: (0.0, 100.0, 200.0, 0.0)
+    viewer._plot_viewport = lambda: viewer._plot_widget.viewport()
+
+    mapped = viewer.map_viewport_pixels_to_view_coords(50.0, 25.0)
+
+    assert mapped == (50.0, 100.0, True)
 
 
 def test_fast_viewer_update_from_matplotlib_skips_unchanged_layer_pushes() -> None:

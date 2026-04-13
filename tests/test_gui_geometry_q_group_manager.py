@@ -111,7 +111,7 @@ def test_geometry_q_group_manager_nominal_hkl_grouping_supports_cache_rows() -> 
     assert peaks[0]["hkl"] == (1, 0, 1)
     assert peaks[0]["q_group_key"] == ("q_group", "primary", 1, 1)
     assert peaks[0]["q_group_nominal_hkl"] is True
-    assert peaks[0]["source_reflection_index"] == 0
+    assert "source_reflection_index" not in peaks[0]
     assert len(entries) == 1
     assert entries[0]["key"] == ("q_group", "primary", 1, 1)
     assert entries[0]["hkl_preview"] == [(1, 0, 1)]
@@ -230,8 +230,8 @@ def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> No
         [
             np.asarray(
                 [
-                    [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
-                    [8.0, 3.0, 4.0, 0.0, 1.0, 0.0, 1.0],
+                    [10.0, 1.2, 2.8, -15.0, 1.0, 0.0, 0.0],
+                    [8.0, 3.0, 4.0, 15.0, 1.0, 0.0, 1.0],
                 ],
                 dtype=float,
             )
@@ -253,10 +253,12 @@ def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> No
     assert peaks[0]["sim_col"] == 31.2
     assert peaks[0]["sim_row"] == 22.8
     assert peaks[0]["source_label"] == "primary"
+    assert peaks[0]["source_branch_index"] == 0
     assert peaks[0]["source_peak_index"] == 0
-    assert peaks[0]["source_reflection_index"] == 0
+    assert "source_reflection_index" not in peaks[0]
     assert peaks[1]["q_group_key"] == ("q_group", "primary", 1, 1)
     assert peaks[1]["source_row_index"] == 1
+    assert peaks[1]["source_branch_index"] == 1
     assert peaks[1]["source_peak_index"] == 1
 
     fallback_peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
@@ -874,9 +876,9 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
 
     cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
     assert len(cached_preview_peaks) == 1
-    assert cached_preview_peaks[0]["sim_col"] == 1.5
-    assert cached_preview_peaks[0]["sim_row"] == 2.5
-    assert cached_preview_peaks[0]["weight"] == 7.0
+    assert cached_preview_peaks[0]["sim_col"] == 4.0
+    assert cached_preview_peaks[0]["sim_row"] == 5.0
+    assert cached_preview_peaks[0]["weight"] == 6.0
     assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
     assert cached_preview_peaks[0]["label"] == "1,0,0"
     assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
@@ -1024,9 +1026,11 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "display_row": 2.5,
             "hkl_raw": [1, 0, 0],
             "intensity": 7.0,
+            "phi": 15.0,
             "source_label": "primary",
             "source_table_index": 0,
             "source_row_index": 1,
+            "source_peak_index": 13,
             "q_group_key": ("q_group", "primary", 1, 0),
         }
     ]
@@ -1041,6 +1045,9 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
     assert cached_preview_peaks[0]["label"] == "1,0,0"
     assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+    assert cached_preview_peaks[0]["source_branch_index"] == 1
+    assert cached_preview_peaks[0]["source_peak_index"] == 1
+    assert "source_reflection_index" not in cached_preview_peaks[0]
     runtime_state.peak_records[0].pop("q_group_key")
     cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
     assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)

@@ -145,6 +145,7 @@ def _build_algebraic_ht_export_rows(
     stack_layers=50,
     iodine_z=None,
     phase_delta_expression=None,
+    phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
     rod_points_per_gz=0,
 ):
     """Return row dictionaries for the algebraic HT text export."""

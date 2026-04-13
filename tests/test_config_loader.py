@@ -111,6 +111,39 @@ def test_loader_falls_back_to_example_file_paths_when_primary_missing(
     assert loader.get_path("cif_file") == "/tmp/example.cif"
 
 
+def test_loader_resolves_relative_file_paths_against_external_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        file_paths={
+            "cif_file": "./inputs/sample.cif",
+            "simulation_background_osc_files": ["./images/a.osc", "./images/b.osc"],
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    assert loader.get_path("cif_file") == str((cfg / "inputs" / "sample.cif").resolve())
+    assert loader.get_path("simulation_background_osc_files") == [
+        str((cfg / "images" / "a.osc").resolve()),
+        str((cfg / "images" / "b.osc").resolve()),
+    ]
+
+
+def test_repo_default_config_resolves_relative_paths_against_repo_root() -> None:
+    expected = (
+        Path(__file__).resolve().parents[1] / "data" / "geometry.poni"
+    ).resolve()
+
+    resolved = loader._resolve_path_value(
+        "./data/geometry.poni",
+        config_dir=loader.DEFAULT_CONFIG_DIR,
+    )
+
+    assert Path(str(resolved)).resolve() == expected
+
+
 def test_loader_cache_can_be_cleared_after_file_change(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -1,5 +1,8 @@
 import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from ra_sim import cli
 from ra_sim.gui import runtime as gui_runtime
@@ -100,6 +103,69 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
         ),
         ("launch", False, "simulation", None),
     ]
+
+
+def test_launch_simulation_gui_reframes_missing_input_paths(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    error_dialog_calls: list[tuple[str, str]] = []
+
+    class _FakeRoot:
+        def withdraw(self) -> None:
+            return None
+
+        def attributes(self, *_args) -> None:
+            return None
+
+        def destroy(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        launcher.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: SimpleNamespace(
+            tk=SimpleNamespace(
+                Tk=lambda: _FakeRoot(),
+                messagebox=SimpleNamespace(
+                    showerror=lambda title, message: error_dialog_calls.append(
+                        (title, message)
+                    )
+                ),
+            ),
+            ttk=None,
+        ),
+    )
+
+    monkeypatch.setattr(
+        launcher.install_prereqs,
+        "require_tkinter",
+        lambda entrypoint_label: None,
+    )
+    monkeypatch.setattr(launcher, "get_config_dir", lambda: cfg)
+    monkeypatch.setattr(
+        gui_runtime,
+        "main",
+        lambda **kwargs: (_ for _ in ()).throw(
+            FileNotFoundError(2, "No such file or directory", "./data/sample_01.osc")
+        ),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        launcher.launch_simulation_gui()
+
+    expected = (
+        "RA-SIM simulation GUI startup failed. "
+        "Missing file: ./data/sample_01.osc. "
+        f"No local config at '{cfg / 'file_paths.yaml'}'. "
+        "Copy `config/file_paths.example.yaml` to `config/file_paths.yaml` "
+        "and point it at local `.osc`, `.poni`, `.cif`, and measured-peak files. "
+        "Or set `RA_SIM_CONFIG_DIR` to your machine-specific config folder."
+    )
+    assert str(excinfo.value) == expected
+    assert error_dialog_calls == [("RA-SIM Startup Error", expected)]
 
 
 def test_launch_mosaic_visualizer_uses_installed_module(monkeypatch) -> None:

@@ -73,6 +73,7 @@ def reset_combined_simulation_artifacts(
         had_sim_image=bool(simulation_runtime_state.stored_sim_image is not None),
     )
     simulation_runtime_state.stored_max_positions_local = None
+    simulation_runtime_state.stored_source_reflection_indices_local = None
     simulation_runtime_state.stored_peak_table_lattice = None
     simulation_runtime_state.stored_sim_image = None
 
@@ -219,6 +220,9 @@ def apply_primary_cache_artifacts(
     )
     simulation_runtime_state.stored_primary_max_positions = copy_hit_tables(
         payload.get("peak_tables", [])
+    )
+    simulation_runtime_state.stored_primary_source_reflection_indices = list(
+        range(len(simulation_runtime_state.stored_primary_max_positions or ()))
     )
     peak_table_lattice = payload.get("peak_table_lattice", [])
     simulation_runtime_state.stored_primary_peak_table_lattice = (

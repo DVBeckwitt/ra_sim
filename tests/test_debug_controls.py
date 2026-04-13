@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import zipfile
 
 import pytest
 import yaml
@@ -10,15 +12,19 @@ from ra_sim.debug_controls import (
     cache_retention_mode,
     console_debug_enabled,
     diffraction_debug_csv_logging_enabled,
+    finalize_run_bundle,
     geometry_fit_extra_sections_enabled,
     geometry_fit_log_files_enabled,
     intersection_cache_logging_enabled,
     is_logging_disabled,
     mosaic_fit_log_files_enabled,
     projection_debug_logging_enabled,
+    register_run_output_path,
     retain_optional_cache,
+    reset_run_bundle_state,
     resolve_intersection_cache_log_root,
     resolve_startup_debug_log_path,
+    start_run_bundle,
     runtime_update_trace_logging_enabled,
 )
 
@@ -269,3 +275,103 @@ def test_cache_retention_is_separate_from_global_logging_disable(
     assert cache_retention_mode("caking") == "never"
     assert retain_optional_cache("primary_contribution", feature_needed=False) is True
     assert retain_optional_cache("caking", feature_needed=True) is False
+
+
+def test_run_bundle_zips_run_outputs_and_non_osc_non_cif_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir(parents=True)
+    inputs_dir = cfg / "inputs"
+    inputs_dir.mkdir()
+    logs_dir = tmp_path / "logs"
+    cache_logs_dir = tmp_path / "cache-logs"
+    _write_yaml(
+        cfg / "file_paths.yaml",
+        {
+            "measured_peaks": "./inputs/measured_peaks.npy",
+            "geometry_poni": "./inputs/geometry.poni",
+            "parameters_file": "./inputs/parameters.npy",
+            "simulation_background_osc_files": ["./inputs/background_01.osc"],
+            "cif_file": "./inputs/sample.cif",
+        },
+    )
+    _write_yaml(
+        cfg / "dir_paths.yaml",
+        {
+            "debug_log_dir": str(logs_dir),
+            "downloads": str(tmp_path / "downloads"),
+        },
+    )
+    _write_yaml(
+        cfg / "debug.yaml",
+        {
+            "debug": {
+                "intersection_cache": {
+                    "enabled": True,
+                    "log_dir": str(cache_logs_dir),
+                }
+            }
+        },
+    )
+    _write_yaml(cfg / "materials.yaml", {})
+    _write_yaml(cfg / "instrument.yaml", {})
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    measured_path = inputs_dir / "measured_peaks.npy"
+    measured_path.write_text("measured", encoding="utf-8")
+    poni_path = inputs_dir / "geometry.poni"
+    poni_path.write_text("poni", encoding="utf-8")
+    params_path = inputs_dir / "parameters.npy"
+    params_path.write_text("params", encoding="utf-8")
+    osc_path = inputs_dir / "background_01.osc"
+    osc_path.write_text("osc", encoding="utf-8")
+    cif_path = inputs_dir / "sample.cif"
+    cif_path.write_text("cif", encoding="utf-8")
+
+    start_run_bundle(entrypoint="test:bundle")
+
+    loader.get_path("measured_peaks")
+    loader.get_path("geometry_poni")
+    loader.get_path("parameters_file")
+    loader.get_path("simulation_background_osc_files")
+    loader.get_path("cif_file")
+
+    run_log_path = logs_dir / "geometry_fit_log_test.txt"
+    run_log_path.parent.mkdir(parents=True, exist_ok=True)
+    run_log_path.write_text("fit log", encoding="utf-8")
+
+    cache_dump_path = cache_logs_dir / "intersection_cache" / "intersection_cache_test" / "table_0000.npy"
+    cache_dump_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_dump_path.write_text("cache", encoding="utf-8")
+
+    output_path = tmp_path / "artifacts" / "result.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("png", encoding="utf-8")
+    register_run_output_path(output_path)
+
+    bundle_path = finalize_run_bundle()
+
+    assert bundle_path is not None
+    assert bundle_path == logs_dir / bundle_path.name
+    assert bundle_path.exists()
+
+    with zipfile.ZipFile(bundle_path) as archive:
+        names = archive.namelist()
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+    assert "manifest.json" in names
+    assert any(name.endswith("roots/debug_log_dir/geometry_fit_log_test.txt") for name in names)
+    assert any(name.endswith("roots/intersection_cache_log_root/intersection_cache/intersection_cache_test/table_0000.npy") for name in names)
+    assert any(name.startswith("inputs/") and name.endswith("/measured_peaks.npy") for name in names)
+    assert any(name.startswith("inputs/") and name.endswith("/geometry.poni") for name in names)
+    assert any(name.startswith("inputs/") and name.endswith("/parameters.npy") for name in names)
+    assert any(name.startswith("outputs/") and name.endswith("/result.png") for name in names)
+    assert not any(name.endswith(".osc") for name in names)
+    assert not any(name.endswith(".cif") for name in names)
+    assert str(osc_path.resolve()) in manifest["omitted_inputs"]
+    assert str(cif_path.resolve()) in manifest["omitted_inputs"]
+    assert manifest["entrypoints"] == ["test:bundle"]
+
+    reset_run_bundle_state()

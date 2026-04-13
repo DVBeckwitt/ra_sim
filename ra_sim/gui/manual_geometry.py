@@ -21,6 +21,7 @@ from ra_sim.fitting.background_peak_matching import (
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
+from ra_sim.utils.calculations import source_branch_index_from_phi_deg
 
 
 DEFAULT_POSITION_SIGMA_FLOOR_PX = 0.75
@@ -467,6 +468,7 @@ def normalize_geometry_manual_pair_entry(
         "source_table_index",
         "source_reflection_index",
         "source_row_index",
+        "source_branch_index",
         "source_peak_index",
     ):
         if key not in entry:
@@ -475,6 +477,15 @@ def normalize_geometry_manual_pair_entry(
             normalized[key] = int(entry.get(key))  # type: ignore[arg-type]
         except Exception:
             pass
+
+    if entry.get("source_reflection_namespace") is not None:
+        normalized["source_reflection_namespace"] = str(
+            entry.get("source_reflection_namespace")
+        )
+    if "source_reflection_is_full" in entry:
+        normalized["source_reflection_is_full"] = bool(
+            entry.get("source_reflection_is_full", False)
+        )
 
     if entry.get("source_label") is not None:
         normalized["source_label"] = str(entry.get("source_label"))
@@ -798,7 +809,10 @@ def geometry_manual_apply_refined_simulated_override(
             "label",
             "source_table_index",
             "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
             "source_row_index",
+            "source_branch_index",
             "source_peak_index",
             "source_label",
             "q_group_key",
@@ -1181,11 +1195,20 @@ def geometry_manual_candidate_source_key(
 
     if not isinstance(entry, dict):
         return None
+    source_branch_index = entry.get("source_branch_index")
+    if source_branch_index is None:
+        try:
+            legacy_branch = int(entry.get("source_peak_index"))
+        except Exception:
+            legacy_branch = -1
+        if legacy_branch in {0, 1}:
+            source_branch_index = int(legacy_branch)
     try:
+        reflection_idx = entry.get("source_reflection_index", entry.get("source_table_index"))
         return (
-            "source_peak",
-            int(entry.get("source_reflection_index", entry.get("source_table_index"))),
-            int(entry.get("source_peak_index")),
+            "source_branch",
+            int(reflection_idx),
+            int(source_branch_index),
         )
     except Exception:
         pass
@@ -1653,11 +1676,54 @@ def geometry_manual_live_peak_candidates_from_records(
     peak_records: Sequence[object] | None,
     *,
     normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+    source_reflection_indices_local: Sequence[object] | None = None,
+    source_row_hkl_lookup: Mapping[tuple[int, int], tuple[int, int, int]] | None = None,
+    active_signature_matches: bool = False,
 ) -> list[dict[str, object]]:
     """Normalize live HKL-pick peak records into manual-pick candidate rows."""
 
     if not isinstance(peak_records, Sequence) or isinstance(peak_records, (str, bytes)):
         return []
+
+    reflection_index_map = (
+        list(source_reflection_indices_local or ())
+        if isinstance(source_reflection_indices_local, Sequence)
+        and not isinstance(source_reflection_indices_local, (str, bytes))
+        else []
+    )
+
+    def _coerce_nonnegative_index(value: object) -> int | None:
+        try:
+            idx = int(value)
+        except Exception:
+            return None
+        return int(idx) if idx >= 0 else None
+
+    def _branch_from_entry(entry: Mapping[str, object]) -> tuple[int | None, str | None]:
+        explicit_branch = _coerce_nonnegative_index(entry.get("source_branch_index"))
+        if explicit_branch in {0, 1}:
+            return int(explicit_branch), "source_branch_index"
+        legacy_branch = _coerce_nonnegative_index(entry.get("source_peak_index"))
+        if legacy_branch in {0, 1}:
+            return int(legacy_branch), "source_peak_index"
+        for key in (
+            "phi",
+            "phi_deg",
+            "background_phi_deg",
+            "simulated_phi_deg",
+        ):
+            branch_idx = source_branch_index_from_phi_deg(entry.get(key))
+            if branch_idx in {0, 1}:
+                return int(branch_idx), str(key)
+        for key in (
+            "refined_sim_caked_y",
+            "caked_y",
+            "raw_caked_y",
+        ):
+            branch_idx = source_branch_index_from_phi_deg(entry.get(key))
+            if branch_idx in {0, 1}:
+                return int(branch_idx), str(key)
+        return None, None
 
     candidates: list[dict[str, object]] = []
     for raw_record in peak_records:
@@ -1691,6 +1757,52 @@ def geometry_manual_live_peak_candidates_from_records(
             entry["q_group_key"] = tuple(raw_group_key)
         elif not isinstance(raw_group_key, tuple):
             entry.pop("q_group_key", None)
+
+        branch_idx, _branch_source = _branch_from_entry(entry)
+        if branch_idx in {0, 1}:
+            entry["source_branch_index"] = int(branch_idx)
+            entry["source_peak_index"] = int(branch_idx)
+        else:
+            entry.pop("source_branch_index", None)
+            entry.pop("source_peak_index", None)
+
+        trusted_full_identity = False
+        table_idx = _coerce_nonnegative_index(entry.get("source_table_index"))
+        row_idx = _coerce_nonnegative_index(entry.get("source_row_index"))
+        if (
+            bool(active_signature_matches)
+            and table_idx is not None
+            and table_idx < len(reflection_index_map)
+            and isinstance(source_row_hkl_lookup, Mapping)
+        ):
+            reflection_idx = _coerce_nonnegative_index(reflection_index_map[int(table_idx)])
+            active_hkl_value = (
+                source_row_hkl_lookup.get((int(table_idx), int(row_idx)))
+                if row_idx is not None
+                else None
+            )
+            active_hkl = (
+                tuple(active_hkl_value)
+                if isinstance(active_hkl_value, (list, tuple, np.ndarray))
+                and len(active_hkl_value) >= 3
+                else ()
+            )
+            if (
+                reflection_idx is not None
+                and isinstance(active_hkl, tuple)
+                and len(active_hkl) == 3
+                and hkl_key is not None
+                and tuple(int(v) for v in active_hkl) == tuple(int(v) for v in hkl_key)
+            ):
+                entry["source_reflection_index"] = int(reflection_idx)
+                entry["source_reflection_namespace"] = "full_reflection"
+                entry["source_reflection_is_full"] = True
+                trusted_full_identity = True
+
+        if not trusted_full_identity:
+            entry.pop("source_reflection_index", None)
+            entry.pop("source_reflection_namespace", None)
+            entry.pop("source_reflection_is_full", None)
 
         candidates.append(entry)
     return candidates
@@ -2295,7 +2407,10 @@ def geometry_manual_pair_entry_from_candidate(
         "y": float(peak_row),
         "source_table_index": candidate.get("source_table_index"),
         "source_reflection_index": candidate.get("source_reflection_index"),
+        "source_reflection_namespace": candidate.get("source_reflection_namespace"),
+        "source_reflection_is_full": candidate.get("source_reflection_is_full"),
         "source_row_index": candidate.get("source_row_index"),
+        "source_branch_index": candidate.get("source_branch_index"),
         "source_peak_index": candidate.get("source_peak_index"),
         "source_label": candidate.get("source_label"),
         "q_group_key": group_key,
@@ -5091,6 +5206,7 @@ def geometry_manual_pair_entry_to_jsonable(
         "source_table_index",
         "source_reflection_index",
         "source_row_index",
+        "source_branch_index",
         "source_peak_index",
     ):
         if key in normalized:
@@ -5098,6 +5214,15 @@ def geometry_manual_pair_entry_to_jsonable(
                 row[key] = int(normalized[key])
             except Exception:
                 continue
+
+    if normalized.get("source_reflection_namespace") is not None:
+        row["source_reflection_namespace"] = str(
+            normalized.get("source_reflection_namespace")
+        )
+    if "source_reflection_is_full" in normalized:
+        row["source_reflection_is_full"] = bool(
+            normalized.get("source_reflection_is_full", False)
+        )
 
     if normalized.get("source_label") is not None:
         row["source_label"] = str(normalized.get("source_label"))

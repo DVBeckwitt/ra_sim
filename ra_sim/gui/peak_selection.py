@@ -9,10 +9,8 @@ from typing import Any
 import numpy as np
 
 from ra_sim.debug_controls import retain_optional_cache
-from ra_sim.simulation.diffraction import (
-    hit_tables_to_max_positions as diffraction_hit_tables_to_max_positions,
-)
 from . import views as gui_views
+from ra_sim.utils.calculations import source_branch_index_from_phi_deg
 
 
 @dataclass(frozen=True)
@@ -1372,7 +1370,7 @@ def _peak_overlay_cache_row_source_indices(
 def _peak_overlay_hit_row_peak_indices(
     rows: Sequence[np.ndarray] | None,
 ) -> list[int | None]:
-    """Assign each cached hit row to branch ``0`` or ``1``."""
+    """Assign each cached hit row to stable branch ``0`` or ``1``."""
 
     if rows is None:
         filtered_rows: list[np.ndarray] = []
@@ -1380,60 +1378,14 @@ def _peak_overlay_hit_row_peak_indices(
         filtered_rows = [np.asarray(row, dtype=float) for row in rows]
     if not filtered_rows:
         return []
-
-    try:
-        max_positions = np.asarray(
-            diffraction_hit_tables_to_max_positions(
-                [np.asarray(filtered_rows, dtype=np.float64)]
-            ),
-            dtype=np.float64,
-        )
-    except Exception:
-        max_positions = np.empty((0, 6), dtype=np.float64)
-
-    if max_positions.ndim != 2 or max_positions.shape[0] <= 0:
-        return [None] * len(filtered_rows)
-
-    branch_centers: list[tuple[int, float, float]] = []
-    try:
-        i0, x0, y0, i1, x1, y1 = max_positions[0]
-    except Exception:
-        return [None] * len(filtered_rows)
-    for peak_index, intensity, col, row in (
-        (0, i0, x0, y0),
-        (1, i1, x1, y1),
-    ):
-        if not np.isfinite(intensity) or float(intensity) <= 0.0:
-            continue
-        if not (np.isfinite(col) and np.isfinite(row)):
-            continue
-        branch_centers.append((int(peak_index), float(col), float(row)))
-
-    if not branch_centers:
-        return [None] * len(filtered_rows)
-    if len(branch_centers) == 1:
-        return [int(branch_centers[0][0])] * len(filtered_rows)
-
     assignments: list[int | None] = []
     for row in filtered_rows:
         try:
-            col = float(row[1])
-            row_px = float(row[2])
+            phi_deg = float(row[3])
         except Exception:
             assignments.append(None)
             continue
-        if not (np.isfinite(col) and np.isfinite(row_px)):
-            assignments.append(None)
-            continue
-        best_branch = min(
-            branch_centers,
-            key=lambda item: (
-                (float(item[1]) - float(col)) ** 2
-                + (float(item[2]) - float(row_px)) ** 2,
-                int(item[0]),
-            ),
-        )
-        assignments.append(int(best_branch[0]))
+        assignments.append(source_branch_index_from_phi_deg(phi_deg))
     return assignments
 
 
@@ -1562,6 +1514,14 @@ def ensure_runtime_peak_overlay_data(
     )
 
     _clear_peak_overlay_lists(simulation_runtime_state)
+    source_reflection_indices_local = (
+        list(getattr(simulation_runtime_state, "stored_source_reflection_indices_local", ()) or ())
+        if isinstance(
+            getattr(simulation_runtime_state, "stored_source_reflection_indices_local", None),
+            (list, tuple),
+        )
+        else []
+    )
 
     if peak_cached:
         simulation_runtime_state.peak_positions.extend(
@@ -1593,16 +1553,6 @@ def ensure_runtime_peak_overlay_data(
             max_positions_local,
             peak_table_lattice_local if isinstance(peak_table_lattice_local, (list, tuple)) else None,
         )
-        row_peak_indices_by_table: dict[int, list[int | None]] = {}
-        if isinstance(max_positions_local, (list, tuple)):
-            for table_idx, table in enumerate(max_positions_local):
-                try:
-                    table_arr = np.asarray(table, dtype=float)
-                except Exception:
-                    table_arr = np.empty((0, 0), dtype=float)
-                row_peak_indices_by_table[int(table_idx)] = _peak_overlay_hit_row_peak_indices(
-                    table_arr
-                )
         for tbl_arr, av_used, cv_used, source_label in intersection_entries:
             if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0 or tbl_arr.shape[1] < 9:
                 continue
@@ -1670,11 +1620,18 @@ def ensure_runtime_peak_overlay_data(
                     native_col=float(cx),
                     native_row=float(cy),
                 )
-                source_peak_index = None
-                if source_table_index is not None and source_row_index is not None:
-                    peak_indices = row_peak_indices_by_table.get(int(source_table_index), [])
-                    if 0 <= int(source_row_index) < len(peak_indices):
-                        source_peak_index = peak_indices[int(source_row_index)]
+                source_branch_index = source_branch_index_from_phi_deg(phi_val)
+                source_reflection_index = None
+                if (
+                    source_table_index is not None
+                    and 0 <= int(source_table_index) < len(source_reflection_indices_local)
+                ):
+                    try:
+                        source_reflection_index = int(
+                            source_reflection_indices_local[int(source_table_index)]
+                        )
+                    except Exception:
+                        source_reflection_index = None
 
                 simulation_runtime_state.peak_positions.append((float(disp_cx), float(disp_cy)))
                 simulation_runtime_state.peak_intensities.append(float(intensity))
@@ -1705,11 +1662,15 @@ def ensure_runtime_peak_overlay_data(
                 }
                 if source_table_index is not None:
                     record["source_table_index"] = int(source_table_index)
-                    record["source_reflection_index"] = int(source_table_index)
                 if source_row_index is not None:
                     record["source_row_index"] = int(source_row_index)
-                if source_peak_index in {0, 1}:
-                    record["source_peak_index"] = int(source_peak_index)
+                if source_reflection_index is not None and int(source_reflection_index) >= 0:
+                    record["source_reflection_index"] = int(source_reflection_index)
+                    record["source_reflection_namespace"] = "full_reflection"
+                    record["source_reflection_is_full"] = True
+                if source_branch_index in {0, 1}:
+                    record["source_branch_index"] = int(source_branch_index)
+                    record["source_peak_index"] = int(source_branch_index)
                 simulation_runtime_state.peak_records.append(record)
 
         if retain_cache:
@@ -1760,7 +1721,6 @@ def ensure_runtime_peak_overlay_data(
             source_label = "primary"
 
         row_order = np.argsort(tbl_arr[:, 0])[::-1]
-        row_peak_indices = _peak_overlay_hit_row_peak_indices(tbl_arr)
         chosen_rows: list[tuple[int, np.ndarray, float, float, float, float]] = []
 
         for row_idx in row_order:
@@ -1843,6 +1803,7 @@ def ensure_runtime_peak_overlay_data(
                 **q_group_kwargs,
             )
             simulation_runtime_state.peak_millers.append(hkl)
+            source_branch_index = source_branch_index_from_phi_deg(phi_val)
             record = {
                 "display_col": float(disp_cx),
                 "display_row": float(disp_cy),
@@ -1858,18 +1819,23 @@ def ensure_runtime_peak_overlay_data(
                 "two_theta_deg": float(two_theta_deg),
                 "phi_deg": float(phi_deg),
                 "source_table_index": int(table_idx),
-                "source_reflection_index": int(table_idx),
                 "source_row_index": int(row_idx),
-                "source_peak_index": int(
-                    row_peak_indices[row_idx]
-                    if row_idx < len(row_peak_indices)
-                    and row_peak_indices[row_idx] is not None
-                    else 0
-                ),
                 "source_label": str(source_label),
                 "av": float(av_used),
                 "cv": float(cv_used),
             }
+            if 0 <= int(table_idx) < len(source_reflection_indices_local):
+                try:
+                    source_reflection_index = int(source_reflection_indices_local[int(table_idx)])
+                except Exception:
+                    source_reflection_index = -1
+                if source_reflection_index >= 0:
+                    record["source_reflection_index"] = int(source_reflection_index)
+                    record["source_reflection_namespace"] = "full_reflection"
+                    record["source_reflection_is_full"] = True
+            if source_branch_index in {0, 1}:
+                record["source_branch_index"] = int(source_branch_index)
+                record["source_peak_index"] = int(source_branch_index)
             if use_nominal_cache_grouping:
                 record["q_group_nominal_hkl"] = True
             simulation_runtime_state.peak_records.append(record)

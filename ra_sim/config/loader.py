@@ -27,6 +27,35 @@ DEFAULT_DIRS: dict[str, str] = {
 }
 
 
+def _path_base_dir(config_dir: Path) -> Path:
+    """Return base directory used for relative file-path config values."""
+
+    resolved_dir = Path(config_dir).resolve()
+    if resolved_dir == DEFAULT_CONFIG_DIR.resolve():
+        return resolved_dir.parent
+    return resolved_dir
+
+
+def _resolve_path_value(value: Any, *, config_dir: Path) -> Any:
+    """Resolve relative file-path config values against stable config context."""
+
+    if isinstance(value, str):
+        expanded = os.path.expanduser(value)
+        if not expanded:
+            return expanded
+        if expanded.startswith(("/", "\\")):
+            return expanded
+        path = Path(expanded)
+        if path.is_absolute():
+            return str(path)
+        return str((_path_base_dir(config_dir) / path).resolve())
+    if isinstance(value, list):
+        return [_resolve_path_value(item, config_dir=config_dir) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_resolve_path_value(item, config_dir=config_dir) for item in value)
+    return value
+
+
 def get_config_dir() -> Path:
     """Return the active configuration directory.
 
@@ -141,6 +170,14 @@ _BUNDLE_CACHE: dict[Path, ConfigBundle] = {}
 _TEMP_DIR_CACHE: dict[Path, Path] = {}
 
 
+def _register_run_bundle_inputs(value: Any) -> None:
+    try:
+        from ra_sim.debug_controls import register_run_input_paths
+    except Exception:
+        return
+    register_run_input_paths(value)
+
+
 def clear_config_cache() -> None:
     """Clear cached configuration bundles."""
 
@@ -162,12 +199,13 @@ def get_config_bundle(config_dir: Path | None = None) -> ConfigBundle:
 def get_path(key: str, *, config_dir: Path | None = None) -> Any:
     """Return the configured file-path value for ``key``."""
 
-    value = get_config_bundle(config_dir).file_paths.get(key)
+    resolved_dir = (config_dir or get_config_dir()).resolve()
+    value = get_config_bundle(resolved_dir).file_paths.get(key)
     if value is None:
         raise KeyError(f"No path configured for {key!r}")
-    if isinstance(value, str):
-        return os.path.expanduser(value)
-    return value
+    resolved_value = _resolve_path_value(value, config_dir=resolved_dir)
+    _register_run_bundle_inputs(resolved_value)
+    return resolved_value
 
 
 def get_path_first(*keys: str, config_dir: Path | None = None) -> Any:
@@ -232,9 +270,7 @@ def get_material_config(
         material_block = materials[material]
     except KeyError as exc:
         available = ", ".join(sorted(materials)) or "<none>"
-        raise KeyError(
-            f"Unknown material {material!r}. Available materials: {available}"
-        ) from exc
+        raise KeyError(f"Unknown material {material!r}. Available materials: {available}") from exc
 
     return {
         "name": material,

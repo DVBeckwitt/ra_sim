@@ -13,14 +13,12 @@ from typing import Any
 import numpy as np
 
 from ra_sim.simulation.diffraction import (
-    hit_tables_to_max_positions as diffraction_hit_tables_to_max_positions,
-)
-from ra_sim.simulation.diffraction import (
     process_peaks_parallel as diffraction_process_peaks_parallel,
 )
 from ra_sim.simulation.diffraction import (
     process_peaks_parallel_safe as diffraction_process_peaks_parallel_safe,
 )
+from ra_sim.utils.calculations import source_branch_index_from_phi_deg
 
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
@@ -55,6 +53,7 @@ class GeometryQGroupRuntimeBindings:
     update_running: object | None = None
     has_cached_hit_tables: object | None = None
     build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None
+    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None
     miller: object | None = None
     intensities: object | None = None
     image_size: object | None = None
@@ -121,6 +120,7 @@ class GeometryFitSimulationRuntimeCallbacks:
 
     simulate_hit_tables: Callable[..., list[object]]
     simulate_peak_centers: Callable[..., list[dict[str, object]]]
+    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]]
     last_simulation_diagnostics: Callable[[], dict[str, object]]
 
 
@@ -388,65 +388,19 @@ def geometry_reference_hit_rows(table: object) -> list[np.ndarray]:
 def _geometry_hit_row_peak_indices(
     rows: Sequence[np.ndarray] | None,
 ) -> list[int | None]:
-    """Assign each filtered hit row to detector-side branch ``0`` or ``1``."""
+    """Assign each filtered hit row to stable detector-side branch ``0`` or ``1``."""
 
     filtered_rows = [np.asarray(row, dtype=float) for row in (rows or ())]
     if not filtered_rows:
         return []
-
-    try:
-        max_positions = np.asarray(
-            diffraction_hit_tables_to_max_positions(
-                [np.asarray(filtered_rows, dtype=np.float64)]
-            ),
-            dtype=np.float64,
-        )
-    except Exception:
-        max_positions = np.empty((0, 6), dtype=np.float64)
-
-    if max_positions.ndim != 2 or max_positions.shape[0] <= 0:
-        return [None] * len(filtered_rows)
-
-    branch_centers: list[tuple[int, float, float]] = []
-    try:
-        i0, x0, y0, i1, x1, y1 = max_positions[0]
-    except Exception:
-        return [None] * len(filtered_rows)
-    for peak_index, intensity, col, row in (
-        (0, i0, x0, y0),
-        (1, i1, x1, y1),
-    ):
-        if not np.isfinite(intensity) or float(intensity) <= 0.0:
-            continue
-        if not (np.isfinite(col) and np.isfinite(row)):
-            continue
-        branch_centers.append((int(peak_index), float(col), float(row)))
-
-    if not branch_centers:
-        return [None] * len(filtered_rows)
-    if len(branch_centers) == 1:
-        return [int(branch_centers[0][0])] * len(filtered_rows)
-
     assignments: list[int | None] = []
     for row in filtered_rows:
         try:
-            col = float(row[1])
-            row_px = float(row[2])
+            phi_deg = float(row[3])
         except Exception:
             assignments.append(None)
             continue
-        if not (np.isfinite(col) and np.isfinite(row_px)):
-            assignments.append(None)
-            continue
-        best_branch = min(
-            branch_centers,
-            key=lambda item: (
-                (float(item[1]) - float(col)) ** 2
-                + (float(item[2]) - float(row_px)) ** 2,
-                int(item[0]),
-            ),
-        )
-        assignments.append(int(best_branch[0]))
+        assignments.append(source_branch_index_from_phi_deg(phi_deg))
     return assignments
 
 
@@ -740,6 +694,7 @@ def build_geometry_fit_simulated_peaks(
         tuple[float, float],
     ],
     peak_table_lattice: Sequence[Sequence[object]] | None = None,
+    source_reflection_indices: Sequence[int] | None = None,
     primary_a: object = np.nan,
     primary_c: object = np.nan,
     default_source_label: str | None = "primary",
@@ -762,6 +717,12 @@ def build_geometry_fit_simulated_peaks(
 
     simulated_peaks: list[dict[str, object]] = []
     peak_table_lattice_local = list(peak_table_lattice or [])
+    source_reflection_indices_local = (
+        list(source_reflection_indices)
+        if isinstance(source_reflection_indices, Sequence)
+        and not isinstance(source_reflection_indices, (str, bytes))
+        else []
+    )
     for table_idx, tbl in enumerate(hit_tables):
         rows = geometry_reference_hit_rows(tbl)
         if not rows:
@@ -792,7 +753,7 @@ def build_geometry_fit_simulated_peaks(
                     )
 
         for row_idx, row in enumerate(rows):
-            intensity, xpix, ypix, _phi, h_val, k_val, l_val = row[:7]
+            intensity, xpix, ypix, phi_deg, h_val, k_val, l_val = row[:7]
             if not (np.isfinite(intensity) and np.isfinite(xpix) and np.isfinite(ypix)):
                 continue
 
@@ -825,23 +786,35 @@ def build_geometry_fit_simulated_peaks(
                 "sim_col": float(display_col),
                 "sim_row": float(display_row),
                 "weight": max(0.0, float(abs(intensity))),
-                "source_peak_index": int(
-                    row_peak_indices[row_idx]
-                    if row_idx < len(row_peak_indices)
-                    and row_peak_indices[row_idx] is not None
-                    else 0
-                ),
                 "source_label": str(source_label),
                 "source_table_index": int(table_idx),
-                "source_reflection_index": int(table_idx),
                 "source_row_index": int(row_idx),
                 "hkl_raw": hkl_raw,
+                "phi": float(phi_deg),
                 "av": float(av_used),
                 "cv": float(cv_used),
                 "qr": float(qr_val),
                 "qz": float(qz_val),
                 "q_group_key": q_group_key,
             }
+            branch_index = (
+                int(row_peak_indices[row_idx])
+                if row_idx < len(row_peak_indices)
+                and row_peak_indices[row_idx] in {0, 1}
+                else None
+            )
+            if branch_index in {0, 1}:
+                peak_record["source_branch_index"] = int(branch_index)
+                peak_record["source_peak_index"] = int(branch_index)
+            if table_idx < len(source_reflection_indices_local):
+                try:
+                    reflection_idx = int(source_reflection_indices_local[table_idx])
+                except Exception:
+                    reflection_idx = -1
+                if reflection_idx >= 0:
+                    peak_record["source_reflection_index"] = int(reflection_idx)
+                    peak_record["source_reflection_namespace"] = "full_reflection"
+                    peak_record["source_reflection_is_full"] = True
             if allow_nominal_hkl_indices:
                 peak_record["q_group_nominal_hkl"] = True
             simulated_peaks.append(peak_record)
@@ -921,6 +894,8 @@ def simulate_geometry_fit_hit_tables(
     image_size: int,
     param_set: Mapping[str, object] | dict[str, object],
     *,
+    build_geometry_fit_central_mosaic_params: Callable[[Mapping[str, object]], Mapping[str, object]]
+    | None = None,
     process_peaks_parallel: Callable[..., object],
     default_solve_q_steps: int,
     default_solve_q_rel_tol: float,
@@ -939,6 +914,13 @@ def simulate_geometry_fit_hit_tables(
     }
 
     mosaic = dict(params_local.get("mosaic_params", {}))
+    if not mosaic and callable(build_geometry_fit_central_mosaic_params):
+        try:
+            built_mosaic = build_geometry_fit_central_mosaic_params(params_local)
+        except Exception:
+            built_mosaic = None
+        if isinstance(built_mosaic, Mapping):
+            mosaic = dict(built_mosaic)
     wavelength_array = mosaic.get("wavelength_array")
     if wavelength_array is None:
         wavelength_array = mosaic.get("wavelength_i_array")
@@ -1053,6 +1035,8 @@ def simulate_geometry_fit_peak_centers(
     image_size: int,
     param_set: Mapping[str, object] | dict[str, object],
     *,
+    build_geometry_fit_central_mosaic_params: Callable[[Mapping[str, object]], Mapping[str, object]]
+    | None = None,
     process_peaks_parallel: Callable[..., object],
     hit_tables_to_max_positions: Callable[[Sequence[object]], Sequence[Sequence[float]]],
     default_solve_q_steps: int,
@@ -1067,6 +1051,9 @@ def simulate_geometry_fit_peak_centers(
             intensity_array,
             image_size,
             param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
             process_peaks_parallel=process_peaks_parallel,
             default_solve_q_steps=default_solve_q_steps,
             default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1111,8 +1098,92 @@ def simulate_geometry_fit_peak_centers(
         raise
 
 
+def simulate_geometry_fit_preview_style_peaks(
+    miller_array: np.ndarray,
+    intensity_array: np.ndarray,
+    image_size: int,
+    param_set: Mapping[str, object] | dict[str, object],
+    *,
+    build_geometry_fit_central_mosaic_params: Callable[[Mapping[str, object]], Mapping[str, object]]
+    | None = None,
+    process_peaks_parallel: Callable[..., object],
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+    peak_table_lattice: Sequence[Sequence[object]] | None = None,
+    primary_a: object = np.nan,
+    primary_c: object = np.nan,
+    default_source_label: str | None = None,
+    round_pixel_centers: bool = False,
+    default_solve_q_steps: int,
+    default_solve_q_rel_tol: float,
+    default_solve_q_mode: int,
+    allow_nominal_hkl_indices: bool = False,
+) -> list[dict[str, object]]:
+    """Simulate once and return preview-style per-branch peak records."""
+
+    try:
+        hit_tables = simulate_geometry_fit_hit_tables(
+            miller_array,
+            intensity_array,
+            image_size,
+            param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
+            process_peaks_parallel=process_peaks_parallel,
+            default_solve_q_steps=default_solve_q_steps,
+            default_solve_q_rel_tol=default_solve_q_rel_tol,
+            default_solve_q_mode=default_solve_q_mode,
+        )
+        peak_records = build_geometry_fit_simulated_peaks(
+            hit_tables,
+            image_shape=(int(image_size), int(image_size)),
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            peak_table_lattice=peak_table_lattice,
+            source_reflection_indices=list(range(len(hit_tables or ()))),
+            primary_a=primary_a,
+            primary_c=primary_c,
+            default_source_label=default_source_label,
+            round_pixel_centers=round_pixel_centers,
+            allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+        )
+        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+        diagnostics.update(
+            {
+                "stage": "simulate_preview_style_peaks",
+                "status": "success" if peak_records else "empty_peak_records",
+                "peak_count": int(len(peak_records)),
+                "projected_peak_count": int(len(peak_records)),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_preview_style_peaks,
+            diagnostics,
+        )
+        return peak_records
+    except Exception as exc:
+        diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
+        diagnostics.update(
+            {
+                "stage": "simulate_preview_style_peaks",
+                "status": "exception",
+                **_geometry_fit_exception_diagnostics(exc),
+            }
+        )
+        _set_function_last_diagnostics(
+            simulate_geometry_fit_preview_style_peaks,
+            diagnostics,
+        )
+        raise
+
+
 def make_runtime_geometry_fit_simulation_callbacks(
     *,
+    build_geometry_fit_central_mosaic_params: (
+        Callable[[Mapping[str, object]], Mapping[str, object]] | None
+    ) = None,
     process_peaks_parallel: Callable[..., object],
     hit_tables_to_max_positions: Callable[[Sequence[object]], Sequence[Sequence[float]]],
     native_sim_to_display_coords: Callable[
@@ -1198,6 +1269,9 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
+                build_geometry_fit_central_mosaic_params=(
+                    build_geometry_fit_central_mosaic_params
+                ),
                 process_peaks_parallel=process_peaks_parallel_runner,
                 default_solve_q_steps=default_solve_q_steps,
                 default_solve_q_rel_tol=default_solve_q_rel_tol,
@@ -1225,6 +1299,9 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 intensity_array,
                 image_size,
                 param_set,
+                build_geometry_fit_central_mosaic_params=(
+                    build_geometry_fit_central_mosaic_params
+                ),
                 process_peaks_parallel=process_peaks_parallel_runner,
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
                 default_solve_q_steps=default_solve_q_steps,
@@ -1241,9 +1318,52 @@ def make_runtime_geometry_fit_simulation_callbacks(
         )
         return result
 
+    def _simulate_preview_style_peaks(
+        miller_array: np.ndarray,
+        intensity_array: np.ndarray,
+        image_size: int,
+        param_set: Mapping[str, object] | dict[str, object],
+    ) -> list[dict[str, object]]:
+        peak_table_lattice = _resolve_runtime_value(peak_table_lattice_factory)
+        try:
+            result = simulate_geometry_fit_preview_style_peaks(
+                miller_array,
+                intensity_array,
+                image_size,
+                param_set,
+                build_geometry_fit_central_mosaic_params=(
+                    build_geometry_fit_central_mosaic_params
+                ),
+                process_peaks_parallel=process_peaks_parallel_runner,
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                peak_table_lattice=(
+                    list(peak_table_lattice)
+                    if isinstance(peak_table_lattice, Sequence)
+                    and not isinstance(peak_table_lattice, (str, bytes))
+                    else peak_table_lattice
+                ),
+                primary_a=_resolve_runtime_value(primary_a_factory),
+                primary_c=_resolve_runtime_value(primary_c_factory),
+                default_source_label=default_source_label,
+                round_pixel_centers=bool(round_pixel_centers),
+                default_solve_q_steps=default_solve_q_steps,
+                default_solve_q_rel_tol=default_solve_q_rel_tol,
+                default_solve_q_mode=default_solve_q_mode,
+            )
+        except Exception:
+            _set_last_simulation_diagnostics(
+                _function_last_diagnostics(simulate_geometry_fit_preview_style_peaks)
+            )
+            raise
+        _set_last_simulation_diagnostics(
+            _function_last_diagnostics(simulate_geometry_fit_preview_style_peaks)
+        )
+        return result
+
     return GeometryFitSimulationRuntimeCallbacks(
         simulate_hit_tables=_simulate_hit_tables,
         simulate_peak_centers=_simulate_peak_centers,
+        simulate_preview_style_peaks=_simulate_preview_style_peaks,
         last_simulation_diagnostics=_last_simulation_diagnostics,
     )
 
@@ -1301,51 +1421,6 @@ def make_runtime_geometry_q_group_value_callbacks(
         return False
 
     def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
-        cached_records = getattr(simulation_runtime_state, "peak_records", None)
-        if not isinstance(cached_records, Sequence) or isinstance(
-            cached_records,
-            (str, bytes),
-        ):
-            cached_records = ()
-
-        cached_peaks: list[dict[str, object]] = []
-        for raw_entry in cached_records:
-            if not isinstance(raw_entry, Mapping):
-                continue
-            entry = dict(raw_entry)
-            try:
-                display_col = float(entry.get("display_col", np.nan))
-                display_row = float(entry.get("display_row", np.nan))
-            except Exception:
-                continue
-            if not (np.isfinite(display_col) and np.isfinite(display_row)):
-                continue
-            entry["sim_col"] = float(display_col)
-            entry["sim_row"] = float(display_row)
-            if entry.get("weight") is None:
-                try:
-                    entry["weight"] = max(0.0, float(entry.get("intensity", 0.0)))
-                except Exception:
-                    pass
-            hkl = gui_geometry_overlay.normalize_hkl_key(
-                entry.get("hkl_raw", entry.get("hkl"))
-            )
-            if hkl is not None:
-                entry["hkl"] = hkl
-                entry.setdefault("label", f"{hkl[0]},{hkl[1]},{hkl[2]}")
-            if _has_intersection_cache() and "q_group_nominal_hkl" not in entry:
-                entry["q_group_nominal_hkl"] = True
-            raw_group_key = entry.get("q_group_key")
-            if isinstance(raw_group_key, list):
-                entry["q_group_key"] = tuple(raw_group_key)
-            elif not isinstance(raw_group_key, tuple):
-                group_key = geometry_q_group_key_from_entry(entry)
-                if group_key is not None:
-                    entry["q_group_key"] = group_key
-            cached_peaks.append(entry)
-        if cached_peaks:
-            return cached_peaks
-
         max_positions_local = simulation_runtime_state.stored_max_positions_local
         if isinstance(max_positions_local, Sequence) and not isinstance(
             max_positions_local,
@@ -1362,19 +1437,54 @@ def make_runtime_geometry_q_group_value_callbacks(
                 )
                 image_shape = (image_size, image_size)
 
+            peak_kwargs: dict[str, object] = {
+                "image_shape": image_shape,
+                "native_sim_to_display_coords": native_sim_to_display_coords,
+                "peak_table_lattice": simulation_runtime_state.stored_peak_table_lattice,
+                "primary_a": _primary_a(),
+                "primary_c": _primary_c(),
+                "default_source_label": "primary",
+                "round_pixel_centers": True,
+                "allow_nominal_hkl_indices": use_nominal_cache_grouping,
+            }
+            if (
+                simulation_runtime_state.stored_source_reflection_indices_local
+                is not None
+            ):
+                peak_kwargs["source_reflection_indices"] = (
+                    simulation_runtime_state.stored_source_reflection_indices_local
+                )
             simulated_peaks = build_geometry_fit_simulated_peaks(
                 max_positions_local,
-                image_shape=image_shape,
-                native_sim_to_display_coords=native_sim_to_display_coords,
-                peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-                primary_a=_primary_a(),
-                primary_c=_primary_c(),
-                default_source_label="primary",
-                round_pixel_centers=True,
-                allow_nominal_hkl_indices=use_nominal_cache_grouping,
+                **peak_kwargs,
             )
             if simulated_peaks:
                 return simulated_peaks
+
+        cached_peaks = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
+            getattr(simulation_runtime_state, "peak_records", None),
+            normalize_hkl_key=gui_geometry_overlay.normalize_hkl_key,
+            source_reflection_indices_local=(
+                getattr(
+                    simulation_runtime_state,
+                    "stored_source_reflection_indices_local",
+                    None,
+                )
+            ),
+            active_signature_matches=False,
+        )
+        for entry in cached_peaks:
+            if _has_intersection_cache() and "q_group_nominal_hkl" not in entry:
+                entry["q_group_nominal_hkl"] = True
+            raw_group_key = entry.get("q_group_key")
+            if isinstance(raw_group_key, list):
+                entry["q_group_key"] = tuple(raw_group_key)
+            elif not isinstance(raw_group_key, tuple):
+                group_key = geometry_q_group_key_from_entry(entry)
+                if group_key is not None:
+                    entry["q_group_key"] = group_key
+        if cached_peaks:
+            return cached_peaks
 
         return []
 
@@ -2692,7 +2802,54 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
     *,
     update_status: bool = True,
 ) -> list[dict[str, object]] | None:
-    """Return runtime live-preview peaks from cache only."""
+    """Return runtime live-preview peaks, preferring fresh simulation when possible."""
+
+    simulate_preview_style_peaks = bindings.simulate_preview_style_peaks
+    if callable(simulate_preview_style_peaks):
+        try:
+            miller_array = np.asarray(bindings.miller, dtype=float)
+            intensity_array = np.asarray(bindings.intensities, dtype=float).reshape(-1)
+            image_size_value = int(_resolve_runtime_value(bindings.image_size))
+            params_local = (
+                dict(bindings.current_geometry_fit_params_factory() or {})
+                if callable(bindings.current_geometry_fit_params_factory)
+                else {}
+            )
+        except Exception:
+            miller_array = np.empty((0, 3), dtype=float)
+            intensity_array = np.empty((0,), dtype=float)
+            image_size_value = 0
+            params_local = {}
+        if (
+            miller_array.ndim == 2
+            and miller_array.shape[0] > 0
+            and intensity_array.size >= miller_array.shape[0]
+            and image_size_value > 0
+        ):
+            try:
+                simulated_peaks = list(
+                    simulate_preview_style_peaks(
+                        miller_array,
+                        intensity_array,
+                        int(image_size_value),
+                        dict(params_local),
+                    )
+                    or []
+                )
+            except Exception as exc:
+                if callable(bindings.clear_geometry_preview_artists):
+                    bindings.clear_geometry_preview_artists()
+                if update_status:
+                    _set_status_text(
+                        bindings.set_status_text,
+                        (
+                            "Live auto-match preview unavailable: "
+                            f"failed to simulate peaks ({exc})."
+                        ),
+                    )
+                return None
+            if simulated_peaks:
+                return simulated_peaks
 
     build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
     simulated_peaks = (
@@ -3062,6 +3219,7 @@ def make_runtime_geometry_q_group_bindings_factory(
     update_running_factory: object | None = None,
     has_cached_hit_tables_factory: object | None = None,
     build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None,
+    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None,
     miller_factory: object | None = None,
     intensities_factory: object | None = None,
     image_size_value_factory: object | None = None,
@@ -3125,6 +3283,7 @@ def make_runtime_geometry_q_group_bindings_factory(
             build_live_preview_simulated_peaks_from_cache=(
                 build_live_preview_simulated_peaks_from_cache
             ),
+            simulate_preview_style_peaks=simulate_preview_style_peaks,
             miller=_resolve_runtime_value(miller_factory),
             intensities=_resolve_runtime_value(intensities_factory),
             image_size=_resolve_runtime_value(image_size_value_factory),

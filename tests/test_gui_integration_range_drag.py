@@ -90,8 +90,18 @@ class _FakeAxis:
 
 
 class _FakeImageDisplay:
-    def __init__(self, extent=(0.0, 3.0, 2.0, 0.0)):
+    def __init__(
+        self,
+        extent=(0.0, 3.0, 2.0, 0.0),
+        *,
+        source_extent=None,
+        source_origin=None,
+    ):
         self._extent = tuple(extent)
+        if source_extent is not None:
+            self._ra_sim_source_extent = tuple(source_extent)
+        if source_origin is not None:
+            self._ra_sim_source_origin = str(source_origin)
 
     def get_extent(self):
         return self._extent
@@ -801,6 +811,71 @@ def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     assert drag_state._fast_viewer_overlay_version >= 1
 
 
+def test_update_runtime_raw_drag_preview_prefers_source_extent_for_overlay_geometry() -> None:
+    overlay = _FakeOverlay()
+    drag_rect = _FakeRect()
+    overlay_rect = _FakeRect()
+    draw_calls = []
+    ai = object()
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [-10.0, -9.0, -8.0],
+            [0.0, 1.0, 2.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+    drag_state = state.IntegrationRangeDragState(
+        active=True,
+        mode="raw",
+        x0=0.2,
+        y0=1.1,
+        x1=1.8,
+        y1=2.0,
+        tth0=20.0,
+        phi0=0.0,
+        tth1=32.0,
+        phi1=12.0,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(),
+        drag_select_rect=drag_rect,
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(
+            extent=(100.0, 103.0, 203.0, 200.0),
+            source_extent=(0.0, 3.0, 3.0, 0.0),
+        ),
+        get_detector_angular_maps=lambda ai_arg: (
+            (two_theta, phi_vals) if ai_arg is ai else (None, None)
+        ),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: ai,
+        draw_idle=lambda: draw_calls.append(True),
+    )
+
+    updated = integration_range_drag.update_runtime_raw_drag_preview(bindings, ai)
+
+    assert updated is True
+    assert overlay.visible is True
+    assert overlay.extent == (0.0, 3.0, 3.0, 0.0)
+    assert int(np.sum(overlay.data)) > 0
+    assert draw_calls == [True]
+
+
 def test_display_to_detector_angles_respects_inverted_detector_extent() -> None:
     two_theta = np.asarray(
         [
@@ -851,6 +926,59 @@ def test_display_to_detector_angles_respects_inverted_detector_extent() -> None:
     assert bottom_angles == (30.0, 150.0)
 
 
+def test_display_to_detector_angles_prefers_source_extent_over_live_extent() -> None:
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [170.0, 175.0, -179.0],
+            [160.0, 165.0, -175.0],
+            [150.0, 155.0, -170.0],
+        ],
+        dtype=float,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0)),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(
+            extent=(100.0, 103.0, 203.0, 200.0),
+            source_extent=(0.0, 3.0, 3.0, 0.0),
+        ),
+        get_detector_angular_maps=lambda ai: (two_theta, phi_vals),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+    )
+
+    top_angles = integration_range_drag.display_to_detector_angles(
+        bindings,
+        0.2,
+        2.8,
+        object(),
+    )
+    bottom_angles = integration_range_drag.display_to_detector_angles(
+        bindings,
+        0.2,
+        0.2,
+        object(),
+    )
+
+    assert top_angles == (10.0, 170.0)
+    assert bottom_angles == (30.0, 150.0)
+
+
 def test_detector_preview_center_respects_inverted_detector_extent() -> None:
     two_theta = np.asarray(
         [
@@ -869,6 +997,39 @@ def test_detector_preview_center_respects_inverted_detector_extent() -> None:
         integration_region_overlay=_FakeOverlay(),
         integration_region_rect=_FakeRect(),
         image_display=_FakeImageDisplay(extent=(0.0, 3.0, 3.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (two_theta, two_theta),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+    )
+
+    center = integration_range_drag._detector_preview_center(bindings, two_theta)
+
+    assert center == (1.5, 2.5)
+
+
+def test_detector_preview_center_prefers_source_extent_over_live_extent() -> None:
+    two_theta = np.asarray(
+        [
+            [5.0, 1.0, 6.0],
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0)),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(
+            extent=(100.0, 103.0, 203.0, 200.0),
+            source_extent=(0.0, 3.0, 3.0, 0.0),
+        ),
         get_detector_angular_maps=lambda ai: (two_theta, two_theta),
         range_visible_factory=lambda: True,
         caked_view_enabled_factory=lambda: False,

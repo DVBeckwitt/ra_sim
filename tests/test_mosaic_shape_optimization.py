@@ -17,9 +17,7 @@ def _pseudo_voigt(delta_deg, sigma_deg, gamma_deg, eta):
     sigma = max(float(sigma_deg), 1.0e-3)
     gamma = max(float(gamma_deg), 1.0e-3)
     gaussian = np.exp(-0.5 * (np.asarray(delta_deg, dtype=np.float64) / sigma) ** 2)
-    lorentz = 1.0 / (
-        1.0 + (np.asarray(delta_deg, dtype=np.float64) / gamma) ** 2
-    )
+    lorentz = 1.0 / (1.0 + (np.asarray(delta_deg, dtype=np.float64) / gamma) ** 2)
     return float(eta) * gaussian + (1.0 - float(eta)) * lorentz
 
 
@@ -182,9 +180,7 @@ def _make_fake_process_peaks(
         del kwargs
         recorded_theta_values.append(float(theta_initial))
         if recorded_subsets is not None:
-            recorded_subsets.append(
-                np.asarray(miller_subset, dtype=np.float64, copy=True)
-            )
+            recorded_subsets.append(np.asarray(miller_subset, dtype=np.float64, copy=True))
         image = _render_image(
             miller_subset,
             intens_subset,
@@ -366,9 +362,7 @@ def test_fit_mosaic_shape_parameters_recovers_profile_parameters_and_uses_datase
     assert np.allclose(result.x, np.asarray(true_shape, dtype=np.float64), atol=1.0e-9)
     assert {round(value, 2) for value in recorded_theta_values} >= {3.0, 3.3}
     assert result.final_residual_rms >= 0.0
-    assert result.parameter_bounds["sigma_mosaic_deg"]["final"] == pytest.approx(
-        true_shape[0]
-    )
+    assert result.parameter_bounds["sigma_mosaic_deg"]["final"] == pytest.approx(true_shape[0])
     diag_by_label = {diag["dataset_label"]: diag for diag in result.dataset_diagnostics}
     assert diag_by_label["bg0"]["in_plane_roi_count"] == 2
     assert diag_by_label["bg0"]["specular_roi_count"] == 3
@@ -447,9 +441,7 @@ def test_fit_mosaic_shape_parameters_refines_per_dataset_theta_i(monkeypatch):
     assert result.success
     assert result.theta_refinement_mode == "per_dataset"
     assert result.theta_param_names == ["theta_initial[0]", "theta_initial[1]"]
-    assert result.refined_theta_values_by_dataset == pytest.approx(
-        {0: 3.0, 1: 3.3}
-    )
+    assert result.refined_theta_values_by_dataset == pytest.approx({0: 3.0, 1: 3.3})
     assert result.parameter_bounds["theta_initial[0]"]["final"] == pytest.approx(3.0)
     assert result.parameter_bounds["theta_initial[1]"]["final"] == pytest.approx(3.3)
     assert {round(value, 2) for value in recorded_theta_values} >= {2.7, 3.0, 3.3}
@@ -520,8 +512,7 @@ def test_fit_mosaic_shape_parameters_only_simulates_selected_profile_reflections
     assert recorded_subsets, "optimizer should simulate at least one selected subset"
     for subset in recorded_subsets:
         simulated_hkls = {
-            tuple(int(round(v)) for v in row)
-            for row in np.asarray(subset, dtype=np.float64)
+            tuple(int(round(v)) for v in row) for row in np.asarray(subset, dtype=np.float64)
         }
         assert simulated_hkls == selected_hkls
 

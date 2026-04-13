@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sys
 import inspect
@@ -30,7 +31,11 @@ from ra_sim.fitting.optimization import (
     _fit_space_pixel_size_provenance,
 )
 from ra_sim.gui import manual_geometry as gui_manual_geometry
-from ra_sim.utils.calculations import d_spacing, two_theta
+from ra_sim.utils.calculations import (
+    d_spacing,
+    source_branch_index_from_phi_deg,
+    two_theta,
+)
 from ra_sim.utils.notifications import play_completion_chime
 
 GeometryFitStageCallback = Callable[[str, Mapping[str, object]], None]
@@ -77,6 +82,22 @@ def build_geometry_fit_log_path(
         log_dir=log_dir,
         downloads_dir=downloads_dir,
     )
+
+
+def build_geometry_fit_trace_path(
+    *,
+    stamp: str,
+    log_dir: Path | str | None = None,
+    downloads_dir: Path | str | None = None,
+) -> Path:
+    """Return the structured JSONL trace path for one geometry-fit run."""
+
+    resolved_log_path = build_geometry_fit_log_path(
+        stamp=stamp,
+        log_dir=log_dir,
+        downloads_dir=downloads_dir,
+    )
+    return resolved_log_path.with_name(f"geometry_fit_trace_{stamp}.jsonl")
 
 
 _GEOMETRY_FIT_LOG_SEPARATOR = "=" * 80
@@ -296,6 +317,7 @@ class GeometryFitSourceRowRebuildResult:
     diagnostics: dict[str, object]
     peak_table_lattice: list[object] | None = None
     hit_tables: list[object] | None = None
+    source_reflection_indices: list[int] | None = None
     intersection_cache: list[object] | None = None
     metadata: dict[str, object] | None = None
 
@@ -518,6 +540,7 @@ class GeometryFitRuntimeExecutionResult:
     """Result metadata for one full runtime geometry-fit execution."""
 
     log_path: Path
+    trace_path: Path | None = None
     solver_request: GeometryFitSolverRequest | None = None
     solver_result: object | None = None
     apply_result: GeometryFitRuntimeApplyResult | None = None
@@ -558,6 +581,566 @@ def _emit_geometry_fit_stage_event(
         return
 
 
+def _geometry_fit_coerce_nonnegative_index(value: object) -> int | None:
+    try:
+        idx = int(value)
+    except Exception:
+        return None
+    return int(idx) if idx >= 0 else None
+
+
+def _geometry_fit_normalized_hkl(
+    value: object,
+) -> tuple[int, int, int] | None:
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 3:
+        return None
+    try:
+        return (
+            int(value[0]),
+            int(value[1]),
+            int(value[2]),
+        )
+    except Exception:
+        return None
+
+
+def _geometry_fit_trusted_full_reflection_identity(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
+    reflection_idx = _geometry_fit_coerce_nonnegative_index(
+        entry.get("source_reflection_index")
+    )
+    if reflection_idx is None:
+        return False
+    if namespace in {"full", "full_reflection", "miller"}:
+        return True
+    return bool(entry.get("source_reflection_is_full", False))
+
+
+def _geometry_fit_source_branch_resolution(
+    entry: Mapping[str, object] | None,
+) -> tuple[int | None, str | None]:
+    if not isinstance(entry, Mapping):
+        return None, None
+    explicit_branch = _geometry_fit_coerce_nonnegative_index(
+        entry.get("source_branch_index")
+    )
+    if explicit_branch in {0, 1}:
+        return int(explicit_branch), "source_branch_index"
+    legacy_branch = _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
+    if legacy_branch in {0, 1}:
+        return int(legacy_branch), "source_peak_index"
+    for key in (
+        "simulated_phi_deg",
+        "background_phi_deg",
+        "phi_deg",
+        "phi",
+    ):
+        branch_idx = source_branch_index_from_phi_deg(entry.get(key))
+        if branch_idx in {0, 1}:
+            return int(branch_idx), str(key)
+    for key in (
+        "refined_sim_caked_y",
+        "caked_y",
+        "raw_caked_y",
+    ):
+        branch_idx = source_branch_index_from_phi_deg(entry.get(key))
+        if branch_idx in {0, 1}:
+            return int(branch_idx), str(key)
+    return None, None
+
+
+def _geometry_fit_source_branch_index(
+    entry: Mapping[str, object] | None,
+) -> int | None:
+    branch_idx, _branch_source = _geometry_fit_source_branch_resolution(entry)
+    return branch_idx
+
+
+def _geometry_fit_source_row_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        return (
+            int(entry.get("source_table_index")),
+            int(entry.get("source_row_index")),
+        )
+    except Exception:
+        return None
+
+
+def _geometry_fit_source_reflection_row_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if not _geometry_fit_trusted_full_reflection_identity(entry):
+        return None
+    try:
+        return (
+            int(entry.get("source_reflection_index")),
+            int(entry.get("source_row_index")),
+        )
+    except Exception:
+        return None
+
+
+def _geometry_fit_source_peak_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    branch_idx = _geometry_fit_source_branch_index(entry)
+    reflection_idx = _geometry_fit_coerce_nonnegative_index(
+        entry.get("source_reflection_index")
+    )
+    if reflection_idx is None:
+        reflection_idx = _geometry_fit_coerce_nonnegative_index(
+            entry.get("source_table_index")
+        )
+    if branch_idx not in {0, 1} or reflection_idx is None:
+        return None
+    return int(reflection_idx), int(branch_idx)
+
+
+def _geometry_fit_source_entry_hkl_matches(
+    entry: Mapping[str, object] | None,
+    candidate: Mapping[str, object] | None,
+) -> bool:
+    entry_hkl = _geometry_fit_normalized_hkl(entry.get("hkl") if isinstance(entry, Mapping) else None)
+    candidate_hkl = _geometry_fit_normalized_hkl(
+        candidate.get("hkl") if isinstance(candidate, Mapping) else None
+    )
+    return (
+        entry_hkl is None
+        or candidate_hkl is None
+        or tuple(int(v) for v in candidate_hkl) == tuple(int(v) for v in entry_hkl)
+    )
+
+
+def _geometry_fit_source_entry_branch_matches(
+    entry: Mapping[str, object] | None,
+    candidate: Mapping[str, object] | None,
+) -> bool:
+    entry_branch = _geometry_fit_source_branch_index(entry)
+    candidate_branch = _geometry_fit_source_branch_index(candidate)
+    return (
+        entry_branch is None
+        or candidate_branch is None
+        or int(entry_branch) == int(candidate_branch)
+    )
+
+
+def _geometry_fit_filter_branch_candidates(
+    entry: Mapping[str, object] | None,
+    candidates: Sequence[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    candidate_pool = [
+        dict(candidate)
+        for candidate in (candidates or ())
+        if isinstance(candidate, Mapping)
+    ]
+    if not candidate_pool:
+        return []
+    entry_branch = _geometry_fit_source_branch_index(entry)
+    if entry_branch in {0, 1}:
+        matched = [
+            dict(candidate)
+            for candidate in candidate_pool
+            if _geometry_fit_source_branch_index(candidate) == int(entry_branch)
+        ]
+        if matched:
+            return matched
+        if _geometry_fit_trusted_full_reflection_identity(entry):
+            return []
+        return candidate_pool
+    if _geometry_fit_trusted_full_reflection_identity(entry):
+        candidate_branches = {
+            int(branch_idx)
+            for branch_idx in (
+                _geometry_fit_source_branch_index(candidate) for candidate in candidate_pool
+            )
+            if branch_idx in {0, 1}
+        }
+        if len(candidate_branches) > 1:
+            return []
+    return candidate_pool
+
+
+def _geometry_fit_is_canonical_live_source_entry(
+    entry: Mapping[str, object] | None,
+) -> tuple[bool, str | None]:
+    if not isinstance(entry, Mapping):
+        return False, "not_mapping"
+    branch_idx = _geometry_fit_source_branch_index(entry)
+    if branch_idx not in {0, 1}:
+        return False, "missing_branch"
+    peak_idx = _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
+    if peak_idx not in {0, 1} or int(peak_idx) != int(branch_idx):
+        return False, "peak_not_branch"
+    if not _geometry_fit_trusted_full_reflection_identity(entry):
+        return False, "untrusted_full_identity"
+    return True, None
+
+
+def _geometry_fit_trace_candidate_inventory(
+    candidates: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Build compact per-candidate diagnostics for live-row validation traces."""
+
+    inventory: list[dict[str, object]] = []
+    for raw_candidate in candidates or ():
+        if not isinstance(raw_candidate, Mapping):
+            continue
+        candidate = dict(raw_candidate)
+        inventory.append(
+            {
+                "source_reflection_index": candidate.get("source_reflection_index"),
+                "source_branch_index": _geometry_fit_source_branch_index(candidate),
+                "source_peak_index": candidate.get("source_peak_index"),
+                "source_table_index": candidate.get("source_table_index"),
+                "source_row_index": candidate.get("source_row_index"),
+                "hkl": _geometry_fit_normalized_hkl(candidate.get("hkl")),
+                "q_group_key": _geometry_fit_cache_jsonable(
+                    candidate.get("q_group_key")
+                ),
+                "simulated_point": [
+                    _geometry_fit_metric_float(candidate.get("sim_col", np.nan)),
+                    _geometry_fit_metric_float(candidate.get("sim_row", np.nan)),
+                ],
+                "source_reflection_namespace": candidate.get(
+                    "source_reflection_namespace"
+                ),
+                "source_reflection_is_full": bool(
+                    candidate.get("source_reflection_is_full", False)
+                ),
+            }
+        )
+    return inventory
+
+
+def _geometry_fit_resolved_pair_trace_entry(
+    *,
+    pair_id: str,
+    entry: Mapping[str, object],
+    candidate: Mapping[str, object],
+    resolution_kind: str,
+) -> dict[str, object]:
+    """Return the canonical pair-resolution trace for one validated pair."""
+
+    source_peak_key = _geometry_fit_source_peak_key(candidate)
+    return {
+        "pair_id": pair_id,
+        "overlay_match_index": entry.get("overlay_match_index"),
+        "resolution_kind": str(resolution_kind),
+        "hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
+        "source_reflection_index": candidate.get("source_reflection_index"),
+        "source_branch_index": _geometry_fit_source_branch_index(candidate),
+        "source_peak_index": candidate.get("source_peak_index"),
+        "source_table_index": candidate.get("source_table_index"),
+        "source_row_index": candidate.get("source_row_index"),
+        "canonical_identity": (
+            [int(source_peak_key[0]), int(source_peak_key[1])]
+            if isinstance(source_peak_key, tuple)
+            else None
+        ),
+        "q_group_key": _geometry_fit_cache_jsonable(entry.get("q_group_key")),
+        "simulated_point": [
+            _geometry_fit_metric_float(candidate.get("sim_col", np.nan)),
+            _geometry_fit_metric_float(candidate.get("sim_row", np.nan)),
+        ],
+        "source_reflection_namespace": candidate.get("source_reflection_namespace"),
+        "source_reflection_is_full": bool(
+            candidate.get("source_reflection_is_full", False)
+        ),
+    }
+
+
+def _geometry_fit_required_pair_dual_path_diff(
+    before_validation: Mapping[str, object] | None,
+    after_validation: Mapping[str, object] | None,
+) -> list[dict[str, object]]:
+    """Diff required-pair resolution between live-cache and rebuild paths."""
+
+    before_map: dict[str, dict[str, object]] = {}
+    after_map: dict[str, dict[str, object]] = {}
+    for raw_entry in (
+        before_validation.get("resolved_pairs", ())
+        if isinstance(before_validation, Mapping)
+        else ()
+    ):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        pair_id = str(raw_entry.get("pair_id", "")).strip()
+        if pair_id:
+            before_map[pair_id] = {"status": "resolved", **dict(raw_entry)}
+    for raw_entry in (
+        before_validation.get("pair_failures", ())
+        if isinstance(before_validation, Mapping)
+        else ()
+    ):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        pair_id = str(raw_entry.get("pair_id", "")).strip()
+        if pair_id:
+            before_map[pair_id] = {"status": "failed", **dict(raw_entry)}
+    for raw_entry in (
+        after_validation.get("resolved_pairs", ())
+        if isinstance(after_validation, Mapping)
+        else ()
+    ):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        pair_id = str(raw_entry.get("pair_id", "")).strip()
+        if pair_id:
+            after_map[pair_id] = {"status": "resolved", **dict(raw_entry)}
+    for raw_entry in (
+        after_validation.get("pair_failures", ())
+        if isinstance(after_validation, Mapping)
+        else ()
+    ):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        pair_id = str(raw_entry.get("pair_id", "")).strip()
+        if pair_id:
+            after_map[pair_id] = {"status": "failed", **dict(raw_entry)}
+
+    diffs: list[dict[str, object]] = []
+    for pair_id in sorted(set(before_map) | set(after_map)):
+        before_entry = before_map.get(pair_id, {"status": "missing"})
+        after_entry = after_map.get(pair_id, {"status": "missing"})
+        before_identity = before_entry.get("canonical_identity")
+        after_identity = after_entry.get("canonical_identity")
+        before_point = before_entry.get("simulated_point")
+        after_point = after_entry.get("simulated_point")
+        before_reason = before_entry.get("reason")
+        after_reason = after_entry.get("reason")
+        if (
+            before_entry.get("status") == after_entry.get("status")
+            and before_identity == after_identity
+            and before_point == after_point
+            and before_reason == after_reason
+        ):
+            continue
+        diffs.append(
+            {
+                "pair_id": pair_id,
+                "before_status": before_entry.get("status"),
+                "after_status": after_entry.get("status"),
+                "before_canonical_identity": before_identity,
+                "after_canonical_identity": after_identity,
+                "before_simulated_point": before_point,
+                "after_simulated_point": after_point,
+                "before_reason": before_reason,
+                "after_reason": after_reason,
+            }
+        )
+    return diffs
+
+
+def validate_geometry_fit_live_source_rows(
+    live_rows: Sequence[object] | None,
+    *,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    """Validate whether live/source rows satisfy canonical identity for active pairs."""
+
+    rows = [
+        dict(entry)
+        for entry in (live_rows or ())
+        if isinstance(entry, Mapping)
+    ]
+    trusted_full_count = 0
+    canonical_branch_count = 0
+    canonical_rows: list[dict[str, object]] = []
+    invalid_rows: list[dict[str, object]] = []
+    canonical_id_counts: Counter[tuple[int, int]] = Counter()
+    for row_index, entry in enumerate(rows):
+        if _geometry_fit_trusted_full_reflection_identity(entry):
+            trusted_full_count += 1
+        branch_idx = _geometry_fit_source_branch_index(entry)
+        if branch_idx in {0, 1}:
+            canonical_branch_count += 1
+        is_canonical, reason = _geometry_fit_is_canonical_live_source_entry(entry)
+        if is_canonical:
+            canonical_rows.append(dict(entry))
+            peak_key = _geometry_fit_source_peak_key(entry)
+            if peak_key is not None:
+                canonical_id_counts[(int(peak_key[0]), int(peak_key[1]))] += 1
+            continue
+        invalid_rows.append(
+            {
+                "row_index": int(row_index),
+                "reason": str(reason or "invalid"),
+                "source_table_index": entry.get("source_table_index"),
+                "source_reflection_index": entry.get("source_reflection_index"),
+                "source_row_index": entry.get("source_row_index"),
+                "source_peak_index": entry.get("source_peak_index"),
+                "source_branch_index": entry.get("source_branch_index"),
+                "hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
+            }
+        )
+
+    canonical_by_row: dict[tuple[int, int], dict[str, object]] = {}
+    canonical_by_reflection_row: dict[tuple[int, int], dict[str, object]] = {}
+    canonical_by_peak: dict[tuple[int, int], dict[str, object]] = {}
+    canonical_by_q_group: dict[object, list[dict[str, object]]] = defaultdict(list)
+    canonical_by_hkl: dict[tuple[int, int, int], list[dict[str, object]]] = defaultdict(list)
+    for entry in canonical_rows:
+        row_key = _geometry_fit_source_row_key(entry)
+        if row_key is not None:
+            canonical_by_row[row_key] = dict(entry)
+        reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
+        if reflection_row_key is not None:
+            canonical_by_reflection_row[reflection_row_key] = dict(entry)
+        peak_key = _geometry_fit_source_peak_key(entry)
+        if peak_key is not None:
+            canonical_by_peak[peak_key] = dict(entry)
+        q_group_key = entry.get("q_group_key")
+        if q_group_key is not None:
+            canonical_by_q_group[q_group_key].append(dict(entry))
+        hkl_key = _geometry_fit_normalized_hkl(entry.get("hkl"))
+        if hkl_key is not None:
+            canonical_by_hkl[hkl_key].append(dict(entry))
+
+    pair_failures: list[dict[str, object]] = []
+    resolved_pairs: list[dict[str, object]] = []
+    validated_pair_count = 0
+    for fallback_index, raw_entry in enumerate(required_pairs or ()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        validated_pair_count += 1
+        entry = dict(raw_entry)
+        pair_id = str(
+            entry.get("pair_id")
+            or f"pair[{int(entry.get('overlay_match_index', fallback_index))}]"
+        )
+        trusted_identity = _geometry_fit_trusted_full_reflection_identity(entry)
+        candidate: dict[str, object] | None = None
+        failure_reason: str | None = None
+        resolution_kind: str | None = None
+        branch_candidates: list[dict[str, object]] = []
+
+        reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
+        if reflection_row_key is not None:
+            candidate = canonical_by_reflection_row.get(reflection_row_key)
+            if not (
+                isinstance(candidate, Mapping)
+                and _geometry_fit_source_entry_hkl_matches(entry, candidate)
+                and _geometry_fit_source_entry_branch_matches(entry, candidate)
+            ):
+                candidate = None
+                if trusted_identity:
+                    failure_reason = "missing_trusted_reflection_row"
+            elif isinstance(candidate, Mapping):
+                resolution_kind = "trusted_reflection_row"
+
+        if candidate is None and not trusted_identity:
+            row_key = _geometry_fit_source_row_key(entry)
+            if row_key is not None:
+                row_candidate = canonical_by_row.get(row_key)
+                if (
+                    isinstance(row_candidate, Mapping)
+                    and _geometry_fit_source_entry_hkl_matches(entry, row_candidate)
+                    and _geometry_fit_source_entry_branch_matches(entry, row_candidate)
+                ):
+                    candidate = dict(row_candidate)
+                    resolution_kind = "source_row"
+
+        if candidate is None and not trusted_identity:
+            peak_key = _geometry_fit_source_peak_key(entry)
+            if peak_key is not None:
+                peak_candidate = canonical_by_peak.get(peak_key)
+                if (
+                    isinstance(peak_candidate, Mapping)
+                    and _geometry_fit_source_entry_hkl_matches(entry, peak_candidate)
+                    and _geometry_fit_source_entry_branch_matches(entry, peak_candidate)
+                ):
+                    candidate = dict(peak_candidate)
+                    resolution_kind = "source_peak"
+
+        if candidate is None and not trusted_identity:
+            candidate_pool: list[dict[str, object]] = []
+            q_group_key = entry.get("q_group_key")
+            if q_group_key is not None:
+                candidate_pool = [
+                    dict(item)
+                    for item in canonical_by_q_group.get(q_group_key, ())
+                    if isinstance(item, Mapping)
+                ]
+            if not candidate_pool:
+                hkl_key = _geometry_fit_normalized_hkl(entry.get("hkl"))
+                if hkl_key is not None:
+                    candidate_pool = [
+                        dict(item)
+                        for item in canonical_by_hkl.get(hkl_key, ())
+                        if isinstance(item, Mapping)
+                    ]
+            candidate_pool = _geometry_fit_filter_branch_candidates(entry, candidate_pool)
+            candidate_pool = [
+                dict(item)
+                for item in candidate_pool
+                if _geometry_fit_source_entry_hkl_matches(entry, item)
+            ]
+            branch_candidates = _geometry_fit_trace_candidate_inventory(candidate_pool)
+            if len(candidate_pool) == 1:
+                candidate = dict(candidate_pool[0])
+                resolution_kind = "q_group_or_hkl"
+            elif len(candidate_pool) > 1:
+                failure_reason = "ambiguous_canonical_candidate"
+
+        if candidate is None:
+            pair_failures.append(
+                {
+                    "pair_id": pair_id,
+                    "overlay_match_index": entry.get("overlay_match_index"),
+                    "reason": str(failure_reason or "missing_canonical_candidate"),
+                    "hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
+                    "source_table_index": entry.get("source_table_index"),
+                    "source_reflection_index": entry.get("source_reflection_index"),
+                    "source_row_index": entry.get("source_row_index"),
+                    "source_peak_index": entry.get("source_peak_index"),
+                    "source_branch_index": _geometry_fit_source_branch_index(entry),
+                    "trusted_identity_required": bool(trusted_identity),
+                    "branch_candidates": branch_candidates,
+                }
+            )
+            continue
+
+        resolved_pairs.append(
+            _geometry_fit_resolved_pair_trace_entry(
+                pair_id=pair_id,
+                entry=entry,
+                candidate=candidate,
+                resolution_kind=str(resolution_kind or "canonical"),
+            )
+        )
+
+    duplicate_canonical_ids = {
+        f"{int(key[0])}:{int(key[1])}": int(count)
+        for key, count in canonical_id_counts.items()
+        if int(count) > 1
+    }
+    return {
+        "valid": not pair_failures,
+        "row_count": int(len(rows)),
+        "canonical_row_count": int(len(canonical_rows)),
+        "trusted_full_id_count": int(trusted_full_count),
+        "canonical_branch_id_count": int(canonical_branch_count),
+        "required_pair_count": int(validated_pair_count),
+        "validated_pair_count": int(validated_pair_count),
+        "pair_failures": pair_failures,
+        "resolved_pairs": resolved_pairs,
+        "invalid_rows": invalid_rows,
+        "duplicate_canonical_ids": duplicate_canonical_ids,
+    }
+
+
 def rebuild_geometry_fit_source_rows(
     *,
     background_index: int,
@@ -583,7 +1166,12 @@ def rebuild_geometry_fit_source_rows(
     | None,
     build_source_rows_from_hit_tables: Callable[
         [Sequence[object]],
-        tuple[Sequence[object], Sequence[object] | None, Sequence[object] | None],
+        tuple[
+            Sequence[object],
+            Sequence[object] | None,
+            Sequence[object] | None,
+            Sequence[int] | None,
+        ],
     ],
     simulate_hit_tables: Callable[[Mapping[str, object]], Sequence[object]] | None,
     last_runtime_simulation_diagnostics: (
@@ -591,6 +1179,7 @@ def rebuild_geometry_fit_source_rows(
         | None
     ) = None,
     project_rows: Callable[[Sequence[object] | None], Sequence[object]] | None = None,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
     live_cache_inventory: Mapping[str, object]
     | Callable[[], Mapping[str, object]]
     | None = None,
@@ -606,6 +1195,7 @@ def rebuild_geometry_fit_source_rows(
     )
     normalized_params = dict(params_local or {})
     rebuild_attempts: list[str] = []
+    live_cache_validation: dict[str, object] | None = None
 
     def _copy_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [
@@ -676,12 +1266,30 @@ def rebuild_geometry_fit_source_rows(
                 projected_rows = raw_rows
         return _copy_rows(projected_rows)
 
+    def _build_source_rows_result(
+        hit_tables_local: Sequence[object],
+    ) -> tuple[
+        Sequence[object],
+        Sequence[object] | None,
+        Sequence[object] | None,
+        Sequence[int] | None,
+    ]:
+        raw_result = build_source_rows_from_hit_tables(hit_tables_local)
+        if isinstance(raw_result, tuple):
+            if len(raw_result) == 4:
+                return raw_result
+            if len(raw_result) == 3:
+                rows, peak_table_lattice, returned_hit_tables = raw_result
+                return rows, peak_table_lattice, returned_hit_tables, None
+        return raw_result, None, None, None
+
     def _success_result(
         raw_rows: Sequence[object] | None,
         *,
         rebuild_source: str,
         peak_table_lattice: Sequence[object] | None = None,
         hit_tables_local: Sequence[object] | None = None,
+        source_reflection_indices: Sequence[int] | None = None,
         intersection_cache_local: Sequence[object] | None = None,
         metadata: Mapping[str, object] | None = None,
         runtime_simulation_diagnostics: Mapping[str, object] | None = None,
@@ -689,6 +1297,29 @@ def rebuild_geometry_fit_source_rows(
         stored_rows = _copy_rows(raw_rows)
         projected_rows = _project_copied_rows(stored_rows)
         cache_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        if isinstance(live_cache_validation, Mapping) and live_cache_validation:
+            cache_metadata.setdefault(
+                "live_runtime_cache_validation",
+                copy.deepcopy(dict(live_cache_validation)),
+            )
+            if str(rebuild_source) != "live_runtime_cache":
+                rebuilt_validation = validate_geometry_fit_live_source_rows(
+                    stored_rows,
+                    required_pairs=required_pairs,
+                )
+                dual_path_diff = _geometry_fit_required_pair_dual_path_diff(
+                    live_cache_validation,
+                    rebuilt_validation,
+                )
+                cache_metadata.setdefault(
+                    "live_runtime_cache_rebuild_validation",
+                    copy.deepcopy(dict(rebuilt_validation)),
+                )
+                if dual_path_diff:
+                    cache_metadata.setdefault(
+                        "live_runtime_cache_dual_path_diff",
+                        copy.deepcopy(list(dual_path_diff)),
+                    )
         diagnostics = _merge_runtime_simulation_diagnostics(
             {
             "source": "source_snapshot",
@@ -725,6 +1356,12 @@ def rebuild_geometry_fit_source_rows(
             diagnostics=diagnostics,
             peak_table_lattice=_copy_optional_sequence(peak_table_lattice),
             hit_tables=_copy_optional_sequence(hit_tables_local),
+            source_reflection_indices=(
+                list(source_reflection_indices)
+                if isinstance(source_reflection_indices, Sequence)
+                and not isinstance(source_reflection_indices, (str, bytes))
+                else None
+            ),
             intersection_cache=_copy_optional_sequence(intersection_cache_local),
             metadata=cache_metadata,
         )
@@ -733,10 +1370,16 @@ def rebuild_geometry_fit_source_rows(
         rebuild_attempts.append("live_runtime_cache")
         live_rows = _copy_rows(build_live_rows())
         if live_rows:
-            return _success_result(
+            live_cache_validation = validate_geometry_fit_live_source_rows(
                 live_rows,
-                rebuild_source="live_runtime_cache",
+                required_pairs=required_pairs,
             )
+            if bool(live_cache_validation.get("valid", False)):
+                return _success_result(
+                    live_rows,
+                    rebuild_source="live_runtime_cache",
+                )
+            rebuild_attempts.append("live_runtime_cache_validation_failed")
 
     if (
         memory_cache_signature is not None
@@ -753,9 +1396,10 @@ def rebuild_geometry_fit_source_rows(
         memory_rows: list[dict[str, object]] = []
         memory_lattice: Sequence[object] | None = None
         memory_hit_tables: Sequence[object] | None = None
+        memory_source_reflection_indices: Sequence[int] | None = None
         if memory_intersection_cache:
-            memory_rows, memory_lattice, memory_hit_tables = (
-                build_source_rows_from_hit_tables(
+            memory_rows, memory_lattice, memory_hit_tables, memory_source_reflection_indices = (
+                _build_source_rows_result(
                     memory_intersection_cache
                 )
             )
@@ -765,6 +1409,7 @@ def rebuild_geometry_fit_source_rows(
                 rebuild_source="last_intersection_cache_memory",
                 peak_table_lattice=memory_lattice,
                 hit_tables_local=memory_hit_tables,
+                source_reflection_indices=memory_source_reflection_indices,
                 intersection_cache_local=memory_intersection_cache,
             )
 
@@ -781,7 +1426,7 @@ def rebuild_geometry_fit_source_rows(
         and callable(logged_cache_matches_params)
         and logged_cache_matches_params(logged_metadata, normalized_params)
     ):
-        logged_rows, logged_lattice, logged_hit_tables = build_source_rows_from_hit_tables(
+        logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = _build_source_rows_result(
             logged_intersection_cache
         )
         if logged_rows:
@@ -790,6 +1435,7 @@ def rebuild_geometry_fit_source_rows(
                 rebuild_source="last_intersection_cache_log",
                 peak_table_lattice=logged_lattice,
                 hit_tables_local=logged_hit_tables,
+                source_reflection_indices=logged_source_reflection_indices,
                 intersection_cache_local=logged_intersection_cache,
                 metadata=logged_metadata,
             )
@@ -804,7 +1450,7 @@ def rebuild_geometry_fit_source_rows(
             fresh_simulation_exception = exc
             fresh_hit_tables = []
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
-    fresh_rows, fresh_lattice, fresh_hit_tables = build_source_rows_from_hit_tables(
+    fresh_rows, fresh_lattice, fresh_hit_tables, fresh_source_reflection_indices = _build_source_rows_result(
         fresh_hit_tables
     )
     if fresh_rows:
@@ -813,6 +1459,7 @@ def rebuild_geometry_fit_source_rows(
             rebuild_source="fresh_simulation",
             peak_table_lattice=fresh_lattice,
             hit_tables_local=fresh_hit_tables,
+            source_reflection_indices=fresh_source_reflection_indices,
             runtime_simulation_diagnostics=runtime_simulation_diagnostics,
         )
 
@@ -848,6 +1495,10 @@ def rebuild_geometry_fit_source_rows(
         },
         runtime_simulation_diagnostics,
     )
+    if isinstance(live_cache_validation, Mapping) and live_cache_validation:
+        diagnostics["live_runtime_cache_validation"] = copy.deepcopy(
+            dict(live_cache_validation)
+        )
     if fresh_simulation_exception is not None:
         diagnostics.setdefault(
             "exception_type",
@@ -2883,6 +3534,7 @@ def build_geometry_manual_fit_dataset(
                 int(background_idx),
                 params_i,
                 consumer="geometry_fit_dataset",
+                required_pairs=selected_entries,
             )
         )
     else:
@@ -2914,6 +3566,7 @@ def build_geometry_manual_fit_dataset(
                 params_i,
                 consumer="geometry_fit_dataset",
                 prior_diagnostics=dict(simulation_diagnostics),
+                required_pairs=selected_entries,
             )
         )
         simulation_diagnostics = _current_simulation_diagnostics()
@@ -2953,55 +3606,41 @@ def build_geometry_manual_fit_dataset(
     def _source_row_key(
         entry: Mapping[str, object] | None,
     ) -> tuple[int, int] | None:
-        if not isinstance(entry, Mapping):
-            return None
-        try:
-            return (
-                int(entry.get("source_table_index")),
-                int(entry.get("source_row_index")),
-            )
-        except Exception:
-            return None
+        return _geometry_fit_source_row_key(entry)
 
     def _source_reflection_row_key(
         entry: Mapping[str, object] | None,
     ) -> tuple[int, int] | None:
-        if not isinstance(entry, Mapping):
-            return None
-        try:
-            return (
-                int(entry.get("source_reflection_index")),
-                int(entry.get("source_row_index")),
-            )
-        except Exception:
-            return None
+        return _geometry_fit_source_reflection_row_key(entry)
+
+    def _coerce_nonnegative_index(value: object) -> int | None:
+        return _geometry_fit_coerce_nonnegative_index(value)
+
+    def _trusted_full_reflection_identity(
+        entry: Mapping[str, object] | None,
+    ) -> bool:
+        return _geometry_fit_trusted_full_reflection_identity(entry)
+
+    def _source_branch_resolution(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[int | None, str | None]:
+        return _geometry_fit_source_branch_resolution(entry)
+
+    def _source_branch_index(
+        entry: Mapping[str, object] | None,
+    ) -> int | None:
+        branch_idx, _branch_source = _source_branch_resolution(entry)
+        return branch_idx
 
     def _source_peak_key(
         entry: Mapping[str, object] | None,
     ) -> tuple[int, int] | None:
-        if not isinstance(entry, Mapping):
-            return None
-        try:
-            return (
-                int(entry.get("source_reflection_index", entry.get("source_table_index"))),
-                int(entry.get("source_peak_index")),
-            )
-        except Exception:
-            return None
+        return _geometry_fit_source_peak_key(entry)
 
     def _normalized_hkl(
         value: object,
     ) -> tuple[int, int, int] | None:
-        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 3:
-            return None
-        try:
-            return (
-                int(value[0]),
-                int(value[1]),
-                int(value[2]),
-            )
-        except Exception:
-            return None
+        return _geometry_fit_normalized_hkl(value)
 
     simulated_by_peak: dict[tuple[int, int], dict[str, object]] = {}
     simulated_by_reflection_row: dict[tuple[int, int], dict[str, object]] = {}
@@ -3043,19 +3682,42 @@ def build_geometry_manual_fit_dataset(
             return None
         return float(col), float(row)
 
+    def _entry_saved_simulated_display_point(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        for x_key, y_key in (
+            ("refined_sim_x", "refined_sim_y"),
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ):
+            try:
+                col = float(entry.get(x_key, np.nan))
+                row = float(entry.get(y_key, np.nan))
+            except Exception:
+                continue
+            if np.isfinite(col) and np.isfinite(row):
+                return float(col), float(row)
+        return None
+
+    def _source_entry_branch_matches(
+        entry: Mapping[str, object] | None,
+        candidate: Mapping[str, object] | None,
+    ) -> bool:
+        return _geometry_fit_source_entry_branch_matches(entry, candidate)
+
+    def _filter_branch_candidates(
+        entry: Mapping[str, object] | None,
+        candidates: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        return _geometry_fit_filter_branch_candidates(entry, candidates)
+
     def _source_entry_hkl_matches(
         entry: Mapping[str, object] | None,
         candidate: Mapping[str, object] | None,
     ) -> bool:
-        entry_hkl = _normalized_hkl(entry.get("hkl") if isinstance(entry, Mapping) else None)
-        candidate_hkl = _normalized_hkl(
-            candidate.get("hkl") if isinstance(candidate, Mapping) else None
-        )
-        return (
-            entry_hkl is None
-            or candidate_hkl is None
-            or tuple(int(v) for v in candidate_hkl) == tuple(int(v) for v in entry_hkl)
-        )
+        return _geometry_fit_source_entry_hkl_matches(entry, candidate)
 
     def _resolve_cached_source_entry(
         entry: Mapping[str, object] | None,
@@ -3068,7 +3730,9 @@ def build_geometry_manual_fit_dataset(
             if isinstance(candidate, Mapping):
                 resolved = dict(candidate)
                 resolved.setdefault("source_row_index", int(reflection_row_key[1]))
-                if _source_entry_hkl_matches(entry, resolved):
+                if _source_entry_hkl_matches(entry, resolved) and _source_entry_branch_matches(
+                    entry, resolved
+                ):
                     return resolved
         row_key = _source_row_key(entry)
         if row_key is not None:
@@ -3077,7 +3741,9 @@ def build_geometry_manual_fit_dataset(
                 resolved = dict(candidate)
                 resolved.setdefault("source_table_index", int(row_key[0]))
                 resolved.setdefault("source_row_index", int(row_key[1]))
-                if _source_entry_hkl_matches(entry, resolved):
+                if _source_entry_hkl_matches(entry, resolved) and _source_entry_branch_matches(
+                    entry, resolved
+                ):
                     return resolved
         peak_key = _source_peak_key(entry)
         if peak_key is not None:
@@ -3085,8 +3751,11 @@ def build_geometry_manual_fit_dataset(
             if candidate is not None:
                 resolved = dict(candidate)
                 resolved.setdefault("source_table_index", int(peak_key[0]))
+                resolved.setdefault("source_branch_index", int(peak_key[1]))
                 resolved.setdefault("source_peak_index", int(peak_key[1]))
-                if _source_entry_hkl_matches(entry, resolved):
+                if _source_entry_hkl_matches(entry, resolved) and _source_entry_branch_matches(
+                    entry, resolved
+                ):
                     return resolved
         return None
 
@@ -3105,12 +3774,15 @@ def build_geometry_manual_fit_dataset(
             hkl_key = _normalized_hkl(entry.get("hkl"))
             if hkl_key is not None:
                 candidate_pool = [dict(item) for item in simulated_by_hkl.get(hkl_key, ())]
+        candidate_pool = _filter_branch_candidates(entry, candidate_pool)
         if not candidate_pool:
             return None
         if len(candidate_pool) == 1:
             return dict(candidate_pool[0])
 
-        display_point = _entry_display_point(entry)
+        display_point = _entry_saved_simulated_display_point(entry)
+        if display_point is None:
+            display_point = _entry_display_point(entry)
         if display_point is None:
             return dict(candidate_pool[0])
 
@@ -3172,6 +3844,8 @@ def build_geometry_manual_fit_dataset(
                 return "no_saved_peak"
         if not isinstance(candidate, Mapping):
             return "missing"
+        if not _source_entry_branch_matches(entry, candidate):
+            return "branch_mismatch"
         if _source_entry_hkl_matches(entry, candidate):
             return "matched"
         return "hkl_mismatch"
@@ -3199,17 +3873,23 @@ def build_geometry_manual_fit_dataset(
         entry: Mapping[str, object] | None,
     ) -> bool:
         row_key = _source_row_key(entry)
-        peak_key = _source_peak_key(entry)
-        if row_key is None or peak_key is None:
+        if row_key is None:
             return False
-        try:
-            return (
-                int(row_key[1]) == 0
-                and int(peak_key[0]) == int(row_key[0])
-                and int(peak_key[1]) == int(row_key[0])
-            )
-        except Exception:
+        legacy_peak_index = _coerce_nonnegative_index(
+            entry.get("source_peak_index") if isinstance(entry, Mapping) else None
+        )
+        if legacy_peak_index is None or legacy_peak_index in {0, 1}:
             return False
+        reflection_idx = _coerce_nonnegative_index(
+            entry.get("source_reflection_index") if isinstance(entry, Mapping) else None
+        )
+        table_idx = _coerce_nonnegative_index(
+            entry.get("source_table_index") if isinstance(entry, Mapping) else None
+        )
+        anchor_idx = reflection_idx if reflection_idx is not None else table_idx
+        if anchor_idx is None:
+            return False
+        return int(row_key[1]) == 0 and int(legacy_peak_index) == int(anchor_idx)
 
     def _promoted_source_entry(
         entry: Mapping[str, object] | None,
@@ -3253,10 +3933,14 @@ def build_geometry_manual_fit_dataset(
             reasons.append("saved source row is missing from the current simulated rows")
         elif row_status == "hkl_mismatch":
             reasons.append("saved source row HKL no longer matches the current row")
+        elif row_status == "branch_mismatch":
+            reasons.append("saved source row resolved to the opposite detector-side branch")
         if peak_status == "missing":
             reasons.append("saved source peak is missing from the current simulated peaks")
         elif peak_status == "hkl_mismatch":
             reasons.append("saved source peak HKL no longer matches the current peak")
+        elif peak_status == "branch_mismatch":
+            reasons.append("saved source peak resolved to the opposite detector-side branch")
         if overlay_kind == "q_group_fallback":
             reasons.append("only a q-group fallback candidate was available")
         elif overlay_kind == "hkl_fallback":
@@ -3370,8 +4054,11 @@ def build_geometry_manual_fit_dataset(
         )
         if entry is None:
             continue
+        pair_id = str(entry.get("pair_id") or f"bg{int(background_idx)}:pair{int(pair_idx)}")
+        entry["pair_id"] = pair_id
         measured_entry = dict(entry)
         measured_entry["overlay_match_index"] = int(pair_idx)
+        measured_entry["pair_id"] = pair_id
         strict_source_entry = (
             dict(record.get("strict_source_entry"))
             if isinstance(record.get("strict_source_entry"), Mapping)
@@ -3409,14 +4096,27 @@ def build_geometry_manual_fit_dataset(
             entry,
             overlay_source_entry,
         )
+        saved_branch_index, saved_branch_source = _source_branch_resolution(entry)
+        strict_branch_index, strict_branch_source = _source_branch_resolution(
+            strict_source_entry
+        )
+        fit_branch_index, fit_branch_source = _source_branch_resolution(
+            fit_source_entry
+        )
+        overlay_branch_index, overlay_branch_source = _source_branch_resolution(
+            overlay_source_entry
+        )
         source_resolution_diagnostics.append(
             {
                 "pair_index": int(pair_idx),
+                "pair_id": pair_id,
                 "saved_source_table_index": entry.get("source_table_index"),
                 "saved_source_reflection_index": entry.get(
                     "source_reflection_index"
                 ),
                 "saved_source_row_index": entry.get("source_row_index"),
+                "saved_source_branch_index": saved_branch_index,
+                "saved_source_branch_source": saved_branch_source,
                 "saved_source_peak_index": entry.get("source_peak_index"),
                 "saved_source_row_key": _source_row_key(entry),
                 "saved_source_peak_key": _source_peak_key(entry),
@@ -3435,11 +4135,15 @@ def build_geometry_manual_fit_dataset(
                 or None,
                 "fit_source_row_key": _source_row_key(fit_source_entry),
                 "fit_source_peak_key": _source_peak_key(fit_source_entry),
+                "fit_source_branch_index": fit_branch_index,
+                "fit_source_branch_source": fit_branch_source,
                 "fit_source_reflection_index": (
                     fit_source_entry.get("source_reflection_index")
                     if isinstance(fit_source_entry, Mapping)
                     else None
                 ),
+                "strict_source_branch_index": strict_branch_index,
+                "strict_source_branch_source": strict_branch_source,
                 "strict_resolution_kind": _resolved_source_kind(entry, strict_source_entry),
                 "row_candidate_status": row_candidate_status,
                 "row_candidate_hkl": _normalized_hkl(
@@ -3454,6 +4158,8 @@ def build_geometry_manual_fit_dataset(
                 "overlay_resolution_kind": overlay_kind,
                 "overlay_source_row_key": _source_row_key(overlay_source_entry),
                 "overlay_source_peak_key": _source_peak_key(overlay_source_entry),
+                "overlay_source_branch_index": overlay_branch_index,
+                "overlay_source_branch_source": overlay_branch_source,
                 "overlay_source_reflection_index": (
                     overlay_source_entry.get("source_reflection_index")
                     if isinstance(overlay_source_entry, Mapping)
@@ -3483,16 +4189,26 @@ def build_geometry_manual_fit_dataset(
         for key in (
             "source_table_index",
             "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
             "source_row_index",
+            "source_branch_index",
             "source_peak_index",
+            "pair_id",
+            "fit_run_id",
         ):
             measured_entry.pop(key, None)
         if isinstance(fit_source_entry, Mapping):
             for key in (
                 "source_table_index",
                 "source_reflection_index",
+                "source_reflection_namespace",
+                "source_reflection_is_full",
                 "source_row_index",
+                "source_branch_index",
                 "source_peak_index",
+                "pair_id",
+                "fit_run_id",
             ):
                 if key in fit_source_entry:
                     measured_entry[key] = fit_source_entry.get(key)
@@ -3505,6 +4221,7 @@ def build_geometry_manual_fit_dataset(
 
         initial_entry: dict[str, object] = {
             "overlay_match_index": int(pair_idx),
+            "pair_id": pair_id,
             "hkl": entry.get("hkl", entry.get("label")),
         }
         raw_group_key = entry.get("q_group_key")
@@ -3566,8 +4283,12 @@ def build_geometry_manual_fit_dataset(
             for key in (
                 "source_table_index",
                 "source_reflection_index",
+                "source_reflection_namespace",
+                "source_reflection_is_full",
                 "source_row_index",
+                "source_branch_index",
                 "source_peak_index",
+                "fit_run_id",
             ):
                 if key in fit_source_entry:
                     initial_entry[key] = fit_source_entry.get(key)
@@ -3747,10 +4468,15 @@ def build_geometry_manual_fit_dataset(
             measured_entry["background_detector_y"] = float(background_detector_y)
         for key in (
             "overlay_match_index",
+            "pair_id",
+            "fit_run_id",
             "q_group_key",
             "source_table_index",
             "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
             "source_row_index",
+            "source_branch_index",
             "source_peak_index",
             "background_detector_x",
             "background_detector_y",
@@ -4108,6 +4834,11 @@ def build_geometry_manual_fit_dataset(
         ),
         "cache_metadata": cache_metadata,
         "source_resolution_diagnostics": source_resolution_diagnostics,
+        "source_rows_for_trace": [
+            dict(entry)
+            for entry in (simulated_peaks or ())
+            if isinstance(entry, Mapping)
+        ],
         "measured_display": measured_display,
         "measured_native": measured_native,
         "measured_for_fit": measured_for_fit,
@@ -5919,6 +6650,24 @@ def _geometry_fit_source_resolution_key_text(value: object) -> str:
     return "<none>"
 
 
+def _geometry_fit_source_branch_text(
+    branch_value: object,
+    branch_source: object = None,
+) -> str:
+    """Format one branch label plus provenance for log output."""
+
+    try:
+        branch_idx = int(branch_value)
+    except Exception:
+        branch_idx = -1
+    source_text = str(branch_source or "").strip()
+    if branch_idx in {0, 1}:
+        if source_text:
+            return f"{branch_idx}({source_text})"
+        return str(branch_idx)
+    return "<none>"
+
+
 def build_geometry_fit_source_resolution_log_lines(
     dataset_infos: Sequence[Mapping[str, object]] | None,
     *,
@@ -5986,6 +6735,40 @@ def build_geometry_fit_source_resolution_log_lines(
                 )
             else:
                 lines.append(f"{label}: all saved manual pairs strictly resolved.")
+            for item in diagnostics[:max_pairs]:
+                pair_index = int(item.get("pair_index", 0) or 0)
+                lines.append(
+                    (
+                        "{label} pair#{pair}: saved_branch={saved_branch} "
+                        "strict_branch={strict_branch} fit_branch={fit_branch} "
+                        "fallback_branch={fallback_branch} fit_kind={fit_kind}"
+                    ).format(
+                        label=label,
+                        pair=pair_index,
+                        saved_branch=_geometry_fit_source_branch_text(
+                            item.get("saved_source_branch_index"),
+                            item.get("saved_source_branch_source"),
+                        ),
+                        strict_branch=_geometry_fit_source_branch_text(
+                            item.get("strict_source_branch_index"),
+                            item.get("strict_source_branch_source"),
+                        ),
+                        fit_branch=_geometry_fit_source_branch_text(
+                            item.get("fit_source_branch_index"),
+                            item.get("fit_source_branch_source"),
+                        ),
+                        fallback_branch=_geometry_fit_source_branch_text(
+                            item.get("overlay_source_branch_index"),
+                            item.get("overlay_source_branch_source"),
+                        ),
+                        fit_kind=str(item.get("fit_resolution_kind", "<none>") or "<none>"),
+                    )
+                )
+            extra_count = len(diagnostics) - max_pairs
+            if extra_count > 0:
+                lines.append(
+                    f"{label}: ... {int(extra_count)} more resolved pair(s) not shown"
+                )
             continue
         for item in unresolved[:max_pairs]:
             pair_index = int(item.get("pair_index", 0) or 0)
@@ -6049,6 +6832,33 @@ def build_geometry_fit_source_resolution_log_lines(
             reason = str(item.get("failure_reason", "") or "").strip()
             if reason:
                 lines.append(f"{label} pair#{pair_index}: reason={reason}")
+            lines.append(
+                (
+                    "{label} pair#{pair}: saved_branch={saved_branch} "
+                    "strict_branch={strict_branch} fit_branch={fit_branch} "
+                    "fallback_branch={fallback_branch} fit_kind={fit_kind}"
+                ).format(
+                    label=label,
+                    pair=pair_index,
+                    saved_branch=_geometry_fit_source_branch_text(
+                        item.get("saved_source_branch_index"),
+                        item.get("saved_source_branch_source"),
+                    ),
+                    strict_branch=_geometry_fit_source_branch_text(
+                        item.get("strict_source_branch_index"),
+                        item.get("strict_source_branch_source"),
+                    ),
+                    fit_branch=_geometry_fit_source_branch_text(
+                        item.get("fit_source_branch_index"),
+                        item.get("fit_source_branch_source"),
+                    ),
+                    fallback_branch=_geometry_fit_source_branch_text(
+                        item.get("overlay_source_branch_index"),
+                        item.get("overlay_source_branch_source"),
+                    ),
+                    fit_kind=str(item.get("fit_resolution_kind", "<none>") or "<none>"),
+                )
+            )
         extra_count = len(unresolved) - max_pairs
         if extra_count > 0:
             lines.append(f"{label}: ... {int(extra_count)} more unresolved pair(s) not shown")
@@ -6476,6 +7286,819 @@ def apply_geometry_fit_runtime_safety_overrides(
             "unsafe runtime disabled, safe-wrapper Numba allowed."
         ),
     )
+
+
+def _geometry_fit_assign_fit_run_id_to_entries(
+    entries: object,
+    *,
+    fit_run_id: str,
+) -> None:
+    """Attach one stable run id to mutable entry collections in place."""
+
+    if not isinstance(entries, list):
+        return
+    for fallback_index, raw_entry in enumerate(entries):
+        if not isinstance(raw_entry, dict):
+            continue
+        raw_entry.setdefault("fit_run_id", str(fit_run_id))
+        if "pair_id" not in raw_entry:
+            overlay_index = _geometry_fit_coerce_nonnegative_index(
+                raw_entry.get("overlay_match_index")
+            )
+            if overlay_index is not None:
+                raw_entry["pair_id"] = f"pair[{int(overlay_index)}]"
+            elif "pair_index" in raw_entry:
+                try:
+                    raw_entry["pair_id"] = f"pair[{int(raw_entry['pair_index'])}]"
+                except Exception:
+                    raw_entry["pair_id"] = f"pair[{int(fallback_index)}]"
+
+
+def _geometry_fit_assign_fit_run_id(
+    prepared_run: GeometryFitPreparedRun,
+    *,
+    fit_run_id: str,
+) -> None:
+    """Propagate one run id across mutable prepared-run payloads."""
+
+    dataset_payloads: list[dict[str, object]] = []
+    if isinstance(prepared_run.current_dataset, dict):
+        dataset_payloads.append(prepared_run.current_dataset)
+    dataset_payloads.extend(
+        dataset
+        for dataset in (prepared_run.dataset_infos or [])
+        if isinstance(dataset, dict)
+    )
+    for dataset in dataset_payloads:
+        dataset.setdefault("fit_run_id", str(fit_run_id))
+        for key in (
+            "measured_for_fit",
+            "initial_pairs_display",
+            "source_resolution_diagnostics",
+            "source_rows_for_trace",
+        ):
+            _geometry_fit_assign_fit_run_id_to_entries(
+                dataset.get(key),
+                fit_run_id=str(fit_run_id),
+            )
+    for raw_spec in prepared_run.dataset_specs or []:
+        if isinstance(raw_spec, dict):
+            raw_spec.setdefault("fit_run_id", str(fit_run_id))
+
+
+def _geometry_fit_trace_namespace_label(
+    entry: Mapping[str, object] | None,
+    field_name: str,
+    *,
+    phase: str,
+) -> str:
+    """Return the namespace label for one identity field in trace output."""
+
+    if not isinstance(entry, Mapping):
+        return "unset"
+    if field_name == "source_reflection_index":
+        return str(entry.get("source_reflection_namespace", "unset") or "unset")
+    if field_name in {"source_branch_index", "source_peak_index"}:
+        branch_idx = (
+            _geometry_fit_source_branch_index(entry)
+            if field_name == "source_branch_index"
+            else _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
+        )
+        return "branch_index" if branch_idx in {0, 1} else "unset"
+    if field_name in {"source_table_index", "source_row_index"}:
+        if phase == "live_source_rows":
+            return (
+                "full_hit_table"
+                if _geometry_fit_trusted_full_reflection_identity(entry)
+                else "live_cache_row"
+            )
+        if str(entry.get("resolution_kind", "") or "").strip() == "hkl_fallback":
+            return "subset_hit_table"
+        return (
+            "full_hit_table"
+            if _geometry_fit_trusted_full_reflection_identity(entry)
+            else "subset_hit_table"
+        )
+    if field_name in {"resolved_table_index", "resolved_peak_index"}:
+        if phase == "seed_correspondence":
+            return "subset_hit_table"
+        if phase in {"full_beam_polish_correspondence", "acceptance_residuals"}:
+            return "full_hit_table"
+        return "resolved"
+    return "unset"
+
+
+def _geometry_fit_trace_simulated_point(
+    entry: Mapping[str, object] | None,
+) -> list[float | None] | None:
+    """Extract one simulated detector point from any supported trace entry."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    for x_key, y_key in (
+        ("simulated_x", "simulated_y"),
+        ("sim_col", "sim_row"),
+    ):
+        x_value = _geometry_fit_metric_float(entry.get(x_key, np.nan))
+        y_value = _geometry_fit_metric_float(entry.get(y_key, np.nan))
+        if np.isfinite(x_value) and np.isfinite(y_value):
+            return [float(x_value), float(y_value)]
+    return None
+
+
+def _geometry_fit_trace_measured_point(
+    entry: Mapping[str, object] | None,
+) -> list[float | None] | None:
+    """Extract one measured point from any supported trace entry."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    for x_key, y_key in (
+        ("measured_x", "measured_y"),
+        ("x", "y"),
+    ):
+        x_value = _geometry_fit_metric_float(entry.get(x_key, np.nan))
+        y_value = _geometry_fit_metric_float(entry.get(y_key, np.nan))
+        if np.isfinite(x_value) and np.isfinite(y_value):
+            return [float(x_value), float(y_value)]
+    return None
+
+
+def _geometry_fit_trace_optimizer_residual_px(
+    entry: Mapping[str, object] | None,
+) -> float | None:
+    """Return the optimizer-space residual magnitude when available."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    weighted_dx = _geometry_fit_metric_float(entry.get("weighted_dx_px", np.nan))
+    weighted_dy = _geometry_fit_metric_float(entry.get("weighted_dy_px", np.nan))
+    if np.isfinite(weighted_dx) and np.isfinite(weighted_dy):
+        return float(np.hypot(weighted_dx, weighted_dy))
+    placement_error = _geometry_fit_metric_float(
+        entry.get("placement_error_px", np.nan)
+    )
+    if np.isfinite(placement_error):
+        return float(placement_error)
+    return None
+
+
+def _geometry_fit_trace_pair_record(
+    *,
+    phase: str,
+    dataset_info: Mapping[str, object] | None,
+    entry: Mapping[str, object],
+    fit_run_id: str,
+    record_type: str = "pair",
+    extra: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Build one structured phase record for a pair or source-row entry."""
+
+    dataset = dict(dataset_info or {})
+    simulation_diag = (
+        dict(dataset.get("simulation_diagnostics", {}))
+        if isinstance(dataset.get("simulation_diagnostics"), Mapping)
+        else {}
+    )
+    cache_metadata = (
+        dict(dataset.get("cache_metadata", {}))
+        if isinstance(dataset.get("cache_metadata"), Mapping)
+        else {}
+    )
+    pair_id = str(
+        entry.get("pair_id")
+        or f"pair[{int(entry.get('overlay_match_index', 0) or 0)}]"
+    )
+    record: dict[str, object] = {
+        "record_type": str(record_type),
+        "fit_run_id": str(fit_run_id),
+        "pair_id": pair_id if record_type == "pair" else None,
+        "phase": str(phase),
+        "dataset_index": int(dataset.get("dataset_index", 0) or 0),
+        "background_index": int(dataset.get("dataset_index", 0) or 0),
+        "background_label": str(
+            dataset.get("label", f"bg[{dataset.get('dataset_index', 0)}]")
+        ),
+        "overlay_match_index": _geometry_fit_coerce_nonnegative_index(
+            entry.get("overlay_match_index")
+        ),
+        "source_cache_origin": str(
+            simulation_diag.get(
+                "created_from",
+                cache_metadata.get("cache_source", "<unknown>"),
+            )
+            or "<unknown>"
+        ),
+        "requested_signature_summary": _geometry_fit_cache_jsonable(
+            simulation_diag.get(
+                "requested_signature_summary",
+                cache_metadata.get("source_snapshot_requested_signature_summary"),
+            )
+        ),
+        "simulation_revision": _geometry_fit_cache_jsonable(
+            simulation_diag.get(
+                "simulation_signature",
+                cache_metadata.get("source_snapshot_stored_signature_summary"),
+            )
+        ),
+        "hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
+        "source_reflection_index": entry.get("source_reflection_index"),
+        "source_branch_index": _geometry_fit_source_branch_index(entry),
+        "source_peak_index": entry.get("source_peak_index"),
+        "source_table_index": entry.get("source_table_index"),
+        "source_row_index": entry.get("source_row_index"),
+        "resolved_table_index": entry.get("resolved_table_index"),
+        "resolved_peak_index": entry.get("resolved_peak_index"),
+        "source_reflection_namespace": entry.get("source_reflection_namespace"),
+        "source_reflection_is_full": bool(entry.get("source_reflection_is_full", False)),
+        "source_reflection_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "source_reflection_index",
+            phase=phase,
+        ),
+        "source_table_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "source_table_index",
+            phase=phase,
+        ),
+        "source_row_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "source_row_index",
+            phase=phase,
+        ),
+        "source_peak_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "source_peak_index",
+            phase=phase,
+        ),
+        "source_branch_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "source_branch_index",
+            phase=phase,
+        ),
+        "resolved_table_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "resolved_table_index",
+            phase=phase,
+        ),
+        "resolved_peak_index_namespace": _geometry_fit_trace_namespace_label(
+            entry,
+            "resolved_peak_index",
+            phase=phase,
+        ),
+        "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+        "resolution_kind": entry.get("resolution_kind"),
+        "resolution_reason": entry.get(
+            "correspondence_resolution_reason",
+            entry.get("resolution_reason"),
+        ),
+        "match_status": entry.get("match_status", "selected"),
+        "canonical_identity": (
+            [
+                int(_geometry_fit_source_peak_key(entry)[0]),
+                int(_geometry_fit_source_peak_key(entry)[1]),
+            ]
+            if _geometry_fit_source_peak_key(entry) is not None
+            else None
+        ),
+        "simulated_point": _geometry_fit_trace_simulated_point(entry),
+        "measured_point": _geometry_fit_trace_measured_point(entry),
+        "optimizer_residual_px": _geometry_fit_trace_optimizer_residual_px(entry),
+        "detector_residual_px": _geometry_fit_metric_float(
+            entry.get("distance_px", np.nan)
+        ),
+    }
+    if isinstance(extra, Mapping):
+        record.update(
+            {
+                str(key): _geometry_fit_cache_jsonable(value)
+                for key, value in extra.items()
+            }
+        )
+    return record
+
+
+def _geometry_fit_phase_summary_record(
+    *,
+    phase: str,
+    dataset_info: Mapping[str, object] | None,
+    entries: Sequence[Mapping[str, object]] | None,
+    fit_run_id: str,
+    dropped_pair_count: int = 0,
+    trust_marker_drop_count: int = 0,
+) -> dict[str, object]:
+    """Build one compact phase summary for the structured trace."""
+
+    normalized_entries = [
+        dict(entry) for entry in (entries or ()) if isinstance(entry, Mapping)
+    ]
+    canonical_counts: Counter[tuple[int, int]] = Counter()
+    simulated_point_counts: Counter[tuple[float, float]] = Counter()
+    trusted_full_ids = 0
+    canonical_branch_ids = 0
+    legacy_fallbacks = 0
+    hkl_fallbacks = 0
+    for entry in normalized_entries:
+        if _geometry_fit_trusted_full_reflection_identity(entry):
+            trusted_full_ids += 1
+        if _geometry_fit_source_branch_index(entry) in {0, 1}:
+            canonical_branch_ids += 1
+        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "")
+        resolution_kind = str(entry.get("resolution_kind", "") or "")
+        if "legacy_dense" in fit_kind or "legacy_dense" in resolution_kind:
+            legacy_fallbacks += 1
+        if fit_kind == "hkl_fallback" or resolution_kind == "hkl_fallback":
+            hkl_fallbacks += 1
+        canonical_key = _geometry_fit_source_peak_key(entry)
+        if canonical_key is not None:
+            canonical_counts[(int(canonical_key[0]), int(canonical_key[1]))] += 1
+        simulated_point = _geometry_fit_trace_simulated_point(entry)
+        if (
+            isinstance(simulated_point, list)
+            and len(simulated_point) == 2
+            and simulated_point[0] is not None
+            and simulated_point[1] is not None
+        ):
+            simulated_point_counts[
+                (round(float(simulated_point[0]), 6), round(float(simulated_point[1]), 6))
+            ] += 1
+    dataset = dict(dataset_info or {})
+    return {
+        "record_type": "summary",
+        "fit_run_id": str(fit_run_id),
+        "phase": str(phase),
+        "dataset_index": int(dataset.get("dataset_index", 0) or 0),
+        "background_index": int(dataset.get("dataset_index", 0) or 0),
+        "background_label": str(
+            dataset.get("label", f"bg[{dataset.get('dataset_index', 0)}]")
+        ),
+        "entry_count": int(len(normalized_entries)),
+        "trusted_full_id_count": int(trusted_full_ids),
+        "canonical_branch_id_count": int(canonical_branch_ids),
+        "legacy_fallback_count": int(legacy_fallbacks),
+        "hkl_fallback_count": int(hkl_fallbacks),
+        "dropped_pair_count": int(max(0, dropped_pair_count)),
+        "duplicate_canonical_id_count": int(
+            sum(1 for count in canonical_counts.values() if int(count) > 1)
+        ),
+        "duplicate_simulated_target_count": int(
+            sum(1 for count in simulated_point_counts.values() if int(count) > 1)
+        ),
+        "trust_marker_drop_count": int(max(0, trust_marker_drop_count)),
+    }
+
+
+def _geometry_fit_duplicate_target_records(
+    diagnostics: Sequence[Mapping[str, object]] | None,
+    *,
+    fit_run_id: str,
+    phase: str,
+) -> list[dict[str, object]]:
+    """Return duplicate-target diagnostics for final correspondence phases."""
+
+    pair_entries = [
+        dict(entry)
+        for entry in (diagnostics or ())
+        if isinstance(entry, Mapping)
+        and str(entry.get("match_status", "") or "") == "matched"
+    ]
+    by_identity: defaultdict[tuple[int, int], list[str]] = defaultdict(list)
+    by_point: defaultdict[tuple[float, float], list[str]] = defaultdict(list)
+    for entry in pair_entries:
+        pair_id = str(entry.get("pair_id", "") or "").strip()
+        if not pair_id:
+            continue
+        identity = _geometry_fit_source_peak_key(entry)
+        if identity is not None:
+            by_identity[(int(identity[0]), int(identity[1]))].append(pair_id)
+        simulated_point = _geometry_fit_trace_simulated_point(entry)
+        if (
+            isinstance(simulated_point, list)
+            and len(simulated_point) == 2
+            and simulated_point[0] is not None
+            and simulated_point[1] is not None
+        ):
+            by_point[
+                (round(float(simulated_point[0]), 6), round(float(simulated_point[1]), 6))
+            ].append(pair_id)
+    records: list[dict[str, object]] = []
+    for identity, pair_ids in sorted(by_identity.items()):
+        if len(pair_ids) <= 1:
+            continue
+        records.append(
+            {
+                "record_type": "duplicate_target",
+                "fit_run_id": str(fit_run_id),
+                "phase": str(phase),
+                "duplicate_kind": "canonical_identity",
+                "canonical_identity": [int(identity[0]), int(identity[1])],
+                "pair_ids": list(pair_ids),
+            }
+        )
+    for point, pair_ids in sorted(by_point.items()):
+        if len(pair_ids) <= 1:
+            continue
+        records.append(
+            {
+                "record_type": "duplicate_target",
+                "fit_run_id": str(fit_run_id),
+                "phase": str(phase),
+                "duplicate_kind": "simulated_point",
+                "simulated_point": [float(point[0]), float(point[1])],
+                "pair_ids": list(pair_ids),
+            }
+        )
+    return records
+
+
+def _build_geometry_fit_trace_records(
+    *,
+    fit_run_id: str,
+    prepared_run: GeometryFitPreparedRun,
+    result: object,
+    apply_result: GeometryFitRuntimeApplyResult,
+    log_path: Path,
+) -> list[dict[str, object]]:
+    """Build the JSONL phase trace for one geometry-fit run."""
+
+    records: list[dict[str, object]] = [
+        {
+            "record_type": "run",
+            "fit_run_id": str(fit_run_id),
+            "phase": "run",
+            "accepted": bool(apply_result.accepted),
+            "rejection_reason": apply_result.rejection_reason,
+            "log_path": str(log_path),
+            "dataset_count": int(len(prepared_run.dataset_infos or [])),
+            "joint_background_mode": bool(prepared_run.joint_background_mode),
+            "weighted_residual_rms_px": _geometry_fit_metric_float(
+                getattr(result, "weighted_residual_rms_px", np.nan)
+            ),
+            "detector_rms_px": _geometry_fit_metric_float(
+                geometry_fit_result_rms(result)
+            ),
+            "final_metric_name": str(getattr(result, "final_metric_name", "") or ""),
+        }
+    ]
+
+    for raw_dataset in prepared_run.dataset_infos or []:
+        if not isinstance(raw_dataset, Mapping):
+            continue
+        dataset = dict(raw_dataset)
+        saved_trust_by_pair: dict[str, bool] = {}
+        preflight_trust_by_pair: dict[str, bool] = {}
+        saved_pairs = [
+            dict(entry)
+            for entry in dataset.get("initial_pairs_display", ())
+            if isinstance(entry, Mapping)
+        ]
+        source_rows = [
+            dict(entry)
+            for entry in dataset.get("source_rows_for_trace", ())
+            if isinstance(entry, Mapping)
+        ]
+        preflight_pairs = [
+            dict(entry)
+            for entry in dataset.get("measured_for_fit", ())
+            if isinstance(entry, Mapping)
+        ]
+        source_resolution = [
+            dict(entry)
+            for entry in dataset.get("source_resolution_diagnostics", ())
+            if isinstance(entry, Mapping)
+        ]
+
+        for entry in saved_pairs:
+            pair_id = str(entry.get("pair_id", "") or "").strip()
+            if pair_id:
+                saved_trust_by_pair[pair_id] = _geometry_fit_trusted_full_reflection_identity(
+                    entry
+                )
+            records.append(
+                _geometry_fit_trace_pair_record(
+                    phase="saved_pairs",
+                    dataset_info=dataset,
+                    entry=entry,
+                    fit_run_id=str(fit_run_id),
+                )
+            )
+        records.append(
+            _geometry_fit_phase_summary_record(
+                phase="saved_pairs",
+                dataset_info=dataset,
+                entries=saved_pairs,
+                fit_run_id=str(fit_run_id),
+            )
+        )
+
+        for entry in source_rows:
+            records.append(
+                _geometry_fit_trace_pair_record(
+                    phase="live_source_rows",
+                    dataset_info=dataset,
+                    entry=entry,
+                    fit_run_id=str(fit_run_id),
+                    record_type="source_row",
+                )
+            )
+        records.append(
+            _geometry_fit_phase_summary_record(
+                phase="live_source_rows",
+                dataset_info=dataset,
+                entries=source_rows,
+                fit_run_id=str(fit_run_id),
+            )
+        )
+
+        for entry in preflight_pairs:
+            pair_id = str(entry.get("pair_id", "") or "").strip()
+            if pair_id:
+                preflight_trust_by_pair[pair_id] = _geometry_fit_trusted_full_reflection_identity(
+                    entry
+                )
+            records.append(
+                _geometry_fit_trace_pair_record(
+                    phase="preflight_normalized_pairs",
+                    dataset_info=dataset,
+                    entry=entry,
+                    fit_run_id=str(fit_run_id),
+                )
+            )
+        trust_drop_count = sum(
+            1
+            for pair_id, was_trusted in saved_trust_by_pair.items()
+            if was_trusted and not bool(preflight_trust_by_pair.get(pair_id, False))
+        )
+        dropped_pair_count = sum(
+            1
+            for entry in source_resolution
+            if not bool(
+                entry.get("fit_resolved", entry.get("strict_resolved", False))
+            )
+        )
+        records.append(
+            _geometry_fit_phase_summary_record(
+                phase="preflight_normalized_pairs",
+                dataset_info=dataset,
+                entries=preflight_pairs,
+                fit_run_id=str(fit_run_id),
+                dropped_pair_count=int(dropped_pair_count),
+                trust_marker_drop_count=int(trust_drop_count),
+            )
+        )
+
+        simulation_diag = (
+            dict(dataset.get("simulation_diagnostics", {}))
+            if isinstance(dataset.get("simulation_diagnostics"), Mapping)
+            else {}
+        )
+        if simulation_diag:
+            records.append(
+                {
+                    "record_type": "summary",
+                    "fit_run_id": str(fit_run_id),
+                    "phase": "subset_mapping",
+                    "dataset_index": int(dataset.get("dataset_index", 0) or 0),
+                    "background_index": int(dataset.get("dataset_index", 0) or 0),
+                    "background_label": str(
+                        dataset.get("label", f"bg[{dataset.get('dataset_index', 0)}]")
+                    ),
+                    "point_match_summary": _geometry_fit_cache_jsonable(
+                        getattr(result, "point_match_summary", None)
+                    ),
+                    "source_snapshot_status": simulation_diag.get("status"),
+                    "live_runtime_cache_validation": _geometry_fit_cache_jsonable(
+                        simulation_diag.get("live_runtime_cache_validation")
+                    ),
+                }
+            )
+            validation = simulation_diag.get("live_runtime_cache_validation")
+            if isinstance(validation, Mapping):
+                for raw_failure in validation.get("pair_failures", ()) or ():
+                    if not isinstance(raw_failure, Mapping):
+                        continue
+                    records.append(
+                        {
+                            "record_type": "validation_failure",
+                            "fit_run_id": str(fit_run_id),
+                            "phase": "live_source_rows",
+                            "dataset_index": int(dataset.get("dataset_index", 0) or 0),
+                            "background_index": int(
+                                dataset.get("dataset_index", 0) or 0
+                            ),
+                            **_geometry_fit_cache_jsonable(dict(raw_failure)),
+                        }
+                    )
+            dual_path_diff = simulation_diag.get("cache_metadata", {})
+            if isinstance(dual_path_diff, Mapping):
+                diff_entries = dual_path_diff.get("live_runtime_cache_dual_path_diff")
+                if isinstance(diff_entries, Sequence) and not isinstance(
+                    diff_entries,
+                    (str, bytes, bytearray),
+                ):
+                    for raw_diff in diff_entries:
+                        if not isinstance(raw_diff, Mapping):
+                            continue
+                        records.append(
+                            {
+                                "record_type": "dual_path_diff",
+                                "fit_run_id": str(fit_run_id),
+                                "phase": "live_source_rows",
+                                "dataset_index": int(dataset.get("dataset_index", 0) or 0),
+                                "background_index": int(
+                                    dataset.get("dataset_index", 0) or 0
+                                ),
+                                **_geometry_fit_cache_jsonable(dict(raw_diff)),
+                            }
+                        )
+
+    full_beam_summary = getattr(result, "full_beam_polish_summary", None)
+    seed_records = []
+    if isinstance(full_beam_summary, Mapping):
+        raw_seed_records = full_beam_summary.get("seed_correspondence_records", ())
+        if isinstance(raw_seed_records, Sequence) and not isinstance(
+            raw_seed_records,
+            (str, bytes, bytearray),
+        ):
+            seed_records = [
+                dict(entry) for entry in raw_seed_records if isinstance(entry, Mapping)
+            ]
+    for entry in seed_records:
+        dataset_index = int(entry.get("dataset_index", 0) or 0)
+        dataset = next(
+            (
+                dict(item)
+                for item in prepared_run.dataset_infos or []
+                if isinstance(item, Mapping)
+                and int(item.get("dataset_index", -1)) == int(dataset_index)
+            ),
+            {"dataset_index": int(dataset_index)},
+        )
+        records.append(
+            _geometry_fit_trace_pair_record(
+                phase="seed_correspondence",
+                dataset_info=dataset,
+                entry=entry,
+                fit_run_id=str(fit_run_id),
+            )
+        )
+    if seed_records:
+        for raw_dataset in prepared_run.dataset_infos or []:
+            if not isinstance(raw_dataset, Mapping):
+                continue
+            dataset = dict(raw_dataset)
+            dataset_seed_records = [
+                dict(entry)
+                for entry in seed_records
+                if int(entry.get("dataset_index", 0) or 0)
+                == int(dataset.get("dataset_index", 0) or 0)
+            ]
+            records.append(
+                _geometry_fit_phase_summary_record(
+                    phase="seed_correspondence",
+                    dataset_info=dataset,
+                    entries=dataset_seed_records,
+                    fit_run_id=str(fit_run_id),
+                    dropped_pair_count=max(
+                        0,
+                        int(dataset.get("pair_count", 0) or 0)
+                        - len(dataset_seed_records),
+                    ),
+                )
+            )
+
+    polish_records = []
+    if isinstance(full_beam_summary, Mapping):
+        raw_polish_records = full_beam_summary.get("point_match_diagnostics", ())
+        if isinstance(raw_polish_records, Sequence) and not isinstance(
+            raw_polish_records,
+            (str, bytes, bytearray),
+        ):
+            polish_records = [
+                dict(entry)
+                for entry in raw_polish_records
+                if isinstance(entry, Mapping)
+            ]
+    for entry in polish_records:
+        dataset_index = int(entry.get("dataset_index", 0) or 0)
+        dataset = next(
+            (
+                dict(item)
+                for item in prepared_run.dataset_infos or []
+                if isinstance(item, Mapping)
+                and int(item.get("dataset_index", -1)) == int(dataset_index)
+            ),
+            {"dataset_index": int(dataset_index)},
+        )
+        records.append(
+            _geometry_fit_trace_pair_record(
+                phase="full_beam_polish_correspondence",
+                dataset_info=dataset,
+                entry=entry,
+                fit_run_id=str(fit_run_id),
+            )
+        )
+    if polish_records:
+        records.extend(
+            _geometry_fit_duplicate_target_records(
+                polish_records,
+                fit_run_id=str(fit_run_id),
+                phase="full_beam_polish_correspondence",
+            )
+        )
+
+    final_records = [
+        dict(entry)
+        for entry in (getattr(result, "point_match_diagnostics", None) or ())
+        if isinstance(entry, Mapping)
+    ]
+    for entry in final_records:
+        dataset_index = int(entry.get("dataset_index", 0) or 0)
+        dataset = next(
+            (
+                dict(item)
+                for item in prepared_run.dataset_infos or []
+                if isinstance(item, Mapping)
+                and int(item.get("dataset_index", -1)) == int(dataset_index)
+            ),
+            {"dataset_index": int(dataset_index)},
+        )
+        records.append(
+            _geometry_fit_trace_pair_record(
+                phase="acceptance_residuals",
+                dataset_info=dataset,
+                entry=entry,
+                fit_run_id=str(fit_run_id),
+                extra={
+                    "accepted": bool(apply_result.accepted),
+                    "rejection_reason": apply_result.rejection_reason,
+                },
+            )
+        )
+    if final_records:
+        for raw_dataset in prepared_run.dataset_infos or []:
+            if not isinstance(raw_dataset, Mapping):
+                continue
+            dataset = dict(raw_dataset)
+            dataset_records = [
+                dict(entry)
+                for entry in final_records
+                if int(entry.get("dataset_index", 0) or 0)
+                == int(dataset.get("dataset_index", 0) or 0)
+            ]
+            records.append(
+                _geometry_fit_phase_summary_record(
+                    phase="acceptance_residuals",
+                    dataset_info=dataset,
+                    entries=dataset_records,
+                    fit_run_id=str(fit_run_id),
+                    dropped_pair_count=sum(
+                        1
+                        for entry in dataset_records
+                        if str(entry.get("match_status", "") or "") != "matched"
+                    ),
+                )
+            )
+        records.extend(
+            _geometry_fit_duplicate_target_records(
+                final_records,
+                fit_run_id=str(fit_run_id),
+                phase="acceptance_residuals",
+            )
+        )
+
+    return [
+        _geometry_fit_cache_jsonable(record)  # type: ignore[arg-type]
+        for record in records
+    ]
+
+
+def _write_geometry_fit_trace_file(
+    *,
+    fit_run_id: str,
+    prepared_run: GeometryFitPreparedRun,
+    result: object,
+    apply_result: GeometryFitRuntimeApplyResult,
+    log_path: Path,
+    trace_path: Path,
+) -> Path | None:
+    """Persist the structured geometry-fit trace as JSONL."""
+
+    records = _build_geometry_fit_trace_records(
+        fit_run_id=str(fit_run_id),
+        prepared_run=prepared_run,
+        result=result,
+        apply_result=apply_result,
+        log_path=log_path,
+    )
+    if not records:
+        return None
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    with trace_path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    register_run_output_path(trace_path)
+    return trace_path
 
 
 def build_geometry_fit_solver_request(
@@ -8078,6 +9701,28 @@ def build_geometry_fit_point_match_failure_reason_lines(
                     reason=_geometry_fit_preferred_failure_reason(entry),
                 )
             )
+            lines.append(
+                (
+                    "dataset[{dataset_index}] {label} overlay_index={pair} "
+                    "source_branch={source_branch} resolved_branch={resolved_branch} "
+                    "fit_kind={fit_kind}"
+                ).format(
+                    dataset_index=dataset_index,
+                    label=label,
+                    pair=pair_index,
+                    source_branch=_geometry_fit_source_branch_text(
+                        entry.get("source_branch_index"),
+                        entry.get("source_branch_resolution_source"),
+                    ),
+                    resolved_branch=_geometry_fit_source_branch_text(
+                        entry.get("resolved_peak_index"),
+                        "resolved_peak_index"
+                        if entry.get("resolved_peak_index") is not None
+                        else None,
+                    ),
+                    fit_kind=str(entry.get("fit_source_resolution_kind", "<none>") or "<none>"),
+                )
+            )
         extra_count = len(unresolved) - max_pairs
         if extra_count > 0:
             lines.append(
@@ -9058,6 +10703,10 @@ def execute_runtime_geometry_fit_solver_phase(
         _emit_progress_text(status_text)
 
     try:
+        _geometry_fit_assign_fit_run_id(
+            prepared_run,
+            fit_run_id=str(stamp),
+        )
         write_geometry_fit_run_start_log(
             stamp=str(stamp),
             prepared_run=prepared_run,
@@ -9144,6 +10793,34 @@ def finalize_runtime_geometry_fit_execution(
             log_section=_log_section,
         ),
     )
+    trace_path: Path | None = None
+    debug_logging = geometry_fit_debug_logging_enabled(
+        prepared_run.geometry_runtime_cfg
+    )
+    should_write_trace = bool(debug_logging) or not bool(apply_result.accepted)
+    if should_write_trace:
+        candidate_trace_path = build_geometry_fit_trace_path(
+            stamp=str(setup.postprocess_config.stamp),
+            log_dir=setup.postprocess_config.log_dir,
+            downloads_dir=setup.postprocess_config.downloads_dir,
+        )
+        trace_path = _write_geometry_fit_trace_file(
+            fit_run_id=str(setup.postprocess_config.stamp),
+            prepared_run=prepared_run,
+            result=result,
+            apply_result=apply_result,
+            log_path=resolved_log_path,
+            trace_path=candidate_trace_path,
+        )
+        if trace_path is not None:
+            _log_section(
+                "Phase trace:",
+                [
+                    f"fit_run_id={setup.postprocess_config.stamp}",
+                    f"trace_path={trace_path}",
+                    f"accepted={bool(apply_result.accepted)}",
+                ],
+            )
     replace_dataset_cache = ui_bindings.replace_dataset_cache
     if apply_result.accepted:
         if callable(replace_dataset_cache):
@@ -9160,6 +10837,7 @@ def finalize_runtime_geometry_fit_execution(
         )
     return GeometryFitRuntimeExecutionResult(
         log_path=resolved_log_path,
+        trace_path=trace_path,
         solver_request=execution_result.solver_request,
         solver_result=result,
         apply_result=apply_result,

@@ -923,6 +923,9 @@ class SimulationRuntimeState:
     stored_secondary_sim_image: np.ndarray | None = None
     stored_primary_max_positions: Any = None
     stored_secondary_max_positions: Any = None
+    stored_source_reflection_indices_local: list[int] | None = None
+    stored_primary_source_reflection_indices: list[int] | None = None
+    stored_secondary_source_reflection_indices: list[int] | None = None
     stored_primary_peak_table_lattice: Any = None
     stored_secondary_peak_table_lattice: Any = None
     stored_primary_intersection_cache: list[Any] | None = None

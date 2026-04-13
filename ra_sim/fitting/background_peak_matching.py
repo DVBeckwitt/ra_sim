@@ -844,6 +844,7 @@ def match_simulated_peaks_to_peak_context(
                 "source_peak_index": entry.get("source_peak_index"),
                 "source_label": entry.get("source_label"),
                 "source_table_index": entry.get("source_table_index"),
+                "source_reflection_index": entry.get("source_reflection_index"),
                 "source_row_index": entry.get("source_row_index"),
                 "hkl_raw": entry.get("hkl_raw"),
                 "qr": entry.get("qr"),

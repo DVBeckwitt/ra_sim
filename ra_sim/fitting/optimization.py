@@ -24,7 +24,11 @@ from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
 )
-from ra_sim.utils.calculations import d_spacing, two_theta
+from ra_sim.utils.calculations import (
+    d_spacing,
+    source_branch_index_from_phi_deg,
+    two_theta,
+)
 from ra_sim.utils.parallel import (
     numba_threads_per_worker as _shared_numba_threads_per_worker,
     reserved_worker_count,
@@ -602,10 +606,13 @@ def _entry_has_geometry_source_identity(entry: Mapping[str, object]) -> bool:
         return True
 
     try:
-        peak_idx = int(entry.get("source_peak_index", -1))
+        branch_idx = _nonnegative_index(entry.get("source_branch_index"))
+        if branch_idx not in {0, 1}:
+            branch_idx = _nonnegative_index(entry.get("source_peak_index", -1))
+        branch_idx = int(branch_idx) if branch_idx in {0, 1} else -1
     except Exception:
-        peak_idx = -1
-    return peak_idx in {0, 1}
+        branch_idx = -1
+    return branch_idx in {0, 1}
 
 
 def _measured_entries_have_geometry_source_identities(
@@ -2360,25 +2367,36 @@ def _prepare_reflection_subset(
             return None
         return int(idx) if idx >= 0 else None
 
+    def _trusted_full_reflection_index(
+        entry: Mapping[str, object],
+    ) -> Optional[int]:
+        reflection_idx = _coerce_index(entry.get("source_reflection_index"))
+        if reflection_idx is None:
+            return None
+        namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
+        if namespace in {"full", "full_reflection", "miller"}:
+            return int(reflection_idx)
+        try:
+            source_is_full = bool(entry.get("source_reflection_is_full", False))
+        except Exception:
+            source_is_full = False
+        return int(reflection_idx) if source_is_full else None
+
     def _resolve_reflection_index(entry: Mapping[str, object]) -> Optional[int]:
         measured_hkl = _entry_hkl_key(entry)
-        reflection_idx = _coerce_index(entry.get("source_reflection_index"))
-        table_idx = _coerce_index(entry.get("source_table_index"))
-        if reflection_idx is None and table_idx is None:
+        reflection_idx = _trusted_full_reflection_index(entry)
+        if reflection_idx is None:
             return None
 
         if measured_hkl is not None:
             matching_indices = hkl_to_reflection_indices.get(measured_hkl, [])
             if reflection_idx is not None and reflection_idx in matching_indices:
                 return int(reflection_idx)
-            if table_idx is not None and table_idx in matching_indices:
-                return int(table_idx)
             if len(matching_indices) == 1:
                 return int(matching_indices[0])
 
-        for candidate in (reflection_idx, table_idx):
-            if candidate is not None and candidate < total_reflections:
-                return int(candidate)
+        if reflection_idx < total_reflections:
+            return int(reflection_idx)
         return None
 
     selected_original_indices: List[int] = []
@@ -2445,6 +2463,10 @@ def _prepare_reflection_subset(
         int(original_idx): int(local_idx)
         for local_idx, original_idx in enumerate(original_indices.tolist())
     }
+    full_identity_preserved = bool(
+        int(original_indices.shape[0]) == int(total_reflections)
+        and np.array_equal(original_indices, np.arange(total_reflections, dtype=np.int64))
+    )
 
     remapped_measured: List[Dict[str, object]] = []
     for entry_index, entry in enumerate(normalized_measured):
@@ -2452,6 +2474,8 @@ def _prepare_reflection_subset(
         reflection_idx = resolved_reflection_indices.get(int(entry_index))
         if reflection_idx is not None:
             remapped_entry["source_reflection_index"] = int(reflection_idx)
+            remapped_entry["source_reflection_namespace"] = "full_reflection"
+            remapped_entry["source_reflection_is_full"] = True
             local_idx = local_index_map.get(int(reflection_idx))
             if local_idx is not None:
                 remapped_entry["resolved_table_index"] = int(local_idx)
@@ -2463,19 +2487,64 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                try:
-                    peak_idx = int(entry.get("source_peak_index"))
-                except Exception:
-                    peak_idx = -1
-                if peak_idx in {0, 1}:
-                    remapped_entry["resolved_peak_index"] = int(peak_idx)
-                    remapped_entry["source_peak_index"] = int(peak_idx)
+                branch_idx = _coerce_index(entry.get("source_branch_index"))
+                if branch_idx not in {0, 1}:
+                    branch_idx = _coerce_index(entry.get("source_peak_index"))
+                if branch_idx in {0, 1}:
+                    remapped_entry["source_branch_index"] = int(branch_idx)
+                    remapped_entry["resolved_peak_index"] = int(branch_idx)
+                    remapped_entry["source_peak_index"] = int(branch_idx)
                 else:
+                    remapped_entry.pop("source_branch_index", None)
                     remapped_entry.pop("resolved_peak_index", None)
             else:
                 remapped_entry.pop("resolved_table_index", None)
                 remapped_entry.pop("resolved_peak_index", None)
                 remapped_entry.pop("source_row_index", None)
+                remapped_entry.pop("source_branch_index", None)
+                remapped_entry.pop("source_peak_index", None)
+                remapped_entry.pop("source_table_index", None)
+        else:
+            local_table_idx = _coerce_index(entry.get("source_table_index"))
+            if (
+                full_identity_preserved
+                and local_table_idx is not None
+                and local_table_idx < total_reflections
+            ):
+                remapped_entry["resolved_table_index"] = int(local_table_idx)
+                try:
+                    row_idx = int(entry.get("source_row_index"))
+                except Exception:
+                    row_idx = -1
+                if row_idx >= 0:
+                    remapped_entry["source_row_index"] = int(row_idx)
+                else:
+                    remapped_entry.pop("source_row_index", None)
+                branch_idx = _coerce_index(entry.get("source_branch_index"))
+                if branch_idx not in {0, 1}:
+                    branch_idx = _coerce_index(entry.get("source_peak_index"))
+                if branch_idx in {0, 1}:
+                    remapped_entry["resolved_peak_index"] = int(branch_idx)
+                    if "source_branch_index" in entry:
+                        remapped_entry["source_branch_index"] = int(branch_idx)
+                    remapped_entry["source_peak_index"] = int(branch_idx)
+                else:
+                    remapped_entry.pop("resolved_peak_index", None)
+                    remapped_entry.pop("source_branch_index", None)
+                    remapped_entry.pop("source_peak_index", None)
+                remapped_entry.pop("source_reflection_index", None)
+                remapped_entry.pop("source_reflection_namespace", None)
+                remapped_entry.pop("source_reflection_is_full", None)
+            else:
+                remapped_entry.pop("resolved_table_index", None)
+                remapped_entry.pop("resolved_peak_index", None)
+                remapped_entry.pop("source_reflection_index", None)
+                remapped_entry.pop("source_reflection_namespace", None)
+                remapped_entry.pop("source_reflection_is_full", None)
+                remapped_entry.pop("source_table_index", None)
+                remapped_entry.pop("source_row_index", None)
+                remapped_entry.pop("source_branch_index", None)
+                remapped_entry.pop("source_peak_index", None)
         remapped_measured.append(remapped_entry)
 
     reduced = len(original_indices) < total_reflections
@@ -3009,7 +3078,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
     measured_dict = build_measured_dict(fallback_measured)
     simulated_candidates_by_hkl = _collect_geometry_fit_simulated_candidates(
         fit_miller,
-        maxpos,
+        hit_tables,
+        original_indices=simulation_subset.original_indices,
         measured_hkls=set(measured_dict),
     )
 
@@ -3132,8 +3202,13 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "sim_list_index": int(sim_idx),
                         "meas_list_index": int(meas_idx),
                         "source_table_index": sim_candidate.get("source_table_index"),
+                        "resolved_table_index": sim_candidate.get("resolved_table_index"),
                         "source_reflection_index": sim_candidate.get("source_reflection_index"),
+                        "source_reflection_namespace": None,
+                        "source_reflection_is_full": False,
+                        "source_branch_index": sim_candidate.get("source_branch_index"),
                         "source_peak_index": sim_candidate.get("source_peak_index"),
+                        "resolved_peak_index": sim_candidate.get("resolved_peak_index"),
                         "measured_x": float(meas_pt[0]),
                         "measured_y": float(meas_pt[1]),
                         "simulated_x": float(sim_pt[0]),
@@ -3547,9 +3622,14 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     measured_anchor_motion_px: List[float] = []
 
     def _entry_diag(entry: Dict[str, object], idx: int) -> Dict[str, object]:
+        source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
+            entry
+        )
         return {
             "match_input_index": int(idx),
             "overlay_match_index": int(_overlay_index(entry, idx)),
+            "pair_id": entry.get("pair_id"),
+            "fit_run_id": entry.get("fit_run_id"),
             "label": str(entry.get("label", "")),
             "hkl": tuple(entry.get("hkl", ()))
             if isinstance(entry.get("hkl"), tuple)
@@ -3557,7 +3637,11 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "q_group_key": entry.get("q_group_key"),
             "source_table_index": entry.get("source_table_index"),
             "source_reflection_index": entry.get("source_reflection_index"),
+            "source_reflection_namespace": entry.get("source_reflection_namespace"),
+            "source_reflection_is_full": entry.get("source_reflection_is_full"),
             "source_row_index": entry.get("source_row_index"),
+            "source_branch_index": source_branch_index,
+            "source_branch_resolution_source": source_branch_source,
             "source_peak_index": entry.get("source_peak_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
@@ -9400,19 +9484,89 @@ def _nonnegative_index(value: object) -> Optional[int]:
 
 
 def _measured_source_table_index(entry: Mapping[str, object]) -> Optional[int]:
-    for key in ("resolved_table_index", "source_reflection_index", "source_table_index"):
-        idx = _nonnegative_index(entry.get(key))
-        if idx is not None:
-            return int(idx)
-    return None
+    table_idx = _nonnegative_index(entry.get("resolved_table_index"))
+    if table_idx is not None:
+        return int(table_idx)
+    if _entry_trusted_full_reflection_identity(entry):
+        return None
+    return _nonnegative_index(entry.get("source_table_index"))
+
+
+def _entry_trusted_full_reflection_identity(entry: Mapping[str, object]) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    reflection_idx = _nonnegative_index(entry.get("source_reflection_index"))
+    if reflection_idx is None:
+        return False
+    namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
+    if namespace in {"full", "full_reflection", "miller"}:
+        return True
+    return bool(entry.get("source_reflection_is_full", False))
+
+
+def _diagnostic_source_table_index(entry: Mapping[str, object]) -> Optional[int]:
+    if not isinstance(entry, Mapping):
+        return None
+    if _entry_trusted_full_reflection_identity(entry):
+        return None
+    if str(entry.get("resolution_kind", "")).strip().lower() != "fixed_source":
+        return None
+    return _nonnegative_index(entry.get("source_table_index"))
+
+
+def _measured_source_peak_index_with_source(
+    entry: Mapping[str, object],
+) -> Tuple[Optional[int], Optional[str]]:
+    peak_idx = _nonnegative_index(entry.get("source_branch_index"))
+    if peak_idx in {0, 1}:
+        return int(peak_idx), "source_branch_index"
+    peak_idx = _nonnegative_index(entry.get("resolved_peak_index"))
+    if peak_idx in {0, 1}:
+        return int(peak_idx), "resolved_peak_index"
+    peak_idx = _nonnegative_index(entry.get("source_peak_index"))
+    if peak_idx in {0, 1}:
+        return int(peak_idx), "source_peak_index"
+    return None, None
 
 
 def _measured_source_peak_index(entry: Mapping[str, object]) -> Optional[int]:
-    for key in ("resolved_peak_index", "source_peak_index"):
-        peak_idx = _nonnegative_index(entry.get(key))
-        if peak_idx in {0, 1}:
-            return int(peak_idx)
-    return None
+    peak_idx, _peak_source = _measured_source_peak_index_with_source(entry)
+    return peak_idx
+
+
+def _branch_representative_row(
+    rows: Sequence[np.ndarray],
+    *,
+    branch_index: int,
+) -> Tuple[Optional[np.ndarray], str]:
+    if branch_index not in {0, 1}:
+        return None, "missing_source_peak_index"
+    best_row: Optional[np.ndarray] = None
+    best_intensity = -math.inf
+    for raw_row in rows:
+        try:
+            row = np.asarray(raw_row, dtype=float).reshape(-1)
+        except Exception:
+            continue
+        if row.shape[0] < 7:
+            continue
+        resolved_branch = source_branch_index_from_phi_deg(row[3])
+        if resolved_branch is None:
+            continue
+        if int(resolved_branch) != int(branch_index):
+            continue
+        try:
+            intensity = abs(float(row[0]))
+        except Exception:
+            intensity = 0.0
+        if not np.isfinite(intensity):
+            intensity = 0.0
+        if best_row is None or float(intensity) > float(best_intensity):
+            best_row = np.asarray(row[:7], dtype=float)
+            best_intensity = float(intensity)
+    if best_row is None:
+        return None, "missing_source_peak"
+    return best_row, "resolved_source_peak"
 
 
 def _resolve_max_position_peak(
@@ -9475,14 +9629,14 @@ def _resolve_fixed_source_matches(
     """Resolve measured peaks back to their original simulated hit-table rows."""
 
     filtered_rows_cache: Dict[int, List[np.ndarray]] = {}
-    try:
-        max_positions = np.asarray(hit_tables_to_max_positions(hit_tables), dtype=np.float64)
-    except Exception:
-        max_positions = np.empty((0, 6), dtype=np.float64)
     resolved: List[Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]] = []
     fallback_entries: List[Dict[str, object]] = []
     resolution_lookup: Dict[int, Dict[str, object]] = {}
     used_source_keys: set[Tuple[object, ...]] = set()
+    try:
+        max_positions = np.asarray(hit_tables_to_max_positions(hit_tables), dtype=float)
+    except Exception:
+        max_positions = np.empty((0, 6), dtype=np.float64)
 
     def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
         try:
@@ -9506,11 +9660,13 @@ def _resolve_fixed_source_matches(
             "source_table_index": entry.get("source_table_index"),
             "source_reflection_index": entry.get("source_reflection_index"),
             "source_row_index": entry.get("source_row_index"),
+            "source_branch_index": entry.get("source_branch_index"),
             "source_peak_index": entry.get("source_peak_index"),
             "resolved_table_index": entry.get("resolved_table_index"),
             "resolved_peak_index": entry.get("resolved_peak_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
         }
+        trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
         source_peak_key = _measured_source_peak_indices(entry)
         source_row_key = _measured_source_indices(entry)
         source_key = (
@@ -9518,11 +9674,18 @@ def _resolve_fixed_source_matches(
             if source_peak_key is not None
             else (
                 ("row", int(source_row_key[0]), int(source_row_key[1]))
-                if source_row_key is not None
+                if source_row_key is not None and not trusted_full_reflection
                 else None
             )
         )
         if source_key is None:
+            if trusted_full_reflection:
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "fixed_source",
+                    "resolution_reason": "missing_source_peak_index",
+                }
+                continue
             fallback_entries.append(entry)
             resolution_lookup[id(entry)] = {
                 **base_diag,
@@ -9534,9 +9697,13 @@ def _resolve_fixed_source_matches(
             fallback_entries.append(entry)
             resolution_lookup[id(entry)] = {
                 **base_diag,
-                "resolution_kind": "hkl_fallback",
+                "resolution_kind": (
+                    "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                ),
                 "resolution_reason": "duplicate_source_key",
             }
+            if trusted_full_reflection:
+                continue
             continue
 
         table_idx = int(source_key[1])
@@ -9553,52 +9720,83 @@ def _resolve_fixed_source_matches(
         sim_hkl: Tuple[int, int, int] | None = None
         if source_peak_key is not None:
             peak_idx = int(source_peak_key[1])
-            peak_point, peak_reason = _resolve_max_position_peak(
-                max_positions,
-                table_idx=int(table_idx),
-                peak_index=int(peak_idx),
+            peak_row, peak_reason = _branch_representative_row(
+                rows,
+                branch_index=int(peak_idx),
             )
-            if peak_point is not None:
-                sim_col = float(peak_point[0])
-                sim_row = float(peak_point[1])
+            if peak_row is not None:
+                sim_col = float(peak_row[1])
+                sim_row = float(peak_row[2])
                 resolved_from_peak = True
-                if rows:
-                    try:
-                        row0 = rows[0]
-                        sim_hkl = (
-                            int(round(float(row0[4]))),
-                            int(round(float(row0[5]))),
-                            int(round(float(row0[6]))),
-                        )
-                    except Exception:
-                        sim_hkl = None
-            elif source_row_key is None:
-                fallback_entries.append(entry)
+                try:
+                    sim_hkl = (
+                        int(round(float(peak_row[4]))),
+                        int(round(float(peak_row[5]))),
+                        int(round(float(peak_row[6]))),
+                    )
+                except Exception:
+                    sim_hkl = None
+            else:
+                legacy_peak_point = None
+                legacy_peak_reason = str(peak_reason)
+                if not trusted_full_reflection:
+                    legacy_peak_point, legacy_peak_reason = _resolve_max_position_peak(
+                        max_positions,
+                        table_idx=int(table_idx),
+                        peak_index=int(peak_idx),
+                    )
+                if legacy_peak_point is not None:
+                    sim_col = float(legacy_peak_point[0])
+                    sim_row = float(legacy_peak_point[1])
+                    resolved_from_peak = True
+                elif source_row_key is None or trusted_full_reflection:
+                    resolution_lookup[id(entry)] = {
+                        **base_diag,
+                        "resolution_kind": (
+                            "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                        ),
+                        "resolution_reason": str(legacy_peak_reason),
+                    }
+                    if not trusted_full_reflection:
+                        fallback_entries.append(entry)
+                    continue
+            if not resolved_from_peak and (source_row_key is None or trusted_full_reflection):
                 resolution_lookup[id(entry)] = {
                     **base_diag,
-                    "resolution_kind": "hkl_fallback",
-                    "resolution_reason": str(peak_reason),
+                    "resolution_kind": (
+                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                    ),
+                    "resolution_reason": "missing_source_peak_index",
                 }
+                if not trusted_full_reflection:
+                    fallback_entries.append(entry)
                 continue
 
         if not resolved_from_peak:
-            if source_row_key is None:
-                fallback_entries.append(entry)
+            if source_row_key is None or trusted_full_reflection:
                 resolution_lookup[id(entry)] = {
                     **base_diag,
-                    "resolution_kind": "hkl_fallback",
-                    "resolution_reason": "missing_source_indices",
+                    "resolution_kind": (
+                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                    ),
+                    "resolution_reason": (
+                        "missing_source_peak_index"
+                        if trusted_full_reflection
+                        else "missing_source_indices"
+                    ),
                 }
+                if not trusted_full_reflection:
+                    fallback_entries.append(entry)
                 continue
             row_idx = int(source_row_key[1])
             if row_idx < 0 or row_idx >= len(rows):
-                fallback_entries.append(entry)
                 resolution_lookup[id(entry)] = {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
                     "resolution_reason": "source_row_out_of_range",
                     "source_row_count": int(len(rows)),
                 }
+                fallback_entries.append(entry)
                 continue
 
             row = rows[row_idx]
@@ -9611,20 +9809,20 @@ def _resolve_fixed_source_matches(
                     int(round(float(row[6]))),
                 )
             except Exception:
-                fallback_entries.append(entry)
                 resolution_lookup[id(entry)] = {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
                     "resolution_reason": "source_row_parse_failed",
                 }
+                fallback_entries.append(entry)
                 continue
             if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-                fallback_entries.append(entry)
                 resolution_lookup[id(entry)] = {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
                     "resolution_reason": "invalid_simulated_point",
                 }
+                fallback_entries.append(entry)
                 continue
         measured_hkl = entry.get("hkl")
         if isinstance(measured_hkl, tuple) and len(measured_hkl) == 3:
@@ -9639,13 +9837,16 @@ def _resolve_fixed_source_matches(
             if measured_hkl_key is not None and sim_hkl is None:
                 sim_hkl = tuple(int(v) for v in measured_hkl_key)
             if measured_hkl_key is not None and sim_hkl is not None and measured_hkl_key != sim_hkl:
-                fallback_entries.append(entry)
                 resolution_lookup[id(entry)] = {
                     **base_diag,
-                    "resolution_kind": "hkl_fallback",
+                    "resolution_kind": (
+                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                    ),
                     "resolution_reason": "source_hkl_mismatch",
                     "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
                 }
+                if not trusted_full_reflection:
+                    fallback_entries.append(entry)
                 continue
 
         resolved.append((entry, (sim_col, sim_row), tuple(int(v) for v in sim_hkl or (0, 0, 0))))
@@ -9664,34 +9865,94 @@ def _resolve_fixed_source_matches(
 
 def _collect_geometry_fit_simulated_candidates(
     fit_miller: np.ndarray,
-    max_positions: np.ndarray,
+    hit_tables: Sequence[object],
     *,
+    original_indices: np.ndarray | None = None,
     measured_hkls: Optional[Set[Tuple[int, int, int]]] = None,
 ) -> Dict[Tuple[int, int, int], List[Dict[str, object]]]:
     """Collect simulated peak candidates with stable reflection/branch ids."""
 
     simulated_by_hkl: Dict[Tuple[int, int, int], List[Dict[str, object]]] = {}
+    try:
+        max_positions = np.asarray(hit_tables_to_max_positions(hit_tables), dtype=float)
+    except Exception:
+        max_positions = np.empty((0, 6), dtype=np.float64)
     for table_idx, (H, K, L) in enumerate(fit_miller):
         hkl_key = (int(round(H)), int(round(K)), int(round(L)))
         if measured_hkls is not None and hkl_key not in measured_hkls:
             continue
-        try:
-            i0, x0, y0, i1, x1, y1 = max_positions[table_idx]
-        except Exception:
+        if table_idx < 0 or table_idx >= len(hit_tables):
             continue
-        for peak_index, (intensity, col, row) in enumerate(((i0, x0, y0), (i1, x1, y1))):
-            if not np.isfinite(intensity) or float(intensity) <= 0.0:
+        rows = _valid_hit_rows(hit_tables[table_idx])
+        emitted_candidate = False
+        for branch_index in (0, 1):
+            branch_row, _ = _branch_representative_row(rows, branch_index=int(branch_index))
+            if branch_row is None:
                 continue
-            if not (np.isfinite(col) and np.isfinite(row)):
+            emitted_candidate = True
+            simulated_by_hkl.setdefault(hkl_key, []).append(
+                {
+                    "hkl": tuple(int(v) for v in hkl_key),
+                    "simulated_x": float(branch_row[1]),
+                    "simulated_y": float(branch_row[2]),
+                    "source_table_index": int(table_idx),
+                    "resolved_table_index": int(table_idx),
+                    "source_reflection_index": (
+                        int(original_indices[table_idx])
+                        if isinstance(original_indices, np.ndarray)
+                        and table_idx < int(original_indices.shape[0])
+                        else None
+                    ),
+                    "source_reflection_namespace": (
+                        "full_reflection"
+                        if isinstance(original_indices, np.ndarray)
+                        and table_idx < int(original_indices.shape[0])
+                        else None
+                    ),
+                    "source_reflection_is_full": bool(
+                        isinstance(original_indices, np.ndarray)
+                        and table_idx < int(original_indices.shape[0])
+                    ),
+                    "source_branch_index": int(branch_index),
+                    "source_peak_index": int(branch_index),
+                    "resolved_peak_index": int(branch_index),
+                }
+            )
+        if emitted_candidate:
+            continue
+        for peak_index in (0, 1):
+            peak_point, _ = _resolve_max_position_peak(
+                max_positions,
+                table_idx=int(table_idx),
+                peak_index=int(peak_index),
+            )
+            if peak_point is None:
                 continue
             simulated_by_hkl.setdefault(hkl_key, []).append(
                 {
                     "hkl": tuple(int(v) for v in hkl_key),
-                    "simulated_x": float(col),
-                    "simulated_y": float(row),
+                    "simulated_x": float(peak_point[0]),
+                    "simulated_y": float(peak_point[1]),
                     "source_table_index": int(table_idx),
-                    "source_reflection_index": int(table_idx),
+                    "resolved_table_index": int(table_idx),
+                    "source_reflection_index": (
+                        int(original_indices[table_idx])
+                        if isinstance(original_indices, np.ndarray)
+                        and table_idx < int(original_indices.shape[0])
+                        else None
+                    ),
+                    "source_reflection_namespace": (
+                        "full_reflection"
+                        if isinstance(original_indices, np.ndarray)
+                        and table_idx < int(original_indices.shape[0])
+                        else None
+                    ),
+                    "source_reflection_is_full": bool(
+                        isinstance(original_indices, np.ndarray)
+                        and table_idx < int(original_indices.shape[0])
+                    ),
                     "source_peak_index": int(peak_index),
+                    "resolved_peak_index": int(peak_index),
                 }
             )
     return simulated_by_hkl
@@ -9738,25 +9999,52 @@ def _geometry_fit_correspondence_simulated_point(
 ) -> Tuple[Optional[Tuple[float, float]], str]:
     """Resolve one frozen correspondence back to the current simulated point."""
 
-    table_idx = _measured_source_table_index(correspondence)
+    trusted_full_reflection = _entry_trusted_full_reflection_identity(correspondence)
+    table_idx = None
+    if trusted_full_reflection:
+        full_table_idx = _nonnegative_index(correspondence.get("source_reflection_index"))
+        if (
+            full_table_idx is not None
+            and full_table_idx < len(hit_tables)
+            and full_table_idx < int(max_positions.shape[0])
+        ):
+            table_idx = int(full_table_idx)
+    if table_idx is None:
+        resolved_table_idx = _nonnegative_index(correspondence.get("resolved_table_index"))
+        if resolved_table_idx is not None:
+            table_idx = int(resolved_table_idx)
+        elif not trusted_full_reflection:
+            source_table_idx = _nonnegative_index(correspondence.get("source_table_index"))
+            if source_table_idx is not None and source_table_idx < len(hit_tables):
+                table_idx = int(source_table_idx)
     if table_idx is None:
         table_idx = -1
     if table_idx < 0:
         return None, "missing_source_table_index"
 
-    if table_idx >= len(hit_tables) or table_idx >= int(max_positions.shape[0]):
+    if table_idx >= len(hit_tables):
         return None, "source_table_out_of_range"
 
     peak_index = _measured_source_peak_index(correspondence)
     if peak_index is not None:
-        peak_point, peak_reason = _resolve_max_position_peak(
-            max_positions,
-            table_idx=int(table_idx),
-            peak_index=int(peak_index),
+        rows = _valid_hit_rows(hit_tables[table_idx])
+        peak_row, peak_reason = _branch_representative_row(
+            rows,
+            branch_index=int(peak_index),
         )
-        if peak_point is not None:
-            return peak_point, peak_reason
+        if peak_row is not None:
+            return (float(peak_row[1]), float(peak_row[2])), peak_reason
+        if not trusted_full_reflection:
+            legacy_peak_point, legacy_peak_reason = _resolve_max_position_peak(
+                max_positions,
+                table_idx=int(table_idx),
+                peak_index=int(peak_index),
+            )
+            if legacy_peak_point is not None:
+                return legacy_peak_point, legacy_peak_reason
 
+    if trusted_full_reflection:
+        return None, "missing_source_peak_index"
     row_idx = _nonnegative_index(correspondence.get("source_row_index", -1))
     if row_idx is not None:
         rows = _valid_hit_rows(hit_tables[table_idx])
@@ -14426,11 +14714,21 @@ def fit_geometry_parameters(
                     normalized_hkl = hkl_value
             else:
                 normalized_hkl = hkl_value
-
+            source_reflection_index = _nonnegative_index(
+                entry.get("source_reflection_index")
+            )
+            source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
+                entry
+            )
+            source_reflection_namespace = entry.get("source_reflection_namespace")
+            source_reflection_is_full = entry.get("source_reflection_is_full")
+            resolved_table_index = entry.get("resolved_table_index")
             grouped.setdefault(int(dataset_index), {})[int(overlay_match_index)] = {
                 "dataset_index": int(dataset_index),
                 "overlay_match_index": int(overlay_match_index),
                 "match_input_index": int(entry.get("match_input_index", overlay_match_index)),
+                "pair_id": entry.get("pair_id"),
+                "fit_run_id": entry.get("fit_run_id"),
                 "label": str(entry.get("label", "")),
                 "hkl": normalized_hkl,
                 "q_group_key": entry.get("q_group_key"),
@@ -14440,17 +14738,18 @@ def fit_geometry_parameters(
                 "resolution_kind": str(entry.get("resolution_kind", "")),
                 "resolution_reason": str(entry.get("resolution_reason", "")),
                 "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
-                "source_table_index": entry.get("source_table_index"),
-                "source_reflection_index": entry.get("source_reflection_index"),
+                "source_table_index": _diagnostic_source_table_index(entry),
+                "source_reflection_index": source_reflection_index,
+                "source_reflection_namespace": source_reflection_namespace,
+                "source_reflection_is_full": source_reflection_is_full,
                 "source_row_index": entry.get("source_row_index"),
+                "source_branch_index": source_branch_index,
+                "source_branch_resolution_source": source_branch_source,
                 "source_peak_index": entry.get(
                     "source_peak_index",
                     entry.get("resolved_peak_index"),
                 ),
-                "resolved_table_index": entry.get(
-                    "resolved_table_index",
-                    entry.get("source_table_index"),
-                ),
+                "resolved_table_index": resolved_table_index,
                 "resolved_peak_index": entry.get(
                     "resolved_peak_index",
                     entry.get("source_peak_index"),
@@ -14704,7 +15003,17 @@ def fit_geometry_parameters(
                     return None, {"resolution_reason": "seed_missing_pair"}
 
                 if str(entry.get("resolution_kind", "")) == "fixed_source":
-                    table_idx = _measured_source_table_index(entry)
+                    table_idx = None
+                    if _entry_trusted_full_reflection_identity(entry):
+                        full_table_idx = _nonnegative_index(
+                            entry.get("source_reflection_index")
+                        )
+                        if full_table_idx is not None and full_table_idx < len(hit_tables):
+                            table_idx = int(full_table_idx)
+                    if table_idx is None:
+                        table_idx = _nonnegative_index(
+                            entry.get("resolved_table_index")
+                        )
                     if table_idx is None:
                         return None, {"resolution_reason": "fixed_source_indices_missing"}
                     if table_idx not in filtered_rows_cache:
@@ -14715,29 +15024,46 @@ def fit_geometry_parameters(
                     rows = filtered_rows_cache.get(table_idx, [])
                     peak_index = _measured_source_peak_index(entry)
                     if peak_index is not None:
-                        peak_point, peak_reason = _resolve_max_position_peak(
-                            maxpos,
-                            table_idx=int(table_idx),
-                            peak_index=int(peak_index),
+                        peak_row, peak_reason = _branch_representative_row(
+                            rows,
+                            branch_index=int(peak_index),
                         )
-                        if peak_point is not None:
+                        if peak_row is not None:
                             resolved_sim_hkl: object = None
-                            if rows:
-                                try:
-                                    resolved_sim_hkl = tuple(
-                                        int(round(float(v))) for v in rows[0][4:7]
-                                    )
-                                except Exception:
-                                    resolved_sim_hkl = None
-                            return (float(peak_point[0]), float(peak_point[1])), {
+                            try:
+                                resolved_sim_hkl = tuple(
+                                    int(round(float(v))) for v in peak_row[4:7]
+                                )
+                            except Exception:
+                                resolved_sim_hkl = None
+                            return (float(peak_row[1]), float(peak_row[2])), {
                                 "resolution_reason": str(entry.get("resolution_reason") or "resolved"),
                                 "resolved_table_index": int(table_idx),
                                 "resolved_peak_index": int(peak_index),
                                 "resolved_sim_hkl": resolved_sim_hkl,
                             }
+                        if not _entry_trusted_full_reflection_identity(entry):
+                            legacy_peak_point, legacy_peak_reason = _resolve_max_position_peak(
+                                maxpos,
+                                table_idx=int(table_idx),
+                                peak_index=int(peak_index),
+                            )
+                            if legacy_peak_point is not None:
+                                return legacy_peak_point, {
+                                    "resolution_reason": str(
+                                        entry.get("resolution_reason") or legacy_peak_reason
+                                    ),
+                                    "resolved_table_index": int(table_idx),
+                                    "resolved_peak_index": int(peak_index),
+                                    "resolved_sim_hkl": entry.get("hkl"),
+                                }
+                        if _entry_trusted_full_reflection_identity(entry):
+                            return None, {"resolution_reason": str(peak_reason)}
                         if _nonnegative_index(entry.get("source_row_index")) is None:
                             return None, {"resolution_reason": str(peak_reason)}
                     row_idx = _nonnegative_index(entry.get("source_row_index"))
+                    if _entry_trusted_full_reflection_identity(entry):
+                        return None, {"resolution_reason": "fixed_source_indices_missing"}
                     if row_idx is None:
                         return None, {"resolution_reason": "fixed_source_indices_missing"}
                     if row_idx < 0 or row_idx >= len(rows):
@@ -14766,43 +15092,66 @@ def fit_geometry_parameters(
                     }
 
                 try:
-                    table_idx = int(
-                        entry.get(
-                            "resolved_table_index",
-                            entry.get("source_table_index"),
+                    table_idx_value = None
+                    if _entry_trusted_full_reflection_identity(entry):
+                        full_table_idx = _nonnegative_index(
+                            entry.get("source_reflection_index")
                         )
-                    )
-                    peak_index = int(
-                        entry.get(
-                            "resolved_peak_index",
-                            entry.get("source_peak_index"),
+                        if full_table_idx is not None and full_table_idx < len(hit_tables):
+                            table_idx_value = int(full_table_idx)
+                    if table_idx_value is None:
+                        table_idx_value = _nonnegative_index(
+                            entry.get("resolved_table_index")
                         )
-                    )
+                    if table_idx_value is None:
+                        raise ValueError("missing_table_index")
+                    table_idx = int(table_idx_value)
                 except Exception:
                     return None, {"resolution_reason": "fallback_peak_identity_missing"}
-                if table_idx < 0 or table_idx >= maxpos.shape[0]:
+                peak_index = _measured_source_peak_index(entry)
+                if peak_index is None:
+                    return None, {"resolution_reason": "fallback_peak_identity_missing"}
+                if table_idx < 0 or table_idx >= len(hit_tables):
                     return None, {"resolution_reason": "fallback_table_out_of_range"}
-                if peak_index not in {0, 1}:
-                    return None, {"resolution_reason": "fallback_peak_index_invalid"}
-                row = maxpos[table_idx]
-                if int(peak_index) == 0:
-                    if not np.isfinite(row[0]) or float(row[0]) <= 0.0:
-                        return None, {"resolution_reason": "fallback_peak_missing"}
-                    sim_col = float(row[1])
-                    sim_row = float(row[2])
-                else:
-                    if not np.isfinite(row[3]) or float(row[3]) <= 0.0:
-                        return None, {"resolution_reason": "fallback_peak_missing"}
-                    sim_col = float(row[4])
-                    sim_row = float(row[5])
-                if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-                    return None, {"resolution_reason": "fallback_peak_missing"}
+                if table_idx not in filtered_rows_cache:
+                    if 0 <= table_idx < len(hit_tables):
+                        filtered_rows_cache[table_idx] = _valid_hit_rows(hit_tables[table_idx])
+                    else:
+                        filtered_rows_cache[table_idx] = []
+                rows = filtered_rows_cache.get(table_idx, [])
+                branch_row, branch_reason = _branch_representative_row(
+                    rows,
+                    branch_index=int(peak_index),
+                )
+                if branch_row is None:
+                    legacy_peak_point, legacy_peak_reason = _resolve_max_position_peak(
+                        maxpos,
+                        table_idx=int(table_idx),
+                        peak_index=int(peak_index),
+                    )
+                    if legacy_peak_point is None:
+                        return None, {"resolution_reason": str(branch_reason)}
+                    sim_col = float(legacy_peak_point[0])
+                    sim_row = float(legacy_peak_point[1])
+                    return (float(sim_col), float(sim_row)), {
+                        "resolution_reason": str(
+                            entry.get("resolution_reason") or legacy_peak_reason
+                        ),
+                        "resolved_table_index": int(table_idx),
+                        "resolved_peak_index": int(peak_index),
+                        "resolved_sim_hkl": entry.get("hkl"),
+                    }
+                sim_col = float(branch_row[1])
+                sim_row = float(branch_row[2])
                 resolved_sim_hkl: object = None
-                if 0 <= table_idx < fit_miller.shape[0]:
-                    try:
-                        resolved_sim_hkl = tuple(int(round(v)) for v in fit_miller[table_idx])
-                    except Exception:
-                        resolved_sim_hkl = None
+                try:
+                    resolved_sim_hkl = tuple(int(round(float(v))) for v in branch_row[4:7])
+                except Exception:
+                    if 0 <= table_idx < fit_miller.shape[0]:
+                        try:
+                            resolved_sim_hkl = tuple(int(round(v)) for v in fit_miller[table_idx])
+                        except Exception:
+                            resolved_sim_hkl = None
                 return (float(sim_col), float(sim_row)), {
                     "resolution_reason": str(entry.get("resolution_reason") or "resolved"),
                     "resolved_table_index": int(table_idx),
@@ -14812,6 +15161,9 @@ def fit_geometry_parameters(
 
             for slot, correspondence in enumerate(correspondence_entries):
                 entry = dict(correspondence)
+                source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
+                    entry
+                )
                 measured_point = (
                     float(entry.get("measured_x", np.nan)),
                     float(entry.get("measured_y", np.nan)),
@@ -14819,16 +15171,28 @@ def fit_geometry_parameters(
                 base_diag = {
                     "match_input_index": int(entry.get("match_input_index", slot)),
                     "overlay_match_index": int(entry.get("overlay_match_index", slot)),
+                    "pair_id": entry.get("pair_id"),
+                    "fit_run_id": entry.get("fit_run_id"),
                     "label": str(entry.get("label", "")),
-                    "hkl": entry.get("hkl"),
-                    "source_table_index": entry.get("source_table_index"),
-                    "source_reflection_index": entry.get("source_reflection_index"),
-                    "source_row_index": entry.get("source_row_index"),
-                    "source_peak_index": entry.get(
-                        "source_peak_index",
-                        entry.get("resolved_peak_index"),
-                    ),
-                    "resolution_kind": str(entry.get("resolution_kind", "")),
+                "hkl": entry.get("hkl"),
+                "source_table_index": _diagnostic_source_table_index(entry),
+                "source_reflection_index": entry.get("source_reflection_index"),
+                "source_reflection_namespace": entry.get(
+                    "source_reflection_namespace"
+                ),
+                "source_reflection_is_full": entry.get(
+                    "source_reflection_is_full"
+                ),
+                "source_row_index": entry.get("source_row_index"),
+                "source_branch_index": source_branch_index,
+                "source_branch_resolution_source": source_branch_source,
+                "source_peak_index": entry.get(
+                    "source_peak_index",
+                    entry.get("resolved_peak_index"),
+                ),
+                "resolved_table_index": entry.get("resolved_table_index"),
+                "resolved_peak_index": entry.get("resolved_peak_index"),
+                "resolution_kind": str(entry.get("resolution_kind", "")),
                     "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
                     "correspondence_resolution_reason": (
                         None
@@ -15238,6 +15602,12 @@ def fit_geometry_parameters(
             sum(len(entries) for entries in fixed_correspondence_map.values())
         )
         summary["seed_correspondence_count"] = int(correspondence_count)
+        summary["seed_correspondence_records"] = [
+            dict(entry)
+            for dataset_entries in fixed_correspondence_map.values()
+            for entry in dataset_entries
+            if isinstance(entry, Mapping)
+        ]
         summary["seed_matched_pair_count"] = int(seed_summary.get("matched_pair_count", 0))
         summary["seed_rms_px"] = float(seed_summary.get("unweighted_peak_rms_px", np.nan))
         if correspondence_count <= 0:

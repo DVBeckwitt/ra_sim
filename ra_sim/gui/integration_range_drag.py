@@ -227,7 +227,16 @@ def _set_integration_overlay_image(
         bindings.set_integration_overlay_image(image)
         return
     bindings.integration_region_overlay.set_data(image)
-    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+    extent = _detector_display_extent(bindings)
+    if extent is None:
+        getter = getattr(bindings.image_display, "get_extent", None)
+        if callable(getter):
+            try:
+                extent = getter()
+            except Exception:
+                extent = None
+    if extent is not None:
+        bindings.integration_region_overlay.set_extent(extent)
 
 
 def _runtime_caked_view_enabled(bindings: IntegrationRangeDragBindings) -> bool:

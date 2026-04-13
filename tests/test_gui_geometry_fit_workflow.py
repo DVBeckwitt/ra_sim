@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 import numpy as np
 from pathlib import Path
@@ -595,6 +596,7 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "background_detector_y": 41.0,
                     "fit_source_identity_only": True,
                     "overlay_match_index": 0,
+                    "pair_id": "bg0:pair0",
                     "q_group_key": ("q", 1),
                     "source_table_index": 1,
                     "source_row_index": 2,
@@ -714,6 +716,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset["initial_pairs_display"] == [
         {
             "overlay_match_index": 0,
+            "pair_id": "bg0:pair0",
             "hkl": (1, 1, 0),
             "q_group_key": ("q", 1),
             "bg_display": (50.0, 60.0),
@@ -748,6 +751,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "background_detector_y": 41.0,
             "fit_source_identity_only": True,
             "overlay_match_index": 0,
+            "pair_id": "bg0:pair0",
             "q_group_key": ("q", 1),
             "source_table_index": 1,
             "source_row_index": 2,
@@ -897,6 +901,102 @@ def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_grou
         (4, 5),
         {"mode": "auto"},
     )
+
+
+def test_build_geometry_manual_fit_dataset_preserves_branch_and_full_reflection_provenance() -> None:
+    source_row = {
+        "hkl": (1, 1, 0),
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 9.0,
+        "sim_row": 8.0,
+    }
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=100,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 2,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
+            dict(source_row)
+        ],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {
+            (1, 2): dict(source_row)
+        },
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda *args, **kwargs: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "xy",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        orient_image_for_fit=lambda image, **kwargs: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            dict(source_row)
+        ],
+        geometry_manual_rebuild_source_rows_for_background=lambda *args, **kwargs: [
+            dict(source_row)
+        ],
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.25},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    measured_entry = dataset["measured_for_fit"][0]
+    initial_entry = dataset["initial_pairs_display"][0]
+
+    assert measured_entry["pair_id"] == "bg0:pair0"
+    assert measured_entry["source_reflection_index"] == 7
+    assert measured_entry["source_reflection_namespace"] == "full_reflection"
+    assert measured_entry["source_reflection_is_full"] is True
+    assert measured_entry["source_branch_index"] == 0
+    assert measured_entry["source_peak_index"] == 0
+    assert initial_entry["pair_id"] == "bg0:pair0"
+    assert initial_entry["source_reflection_index"] == 7
+    assert initial_entry["source_reflection_namespace"] == "full_reflection"
+    assert initial_entry["source_reflection_is_full"] is True
+    assert initial_entry["source_branch_index"] == 0
+    assert dataset["source_rows_for_trace"][0]["source_reflection_index"] == 7
+    assert dataset["source_rows_for_trace"][0]["source_peak_index"] == 0
 
 
 def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coords() -> None:
@@ -1273,12 +1373,14 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
         *,
         consumer,
         prior_diagnostics,
+        required_pairs,
     ):
         calls["rebuild"] = {
             "background_idx": int(background_idx),
             "params": dict(params),
             "consumer": consumer,
             "prior_diagnostics": dict(prior_diagnostics),
+            "required_pairs": [dict(entry) for entry in (required_pairs or ())],
         }
         snapshot_diag.clear()
         snapshot_diag.update(
@@ -1325,7 +1427,9 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
             np.zeros((6, 7), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [],
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: []
+        ),
         geometry_manual_rebuild_source_rows_for_background=_rebuild_source_rows,
         geometry_manual_last_source_snapshot_diagnostics=lambda: dict(snapshot_diag),
         geometry_manual_simulated_peaks_for_params=(
@@ -1364,6 +1468,17 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
     assert calls["rebuild"]["background_idx"] == 0
     assert calls["rebuild"]["consumer"] == "geometry_fit_dataset"
     assert calls["rebuild"]["prior_diagnostics"]["status"] == "snapshot_empty"
+    assert calls["rebuild"]["required_pairs"] == [
+        {
+            "q_group_key": ("q", 1),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "source_peak_index": 0,
+            "hkl": (1, 1, 0),
+            "x": 30.0,
+            "y": 40.0,
+        }
+    ]
     assert calls["background_context"] == {
         "shape": (6, 7),
         "cfg": {"search_radius": 4.0},
@@ -1445,7 +1560,9 @@ def test_geometry_fit_dynamic_reanchor_uses_background_detector_cache_as_raw_see
             np.zeros((6, 7), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [dict(valid_source_row)],
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [dict(valid_source_row)]
+        ),
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
@@ -1578,9 +1695,11 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_but_keeps_detec
             np.zeros((6, 7), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [
-            dict(valid_source_row)
-        ],
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [
+                dict(valid_source_row)
+            ]
+        ),
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
@@ -1712,6 +1831,95 @@ def test_rebuild_geometry_fit_source_rows_preserves_runtime_failure_status() -> 
     assert result.diagnostics["image_size"] == 2048
 
 
+def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_required_pair_and_records_dual_path_diff() -> None:
+    live_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_table_index": 5,
+            "source_row_index": 0,
+            "source_peak_index": 13,
+            "sim_col": 1.0,
+            "sim_row": 2.0,
+        }
+    ]
+    rebuilt_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        }
+    ]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_hit"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=True,
+        build_live_rows=lambda: list(live_rows),
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache=lambda: ([], None),
+        logged_cache_matches_params=lambda _meta, _params: False,
+        build_source_rows_from_hit_tables=lambda _tables: (
+            list(rebuilt_rows),
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=None,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 5,
+                "source_row_index": 0,
+                "source_peak_index": 13,
+            }
+        ],
+        live_cache_inventory={"source_snapshot_count": 1},
+    )
+
+    assert result.rebuild_source == "fresh_simulation"
+    assert isinstance(result.metadata, dict)
+    validation = result.metadata["live_runtime_cache_validation"]
+    assert validation["valid"] is False
+    assert validation["pair_failures"][0]["pair_id"] == "bg0:pair0"
+    assert "branch_candidates" in validation["pair_failures"][0]
+    rebuilt_validation = result.metadata["live_runtime_cache_rebuild_validation"]
+    assert rebuilt_validation["valid"] is True
+    assert rebuilt_validation["resolved_pairs"][0]["pair_id"] == "bg0:pair0"
+    diff_entries = result.metadata["live_runtime_cache_dual_path_diff"]
+    assert diff_entries == [
+        {
+            "pair_id": "bg0:pair0",
+            "before_status": "failed",
+            "after_status": "resolved",
+            "before_canonical_identity": None,
+            "after_canonical_identity": [7, 1],
+            "before_simulated_point": None,
+            "after_simulated_point": [10.0, 20.0],
+            "before_reason": "missing_canonical_candidate",
+            "after_reason": None,
+        }
+    ]
+
+
 def test_build_geometry_manual_fit_dataset_includes_runtime_exception_details_in_failure() -> None:
     snapshot_diag = {
         "status": "process_peaks_parallel_exception",
@@ -1725,6 +1933,7 @@ def test_build_geometry_manual_fit_dataset_includes_runtime_exception_details_in
         *,
         consumer,
         prior_diagnostics,
+        required_pairs,
     ):
         return []
 
@@ -1749,7 +1958,9 @@ def test_build_geometry_manual_fit_dataset_includes_runtime_exception_details_in
             np.zeros((6, 7), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_source_rows_for_background=lambda idx, params, *, consumer: [],
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: []
+        ),
         geometry_manual_rebuild_source_rows_for_background=_rebuild_source_rows,
         geometry_manual_last_source_snapshot_diagnostics=lambda: dict(snapshot_diag),
         geometry_manual_simulated_peaks_for_params=(
@@ -2957,6 +3168,44 @@ def test_build_geometry_fit_source_resolution_log_lines_note_fit_only_rebinds() 
     )
 
 
+def test_build_geometry_fit_source_resolution_log_lines_include_branch_details() -> None:
+    lines = geometry_fit.build_geometry_fit_source_resolution_log_lines(
+        [
+            {
+                "label": "bg0.osc",
+                "pair_count": 1,
+                "resolved_source_pair_count": 1,
+                "simulated_peak_count": 2,
+                "simulated_lookup_count": 2,
+                "source_resolution_diagnostics": [
+                    {
+                        "pair_index": 0,
+                        "strict_resolved": True,
+                        "fit_resolved": True,
+                        "fit_resolution_kind": "strict_source_match",
+                        "saved_source_branch_index": 0,
+                        "saved_source_branch_source": "caked_y",
+                        "strict_source_branch_index": 0,
+                        "strict_source_branch_source": "source_branch_index",
+                        "fit_source_branch_index": 0,
+                        "fit_source_branch_source": "source_branch_index",
+                        "overlay_source_branch_index": 0,
+                        "overlay_source_branch_source": "source_branch_index",
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert lines[1] == "bg0.osc: all saved manual pairs strictly resolved."
+    assert any(
+        "saved_branch=0(caked_y)" in line
+        and "fit_branch=0(source_branch_index)" in line
+        and "fallback_branch=0(source_branch_index)" in line
+        for line in lines[2:]
+    )
+
+
 def test_build_geometry_fit_simulation_diagnostic_log_lines_include_runtime_failure_details() -> None:
     lines = geometry_fit.build_geometry_fit_simulation_diagnostic_log_lines(
         [
@@ -3157,6 +3406,41 @@ def test_build_geometry_fit_point_match_failure_reason_lines_summarize_unresolve
     assert "measured_angles=[11.250, 6.500]" in lines[7]
     assert "simulated=<none>" in lines[8]
     assert "resolution_reason=source_row_out_of_range" in lines[8]
+
+
+def test_build_geometry_fit_point_match_failure_reason_lines_include_branch_details() -> None:
+    lines = geometry_fit.build_geometry_fit_point_match_failure_reason_lines(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0.osc",
+                "overlay_match_index": 7,
+                "match_status": "missing_pair",
+                "hkl": (1, 1, 0),
+                "measured_x": 50.0,
+                "measured_y": 60.0,
+                "simulated_x": np.nan,
+                "simulated_y": np.nan,
+                "distance_px": np.nan,
+                "measured_two_theta_deg": 11.25,
+                "measured_phi_deg": 6.5,
+                "delta_two_theta_deg": np.nan,
+                "delta_phi_deg": np.nan,
+                "resolution_reason": "match_radius_exceeded",
+                "fit_source_resolution_kind": "legacy_dense_q_group_rebind",
+                "source_branch_index": 1,
+                "source_branch_resolution_source": "source_branch_index",
+                "resolved_peak_index": 1,
+            }
+        ]
+    )
+
+    assert any(
+        "source_branch=1(source_branch_index)" in line
+        and "resolved_branch=1(resolved_peak_index)" in line
+        and "fit_kind=legacy_dense_q_group_rebind" in line
+        for line in lines
+    )
 
 
 def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
@@ -5648,6 +5932,319 @@ def test_run_runtime_geometry_fit_action_persists_debug_preflight_log_without_er
     assert cmd_events == []
 
 
+def test_execute_runtime_geometry_fit_solver_phase_stamps_fit_run_id_before_solve(
+    tmp_path,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+        stamp="20260328_130004",
+    )
+    pair_entry = {
+        "pair_id": "bg0:pair0",
+        "overlay_match_index": 0,
+        "hkl": (1, 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "x": 30.0,
+        "y": 40.0,
+    }
+    prepared_run.current_dataset["measured_for_fit"] = [dict(pair_entry)]
+    prepared_run.current_dataset["initial_pairs_display"] = [dict(pair_entry)]
+    prepared_run.current_dataset["source_rows_for_trace"] = [dict(pair_entry)]
+    prepared_run.dataset_infos[0].update(
+        {
+            "dataset_index": 0,
+            "label": "bg0.osc",
+            "measured_for_fit": [dict(pair_entry)],
+            "initial_pairs_display": [dict(pair_entry)],
+            "source_rows_for_trace": [dict(pair_entry)],
+        }
+    )
+
+    seen: dict[str, object] = {}
+
+    def _solve_fit(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks,
+        var_names,
+        **kwargs,
+    ):
+        seen["measured_peaks"] = [dict(entry) for entry in measured_peaks]
+        return SimpleNamespace(success=True)
+
+    execution_result = geometry_fit.execute_runtime_geometry_fit_solver_phase(
+        prepared_run=prepared_run,
+        var_names=["gamma"],
+        solve_fit=_solve_fit,
+        solver_inputs=postprocess_config.solver_inputs,
+        stamp="20260328_130004",
+        log_path=tmp_path / "geometry_fit_log_20260328_130004.txt",
+    )
+
+    assert execution_result.error_text is None
+    assert seen["measured_peaks"][0]["fit_run_id"] == "20260328_130004"
+    assert prepared_run.current_dataset["initial_pairs_display"][0]["fit_run_id"] == (
+        "20260328_130004"
+    )
+    assert prepared_run.dataset_infos[0]["source_rows_for_trace"][0]["fit_run_id"] == (
+        "20260328_130004"
+    )
+
+
+def test_finalize_runtime_geometry_fit_execution_writes_trace_for_rejected_run(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+        stamp="20260328_130005",
+    )
+    pair_entry = {
+        "pair_id": "bg0:pair0",
+        "overlay_match_index": 0,
+        "hkl": (1, 1, 0),
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "x": 30.0,
+        "y": 40.0,
+    }
+    measured_entry = {
+        **pair_entry,
+        "fit_source_identity_only": True,
+        "measured_x": 30.0,
+        "measured_y": 40.0,
+    }
+    source_row = {
+        "hkl": (1, 1, 0),
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    prepared_run.current_dataset.update(
+        {
+            "label": "bg0.osc",
+            "initial_pairs_display": [dict(pair_entry)],
+            "measured_for_fit": [dict(measured_entry)],
+            "source_rows_for_trace": [dict(source_row)],
+            "pair_count": 1,
+            "group_count": 1,
+        }
+    )
+    prepared_run.dataset_infos[0].update(
+        {
+            "dataset_index": 0,
+            "label": "bg0.osc",
+            "initial_pairs_display": [dict(pair_entry)],
+            "measured_for_fit": [dict(measured_entry)],
+            "source_rows_for_trace": [dict(source_row)],
+            "pair_count": 1,
+            "group_count": 1,
+            "simulation_diagnostics": {
+                "created_from": "live_runtime_cache",
+                "requested_signature_summary": "sig-summary",
+                "stored_signature_summary": "sig-summary",
+                "cache_metadata": {
+                    "live_runtime_cache_dual_path_diff": [
+                        {
+                            "pair_id": "bg0:pair0",
+                            "before_status": "failed",
+                            "after_status": "resolved",
+                        }
+                    ]
+                },
+                "live_runtime_cache_validation": {
+                    "pair_failures": [
+                        {
+                            "pair_id": "bg0:pair0",
+                            "reason": "missing_canonical_candidate",
+                            "branch_candidates": [],
+                        }
+                    ]
+                },
+            },
+        }
+    )
+
+    result = SimpleNamespace(
+        weighted_residual_rms_px=1.5,
+        rms_px=1392.6754,
+        point_match_summary={
+            "matched_pair_count": 1,
+            "fixed_source_reflection_count": 1,
+            "subset_fallback_hkl_count": 0,
+        },
+        point_match_diagnostics=[
+            {
+                "dataset_index": 0,
+                "pair_id": "bg0:pair0",
+                "fit_run_id": "20260328_130005",
+                "overlay_match_index": 0,
+                "match_status": "matched",
+                "hkl": (1, 1, 0),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "resolved_table_index": 1,
+                "resolved_peak_index": 1,
+                "resolution_kind": "fixed_source",
+                "measured_x": 30.0,
+                "measured_y": 40.0,
+                "simulated_x": 10.0,
+                "simulated_y": 20.0,
+                "distance_px": 22.360679775,
+                "weighted_dx_px": -1.0,
+                "weighted_dy_px": 2.0,
+            }
+        ],
+        full_beam_polish_summary={
+            "seed_correspondence_records": [
+                {
+                    "dataset_index": 0,
+                    "pair_id": "bg0:pair0",
+                    "fit_run_id": "20260328_130005",
+                    "overlay_match_index": 0,
+                    "hkl": (1, 1, 0),
+                    "source_reflection_index": 7,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "resolved_table_index": 1,
+                    "resolved_peak_index": 1,
+                    "match_status": "matched",
+                    "simulated_x": 10.0,
+                    "simulated_y": 20.0,
+                }
+            ],
+            "point_match_diagnostics": [],
+        },
+        final_metric_name="full_beam_fixed_correspondence",
+    )
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_runtime_geometry_fit_execution_result_bindings",
+        lambda **kwargs: "bindings",
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "apply_runtime_geometry_fit_result",
+        lambda **kwargs: geometry_fit.GeometryFitRuntimeApplyResult(
+            accepted=False,
+            rejection_reason="detector-space regression",
+            rms=1392.6754,
+            fitted_params=None,
+            postprocess=None,
+        ),
+    )
+
+    setup = geometry_fit.GeometryFitRuntimeExecutionSetup(
+        ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
+            fit_params=prepared_run.fit_params,
+            base_profile_cache={},
+            mosaic_params={},
+            current_ui_params=lambda: {},
+            var_map={},
+            geometry_theta_offset_var=None,
+            capture_undo_state=lambda: {},
+            sync_joint_background_theta=None,
+            refresh_status=lambda: None,
+            update_manual_pick_button_label=lambda: None,
+            replace_profile_cache=lambda cache: None,
+            replace_dataset_cache=lambda payload: None,
+            push_undo_state=lambda state: None,
+            request_preview_skip_once=lambda: None,
+            mark_last_simulation_dirty=lambda: None,
+            schedule_update=lambda: None,
+            draw_overlay_records=lambda records, marker_limit: None,
+            draw_initial_pairs_overlay=lambda pairs, marker_limit: None,
+            set_last_overlay_state=lambda state: None,
+            save_export_records=lambda path, records: None,
+            set_progress_text=lambda text: None,
+            cmd_line=lambda text: None,
+        ),
+        postprocess_config=postprocess_config,
+    )
+
+    execution_result = geometry_fit.finalize_runtime_geometry_fit_execution(
+        execution_result=geometry_fit.GeometryFitRuntimeExecutionResult(
+            log_path=Path(postprocess_config.log_path),
+            solver_result=result,
+        ),
+        prepared_run=prepared_run,
+        var_names=["gamma"],
+        preserve_live_theta=True,
+        setup=setup,
+    )
+
+    expected_trace_path = tmp_path / "geometry_fit_trace_20260328_130005.jsonl"
+    assert execution_result.trace_path == expected_trace_path
+    assert expected_trace_path.exists()
+    records = [
+        json.loads(line)
+        for line in expected_trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        record["record_type"] == "run"
+        and record["fit_run_id"] == "20260328_130005"
+        and record["accepted"] is False
+        for record in records
+    )
+    assert any(
+        record["phase"] == "saved_pairs"
+        and record["pair_id"] == "bg0:pair0"
+        and record["source_reflection_namespace"] == "full_reflection"
+        for record in records
+    )
+    assert any(
+        record["phase"] == "seed_correspondence"
+        and record["pair_id"] == "bg0:pair0"
+        and record["canonical_identity"] == [7, 1]
+        for record in records
+    )
+    assert any(
+        record["record_type"] == "dual_path_diff"
+        and record["pair_id"] == "bg0:pair0"
+        and record["before_status"] == "failed"
+        and record["after_status"] == "resolved"
+        for record in records
+    )
+    assert any(
+        record["phase"] == "acceptance_residuals"
+        and record["pair_id"] == "bg0:pair0"
+        and record["optimizer_residual_px"] == pytest.approx(np.hypot(1.0, 2.0))
+        and record["detector_residual_px"] == pytest.approx(22.360679775)
+        for record in records
+    )
+
+
 def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloads(
     tmp_path,
 ) -> None:
@@ -6651,11 +7248,23 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
             "intensities": "intensity-data",
             "image_size": 512,
             "params": {"theta_initial": 3.0, "theta_offset": 0.0},
-            "measured_peaks": [{"x": 1.0, "y": 2.0}],
+            "measured_peaks": [
+                {
+                    "x": 1.0,
+                    "y": 2.0,
+                    "fit_run_id": "20260328_120000",
+                }
+            ],
             "var_names": ["gamma", "a"],
             "pixel_tol": float("inf"),
             "experimental_image": None,
-            "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+            "dataset_specs": [
+                {
+                    "dataset_index": 0,
+                    "theta_initial": 3.0,
+                    "fit_run_id": "20260328_120000",
+                }
+            ],
             "refinement_config": {
                 "bounds": {"gamma": [0.0, 1.0]},
                 "completion_chime": {
@@ -6714,7 +7323,13 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                 "current_background_index": 0,
                 "joint_background_mode": False,
                 "background_theta_values": [3.0],
-                "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+                "dataset_specs": [
+                    {
+                        "dataset_index": 0,
+                        "theta_initial": 3.0,
+                        "fit_run_id": "20260328_120000",
+                    }
+                ],
                 "cache_metadata": {
                     "cache_action": "rebuilt",
                     "reused": False,
@@ -6742,11 +7357,16 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
             "alias": "SystemNotification",
         }
     ]
-    assert (
-        "draw_overlay",
-        [{"initial_pairs_display": [{"pair": 1}], "diagnostics": [keep_diag]}],
-        120,
-    ) in events
+    draw_overlay_event = next(
+        event
+        for event in events
+        if isinstance(event, tuple) and event[0] == "draw_overlay"
+    )
+    assert draw_overlay_event[2] == 120
+    assert draw_overlay_event[1][0]["initial_pairs_display"][0]["pair"] == 1
+    overlay_diag = draw_overlay_event[1][0]["diagnostics"][0]
+    for key, value in keep_diag.items():
+        assert overlay_diag[key] == value
     assert "flush_ui" in events
 
 

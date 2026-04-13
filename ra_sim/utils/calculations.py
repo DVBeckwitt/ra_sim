@@ -76,6 +76,46 @@ def two_theta(d, wavelength):
         return None
     theta = np.arcsin(sin_theta)
     return 2 * np.degrees(theta)
+
+
+SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG = 1.0e-3
+
+
+def normalize_signed_phi_deg(phi_deg):
+    """Wrap one azimuth into the stable interval ``(-180, 180]`` degrees."""
+
+    try:
+        value = float(phi_deg)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value):
+        return None
+    wrapped = float(((value + 180.0) % 360.0) - 180.0)
+    if wrapped <= -180.0 + 1.0e-12:
+        wrapped = 180.0
+    return float(wrapped)
+
+
+def source_branch_index_from_phi_deg(
+    phi_deg,
+    *,
+    zero_deadband_deg: float = SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
+):
+    """Return stable detector-side branch label ``0``/``1`` from signed azimuth."""
+
+    wrapped = normalize_signed_phi_deg(phi_deg)
+    if wrapped is None:
+        return None
+    try:
+        deadband = abs(float(zero_deadband_deg))
+    except (TypeError, ValueError):
+        deadband = float(SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG)
+    if not np.isfinite(deadband):
+        deadband = float(SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG)
+    if abs(float(wrapped)) <= float(deadband):
+        return None
+    return 0 if float(wrapped) < 0.0 else 1
+
 @njit
 def IoR(lambda_, rho_e, r, mu):
     # delta = (lambda^2 * rho_e * r_e)/(2 pi)

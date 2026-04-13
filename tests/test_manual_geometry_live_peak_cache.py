@@ -179,3 +179,57 @@ def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_previe
     assert ("q_group", "primary", 1, 2) not in cache_data["grouped_candidates"]
     assert cache_state["signature"] == cache_data["signature"]
     assert cache_state["data"]["simulated_lookup"][(7, 9)]["sim_col"] == 44.0
+
+
+def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenance() -> None:
+    candidates = mg.geometry_manual_live_peak_candidates_from_records(
+        [
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
+                "source_peak_index": 13,
+                "phi": 15.0,
+            }
+        ],
+        source_reflection_indices_local=[7],
+        source_row_hkl_lookup={(0, 8): (1, 0, 2)},
+        active_signature_matches=True,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_branch_index"] == 1
+    assert candidates[0]["source_peak_index"] == 1
+    assert candidates[0]["source_reflection_index"] == 7
+    assert candidates[0]["source_reflection_namespace"] == "full_reflection"
+    assert candidates[0]["source_reflection_is_full"] is True
+
+
+def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_not_match() -> None:
+    candidates = mg.geometry_manual_live_peak_candidates_from_records(
+        [
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
+                "source_peak_index": 19,
+                "phi": -15.0,
+            }
+        ],
+        source_reflection_indices_local=[7],
+        source_row_hkl_lookup={(0, 8): (2, 0, 0)},
+        active_signature_matches=True,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_branch_index"] == 0
+    assert candidates[0]["source_peak_index"] == 0
+    assert "source_reflection_index" not in candidates[0]
+    assert "source_reflection_namespace" not in candidates[0]
+    assert "source_reflection_is_full" not in candidates[0]

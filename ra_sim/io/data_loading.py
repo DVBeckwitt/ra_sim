@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+from ra_sim.debug_controls import register_run_input_paths, register_run_output_path
 
 SOLVE_Q_STEPS_MIN = 32
 SOLVE_Q_STEPS_MAX = 8192
@@ -105,6 +106,7 @@ def save_gui_state_file(
     payload = build_gui_state_payload(state, metadata=metadata)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+    register_run_output_path(path)
     return payload
 
 
@@ -119,6 +121,7 @@ def save_geometry_placements_file(
     payload = build_geometry_placements_payload(state, metadata=metadata)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+    register_run_output_path(path)
     return payload
 
 
@@ -165,6 +168,7 @@ def _legacy_gui_state_payload_from_object(payload: dict[str, Any]) -> dict[str, 
 def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Read and validate a JSON GUI-state snapshot."""
 
+    register_run_input_paths(path)
     with open(path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):
@@ -190,6 +194,7 @@ def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
 def load_geometry_placements_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Read and validate a JSON manual-placement snapshot."""
 
+    register_run_input_paths(path)
     with open(path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):
