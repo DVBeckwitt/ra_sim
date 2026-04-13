@@ -69,6 +69,7 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
         pick_uses_caked_space="pick-uses-caked-space",
         current_background_image="current-background-image",
         entry_display_coords="entry-display-coords",
+        refresh_entry_geometry="refresh-entry-geometry",
         caked_angles_to_background_display_coords="caked-angles",
         background_display_to_native_detector_coords="display-to-native",
         native_detector_coords_to_caked_display_coords="native-to-caked",
@@ -98,6 +99,7 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
     assert workflow.pick_uses_caked_space == "pick-uses-caked-space"
     assert workflow.current_background_image == "current-background-image"
     assert workflow.entry_display_coords == "entry-display-coords"
+    assert workflow.refresh_entry_geometry == "refresh-entry-geometry"
     assert workflow.caked_angles_to_background_display_coords == "caked-angles"
     assert workflow.background_display_to_native_detector_coords == "display-to-native"
     assert workflow.native_detector_coords_to_caked_display_coords == "native-to-caked"

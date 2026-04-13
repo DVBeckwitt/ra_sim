@@ -26,6 +26,7 @@ from ra_sim.simulation.diffraction import (
 )
 from ra_sim.utils.calculations import (
     d_spacing,
+    resolve_canonical_branch,
     source_branch_index_from_phi_deg,
     two_theta,
 )
@@ -605,13 +606,7 @@ def _entry_has_geometry_source_identity(entry: Mapping[str, object]) -> bool:
     if row_idx >= 0:
         return True
 
-    try:
-        branch_idx = _nonnegative_index(entry.get("source_branch_index"))
-        if branch_idx not in {0, 1}:
-            branch_idx = _nonnegative_index(entry.get("source_peak_index", -1))
-        branch_idx = int(branch_idx) if branch_idx in {0, 1} else -1
-    except Exception:
-        branch_idx = -1
+    branch_idx = _measured_source_peak_index(entry)
     return branch_idx in {0, 1}
 
 
@@ -2487,9 +2482,9 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                branch_idx = _coerce_index(entry.get("source_branch_index"))
-                if branch_idx not in {0, 1}:
-                    branch_idx = _coerce_index(entry.get("source_peak_index"))
+                branch_idx, _branch_source = _measured_source_peak_index_with_source(
+                    entry
+                )
                 if branch_idx in {0, 1}:
                     remapped_entry["source_branch_index"] = int(branch_idx)
                     remapped_entry["resolved_peak_index"] = int(branch_idx)
@@ -2520,9 +2515,9 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                branch_idx = _coerce_index(entry.get("source_branch_index"))
-                if branch_idx not in {0, 1}:
-                    branch_idx = _coerce_index(entry.get("source_peak_index"))
+                branch_idx, _branch_source = _measured_source_peak_index_with_source(
+                    entry
+                )
                 if branch_idx in {0, 1}:
                     remapped_entry["resolved_peak_index"] = int(branch_idx)
                     if "source_branch_index" in entry:
@@ -9516,21 +9511,34 @@ def _diagnostic_source_table_index(entry: Mapping[str, object]) -> Optional[int]
 
 def _measured_source_peak_index_with_source(
     entry: Mapping[str, object],
+    *,
+    allow_legacy_peak_fallback: bool = False,
 ) -> Tuple[Optional[int], Optional[str]]:
-    peak_idx = _nonnegative_index(entry.get("source_branch_index"))
+    peak_idx, peak_source, _peak_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
+    )
     if peak_idx in {0, 1}:
-        return int(peak_idx), "source_branch_index"
+        return int(peak_idx), str(peak_source or "source_branch_index")
     peak_idx = _nonnegative_index(entry.get("resolved_peak_index"))
     if peak_idx in {0, 1}:
         return int(peak_idx), "resolved_peak_index"
-    peak_idx = _nonnegative_index(entry.get("source_peak_index"))
-    if peak_idx in {0, 1}:
-        return int(peak_idx), "source_peak_index"
+    if allow_legacy_peak_fallback:
+        peak_idx = _nonnegative_index(entry.get("source_peak_index"))
+        if peak_idx in {0, 1}:
+            return int(peak_idx), "source_peak_index"
     return None, None
 
 
-def _measured_source_peak_index(entry: Mapping[str, object]) -> Optional[int]:
-    peak_idx, _peak_source = _measured_source_peak_index_with_source(entry)
+def _measured_source_peak_index(
+    entry: Mapping[str, object],
+    *,
+    allow_legacy_peak_fallback: bool = False,
+) -> Optional[int]:
+    peak_idx, _peak_source = _measured_source_peak_index_with_source(
+        entry,
+        allow_legacy_peak_fallback=allow_legacy_peak_fallback,
+    )
     return peak_idx
 
 
@@ -9951,8 +9959,6 @@ def _collect_geometry_fit_simulated_candidates(
                         isinstance(original_indices, np.ndarray)
                         and table_idx < int(original_indices.shape[0])
                     ),
-                    "source_peak_index": int(peak_index),
-                    "resolved_peak_index": int(peak_index),
                 }
             )
     return simulated_by_hkl

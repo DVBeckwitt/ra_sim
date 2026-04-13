@@ -20731,6 +20731,9 @@ def _build_geometry_fit_async_job(
         "geometry_manual_entry_display_coords": (
             manual_dataset_bindings.geometry_manual_entry_display_coords
         ),
+        "geometry_manual_refresh_pair_entry": (
+            manual_dataset_bindings.geometry_manual_refresh_pair_entry
+        ),
         "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
         "display_to_native_sim_coords": (manual_dataset_bindings.display_to_native_sim_coords),
         "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
@@ -21483,6 +21486,7 @@ def _run_async_geometry_fit_worker_job(
             lambda: copy.deepcopy(job_data.get("manual_match_config", {}))
         ),
         geometry_manual_entry_display_coords=job_data.get("geometry_manual_entry_display_coords"),
+        geometry_manual_refresh_pair_entry=job_data.get("geometry_manual_refresh_pair_entry"),
         geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
@@ -21915,6 +21919,9 @@ geometry_fit_runtime_workflow = gui_runtime_geometry_fit.build_runtime_geometry_
         ),
         "geometry_manual_match_config": _current_geometry_manual_match_config,
         "geometry_manual_entry_display_coords": (_geometry_manual_entry_display_coords),
+        "geometry_manual_refresh_pair_entry": (
+            geometry_manual_projection_workflow.refresh_entry_geometry
+        ),
         "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
         "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),
         "unrotate_display_peaks": _unrotate_display_peaks,

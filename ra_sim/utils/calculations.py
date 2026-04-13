@@ -1,5 +1,6 @@
 """Numerical helper functions used by the simulator."""
 
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 import re
@@ -115,6 +116,93 @@ def source_branch_index_from_phi_deg(
     if abs(float(wrapped)) <= float(deadband):
         return None
     return 0 if float(wrapped) < 0.0 else 1
+
+
+def resolve_canonical_branch(
+    entry: Mapping[str, object] | None,
+    *,
+    allow_legacy_peak_fallback: bool = False,
+    zero_deadband_deg: float = SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
+) -> tuple[int | None, str | None, str | None]:
+    """Resolve canonical detector-side branch identity for one entry.
+
+    Canonical runtime behavior accepts only ``source_branch_index`` or signed-phi
+    geometry hints. Legacy migration may additionally consult cached caked
+    azimuth values and, as a final fallback only, ``source_peak_index`` when it
+    already lives in the compact ``{0, 1}`` branch namespace.
+    """
+
+    if not isinstance(entry, Mapping):
+        return None, None, None
+
+    try:
+        explicit_branch = int(entry.get("source_branch_index"))
+    except Exception:
+        explicit_branch = -1
+    if explicit_branch in {0, 1}:
+        return int(explicit_branch), "source_branch_index", None
+
+    try:
+        deadband = abs(float(zero_deadband_deg))
+    except (TypeError, ValueError):
+        deadband = float(SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG)
+    if not np.isfinite(deadband):
+        deadband = float(SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG)
+
+    def _resolve_signed_value(
+        value: object,
+        *,
+        source_name: str,
+    ) -> tuple[int | None, str | None, str | None]:
+        wrapped = normalize_signed_phi_deg(value)
+        if wrapped is None:
+            return None, None, None
+        if abs(float(wrapped)) <= float(deadband):
+            return None, str(source_name), "ambiguous_branch_deadband"
+        return (
+            0 if float(wrapped) < 0.0 else 1,
+            str(source_name),
+            None,
+        )
+
+    for key in (
+        "simulated_phi_deg",
+        "background_phi_deg",
+        "phi_deg",
+        "phi",
+    ):
+        branch_idx, branch_source, branch_reason = _resolve_signed_value(
+            entry.get(key),
+            source_name=str(key),
+        )
+        if branch_reason is not None:
+            return None, branch_source, branch_reason
+        if branch_idx in {0, 1}:
+            return int(branch_idx), branch_source, None
+
+    if allow_legacy_peak_fallback:
+        for key in (
+            "refined_sim_caked_y",
+            "caked_y",
+            "raw_caked_y",
+        ):
+            branch_idx, branch_source, branch_reason = _resolve_signed_value(
+                entry.get(key),
+                source_name=str(key),
+            )
+            if branch_reason is not None:
+                return None, branch_source, branch_reason
+            if branch_idx in {0, 1}:
+                return int(branch_idx), branch_source, None
+
+        try:
+            legacy_branch = int(entry.get("source_peak_index"))
+        except Exception:
+            legacy_branch = -1
+        if legacy_branch in {0, 1}:
+            return int(legacy_branch), "source_peak_index", None
+
+    return None, None, None
 
 @njit
 def IoR(lambda_, rho_e, r, mu):

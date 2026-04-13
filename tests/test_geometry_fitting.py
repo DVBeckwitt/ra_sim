@@ -1809,6 +1809,7 @@ def test_resolve_fixed_source_matches_keeps_distinct_branches(monkeypatch) -> No
             "y": 2.0,
             "source_reflection_index": 0,
             "resolved_table_index": 0,
+            "source_branch_index": 0,
             "source_peak_index": 0,
             "source_row_index": 0,
         },
@@ -1819,6 +1820,7 @@ def test_resolve_fixed_source_matches_keeps_distinct_branches(monkeypatch) -> No
             "y": 8.0,
             "source_reflection_index": 0,
             "resolved_table_index": 0,
+            "source_branch_index": 1,
             "source_peak_index": 1,
             "source_row_index": 0,
         },
@@ -1847,6 +1849,7 @@ def test_geometry_fit_correspondence_simulated_point_prefers_branch_identity() -
         "source_reflection_index": 0,
         "resolved_table_index": 0,
         "source_row_index": 0,
+        "source_branch_index": 1,
         "source_peak_index": 1,
     }
     hit_tables = [
@@ -1914,6 +1917,7 @@ def test_geometry_fit_correspondence_simulated_point_ignores_stale_source_table_
         "source_table_index": 13,
         "source_reflection_index": 13,
         "source_row_index": 0,
+        "source_branch_index": 1,
         "source_peak_index": 1,
     }
     hit_tables = [
@@ -1935,6 +1939,61 @@ def test_geometry_fit_correspondence_simulated_point_ignores_stale_source_table_
 
     assert point is None
     assert reason == "missing_source_table_index"
+
+
+def test_collect_geometry_fit_simulated_candidates_keeps_deadband_fallback_branchless(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        opt,
+        "hit_tables_to_max_positions",
+        lambda hit_tables: np.asarray(
+            [[1.0, 150.0, 250.0, 0.0, 0.0, 0.0]], dtype=np.float64
+        ),
+    )
+
+    candidates = opt._collect_geometry_fit_simulated_candidates(
+        np.asarray([[1.0, 0.0, 3.0]], dtype=np.float64),
+        [
+            np.asarray(
+                [[50.0, 150.0, 250.0, 5.0e-4, 1.0, 0.0, 3.0]],
+                dtype=np.float64,
+            )
+        ],
+        original_indices=np.asarray([7], dtype=np.int64),
+    )
+
+    candidate = candidates[(1, 0, 3)][0]
+    assert candidate["source_reflection_index"] == 7
+    assert "source_branch_index" not in candidate
+    assert "source_peak_index" not in candidate
+    assert "resolved_peak_index" not in candidate
+
+
+def test_geometry_fit_correspondence_simulated_point_rejects_legacy_branch_alias_for_trusted_identity() -> None:
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        {
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "resolved_table_index": 0,
+            "source_row_index": 0,
+            "source_peak_index": 1,
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, -22.0, 1.0, 0.0, 3.0],
+                    [1.0, 8.0, 8.0, 22.0, 1.0, 0.0, 3.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+    )
+
+    assert point is None
+    assert reason == "missing_source_peak_index"
 
 
 def test_fit_geometry_parameters_pixel_path_falls_back_from_stale_in_range_source_indices(

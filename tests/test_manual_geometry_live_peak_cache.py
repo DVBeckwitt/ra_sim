@@ -233,3 +233,78 @@ def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_n
     assert "source_reflection_index" not in candidates[0]
     assert "source_reflection_namespace" not in candidates[0]
     assert "source_reflection_is_full" not in candidates[0]
+
+
+def test_refresh_geometry_manual_pair_entry_recomputes_stale_caked_cache() -> None:
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "0,0,3",
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "detector_x": 30.0,
+            "detector_y": 40.0,
+            "caked_x": 150.0,
+            "caked_y": 160.0,
+            "raw_caked_x": 151.0,
+            "raw_caked_y": 161.0,
+        },
+        background_display_shape=(200, 200),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            float(two_theta) - 10.0,
+            float(phi) - 20.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
+        display_rotate_k=0,
+    )
+
+    assert refreshed is not None
+    assert refreshed["detector_x"] == 30.0
+    assert refreshed["detector_y"] == 40.0
+    assert refreshed["x"] == 30.0
+    assert refreshed["y"] == 40.0
+    assert refreshed["caked_x"] == 40.0
+    assert refreshed["caked_y"] == 60.0
+    assert refreshed["raw_caked_x"] == 40.0
+    assert refreshed["raw_caked_y"] == 60.0
+    assert refreshed["stale_caked_fields"] is True
+
+    display_point = (float(refreshed["caked_x"]) - 10.0, float(refreshed["caked_y"]) - 20.0)
+    assert display_point == (30.0, 40.0)
+
+
+def test_refresh_geometry_manual_pair_entry_migrates_legacy_peak_branch_once() -> None:
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "1,0,3",
+            "hkl": (1, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "detector_x": 30.0,
+            "detector_y": 40.0,
+            "source_peak_index": 1,
+        },
+        background_display_shape=(200, 200),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 1.0,
+            float(row) + 2.0,
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
+        display_rotate_k=0,
+    )
+
+    assert refreshed is not None
+    assert refreshed["source_branch_index"] == 1
+    assert refreshed["source_peak_index"] == 1

@@ -33,6 +33,7 @@ from ra_sim.fitting.optimization import (
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.utils.calculations import (
     d_spacing,
+    resolve_canonical_branch,
     source_branch_index_from_phi_deg,
     two_theta,
 )
@@ -201,6 +202,10 @@ class GeometryFitRuntimeManualDatasetBindings:
     geometry_manual_match_config: Callable[[], Mapping[str, object]] | None = None
     pick_uses_caked_space: Callable[[], bool] | None = None
     geometry_manual_caked_view_for_index: Callable[[int], object] | None = None
+    geometry_manual_refresh_pair_entry: (
+        Callable[[Mapping[str, object] | None], dict[str, object] | None]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -623,34 +628,21 @@ def _geometry_fit_trusted_full_reflection_identity(
 def _geometry_fit_source_branch_resolution(
     entry: Mapping[str, object] | None,
 ) -> tuple[int | None, str | None]:
-    if not isinstance(entry, Mapping):
-        return None, None
-    explicit_branch = _geometry_fit_coerce_nonnegative_index(
-        entry.get("source_branch_index")
+    branch_idx, branch_source, _branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
     )
-    if explicit_branch in {0, 1}:
-        return int(explicit_branch), "source_branch_index"
-    legacy_branch = _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
-    if legacy_branch in {0, 1}:
-        return int(legacy_branch), "source_peak_index"
-    for key in (
-        "simulated_phi_deg",
-        "background_phi_deg",
-        "phi_deg",
-        "phi",
-    ):
-        branch_idx = source_branch_index_from_phi_deg(entry.get(key))
-        if branch_idx in {0, 1}:
-            return int(branch_idx), str(key)
-    for key in (
-        "refined_sim_caked_y",
-        "caked_y",
-        "raw_caked_y",
-    ):
-        branch_idx = source_branch_index_from_phi_deg(entry.get(key))
-        if branch_idx in {0, 1}:
-            return int(branch_idx), str(key)
-    return None, None
+    return branch_idx, branch_source
+
+
+def _geometry_fit_source_branch_reason(
+    entry: Mapping[str, object] | None,
+) -> str | None:
+    _branch_idx, _branch_source, branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
+    )
+    return str(branch_reason) if branch_reason is not None else None
 
 
 def _geometry_fit_source_branch_index(
@@ -729,9 +721,10 @@ def _geometry_fit_source_entry_branch_matches(
 ) -> bool:
     entry_branch = _geometry_fit_source_branch_index(entry)
     candidate_branch = _geometry_fit_source_branch_index(candidate)
+    if entry_branch is None:
+        return not _geometry_fit_trusted_full_reflection_identity(entry)
     return (
-        entry_branch is None
-        or candidate_branch is None
+        candidate_branch is None
         or int(entry_branch) == int(candidate_branch)
     )
 
@@ -760,15 +753,7 @@ def _geometry_fit_filter_branch_candidates(
             return []
         return candidate_pool
     if _geometry_fit_trusted_full_reflection_identity(entry):
-        candidate_branches = {
-            int(branch_idx)
-            for branch_idx in (
-                _geometry_fit_source_branch_index(candidate) for candidate in candidate_pool
-            )
-            if branch_idx in {0, 1}
-        }
-        if len(candidate_branches) > 1:
-            return []
+        return []
     return candidate_pool
 
 
@@ -779,7 +764,7 @@ def _geometry_fit_is_canonical_live_source_entry(
         return False, "not_mapping"
     branch_idx = _geometry_fit_source_branch_index(entry)
     if branch_idx not in {0, 1}:
-        return False, "missing_branch"
+        return False, _geometry_fit_source_branch_reason(entry) or "missing_branch"
     peak_idx = _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
     if peak_idx not in {0, 1} or int(peak_idx) != int(branch_idx):
         return False, "peak_not_branch"
@@ -1021,13 +1006,20 @@ def validate_geometry_fit_live_source_rows(
             or f"pair[{int(entry.get('overlay_match_index', fallback_index))}]"
         )
         trusted_identity = _geometry_fit_trusted_full_reflection_identity(entry)
+        entry_branch_idx = _geometry_fit_source_branch_index(entry)
+        entry_branch_reason = (
+            _geometry_fit_source_branch_reason(entry) or "missing_branch"
+        )
         candidate: dict[str, object] | None = None
         failure_reason: str | None = None
         resolution_kind: str | None = None
         branch_candidates: list[dict[str, object]] = []
 
+        if trusted_identity and entry_branch_idx not in {0, 1}:
+            failure_reason = str(entry_branch_reason)
+
         reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
-        if reflection_row_key is not None:
+        if candidate is None and failure_reason is None and reflection_row_key is not None:
             candidate = canonical_by_reflection_row.get(reflection_row_key)
             if not (
                 isinstance(candidate, Mapping)
@@ -1556,6 +1548,10 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     geometry_manual_match_config: Callable[[], Mapping[str, object]] | None = None,
     pick_uses_caked_space: Callable[[], bool] | None = None,
     geometry_manual_caked_view_for_index: Callable[[int], object] | None = None,
+    geometry_manual_refresh_pair_entry: (
+        Callable[[Mapping[str, object] | None], dict[str, object] | None]
+        | None
+    ) = None,
 ) -> GeometryFitRuntimeManualDatasetBindings:
     """Build the live manual-pair dataset bundle used during geometry-fit prep."""
 
@@ -1592,6 +1588,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         orient_image_for_fit=orient_image_for_fit,
         pick_uses_caked_space=pick_uses_caked_space,
         geometry_manual_caked_view_for_index=geometry_manual_caked_view_for_index,
+        geometry_manual_refresh_pair_entry=geometry_manual_refresh_pair_entry,
     )
 
 
@@ -1631,6 +1628,10 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     geometry_manual_match_config: Callable[[], Mapping[str, object]] | None = None,
     pick_uses_caked_space: Callable[[], bool] | None = None,
     geometry_manual_caked_view_for_index: Callable[[int], object] | None = None,
+    geometry_manual_refresh_pair_entry: (
+        Callable[[Mapping[str, object] | None], dict[str, object] | None]
+        | None
+    ) = None,
 ) -> Callable[[], GeometryFitRuntimeManualDatasetBindings]:
     """Build a factory that resolves the live manual-pair dataset bundle on demand."""
 
@@ -1673,6 +1674,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             pick_uses_caked_space=pick_uses_caked_space,
             geometry_manual_caked_view_for_index=(
                 geometry_manual_caked_view_for_index
+            ),
+            geometry_manual_refresh_pair_entry=(
+                geometry_manual_refresh_pair_entry
             ),
         )
 
@@ -3504,6 +3508,18 @@ def build_geometry_manual_fit_dataset(
     native_background, display_background = (
         manual_dataset_bindings.load_background_by_index(background_idx)
     )
+    if callable(manual_dataset_bindings.geometry_manual_refresh_pair_entry):
+        refreshed_entries: list[dict[str, object]] = []
+        for raw_entry in selected_entries:
+            refreshed = manual_dataset_bindings.geometry_manual_refresh_pair_entry(
+                raw_entry
+            )
+            if isinstance(refreshed, dict):
+                refreshed_entries.append(refreshed)
+            elif isinstance(raw_entry, Mapping):
+                refreshed_entries.append(dict(raw_entry))
+        if refreshed_entries:
+            selected_entries = refreshed_entries
 
     params_i = dict(base_fit_params or {})
     theta_offset = float(params_i.get("theta_offset", 0.0))

@@ -7424,3 +7424,65 @@ def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
         "start: vars=gamma,a datasets=1 current_groups=2 current_points=3",
         "failed: boom",
     ]
+
+
+def test_validate_geometry_fit_live_source_rows_drops_trusted_deadband_branch() -> None:
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [
+            {
+                "hkl": (1, 0, 3),
+                "q_group_key": ("q_group", "primary", 1, 3),
+                "source_table_index": 0,
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+                "simulated_phi_deg": -22.0,
+            },
+            {
+                "hkl": (1, 0, 3),
+                "q_group_key": ("q_group", "primary", 1, 3),
+                "source_table_index": 0,
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 1,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "simulated_phi_deg": 22.0,
+            },
+        ],
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 3),
+                "q_group_key": ("q_group", "primary", 1, 3),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_peak_index": 0,
+                "simulated_phi_deg": 5.0e-4,
+            }
+        ],
+    )
+
+    assert validation["valid"] is False
+    assert validation["pair_failures"] == [
+        {
+            "pair_id": "bg0:pair0",
+            "overlay_match_index": 0,
+            "reason": "ambiguous_branch_deadband",
+            "hkl": (1, 0, 3),
+            "source_table_index": None,
+            "source_reflection_index": 7,
+            "source_row_index": 0,
+            "source_peak_index": 0,
+            "source_branch_index": None,
+            "trusted_identity_required": True,
+            "branch_candidates": [],
+        }
+    ]

@@ -1183,6 +1183,7 @@ def run_headless_geometry_fit(
         geometry_manual_source_rows_for_background=_geometry_manual_source_rows_for_background,
         geometry_manual_last_source_snapshot_diagnostics=_geometry_manual_last_source_snapshot_diagnostics,
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
+        geometry_manual_refresh_pair_entry=projection_callbacks.refresh_entry_geometry,
         unrotate_display_peaks=gui_geometry_overlay.unrotate_display_peaks,
         display_to_native_sim_coords=lambda col, row, image_shape: gui_geometry_overlay.display_to_native_sim_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
         select_fit_orientation=gui_geometry_overlay.select_fit_orientation,

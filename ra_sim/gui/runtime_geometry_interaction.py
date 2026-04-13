@@ -28,6 +28,7 @@ class RuntimeGeometryManualProjectionWorkflow:
     pick_uses_caked_space: Callable[..., Any]
     current_background_image: Callable[..., Any]
     entry_display_coords: Callable[..., Any]
+    refresh_entry_geometry: Callable[..., Any]
     caked_angles_to_background_display_coords: Callable[..., Any]
     background_display_to_native_detector_coords: Callable[..., Any]
     native_detector_coords_to_caked_display_coords: Callable[..., Any]
@@ -163,6 +164,7 @@ def build_runtime_geometry_manual_projection_workflow(
         pick_uses_caked_space=callbacks.pick_uses_caked_space,
         current_background_image=callbacks.current_background_image,
         entry_display_coords=callbacks.entry_display_coords,
+        refresh_entry_geometry=callbacks.refresh_entry_geometry,
         caked_angles_to_background_display_coords=(
             callbacks.caked_angles_to_background_display_coords
         ),

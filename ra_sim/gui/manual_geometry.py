@@ -21,7 +21,10 @@ from ra_sim.fitting.background_peak_matching import (
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
-from ra_sim.utils.calculations import source_branch_index_from_phi_deg
+from ra_sim.utils.calculations import (
+    resolve_canonical_branch,
+    source_branch_index_from_phi_deg,
+)
 
 
 DEFAULT_POSITION_SIGMA_FLOOR_PX = 0.75
@@ -67,6 +70,10 @@ class GeometryManualRuntimeProjectionCallbacks:
     entry_display_coords: Callable[
         [dict[str, object] | None],
         tuple[float, float] | None,
+    ]
+    refresh_entry_geometry: Callable[
+        [Mapping[str, object] | None],
+        dict[str, object] | None,
     ]
     caked_angles_to_background_display_coords: Callable[
         [float, float],
@@ -143,6 +150,231 @@ def geometry_manual_position_sigma_px(
 
     floor_val = max(1.0e-3, float(floor_px))
     return float(np.hypot(float(error_px), floor_val))
+
+
+def _canonicalize_manual_entry_branch_fields(
+    entry: dict[str, object],
+    *,
+    allow_legacy_peak_fallback: bool,
+    preserve_legacy_peak_when_unresolved: bool = False,
+) -> None:
+    """Stamp canonical branch identity onto one saved/manual geometry entry."""
+
+    try:
+        legacy_peak_idx = int(entry.get("source_peak_index"))
+    except Exception:
+        legacy_peak_idx = None
+
+    branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=allow_legacy_peak_fallback,
+    )
+    if branch_idx in {0, 1}:
+        entry["source_branch_index"] = int(branch_idx)
+        entry["source_peak_index"] = int(branch_idx)
+        return
+
+    entry.pop("source_branch_index", None)
+    if (
+        not preserve_legacy_peak_when_unresolved
+        and (legacy_peak_idx in {0, 1} or legacy_peak_idx is None)
+    ):
+        entry.pop("source_peak_index", None)
+
+
+def refresh_geometry_manual_pair_entry(
+    entry: Mapping[str, object] | None,
+    *,
+    background_display_shape: Sequence[object] | None,
+    background_display_to_native_detector_coords: (
+        Callable[[float, float], tuple[float, float] | None]
+        | None
+    ),
+    caked_angles_to_background_display_coords: (
+        Callable[[float, float], tuple[float | None, float | None]]
+        | None
+    ) = None,
+    native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], tuple[float, float] | None]
+        | None
+    ) = None,
+    rotate_point_for_display: Callable[
+        [float, float, tuple[int, ...], int],
+        tuple[float, float],
+    ] = _default_rotate_point,
+    display_rotate_k: int = 0,
+    normalize_hkl_key: Callable[
+        [object],
+        tuple[int, int, int] | None,
+    ] = _default_normalize_hkl_key,
+    sigma_floor_px: float = DEFAULT_POSITION_SIGMA_FLOOR_PX,
+    stale_caked_tolerance_px: float = 0.5,
+    allow_legacy_peak_fallback: bool = True,
+) -> dict[str, object] | None:
+    """Refresh cached display/caked fields from canonical detector coordinates."""
+
+    normalized = normalize_geometry_manual_pair_entry(
+        dict(entry) if isinstance(entry, Mapping) else None,
+        normalize_hkl_key=normalize_hkl_key,
+        sigma_floor_px=sigma_floor_px,
+    )
+    if normalized is None:
+        return None
+
+    _canonicalize_manual_entry_branch_fields(
+        normalized,
+        allow_legacy_peak_fallback=allow_legacy_peak_fallback,
+        preserve_legacy_peak_when_unresolved=False,
+    )
+
+    def _finite_pair(
+        x_key: str,
+        y_key: str,
+        *,
+        source: Mapping[str, object] | None = None,
+    ) -> tuple[float, float] | None:
+        raw_source = source if isinstance(source, Mapping) else normalized
+        try:
+            col = float(raw_source.get(x_key, np.nan))
+            row = float(raw_source.get(y_key, np.nan))
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    try:
+        shape = tuple(int(v) for v in (background_display_shape or ())[:2])
+    except Exception:
+        shape = ()
+
+    detector_point = _finite_pair("detector_x", "detector_y")
+    if detector_point is None:
+        detector_point = _finite_pair(
+            "background_detector_x",
+            "background_detector_y",
+        )
+
+    if (
+        detector_point is None
+        and callable(background_display_to_native_detector_coords)
+    ):
+        display_point = _finite_pair("x", "y")
+        if display_point is not None:
+            detector_point = background_display_to_native_detector_coords(
+                float(display_point[0]),
+                float(display_point[1]),
+            )
+
+    if (
+        detector_point is None
+        and callable(caked_angles_to_background_display_coords)
+        and callable(background_display_to_native_detector_coords)
+    ):
+        caked_point = _finite_pair("caked_x", "caked_y")
+        if caked_point is not None:
+            display_point = caked_angles_to_background_display_coords(
+                float(caked_point[0]),
+                float(caked_point[1]),
+            )
+            if (
+                isinstance(display_point, tuple)
+                and len(display_point) >= 2
+                and np.isfinite(float(display_point[0]))
+                and np.isfinite(float(display_point[1]))
+            ):
+                detector_point = background_display_to_native_detector_coords(
+                    float(display_point[0]),
+                    float(display_point[1]),
+                )
+
+    if (
+        isinstance(detector_point, tuple)
+        and len(detector_point) >= 2
+        and np.isfinite(float(detector_point[0]))
+        and np.isfinite(float(detector_point[1]))
+    ):
+        detector_col = float(detector_point[0])
+        detector_row = float(detector_point[1])
+        normalized["detector_x"] = float(detector_col)
+        normalized["detector_y"] = float(detector_row)
+        normalized["background_detector_x"] = float(detector_col)
+        normalized["background_detector_y"] = float(detector_row)
+
+        if len(shape) >= 2:
+            try:
+                display_col, display_row = rotate_point_for_display(
+                    float(detector_col),
+                    float(detector_row),
+                    shape,
+                    int(display_rotate_k),
+                )
+            except Exception:
+                display_col = float("nan")
+                display_row = float("nan")
+            if np.isfinite(display_col) and np.isfinite(display_row):
+                normalized["x"] = float(display_col)
+                normalized["y"] = float(display_row)
+
+        recomputed_caked = None
+        if callable(native_detector_coords_to_caked_display_coords):
+            recomputed_caked = native_detector_coords_to_caked_display_coords(
+                float(detector_col),
+                float(detector_row),
+            )
+        if (
+            isinstance(recomputed_caked, tuple)
+            and len(recomputed_caked) >= 2
+            and np.isfinite(float(recomputed_caked[0]))
+            and np.isfinite(float(recomputed_caked[1]))
+        ):
+            stale_caked_fields = False
+            saved_caked = _finite_pair("caked_x", "caked_y", source=entry)
+            if (
+                saved_caked is not None
+                and callable(caked_angles_to_background_display_coords)
+                and callable(background_display_to_native_detector_coords)
+            ):
+                saved_display = caked_angles_to_background_display_coords(
+                    float(saved_caked[0]),
+                    float(saved_caked[1]),
+                )
+                saved_native = (
+                    background_display_to_native_detector_coords(
+                        float(saved_display[0]),
+                        float(saved_display[1]),
+                    )
+                    if isinstance(saved_display, tuple)
+                    and len(saved_display) >= 2
+                    and np.isfinite(float(saved_display[0]))
+                    and np.isfinite(float(saved_display[1]))
+                    else None
+                )
+                if (
+                    isinstance(saved_native, tuple)
+                    and len(saved_native) >= 2
+                    and np.isfinite(float(saved_native[0]))
+                    and np.isfinite(float(saved_native[1]))
+                ):
+                    stale_caked_fields = (
+                        float(
+                            np.hypot(
+                                float(saved_native[0]) - float(detector_col),
+                                float(saved_native[1]) - float(detector_row),
+                            )
+                        )
+                        > float(stale_caked_tolerance_px)
+                    )
+            if stale_caked_fields:
+                normalized["stale_caked_fields"] = True
+            else:
+                normalized.pop("stale_caked_fields", None)
+            normalized["caked_x"] = float(recomputed_caked[0])
+            normalized["caked_y"] = float(recomputed_caked[1])
+            normalized["raw_caked_x"] = float(recomputed_caked[0])
+            normalized["raw_caked_y"] = float(recomputed_caked[1])
+
+    return normalized
 
 
 def geometry_manual_preview_color(
@@ -489,6 +721,10 @@ def normalize_geometry_manual_pair_entry(
 
     if entry.get("source_label") is not None:
         normalized["source_label"] = str(entry.get("source_label"))
+    if "stale_caked_fields" in entry:
+        normalized["stale_caked_fields"] = bool(
+            entry.get("stale_caked_fields", False)
+        )
 
     raw_x = entry.get("raw_x")
     raw_y = entry.get("raw_y")
@@ -603,6 +839,12 @@ def normalize_geometry_manual_pair_entry(
         sigma_px = float("nan")
     if np.isfinite(sigma_px) and sigma_px > 0.0:
         normalized["sigma_px"] = float(sigma_px)
+
+    _canonicalize_manual_entry_branch_fields(
+        normalized,
+        allow_legacy_peak_fallback=False,
+        preserve_legacy_peak_when_unresolved=True,
+    )
 
     return normalized
 
@@ -1700,30 +1942,11 @@ def geometry_manual_live_peak_candidates_from_records(
         return int(idx) if idx >= 0 else None
 
     def _branch_from_entry(entry: Mapping[str, object]) -> tuple[int | None, str | None]:
-        explicit_branch = _coerce_nonnegative_index(entry.get("source_branch_index"))
-        if explicit_branch in {0, 1}:
-            return int(explicit_branch), "source_branch_index"
-        legacy_branch = _coerce_nonnegative_index(entry.get("source_peak_index"))
-        if legacy_branch in {0, 1}:
-            return int(legacy_branch), "source_peak_index"
-        for key in (
-            "phi",
-            "phi_deg",
-            "background_phi_deg",
-            "simulated_phi_deg",
-        ):
-            branch_idx = source_branch_index_from_phi_deg(entry.get(key))
-            if branch_idx in {0, 1}:
-                return int(branch_idx), str(key)
-        for key in (
-            "refined_sim_caked_y",
-            "caked_y",
-            "raw_caked_y",
-        ):
-            branch_idx = source_branch_index_from_phi_deg(entry.get(key))
-            if branch_idx in {0, 1}:
-                return int(branch_idx), str(key)
-        return None, None
+        branch_idx, branch_source, _branch_reason = resolve_canonical_branch(
+            entry,
+            allow_legacy_peak_fallback=False,
+        )
+        return branch_idx, branch_source
 
     candidates: list[dict[str, object]] = []
     for raw_record in peak_records:
@@ -2431,6 +2654,11 @@ def geometry_manual_pair_entry_from_candidate(
         entry["placement_error_px"] = max(0.0, float(placement_error_px))
     if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
         entry["sigma_px"] = float(sigma_px)
+    _canonicalize_manual_entry_branch_fields(
+        entry,
+        allow_legacy_peak_fallback=False,
+        preserve_legacy_peak_when_unresolved=False,
+    )
     _copy_q_values_from_sources(entry, candidate)
     return entry
 
@@ -3445,24 +3673,52 @@ def make_runtime_geometry_manual_projection_callbacks(
             return None
         return float(native_col), float(native_row)
 
+    def _refresh_entry_geometry(
+        entry: Mapping[str, object] | None,
+    ) -> dict[str, object] | None:
+        native_background = _resolve_runtime_value(current_background_native)
+        try:
+            background_shape = tuple(
+                int(v) for v in np.asarray(native_background).shape[:2]
+            )
+        except Exception:
+            background_shape = ()
+        return refresh_geometry_manual_pair_entry(
+            entry,
+            background_display_shape=background_shape,
+            background_display_to_native_detector_coords=(
+                _background_display_to_native_detector_coords
+            ),
+            caked_angles_to_background_display_coords=(
+                _caked_angles_to_background_display
+            ),
+            native_detector_coords_to_caked_display_coords=(
+                _native_to_caked_display_coords
+            ),
+            rotate_point_for_display=rotate_point_for_display,
+            display_rotate_k=int(display_rotate_k),
+            allow_legacy_peak_fallback=True,
+        )
+
     def _entry_display_coords(
         entry: dict[str, object] | None,
     ) -> tuple[float, float] | None:
-        if not isinstance(entry, dict):
+        refreshed_entry = _refresh_entry_geometry(entry)
+        if not isinstance(refreshed_entry, dict):
             return None
         use_caked = _pick_uses_caked_space()
         key_x = "caked_x" if use_caked else "x"
         key_y = "caked_y" if use_caked else "y"
         try:
-            col = float(entry.get(key_x, np.nan))
-            row = float(entry.get(key_y, np.nan))
+            col = float(refreshed_entry.get(key_x, np.nan))
+            row = float(refreshed_entry.get(key_y, np.nan))
         except Exception:
             col = float("nan")
             row = float("nan")
         if use_caked and not (np.isfinite(col) and np.isfinite(row)):
             try:
-                detector_col = float(entry.get("detector_x", np.nan))
-                detector_row = float(entry.get("detector_y", np.nan))
+                detector_col = float(refreshed_entry.get("detector_x", np.nan))
+                detector_row = float(refreshed_entry.get("detector_y", np.nan))
             except Exception:
                 detector_col = float("nan")
                 detector_row = float("nan")
@@ -3476,8 +3732,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                     row = float(converted[1])
         if use_caked and not (np.isfinite(col) and np.isfinite(row)):
             try:
-                raw_col = float(entry.get("x", np.nan))
-                raw_row = float(entry.get("y", np.nan))
+                raw_col = float(refreshed_entry.get("x", np.nan))
+                raw_row = float(refreshed_entry.get("y", np.nan))
             except Exception:
                 raw_col = float("nan")
                 raw_row = float("nan")
@@ -3826,6 +4082,7 @@ def make_runtime_geometry_manual_projection_callbacks(
         pick_uses_caked_space=_pick_uses_caked_space,
         current_background_image=_current_background_image,
         entry_display_coords=_entry_display_coords,
+        refresh_entry_geometry=_refresh_entry_geometry,
         caked_angles_to_background_display_coords=(
             _caked_angles_to_background_display
         ),
@@ -5226,6 +5483,10 @@ def geometry_manual_pair_entry_to_jsonable(
 
     if normalized.get("source_label") is not None:
         row["source_label"] = str(normalized.get("source_label"))
+    if "stale_caked_fields" in normalized:
+        row["stale_caked_fields"] = bool(
+            normalized.get("stale_caked_fields", False)
+        )
 
     return row
 

@@ -1925,6 +1925,7 @@ def run_headless_geometry_fit(
             )
         ),
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
+        geometry_manual_refresh_pair_entry=projection_callbacks.refresh_entry_geometry,
         unrotate_display_peaks=lambda measured, rotated_shape, *, k=None: (
             gui_geometry_overlay.unrotate_display_peaks(
                 measured,
