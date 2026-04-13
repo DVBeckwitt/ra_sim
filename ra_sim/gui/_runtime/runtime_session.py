@@ -8995,17 +8995,13 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_secondary_intersection_cache,
         result.get("secondary_max_positions", []),
     )
-    primary_source_reflection_indices = (
-        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
-            resolved_primary_peak_tables,
-            owner="runtime_session.store_primary_secondary_peak_tables.primary",
-        )
-    )
-    secondary_source_reflection_indices = (
-        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
-            resolved_secondary_peak_tables,
-            owner="runtime_session.store_primary_secondary_peak_tables.secondary",
-            start_index=len(primary_source_reflection_indices),
+    primary_source_reflection_indices, secondary_source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_index_groups(
+            (
+                resolved_primary_peak_tables,
+                resolved_secondary_peak_tables,
+            ),
+            owner="runtime_session.store_primary_secondary_peak_tables",
         )
     )
     simulation_runtime_state.stored_primary_peak_table_lattice = list(
@@ -13414,26 +13410,18 @@ def _geometry_manual_build_source_rows_from_hit_tables(
     except Exception:
         primary_c = float("nan")
 
-    peak_table_lattice = [
-        (float(primary_a), float(primary_c), "primary") for _ in copied_hit_tables
-    ]
-    source_reflection_indices = (
-        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+    raw_rows, peak_table_lattice, source_reflection_indices = (
+        gui_geometry_q_group_manager.build_geometry_fit_full_order_source_rows(
             copied_hit_tables,
+            image_shape=(int(image_size_value), int(image_size_value)),
+            native_sim_to_display_coords=_native_sim_to_display_coords,
+            primary_a=primary_a,
+            primary_c=primary_c,
+            default_source_label="primary",
+            round_pixel_centers=False,
+            allow_nominal_hkl_indices=bool(allow_nominal_hkl_indices),
             owner="runtime_session._geometry_manual_build_source_rows_from_hit_tables",
         )
-    )
-    raw_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
-        copied_hit_tables,
-        image_shape=(int(image_size_value), int(image_size_value)),
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        peak_table_lattice=peak_table_lattice,
-        source_reflection_indices=source_reflection_indices,
-        primary_a=primary_a,
-        primary_c=primary_c,
-        default_source_label="primary",
-        round_pixel_centers=False,
-        allow_nominal_hkl_indices=bool(allow_nominal_hkl_indices),
     )
     raw_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
     return raw_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices

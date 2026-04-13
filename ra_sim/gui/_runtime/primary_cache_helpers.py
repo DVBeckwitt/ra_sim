@@ -223,10 +223,10 @@ def apply_primary_cache_artifacts(
         payload.get("peak_tables", [])
     )
     simulation_runtime_state.stored_primary_source_reflection_indices = (
-        gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
-            simulation_runtime_state.stored_primary_max_positions or (),
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_index_groups(
+            (simulation_runtime_state.stored_primary_max_positions or (),),
             owner="primary_cache_helpers.apply_primary_cache_artifacts",
-        )
+        )[0]
     )
     peak_table_lattice = payload.get("peak_table_lattice", [])
     simulation_runtime_state.stored_primary_peak_table_lattice = (

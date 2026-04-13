@@ -839,6 +839,71 @@ def audited_full_order_source_reflection_indices(
     return list(range(base_index, base_index + table_count))
 
 
+def audited_full_order_source_reflection_index_groups(
+    hit_table_groups: Sequence[Sequence[object] | None] | None,
+    *,
+    owner: str,
+) -> list[list[int]]:
+    """Return sequential full-order reflection ids for one or more table groups."""
+
+    groups = list(hit_table_groups or ())
+    if not groups:
+        return []
+
+    next_start_index = 0
+    reflection_index_groups: list[list[int]] = []
+    for group_index, hit_tables in enumerate(groups):
+        indices = audited_full_order_source_reflection_indices(
+            hit_tables,
+            owner=f"{owner}.group[{group_index}]",
+            start_index=next_start_index,
+        )
+        reflection_index_groups.append(indices)
+        next_start_index += len(indices)
+    return reflection_index_groups
+
+
+def build_geometry_fit_full_order_source_rows(
+    hit_tables: Sequence[object] | None,
+    *,
+    image_shape: tuple[int, int],
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+    primary_a: object = np.nan,
+    primary_c: object = np.nan,
+    default_source_label: str = "primary",
+    round_pixel_centers: bool = False,
+    allow_nominal_hkl_indices: bool = False,
+    owner: str,
+    start_index: int = 0,
+) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[int]]:
+    """Build full-order source rows plus the audited reflection-index mapping."""
+
+    source_reflection_indices = audited_full_order_source_reflection_indices(
+        hit_tables,
+        owner=owner,
+        start_index=start_index,
+    )
+    peak_table_lattice = [
+        (float(primary_a), float(primary_c), str(default_source_label)) for _ in (hit_tables or ())
+    ]
+    source_rows = build_geometry_fit_simulated_peaks(
+        hit_tables,
+        image_shape=image_shape,
+        native_sim_to_display_coords=native_sim_to_display_coords,
+        peak_table_lattice=peak_table_lattice,
+        source_reflection_indices=source_reflection_indices,
+        primary_a=primary_a,
+        primary_c=primary_c,
+        default_source_label=default_source_label,
+        round_pixel_centers=round_pixel_centers,
+        allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+    )
+    return list(source_rows), peak_table_lattice, source_reflection_indices
+
+
 def _source_row_hkl_lookup_from_rows(
     source_rows: Sequence[object] | None,
 ) -> dict[tuple[int, int], tuple[int, int, int]]:
@@ -1297,20 +1362,18 @@ def simulate_geometry_fit_preview_style_peaks(
             default_solve_q_rel_tol=default_solve_q_rel_tol,
             default_solve_q_mode=default_solve_q_mode,
         )
-        peak_records = build_geometry_fit_simulated_peaks(
-            hit_tables,
-            image_shape=(int(image_size), int(image_size)),
-            native_sim_to_display_coords=native_sim_to_display_coords,
-            peak_table_lattice=peak_table_lattice,
-            source_reflection_indices=audited_full_order_source_reflection_indices(
+        peak_records, _peak_table_lattice, _source_reflection_indices = (
+            build_geometry_fit_full_order_source_rows(
                 hit_tables,
+                image_shape=(int(image_size), int(image_size)),
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                primary_a=primary_a,
+                primary_c=primary_c,
+                default_source_label=default_source_label,
+                round_pixel_centers=round_pixel_centers,
+                allow_nominal_hkl_indices=allow_nominal_hkl_indices,
                 owner="simulate_geometry_fit_preview_style_peaks",
-            ),
-            primary_a=primary_a,
-            primary_c=primary_c,
-            default_source_label=default_source_label,
-            round_pixel_centers=round_pixel_centers,
-            allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+            )
         )
         diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
         diagnostics.update(
