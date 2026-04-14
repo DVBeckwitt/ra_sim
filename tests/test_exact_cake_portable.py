@@ -5,6 +5,13 @@ from ra_sim.simulation import exact_cake
 from ra_sim.simulation import exact_cake_portable
 
 
+@pytest.fixture(autouse=True)
+def _clear_exact_cake_process_caches() -> None:
+    exact_cake_portable._clear_shared_exact_cake_caches()
+    yield
+    exact_cake_portable._clear_shared_exact_cake_caches()
+
+
 def test_fast_azimuthal_integrator_detector_maps_match_flat_geometry() -> None:
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
         dist=5.0,
@@ -73,7 +80,7 @@ def test_fast_azimuthal_integrator_detector_map_radian_requests_still_allocate()
     assert np.allclose(chi_rad, np.deg2rad(chi_deg))
 
 
-def test_fast_azimuthal_integrator_detector_maps_cache_per_instance(
+def test_fast_azimuthal_integrator_detector_maps_cache_is_shared_across_instances(
     monkeypatch,
 ) -> None:
     map_calls: list[tuple[tuple[int, int], exact_cake_portable.PortableGeometry]] = []
@@ -106,8 +113,8 @@ def test_fast_azimuthal_integrator_detector_maps_cache_per_instance(
     two_theta_a = integrator_a.twoThetaArray(shape=(21, 21), unit="2th_deg")
     two_theta_b = integrator_b.twoThetaArray(shape=(21, 21), unit="2th_deg")
 
-    assert len(map_calls) == 2
-    assert two_theta_a is not two_theta_b
+    assert len(map_calls) == 1
+    assert two_theta_a is two_theta_b
 
 
 def test_exact_cake_auto_workers_default_to_8(monkeypatch) -> None:
@@ -517,7 +524,7 @@ def test_fast_azimuthal_integrator_reuses_cake_lut(monkeypatch) -> None:
     assert lut_calls == [((4, 4), 8, 6)]
 
 
-def test_fast_azimuthal_integrator_cake_lut_cache_is_per_instance(monkeypatch) -> None:
+def test_fast_azimuthal_integrator_cake_lut_cache_is_shared_across_instances(monkeypatch) -> None:
     lut_calls: list[tuple[tuple[int, int], int, int]] = []
 
     def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
@@ -564,4 +571,4 @@ def test_fast_azimuthal_integrator_cake_lut_cache_is_per_instance(monkeypatch) -
     integrator_a.integrate2d(image, npt_rad=8, npt_azim=6, method="lut", unit="2th_deg")
     integrator_b.integrate2d(image, npt_rad=8, npt_azim=6, method="lut", unit="2th_deg")
 
-    assert lut_calls == [((4, 4), 8, 6), ((4, 4), 8, 6)]
+    assert lut_calls == [((4, 4), 8, 6)]

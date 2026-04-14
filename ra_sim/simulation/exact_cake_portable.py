@@ -31,9 +31,11 @@ azimuth_deg = result.azimuthal_deg
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import threading
 
 import numpy as np
 
@@ -48,6 +50,17 @@ from ra_sim.simulation.exact_cake import (
 
 
 PHI_ZERO_OFFSET_DEGREES = -90.0
+_PROCESS_DETECTOR_MAP_CACHE_LIMIT = 2
+_PROCESS_CAKE_LUT_CACHE_LIMIT = 2
+
+
+_SharedDetectorMapKey = tuple["PortableGeometry", tuple[int, int]]
+_SharedCakeLutKey = tuple["PortableGeometry", tuple[int, int], int, float, float, int, float, float]
+
+_PROCESS_DETECTOR_MAP_CACHE: OrderedDict[_SharedDetectorMapKey, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+_PROCESS_CAKE_LUT_CACHE: OrderedDict[_SharedCakeLutKey, DetectorCakeLUT] = OrderedDict()
+_PROCESS_DETECTOR_MAP_CACHE_LOCK = threading.RLock()
+_PROCESS_CAKE_LUT_CACHE_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -56,6 +69,107 @@ class PortableGeometry:
     distance_m: float
     center_row_px: float
     center_col_px: float
+
+
+def _clear_shared_exact_cake_caches() -> None:
+    """Clear process-level detector-map and LUT caches."""
+
+    with _PROCESS_DETECTOR_MAP_CACHE_LOCK:
+        _PROCESS_DETECTOR_MAP_CACHE.clear()
+    with _PROCESS_CAKE_LUT_CACHE_LOCK:
+        _PROCESS_CAKE_LUT_CACHE.clear()
+
+
+def _shared_detector_map_cache_key(
+    geometry: PortableGeometry,
+    detector_shape: tuple[int, int],
+) -> _SharedDetectorMapKey:
+    return geometry, detector_shape
+
+
+def _shared_cake_lut_cache_key(
+    geometry: PortableGeometry,
+    detector_shape: tuple[int, int],
+    radial_deg: np.ndarray,
+    azimuthal_deg: np.ndarray,
+) -> _SharedCakeLutKey:
+    return (
+        geometry,
+        detector_shape,
+        int(radial_deg.size),
+        float(radial_deg[0]),
+        float(radial_deg[-1]),
+        int(azimuthal_deg.size),
+        float(azimuthal_deg[0]),
+        float(azimuthal_deg[-1]),
+    )
+
+
+def _shared_detector_maps_for_shape(
+    detector_shape: tuple[int, int],
+    geometry: PortableGeometry,
+) -> tuple[np.ndarray, np.ndarray]:
+    key = _shared_detector_map_cache_key(geometry, detector_shape)
+    with _PROCESS_DETECTOR_MAP_CACHE_LOCK:
+        cached = _PROCESS_DETECTOR_MAP_CACHE.get(key)
+        if cached is not None:
+            _PROCESS_DETECTOR_MAP_CACHE.move_to_end(key)
+            return cached
+
+    two_theta_deg, raw_azimuth_deg = detector_pixel_angular_maps(detector_shape, geometry)
+    two_theta_deg = np.asarray(two_theta_deg, dtype=np.float64)
+    raw_azimuth_deg = np.asarray(raw_azimuth_deg, dtype=np.float64)
+    two_theta_deg.setflags(write=False)
+    raw_azimuth_deg.setflags(write=False)
+    built = (two_theta_deg, raw_azimuth_deg)
+
+    with _PROCESS_DETECTOR_MAP_CACHE_LOCK:
+        cached = _PROCESS_DETECTOR_MAP_CACHE.get(key)
+        if cached is not None:
+            _PROCESS_DETECTOR_MAP_CACHE.move_to_end(key)
+            return cached
+        _PROCESS_DETECTOR_MAP_CACHE[key] = built
+        while len(_PROCESS_DETECTOR_MAP_CACHE) > _PROCESS_DETECTOR_MAP_CACHE_LIMIT:
+            _PROCESS_DETECTOR_MAP_CACHE.popitem(last=False)
+    return built
+
+
+def _shared_cake_lut_for_request(
+    detector_shape: tuple[int, int],
+    radial_deg: np.ndarray,
+    azimuthal_deg: np.ndarray,
+    geometry: DetectorCakeGeometry,
+    portable_geometry: PortableGeometry,
+    *,
+    workers: int | str | None,
+) -> DetectorCakeLUT | None:
+    key = _shared_cake_lut_cache_key(portable_geometry, detector_shape, radial_deg, azimuthal_deg)
+    with _PROCESS_CAKE_LUT_CACHE_LOCK:
+        cached = _PROCESS_CAKE_LUT_CACHE.get(key)
+        if cached is not None:
+            _PROCESS_CAKE_LUT_CACHE.move_to_end(key)
+            return cached
+
+    try:
+        built = build_detector_to_cake_lut(
+            detector_shape,
+            radial_deg,
+            azimuthal_deg,
+            geometry,
+            workers=workers,
+        )
+    except (MemoryError, RuntimeError):
+        return None
+
+    with _PROCESS_CAKE_LUT_CACHE_LOCK:
+        cached = _PROCESS_CAKE_LUT_CACHE.get(key)
+        if cached is not None:
+            _PROCESS_CAKE_LUT_CACHE.move_to_end(key)
+            return cached
+        _PROCESS_CAKE_LUT_CACHE[key] = built
+        while len(_PROCESS_CAKE_LUT_CACHE) > _PROCESS_CAKE_LUT_CACHE_LIMIT:
+            _PROCESS_CAKE_LUT_CACHE.popitem(last=False)
+    return built
 
 def _parse_poni_file_simple(poni_path: str | Path) -> dict[str, float]:
     values: dict[str, float] = {}
@@ -298,12 +412,7 @@ class FastAzimuthalIntegrator:
             center_row_px=float(poni1) / float(pixel_row),
             center_col_px=float(poni2) / float(pixel_col),
         )
-        self._detector_map_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
         self._solid_angle_cache: dict[tuple[int, int], np.ndarray] = {}
-        self._cake_lut_cache: dict[
-            tuple[tuple[int, int], int, float, float, int, float, float],
-            DetectorCakeLUT,
-        ] = {}
 
     def twoThetaArray(self, *, shape: tuple[int, int], unit: str | None = None) -> np.ndarray:
         two_theta_deg, _raw_azimuth_deg = self._detector_maps_for_shape(shape)
@@ -391,16 +500,7 @@ class FastAzimuthalIntegrator:
         shape: tuple[int, int],
     ) -> tuple[np.ndarray, np.ndarray]:
         detector_shape = tuple(int(v) for v in tuple(shape)[:2])
-        cached = self._detector_map_cache.get(detector_shape)
-        if cached is None:
-            two_theta_deg, raw_azimuth_deg = detector_pixel_angular_maps(detector_shape, self.geometry)
-            two_theta_deg = np.asarray(two_theta_deg, dtype=np.float64)
-            raw_azimuth_deg = np.asarray(raw_azimuth_deg, dtype=np.float64)
-            two_theta_deg.setflags(write=False)
-            raw_azimuth_deg.setflags(write=False)
-            cached = (two_theta_deg, raw_azimuth_deg)
-            self._detector_map_cache[detector_shape] = cached
-        return cached
+        return _shared_detector_maps_for_shape(detector_shape, self.geometry)
 
     def _solid_angle_for_shape(self, shape: tuple[int, ...]) -> np.ndarray:
         detector_shape = tuple(int(v) for v in tuple(shape)[:2])
@@ -428,30 +528,14 @@ class FastAzimuthalIntegrator:
         if engine_name not in {"", "auto", "numba"}:
             return None
         detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
-        key = (
+        return _shared_cake_lut_for_request(
             detector_shape,
-            int(radial_deg.size),
-            float(radial_deg[0]),
-            float(radial_deg[-1]),
-            int(azimuthal_deg.size),
-            float(azimuthal_deg[0]),
-            float(azimuthal_deg[-1]),
+            radial_deg,
+            azimuthal_deg,
+            geometry,
+            self.geometry,
+            workers=workers,
         )
-        cached = self._cake_lut_cache.get(key)
-        if cached is not None:
-            return cached
-        try:
-            built = build_detector_to_cake_lut(
-                detector_shape,
-                radial_deg,
-                azimuthal_deg,
-                geometry,
-                workers=workers,
-            )
-        except (MemoryError, RuntimeError):
-            return None
-        self._cake_lut_cache[key] = built
-        return built
 
 
 def convert_image_to_angle_space(
