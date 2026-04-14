@@ -6,13 +6,6 @@ from pathlib import Path
 import re
 
 import numpy as np
-try:
-    import pyFAI
-    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-except Exception:  # pragma: no cover - optional
-    pyFAI = None
-    class AzimuthalIntegrator:
-        pass
 import json
 import matplotlib.pyplot as plt
 from numba import njit

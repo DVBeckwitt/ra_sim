@@ -15,7 +15,6 @@ IMPORT_TO_DISTRIBUTION = {
     "cv2": "opencv-python",
     "dans_diffraction": "dans_diffraction",
     "pil": "pillow",
-    "pyfai": "pyfai",
     "pyqtgraph": "pyqtgraph",
     "skimage": "scikit-image",
     "yaml": "pyyaml",

@@ -24,6 +24,7 @@ from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from threading import Thread
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Mapping, Sequence
@@ -121,6 +122,8 @@ from ra_sim.simulation.engine import (
     simulate as simulate_request,
     simulate_qr_rods as simulate_qr_rods_request,
 )
+from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background
+from ra_sim.simulation.exact_cake_portable import FastAzimuthalIntegrator
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.simulation.types import (
     BeamSamples,
@@ -243,9 +246,7 @@ def _get_azimuthal_integrator_cls():
     global _AZIMUTHAL_INTEGRATOR_CLS
 
     if _AZIMUTHAL_INTEGRATOR_CLS is None:
-        from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-
-        _AZIMUTHAL_INTEGRATOR_CLS = AzimuthalIntegrator
+        _AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator
     return _AZIMUTHAL_INTEGRATOR_CLS
 
 
@@ -1883,7 +1884,7 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
 matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
 gui_main_figure_chrome.configure_matplotlib_canvas_widget(matplotlib_canvas_widget)
 PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
-    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "tk_canvas")
+    os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
 )
 canvas = matplotlib_canvas
 primary_viewport_backend = None
@@ -6399,6 +6400,8 @@ phi_min_slider = None
 phi_max_slider = None
 
 PHI_ZERO_OFFSET_DEGREES = -90.0
+DEFAULT_ANALYSIS_RADIAL_BINS = 1000
+DEFAULT_ANALYSIS_AZIMUTH_BINS = 720
 
 
 def _adjust_phi_zero(phi_values):
@@ -6414,7 +6417,13 @@ def _wrap_phi_range(phi_values):
     return wrapped
 
 
-def caking(data, ai, *, npt_rad=1000, npt_azim=720):
+def caking(
+    data,
+    ai,
+    *,
+    npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS,
+    npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
+):
     return ai.integrate2d(
         data,
         npt_rad=int(max(1, npt_rad)),
@@ -6423,6 +6432,83 @@ def caking(data, ai, *, npt_rad=1000, npt_azim=720):
         method="lut",
         unit="2th_deg",
     )
+
+
+def _schedule_exact_cake_geometry_warmup(ai, detector_shape) -> None:
+    if ai is None or not hasattr(ai, "warm_geometry_cache"):
+        return
+    if detector_shape is None or len(detector_shape) < 2:
+        return
+    detector_shape = tuple(int(v) for v in tuple(detector_shape)[:2])
+    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return
+
+    geometry = getattr(ai, "geometry", None)
+    if geometry is None:
+        return
+
+    warmup_sig = (
+        geometry,
+        detector_shape,
+        int(DEFAULT_ANALYSIS_RADIAL_BINS),
+        int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
+    )
+    completed_sig = getattr(
+        simulation_runtime_state,
+        "exact_cake_geometry_warmup_signature",
+        None,
+    )
+    inflight_sig = getattr(
+        simulation_runtime_state,
+        "exact_cake_geometry_warmup_inflight_signature",
+        None,
+    )
+    warmup_thread = getattr(
+        simulation_runtime_state,
+        "exact_cake_geometry_warmup_thread",
+        None,
+    )
+    if completed_sig == warmup_sig or inflight_sig == warmup_sig:
+        return
+    if warmup_thread is not None and warmup_thread.is_alive():
+        return
+
+    simulation_runtime_state.exact_cake_geometry_warmup_inflight_signature = warmup_sig
+
+    def _warm() -> None:
+        success = False
+        try:
+            ai.warm_geometry_cache(
+                shape=detector_shape,
+                npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS,
+                npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
+                correctSolidAngle=True,
+                engine="auto",
+                workers="auto",
+            )
+            success = True
+        except Exception:
+            success = False
+        finally:
+            if success:
+                simulation_runtime_state.exact_cake_geometry_warmup_signature = warmup_sig
+            if (
+                getattr(
+                    simulation_runtime_state,
+                    "exact_cake_geometry_warmup_inflight_signature",
+                    None,
+                )
+                == warmup_sig
+            ):
+                simulation_runtime_state.exact_cake_geometry_warmup_inflight_signature = None
+
+    warmup_thread = Thread(
+        target=_warm,
+        name="ra-sim-exact-cake-geometry-warmup",
+        daemon=True,
+    )
+    simulation_runtime_state.exact_cake_geometry_warmup_thread = warmup_thread
+    warmup_thread.start()
 
 
 def _copy_intersection_cache_tables(cache):
@@ -6718,6 +6804,9 @@ simulation_runtime_state.last_caked_intersection_cache = None
 simulation_runtime_state.last_res2_background = None
 simulation_runtime_state.last_res2_sim = None
 simulation_runtime_state.ai_cache = {}
+simulation_runtime_state.exact_cake_geometry_warmup_signature = None
+simulation_runtime_state.exact_cake_geometry_warmup_inflight_signature = None
+simulation_runtime_state.exact_cake_geometry_warmup_thread = None
 
 
 def _clear_1d_plot_cache_and_lines():
@@ -10566,19 +10655,17 @@ def do_update():
                 reset_override=True,
             )
     # ---------------------------------------------------------------
-    # pyFAI integrator setup is relatively expensive. Cache the
-    # AzimuthalIntegrator instance and only recreate it when any of the
-    # geometry parameters actually change. This significantly reduces
-    # overhead when repeatedly redrawing the live simulation with
-    # unchanged geometry settings.
+    # The exact-cake analysis integrator setup is relatively expensive. Cache
+    # the runtime integrator instance and only recreate it when geometry
+    # consumed by the flat backend actually changes. Tilt and wavelength are
+    # intentionally ignored here because FastAzimuthalIntegrator discards them,
+    # and including them would flush the detector-map and LUT caches for no
+    # numerical benefit.
     # ---------------------------------------------------------------
     sig = (
         corto_det_up,
         center_x_up,
         center_y_up,
-        Gamma_updated,
-        gamma_updated,
-        wave_m,
     )
     ai_cache_action = "reuse"
     if simulation_runtime_state.ai_cache.get("sig") != sig:
@@ -10605,6 +10692,14 @@ def do_update():
         image_signature_summary=_live_cache_signature_summary(new_sim_image_sig),
     )
     ai = simulation_runtime_state.ai_cache["ai"]
+    warm_detector_shape = None
+    if native_background is not None:
+        warm_detector_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    elif simulation_runtime_state.unscaled_image is not None:
+        warm_detector_shape = tuple(
+            int(v) for v in np.asarray(simulation_runtime_state.unscaled_image).shape[:2]
+        )
+    _schedule_exact_cake_geometry_warmup(ai, warm_detector_shape)
     sim_caking_sig = (
         new_sim_image_sig,
         sig,
@@ -10646,7 +10741,7 @@ def do_update():
     analysis_bins = (
         (LIVE_DRAG_ANALYSIS_RADIAL_BINS, LIVE_DRAG_ANALYSIS_AZIMUTH_BINS)
         if desired_analysis_preview
-        else (1000, 720)
+        else (DEFAULT_ANALYSIS_RADIAL_BINS, DEFAULT_ANALYSIS_AZIMUTH_BINS)
     )
     sim_cache_sig = (
         (sim_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
@@ -10916,6 +11011,7 @@ def do_update():
             preserve=(previous_primary_view_mode == "caked"),
         )
         ax.set_aspect("auto")
+        gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)
         ax.set_xlabel("2θ (degrees)")
         ax.set_ylabel("φ (degrees)")
         ax.set_title("")
@@ -10935,6 +11031,7 @@ def do_update():
             preserve=(previous_primary_view_mode == "detector"),
         )
         ax.set_aspect("auto")
+        gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
         ax.set_xlabel("X (pixels)")
         ax.set_ylabel("Y (pixels)")
         ax.set_title("")
@@ -10955,7 +11052,10 @@ def do_update():
             background_display.set_visible(False)
         _sync_primary_raster_geometry(show_caked_image=False)
 
-    gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
+    gui_main_figure_chrome.apply_main_figure_axes_chrome(
+        ax,
+        axes_visible=bool(show_caked_image),
+    )
 
     # 1D integration
     if one_d_analysis_requested and sim_res2 is not None and not defer_overlay_refresh:
@@ -11209,7 +11309,7 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
     set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
     set_background_display_data=background_display.set_data,
-    set_background_alpha=image_display.set_alpha,
+    set_background_alpha=background_display.set_alpha,
     update_background_slider_defaults=(
         lambda image: _update_background_slider_defaults(
             image,
@@ -23249,6 +23349,10 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 post_startup_task_runner.schedule()
             if _STARTUP_BENCHMARK_AUTO_EXIT:
                 root.after(750 if post_startup_task_runner.has_tasks() else 150, _shutdown_gui)
+
+    # Start the exact-cake Numba warmup in the background so the first caked
+    # conversion is less likely to pay the JIT compile cost on the UI path.
+    start_exact_cake_numba_warmup_in_background()
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)

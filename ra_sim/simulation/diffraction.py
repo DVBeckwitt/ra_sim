@@ -12,6 +12,7 @@ from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
 from ra_sim.debug_controls import (
+    current_startup_debug_log_path,
     intersection_cache_logging_enabled,
     retain_optional_cache,
     resolve_intersection_cache_log_root,
@@ -351,6 +352,26 @@ def _write_intersection_cache_log(
             json.dump(metadata, handle, indent=2, sort_keys=True)
             handle.write("\n")
         print(f"[intersection_cache] wrote cache to: {log_dir}")
+        startup_log_path = current_startup_debug_log_path()
+        if startup_log_path is not None:
+            summary = {
+                "log_dir": str(log_dir),
+                "meta_path": str(log_dir / "meta.json"),
+                "source": metadata.get("source"),
+                "table_count": metadata.get("table_count"),
+                "cache_tables": metadata.get("cache_tables", []),
+            }
+            needs_separator = (
+                startup_log_path.exists()
+                and startup_log_path.stat().st_size > 0
+            )
+            startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with startup_log_path.open("a", encoding="utf-8") as handle:
+                if needs_separator:
+                    handle.write("\n")
+                handle.write("Intersection cache updated:\n")
+                json.dump(summary, handle, indent=2, sort_keys=True)
+                handle.write("\n")
     except Exception:
         return
 

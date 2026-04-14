@@ -1,4 +1,4 @@
-"""Geometry helpers for configuring pyFAI integrators."""
+"""Geometry helpers for configuring flat exact-cake integrators."""
 
 from __future__ import annotations
 

@@ -25,10 +25,12 @@ def test_view_azimuthal_radial_preserves_full_cake_azimuth(monkeypatch) -> None:
                     dtype=float,
                 ),
                 radial=np.asarray([10.0, 20.0], dtype=float),
+                radial_deg=np.asarray([10.0, 20.0], dtype=float),
                 azimuthal=np.asarray([-170.0, 10.0, 100.0], dtype=float),
+                azimuthal_deg=np.asarray([-170.0, 10.0, 100.0], dtype=float),
             )
 
-    monkeypatch.setattr(diffraction_tools, "AzimuthalIntegrator", _FakeIntegrator)
+    monkeypatch.setattr(diffraction_tools, "FastAzimuthalIntegrator", _FakeIntegrator)
     monkeypatch.setattr(diffraction_tools.plt, "figure", lambda *args, **kwargs: None)
     monkeypatch.setattr(diffraction_tools.plt, "title", lambda *args, **kwargs: None)
     monkeypatch.setattr(diffraction_tools.plt, "xlabel", lambda *args, **kwargs: None)
@@ -55,14 +57,19 @@ def test_view_azimuthal_radial_preserves_full_cake_azimuth(monkeypatch) -> None:
             "rot3": 0.0,
             "wavelength": 1.54e-10,
         },
+        rows=np.asarray([0, 1], dtype=np.int64),
+        cols=np.asarray([1, 0], dtype=np.int64),
     )
 
     imshow_image = np.asarray(captured["imshow_image"], dtype=float)
     imshow_kwargs = dict(captured["imshow_kwargs"])
     extent = list(imshow_kwargs["extent"])
+    integrate2d_kwargs = dict(captured["integrate2d_kwargs"])
 
     assert imshow_image.shape == (3, 2)
     assert np.allclose(imshow_image, [[3.0, 4.0], [1.0, 2.0], [5.0, 6.0]])
     assert extent[0:2] == [10.0, 20.0]
     assert extent[2] < -90.0
     assert extent[3] > 90.0
+    assert np.array_equal(integrate2d_kwargs["rows"], np.asarray([0, 1], dtype=np.int64))
+    assert np.array_equal(integrate2d_kwargs["cols"], np.asarray([1, 0], dtype=np.int64))

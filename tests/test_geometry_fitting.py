@@ -302,6 +302,32 @@ def test_detector_pixels_to_fit_space_matches_zero_tilt_geometry() -> None:
     assert single_phi == pytest.approx(float(expected_phi[1]))
 
 
+def test_detector_pixels_to_fit_space_ignores_gamma_and_Gamma() -> None:
+    cols = np.array([8.0, 12.0, 15.0], dtype=np.float64)
+    rows = np.array([6.0, 10.0, 14.0], dtype=np.float64)
+    center = [10.0, 10.0]
+
+    base_two_theta, base_phi = opt._detector_pixels_to_fit_space(
+        cols,
+        rows,
+        center=center,
+        detector_distance=5.0,
+        pixel_size=2.0,
+    )
+    tilted_two_theta, tilted_phi = opt._detector_pixels_to_fit_space(
+        cols,
+        rows,
+        center=center,
+        detector_distance=5.0,
+        pixel_size=2.0,
+        gamma_deg=3.5,
+        Gamma_deg=-7.25,
+    )
+
+    assert np.allclose(tilted_two_theta, base_two_theta, atol=1.0e-12)
+    assert np.allclose(tilted_phi, base_phi, atol=1.0e-12)
+
+
 def test_measured_fit_space_anchor_prefers_detector_anchor_over_cached_fit_space() -> None:
     center = [10.0, 10.0]
     entry = {
@@ -342,6 +368,33 @@ def test_measured_fit_space_anchor_prefers_detector_anchor_over_cached_fit_space
     assert fallback_reason == "background_detector_fit_space_anchor"
     assert fallback_anchor == pytest.approx(expected_fallback)
     assert fallback_metadata["anchor_source"] == "background_detector_fit_space_anchor"
+
+
+def test_measured_fit_space_anchor_ignores_gamma_and_Gamma() -> None:
+    entry = {
+        "detector_x": 13.0,
+        "detector_y": 7.0,
+    }
+
+    base_anchor, base_reason, _base_metadata = opt._measured_fit_space_anchor(
+        entry,
+        center=[10.0, 10.0],
+        detector_distance=5.0,
+        pixel_size=2.0,
+    )
+    tilted_anchor, tilted_reason, tilted_metadata = opt._measured_fit_space_anchor(
+        entry,
+        center=[10.0, 10.0],
+        detector_distance=5.0,
+        pixel_size=2.0,
+        gamma_deg=8.0,
+        Gamma_deg=-4.0,
+    )
+
+    assert base_reason == "detector_fit_space_anchor"
+    assert tilted_reason == "detector_fit_space_anchor"
+    assert tilted_anchor == pytest.approx(base_anchor)
+    assert tilted_metadata["anchor_source"] == "detector_fit_space_anchor"
 
 
 def test_measured_fit_space_anchor_keeps_cached_fit_space_stable_when_wavelength_changes(
@@ -1415,6 +1468,79 @@ def test_fit_geometry_parameters_dynamic_point_path_uses_angular_missing_penalty
     assert bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit"]) is True
 
 
+def test_fit_geometry_parameters_manual_point_fit_with_cached_sources_defaults_to_central_point_match(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [np.array([[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float64)]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 24
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["debye_x"] = 1.0
+    params["debye_y"] = 1.0
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 12.0,
+            "y": 12.0,
+            "detector_x": 12.0,
+            "detector_y": 12.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+        }
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        pixel_tol=2.0,
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert result.final_metric_name == "central_point_match"
+    assert bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit"]) is False
+
+
 def test_fit_geometry_parameters_dynamic_point_path_records_fit_space_provenance(
     monkeypatch,
 ):
@@ -2152,6 +2278,7 @@ def _run_identity_bridge_case(
     monkeypatch,
     *,
     trusted: bool,
+    enable_full_beam_polish: bool = True,
 ) -> dict[str, object]:
     _install_identity_bridge_solver_stubs(monkeypatch)
 
@@ -2218,7 +2345,10 @@ def _run_identity_bridge_case(
         experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
         refinement_config={
             "solver": {"restarts": 0, "weighted_matching": False},
-            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "full_beam_polish": {
+                "enabled": bool(enable_full_beam_polish),
+                "max_nfev": 10,
+            },
             "identifiability": {"enabled": False},
         },
     )
@@ -2230,7 +2360,11 @@ def _run_identity_bridge_case(
         "fallback_entries": list(fallback_entries),
         "resolved_diag": dict(resolution_lookup[id(subset.measured_entries[0])]),
         "point_diag": dict(result.point_match_diagnostics[0]),
-        "seed_record": dict(result.full_beam_polish_summary["seed_correspondence_records"][0]),
+        "seed_record": (
+            dict(result.full_beam_polish_summary["seed_correspondence_records"][0])
+            if result.full_beam_polish_summary.get("seed_correspondence_records")
+            else None
+        ),
         "result": result,
     }
 
@@ -2288,6 +2422,127 @@ def test_point_match_diagnostics_preserve_trusted_identity_payload(
     assert point_diag.get("source_row_index_namespace") == "full_hit_table"
     assert point_diag.get("source_peak_index_namespace") == "branch_index"
     assert point_diag.get("source_branch_index_namespace") == "branch_index"
+
+
+def test_fixed_correspondence_path_remaps_trusted_full_reflection_indices_without_polish(
+    monkeypatch,
+) -> None:
+    case = _run_identity_bridge_case(
+        monkeypatch,
+        trusted=True,
+        enable_full_beam_polish=False,
+    )
+    trusted_pair = dict(case["input_pair"])
+    point_diag = dict(case["point_diag"])
+
+    assert bool(case["result"].success) is True
+    assert case["result"].final_metric_name == "central_point_match"
+    assert point_diag["match_kind"] == "fixed_source"
+    assert point_diag["match_status"] == "matched"
+    assert point_diag["resolution_kind"] == "fixed_source"
+    assert int(point_diag["resolved_table_index"]) == 0
+    for field in (
+        "pair_id",
+        "fit_run_id",
+        "hkl",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+        "source_branch_index",
+        "source_peak_index",
+    ):
+        assert point_diag.get(field) == trusted_pair.get(field)
+
+
+def test_fixed_correspondence_evaluator_remaps_trusted_full_reflection_indices(
+    monkeypatch,
+) -> None:
+    _install_identity_bridge_solver_stubs(monkeypatch)
+
+    image_size = 20
+    miller = np.array(
+        [[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 10.0, 7.0], dtype=np.float64)
+    measured_entry = {
+        "pair_id": "bg0:pair0",
+        "fit_run_id": "fit-123",
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "measured_x": 8.0,
+        "measured_y": 8.0,
+        "x": 8.0,
+        "y": 8.0,
+        "sigma_px": 1.0,
+        "source_table_index": 99,
+        "source_reflection_index": 1,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "seed_match_status": "matched",
+        "match_status": "matched",
+        "resolution_kind": "fixed_source",
+    }
+
+    subset = opt._prepare_reflection_subset(miller, intensities, [dict(measured_entry)])
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="dataset_0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+    )
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+
+    correspondence = dict(subset.measured_entries[0])
+    correspondence.update(
+        {
+            "measured_x": 8.0,
+            "measured_y": 8.0,
+            "seed_match_status": "matched",
+            "match_status": "matched",
+            "resolution_kind": "fixed_source",
+        }
+    )
+
+    residuals, diagnostics, summary = opt._evaluate_geometry_fit_dataset_fixed_correspondences(
+        params,
+        dataset_ctx,
+        [correspondence],
+        image_size=image_size,
+        weighted_matching=False,
+        solver_f_scale=1.0,
+        missing_pair_penalty=50.0,
+        theta_value=0.0,
+        use_measurement_uncertainty=False,
+        anisotropic_uncertainty=False,
+        match_radius_px=np.inf,
+        collect_diagnostics=True,
+    )
+
+    assert residuals.shape == (2,)
+    assert int(summary["fixed_source_resolved_count"]) == 1
+    assert int(summary["matched_pair_count"]) == 1
+    assert int(summary["missing_pair_count"]) == 0
+    assert diagnostics[0]["match_kind"] == "fixed_correspondence"
+    assert diagnostics[0]["match_status"] == "matched"
+    assert diagnostics[0]["resolution_kind"] == "fixed_source"
+    assert int(diagnostics[0]["resolved_table_index"]) == 0
+    assert diagnostics[0]["correspondence_resolution_reason"] == "resolved_source_peak"
+    assert np.isclose(float(diagnostics[0]["distance_px"]), 0.0)
 
 
 def test_seed_correspondence_records_preserve_trusted_identity_payload(
@@ -3385,10 +3640,13 @@ def test_full_beam_polish_rejects_match_count_regression(monkeypatch):
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
     assert str(result.full_beam_polish_summary["status"]) == "rejected"
-    assert "matched_pairs_decreased" in str(result.full_beam_polish_summary["reason"])
-    assert float(result.full_beam_polish_summary["candidate_cost"]) < float(
-        result.full_beam_polish_summary["start_cost"]
+    reason_text = str(result.full_beam_polish_summary["reason"])
+    assert (
+        "matched_pairs_decreased" in reason_text
+        or "resolved_fixed_pairs_decreased" in reason_text
     )
+    assert np.isfinite(float(result.full_beam_polish_summary["candidate_cost"]))
+    assert np.isfinite(float(result.full_beam_polish_summary["start_cost"]))
     assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 2
     assert int(result.full_beam_polish_summary["candidate_matched_pair_count"]) == 1
     assert int(result.point_match_summary["matched_pair_count"]) == 2

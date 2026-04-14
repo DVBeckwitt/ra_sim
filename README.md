@@ -44,6 +44,7 @@
 - [Usage](#usage)
 - [Runtime Toggles](#runtime-toggles)
 - [Architecture at a Glance](#architecture-at-a-glance)
+- [Detector-to-Angle Backend](#detector-to-angle-backend)
 - [Documentation Map](#documentation-map)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -71,6 +72,8 @@ The repository is shaped around three core workflows:
   divergence, detector geometry handling, and multiple optics transport modes.
 - Interactive Tk/Matplotlib GUI for detector-space alignment, integration
   checks, and parameter refinement.
+- In-repo exact-cake detector-to-angle backend for caked views, manual QR/HKL
+  picks, and fit-space point conversion with no `pyFAI` dependency.
 - Headless CLI entry points for simulation, hBN fitting, geometry fitting, and
   geometry-locked mosaic-shape fitting.
 - Config-driven workflow with versioned templates under `config/` and machine-local
@@ -82,7 +85,8 @@ The repository is shaped around three core workflows:
 
 - **Language**: Python 3.11+
 - **Core numerics**: NumPy, SciPy, Numba
-- **Diffraction/science stack**: pyFAI, Dans_Diffraction, PyCifRW, spglib, xraydb
+- **Diffraction/science stack**: Dans_Diffraction, PyCifRW, spglib, xraydb
+- **Detector-angle backend**: in-repo flat exact-cake integrator with sparse LUT reuse
 - **GUI**: Tkinter + Matplotlib
 - **Image/data tools**: Pillow, OpenCV, scikit-image, pandas, openpyxl
 - **Optional acceleration**: Qt + PyQtGraph fast viewer path
@@ -359,9 +363,10 @@ The GUI manual geometry-fit workflow keeps one objective throughout the solve:
 - manual picks keep a detector-native background anchor plus the chosen simulated source identity
 - saved or restored runs rebuild missing source rows from live caches, retained intersection caches, or a fresh simulation before failing
 - source identity stays pinned to the saved source row or peak when possible, then falls back through q-group or HKL rebinding when reflection ordering changes
-- refinement recomputes observed and simulated points in the same detector-derived angular space and minimizes residuals in `(2theta, phi)`
+- refinement recomputes observed and simulated points in the same flat detector-derived angular space and minimizes residuals in `(2theta, phi)`
 - geometry, lattice, wavelength, and shared-theta updates re-anchor both simulated source rows and measured/background maxima during the solve
-- detector-geometry variables move both sides of the comparison, while shared sample-rotation variables move only the simulated side
+- beam center, detector distance, and pixel geometry move both sides of the comparison; detector `gamma/Gamma` tilts are intentionally ignored in the detector-to-angle remap
+- shared sample-rotation variables move only the simulated side
 - rematching, robust reweighting, and post-polish stages are disabled for this path so it stays on the manual correspondence workflow
 
 </details>
@@ -427,6 +432,136 @@ copied into the zip.
 4. The simulation engine produces detector-space predictions.
 5. Fitting code compares predictions against measured peaks or images.
 6. GUI/runtime code manages interaction state, retained caches, and analysis views.
+
+## Detector-to-Angle Backend
+
+RA-SIM no longer uses `pyFAI` for detector-to-angle conversion. The GUI caked
+button, manual QR/HKL selection helpers, geometry-fit point conversion, and the
+diffraction utility views all go through the repo-local
+`FastAzimuthalIntegrator` compatibility wrapper in
+`ra_sim/simulation/exact_cake_portable.py`.
+
+That wrapper intentionally implements only the subset RA-SIM actually uses:
+
+- `integrate2d(...)` for caked images
+- `twoThetaArray(...)` for detector-wide `2theta` maps
+- `chiArray(...)` for detector-wide raw azimuth maps
+
+### Geometry Inputs
+
+The exact-cake backend is flat-detector only and currently requires square
+pixels. Geometry is defined by:
+
+- detector distance `d`
+- pixel size `p`
+- beam center in either pixels `(center_row_px, center_col_px)` or PONI meters
+
+When PONI values are given, the beam center is reconstructed as:
+
+```math
+\mathrm{center\_row\_px} = \frac{\mathrm{poni1\_m}}{p},
+\qquad
+\mathrm{center\_col\_px} = \frac{\mathrm{poni2\_m}}{p}.
+```
+
+### Point Conversion Math
+
+For manual picks and geometry-fit correspondences, detector coordinates
+`(col, row)` are converted to flat-detector `(2theta, phi)` with:
+
+```math
+dx = (col - c_x)\,p,
+\qquad
+dy = (c_y - row)\,p,
+\qquad
+r = \sqrt{dx^2 + dy^2}
+```
+
+```math
+2\theta = \operatorname{degrees}\!\left(\operatorname{atan2}(r, d)\right)
+```
+
+```math
+\phi = \operatorname{wrap}_{[-180,180)}\!\left(
+\operatorname{degrees}\!\left(\operatorname{atan2}(dx, dy)\right)
+\right)
+```
+
+where `(c_y, c_x)` is the detector center in pixels, `p` is the pixel size, and
+`d` is the sample-to-detector distance.
+
+This is intentionally flat-detector math. `gamma` and `Gamma` are ignored in
+the detector-to-`(2theta, phi)` remap. They can still affect simulated detector
+hits upstream, but they do not enter the fit-space angle conversion for manual
+or geometric correspondence points.
+
+### Full-Image Caking
+
+For the caked view, RA-SIM performs exact pixel splitting from detector space
+into `(2theta, phi)` bins using the same flat geometry. Internally the backend
+builds detector-wide maps at pixel-center coordinates and computes:
+
+```math
+y = (row + 0.5 - c_y)\,p,
+\qquad
+x = (col + 0.5 - c_x)\,p
+```
+
+```math
+2\theta_{\mathrm{pixel}} =
+\operatorname{degrees}\!\left(\operatorname{atan2}(\sqrt{x^2+y^2}, d)\right)
+```
+
+```math
+\phi_{\mathrm{raw}} =
+\operatorname{degrees}\!\left(\operatorname{atan2}(y, x)\right)
+```
+
+The GUI keeps its historical display convention by remapping the raw azimuth to
+the plotted caked-axis angle:
+
+```math
+\phi_{\mathrm{gui}} =
+\operatorname{wrap}_{[-180,180)}\!\left(-90^\circ - \phi_{\mathrm{raw}}\right)
+```
+
+So the internal `chiArray(...)` result is the raw detector azimuth, while the
+displayed caked view uses the GUI remap above.
+
+### Performance Behavior
+
+The exact-cake path is optimized for repeated interactive use:
+
+- detector-wide `(2theta, raw azimuth)` maps are cached as readonly process-level
+  LRU entries keyed by flat geometry plus detector shape
+- exact-cake LUTs are cached as process-level LRU entries keyed by flat
+  geometry, detector shape, and output binning/range
+- solid-angle normalization is cached per integrator instance by detector shape
+- the Numba kernel is warmed once on a tiny dummy image in a background thread
+  when the GUI runtime starts
+- once the GUI knows the live geometry and detector shape, it schedules an idle
+  background warmup for the real detector maps, solid-angle array, and the
+  default caked `1000 x 720` LUT
+- auto worker selection defaults to `8` and clamps to both host CPU count and
+  the number of work chunks
+- repeated `integrate2d(...)` calls reuse those warmed caches instead of
+  rebuilding them on the first button press
+
+Rebuild the LUT when any of these change:
+
+- detector distance
+- beam center
+- pixel size
+- image shape
+- `2theta` bin count or range
+- `phi` bin count or range
+
+Detector-map and LUT caches are shared across integrator instances, so GUI cache
+resets and integrator recreation do not discard previously built geometry work
+for the same flat-detector setup. The LUT speeds repeated full-image caking.
+Sparse point conversion for geometry fitting does not use the LUT because that
+path only converts selected detector coordinates rather than reintegrating the
+full image.
 
 ## Documentation Map
 

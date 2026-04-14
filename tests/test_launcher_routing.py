@@ -1,4 +1,5 @@
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -83,6 +84,18 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
         "require_tkinter",
         lambda entrypoint_label: calls.append(("preflight", entrypoint_label)),
     )
+    monkeypatch.setattr(
+        launcher.gui_bootstrap,
+        "quick_simulation_debug_override_dialog",
+        lambda: "inherit",
+    )
+
+    @contextmanager
+    def _fake_debug_override(mode: str):
+        calls.append(("debug-override", mode))
+        yield
+
+    monkeypatch.setattr(launcher, "temporary_startup_debug_override", _fake_debug_override)
 
     def _fake_gui_main(
         *,
@@ -101,7 +114,37 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
             "preflight",
             "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)",
         ),
+        ("debug-override", "inherit"),
         ("launch", False, "simulation", None),
+    ]
+
+
+def test_launch_simulation_gui_cancelled_before_runtime_start(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        launcher.install_prereqs,
+        "require_tkinter",
+        lambda entrypoint_label: calls.append(("preflight", entrypoint_label)),
+    )
+    monkeypatch.setattr(
+        launcher.gui_bootstrap,
+        "quick_simulation_debug_override_dialog",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        gui_runtime,
+        "main",
+        lambda **kwargs: calls.append(("launch", kwargs)),
+    )
+
+    launcher.launch_simulation_gui()
+
+    assert calls == [
+        (
+            "preflight",
+            "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)",
+        ),
     ]
 
 
@@ -144,6 +187,16 @@ def test_launch_simulation_gui_reframes_missing_input_paths(
         "require_tkinter",
         lambda entrypoint_label: None,
     )
+    monkeypatch.setattr(
+        launcher.gui_bootstrap,
+        "quick_simulation_debug_override_dialog",
+        lambda: "disable_all",
+    )
+    @contextmanager
+    def _fake_debug_override(mode: str):
+        yield
+
+    monkeypatch.setattr(launcher, "temporary_startup_debug_override", _fake_debug_override)
     monkeypatch.setattr(launcher, "get_config_dir", lambda: cfg)
     monkeypatch.setattr(
         gui_runtime,

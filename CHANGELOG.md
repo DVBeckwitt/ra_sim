@@ -40,7 +40,7 @@
   - Routed the lazy background cache read/update workflow used by the main runtime through shared wrappers in `ra_sim/gui/background_manager.py`.
   - Routed initial background-cache boot and shared background-runtime normalization through `ra_sim/gui/background_manager.py`.
   - Routed background display defaults, transparency, and range/default-refresh helpers through `ra_sim/gui/background_manager.py`.
-  - Corrected center-axis mappings used in pyFAI/intersection geometry paths.
+  - Corrected center-axis mappings used in detector angle-space/intersection geometry paths.
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.
   - Removed the unused `ra_sim/gui/main_app.py` compatibility shim and standardized the package GUI entrypoint on `ra_sim.gui.app.main`.

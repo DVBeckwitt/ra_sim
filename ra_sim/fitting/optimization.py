@@ -26,6 +26,10 @@ from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
 )
+from ra_sim.simulation.exact_cake_portable import (
+    PortableGeometry,
+    detector_points_to_angles as _flat_detector_points_to_angles,
+)
 from ra_sim.utils.calculations import (
     d_spacing,
     resolve_canonical_branch,
@@ -3585,6 +3589,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         return int(out)
 
     maxpos = hit_tables_to_max_positions(hit_tables)
+    full_reflection_local_index_map = _full_reflection_local_index_map(
+        simulation_subset.original_indices
+    )
     residual_components = np.zeros((len(normalized_measured), 2), dtype=np.float64)
     diagnostics: List[Dict[str, object]] = []
     pixel_distances: List[float] = []
@@ -3640,6 +3647,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             measured_entry,
             hit_tables=hit_tables,
             max_positions=maxpos,
+            trusted_full_reflection_local_index_map=full_reflection_local_index_map,
         )
         if sim_point is not None:
             sim_col = float(sim_point[0])
@@ -4213,6 +4221,9 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         **_simulation_kernel_kwargs(local, mosaic),
     )
     maxpos = hit_tables_to_max_positions(hit_tables)
+    full_reflection_local_index_map = _full_reflection_local_index_map(
+        dataset_ctx.subset.original_indices
+    )
 
     def _point_radius_px(point: Tuple[float, float]) -> float:
         try:
@@ -4362,6 +4373,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             entry,
             hit_tables=hit_tables,
             max_positions=maxpos,
+            trusted_full_reflection_local_index_map=full_reflection_local_index_map,
         )
 
         pair_dist = float("nan")
@@ -9511,6 +9523,17 @@ def _local_table_signature(original_indices: object) -> Optional[str]:
     return f"n{int(indices_arr.size)}:{digest}"
 
 
+def _full_reflection_local_index_map(original_indices: object) -> Dict[int, int]:
+    try:
+        indices_arr = np.asarray(original_indices, dtype=np.int64).reshape(-1)
+    except Exception:
+        return {}
+    return {
+        int(original_idx): int(local_idx)
+        for local_idx, original_idx in enumerate(indices_arr.tolist())
+    }
+
+
 def _measured_source_peak_index_with_source(
     entry: Mapping[str, object],
     *,
@@ -10506,6 +10529,7 @@ def _geometry_fit_correspondence_simulated_point(
     *,
     hit_tables: Sequence[object],
     max_positions: np.ndarray,
+    trusted_full_reflection_local_index_map: Optional[Mapping[int, int]] = None,
 ) -> Tuple[Optional[Tuple[float, float]], str]:
     """Resolve one frozen correspondence back to the current simulated point."""
 
@@ -10513,6 +10537,7 @@ def _geometry_fit_correspondence_simulated_point(
         correspondence,
         hit_tables=hit_tables,
         max_positions=max_positions,
+        trusted_full_reflection_local_index_map=trusted_full_reflection_local_index_map,
     )
     return sim_point, str(resolution_payload.get("resolution_reason", "missing_source_peak_index"))
 
@@ -10527,7 +10552,9 @@ def _detector_pixels_to_fit_space(
     gamma_deg: float = 0.0,
     Gamma_deg: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Convert detector pixels into `(2theta_deg, phi_deg)` using full detector tilt."""
+    """Convert detector pixels into flat-detector ``(2theta_deg, phi_deg)``."""
+
+    del gamma_deg, Gamma_deg
 
     cols_arr = np.asarray(cols, dtype=float).reshape(-1)
     rows_arr = np.asarray(rows, dtype=float).reshape(-1)
@@ -10549,72 +10576,13 @@ def _detector_pixels_to_fit_space(
     except (TypeError, ValueError, IndexError):
         return two_theta, phi
 
-    cg = math.cos(math.radians(float(gamma_deg)))
-    sg = math.sin(math.radians(float(gamma_deg)))
-    cG = math.cos(math.radians(float(Gamma_deg)))
-    sG = math.sin(math.radians(float(Gamma_deg)))
-
-    R_x_det = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, cg, sg],
-            [0.0, -sg, cg],
-        ],
-        dtype=np.float64,
+    geometry = PortableGeometry(
+        pixel_size_m=float(pixel_size),
+        distance_m=float(detector_distance),
+        center_row_px=float(centre_row),
+        center_col_px=float(centre_col),
     )
-    R_z_det = np.array(
-        [
-            [cG, sG, 0.0],
-            [-sG, cG, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-
-    n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-    n_det_rot = R_z_det @ (R_x_det @ n_detector)
-    n_det_len = float(np.linalg.norm(n_det_rot))
-    if not np.isfinite(n_det_len) or n_det_len <= 1.0e-14:
-        return two_theta, phi
-    n_det_rot /= n_det_len
-
-    detector_pos = np.array(
-        [0.0, float(detector_distance), 0.0],
-        dtype=np.float64,
-    )
-
-    e1_det = unit_x - float(np.dot(unit_x, n_det_rot)) * n_det_rot
-    e1_len = float(np.linalg.norm(e1_det))
-    if not np.isfinite(e1_len) or e1_len <= 1.0e-14:
-        e1_det = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-    else:
-        e1_det /= e1_len
-
-    e2_det = -np.cross(n_det_rot, e1_det)
-    e2_len = float(np.linalg.norm(e2_det))
-    if not np.isfinite(e2_len) or e2_len <= 1.0e-14:
-        e2_det = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    else:
-        e2_det /= e2_len
-
-    valid_mask = np.isfinite(cols_arr) & np.isfinite(rows_arr)
-    if not np.any(valid_mask):
-        return two_theta, phi
-
-    x_det = (cols_arr[valid_mask] - centre_col) * float(pixel_size)
-    y_det = (centre_row - rows_arr[valid_mask]) * float(pixel_size)
-    world_points = (
-        detector_pos[None, :] + x_det[:, None] * e1_det[None, :] + y_det[:, None] * e2_det[None, :]
-    )
-    radial = np.hypot(world_points[:, 0], world_points[:, 2])
-    two_theta_valid = np.degrees(np.arctan2(radial, world_points[:, 1]))
-    phi_valid = np.degrees(np.arctan2(world_points[:, 0], world_points[:, 2]))
-    phi_valid = (phi_valid + 180.0) % 360.0 - 180.0
-
-    two_theta[valid_mask] = two_theta_valid
-    phi[valid_mask] = phi_valid
-    return two_theta, phi
+    return _flat_detector_points_to_angles(cols_arr, rows_arr, geometry)
 
 
 def _detector_anchor_from_entry(
@@ -11485,8 +11453,6 @@ def fit_geometry_parameters(
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
     dynamic_point_geometry_fit = bool(solver_cfg.get("dynamic_point_geometry_fit", False))
-    if manual_point_fit_mode and point_match_mode and manual_point_fit_has_cached_sources:
-        dynamic_point_geometry_fit = True
     missing_pair_penalty_deg = float(solver_cfg.get("missing_pair_penalty_deg", 5.0))
     if not np.isfinite(missing_pair_penalty_deg) or missing_pair_penalty_deg < 0.0:
         missing_pair_penalty_deg = 5.0
@@ -15322,12 +15288,9 @@ def fit_geometry_parameters(
         ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
             local_item, dataset_ctx = item
             theta_value = _theta_initial_for_dataset(local_item, dataset_ctx)
-            full_reflection_local_index_map = {
-                int(original_idx): int(local_idx)
-                for local_idx, original_idx in enumerate(
-                    np.asarray(dataset_ctx.subset.original_indices, dtype=np.int64).reshape(-1)
-                )
-            }
+            full_reflection_local_index_map = _full_reflection_local_index_map(
+                dataset_ctx.subset.original_indices
+            )
             correspondence_entries = [
                 dict(entry)
                 for entry in fixed_correspondence_map.get(int(dataset_ctx.dataset_index), [])

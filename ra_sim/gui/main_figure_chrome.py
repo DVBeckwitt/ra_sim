@@ -27,43 +27,14 @@ def configure_matplotlib_canvas_widget(widget: object) -> None:
     _safe_widget_configure(widget, relief="flat")
 
 
-def apply_main_figure_axes_chrome(ax: Any) -> None:
-    """Apply the borderless main-image axes styling."""
+def set_main_figure_axes_axis_visibility(ax: Any, *, visible: bool) -> None:
+    """Toggle visible left/bottom axes for angle-space views."""
 
-    fig = getattr(ax, "figure", None)
-    if fig is not None:
-        try:
-            fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
-        except Exception:
-            pass
-        try:
-            fig.patch.set_edgecolor("none")
-            fig.patch.set_linewidth(0.0)
-        except Exception:
-            pass
-
-    try:
-        ax.set_position(MAIN_IMAGE_AX_BOUNDS)
-    except Exception:
-        pass
-    try:
-        ax.set_aspect("auto")
-    except Exception:
-        pass
-    try:
-        ax.set_title("")
-    except Exception:
-        pass
-    try:
-        ax.patch.set_edgecolor("none")
-        ax.patch.set_linewidth(0.0)
-    except Exception:
-        pass
-
+    visible = bool(visible)
     spines = getattr(ax, "spines", {})
-    for spine in getattr(spines, "values", lambda: ())():
+    for name, spine in getattr(spines, "items", lambda: ())():
         try:
-            spine.set_visible(False)
+            spine.set_visible(visible and name in {"bottom", "left"})
         except Exception:
             continue
 
@@ -97,6 +68,42 @@ def apply_main_figure_axes_chrome(ax: Any) -> None:
             yaxis.set_ticks_position("left")
         except Exception:
             pass
+
+
+def apply_main_figure_axes_chrome(ax: Any, *, axes_visible: bool = False) -> None:
+    """Apply the main-image axes styling for detector or angle-space views."""
+
+    fig = getattr(ax, "figure", None)
+    if fig is not None:
+        try:
+            fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+        except Exception:
+            pass
+        try:
+            fig.patch.set_edgecolor("none")
+            fig.patch.set_linewidth(0.0)
+        except Exception:
+            pass
+
+    try:
+        ax.set_position(MAIN_IMAGE_AX_BOUNDS)
+    except Exception:
+        pass
+    try:
+        ax.set_aspect("auto")
+    except Exception:
+        pass
+    try:
+        ax.set_title("")
+    except Exception:
+        pass
+    try:
+        ax.patch.set_edgecolor("none")
+        ax.patch.set_linewidth(0.0)
+    except Exception:
+        pass
+
+    set_main_figure_axes_axis_visibility(ax, visible=axes_visible)
 
 
 def _apply_colorbar_chrome(colorbar: Any) -> None:

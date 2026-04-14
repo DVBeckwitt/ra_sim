@@ -94,6 +94,19 @@ def test_quick_startup_mode_dialog_requires_tkinter(monkeypatch) -> None:
         bootstrap.quick_startup_mode_dialog()
 
 
+def test_quick_simulation_debug_override_dialog_requires_tkinter(monkeypatch) -> None:
+    error = bootstrap.install_prereqs.MissingPrerequisiteError("tk missing")
+
+    monkeypatch.setattr(
+        bootstrap.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(bootstrap.install_prereqs.MissingPrerequisiteError, match="tk missing"):
+        bootstrap.quick_simulation_debug_override_dialog()
+
+
 def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None:
     events: list[object] = []
 

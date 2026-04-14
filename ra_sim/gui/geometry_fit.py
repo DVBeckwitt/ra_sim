@@ -7708,14 +7708,13 @@ def write_geometry_fit_preflight_failure_log(
     sections = list(log_sections or ())
     if not sections:
         sections = [("Failure:", [str(error_text).strip(), "stage=preflight"])]
-    resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
-    with resolved_log_path.open("w", encoding="utf-8") as log_file:
-        log_file.write(f"Geometry fit aborted before solver start: {stamp}\n\n")
-        for title, lines in sections:
-            log_file.write(str(title) + "\n")
-            for line in lines or ():
-                log_file.write(f"  {str(line)}\n")
-            log_file.write("\n")
+    resolved_log_path, log_line, log_section = _build_geometry_fit_log_writers(
+        resolved_log_path
+    )
+    log_line(f"Geometry fit aborted before solver start: {stamp}")
+    log_line("")
+    for title, lines in sections:
+        log_section(str(title), [str(line) for line in lines or ()])
     return resolved_log_path
 
 

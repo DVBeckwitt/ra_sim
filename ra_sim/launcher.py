@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from ra_sim import install_prereqs
 from ra_sim.config import get_config_dir
-from ra_sim.debug_controls import start_run_bundle
+from ra_sim.debug_controls import start_run_bundle, temporary_startup_debug_override
 from ra_sim.gui import bootstrap as gui_bootstrap
 
 _MOSAIC_MODULE = "mosaic_sim.unified_app"
@@ -74,13 +74,19 @@ def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
     install_prereqs.require_tkinter(
         "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)"
     )
+
+    debug_override = gui_bootstrap.quick_simulation_debug_override_dialog()
+    if debug_override is None:
+        return
+
     from ra_sim.gui.runtime import main as gui_main
 
     try:
-        gui_main(
-            write_excel_flag=write_excel_flag,
-            startup_mode="simulation",
-        )
+        with temporary_startup_debug_override(debug_override):
+            gui_main(
+                write_excel_flag=write_excel_flag,
+                startup_mode="simulation",
+            )
     except FileNotFoundError as exc:
         error_message = _simulation_gui_startup_error_message(exc)
         _show_simulation_gui_startup_error(error_message)

@@ -145,6 +145,31 @@ def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
     assert "log_file={log_path if log_path is not None else 'disabled'}" in source
 
 
+def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background" in source
+    assert "from ra_sim.simulation.exact_cake_portable import FastAzimuthalIntegrator" in source
+    assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
+    assert "start_exact_cake_numba_warmup_in_background()" in source
+    assert "def _schedule_exact_cake_geometry_warmup(ai, detector_shape) -> None:" in source
+    assert "ai.warm_geometry_cache(" in source
+    assert "_schedule_exact_cake_geometry_warmup(ai, warm_detector_shape)" in source
+
+
+def test_runtime_impl_ai_cache_signature_ignores_flat_backend_noops() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    signature_prefix = source.split('ai_cache_action = "reuse"', 1)[0]
+    sig_block = signature_prefix.rsplit("sig = (", 1)[1]
+
+    assert "corto_det_up" in sig_block
+    assert "center_x_up" in sig_block
+    assert "center_y_up" in sig_block
+    assert "Gamma_updated" not in sig_block
+    assert "gamma_updated" not in sig_block
+    assert "wave_m" not in sig_block
+
+
 def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:
     source = CLI_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -218,7 +243,10 @@ def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
     assert "from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome" in source
     assert "gui_main_figure_chrome.configure_matplotlib_canvas_widget(" in source
     assert "gui_main_figure_chrome.configure_main_figure_layout(" in source
-    assert "gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)" in source
+    assert "gui_main_figure_chrome.apply_main_figure_axes_chrome(" in source
+    assert "axes_visible=bool(show_caked_image)" in source
+    assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)" in source
+    assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)" in source
     assert "ax.set_title('Simulated Diffraction Pattern')" not in source
 
 
@@ -383,13 +411,14 @@ def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
     assert "on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed" in source
 
 
-def test_runtime_impl_defaults_primary_viewport_to_tk_canvas_with_safe_activation() -> None:
+def test_runtime_impl_defaults_primary_viewport_to_matplotlib_with_safe_activation() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'RA_SIM_PRIMARY_VIEWPORT", "tk_canvas"' in source
+    assert 'RA_SIM_PRIMARY_VIEWPORT", "matplotlib"' in source
     assert "activate_runtime_primary_viewport(" in source
     assert "PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend" in source
     assert '"key": "primary_viewport_backend"' not in source
+    assert "set_background_alpha=background_display.set_alpha" in source
 
 
 def test_runtime_impl_shares_pick_hkl_live_cache_with_manual_qr_picker() -> None:

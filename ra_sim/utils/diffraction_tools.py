@@ -12,11 +12,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-try:
-    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-except Exception:  # pragma: no cover - optional dependency may be absent
-    class AzimuthalIntegrator:  # minimal stub for type hints
-        pass
+from ra_sim.simulation.exact_cake_portable import (
+    FastAzimuthalIntegrator,
+    prepare_gui_phi_display,
+)
 
 from ra_sim.utils.calculations import d_spacing, two_theta
 
@@ -138,13 +137,13 @@ def _prepare_temp_cif(cif_path: str, occ) -> str:
 
 
 def setup_azimuthal_integrator(parameters):
-    """Build a pyFAI azimuthal integrator from detector parameters."""
+    """Build the flat exact-cake integrator from detector parameters."""
 
     detector_config = json.loads(parameters["Detector_config"])
     pixel1 = float(detector_config["pixel1"])
     pixel2 = float(detector_config["pixel2"])
 
-    return AzimuthalIntegrator(
+    return FastAzimuthalIntegrator(
         dist=parameters["Distance"],
         poni1=parameters["Poni1"],
         poni2=parameters["Poni2"],
@@ -295,7 +294,7 @@ def intensities_for_hkls(
     return np.asarray(intensities, dtype=float)
 
 
-def view_azimuthal_radial(simulated_image, center, detector_params):
+def view_azimuthal_radial(simulated_image, center, detector_params, *, rows=None, cols=None):
     """Display the azimuthal vs radial intensity map for a simulated image."""
 
     _ = center
@@ -308,7 +307,7 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
     rot3 = detector_params["rot3"]
     wavelength = detector_params["wavelength"]
 
-    ai = AzimuthalIntegrator(
+    ai = FastAzimuthalIntegrator(
         dist=dist,
         poni1=poni1,
         poni2=poni2,
@@ -325,15 +324,10 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
         npt_rad=2000,
         npt_azim=1000,
         unit="2th_deg",
+        rows=rows,
+        cols=cols,
     )
-    intensity = res2.intensity
-    radial = res2.radial
-    azimuthal = res2.azimuthal
-
-    azimuthal_adjusted = ((-90.0 - np.asarray(azimuthal, dtype=float) + 180.0) % 360.0) - 180.0
-    sort_indices = np.argsort(azimuthal_adjusted)
-    azimuthal_adjusted_sorted = azimuthal_adjusted[sort_indices]
-    intensity_sorted = intensity[sort_indices, :]
+    intensity_sorted, radial, azimuthal_adjusted_sorted = prepare_gui_phi_display(res2)
 
     extent = [
         radial.min(),

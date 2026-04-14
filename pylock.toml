@@ -550,17 +550,6 @@ url = "https://files.pythonhosted.org/packages/9f/9b/50835e8fd86073fa7aa921df61b
 sha256 = "8632df76b99932408ab432e09b30aa9a6c390df884a5f34f1e1f76201e625156"
 
 [[packages]]
-name = "pyfai"
-version = "2026.3.0"
-
-[[packages.wheels]]
-name = "pyfai-2026.3.0-cp313-cp313-win_amd64.whl"
-url = "https://files.pythonhosted.org/packages/42/47/6ebf7bf5bad7361e94f4792e85978601e3c68c6931a72309c6fcf862d269/pyfai-2026.3.0-cp313-cp313-win_amd64.whl"
-
-[packages.wheels.hashes]
-sha256 = "d765e3d0301630f15ceae09e529ebb681904dd2c2588d80ef91ffc7a856e1023"
-
-[[packages]]
 name = "pygments"
 version = "2.20.0"
 

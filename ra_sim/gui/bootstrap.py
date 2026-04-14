@@ -349,6 +349,155 @@ def quick_startup_mode_dialog() -> str | None:
     return None
 
 
+def quick_simulation_debug_override_dialog() -> str | None:
+    """Ask how the simulation GUI should treat debug controls for this run."""
+
+    tk_modules = install_prereqs.require_tkinter_modules(
+        "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)"
+    )
+    tk = tk_modules.tk
+
+    choice = {"mode": "inherit"}
+    launch_context = window_affinity.capture_launch_window_context()
+
+    dialog = tk.Tk()
+    dialog.title("RA-SIM Debug Startup")
+    dialog.configure(bg="#e8eef5")
+    dialog.resizable(False, False)
+    dialog.attributes("-topmost", True)
+
+    panel = tk.Frame(
+        dialog,
+        bg="#ffffff",
+        highlightbackground="#d4deeb",
+        highlightthickness=1,
+    )
+    panel.pack(fill="both", expand=True, padx=18, pady=18)
+
+    tk.Label(
+        panel,
+        text="Simulation Debug Mode",
+        font=("Segoe UI", 16, "bold"),
+        fg="#0f172a",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=18, pady=(18, 4))
+    tk.Label(
+        panel,
+        text="This changes only the current run and does not write config files.",
+        font=("Segoe UI", 10),
+        fg="#475569",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=18, pady=(0, 14))
+
+    def _set_mode(mode_name: str | None) -> None:
+        choice["mode"] = mode_name
+        dialog.destroy()
+
+    button_specs = [
+        (
+            "Use Saved Debug Settings",
+            "#2563eb",
+            "#1d4ed8",
+            "Run with the current YAML and environment configuration.",
+            "inherit",
+        ),
+        (
+            "Boot In Debug",
+            "#0f766e",
+            "#0f5f59",
+            "Force all debug controls on for this run, even if config files disable them.",
+            "enable_all",
+        ),
+        (
+            "Disable All Debug",
+            "#b45309",
+            "#92400e",
+            "Force all debug logging off for this run without changing saved files.",
+            "disable_all",
+        ),
+    ]
+    first_button = None
+    for label, bg, active_bg, description, mode_name in button_specs:
+        button = tk.Button(
+            panel,
+            text=label,
+            font=("Segoe UI", 11, "bold"),
+            bg=bg,
+            fg="#ffffff",
+            activebackground=active_bg,
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=10,
+            cursor="hand2",
+            command=lambda selected=mode_name: _set_mode(selected),
+        )
+        button.pack(fill="x", padx=18, pady=(0, 6))
+        tk.Label(
+            panel,
+            text=description,
+            font=("Segoe UI", 9),
+            fg="#64748b",
+            bg="#ffffff",
+        ).pack(anchor="w", padx=20, pady=(0, 12))
+        if first_button is None:
+            first_button = button
+
+    footer = tk.Frame(panel, bg="#ffffff")
+    footer.pack(fill="x", padx=18, pady=(0, 16))
+    tk.Label(
+        footer,
+        text="Keyboard: Enter = Saved Settings, D = Debug, 0 = Disable All, Esc = Cancel",
+        font=("Segoe UI", 8),
+        fg="#64748b",
+        bg="#ffffff",
+    ).pack(side="left")
+    tk.Button(
+        footer,
+        text="Cancel",
+        font=("Segoe UI", 9),
+        bg="#e2e8f0",
+        fg="#1e293b",
+        activebackground="#cbd5e1",
+        activeforeground="#1e293b",
+        relief="flat",
+        bd=0,
+        padx=12,
+        pady=6,
+        cursor="hand2",
+        command=lambda: _set_mode(None),
+    ).pack(side="right")
+
+    dialog.bind("<Escape>", lambda _event: _set_mode(None))
+    dialog.bind("<Return>", lambda _event: _set_mode("inherit"))
+    dialog.bind("d", lambda _event: _set_mode("enable_all"))
+    dialog.bind("D", lambda _event: _set_mode("enable_all"))
+    dialog.bind("0", lambda _event: _set_mode("disable_all"))
+    dialog.protocol("WM_DELETE_WINDOW", lambda: _set_mode(None))
+
+    dialog.update_idletasks()
+    width = max(dialog.winfo_width(), 520)
+    height = max(dialog.winfo_height(), 360)
+    if not window_affinity.apply_window_launch_context(
+        dialog,
+        context=launch_context,
+        width=width,
+        height=height,
+    ):
+        x = dialog.winfo_screenwidth() // 2 - width // 2
+        y = dialog.winfo_screenheight() // 2 - height // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+    if first_button is not None:
+        first_button.focus_set()
+    dialog.mainloop()
+
+    mode = choice["mode"]
+    if mode in {"inherit", "enable_all", "disable_all"}:
+        return mode
+    return None
+
+
 def choose_startup_mode_dialog(root: Any) -> str | None:
     """Ask whether to start the simulation GUI, calibrant fitter, or mosaic viewer."""
 

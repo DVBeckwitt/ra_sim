@@ -25,6 +25,7 @@ from ra_sim.debug_controls import (
     resolve_intersection_cache_log_root,
     resolve_startup_debug_log_path,
     start_run_bundle,
+    temporary_startup_debug_override,
     runtime_update_trace_logging_enabled,
 )
 
@@ -194,6 +195,75 @@ def test_env_global_disable_is_a_kill_switch(
     assert not console_debug_enabled()
     assert not projection_debug_logging_enabled()
     assert not intersection_cache_logging_enabled()
+
+
+def test_startup_debug_override_can_force_all_debug_on(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "global": {"disable_all": True},
+                "console": {"enabled": False},
+                "runtime_update_trace": {"enabled": False},
+                "geometry_fit": {"log_files": False, "extra_sections": False},
+                "mosaic_fit": {"log_files": False},
+                "projection_debug": {"enabled": False},
+                "diffraction_debug_csv": {"enabled": False},
+                "intersection_cache": {"enabled": False},
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    monkeypatch.setenv("RA_SIM_DISABLE_ALL_LOGGING", "1")
+    monkeypatch.setenv("RA_SIM_DISABLE_PROJECTION_DEBUG", "1")
+
+    with temporary_startup_debug_override("enable_all"):
+        assert not is_logging_disabled()
+        assert console_debug_enabled()
+        assert runtime_update_trace_logging_enabled()
+        assert geometry_fit_log_files_enabled()
+        assert geometry_fit_extra_sections_enabled()
+        assert mosaic_fit_log_files_enabled()
+        assert projection_debug_logging_enabled()
+        assert diffraction_debug_csv_logging_enabled()
+        assert intersection_cache_logging_enabled()
+
+
+def test_startup_debug_override_can_force_all_debug_off(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "console": {"enabled": True},
+                "runtime_update_trace": {"enabled": True},
+                "geometry_fit": {"log_files": True, "extra_sections": True},
+                "mosaic_fit": {"log_files": True},
+                "projection_debug": {"enabled": True},
+                "diffraction_debug_csv": {"enabled": True},
+                "intersection_cache": {"enabled": True},
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    monkeypatch.setenv("RA_SIM_DEBUG", "1")
+    monkeypatch.setenv("RA_SIM_LOG_INTERSECTION_CACHE", "1")
+
+    with temporary_startup_debug_override("disable_all"):
+        assert is_logging_disabled()
+        assert not console_debug_enabled()
+        assert not runtime_update_trace_logging_enabled()
+        assert not geometry_fit_log_files_enabled()
+        assert not geometry_fit_extra_sections_enabled()
+        assert not mosaic_fit_log_files_enabled()
+        assert not projection_debug_logging_enabled()
+        assert not diffraction_debug_csv_logging_enabled()
+        assert not intersection_cache_logging_enabled()
 
 
 def test_geometry_fit_extra_sections_fall_back_to_legacy_instrument_key_when_missing(

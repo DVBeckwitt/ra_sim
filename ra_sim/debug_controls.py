@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import zipfile
+from contextlib import contextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,6 +49,8 @@ _TRUTHY_VALUES = {"1", "true", "yes", "on"}
 _FALSY_VALUES = {"", "0", "false", "no", "off"}
 _VALID_CACHE_RETENTIONS = {"never", "auto", "always"}
 _STARTUP_DEBUG_LOG_PATH: Path | None = None
+_STARTUP_DEBUG_OVERRIDE: DebugStartupOverride = "inherit"
+_STARTUP_DEBUG_OVERRIDE_LOCK = threading.Lock()
 _RUN_BUNDLE_EXCLUDED_INPUT_SUFFIXES = {".osc", ".cif"}
 _RUN_BUNDLE_LOCK = threading.Lock()
 
@@ -68,6 +71,7 @@ class _RunBundleState:
 _RUN_BUNDLE_STATE: _RunBundleState | None = None
 
 CacheRetention = Literal["never", "auto", "always"]
+DebugStartupOverride = Literal["inherit", "enable_all", "disable_all"]
 CacheFamily = Literal[
     "primary_contribution",
     "source_snapshots",
@@ -82,6 +86,43 @@ CacheFamily = Literal[
     "fit_simulation",
     "stacking_fault_base",
 ]
+
+
+def _normalize_startup_debug_override(mode: str | None) -> DebugStartupOverride:
+    normalized = "inherit" if mode is None else str(mode).strip().lower()
+    if normalized in {"", "default"}:
+        normalized = "inherit"
+    if normalized not in {"inherit", "enable_all", "disable_all"}:
+        raise ValueError(
+            "startup debug override must be one of: inherit, enable_all, disable_all"
+        )
+    return normalized  # type: ignore[return-value]
+
+
+def _startup_debug_override_mode() -> DebugStartupOverride:
+    return _STARTUP_DEBUG_OVERRIDE
+
+
+@contextmanager
+def temporary_startup_debug_override(
+    mode: DebugStartupOverride | str | None,
+):
+    """Apply one startup debug override for the current process temporarily."""
+
+    normalized = _normalize_startup_debug_override(mode)
+    if normalized == "inherit":
+        yield
+        return
+
+    global _STARTUP_DEBUG_OVERRIDE
+    with _STARTUP_DEBUG_OVERRIDE_LOCK:
+        previous = _STARTUP_DEBUG_OVERRIDE
+        _STARTUP_DEBUG_OVERRIDE = normalized
+    try:
+        yield
+    finally:
+        with _STARTUP_DEBUG_OVERRIDE_LOCK:
+            _STARTUP_DEBUG_OVERRIDE = previous
 
 
 def env_flag_enabled(
@@ -204,6 +245,12 @@ def is_logging_disabled(
 ) -> bool:
     """Return whether the global debug/logging kill-switch is active."""
 
+    startup_override = _startup_debug_override_mode()
+    if startup_override == "disable_all":
+        return True
+    if startup_override == "enable_all":
+        return False
+
     if _resolve_config_bool(
         ("global", "disable_all"),
         default=_DEBUG_DEFAULTS["global"]["disable_all"],
@@ -223,6 +270,8 @@ def console_debug_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     override = _env_override_bool("RA_SIM_DEBUG", env)
     if override is not None:
         return override
@@ -240,6 +289,8 @@ def runtime_update_trace_logging_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     return _resolve_config_bool(
         ("runtime_update_trace", "enabled"),
         default=_DEBUG_DEFAULTS["runtime_update_trace"]["enabled"],
@@ -254,6 +305,8 @@ def geometry_fit_log_files_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     return _resolve_config_bool(
         ("geometry_fit", "log_files"),
         default=_DEBUG_DEFAULTS["geometry_fit"]["log_files"],
@@ -270,6 +323,8 @@ def geometry_fit_extra_sections_enabled(
 ) -> bool:
     if not geometry_fit_log_files_enabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
 
     present, value = _lookup_mapping_value(
         _debug_root(debug_config),
@@ -299,6 +354,8 @@ def mosaic_fit_log_files_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     return _resolve_config_bool(
         ("mosaic_fit", "log_files"),
         default=_DEBUG_DEFAULTS["mosaic_fit"]["log_files"],
@@ -313,6 +370,8 @@ def projection_debug_logging_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     override = _env_override_bool("RA_SIM_DISABLE_PROJECTION_DEBUG", env)
     if override is not None:
         return not override
@@ -330,6 +389,8 @@ def diffraction_debug_csv_logging_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     return _resolve_config_bool(
         ("diffraction_debug_csv", "enabled"),
         default=_DEBUG_DEFAULTS["diffraction_debug_csv"]["enabled"],
@@ -344,6 +405,8 @@ def intersection_cache_logging_enabled(
 ) -> bool:
     if is_logging_disabled(env, debug_config=debug_config):
         return False
+    if _startup_debug_override_mode() == "enable_all":
+        return True
     override = _env_override_bool("RA_SIM_LOG_INTERSECTION_CACHE", env)
     if override is not None:
         return override
@@ -420,6 +483,12 @@ def reset_startup_debug_log_path() -> None:
 
     global _STARTUP_DEBUG_LOG_PATH
     _STARTUP_DEBUG_LOG_PATH = None
+
+
+def current_startup_debug_log_path() -> Path | None:
+    """Return the cached startup-scoped debug log path if one already exists."""
+
+    return _STARTUP_DEBUG_LOG_PATH
 
 
 def _coerce_run_bundle_path(value: object) -> Path | None:
@@ -777,6 +846,7 @@ __all__ = [
     "CacheRetention",
     "cache_retention_mode",
     "console_debug_enabled",
+    "current_startup_debug_log_path",
     "diffraction_debug_csv_logging_enabled",
     "env_flag_enabled",
     "finalize_run_bundle",
@@ -794,6 +864,7 @@ __all__ = [
     "resolve_intersection_cache_log_root",
     "resolve_startup_debug_log_path",
     "start_run_bundle",
+    "temporary_startup_debug_override",
     "runtime_update_trace_logging_enabled",
 ]
 
