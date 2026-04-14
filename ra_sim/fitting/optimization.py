@@ -10229,6 +10229,7 @@ def _resolve_geometry_fit_correspondence(
     max_positions: np.ndarray,
     filtered_rows_cache: Optional[Dict[int, List[np.ndarray]]] = None,
     current_local_table_signature: Optional[str] = None,
+    trusted_full_reflection_local_index_map: Optional[Mapping[int, int]] = None,
 ) -> Tuple[Optional[Tuple[float, float]], Dict[str, object]]:
     """Resolve one frozen correspondence back to a simulated detector point."""
 
@@ -10276,6 +10277,34 @@ def _resolve_geometry_fit_correspondence(
     table_idx: Optional[int] = None
     peak_idx: Optional[int] = None
     row_idx: Optional[int] = None
+    trusted_full_reflection_remapped = False
+
+    def _maybe_remap_trusted_full_reflection_index(
+        table_idx_value: Optional[int],
+        *,
+        namespace: str,
+    ) -> Tuple[Optional[int], Optional[Dict[str, object]]]:
+        if table_idx_value is None:
+            return None, None
+        if namespace != "full_reflection":
+            return table_idx_value, None
+        if trusted_full_reflection_local_index_map is None:
+            return table_idx_value, None
+        local_idx = _nonnegative_index(
+            trusted_full_reflection_local_index_map.get(int(table_idx_value))
+        )
+        if local_idx is None:
+            return None, _payload(
+                "trusted_full_reflection_index_not_in_subset",
+                extra={
+                    "trusted_full_reflection_remapped": False,
+                    "frozen_table_index": int(table_idx_value),
+                    "frozen_table_namespace": str(namespace),
+                },
+            )
+        return int(local_idx), {
+            "trusted_full_reflection_remapped": True,
+        }
 
     if frozen_kind:
         table_idx = _nonnegative_index(correspondence.get("frozen_table_index"))
@@ -10284,6 +10313,16 @@ def _resolve_geometry_fit_correspondence(
         if frozen_kind == "trusted_branch":
             if frozen_namespace != "full_reflection":
                 return None, _payload("invalid_frozen_locator")
+            table_idx, remap_payload = _maybe_remap_trusted_full_reflection_index(
+                table_idx,
+                namespace=frozen_namespace,
+            )
+            if remap_payload is not None and table_idx is None:
+                return None, remap_payload
+            trusted_full_reflection_remapped = bool(
+                isinstance(remap_payload, Mapping)
+                and remap_payload.get("trusted_full_reflection_remapped", False)
+            )
             peak_idx = _nonnegative_index(correspondence.get("frozen_branch_index"))
             if peak_idx not in {0, 1}:
                 return None, _payload("missing_source_peak_index", table_idx=table_idx)
@@ -10329,6 +10368,16 @@ def _resolve_geometry_fit_correspondence(
         table_idx = _nonnegative_index(correspondence.get("source_reflection_index"))
         if table_idx is None:
             return None, _payload("missing_source_table_index")
+        table_idx, remap_payload = _maybe_remap_trusted_full_reflection_index(
+            table_idx,
+            namespace="full_reflection",
+        )
+        if remap_payload is not None and table_idx is None:
+            return None, remap_payload
+        trusted_full_reflection_remapped = bool(
+            isinstance(remap_payload, Mapping)
+            and remap_payload.get("trusted_full_reflection_remapped", False)
+        )
         peak_idx = _measured_source_peak_index(correspondence)
         if peak_idx not in {0, 1}:
             return None, _payload("missing_source_peak_index", table_idx=table_idx)
@@ -10370,6 +10419,9 @@ def _resolve_geometry_fit_correspondence(
                 table_idx=table_idx,
                 peak_idx=peak_idx,
                 sim_hkl=_branch_sim_hkl(branch_row),
+                extra={
+                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                },
             )
         if frozen_kind != "trusted_branch":
             legacy_peak_point, legacy_peak_reason = _resolve_max_position_peak(
@@ -10384,6 +10436,11 @@ def _resolve_geometry_fit_correspondence(
                     table_idx=table_idx,
                     peak_idx=peak_idx,
                     sim_hkl=fallback_hkl,
+                    extra={
+                        "trusted_full_reflection_remapped": bool(
+                            trusted_full_reflection_remapped
+                        ),
+                    },
                 )
         elif frozen_kind == "trusted_branch":
             trusted_row, trusted_reason = _trusted_source_row_fallback(
@@ -10400,8 +10457,20 @@ def _resolve_geometry_fit_correspondence(
                     table_idx=table_idx,
                     peak_idx=peak_idx,
                     sim_hkl=_branch_sim_hkl(trusted_row),
+                    extra={
+                        "trusted_full_reflection_remapped": bool(
+                            trusted_full_reflection_remapped
+                        ),
+                    },
                 )
-        return None, _payload(str(branch_reason), table_idx=table_idx, peak_idx=peak_idx)
+        return None, _payload(
+            str(branch_reason),
+            table_idx=table_idx,
+            peak_idx=peak_idx,
+            extra={
+                "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+            },
+        )
 
     if row_idx is None:
         return None, _payload("missing_source_row_index", table_idx=table_idx)
@@ -10426,6 +10495,9 @@ def _resolve_geometry_fit_correspondence(
         "resolved_source_row",
         table_idx=table_idx,
         sim_hkl=_branch_sim_hkl(row, fallback=correspondence.get("hkl")),
+        extra={
+            "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+        },
     )
 
 
@@ -15250,6 +15322,12 @@ def fit_geometry_parameters(
         ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
             local_item, dataset_ctx = item
             theta_value = _theta_initial_for_dataset(local_item, dataset_ctx)
+            full_reflection_local_index_map = {
+                int(original_idx): int(local_idx)
+                for local_idx, original_idx in enumerate(
+                    np.asarray(dataset_ctx.subset.original_indices, dtype=np.int64).reshape(-1)
+                )
+            }
             correspondence_entries = [
                 dict(entry)
                 for entry in fixed_correspondence_map.get(int(dataset_ctx.dataset_index), [])
@@ -15444,6 +15522,7 @@ def fit_geometry_parameters(
                     max_positions=maxpos,
                     filtered_rows_cache=filtered_rows_cache,
                     current_local_table_signature=current_local_table_signature,
+                    trusted_full_reflection_local_index_map=full_reflection_local_index_map,
                 )
 
             for slot, correspondence in enumerate(correspondence_entries):
@@ -15461,12 +15540,16 @@ def fit_geometry_parameters(
                     "label": str(entry.get("label", "")),
                     **_copy_source_identity_payload(entry),
                     "hkl": entry.get("hkl"),
+                    "frozen_locator_kind": entry.get("frozen_locator_kind"),
+                    "frozen_table_namespace": entry.get("frozen_table_namespace"),
+                    "frozen_table_index": entry.get("frozen_table_index"),
                     "source_table_index": _diagnostic_source_table_index(entry),
                     "source_branch_resolution_source": source_branch_source,
                     "resolved_table_index": entry.get("resolved_table_index"),
                     "resolved_peak_index": entry.get("resolved_peak_index"),
                     "resolution_kind": str(entry.get("resolution_kind", "")),
                     "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+                    "trusted_full_reflection_remapped": False,
                     "correspondence_resolution_reason": (
                         None
                         if entry.get("resolution_reason") in ("", None)
@@ -15544,6 +15627,12 @@ def fit_geometry_parameters(
                                     "resolved_peak_index"
                                 ),
                                 "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
+                                "trusted_full_reflection_remapped": bool(
+                                    resolution_payload.get(
+                                        "trusted_full_reflection_remapped",
+                                        False,
+                                    )
+                                ),
                                 "measured_x": float(measured_point[0]),
                                 "measured_y": float(measured_point[1]),
                                 "simulated_x": float(sim_point[0]),
@@ -15590,6 +15679,9 @@ def fit_geometry_parameters(
                         "resolved_table_index": resolution_payload.get("resolved_table_index"),
                         "resolved_peak_index": resolution_payload.get("resolved_peak_index"),
                         "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
+                        "trusted_full_reflection_remapped": bool(
+                            resolution_payload.get("trusted_full_reflection_remapped", False)
+                        ),
                         "measured_x": float(measured_point[0]),
                         "measured_y": float(measured_point[1]),
                         "simulated_x": float("nan"),

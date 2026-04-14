@@ -2317,6 +2317,43 @@ def test_seed_correspondence_records_preserve_trusted_identity_payload(
     assert seed_record["frozen_table_namespace"] == "full_reflection"
 
 
+def test_full_beam_polish_remaps_trusted_full_reflection_indices_into_subset_local_tables(
+    monkeypatch,
+) -> None:
+    case = _run_identity_bridge_case(monkeypatch, trusted=True)
+    trusted_pair = dict(case["input_pair"])
+    result = case["result"]
+    summary = dict(result.full_beam_polish_summary)
+    summary_diag = dict(summary["point_match_diagnostics"][0])
+    point_diag = dict(result.point_match_diagnostics[0])
+
+    assert bool(result.success) is True
+    assert bool(summary["accepted"]) is True
+    assert str(summary["status"]) == "accepted"
+    assert result.final_metric_name == "full_beam_fixed_correspondence"
+    assert int(summary["matched_pair_count_before"]) == 1
+    assert int(summary["matched_pair_count_after"]) == 1
+    for diag in (summary_diag, point_diag):
+        assert diag["match_kind"] == "full_beam_fixed"
+        assert diag["match_status"] == "matched"
+        assert diag["resolution_kind"] == "fixed_source"
+        assert bool(diag["trusted_full_reflection_remapped"]) is True
+        assert int(diag["frozen_table_index"]) == 1
+        assert str(diag["frozen_table_namespace"]) == "full_reflection"
+        assert int(diag["resolved_table_index"]) == 0
+        for field in (
+            "pair_id",
+            "fit_run_id",
+            "hkl",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_branch_index",
+            "source_peak_index",
+        ):
+            assert diag.get(field) == trusted_pair.get(field)
+
+
 def test_hkl_fallback_bridge_does_not_retrust_identity(monkeypatch) -> None:
     case = _run_identity_bridge_case(monkeypatch, trusted=False)
     resolved_diag = dict(case["resolved_diag"])
@@ -2404,6 +2441,42 @@ def test_resolve_geometry_fit_correspondence_rejects_mismatched_local_table_sign
 
     assert point is None
     assert payload["resolution_reason"] == "frozen_table_signature_mismatch"
+
+
+def test_resolve_geometry_fit_correspondence_rejects_trusted_full_reflection_index_missing_from_subset() -> None:
+    point, payload = opt._resolve_geometry_fit_correspondence(
+        {
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "frozen_locator_kind": "trusted_branch",
+            "frozen_table_namespace": "full_reflection",
+            "frozen_table_index": 7,
+            "frozen_branch_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, -22.0, 1.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 22.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+        trusted_full_reflection_local_index_map={5: 0},
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "trusted_full_reflection_index_not_in_subset"
+    assert bool(payload["trusted_full_reflection_remapped"]) is False
+    assert int(payload["frozen_table_index"]) == 7
+    assert payload["frozen_table_namespace"] == "full_reflection"
+    assert "resolved_table_index" not in payload
 
 
 def test_fit_geometry_parameters_pixel_path_falls_back_from_stale_in_range_source_indices(
