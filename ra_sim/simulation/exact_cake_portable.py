@@ -307,13 +307,13 @@ class FastAzimuthalIntegrator:
     def twoThetaArray(self, *, shape: tuple[int, int], unit: str | None = None) -> np.ndarray:
         two_theta_deg, _raw_azimuth_deg = self._detector_maps_for_shape(shape)
         if _normalize_two_theta_unit(unit) == "deg":
-            return np.array(two_theta_deg, copy=True)
+            return two_theta_deg
         return np.deg2rad(two_theta_deg)
 
     def chiArray(self, *, shape: tuple[int, int], unit: str | None = None) -> np.ndarray:
         _two_theta_deg, raw_azimuth_deg = self._detector_maps_for_shape(shape)
         if _normalize_angle_unit(unit) == "deg":
-            return np.array(raw_azimuth_deg, copy=True)
+            return raw_azimuth_deg
         return np.deg2rad(raw_azimuth_deg)
 
     def integrate2d(
@@ -392,7 +392,12 @@ class FastAzimuthalIntegrator:
         detector_shape = tuple(int(v) for v in tuple(shape)[:2])
         cached = self._detector_map_cache.get(detector_shape)
         if cached is None:
-            cached = detector_pixel_angular_maps(detector_shape, self.geometry)
+            two_theta_deg, raw_azimuth_deg = detector_pixel_angular_maps(detector_shape, self.geometry)
+            two_theta_deg = np.asarray(two_theta_deg, dtype=np.float64)
+            raw_azimuth_deg = np.asarray(raw_azimuth_deg, dtype=np.float64)
+            two_theta_deg.setflags(write=False)
+            raw_azimuth_deg.setflags(write=False)
+            cached = (two_theta_deg, raw_azimuth_deg)
             self._detector_map_cache[detector_shape] = cached
         return cached
 

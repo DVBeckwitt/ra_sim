@@ -28,7 +28,7 @@ def test_fast_azimuthal_integrator_detector_maps_match_flat_geometry() -> None:
     assert np.allclose(chi, expected_chi)
 
 
-def test_fast_azimuthal_integrator_detector_maps_return_copies() -> None:
+def test_fast_azimuthal_integrator_detector_maps_reuse_readonly_cache() -> None:
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
         dist=5.0,
         poni1=20.0,
@@ -42,15 +42,35 @@ def test_fast_azimuthal_integrator_detector_maps_return_copies() -> None:
     two_theta_second = integrator.twoThetaArray(shape=(21, 21), unit="2th_deg")
     chi_second = integrator.chiArray(shape=(21, 21), unit="deg")
 
-    assert two_theta_first is not two_theta_second
-    assert chi_first is not chi_second
-    assert two_theta_first.flags.writeable
-    assert chi_first.flags.writeable
+    assert two_theta_first is two_theta_second
+    assert chi_first is chi_second
+    assert not two_theta_first.flags.writeable
+    assert not chi_first.flags.writeable
 
-    two_theta_first[0, 0] = 0.0
-    chi_first[0, 0] = 0.0
-    assert two_theta_second[0, 0] != 0.0
-    assert chi_second[0, 0] != 0.0
+    with pytest.raises(ValueError):
+        two_theta_first[0, 0] = 0.0
+    with pytest.raises(ValueError):
+        chi_first[0, 0] = 0.0
+
+
+def test_fast_azimuthal_integrator_detector_map_radian_requests_still_allocate() -> None:
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=5.0,
+        poni1=20.0,
+        poni2=20.0,
+        pixel1=2.0,
+        pixel2=2.0,
+    )
+
+    two_theta_deg = integrator.twoThetaArray(shape=(21, 21), unit="2th_deg")
+    chi_deg = integrator.chiArray(shape=(21, 21), unit="deg")
+    two_theta_rad = integrator.twoThetaArray(shape=(21, 21), unit="2th_rad")
+    chi_rad = integrator.chiArray(shape=(21, 21), unit="rad")
+
+    assert two_theta_rad is not two_theta_deg
+    assert chi_rad is not chi_deg
+    assert np.allclose(two_theta_rad, np.deg2rad(two_theta_deg))
+    assert np.allclose(chi_rad, np.deg2rad(chi_deg))
 
 
 def test_fast_azimuthal_integrator_detector_maps_cache_per_instance(
