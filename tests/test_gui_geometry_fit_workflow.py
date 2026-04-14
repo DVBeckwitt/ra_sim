@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import hashlib
 from dataclasses import replace
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 from ra_sim.fitting import optimization as opt
 from ra_sim.gui import geometry_fit, geometry_overlay, manual_geometry
+from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 
 
 class _DummyVar:
@@ -1084,6 +1086,23 @@ def _make_legacy_dense_manual_dataset_bindings(
             _refresh_legacy_dense_pair_entry if refresh_pairs else None
         ),
     )
+
+
+def _load_new2_probe_module():
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "debug"
+        / "validate_new2_preflight_rebind.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "validate_new2_preflight_rebind",
+        script_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coords() -> None:
@@ -2282,6 +2301,165 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
         assert [entry.get(field) for entry in headless_dataset["measured_for_fit"]] == [
             entry.get(field) for entry in workflow_dataset["measured_for_fit"]
         ]
+
+
+def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -> None:
+    probe = _load_new2_probe_module()
+
+    result = probe._select_live_candidate_for_saved_entry(
+        saved_entry={
+            "hkl": (-1, 0, 5),
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "refined_sim_x": 10.0,
+            "refined_sim_y": 10.0,
+        },
+        grouped_candidates={
+            ("q_group", "primary", 1, 5): [
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "sim_col_raw": 0.0,
+                    "sim_row_raw": 10.0,
+                    "sim_col": 0.0,
+                    "sim_row": 10.0,
+                },
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 204,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "sim_col_raw": 20.0,
+                    "sim_row_raw": 10.0,
+                    "sim_col": 20.0,
+                    "sim_row": 10.0,
+                },
+            ]
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["selection_status"] == "ambiguous_live_row_selection"
+    assert len(result["tied_candidate_inventory"]) == 2
+
+
+def test_fresh_one_pair_gui_state_save_reload_preflight_resolves_without_generic_fallback(
+    tmp_path,
+) -> None:
+    saved_entry = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 1,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "hkl": (-1, 0, 5),
+        "x": 189.5,
+        "y": 97.0,
+        "caked_x": 30.0,
+        "caked_y": 9.0,
+        "refined_sim_caked_x": 30.0,
+        "refined_sim_caked_y": 9.0,
+        "refined_sim_x": 189.5,
+        "refined_sim_y": 97.0,
+    }
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 0,
+            "source_reflection_index": 202,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (-1, 0, 5),
+            "sim_col": 110.0,
+            "sim_row": 100.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 189.5,
+            "sim_row": 97.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 182.0,
+            "sim_row": 98.0,
+        },
+    ]
+    state_path = tmp_path / "fresh_one_pair_state.json"
+    save_gui_state_file(
+        state_path,
+        {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc", "C:/tmp/bg1.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "entries": [dict(saved_entry)],
+                    }
+                ],
+                "peak_records": [],
+                "q_group_rows": [],
+            },
+        },
+    )
+
+    loaded_state = load_gui_state_file(state_path)["state"]
+    loaded_entry = loaded_state["geometry"]["manual_pairs"][0]["entries"][0]
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=_make_legacy_dense_manual_dataset_bindings(
+            saved_entries=[loaded_entry],
+            simulated_rows=simulated_rows,
+            refresh_pairs=False,
+        ),
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    measured_pair = dataset["measured_for_fit"][0]
+    resolution_diag = dataset["source_resolution_diagnostics"][0]
+    assert measured_pair["source_reflection_index"] == 203
+    assert measured_pair["source_reflection_namespace"] == "full_reflection"
+    assert measured_pair["source_reflection_is_full"] is True
+    assert measured_pair["source_branch_index"] == 1
+    assert measured_pair["source_peak_index"] == 1
+    assert resolution_diag["fit_resolution_kind"] in {"source_row", "source_peak"}
+    assert resolution_diag["overlay_resolution_kind"] in {"source_row", "source_peak"}
 
 
 def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> None:

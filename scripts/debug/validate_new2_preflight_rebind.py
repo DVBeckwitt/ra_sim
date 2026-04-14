@@ -1,10 +1,12 @@
-"""Validate canonical preflight rebinding on one saved GUI state."""
+"""Validate fresh grouped-pick emission and canonical preflight rebinding."""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -12,9 +14,10 @@ from pathlib import Path
 import numpy as np
 
 from ra_sim import headless_geometry_fit as hgf
+from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import manual_geometry as gui_manual_geometry
-from ra_sim.io.data_loading import load_gui_state_file
+from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 
 
 class _CapturedPreflight(RuntimeError):
@@ -86,6 +89,93 @@ def _canonical_identity(entry: Mapping[str, object] | None) -> tuple[object, ...
     )
 
 
+def _finite_point(
+    entry: Mapping[str, object] | None,
+    *keys: str,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping) or len(keys) < 2:
+        return None
+    try:
+        col = float(entry.get(keys[0], np.nan))
+        row = float(entry.get(keys[1], np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _normalized_branch_index(entry: Mapping[str, object] | None) -> int | None:
+    if not isinstance(entry, Mapping):
+        return None
+    for key in ("source_branch_index", "source_peak_index"):
+        try:
+            value = int(entry.get(key))
+        except Exception:
+            continue
+        if value in {0, 1}:
+            return int(value)
+    return None
+
+
+def _saved_simulated_display_hint(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for keys in (
+        ("refined_sim_x", "refined_sim_y"),
+        ("x", "y"),
+        ("raw_x", "raw_y"),
+    ):
+        hint = _finite_point(entry, *keys)
+        if hint is not None:
+            return hint
+    return None
+
+
+def _saved_click_hint(
+    entry: Mapping[str, object] | None,
+    *,
+    use_caked_space: bool,
+) -> tuple[float, float] | None:
+    key_sets = (
+        (("raw_caked_x", "raw_caked_y"), ("caked_x", "caked_y"))
+        if bool(use_caked_space)
+        else (("raw_x", "raw_y"), ("x", "y"))
+    )
+    for keys in key_sets:
+        hint = _finite_point(entry, *keys)
+        if hint is not None:
+            return hint
+    return None
+
+
+def _candidate_detector_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for keys in (("sim_col_raw", "sim_row_raw"), ("sim_col", "sim_row")):
+        point = _finite_point(entry, *keys)
+        if point is not None:
+            return point
+    return None
+
+
+def _candidate_detector_display_distance(
+    detector_hint: tuple[float, float] | None,
+    candidate: Mapping[str, object] | None,
+) -> float:
+    if detector_hint is None:
+        return float("nan")
+    candidate_point = _candidate_detector_display_point(candidate)
+    if candidate_point is None:
+        return float("nan")
+    return float(
+        np.hypot(
+            float(candidate_point[0]) - float(detector_hint[0]),
+            float(candidate_point[1]) - float(detector_hint[1]),
+        )
+    )
+
+
 def _display_hint(
     entry: Mapping[str, object] | None,
     *,
@@ -110,9 +200,11 @@ def _compact_entry(
     entry: Mapping[str, object] | None,
     *,
     display_hint: tuple[float, float] | None = None,
+    detector_display_hint: tuple[float, float] | None = None,
 ) -> dict[str, object] | None:
     if not isinstance(entry, Mapping):
         return None
+    detector_display = _candidate_detector_display_point(entry)
     payload = {
         "candidate_source_key": gui_manual_geometry.geometry_manual_candidate_source_key(
             dict(entry)
@@ -130,6 +222,7 @@ def _compact_entry(
         "sim_row": entry.get("sim_row"),
         "sim_col_raw": entry.get("sim_col_raw"),
         "sim_row_raw": entry.get("sim_row_raw"),
+        "sim_detector_display": list(detector_display) if detector_display is not None else None,
         "caked_x": entry.get("caked_x"),
         "caked_y": entry.get("caked_y"),
     }
@@ -141,7 +234,134 @@ def _compact_entry(
                 dict(entry),
             )
         )
+    if detector_display_hint is not None:
+        payload["distance_to_saved_sim_hint_px"] = _candidate_detector_display_distance(
+            detector_display_hint,
+            entry,
+        )
     return payload
+
+
+def _group_inventory(
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+) -> list[dict[str, object]]:
+    inventory: list[dict[str, object]] = []
+    if not isinstance(grouped_candidates, Mapping):
+        return inventory
+    normalized_keys = sorted(
+        (_normalize_q_group_key(key) for key in grouped_candidates.keys()),
+        key=repr,
+    )
+    for group_key in normalized_keys:
+        entries = [
+            dict(entry)
+            for entry in grouped_candidates.get(group_key, ())
+            if isinstance(entry, Mapping)
+        ]
+        inventory.append(
+            {
+                "group_key": group_key,
+                "candidate_count": len(entries),
+                "candidate_source_keys": [
+                    gui_manual_geometry.geometry_manual_candidate_source_key(entry)
+                    for entry in entries
+                ],
+                "hkls": sorted(
+                    {
+                        _normalize_hkl(entry.get("hkl"))
+                        for entry in entries
+                        if _normalize_hkl(entry.get("hkl")) is not None
+                    },
+                    key=repr,
+                ),
+            }
+        )
+    return inventory
+
+
+def _select_live_candidate_for_saved_entry(
+    *,
+    saved_entry: Mapping[str, object],
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+    tie_tolerance_px: float = gui_geometry_fit.GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX,
+) -> dict[str, object]:
+    detector_hint = _saved_simulated_display_hint(saved_entry)
+    target_hkl = _normalize_hkl(saved_entry.get("hkl"))
+    target_branch = _normalized_branch_index(saved_entry)
+    inventory = _group_inventory(grouped_candidates)
+    matching_candidates: list[dict[str, object]] = []
+    if isinstance(grouped_candidates, Mapping):
+        for group_key, raw_entries in grouped_candidates.items():
+            normalized_group_key = _normalize_q_group_key(group_key)
+            for raw_entry in raw_entries or ():
+                if not isinstance(raw_entry, Mapping):
+                    continue
+                entry = dict(raw_entry)
+                if target_hkl is not None and _normalize_hkl(entry.get("hkl")) != target_hkl:
+                    continue
+                if target_branch is not None and _normalized_branch_index(entry) != target_branch:
+                    continue
+                entry["q_group_key"] = normalized_group_key
+                matching_candidates.append(entry)
+
+    candidate_inventory = [
+        _compact_entry(entry, detector_display_hint=detector_hint)
+        for entry in matching_candidates
+    ]
+    finite_candidates = [
+        (entry, _candidate_detector_display_distance(detector_hint, entry))
+        for entry in matching_candidates
+        if np.isfinite(_candidate_detector_display_distance(detector_hint, entry))
+    ]
+    if not finite_candidates:
+        return {
+            "ok": False,
+            "failure_stage": "grouped_candidate_regeneration",
+            "selection_status": "missing_live_candidate",
+            "saved_simulated_display_hint": detector_hint,
+            "saved_target_hkl": target_hkl,
+            "saved_target_branch_index": target_branch,
+            "group_inventory": inventory,
+            "matching_branch_candidate_inventory": candidate_inventory,
+        }
+
+    finite_candidates.sort(key=lambda item: item[1])
+    best_entry, best_distance = finite_candidates[0]
+    tied_entries = [
+        dict(entry)
+        for entry, distance in finite_candidates
+        if abs(float(distance) - float(best_distance)) <= float(tie_tolerance_px)
+    ]
+    if len(tied_entries) > 1:
+        return {
+            "ok": False,
+            "failure_stage": "resolved_live_row_selection",
+            "selection_status": "ambiguous_live_row_selection",
+            "saved_simulated_display_hint": detector_hint,
+            "saved_target_hkl": target_hkl,
+            "saved_target_branch_index": target_branch,
+            "tie_tolerance_px": float(tie_tolerance_px),
+            "best_distance_px": float(best_distance),
+            "group_inventory": inventory,
+            "matching_branch_candidate_inventory": candidate_inventory,
+            "tied_candidate_inventory": [
+                _compact_entry(entry, detector_display_hint=detector_hint)
+                for entry in tied_entries
+            ],
+        }
+
+    return {
+        "ok": True,
+        "selection_status": "selected",
+        "saved_simulated_display_hint": detector_hint,
+        "saved_target_hkl": target_hkl,
+        "saved_target_branch_index": target_branch,
+        "best_distance_px": float(best_distance),
+        "selected_candidate": dict(best_entry),
+        "group_key": _normalize_q_group_key(best_entry.get("q_group_key")),
+        "group_inventory": inventory,
+        "matching_branch_candidate_inventory": candidate_inventory,
+    }
 
 
 def _capture_preflight(
@@ -496,9 +716,9 @@ def _build_single_background_dataset(
         manual_dataset_bindings=isolated_bindings,
         orientation_cfg=dict(orientation_cfg),
     )
- 
 
-def _run_validation(state_path: Path, background_index: int) -> dict[str, object]:
+
+def _prepare_validation_context(state_path: Path, background_index: int) -> dict[str, object]:
     payload = load_gui_state_file(state_path)
     saved_state = dict(payload["state"])
     captured = _capture_preflight(saved_state=saved_state, state_path=state_path)
@@ -517,6 +737,7 @@ def _run_validation(state_path: Path, background_index: int) -> dict[str, object
         "background_index": int(background_index),
         "saved_pair_count": int(len(saved_entries)),
         "captured_preflight_error_text": prepare_result.error_text,
+        "used_isolated_background_dataset": prepared_run is None,
     }
     try:
         if prepared_run is not None:
@@ -567,6 +788,44 @@ def _run_validation(state_path: Path, background_index: int) -> dict[str, object
         result["ok"] = False
         result["classification"] = "harness_invalid"
         return result
+    result["ok"] = True
+    result["saved_state"] = saved_state
+    result["params"] = params
+    result["bindings"] = bindings
+    result["projection_callbacks"] = projection_callbacks
+    result["manual_dataset_bindings"] = manual_dataset_bindings
+    result["dataset"] = dataset
+    result["group_cache"] = group_cache
+    result["saved_entries"] = saved_entries
+    return result
+
+
+def _run_saved_state_compatibility_validation(
+    state_path: Path,
+    background_index: int,
+) -> dict[str, object]:
+    context = _prepare_validation_context(state_path, background_index)
+    if not bool(context.get("ok", False)):
+        return context
+    saved_entries = list(context["saved_entries"])
+    dataset = dict(context["dataset"])
+    group_cache = dict(context["group_cache"])
+    manual_dataset_bindings = context["manual_dataset_bindings"]
+    result = {
+        key: value
+        for key, value in context.items()
+        if key
+        not in {
+            "saved_state",
+            "params",
+            "bindings",
+            "projection_callbacks",
+            "manual_dataset_bindings",
+            "dataset",
+            "group_cache",
+            "saved_entries",
+        }
+    }
 
     checked_pairs: list[dict[str, object]] = []
     for slot_index in (1, 2):
@@ -654,9 +913,532 @@ def _run_validation(state_path: Path, background_index: int) -> dict[str, object
     return result
 
 
+def _public_context_fields(context: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in context.items()
+        if key
+        not in {
+            "saved_state",
+            "params",
+            "bindings",
+            "projection_callbacks",
+            "manual_dataset_bindings",
+            "dataset",
+            "group_cache",
+            "saved_entries",
+        }
+    }
+
+
+def _current_source_rows_for_background(
+    *,
+    background_index: int,
+    context: Mapping[str, object],
+    consumer: str,
+) -> list[dict[str, object]]:
+    manual_dataset_bindings = context["manual_dataset_bindings"]
+    params = dict(context["params"])
+    source_rows_for_background = getattr(
+        manual_dataset_bindings,
+        "geometry_manual_source_rows_for_background",
+        None,
+    )
+    if callable(source_rows_for_background):
+        rows = source_rows_for_background(
+            int(background_index),
+            params,
+            consumer=str(consumer),
+        )
+        return [dict(entry) for entry in rows or () if isinstance(entry, Mapping)]
+    dataset = context["dataset"]
+    return [
+        dict(entry)
+        for entry in dataset.get("source_rows_for_trace", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
+
+
+def _entry_caked_display_coords(
+    entry: Mapping[str, object] | None,
+    *,
+    projection_callbacks,
+) -> tuple[float, float] | None:
+    for keys in (("caked_x", "caked_y"), ("raw_caked_x", "raw_caked_y")):
+        point = _finite_point(entry, *keys)
+        if point is not None:
+            return point
+    detector_point = _finite_point(entry, "detector_x", "detector_y")
+    if detector_point is not None:
+        converted = projection_callbacks.native_detector_coords_to_caked_display_coords(
+            float(detector_point[0]),
+            float(detector_point[1]),
+        )
+        if converted is not None:
+            try:
+                return float(converted[0]), float(converted[1])
+            except Exception:
+                return None
+    display_point = _finite_point(entry, "x", "y")
+    if display_point is not None:
+        native_point = projection_callbacks.background_display_to_native_detector_coords(
+            float(display_point[0]),
+            float(display_point[1]),
+        )
+        if native_point is not None:
+            converted = projection_callbacks.native_detector_coords_to_caked_display_coords(
+                float(native_point[0]),
+                float(native_point[1]),
+            )
+            if converted is not None:
+                try:
+                    return float(converted[0]), float(converted[1])
+                except Exception:
+                    return None
+    return None
+
+
+def _run_single_slot_preflight_validation(
+    state_path: Path,
+    *,
+    background_index: int,
+    slot_index: int,
+) -> dict[str, object]:
+    context = _prepare_validation_context(state_path, background_index)
+    if not bool(context.get("ok", False)):
+        return context
+    saved_entries = list(context["saved_entries"])
+    dataset = dict(context["dataset"])
+    group_cache = dict(context["group_cache"])
+    manual_dataset_bindings = context["manual_dataset_bindings"]
+    pair_result = _validate_pair(
+        background_index=int(background_index),
+        slot_index=int(slot_index),
+        expected_pair_id=f"bg{int(background_index)}:pair{int(slot_index)}",
+        saved_entries=saved_entries,
+        dataset=dataset,
+        group_cache=group_cache,
+        entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
+    )
+    result = _public_context_fields(context)
+    result["slot_index"] = int(slot_index)
+    result["pair_result"] = pair_result
+    result["ok"] = bool(pair_result.get("ok", False))
+    result["classification"] = "pass" if result["ok"] else "seam_failure"
+    if not result["ok"]:
+        result["failed_pair"] = pair_result
+    return result
+
+
+def _session_refresh_summary(session: Mapping[str, object] | None) -> dict[str, object]:
+    tagged_candidate = session.get("tagged_candidate") if isinstance(session, Mapping) else None
+    return {
+        "group_key": (
+            _normalize_q_group_key(session.get("group_key"))
+            if isinstance(session, Mapping)
+            else None
+        ),
+        "target_count": session.get("target_count") if isinstance(session, Mapping) else None,
+        "tagged_candidate_key": (
+            session.get("tagged_candidate_key")
+            if isinstance(session, Mapping)
+            else None
+        ),
+        "tagged_candidate_identity": _identity_payload(tagged_candidate),
+    }
+
+
+def _compatibility_summary(result: Mapping[str, object] | None) -> dict[str, object]:
+    if not isinstance(result, Mapping):
+        return {"ok": False, "classification": "missing"}
+    failed_pair = result.get("failed_pair") if isinstance(result.get("failed_pair"), Mapping) else {}
+    return {
+        "ok": bool(result.get("ok", False)),
+        "classification": result.get("classification"),
+        "failure_stage": failed_pair.get("failure_stage"),
+        "fit_resolution_kind": failed_pair.get("fit_resolution_kind"),
+        "overlay_resolution_kind": failed_pair.get("overlay_resolution_kind"),
+    }
+
+
+def _build_fresh_one_pair_state(
+    *,
+    saved_state: Mapping[str, object],
+    background_index: int,
+    emitted_pair: Mapping[str, object],
+) -> dict[str, object]:
+    next_state = copy.deepcopy(dict(saved_state))
+    files_state = dict(next_state.get("files", {}))
+    variables_state = dict(next_state.get("variables", {}))
+    geometry_state = dict(next_state.get("geometry", {}))
+    background_files = [
+        str(path) for path in (files_state.get("background_files", []) or ()) if str(path).strip()
+    ]
+    selection_text = gui_background_theta.serialize_geometry_fit_background_selection(
+        selected_indices=[int(background_index)],
+        total_count=len(background_files),
+        current_index=int(background_index),
+    )
+    variables_state["geometry_fit_background_selection_var"] = str(selection_text)
+    files_state["current_background_index"] = int(background_index)
+
+    existing_bg_entry = next(
+        (
+            dict(item)
+            for item in (geometry_state.get("manual_pairs", []) or ())
+            if isinstance(item, Mapping)
+            and int(item.get("background_index", -1)) == int(background_index)
+        ),
+        {},
+    )
+    geometry_state["manual_pairs"] = [
+        {
+            "background_index": int(background_index),
+            "background_name": existing_bg_entry.get("background_name"),
+            "background_path": existing_bg_entry.get("background_path"),
+            "entries": [dict(emitted_pair)],
+        }
+    ]
+    geometry_state["peak_records"] = []
+    geometry_state["q_group_rows"] = []
+
+    next_state["files"] = files_state
+    next_state["variables"] = variables_state
+    next_state["geometry"] = geometry_state
+    return next_state
+
+
+def _run_fresh_contract_validation(
+    state_path: Path,
+    *,
+    background_index: int,
+    sentinel_slot_index: int = 1,
+) -> dict[str, object]:
+    context = _prepare_validation_context(state_path, background_index)
+    if not bool(context.get("ok", False)):
+        return context
+    saved_entries = list(context["saved_entries"])
+    if int(sentinel_slot_index) >= len(saved_entries):
+        result = _public_context_fields(context)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failure_stage"] = "saved_entry_missing"
+        result["message"] = "sentinel slot missing from saved entries"
+        result["slot_index"] = int(sentinel_slot_index)
+        return result
+
+    projection_callbacks = context["projection_callbacks"]
+    manual_dataset_bindings = context["manual_dataset_bindings"]
+    group_cache = dict(context["group_cache"])
+    current_source_rows = _current_source_rows_for_background(
+        background_index=int(background_index),
+        context=context,
+        consumer="manual_pick_group_probe",
+    )
+    grouped_candidates = dict(group_cache.get("grouped_candidates", {}) or {})
+    grouped_candidate_source = "pick_cache"
+    if not grouped_candidates and current_source_rows:
+        try:
+            grouped_candidates = projection_callbacks.pick_candidates(current_source_rows)
+        except Exception:
+            grouped_candidates = {}
+        grouped_candidate_source = "current_live_source_rows"
+    saved_entry = dict(saved_entries[int(sentinel_slot_index)])
+    selected_candidate_result = _select_live_candidate_for_saved_entry(
+        saved_entry=saved_entry,
+        grouped_candidates=grouped_candidates,
+    )
+    result = _public_context_fields(context)
+    result["sentinel_slot_index"] = int(sentinel_slot_index)
+    result["saved_entry"] = {
+        **_identity_payload(saved_entry, pair_id=f"bg{int(background_index)}:pair{int(sentinel_slot_index)}"),
+        "q_group_key": _normalize_q_group_key(saved_entry.get("q_group_key")),
+        "saved_simulated_display_hint": _saved_simulated_display_hint(saved_entry),
+    }
+    result["grouped_candidate_source"] = grouped_candidate_source
+    result["current_live_source_row_inventory"] = [
+        _compact_entry(
+            entry,
+            detector_display_hint=_saved_simulated_display_hint(saved_entry),
+        )
+        for entry in current_source_rows
+        if _normalize_hkl(entry.get("hkl")) == _normalize_hkl(saved_entry.get("hkl"))
+    ]
+    result["candidate_selection"] = selected_candidate_result
+    if not bool(selected_candidate_result.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = selected_candidate_result
+        return result
+
+    selected_candidate = dict(selected_candidate_result["selected_candidate"])
+    selected_group_key = _normalize_q_group_key(selected_candidate.get("q_group_key"))
+    group_entries = [
+        dict(entry)
+        for entry in grouped_candidates.get(selected_group_key, ())
+        if isinstance(entry, Mapping)
+    ]
+    display_background = projection_callbacks.current_background_image()
+    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
+    click_hint = _saved_click_hint(saved_entry, use_caked_space=use_caked_space)
+    if click_hint is None:
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = {
+            "failure_stage": "fresh_emitted_pair",
+            "selection_status": "missing_saved_click_hint",
+        }
+        return result
+
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    set_sessions: list[dict[str, object]] = []
+    refine_preview_point = (
+        lambda candidate, raw_col, raw_row, **kwargs: gui_manual_geometry.geometry_manual_refine_preview_point(
+            candidate,
+            raw_col,
+            raw_row,
+            use_caked_space=use_caked_space,
+            **kwargs,
+        )
+    )
+    handled, next_session = gui_manual_geometry.geometry_manual_place_selection_at(
+        float(click_hint[0]),
+        float(click_hint[1]),
+        pick_session={
+            "group_key": selected_group_key,
+            "group_entries": [dict(entry) for entry in group_entries],
+            "pending_entries": [],
+            "target_count": int(
+                gui_manual_geometry.geometry_manual_group_target_count(
+                    selected_group_key,
+                    group_entries,
+                )
+            ),
+            "base_entries": [],
+            "q_label": repr(selected_group_key),
+            "background_index": int(background_index),
+            "tagged_candidate_key": gui_manual_geometry.geometry_manual_candidate_source_key(
+                selected_candidate
+            ),
+            "tagged_candidate": dict(selected_candidate),
+            "zoom_active": False,
+            "zoom_center": None,
+            "saved_xlim": None,
+            "saved_ylim": None,
+        },
+        current_background_index=int(background_index),
+        display_background=display_background,
+        get_cache_data=lambda **_kwargs: dict(group_cache),
+        refine_preview_point=refine_preview_point,
+        set_pairs_for_index_fn=(
+            lambda _idx, entries: saved_entry_sets.append(list(entries or []))
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=use_caked_space,
+        caked_angles_to_background_display_coords=(
+            projection_callbacks.caked_angles_to_background_display_coords
+        ),
+        background_display_to_native_detector_coords=(
+            projection_callbacks.background_display_to_native_detector_coords
+        ),
+        refine_saved_pair_entry_fn=projection_callbacks.refresh_entry_geometry,
+    )
+    emitted_pair = None
+    if isinstance(next_session, Mapping):
+        pending_entries = next_session.get("pending_entries")
+        if isinstance(pending_entries, list) and pending_entries:
+            emitted_pair = dict(pending_entries[-1])
+    if emitted_pair is None and saved_entry_sets:
+        latest_entries = saved_entry_sets[-1]
+        if latest_entries:
+            emitted_pair = dict(latest_entries[-1])
+    emitted_identity = _identity_payload(emitted_pair)
+    expected_identity = _identity_payload(selected_candidate)
+    fresh_emission = {
+        "handled": bool(handled),
+        "use_caked_space": bool(use_caked_space),
+        "saved_click_hint": click_hint,
+        "group_key": selected_group_key,
+        "target_count": int(
+            gui_manual_geometry.geometry_manual_group_target_count(
+                selected_group_key,
+                group_entries,
+            )
+        ),
+        "selected_candidate": _compact_entry(
+            selected_candidate,
+            detector_display_hint=_saved_simulated_display_hint(saved_entry),
+        ),
+        "emitted_pair": dict(emitted_pair) if isinstance(emitted_pair, Mapping) else None,
+    }
+    result["fresh_emission"] = fresh_emission
+    if (
+        not handled
+        or not isinstance(emitted_pair, Mapping)
+        or emitted_identity != expected_identity
+    ):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = {
+            "failure_stage": "fresh_emitted_pair",
+            "expected_identity": expected_identity,
+            "actual_identity": emitted_identity,
+        }
+        return result
+
+    detector_measured, detector_pairs = gui_manual_geometry.build_geometry_manual_initial_pairs_display(
+        int(background_index),
+        param_set=dict(context["params"]),
+        current_background_index=int(background_index),
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(emitted_pair)],
+        get_cache_data=lambda **_kwargs: dict(group_cache),
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(entry) for entry in current_source_rows],
+        simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
+        build_simulated_lookup=projection_callbacks.simulated_lookup,
+        entry_display_coords=lambda entry: _finite_point(entry, "x", "y"),
+    )
+    caked_measured, caked_pairs = gui_manual_geometry.build_geometry_manual_initial_pairs_display(
+        int(background_index),
+        param_set=dict(context["params"]),
+        current_background_index=int(background_index),
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(emitted_pair)],
+        get_cache_data=lambda **_kwargs: dict(group_cache),
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(entry) for entry in current_source_rows],
+        simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
+        build_simulated_lookup=projection_callbacks.simulated_lookup,
+        entry_display_coords=lambda entry: _entry_caked_display_coords(
+            entry,
+            projection_callbacks=projection_callbacks,
+        ),
+    )
+    redraw_result = {
+        "detector_measured": detector_measured,
+        "detector_pairs": detector_pairs,
+        "caked_measured": caked_measured,
+        "caked_pairs": caked_pairs,
+    }
+    result["no_fit_redraw"] = redraw_result
+    if (
+        len(detector_measured) != 1
+        or len(caked_measured) != 1
+        or _identity_payload(detector_measured[0]) != emitted_identity
+        or _identity_payload(caked_measured[0]) != emitted_identity
+        or len(detector_pairs) != 1
+        or len(caked_pairs) != 1
+    ):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = {
+            "failure_stage": "no_fit_overlay_redraw",
+            "emitted_identity": emitted_identity,
+        }
+        return result
+
+    refresh_source_session = (
+        dict(next_session)
+        if isinstance(next_session, Mapping) and next_session
+        else {
+            "group_key": selected_group_key,
+            "group_entries": [dict(entry) for entry in group_entries],
+            "pending_entries": [dict(emitted_pair)],
+            "target_count": int(
+                gui_manual_geometry.geometry_manual_group_target_count(
+                    selected_group_key,
+                    group_entries,
+                )
+            ),
+            "background_index": int(background_index),
+            "tagged_candidate_key": gui_manual_geometry.geometry_manual_candidate_source_key(
+                selected_candidate
+            ),
+            "tagged_candidate": dict(selected_candidate),
+        }
+    )
+    reversed_grouped_candidates = dict(grouped_candidates)
+    reversed_grouped_candidates[selected_group_key] = list(reversed(group_entries))
+    refreshed = gui_manual_geometry.refresh_geometry_manual_pick_session_candidates(
+        refresh_source_session,
+        grouped_candidates=grouped_candidates,
+        cache_signature=group_cache.get("signature"),
+    )
+    refreshed_reversed = gui_manual_geometry.refresh_geometry_manual_pick_session_candidates(
+        refresh_source_session,
+        grouped_candidates=reversed_grouped_candidates,
+        cache_signature=group_cache.get("signature"),
+    )
+    refresh_result = {
+        "forward": _session_refresh_summary(refreshed),
+        "reversed": _session_refresh_summary(refreshed_reversed),
+    }
+    result["session_refresh"] = refresh_result
+    selected_candidate_key = gui_manual_geometry.geometry_manual_candidate_source_key(
+        selected_candidate
+    )
+    for refreshed_session in (refreshed, refreshed_reversed):
+        tagged_candidate = refreshed_session.get("tagged_candidate")
+        tagged_identity = _identity_payload(tagged_candidate)
+        if (
+            refreshed_session.get("group_key") != selected_group_key
+            or refreshed_session.get("tagged_candidate_key") != selected_candidate_key
+            or tagged_identity != expected_identity
+        ):
+            result["ok"] = False
+            result["classification"] = "seam_failure"
+            result["failed_pair"] = {
+                "failure_stage": "session_refresh_rebind",
+                "expected_identity": expected_identity,
+                "actual_identity": tagged_identity,
+            }
+            return result
+
+    fresh_state = _build_fresh_one_pair_state(
+        saved_state=context["saved_state"],
+        background_index=int(background_index),
+        emitted_pair=emitted_pair,
+    )
+    with tempfile.TemporaryDirectory(prefix="new2_fresh_probe_") as tmp_dir:
+        temp_state_path = Path(tmp_dir) / "fresh_one_pair_state.json"
+        save_gui_state_file(temp_state_path, fresh_state)
+        fresh_preflight = _run_single_slot_preflight_validation(
+            temp_state_path,
+            background_index=int(background_index),
+            slot_index=0,
+        )
+    result["fresh_one_pair_preflight"] = fresh_preflight
+    if not bool(fresh_preflight.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = fresh_preflight.get("failed_pair", fresh_preflight)
+        return result
+
+    compatibility = _run_saved_state_compatibility_validation(
+        state_path,
+        int(background_index),
+    )
+    result["new2_compatibility"] = _compatibility_summary(compatibility)
+    result["ok"] = True
+    result["classification"] = (
+        "fresh_contract_pass"
+        if bool(compatibility.get("ok", False))
+        else "fresh_contract_pass_new2_compatibility_fail"
+    )
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate canonical preflight rebinding on a saved GUI state.",
+        description="Validate fresh grouped-pick emission and saved-state preflight rebinding.",
     )
     parser.add_argument("--state", required=True, help="Path to the saved GUI state.")
     parser.add_argument(
@@ -665,12 +1447,30 @@ def main() -> int:
         default=0,
         help="Background index to validate. Default: 0.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("full", "fresh", "compatibility"),
+        default="full",
+        help="Validation mode. Default: full.",
+    )
     args = parser.parse_args()
 
-    result = _run_validation(
-        Path(args.state).expanduser().resolve(),
-        background_index=int(args.background_index),
-    )
+    resolved_state_path = Path(args.state).expanduser().resolve()
+    if args.mode == "fresh":
+        result = _run_fresh_contract_validation(
+            resolved_state_path,
+            background_index=int(args.background_index),
+        )
+    elif args.mode == "compatibility":
+        result = _run_saved_state_compatibility_validation(
+            resolved_state_path,
+            int(args.background_index),
+        )
+    else:
+        result = _run_fresh_contract_validation(
+            resolved_state_path,
+            background_index=int(args.background_index),
+        )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0 if bool(result.get("ok", False)) else 1
 

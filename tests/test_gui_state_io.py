@@ -248,3 +248,56 @@ def test_save_and_load_geometry_placements_file_preserves_canonical_trusted_pair
     assert entry["source_reflection_is_full"] is True
     assert entry["source_branch_index"] == 1
     assert entry["source_peak_index"] == 1
+
+
+def test_save_and_load_gui_state_file_preserves_fresh_one_pair_current_selection(
+    tmp_path,
+) -> None:
+    file_path = tmp_path / "fresh_one_pair_state.json"
+    save_gui_state_file(
+        file_path,
+        {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc", "C:/tmp/bg1.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "entries": [
+                            {
+                                "label": "-1,0,5",
+                                "hkl": (-1, 0, 5),
+                                "q_group_key": ("q_group", "primary", 1, 5),
+                                "x": 182.0,
+                                "y": 138.0,
+                                "source_reflection_index": 203,
+                                "source_reflection_namespace": "full_reflection",
+                                "source_reflection_is_full": True,
+                                "source_branch_index": 1,
+                                "source_peak_index": 1,
+                            }
+                        ],
+                    }
+                ],
+                "peak_records": [],
+                "q_group_rows": [],
+            },
+        },
+    )
+
+    loaded = load_gui_state_file(file_path)["state"]
+
+    assert loaded["variables"]["geometry_fit_background_selection_var"] == "current"
+    entry = loaded["geometry"]["manual_pairs"][0]["entries"][0]
+    assert entry["hkl"] == [-1, 0, 5]
+    assert entry["q_group_key"] == ["q_group", "primary", 1, 5]
+    assert entry["source_reflection_index"] == 203
+    assert entry["source_reflection_namespace"] == "full_reflection"
+    assert entry["source_reflection_is_full"] is True
+    assert entry["source_branch_index"] == 1
+    assert entry["source_peak_index"] == 1

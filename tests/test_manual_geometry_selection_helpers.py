@@ -3547,6 +3547,129 @@ def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_
     assert first == second
 
 
+def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
+    candidate = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        181.0,
+        137.0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 5),
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate_key": ("source_branch", 203, 1),
+            "tagged_candidate": dict(candidate),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (182.0, 138.0),
+        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(
+            list(entries or [])
+        )
+        or list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        refine_saved_pair_entry_fn=lambda entry, candidate=None: {
+            **dict(entry),
+            "caked_x": 29.5,
+            "caked_y": -58.0,
+            "refined_sim_x": 190.0,
+            "refined_sim_y": 96.0,
+            "refined_sim_caked_x": 30.25,
+            "refined_sim_caked_y": -57.5,
+        },
+    )
+
+    assert handled is True
+    assert next_session == {}
+    emitted_pair = dict(saved_entry_sets[-1][0])
+
+    detector_measured, detector_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(emitted_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(candidate)],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+    caked_measured, caked_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(emitted_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(candidate)],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+
+    for measured_display in (detector_measured, caked_measured):
+        assert measured_display[0]["source_reflection_index"] == 203
+        assert measured_display[0]["source_reflection_namespace"] == "full_reflection"
+        assert measured_display[0]["source_reflection_is_full"] is True
+        assert measured_display[0]["source_branch_index"] == 1
+        assert measured_display[0]["source_peak_index"] == 1
+
+    assert detector_pairs == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (182.0, 138.0),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+    assert caked_pairs == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (29.5, -58.0),
+            "sim_display": (30.25, -57.5),
+        }
+    ]
+
+
 def test_runtime_projection_callbacks_capture_fresh_simulation_failure_diagnostics() -> None:
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
