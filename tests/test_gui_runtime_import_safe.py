@@ -154,6 +154,28 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "start_exact_cake_numba_warmup_in_background()" in source
 
 
+def test_runtime_impl_exact_cake_cache_signature_ignores_tilt_and_wavelength() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    signature_comment = (
+        "Tilt and wavelength are\n"
+        "    # intentionally ignored here because FastAzimuthalIntegrator discards them,"
+    )
+    signature_block = (
+        "sig = (\n"
+        "        corto_det_up,\n"
+        "        center_x_up,\n"
+        "        center_y_up,\n"
+        "    )"
+    )
+
+    assert signature_comment in source
+    assert signature_block in source
+    assert "Gamma_updated" not in signature_block
+    assert "gamma_updated" not in signature_block
+    assert "wave_m" not in signature_block
+    assert "wavelength=wave_m," in source
+
+
 def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:
     source = CLI_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -228,7 +250,8 @@ def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
     assert "gui_main_figure_chrome.configure_matplotlib_canvas_widget(" in source
     assert "gui_main_figure_chrome.configure_main_figure_layout(" in source
     assert "gui_main_figure_chrome.apply_main_figure_axes_chrome(" in source
-    assert "axes_visible=bool(show_caked_image)" in source
+    assert "axes_visible=bool(caked_display_available)" in source
+    assert "axes_visible=bool(show_caked_image)" not in source
     assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)" in source
     assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)" in source
     assert "ax.set_title('Simulated Diffraction Pattern')" not in source
