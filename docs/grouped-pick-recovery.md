@@ -45,8 +45,8 @@ See also:
 
 ## Current State
 
-- Raw `new2.json` is the primary frozen input and diagnostic source for the
-  grouped-pick workflow.
+- Raw `new2.json` is primary frozen input and diagnostic source for grouped-pick
+  workflow.
 - It already stores manual pairs with trusted full-reflection provenance and
   branch ids.
 - It intentionally does not store transient `peak_records` or `q_group_rows`.
@@ -55,34 +55,29 @@ See also:
   fresh canonical export derived from raw `new2.json` after all saved slots are
   re-emitted from current code and that export survives the saved-state
   compatibility / preflight sweep.
-- Fresh current-code sentinel validation now proves that one mirrored sentinel
-  pair can survive:
+- `new2_fresh_all.json` is current primary green artifact. Raw `new2.json`
+  re-emits `9/9` fresh slots, exported canonical state passes compatibility /
+  preflight, and that export is acceptance target for milestone 6.
+- `new3_fresh_all.json` is current secondary green control. Raw `new3.json`
+  re-emits `11/11` fresh slots, including old slot-8 seam, and exported
+  canonical state also passes compatibility / preflight.
+- Fresh current-code sentinel validation proved one mirrored sentinel pair can
+  survive:
   - fresh emitted pair row creation
   - detector/caked no-fit redraw
   - session refresh/rebind
   - fresh save -> reload -> preflight
   - mirrored two-entry compatibility validation
-- The remaining live blocker is therefore narrower than before. Current code can
-  create and preserve a fresh canonical sentinel pair, but legacy saved states
-  with stale source-row identity still fail at grouped-candidate regeneration /
-  source-row identity alignment.
-- Real-state harness work on `new2.json` still shows the first meaningful
-  failure at that upstream producer/preflight seam, not in subset mapping and
-  not in solver math.
-- `new3.json` is a red diagnostic path for the same seam. It is useful because
-  it exercises more saved pairs, but it is not an acceptance artifact until the
-  upstream source-row / branch-stamping break is fixed.
-- Current `new3.json` triage shows the slot-8 failure begins in live source-row
-  emission. Branch 1 is missing before grouped-candidate collapse, so the next
-  code change must target upstream source-row / branch stamping first and only
-  revisit collapse if branch 1 later proves to be present pre-collapse and lost
-  post-collapse.
+- Milestone 6 is complete. Upstream source-row / branch-stamping seam that broke
+  `new3` slot 8 is fixed in live source-row emission, before grouped-candidate
+  collapse.
+- Next active work is downstream identity validation from preflight-normalized
+  pairs through solver input, subset mapping, seed correspondence, and
+  full-beam correspondence.
 
 ## What Must Be True Next
 
-- Fresh current-code success for one mirrored sentinel pair must now scale to
-  all 9 saved pairs in `new2.json`.
-- Every surviving pair must preserve these fields without loss:
+- Fresh canonical exports must preserve these fields without loss:
   `hkl`, `source_reflection_index`, `source_reflection_namespace`,
   `source_reflection_is_full`, `source_branch_index`, or
   `source_peak_index`.
@@ -94,8 +89,8 @@ See also:
   - subset mapping
   - seed correspondence
   - full-beam correspondence
-- Only after those invariants hold should full geometry fit return as an
-  acceptance test.
+- Only after those invariants hold on fresh canonical exports should full
+  geometry fit return as primary acceptance test.
 
 ## Next Sequential Milestone Order
 
@@ -105,20 +100,31 @@ See also:
 4. Fresh one-pair save -> reload -> preflight: done for sentinel
 5. Mirrored mate: done for fresh sentinel pair
 6. Fresh-all sweep for all 9 pairs in raw `new2.json`, then compatibility /
-   preflight on the exported fresh canonical state
-7. Only then `preflight_normalized_pairs -> solver input` and the downstream
-   fit seams
+   preflight on exported fresh canonical state: done
+7. `preflight_normalized_pairs -> solver input -> subset mapping -> seed
+   correspondence -> full-beam correspondence`: active
 
 ## Phase Exit Criteria
 
-This recovery phase is complete when:
+Milestone 6 completed when:
 
 - one fresh mirrored sentinel pair is canonical at emission time
 - that pair survives save/load and preflight unchanged
 - raw `new2.json` can be re-emitted slot-by-slot into a fresh canonical export
 - that exported `new2` state survives compatibility / preflight cleanly
 - the same upstream invariants hold for the broader `new3.json` diagnostic path
-- only then full geometry fit is reused as a meaningful acceptance check
+- only then downstream identity seam chain becomes next active gate
+
+Milestone 7 completes when:
+
+- `new2_fresh_all.json` preserves canonical identity through
+  `preflight_normalized_pairs`
+- same canonical identity survives solver request measured peaks
+- same canonical identity survives subset mapping
+- same canonical identity survives seed correspondence
+- same canonical identity survives full-beam fixed correspondence
+- `new3_fresh_all.json` passes same downstream identity chain
+- only then full geometry fit is reused as meaningful acceptance check
 
 Until then, treat fit output as secondary evidence. Primary signal remains seam
 integrity at each boundary.

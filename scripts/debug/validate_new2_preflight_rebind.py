@@ -24,6 +24,23 @@ class _CapturedPreflight(RuntimeError):
     """Internal stop used to abort headless execution after preflight capture."""
 
 
+def _finalize_cli_result(
+    result: Mapping[str, object] | None,
+    *,
+    requested_mode: str,
+    effective_mode: str,
+) -> dict[str, object]:
+    payload = dict(result or {})
+    payload["requested_mode"] = str(requested_mode)
+    payload["effective_mode"] = str(effective_mode)
+    if (
+        str(requested_mode).strip().lower() == "full"
+        and str(effective_mode).strip().lower() == "fresh-all"
+    ):
+        payload["mode_note"] = "full now aliases fresh-all milestone-6 gate"
+    return payload
+
+
 def _stable_digest(payload: object) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
@@ -1747,7 +1764,7 @@ def main() -> int:
         "--mode",
         choices=("full", "fresh", "fresh-all", "compatibility"),
         default="full",
-        help="Validation mode. Default: full.",
+        help="Validation mode. Default: full (aliases fresh-all milestone-6 gate).",
     )
     parser.add_argument(
         "--sentinel-slot-index",
@@ -1765,24 +1782,26 @@ def main() -> int:
     export_fresh_state_path = (
         Path(args.export_fresh_state) if args.export_fresh_state else None
     )
-    if args.mode == "compatibility" and export_fresh_state_path is not None:
+    requested_mode = str(args.mode)
+    effective_mode = "fresh-all" if requested_mode == "full" else requested_mode
+    if effective_mode == "compatibility" and export_fresh_state_path is not None:
         parser.error(
             "--export-fresh-state requires --mode fresh, --mode fresh-all, or --mode full."
         )
-    if args.mode == "fresh":
+    if effective_mode == "fresh":
         result = _run_fresh_contract_validation(
             resolved_state_path,
             background_index=int(args.background_index),
             sentinel_slot_index=int(args.sentinel_slot_index),
             export_fresh_state_path=export_fresh_state_path,
         )
-    elif args.mode == "fresh-all":
+    elif effective_mode == "fresh-all":
         result = _run_fresh_all_contract_validation(
             resolved_state_path,
             background_index=int(args.background_index),
             export_fresh_state_path=export_fresh_state_path,
         )
-    elif args.mode == "compatibility":
+    elif effective_mode == "compatibility":
         result = _run_saved_state_compatibility_validation(
             resolved_state_path,
             int(args.background_index),
@@ -1794,6 +1813,11 @@ def main() -> int:
             sentinel_slot_index=int(args.sentinel_slot_index),
             export_fresh_state_path=export_fresh_state_path,
         )
+    result = _finalize_cli_result(
+        result,
+        requested_mode=requested_mode,
+        effective_mode=effective_mode,
+    )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0 if bool(result.get("ok", False)) else 1
 

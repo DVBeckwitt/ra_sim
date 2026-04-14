@@ -2408,6 +2408,52 @@ def test_saved_to_selected_identity_delta_reports_legacy_canonicalization() -> N
     }
 
 
+def test_probe_main_aliases_full_to_fresh_all(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        probe.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: SimpleNamespace(
+            state=str(tmp_path / "dummy.json"),
+            background_index=0,
+            mode="full",
+            sentinel_slot_index=1,
+            export_fresh_state=None,
+        ),
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_all_contract_validation",
+        lambda *args, **kwargs: calls.append("fresh-all")
+        or {"ok": True, "classification": "pass"},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_contract_validation",
+        lambda *args, **kwargs: pytest.fail("fresh sentinel path should not run"),
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: pytest.fail("compatibility path should not run"),
+    )
+
+    exit_code = probe.main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert calls == ["fresh-all"]
+    assert payload["requested_mode"] == "full"
+    assert payload["effective_mode"] == "fresh-all"
+    assert "aliases fresh-all" in payload["mode_note"]
+
+
 def test_saved_state_compatibility_validation_handles_two_entry_pair(
     monkeypatch,
     tmp_path,
