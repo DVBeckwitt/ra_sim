@@ -1,3 +1,6 @@
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -115,6 +118,113 @@ def test_fast_azimuthal_integrator_detector_maps_cache_is_shared_across_instance
 
     assert len(map_calls) == 1
     assert two_theta_a is two_theta_b
+
+
+def test_fast_azimuthal_integrator_warm_geometry_cache_prebuilds_common_caches(
+    monkeypatch,
+) -> None:
+    map_calls: list[tuple[int, int]] = []
+    norm_calls: list[tuple[int, int]] = []
+    lut_calls: list[tuple[tuple[int, int], int, int]] = []
+
+    def _fake_maps(image_shape, geometry):
+        del geometry
+        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
+        map_calls.append(detector_shape)
+        return (
+            np.full(detector_shape, 1.0, dtype=np.float64),
+            np.full(detector_shape, -1.0, dtype=np.float64),
+        )
+
+    def _fake_norm(image_shape, geometry):
+        del geometry
+        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
+        norm_calls.append(detector_shape)
+        return np.full(detector_shape, 2.0, dtype=np.float32)
+
+    def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
+        del geometry, workers
+        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
+        lut_calls.append((detector_shape, len(radial_deg), len(azimuthal_deg)))
+        return exact_cake.DetectorCakeLUT(
+            image_shape=detector_shape,
+            n_rad=int(len(radial_deg)),
+            n_az=int(len(azimuthal_deg)),
+            matrix=np.eye(int(len(radial_deg) * len(azimuthal_deg)), int(np.prod(detector_shape)), dtype=np.float32),
+            count_flat=np.ones(int(len(radial_deg) * len(azimuthal_deg)), dtype=np.float64),
+        )
+
+    monkeypatch.setattr(exact_cake_portable, "detector_pixel_angular_maps", _fake_maps)
+    monkeypatch.setattr(exact_cake_portable, "flat_solid_angle_normalization", _fake_norm)
+    monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
+
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+
+    integrator.warm_geometry_cache((4, 4), npt_rad=8, npt_azim=6)
+    integrator.warm_geometry_cache((4, 4), npt_rad=8, npt_azim=6)
+
+    assert map_calls == [(4, 4)]
+    assert norm_calls == [(4, 4)]
+    assert lut_calls == [((4, 4), 8, 6)]
+
+
+def test_start_exact_cake_geometry_warmup_in_background_dedupes_requests(
+    monkeypatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[tuple[tuple[int, int], int, int]] = []
+
+    def _fake_warm(self, detector_shape, *, npt_rad=1000, npt_azim=720, engine="auto", workers="auto"):
+        del self, engine, workers
+        calls.append((tuple(int(v) for v in tuple(detector_shape)[:2]), int(npt_rad), int(npt_azim)))
+        entered.set()
+        release.wait(timeout=1.0)
+
+    monkeypatch.setattr(exact_cake_portable.FastAzimuthalIntegrator, "warm_geometry_cache", _fake_warm)
+
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+
+    assert exact_cake_portable.start_exact_cake_geometry_warmup_in_background(
+        integrator,
+        (4, 4),
+        npt_rad=8,
+        npt_azim=6,
+    )
+    assert entered.wait(timeout=1.0)
+    assert not exact_cake_portable.start_exact_cake_geometry_warmup_in_background(
+        integrator,
+        (4, 4),
+        npt_rad=8,
+        npt_azim=6,
+    )
+
+    release.set()
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if not exact_cake_portable._EXACT_CAKE_GEOMETRY_WARMUP_THREADS:
+            break
+        time.sleep(0.01)
+
+    assert calls == [((4, 4), 8, 6)]
+    assert not exact_cake_portable.start_exact_cake_geometry_warmup_in_background(
+        integrator,
+        (4, 4),
+        npt_rad=8,
+        npt_azim=6,
+    )
 
 
 def test_exact_cake_auto_workers_default_to_8(monkeypatch) -> None:

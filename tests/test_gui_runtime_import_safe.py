@@ -149,7 +149,10 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background" in source
-    assert "from ra_sim.simulation.exact_cake_portable import FastAzimuthalIntegrator" in source
+    assert "start_exact_cake_geometry_warmup_in_background" in source
+    assert "from ra_sim.simulation.exact_cake_portable import (" in source
+    assert "FastAzimuthalIntegrator," in source
+    assert "start_exact_cake_geometry_warmup_in_background," in source
     assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
     assert "start_exact_cake_numba_warmup_in_background()" in source
 
@@ -174,6 +177,15 @@ def test_runtime_impl_exact_cake_cache_signature_ignores_tilt_and_wavelength() -
     assert "gamma_updated" not in signature_block
     assert "wave_m" not in signature_block
     assert "wavelength=wave_m," in source
+
+
+def test_runtime_impl_warms_live_exact_cake_geometry_cache() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "start_exact_cake_geometry_warmup_in_background(" in source
+    assert "np.asarray(simulation_runtime_state.unscaled_image).shape" in source
+    assert "npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS" in source
+    assert "npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS" in source
 
 
 def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:

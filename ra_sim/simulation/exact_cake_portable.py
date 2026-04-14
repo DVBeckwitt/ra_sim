@@ -52,15 +52,20 @@ from ra_sim.simulation.exact_cake import (
 PHI_ZERO_OFFSET_DEGREES = -90.0
 _PROCESS_DETECTOR_MAP_CACHE_LIMIT = 2
 _PROCESS_CAKE_LUT_CACHE_LIMIT = 2
+_GEOMETRY_WARMUP_COMPLETION_LIMIT = 16
 
 
 _SharedDetectorMapKey = tuple["PortableGeometry", tuple[int, int]]
 _SharedCakeLutKey = tuple["PortableGeometry", tuple[int, int], int, float, float, int, float, float]
+_GeometryWarmupKey = tuple[int, tuple[int, int], int, int]
 
 _PROCESS_DETECTOR_MAP_CACHE: OrderedDict[_SharedDetectorMapKey, tuple[np.ndarray, np.ndarray]] = OrderedDict()
 _PROCESS_CAKE_LUT_CACHE: OrderedDict[_SharedCakeLutKey, DetectorCakeLUT] = OrderedDict()
 _PROCESS_DETECTOR_MAP_CACHE_LOCK = threading.RLock()
 _PROCESS_CAKE_LUT_CACHE_LOCK = threading.RLock()
+_EXACT_CAKE_GEOMETRY_WARMUP_THREADS: dict[_GeometryWarmupKey, threading.Thread] = {}
+_EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED: OrderedDict[_GeometryWarmupKey, None] = OrderedDict()
+_EXACT_CAKE_GEOMETRY_WARMUP_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,9 @@ def _clear_shared_exact_cake_caches() -> None:
         _PROCESS_DETECTOR_MAP_CACHE.clear()
     with _PROCESS_CAKE_LUT_CACHE_LOCK:
         _PROCESS_CAKE_LUT_CACHE.clear()
+    with _EXACT_CAKE_GEOMETRY_WARMUP_LOCK:
+        _EXACT_CAKE_GEOMETRY_WARMUP_THREADS.clear()
+        _EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED.clear()
 
 
 def _shared_detector_map_cache_key(
@@ -170,6 +178,15 @@ def _shared_cake_lut_for_request(
         while len(_PROCESS_CAKE_LUT_CACHE) > _PROCESS_CAKE_LUT_CACHE_LIMIT:
             _PROCESS_CAKE_LUT_CACHE.popitem(last=False)
     return built
+
+
+def _normalize_detector_shape(shape: tuple[int, ...] | list[int]) -> tuple[int, int] | None:
+    if len(shape) < 2:
+        return None
+    detector_shape = tuple(int(v) for v in tuple(shape)[:2])
+    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None
+    return detector_shape
 
 def _parse_poni_file_simple(poni_path: str | Path) -> dict[str, float]:
     values: dict[str, float] = {}
@@ -413,6 +430,7 @@ class FastAzimuthalIntegrator:
             center_col_px=float(poni2) / float(pixel_col),
         )
         self._solid_angle_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._solid_angle_cache_lock = threading.RLock()
 
     def twoThetaArray(self, *, shape: tuple[int, int], unit: str | None = None) -> np.ndarray:
         two_theta_deg, _raw_azimuth_deg = self._detector_maps_for_shape(shape)
@@ -499,20 +517,61 @@ class FastAzimuthalIntegrator:
         self,
         shape: tuple[int, int],
     ) -> tuple[np.ndarray, np.ndarray]:
-        detector_shape = tuple(int(v) for v in tuple(shape)[:2])
+        detector_shape = _normalize_detector_shape(tuple(shape))
+        if detector_shape is None:
+            raise ValueError("shape must have two positive detector dimensions.")
         return _shared_detector_maps_for_shape(detector_shape, self.geometry)
 
     def _solid_angle_for_shape(self, shape: tuple[int, ...]) -> np.ndarray:
-        detector_shape = tuple(int(v) for v in tuple(shape)[:2])
-        cached = self._solid_angle_cache.get(detector_shape)
-        if cached is None:
-            cached = np.asarray(
-                flat_solid_angle_normalization(detector_shape, self.geometry),
-                dtype=np.float32,
-            )
-            cached.setflags(write=False)
-            self._solid_angle_cache[detector_shape] = cached
+        detector_shape = _normalize_detector_shape(tuple(shape))
+        if detector_shape is None:
+            raise ValueError("shape must have two positive detector dimensions.")
+        with self._solid_angle_cache_lock:
+            cached = self._solid_angle_cache.get(detector_shape)
+            if cached is None:
+                cached = np.asarray(
+                    flat_solid_angle_normalization(detector_shape, self.geometry),
+                    dtype=np.float32,
+                )
+                cached.setflags(write=False)
+                self._solid_angle_cache[detector_shape] = cached
         return cached
+
+    def warm_geometry_cache(
+        self,
+        detector_shape: tuple[int, ...] | list[int],
+        *,
+        npt_rad: int = 1000,
+        npt_azim: int = 720,
+        engine: str = "auto",
+        workers: int | str | None = "auto",
+    ) -> None:
+        normalized_shape = _normalize_detector_shape(tuple(detector_shape))
+        if normalized_shape is None:
+            raise ValueError("detector_shape must have two positive dimensions.")
+        self._detector_maps_for_shape(normalized_shape)
+        self._solid_angle_for_shape(normalized_shape)
+        radial_deg, azimuthal_deg = build_angle_axes(
+            npt_rad=int(max(1, npt_rad)),
+            npt_azim=int(max(1, npt_azim)),
+            tth_min_deg=0.0,
+            tth_max_deg=detector_two_theta_max_deg(normalized_shape, self.geometry),
+            azimuth_min_deg=-180.0,
+            azimuth_max_deg=180.0,
+        )
+        self._cached_cake_lut(
+            normalized_shape,
+            radial_deg,
+            azimuthal_deg,
+            DetectorCakeGeometry(
+                pixel_size_m=float(self.geometry.pixel_size_m),
+                distance_m=float(self.geometry.distance_m),
+                center_row_px=float(self.geometry.center_row_px),
+                center_col_px=float(self.geometry.center_col_px),
+            ),
+            engine=engine,
+            workers=workers,
+        )
 
     def _cached_cake_lut(
         self,
@@ -536,6 +595,66 @@ class FastAzimuthalIntegrator:
             self.geometry,
             workers=workers,
         )
+
+
+def start_exact_cake_geometry_warmup_in_background(
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...] | list[int],
+    *,
+    npt_rad: int = 1000,
+    npt_azim: int = 720,
+    engine: str = "auto",
+    workers: int | str | None = "auto",
+) -> bool:
+    """Warm detector maps and the default LUT for one live integrator in a daemon thread."""
+
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return False
+    normalized_shape = _normalize_detector_shape(tuple(detector_shape))
+    if normalized_shape is None:
+        return False
+    warm_key = (
+        int(id(ai)),
+        normalized_shape,
+        int(max(1, npt_rad)),
+        int(max(1, npt_azim)),
+    )
+
+    with _EXACT_CAKE_GEOMETRY_WARMUP_LOCK:
+        if warm_key in _EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED:
+            return False
+        existing = _EXACT_CAKE_GEOMETRY_WARMUP_THREADS.get(warm_key)
+        if existing is not None and existing.is_alive():
+            return False
+
+        def _run() -> None:
+            try:
+                ai.warm_geometry_cache(
+                    normalized_shape,
+                    npt_rad=int(max(1, npt_rad)),
+                    npt_azim=int(max(1, npt_azim)),
+                    engine=engine,
+                    workers=workers,
+                )
+            finally:
+                with _EXACT_CAKE_GEOMETRY_WARMUP_LOCK:
+                    _EXACT_CAKE_GEOMETRY_WARMUP_THREADS.pop(warm_key, None)
+                    _EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED[warm_key] = None
+                    _EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED.move_to_end(warm_key)
+                    while (
+                        len(_EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED)
+                        > _GEOMETRY_WARMUP_COMPLETION_LIMIT
+                    ):
+                        _EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED.popitem(last=False)
+
+        thread = threading.Thread(
+            target=_run,
+            name="exact-cake-geometry-warmup",
+            daemon=True,
+        )
+        _EXACT_CAKE_GEOMETRY_WARMUP_THREADS[warm_key] = thread
+        thread.start()
+        return True
 
 
 def convert_image_to_angle_space(

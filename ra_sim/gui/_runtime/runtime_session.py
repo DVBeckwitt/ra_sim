@@ -122,7 +122,10 @@ from ra_sim.simulation.engine import (
     simulate_qr_rods as simulate_qr_rods_request,
 )
 from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background
-from ra_sim.simulation.exact_cake_portable import FastAzimuthalIntegrator
+from ra_sim.simulation.exact_cake_portable import (
+    FastAzimuthalIntegrator,
+    start_exact_cake_geometry_warmup_in_background,
+)
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.simulation.types import (
     BeamSamples,
@@ -10611,6 +10614,13 @@ def do_update():
         image_signature_summary=_live_cache_signature_summary(new_sim_image_sig),
     )
     ai = simulation_runtime_state.ai_cache["ai"]
+    if simulation_runtime_state.unscaled_image is not None:
+        start_exact_cake_geometry_warmup_in_background(
+            ai,
+            np.asarray(simulation_runtime_state.unscaled_image).shape,
+            npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS,
+            npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
+        )
     sim_caking_sig = (
         new_sim_image_sig,
         sig,
