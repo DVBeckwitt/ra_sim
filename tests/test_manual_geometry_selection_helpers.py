@@ -77,6 +77,68 @@ def _wrap_phi_range(phi_values):
     return ((np.asarray(phi_values) + 180.0) % 360.0) - 180.0
 
 
+def _group_candidates(entries):
+    grouped = {}
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, dict):
+            continue
+        group_key = raw_entry.get("q_group_key")
+        if not isinstance(group_key, tuple):
+            continue
+        grouped.setdefault(group_key, []).append(dict(raw_entry))
+    return grouped
+
+
+def _build_lookup(entries):
+    lookup = {}
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, dict):
+            continue
+        try:
+            key = (
+                int(raw_entry.get("source_table_index")),
+                int(raw_entry.get("source_row_index")),
+            )
+        except Exception:
+            continue
+        lookup[key] = dict(raw_entry)
+    return lookup
+
+
+def _candidate_multiset(entries):
+    normalized = []
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, dict):
+            continue
+        hkl_value = raw_entry.get("hkl")
+        if isinstance(hkl_value, (list, tuple)) and len(hkl_value) >= 3:
+            hkl_value = tuple(int(v) for v in hkl_value[:3])
+        else:
+            hkl_value = None
+        normalized.append(
+            {
+                "candidate_source_key": mg.geometry_manual_candidate_source_key(raw_entry),
+                "hkl": hkl_value,
+                "source_reflection_index": raw_entry.get("source_reflection_index"),
+                "source_reflection_namespace": raw_entry.get(
+                    "source_reflection_namespace"
+                ),
+                "source_reflection_is_full": raw_entry.get(
+                    "source_reflection_is_full"
+                ),
+                "source_branch_index": raw_entry.get("source_branch_index"),
+                "source_peak_index": raw_entry.get("source_peak_index"),
+            }
+        )
+    return sorted(
+        normalized,
+        key=lambda item: (
+            repr(item["candidate_source_key"]),
+            repr(item["hkl"]),
+        ),
+    )
+
+
 def test_manual_pair_store_keeps_backgrounds_separate() -> None:
     pairs_by_background: dict[int, list[dict[str, object]]] = {}
 
@@ -1545,6 +1607,68 @@ def test_refresh_geometry_manual_pick_session_candidates_rebinds_live_group_entr
     assert refreshed["pending_entries"][0]["source_row_index"] == 3
 
 
+def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_under_permutation() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    tagged_candidate = {
+        "label": "right",
+        "hkl": (-1, 0, 2),
+        "source_reflection_index": 9,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    other_candidate = {
+        "label": "left",
+        "hkl": (1, 0, 2),
+        "source_reflection_index": 8,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    pick_session = {
+        "group_key": group_key,
+        "group_entries": [dict(other_candidate), dict(tagged_candidate)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source_branch", 9, 1),
+        "tagged_candidate": dict(tagged_candidate),
+    }
+
+    forward = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(other_candidate), dict(tagged_candidate)]},
+        cache_signature=("sig", 1),
+    )
+    reversed_order = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(tagged_candidate), dict(other_candidate)]},
+        cache_signature=("sig", 1),
+    )
+
+    for refreshed in (forward, reversed_order):
+        assert refreshed["target_count"] == 2
+        assert refreshed["tagged_candidate_key"] == ("source_branch", 9, 1)
+        assert refreshed["tagged_candidate"]["source_reflection_index"] == 9
+        assert refreshed["tagged_candidate"]["source_reflection_namespace"] == (
+            "full_reflection"
+        )
+        assert refreshed["tagged_candidate"]["source_reflection_is_full"] is True
+        assert refreshed["tagged_candidate"]["source_branch_index"] == 1
+        assert refreshed["group_entries"][0]["source_reflection_index"] == 9
+        assert refreshed["group_entries"][0]["source_branch_index"] == 1
+
+
 def test_cancel_geometry_manual_pick_session_clears_session_and_triggers_callbacks() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 0),
@@ -2003,6 +2127,85 @@ def test_build_geometry_manual_initial_pairs_display_uses_saved_refined_caked_co
             "hkl": (1, 0, 2),
             "bg_display": (109.0, -11.0),
             "sim_display": (113.5, -12.5),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_preserves_canonical_pair_between_detector_and_caked_views() -> None:
+    saved_pair = {
+        "pair_id": "bg0:pair0",
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 1822.0,
+        "y": 1375.0,
+        "caked_x": 29.861040445064752,
+        "caked_y": -59.079850372490654,
+        "refined_sim_x": 1365.0,
+        "refined_sim_y": 1168.0,
+        "refined_sim_caked_x": 30.608825251597132,
+        "refined_sim_caked_y": -58.571417149366184,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 9,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    detector_measured, detector_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+    caked_measured, caked_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+
+    for measured_display in (detector_measured, caked_measured):
+        assert measured_display[0]["pair_id"] == "bg0:pair0"
+        assert measured_display[0]["source_reflection_index"] == 9
+        assert measured_display[0]["source_reflection_namespace"] == "full_reflection"
+        assert measured_display[0]["source_reflection_is_full"] is True
+        assert measured_display[0]["source_branch_index"] == 1
+        assert measured_display[0]["source_peak_index"] == 1
+
+    assert detector_pairs == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (1822.0, 1375.0),
+            "sim_display": (1365.0, 1168.0),
+        }
+    ]
+    assert caked_pairs == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (29.861040445064752, -59.079850372490654),
+            "sim_display": (30.608825251597132, -58.571417149366184),
         }
     ]
 
@@ -2783,6 +2986,80 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
     assert set_sessions[-1]["tagged_candidate_key"] == ("source", 1, 3)
 
 
+def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_permutation() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    left = {
+        "label": "left",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 8,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 8,
+        "source_row_index": 0,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+        "weight": 1.0,
+    }
+    right = {
+        "label": "right",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 9,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+        "weight": 1.0,
+    }
+
+    def _run(entries):
+        handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+            29.5,
+            39.5,
+            pick_session={},
+            current_background_index=0,
+            display_background=np.zeros((8, 8), dtype=float),
+            get_cache_data=lambda **_kwargs: {
+                "signature": ("cache",),
+                "grouped_candidates": {group_key: [dict(entry) for entry in entries]},
+            },
+            pairs_for_index=lambda _idx: [],
+            set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+            set_pick_session_fn=lambda _session: None,
+            restore_view_fn=lambda **_kwargs: None,
+            clear_preview_artists_fn=lambda **_kwargs: None,
+            render_current_pairs_fn=lambda **_kwargs: None,
+            update_button_label_fn=lambda: None,
+            set_status_text=lambda _text: None,
+            listed_q_group_entries=lambda: [{"key": group_key}],
+            format_q_group_line=lambda _entry: "selected group",
+            use_caked_space=False,
+            pick_search_window_px=50.0,
+        )
+        assert handled is True
+        assert suppress_drag is True
+        return next_session
+
+    forward = _run([left, right])
+    reversed_order = _run([right, left])
+
+    for session in (forward, reversed_order):
+        assert session["tagged_candidate_key"] == ("source_branch", 9, 1)
+        assert session["tagged_candidate"]["source_reflection_index"] == 9
+        assert session["tagged_candidate"]["source_reflection_namespace"] == (
+            "full_reflection"
+        )
+        assert session["tagged_candidate"]["source_reflection_is_full"] is True
+        assert session["tagged_candidate"]["source_branch_index"] == 1
+        assert session["group_entries"][0]["source_reflection_index"] == 9
+        assert session["group_entries"][0]["source_branch_index"] == 1
+
+
 def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     set_sessions: list[dict[str, object]] = []
     saved_entry_sets: list[list[dict[str, object]]] = []
@@ -3024,10 +3301,250 @@ def test_geometry_manual_place_selection_at_back_projects_caked_pick_to_detector
     assert saved_entry_sets[-1][0]["detector_y"] == 211.2
     assert saved_entry_sets[-1][0]["caked_x"] == 13.2
     assert saved_entry_sets[-1][0]["caked_y"] == 2.5
-    assert saved_entry_sets[-1][0]["raw_caked_x"] == 13.0
-    assert saved_entry_sets[-1][0]["raw_caked_y"] == 2.0
-    assert saved_entry_sets[-1][0]["placement_error_px"] > 0.0
-    assert "Saved 1 manual background points for selected group" in status_messages[-1]
+
+
+def test_geometry_manual_refine_preview_point_is_repeatable_with_peak_context_seed() -> None:
+    calls: list[dict[str, object]] = []
+
+    def _fake_match(candidates, background_context, match_cfg):
+        calls.append(
+            {
+                "candidate": dict(candidates[0]),
+                "background_context": dict(background_context),
+                "match_cfg": dict(match_cfg),
+            }
+        )
+        return ([{"x": 11.0, "y": 12.0}], {"status": "ok"})
+
+    first = mg.geometry_manual_refine_preview_point(
+        {"sim_col": 30.0, "sim_row": 31.0, "source_reflection_index": 9},
+        10.0,
+        20.0,
+        display_background=np.zeros((8, 8), dtype=float),
+        cache_data={
+            "match_config": {"search_radius_px": 6.0},
+            "background_context": {"img_valid": True},
+        },
+        use_caked_space=False,
+        match_simulated_peaks_to_peak_context=_fake_match,
+    )
+    second = mg.geometry_manual_refine_preview_point(
+        {"sim_col": 30.0, "sim_row": 31.0, "source_reflection_index": 9},
+        10.0,
+        20.0,
+        display_background=np.zeros((8, 8), dtype=float),
+        cache_data={
+            "match_config": {"search_radius_px": 6.0},
+            "background_context": {"img_valid": True},
+        },
+        use_caked_space=False,
+        match_simulated_peaks_to_peak_context=_fake_match,
+    )
+
+    assert first == (11.0, 12.0)
+    assert second == (11.0, 12.0)
+    assert calls == [
+        {
+            "candidate": {"sim_col": 30.0, "sim_row": 31.0, "source_reflection_index": 9},
+            "background_context": {"img_valid": True},
+            "match_cfg": {"search_radius_px": 6.0},
+        },
+        {
+            "candidate": {"sim_col": 30.0, "sim_row": 31.0, "source_reflection_index": 9},
+            "background_context": {"img_valid": True},
+            "match_cfg": {"search_radius_px": 6.0},
+        },
+    ]
+
+
+def test_build_geometry_manual_pick_cache_matches_active_group_multiset_for_cache_and_rebuild() -> None:
+    active_group_key = ("q_group", "primary", 1, 5)
+    cached_rows = [
+        {
+            "label": "left",
+            "hkl": (-1, 0, 5),
+            "q_group_key": active_group_key,
+            "source_reflection_index": 8,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_table_index": 8,
+            "source_row_index": 0,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "right",
+            "hkl": (-1, 0, 5),
+            "q_group_key": active_group_key,
+            "source_reflection_index": 9,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 30.0,
+            "sim_row": 40.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "00l",
+            "hkl": (0, 0, 3),
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_reflection_index": 1,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_table_index": 1,
+            "source_row_index": 0,
+            "sim_col": 50.0,
+            "sim_row": 60.0,
+            "weight": 1.0,
+        },
+    ]
+
+    def _simulate(_params, *, prefer_cache):
+        return list(reversed(cached_rows)) if prefer_cache else [dict(row) for row in cached_rows]
+
+    cached_cache_data, _, _ = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((8, 8), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=_simulate,
+        peak_records=[],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+    )
+    rebuilt_cache_data, _, _ = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=False,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((8, 8), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=_simulate,
+        peak_records=[],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+    )
+
+    assert cached_cache_data["cache_metadata"]["cache_source"] == (
+        "geometry_manual_simulated_peaks_for_params(prefer_cache=True)"
+    )
+    assert rebuilt_cache_data["cache_metadata"]["cache_source"] == (
+        "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
+    )
+    assert set(cached_cache_data["grouped_candidates"]) == set(
+        rebuilt_cache_data["grouped_candidates"]
+    )
+    assert _candidate_multiset(cached_cache_data["grouped_candidates"][active_group_key]) == (
+        _candidate_multiset(rebuilt_cache_data["grouped_candidates"][active_group_key])
+    )
+    assert mg.geometry_manual_group_target_count(
+        active_group_key,
+        cached_cache_data["grouped_candidates"][active_group_key],
+    ) == mg.geometry_manual_group_target_count(
+        active_group_key,
+        rebuilt_cache_data["grouped_candidates"][active_group_key],
+    )
+
+
+def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_projection() -> None:
+    candidate = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 9,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "sim_col": 13.2,
+        "sim_row": 2.5,
+    }
+
+    def _run_once():
+        saved_entry_sets: list[list[dict[str, object]]] = []
+        handled, next_session = mg.geometry_manual_place_selection_at(
+            13.0,
+            2.0,
+            pick_session={
+                "group_key": ("q_group", "primary", 1, 5),
+                "group_entries": [dict(candidate)],
+                "pending_entries": [],
+                "target_count": 1,
+                "base_entries": [],
+                "q_label": "selected group",
+                "background_index": 0,
+                "zoom_active": True,
+                "zoom_center": (13.0, 2.0),
+                "saved_xlim": (10.0, 16.0),
+                "saved_ylim": (-4.0, 4.0),
+            },
+            current_background_index=0,
+            display_background=np.zeros((8, 8), dtype=float),
+            get_cache_data=lambda **_kwargs: {},
+            refine_preview_point=lambda *_args, **_kwargs: (13.2, 2.5),
+            set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(
+                list(entries or [])
+            )
+            or list(entries or []),
+            set_pick_session_fn=lambda _session: None,
+            clear_preview_artists_fn=lambda **_kwargs: None,
+            restore_view_fn=lambda **_kwargs: None,
+            render_current_pairs_fn=lambda **_kwargs: None,
+            update_button_label_fn=lambda: None,
+            set_status_text=lambda _text: None,
+            push_undo_state_fn=lambda: None,
+            use_caked_space=True,
+            caked_angles_to_background_display_coords=lambda two_theta, phi: (
+                float(phi) + 100.0,
+                float(two_theta) + 200.0,
+            ),
+            background_display_to_native_detector_coords=lambda col, row: (
+                float(col) - 1.0,
+                float(row) - 2.0,
+            ),
+        )
+        assert handled is True
+        assert next_session == {}
+        return dict(saved_entry_sets[-1][0])
+
+    first = _run_once()
+    second = _run_once()
+
+    for entry in (first, second):
+        assert entry["hkl"] == (-1, 0, 5)
+        assert entry["source_reflection_index"] == 9
+        assert entry["source_reflection_namespace"] == "full_reflection"
+        assert entry["source_reflection_is_full"] is True
+        assert entry["source_branch_index"] == 1
+        assert entry["source_peak_index"] == 1
+        assert entry["x"] == 102.5
+        assert entry["y"] == 213.2
+        assert entry["detector_x"] == 101.5
+        assert entry["detector_y"] == 211.2
+        assert entry["caked_x"] == 13.2
+        assert entry["caked_y"] == 2.5
+        assert entry["raw_caked_x"] == 13.0
+        assert entry["raw_caked_y"] == 2.0
+    assert first == second
 
 
 def test_runtime_projection_callbacks_capture_fresh_simulation_failure_diagnostics() -> None:

@@ -207,3 +207,44 @@ def test_save_and_load_geometry_placements_file_preserves_caked_angles(
     assert entry["raw_caked_x"] == 22.75
     assert entry["raw_caked_y"] == -17.25
     assert entry["stale_caked_fields"] is True
+
+
+def test_save_and_load_geometry_placements_file_preserves_canonical_trusted_pair_fields(
+    tmp_path,
+):
+    file_path = tmp_path / "placements_canonical.json"
+    save_geometry_placements_file(
+        file_path,
+        {
+            "background_files": ["bg0.osc"],
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "background_name": "bg0.osc",
+                    "entries": [
+                        {
+                            "label": "-1,0,5",
+                            "hkl": (-1, 0, 5),
+                            "x": 1822.0,
+                            "y": 1375.0,
+                            "source_reflection_index": 9,
+                            "source_reflection_namespace": "full_reflection",
+                            "source_reflection_is_full": True,
+                            "source_branch_index": 1,
+                            "source_peak_index": 1,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    loaded = load_geometry_placements_file(file_path)
+
+    entry = loaded["state"]["manual_pairs"][0]["entries"][0]
+    assert entry["hkl"] == [-1, 0, 5]
+    assert entry["source_reflection_index"] == 9
+    assert entry["source_reflection_namespace"] == "full_reflection"
+    assert entry["source_reflection_is_full"] is True
+    assert entry["source_branch_index"] == 1
+    assert entry["source_peak_index"] == 1
