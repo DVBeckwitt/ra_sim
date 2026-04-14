@@ -117,6 +117,41 @@ def test_geometry_q_group_manager_nominal_hkl_grouping_supports_cache_rows() -> 
     assert entries[0]["hkl_preview"] == [(1, 0, 1)]
 
 
+def test_build_geometry_fit_simulated_peaks_recovers_mirrored_live_source_branches() -> None:
+    hit_tables = [
+        np.asarray(
+            [
+                [10.0, 100.0, 200.0, -0.44, -1.0, 0.0, 13.0],
+            ],
+            dtype=float,
+        ),
+        np.asarray(
+            [
+                [11.0, 140.0, 150.0, -0.41, -1.0, 0.0, 13.0],
+            ],
+            dtype=float,
+        ),
+    ]
+
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        hit_tables,
+        image_shape=(256, 256),
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+        peak_table_lattice=[(3.0, 5.0, "primary"), (3.0, 5.0, "primary")],
+        source_reflection_indices=[220, 221],
+    )
+
+    assert len(peaks) == 2
+    assert [peak["source_reflection_index"] for peak in peaks] == [220, 221]
+    assert [peak["source_reflection_namespace"] for peak in peaks] == [
+        "full_reflection",
+        "full_reflection",
+    ]
+    assert [peak["source_reflection_is_full"] for peak in peaks] == [True, True]
+    assert [peak["source_branch_index"] for peak in peaks] == [0, 1]
+    assert [peak["source_peak_index"] for peak in peaks] == [0, 1]
+
+
 def test_geometry_q_group_manager_builds_entries_from_hit_tables() -> None:
     entries = geometry_q_group_manager.build_geometry_q_group_entries(
         [

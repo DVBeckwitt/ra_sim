@@ -2349,6 +2349,295 @@ def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -
     assert len(result["tied_candidate_inventory"]) == 2
 
 
+def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None:
+    probe = _load_new2_probe_module()
+
+    result = probe._compatibility_probe_slot_indices(
+        [
+            {
+                "q_group_key": ("q_group", "primary", 0, 1),
+                "hkl": (0, 0, 1),
+            },
+            {
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "hkl": (-1, 0, 5),
+            },
+            {
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "hkl": (-1, 0, 5),
+            },
+        ]
+    )
+
+    assert result == [1, 2]
+
+
+def test_saved_to_selected_identity_delta_reports_legacy_canonicalization() -> None:
+    probe = _load_new2_probe_module()
+
+    saved_entry = {
+        "pair_id": "bg0:pair1",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 15,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    selected_entry = {
+        "pair_id": "selected-live-row",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 214,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    delta, classification = probe._classify_saved_to_selected_identity_delta(
+        saved_entry,
+        selected_entry,
+    )
+
+    assert classification == "legacy_saved_identity_canonicalized"
+    assert delta == {
+        "source_reflection_index": {
+            "saved": 15,
+            "selected": 214,
+        }
+    }
+
+
+def test_saved_state_compatibility_validation_handles_two_entry_pair(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    saved_entries = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "hkl": (-1, 0, 5),
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "hkl": (-1, 0, 5),
+        },
+    ]
+    context = {
+        "ok": True,
+        "state_path": str(tmp_path / "dummy.json"),
+        "background_index": 0,
+        "saved_pair_count": 2,
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "dataset_pair_count": 2,
+        "dataset_resolved_source_pair_count": 2,
+        "harness_validation": {"valid": True},
+        "saved_entries": saved_entries,
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+    calls: list[int] = []
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+
+    def _fake_validate_pair(
+        *,
+        background_index,
+        slot_index,
+        expected_pair_id,
+        saved_entries,
+        dataset,
+        group_cache,
+        entry_display_coords,
+    ):
+        calls.append(int(slot_index))
+        identity_entry = {
+            "hkl": (-1, 0, 5),
+            "source_reflection_index": 200 + int(slot_index),
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": int(slot_index),
+            "source_peak_index": int(slot_index),
+        }
+        return {
+            "ok": True,
+            "expected_pair_id": expected_pair_id,
+            "chosen_resolved_live_row": dict(identity_entry),
+            "emitted_preflight_normalized_pair": {
+                **identity_entry,
+                "pair_id": expected_pair_id,
+            },
+            "fit_resolution_kind": "source_row",
+            "overlay_resolution_kind": "source_row",
+        }
+
+    monkeypatch.setattr(probe, "_validate_pair", _fake_validate_pair)
+
+    result = probe._run_saved_state_compatibility_validation(tmp_path / "dummy.json", 0)
+
+    assert result["ok"] is True
+    assert result["classification"] == "pass"
+    assert result["checked_slot_indices"] == [0, 1]
+    assert calls == [0, 1, 0, 1]
+
+
+def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    saved_entries = [
+        {
+            "pair_id": f"bg0:pair{slot_index}",
+            "q_group_key": ("q_group", "primary", 1, slot_index + 1),
+            "hkl": (-1, 0, slot_index + 1),
+            "source_reflection_index": 10 + slot_index,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": slot_index % 2,
+            "source_peak_index": slot_index % 2,
+        }
+        for slot_index in range(9)
+    ]
+    state_path = tmp_path / "new2_like.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": len(saved_entries),
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "dataset_pair_count": len(saved_entries),
+        "dataset_resolved_source_pair_count": len(saved_entries),
+        "harness_validation": {"valid": True},
+        "saved_entries": saved_entries,
+        "saved_state": {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(entry) for entry in saved_entries],
+                    }
+                ],
+                "peak_records": ["stale"],
+                "q_group_rows": ["stale"],
+            },
+        },
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+
+    def _fake_run_fresh_slot_validation(*, context, background_index, slot_index, runtime):
+        emitted_pair = {
+            "pair_id": f"bg0:pair{int(slot_index)}",
+            "q_group_key": ("q_group", "primary", 1, int(slot_index) + 1),
+            "hkl": (-1, 0, int(slot_index) + 1),
+            "source_reflection_index": 200 + int(slot_index),
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": int(slot_index) % 2,
+            "source_peak_index": int(slot_index) % 2,
+        }
+        return {
+            "ok": True,
+            "classification": "pass",
+            "slot_index": int(slot_index),
+            "saved_to_selected_identity_delta": (
+                {
+                    "source_reflection_index": {
+                        "saved": 10 + int(slot_index),
+                        "selected": 200 + int(slot_index),
+                    }
+                }
+                if int(slot_index) == 0
+                else {}
+            ),
+            "saved_to_selected_identity_delta_classification": (
+                "legacy_saved_identity_canonicalized"
+                if int(slot_index) == 0
+                else "saved_identity_already_canonical"
+            ),
+            "emitted_pair": emitted_pair,
+        }
+
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        _fake_run_fresh_slot_validation,
+    )
+
+    def _fake_compatibility(state_path, background_index):
+        exported_state = load_gui_state_file(state_path)["state"]
+        manual_pairs = exported_state["geometry"]["manual_pairs"]
+        assert len(manual_pairs) == 1
+        assert [entry["pair_id"] for entry in manual_pairs[0]["entries"]] == [
+            f"bg0:pair{slot_index}" for slot_index in range(9)
+        ]
+        assert exported_state["geometry"]["peak_records"] == []
+        assert exported_state["geometry"]["q_group_rows"] == []
+        return {
+            "ok": True,
+            "classification": "pass",
+            "checked_slot_indices": list(range(9)),
+        }
+
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        _fake_compatibility,
+    )
+
+    export_path = tmp_path / "fresh_all_export.json"
+    result = probe._run_fresh_all_contract_validation(
+        state_path,
+        background_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is True
+    assert result["classification"] == "pass"
+    assert len(result["slot_results"]) == 9
+    assert result["slot_results"][0]["saved_to_selected_identity_delta_classification"] == (
+        "legacy_saved_identity_canonicalized"
+    )
+    assert result["slot_results"][1]["saved_to_selected_identity_delta_classification"] == (
+        "saved_identity_already_canonical"
+    )
+    assert result["exported_fresh_state_path"] == str(export_path.resolve())
+    assert result["exported_state_compatibility"]["ok"] is True
+
+
 def test_fresh_one_pair_gui_state_save_reload_preflight_resolves_without_generic_fallback(
     tmp_path,
 ) -> None:

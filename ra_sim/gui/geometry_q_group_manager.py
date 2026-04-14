@@ -484,6 +484,110 @@ def reflection_q_group_metadata(
     return key, float(qr_val), float(qz_val)
 
 
+def _simulated_peak_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        sim_col = float(entry.get("sim_col", np.nan))
+        sim_row = float(entry.get("sim_row", np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None
+    return float(sim_col), float(sim_row)
+
+
+def _repair_mirrored_source_row_branches(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    *,
+    cluster_radius_px: float = 24.0,
+) -> None:
+    """Recover mirrored branch ids when signed phi resolves only one side."""
+
+    radius = max(0.0, float(cluster_radius_px))
+    grouped_entries: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for entry in simulated_peaks or ():
+        if not isinstance(entry, dict):
+            continue
+        group_key = geometry_q_group_key_from_entry(entry)
+        if group_key is None:
+            continue
+        grouped_entries.setdefault(group_key, []).append(entry)
+
+    for entries in grouped_entries.values():
+        if len(entries) < 2:
+            continue
+        existing_branches = {
+            int(branch_idx)
+            for branch_idx, _branch_source, _branch_reason in (
+                resolve_canonical_branch(
+                    entry,
+                    allow_legacy_peak_fallback=False,
+                )
+                for entry in entries
+            )
+            if branch_idx in {0, 1}
+        }
+        if existing_branches == {0, 1}:
+            continue
+
+        clusters: list[list[dict[str, object]]] = []
+        anchors: list[tuple[float, float] | None] = []
+        for entry in entries:
+            point = _simulated_peak_display_point(entry)
+            if point is None:
+                clusters = []
+                break
+            chosen_idx = None
+            chosen_dist = float("inf")
+            for cluster_idx, anchor in enumerate(anchors):
+                if anchor is None:
+                    continue
+                dist = float(math.hypot(point[0] - anchor[0], point[1] - anchor[1]))
+                if dist <= radius and dist < chosen_dist:
+                    chosen_idx = cluster_idx
+                    chosen_dist = dist
+            if chosen_idx is None:
+                clusters.append([entry])
+                anchors.append(point)
+                continue
+            clusters[chosen_idx].append(entry)
+            cols = []
+            rows = []
+            for cluster_entry in clusters[chosen_idx]:
+                cluster_point = _simulated_peak_display_point(cluster_entry)
+                if cluster_point is None:
+                    continue
+                cols.append(float(cluster_point[0]))
+                rows.append(float(cluster_point[1]))
+            anchors[chosen_idx] = (
+                float(np.mean(np.asarray(cols, dtype=float))),
+                float(np.mean(np.asarray(rows, dtype=float))),
+            )
+
+        if len(clusters) != 2:
+            continue
+
+        ordered_cluster_indices = sorted(
+            range(len(clusters)),
+            key=lambda idx: (
+                anchors[idx][0] if anchors[idx] is not None else float("inf"),
+                anchors[idx][1] if anchors[idx] is not None else float("inf"),
+            ),
+        )
+        branch_by_cluster = {
+            int(ordered_cluster_indices[0]): 0,
+            int(ordered_cluster_indices[1]): 1,
+        }
+        for cluster_idx, cluster_entries in enumerate(clusters):
+            branch_idx = int(branch_by_cluster[int(cluster_idx)])
+            for entry in cluster_entries:
+                entry["source_branch_index"] = int(branch_idx)
+                entry["source_peak_index"] = int(branch_idx)
+
+
 def geometry_q_group_key_from_entry(
     entry: Mapping[str, object] | None,
 ) -> tuple[object, ...] | None:
@@ -819,6 +923,7 @@ def build_geometry_fit_simulated_peaks(
                 peak_record["q_group_nominal_hkl"] = True
             simulated_peaks.append(peak_record)
 
+    _repair_mirrored_source_row_branches(simulated_peaks)
     return simulated_peaks
 
 

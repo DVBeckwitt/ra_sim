@@ -827,8 +827,19 @@ def _run_saved_state_compatibility_validation(
         }
     }
 
+    checked_slot_indices = _compatibility_probe_slot_indices(saved_entries)
+    result["checked_slot_indices"] = list(checked_slot_indices)
+    if not checked_slot_indices:
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = {
+            "failure_stage": "saved_entry_missing",
+            "message": "no saved entries available for compatibility validation",
+        }
+        return result
+
     checked_pairs: list[dict[str, object]] = []
-    for slot_index in (1, 2):
+    for slot_index in checked_slot_indices:
         pair_result = _validate_pair(
             background_index=int(background_index),
             slot_index=int(slot_index),
@@ -846,9 +857,9 @@ def _run_saved_state_compatibility_validation(
             result["failed_pair"] = pair_result
             return result
 
-    if _canonical_identity(checked_pairs[0]["chosen_resolved_live_row"]) == _canonical_identity(
-        checked_pairs[1]["chosen_resolved_live_row"]
-    ):
+    if len(checked_pairs) >= 2 and _canonical_identity(
+        checked_pairs[0]["chosen_resolved_live_row"]
+    ) == _canonical_identity(checked_pairs[1]["chosen_resolved_live_row"]):
         result["ok"] = False
         result["classification"] = "seam_failure"
         result["checked_pairs"] = checked_pairs
@@ -911,6 +922,27 @@ def _run_saved_state_compatibility_validation(
     result["checked_pairs"] = checked_pairs
     result["full_sweep"] = full_sweep
     return result
+
+
+def _compatibility_probe_slot_indices(
+    saved_entries: Sequence[Mapping[str, object]],
+) -> list[int]:
+    if not saved_entries:
+        return []
+
+    grouped_slots: dict[tuple[object, object], list[int]] = {}
+    for slot_index, entry in enumerate(saved_entries):
+        group_key = (
+            _normalize_q_group_key(entry.get("q_group_key")),
+            _normalize_hkl(entry.get("hkl")),
+        )
+        grouped_slots.setdefault(group_key, []).append(int(slot_index))
+
+    for slot_indices in grouped_slots.values():
+        if len(slot_indices) >= 2:
+            return list(slot_indices[:2])
+
+    return list(range(min(2, len(saved_entries))))
 
 
 def _public_context_fields(context: Mapping[str, object]) -> dict[str, object]:
@@ -1061,11 +1093,72 @@ def _compatibility_summary(result: Mapping[str, object] | None) -> dict[str, obj
     }
 
 
-def _build_fresh_one_pair_state(
+def _comparable_identity_payload(
+    entry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    payload = _identity_payload(entry)
+    payload.pop("pair_id", None)
+    return payload
+
+
+def _saved_to_selected_identity_delta(
+    saved_entry: Mapping[str, object] | None,
+    selected_entry: Mapping[str, object] | None,
+) -> dict[str, dict[str, object]]:
+    saved_identity = _comparable_identity_payload(saved_entry)
+    selected_identity = _comparable_identity_payload(selected_entry)
+    return {
+        key: {
+            "saved": saved_identity.get(key),
+            "selected": selected_identity.get(key),
+        }
+        for key in saved_identity.keys()
+        if saved_identity.get(key) != selected_identity.get(key)
+    }
+
+
+def _trusted_full_reflection_identity_payload(
+    payload: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    return (
+        payload.get("source_reflection_namespace") == "full_reflection"
+        and bool(payload.get("source_reflection_is_full", False))
+        and payload.get("source_reflection_index") is not None
+    )
+
+
+def _classify_saved_to_selected_identity_delta(
+    saved_entry: Mapping[str, object] | None,
+    selected_entry: Mapping[str, object] | None,
+) -> tuple[dict[str, dict[str, object]], str]:
+    delta = _saved_to_selected_identity_delta(saved_entry, selected_entry)
+    if not delta:
+        return delta, "saved_identity_already_canonical"
+    if "hkl" in delta:
+        return delta, "hkl_drift"
+    if "source_reflection_namespace" in delta:
+        return delta, "namespace_drift"
+    if "source_reflection_is_full" in delta:
+        return delta, "full_trust_drift"
+    if "source_branch_index" in delta or "source_peak_index" in delta:
+        return delta, "branch_drift"
+    if set(delta.keys()) == {"source_reflection_index"}:
+        saved_identity = _comparable_identity_payload(saved_entry)
+        selected_identity = _comparable_identity_payload(selected_entry)
+        if _trusted_full_reflection_identity_payload(
+            saved_identity
+        ) and _trusted_full_reflection_identity_payload(selected_identity):
+            return delta, "legacy_saved_identity_canonicalized"
+    return delta, "identity_drift"
+
+
+def _build_fresh_pair_state(
     *,
     saved_state: Mapping[str, object],
     background_index: int,
-    emitted_pair: Mapping[str, object],
+    emitted_pairs: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     next_state = copy.deepcopy(dict(saved_state))
     files_state = dict(next_state.get("files", {}))
@@ -1082,23 +1175,38 @@ def _build_fresh_one_pair_state(
     variables_state["geometry_fit_background_selection_var"] = str(selection_text)
     files_state["current_background_index"] = int(background_index)
 
-    existing_bg_entry = next(
-        (
-            dict(item)
-            for item in (geometry_state.get("manual_pairs", []) or ())
-            if isinstance(item, Mapping)
-            and int(item.get("background_index", -1)) == int(background_index)
-        ),
-        {},
-    )
-    geometry_state["manual_pairs"] = [
-        {
-            "background_index": int(background_index),
-            "background_name": existing_bg_entry.get("background_name"),
-            "background_path": existing_bg_entry.get("background_path"),
-            "entries": [dict(emitted_pair)],
-        }
-    ]
+    existing_bg_entry = {}
+    manual_pairs = []
+    replaced_target_background = False
+    target_bg_entry = None
+    for raw_entry in geometry_state.get("manual_pairs", []) or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        entry_background_index = int(entry.get("background_index", -1))
+        if entry_background_index == int(background_index):
+            existing_bg_entry = dict(entry)
+            if not replaced_target_background:
+                target_bg_entry = {
+                    "background_index": int(background_index),
+                    "background_name": existing_bg_entry.get("background_name"),
+                    "background_path": existing_bg_entry.get("background_path"),
+                    "entries": [dict(pair) for pair in emitted_pairs],
+                }
+                manual_pairs.append(target_bg_entry)
+                replaced_target_background = True
+            continue
+        manual_pairs.append(entry)
+    if not replaced_target_background:
+        manual_pairs.append(
+            {
+                "background_index": int(background_index),
+                "background_name": existing_bg_entry.get("background_name"),
+                "background_path": existing_bg_entry.get("background_path"),
+                "entries": [dict(pair) for pair in emitted_pairs],
+            }
+        )
+    geometry_state["manual_pairs"] = manual_pairs
     geometry_state["peak_records"] = []
     geometry_state["q_group_rows"] = []
 
@@ -1108,27 +1216,25 @@ def _build_fresh_one_pair_state(
     return next_state
 
 
-def _run_fresh_contract_validation(
-    state_path: Path,
+def _build_fresh_one_pair_state(
     *,
+    saved_state: Mapping[str, object],
     background_index: int,
-    sentinel_slot_index: int = 1,
+    emitted_pair: Mapping[str, object],
 ) -> dict[str, object]:
-    context = _prepare_validation_context(state_path, background_index)
-    if not bool(context.get("ok", False)):
-        return context
-    saved_entries = list(context["saved_entries"])
-    if int(sentinel_slot_index) >= len(saved_entries):
-        result = _public_context_fields(context)
-        result["ok"] = False
-        result["classification"] = "seam_failure"
-        result["failure_stage"] = "saved_entry_missing"
-        result["message"] = "sentinel slot missing from saved entries"
-        result["slot_index"] = int(sentinel_slot_index)
-        return result
+    return _build_fresh_pair_state(
+        saved_state=saved_state,
+        background_index=int(background_index),
+        emitted_pairs=[dict(emitted_pair)],
+    )
 
+
+def _prepare_fresh_slot_runtime(
+    *,
+    context: Mapping[str, object],
+    background_index: int,
+) -> dict[str, object]:
     projection_callbacks = context["projection_callbacks"]
-    manual_dataset_bindings = context["manual_dataset_bindings"]
     group_cache = dict(context["group_cache"])
     current_source_rows = _current_source_rows_for_background(
         background_index=int(background_index),
@@ -1143,15 +1249,64 @@ def _run_fresh_contract_validation(
         except Exception:
             grouped_candidates = {}
         grouped_candidate_source = "current_live_source_rows"
-    saved_entry = dict(saved_entries[int(sentinel_slot_index)])
+    return {
+        "projection_callbacks": projection_callbacks,
+        "group_cache": group_cache,
+        "current_source_rows": current_source_rows,
+        "grouped_candidates": grouped_candidates,
+        "grouped_candidate_source": grouped_candidate_source,
+    }
+
+
+def _run_fresh_slot_validation(
+    *,
+    context: Mapping[str, object],
+    background_index: int,
+    slot_index: int,
+    runtime: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    saved_entries = list(context["saved_entries"])
+    result = {
+        "slot_index": int(slot_index),
+    }
+    if int(slot_index) >= len(saved_entries):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = {
+            "failure_stage": "saved_entry_missing",
+            "selection_status": "missing_saved_entry",
+            "slot_index": int(slot_index),
+        }
+        return result
+
+    prepared_runtime = (
+        dict(runtime)
+        if isinstance(runtime, Mapping)
+        else _prepare_fresh_slot_runtime(
+            context=context,
+            background_index=int(background_index),
+        )
+    )
+    projection_callbacks = prepared_runtime["projection_callbacks"]
+    group_cache = dict(prepared_runtime["group_cache"])
+    current_source_rows = [
+        dict(entry)
+        for entry in prepared_runtime.get("current_source_rows", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
+    grouped_candidates = dict(prepared_runtime.get("grouped_candidates", {}) or {})
+    grouped_candidate_source = prepared_runtime.get("grouped_candidate_source")
+
+    saved_entry = dict(saved_entries[int(slot_index)])
     selected_candidate_result = _select_live_candidate_for_saved_entry(
         saved_entry=saved_entry,
         grouped_candidates=grouped_candidates,
     )
-    result = _public_context_fields(context)
-    result["sentinel_slot_index"] = int(sentinel_slot_index)
     result["saved_entry"] = {
-        **_identity_payload(saved_entry, pair_id=f"bg{int(background_index)}:pair{int(sentinel_slot_index)}"),
+        **_identity_payload(
+            saved_entry,
+            pair_id=f"bg{int(background_index)}:pair{int(slot_index)}",
+        ),
         "q_group_key": _normalize_q_group_key(saved_entry.get("q_group_key")),
         "saved_simulated_display_hint": _saved_simulated_display_hint(saved_entry),
     }
@@ -1172,6 +1327,30 @@ def _run_fresh_contract_validation(
         return result
 
     selected_candidate = dict(selected_candidate_result["selected_candidate"])
+    saved_to_selected_delta, delta_classification = (
+        _classify_saved_to_selected_identity_delta(
+            saved_entry,
+            selected_candidate,
+        )
+    )
+    result["saved_to_selected_identity_delta"] = saved_to_selected_delta
+    result["saved_to_selected_identity_delta_classification"] = delta_classification
+    if delta_classification not in {
+        "saved_identity_already_canonical",
+        "legacy_saved_identity_canonicalized",
+    }:
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_pair"] = {
+            "failure_stage": "saved_to_selected_identity_alignment",
+            "selection_status": "identity_drift",
+            "saved_to_selected_identity_delta_classification": delta_classification,
+            "saved_to_selected_identity_delta": saved_to_selected_delta,
+            "saved_identity": _comparable_identity_payload(saved_entry),
+            "selected_identity": _comparable_identity_payload(selected_candidate),
+        }
+        return result
+
     selected_group_key = _normalize_q_group_key(selected_candidate.get("q_group_key"))
     group_entries = [
         dict(entry)
@@ -1234,7 +1413,7 @@ def _run_fresh_contract_validation(
             lambda _idx, entries: saved_entry_sets.append(list(entries or []))
             or list(entries or [])
         ),
-        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        set_pick_session_fn=lambda session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,
         render_current_pairs_fn=lambda **_kwargs: None,
@@ -1259,8 +1438,8 @@ def _run_fresh_contract_validation(
         latest_entries = saved_entry_sets[-1]
         if latest_entries:
             emitted_pair = dict(latest_entries[-1])
-    emitted_identity = _identity_payload(emitted_pair)
-    expected_identity = _identity_payload(selected_candidate)
+    emitted_identity = _comparable_identity_payload(emitted_pair)
+    expected_identity = _comparable_identity_payload(selected_candidate)
     fresh_emission = {
         "handled": bool(handled),
         "use_caked_space": bool(use_caked_space),
@@ -1277,6 +1456,8 @@ def _run_fresh_contract_validation(
             detector_display_hint=_saved_simulated_display_hint(saved_entry),
         ),
         "emitted_pair": dict(emitted_pair) if isinstance(emitted_pair, Mapping) else None,
+        "expected_identity": expected_identity,
+        "actual_identity": emitted_identity,
     }
     result["fresh_emission"] = fresh_emission
     if (
@@ -1332,8 +1513,8 @@ def _run_fresh_contract_validation(
     if (
         len(detector_measured) != 1
         or len(caked_measured) != 1
-        or _identity_payload(detector_measured[0]) != emitted_identity
-        or _identity_payload(caked_measured[0]) != emitted_identity
+        or _comparable_identity_payload(detector_measured[0]) != emitted_identity
+        or _comparable_identity_payload(caked_measured[0]) != emitted_identity
         or len(detector_pairs) != 1
         or len(caked_pairs) != 1
     ):
@@ -1387,7 +1568,7 @@ def _run_fresh_contract_validation(
     )
     for refreshed_session in (refreshed, refreshed_reversed):
         tagged_candidate = refreshed_session.get("tagged_candidate")
-        tagged_identity = _identity_payload(tagged_candidate)
+        tagged_identity = _comparable_identity_payload(tagged_candidate)
         if (
             refreshed_session.get("group_key") != selected_group_key
             or refreshed_session.get("tagged_candidate_key") != selected_candidate_key
@@ -1402,10 +1583,10 @@ def _run_fresh_contract_validation(
             }
             return result
 
-    fresh_state = _build_fresh_one_pair_state(
+    fresh_state = _build_fresh_pair_state(
         saved_state=context["saved_state"],
         background_index=int(background_index),
-        emitted_pair=emitted_pair,
+        emitted_pairs=[dict(emitted_pair)],
     )
     with tempfile.TemporaryDirectory(prefix="new2_fresh_probe_") as tmp_dir:
         temp_state_path = Path(tmp_dir) / "fresh_one_pair_state.json"
@@ -1422,17 +1603,132 @@ def _run_fresh_contract_validation(
         result["failed_pair"] = fresh_preflight.get("failed_pair", fresh_preflight)
         return result
 
+    result["emitted_pair"] = dict(emitted_pair)
+    result["ok"] = True
+    result["classification"] = "pass"
+    return result
+
+
+def _run_fresh_contract_validation(
+    state_path: Path,
+    *,
+    background_index: int,
+    sentinel_slot_index: int = 1,
+    export_fresh_state_path: Path | None = None,
+) -> dict[str, object]:
+    context = _prepare_validation_context(state_path, background_index)
+    if not bool(context.get("ok", False)):
+        return context
+
+    result = _public_context_fields(context)
+    result["sentinel_slot_index"] = int(sentinel_slot_index)
+    runtime = _prepare_fresh_slot_runtime(
+        context=context,
+        background_index=int(background_index),
+    )
+    slot_result = _run_fresh_slot_validation(
+        context=context,
+        background_index=int(background_index),
+        slot_index=int(sentinel_slot_index),
+        runtime=runtime,
+    )
+    result.update(slot_result)
+    if not bool(slot_result.get("ok", False)):
+        return result
+
+    emitted_pair = slot_result.get("emitted_pair")
+    fresh_state = _build_fresh_pair_state(
+        saved_state=context["saved_state"],
+        background_index=int(background_index),
+        emitted_pairs=[dict(emitted_pair)] if isinstance(emitted_pair, Mapping) else [],
+    )
+    if export_fresh_state_path is not None:
+        export_fresh_state_path = export_fresh_state_path.expanduser().resolve()
+        export_fresh_state_path.parent.mkdir(parents=True, exist_ok=True)
+        save_gui_state_file(export_fresh_state_path, fresh_state)
+        result["exported_fresh_state_path"] = str(export_fresh_state_path)
+
     compatibility = _run_saved_state_compatibility_validation(
         state_path,
         int(background_index),
     )
     result["new2_compatibility"] = _compatibility_summary(compatibility)
-    result["ok"] = True
     result["classification"] = (
         "fresh_contract_pass"
         if bool(compatibility.get("ok", False))
         else "fresh_contract_pass_new2_compatibility_fail"
     )
+    result["ok"] = True
+    return result
+
+
+def _run_fresh_all_contract_validation(
+    state_path: Path,
+    *,
+    background_index: int,
+    export_fresh_state_path: Path | None = None,
+) -> dict[str, object]:
+    context = _prepare_validation_context(state_path, background_index)
+    if not bool(context.get("ok", False)):
+        return context
+
+    saved_entries = list(context["saved_entries"])
+    result = _public_context_fields(context)
+    runtime = _prepare_fresh_slot_runtime(
+        context=context,
+        background_index=int(background_index),
+    )
+    slot_results: list[dict[str, object]] = []
+    emitted_pairs: list[dict[str, object]] = []
+    for slot_index in range(len(saved_entries)):
+        slot_result = _run_fresh_slot_validation(
+            context=context,
+            background_index=int(background_index),
+            slot_index=int(slot_index),
+            runtime=runtime,
+        )
+        slot_results.append(slot_result)
+        if not bool(slot_result.get("ok", False)):
+            result["ok"] = False
+            result["classification"] = "seam_failure"
+            result["slot_results"] = slot_results
+            result["failed_slot_index"] = int(slot_index)
+            result["failed_pair"] = slot_result.get("failed_pair", slot_result)
+            return result
+        emitted_pair = slot_result.get("emitted_pair")
+        if isinstance(emitted_pair, Mapping):
+            emitted_pairs.append(dict(emitted_pair))
+
+    result["slot_results"] = slot_results
+    fresh_state = _build_fresh_pair_state(
+        saved_state=context["saved_state"],
+        background_index=int(background_index),
+        emitted_pairs=emitted_pairs,
+    )
+
+    if export_fresh_state_path is not None:
+        export_path = export_fresh_state_path.expanduser().resolve()
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        save_gui_state_file(export_path, fresh_state)
+        result["exported_fresh_state_path"] = str(export_path)
+        compatibility = _run_saved_state_compatibility_validation(
+            export_path,
+            int(background_index),
+        )
+    else:
+        with tempfile.TemporaryDirectory(prefix="new2_fresh_all_probe_") as tmp_dir:
+            temp_state_path = Path(tmp_dir) / "fresh_all_state.json"
+            save_gui_state_file(temp_state_path, fresh_state)
+            compatibility = _run_saved_state_compatibility_validation(
+                temp_state_path,
+                int(background_index),
+            )
+
+    result["exported_state_compatibility"] = compatibility
+    result["ok"] = bool(compatibility.get("ok", False))
+    result["classification"] = "pass" if result["ok"] else "seam_failure"
+    if not result["ok"]:
+        result["failed_pair"] = compatibility.get("failed_pair", compatibility)
     return result
 
 
@@ -1449,17 +1745,42 @@ def main() -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("full", "fresh", "compatibility"),
+        choices=("full", "fresh", "fresh-all", "compatibility"),
         default="full",
         help="Validation mode. Default: full.",
+    )
+    parser.add_argument(
+        "--sentinel-slot-index",
+        type=int,
+        default=1,
+        help="Saved entry slot to use for fresh emission validation. Default: 1.",
+    )
+    parser.add_argument(
+        "--export-fresh-state",
+        help="Optional path to write the validated fresh one-pair state.",
     )
     args = parser.parse_args()
 
     resolved_state_path = Path(args.state).expanduser().resolve()
+    export_fresh_state_path = (
+        Path(args.export_fresh_state) if args.export_fresh_state else None
+    )
+    if args.mode == "compatibility" and export_fresh_state_path is not None:
+        parser.error(
+            "--export-fresh-state requires --mode fresh, --mode fresh-all, or --mode full."
+        )
     if args.mode == "fresh":
         result = _run_fresh_contract_validation(
             resolved_state_path,
             background_index=int(args.background_index),
+            sentinel_slot_index=int(args.sentinel_slot_index),
+            export_fresh_state_path=export_fresh_state_path,
+        )
+    elif args.mode == "fresh-all":
+        result = _run_fresh_all_contract_validation(
+            resolved_state_path,
+            background_index=int(args.background_index),
+            export_fresh_state_path=export_fresh_state_path,
         )
     elif args.mode == "compatibility":
         result = _run_saved_state_compatibility_validation(
@@ -1470,6 +1791,8 @@ def main() -> int:
         result = _run_fresh_contract_validation(
             resolved_state_path,
             background_index=int(args.background_index),
+            sentinel_slot_index=int(args.sentinel_slot_index),
+            export_fresh_state_path=export_fresh_state_path,
         )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0 if bool(result.get("ok", False)) else 1

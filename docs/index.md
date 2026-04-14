@@ -15,6 +15,7 @@ you need implementation-level detail.
 - [gui-workflow.md](gui-workflow.md): operator workflow through calibrant, GUI, and refinement stages
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
 - [debug-and-cache.md](debug-and-cache.md): debug controls, output locations, and cache retention
+- [grouped-pick-recovery.md](grouped-pick-recovery.md): current recovery status and acceptance plan for canonical grouped-pick identity
 - [troubleshooting.md](troubleshooting.md): common setup, config, and workflow failures
 
 ## Quick Routing
@@ -24,6 +25,7 @@ If you need to:
 - run or launch the app: start with [README.md](../README.md#usage)
 - change simulation/fitting code: read [architecture.md](architecture.md) and then the code map in [simulation_and_fitting.md](simulation_and_fitting.md#code-map)
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
+- debug grouped-pick manual geometry identity/preflight: read [grouped-pick-recovery.md](grouped-pick-recovery.md) and then [geometry fitting from picked spots](simulation_and_fitting.md#geometry-fitting-from-picked-spots)
 - debug logs or retained caches: read [debug-and-cache.md](debug-and-cache.md)
 - fix local setup or path issues: read [troubleshooting.md](troubleshooting.md)
 
