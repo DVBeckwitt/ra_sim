@@ -2042,6 +2042,68 @@ def test_geometry_fit_correspondence_simulated_point_rejects_legacy_branch_alias
     assert reason == "missing_source_peak_index"
 
 
+def test_resolve_fixed_source_matches_allows_trusted_deadband_source_row_fallback() -> None:
+    entry = {
+        "hkl": (1, 0, 3),
+        "label": "1,0,3",
+        "x": 4.0,
+        "y": 4.0,
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "resolved_table_index": 0,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    hit_tables = [
+        np.asarray(
+            [[1.0, 4.0, 4.0, 0.0, 1.0, 0.0, 3.0]],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert fallback_entries == []
+    assert len(resolved) == 1
+    assert resolved[0][1] == (4.0, 4.0)
+    assert resolved[0][2] == (1, 0, 3)
+    assert resolution_lookup[id(entry)]["resolution_kind"] == "fixed_source"
+    assert resolution_lookup[id(entry)]["resolution_reason"] == "resolved"
+
+
+def test_geometry_fit_correspondence_simulated_point_allows_trusted_deadband_source_row_fallback() -> None:
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        {
+            "hkl": (1, 0, 3),
+            "source_reflection_index": 0,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "frozen_locator_kind": "trusted_branch",
+            "frozen_table_namespace": "full_reflection",
+            "frozen_table_index": 0,
+            "frozen_branch_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+        hit_tables=[
+            np.asarray(
+                [[1.0, 4.0, 4.0, 0.0, 1.0, 0.0, 3.0]],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 4.0, 4.0, 4.0, 4.0, 4.0]], dtype=np.float64),
+    )
+
+    assert point == (4.0, 4.0)
+    assert reason == "resolved_source_row_fallback"
+
+
 def _install_identity_bridge_solver_stubs(monkeypatch) -> None:
     def fake_process(*args, **kwargs):
         image_size = int(args[2])

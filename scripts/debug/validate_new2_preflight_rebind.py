@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ra_sim.fitting import optimization as opt
 from ra_sim import headless_geometry_fit as hgf
 from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import geometry_fit as gui_geometry_fit
@@ -22,6 +23,30 @@ from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 
 class _CapturedPreflight(RuntimeError):
     """Internal stop used to abort headless execution after preflight capture."""
+
+
+class _CapturedExecutionSetup(RuntimeError):
+    """Internal stop used to abort headless execution after setup capture."""
+
+
+CANONICAL_IDENTITY_FIELDS = (
+    "hkl",
+    "source_reflection_index",
+    "source_reflection_namespace",
+    "source_reflection_is_full",
+    "source_branch_index",
+    "source_peak_index",
+)
+
+DOWNSTREAM_IDENTITY_STAGE_ORDER = (
+    "input_contract",
+    "preflight_normalized_pairs",
+    "solver_request_measured_peaks",
+    "subset_measured_entries",
+    "seed_correspondence_records",
+    "full_beam_identity_coverage",
+    "full_beam_fixed_correspondence",
+)
 
 
 def _finalize_cli_result(
@@ -94,6 +119,13 @@ def _identity_payload(
     }
 
 
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
 def _canonical_identity(entry: Mapping[str, object] | None) -> tuple[object, ...] | None:
     if not isinstance(entry, Mapping):
         return None
@@ -133,6 +165,91 @@ def _normalized_branch_index(entry: Mapping[str, object] | None) -> int | None:
         if value in {0, 1}:
             return int(value)
     return None
+
+
+def _entry_dataset_index(
+    entry: Mapping[str, object] | None,
+    *,
+    default: int = 0,
+) -> int:
+    if not isinstance(entry, Mapping):
+        return int(default)
+    try:
+        return int(entry.get("dataset_index", default))
+    except Exception:
+        return int(default)
+
+
+def _downstream_identity_key(
+    entry: Mapping[str, object] | None,
+    *,
+    default_dataset_index: int = 0,
+) -> tuple[object, ...] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    return (
+        _entry_dataset_index(entry, default=default_dataset_index),
+        _normalize_hkl(entry.get("hkl")),
+        entry.get("source_reflection_index"),
+        entry.get("source_branch_index"),
+        entry.get("source_peak_index"),
+    )
+
+
+def _saved_entries_for_background(
+    saved_state: Mapping[str, object] | None,
+    *,
+    background_index: int,
+) -> list[dict[str, object]]:
+    geometry_state = (
+        saved_state.get("geometry", {})
+        if isinstance(saved_state, Mapping) and isinstance(saved_state.get("geometry"), Mapping)
+        else {}
+    )
+    manual_pairs = geometry_state.get("manual_pairs", []) or ()
+    for raw_entry in manual_pairs:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        try:
+            entry_background_index = int(raw_entry.get("background_index", -1))
+        except Exception:
+            entry_background_index = -1
+        if entry_background_index != int(background_index):
+            continue
+        return [
+            dict(entry)
+            for entry in (raw_entry.get("entries", []) or ())
+            if isinstance(entry, Mapping)
+        ]
+    return []
+
+
+def _all_saved_manual_pair_entries(
+    saved_state: Mapping[str, object] | None,
+) -> list[dict[str, object]]:
+    geometry_state = (
+        saved_state.get("geometry", {})
+        if isinstance(saved_state, Mapping) and isinstance(saved_state.get("geometry"), Mapping)
+        else {}
+    )
+    entries: list[dict[str, object]] = []
+    for raw_entry in geometry_state.get("manual_pairs", []) or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        background_index = _int_or_none(raw_entry.get("background_index"))
+        for slot_index, raw_pair in enumerate(raw_entry.get("entries", []) or ()):
+            if not isinstance(raw_pair, Mapping):
+                continue
+            pair = dict(raw_pair)
+            if background_index is not None:
+                pair.setdefault("background_index", int(background_index))
+            pair.setdefault("slot_index", int(slot_index))
+            entries.append(pair)
+    return entries
+
+
+def _empty_saved_sequence(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and len(value) == 0
 
 
 def _saved_simulated_display_hint(
@@ -419,6 +536,475 @@ def _capture_preflight(
         raise RuntimeError("Failed to capture headless preflight context.")
     return captured
 
+
+def _capture_execution_setup(
+    *,
+    saved_state: dict[str, object],
+    state_path: Path,
+) -> dict[str, object]:
+    captured: dict[str, object] = {}
+    original_prepare = hgf.gui_geometry_fit.prepare_runtime_geometry_fit_run
+    original_execute = hgf.gui_geometry_fit.execute_runtime_geometry_fit
+
+    def _prepare_wrapper(*args, **kwargs):
+        result = original_prepare(*args, **kwargs)
+        captured["prepare_kwargs"] = dict(kwargs)
+        captured["prepare_result"] = result
+        return result
+
+    def _execute_wrapper(*args, **kwargs):
+        captured["execute_kwargs"] = dict(kwargs)
+        raise _CapturedExecutionSetup()
+
+    hgf.gui_geometry_fit.prepare_runtime_geometry_fit_run = _prepare_wrapper
+    hgf.gui_geometry_fit.execute_runtime_geometry_fit = _execute_wrapper
+    try:
+        hgf.run_headless_geometry_fit(
+            saved_state,
+            state_path=state_path,
+            downloads_dir=state_path.parent,
+            stamp=f"{state_path.stem}_downstream_probe",
+        )
+    except _CapturedExecutionSetup:
+        pass
+    except Exception as exc:
+        captured["execution_error_text"] = str(exc)
+    finally:
+        hgf.gui_geometry_fit.prepare_runtime_geometry_fit_run = original_prepare
+        hgf.gui_geometry_fit.execute_runtime_geometry_fit = original_execute
+    if "prepare_kwargs" not in captured or "prepare_result" not in captured:
+        raise RuntimeError("Failed to capture headless execution setup context.")
+    return captured
+
+
+def _failed_stage_result(
+    stage: str,
+    *,
+    failure_reason: str,
+    failed_pair: Mapping[str, object] | None = None,
+    **extra: object,
+) -> dict[str, object]:
+    result = {
+        "stage": str(stage),
+        "ok": False,
+        "failure_reason": str(failure_reason),
+    }
+    if isinstance(failed_pair, Mapping):
+        result["failed_pair"] = dict(failed_pair)
+    result.update(extra)
+    return result
+
+
+def _deterministic_identity_sort_key(record: Mapping[str, object]) -> tuple[str, str]:
+    return (
+        repr(record.get("identity_key")),
+        repr(record.get("pair_id")),
+    )
+
+
+def _downstream_stage_record(
+    entry: Mapping[str, object] | None,
+    *,
+    default_dataset_index: int = 0,
+    slot_index: int | None = None,
+) -> dict[str, object]:
+    payload = _comparable_identity_payload(entry)
+    record = {
+        "slot_index": int(slot_index) if slot_index is not None else None,
+        "dataset_index": _entry_dataset_index(entry, default=default_dataset_index),
+        "pair_id": (
+            str(entry.get("pair_id"))
+            if isinstance(entry, Mapping) and entry.get("pair_id") is not None
+            else None
+        ),
+        "overlay_match_index": (
+            _int_or_none(entry.get("overlay_match_index"))
+            if isinstance(entry, Mapping)
+            else None
+        ),
+        "match_input_index": (
+            _int_or_none(entry.get("match_input_index"))
+            if isinstance(entry, Mapping)
+            else None
+        ),
+        "match_status": (
+            str(entry.get("match_status"))
+            if isinstance(entry, Mapping) and entry.get("match_status") is not None
+            else None
+        ),
+        "match_kind": (
+            str(entry.get("match_kind"))
+            if isinstance(entry, Mapping) and entry.get("match_kind") is not None
+            else None
+        ),
+        "resolution_kind": (
+            str(entry.get("resolution_kind"))
+            if isinstance(entry, Mapping) and entry.get("resolution_kind") is not None
+            else None
+        ),
+        "identity": payload,
+        "identity_key": _downstream_identity_key(
+            entry,
+            default_dataset_index=default_dataset_index,
+        ),
+    }
+    return record
+
+
+def _ordered_stage_records(
+    entries: Sequence[object] | None,
+    *,
+    default_dataset_index: int = 0,
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for slot_index, raw_entry in enumerate(entries or ()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        records.append(
+            _downstream_stage_record(
+                raw_entry,
+                default_dataset_index=default_dataset_index,
+                slot_index=int(slot_index),
+            )
+        )
+    return records
+
+
+def _ordered_stage_result(
+    stage: str,
+    *,
+    expected_entries: Sequence[object] | None,
+    actual_entries: Sequence[object] | None,
+    default_dataset_index: int = 0,
+) -> dict[str, object]:
+    expected_records = _ordered_stage_records(
+        expected_entries,
+        default_dataset_index=default_dataset_index,
+    )
+    actual_records = _ordered_stage_records(
+        actual_entries,
+        default_dataset_index=default_dataset_index,
+    )
+    if len(expected_records) != len(actual_records):
+        return _failed_stage_result(
+            stage,
+            failure_reason="pair_count_drift",
+            expected_count=len(expected_records),
+            actual_count=len(actual_records),
+            expected_identity_keys=[
+                record.get("identity_key") for record in expected_records
+            ],
+            actual_identity_keys=[
+                record.get("identity_key") for record in actual_records
+            ],
+        )
+    for index, (expected_record, actual_record) in enumerate(
+        zip(expected_records, actual_records)
+    ):
+        if (
+            expected_record.get("identity_key") != actual_record.get("identity_key")
+            or expected_record.get("identity") != actual_record.get("identity")
+        ):
+            return _failed_stage_result(
+                stage,
+                failure_reason="identity_or_order_drift",
+                failed_pair={
+                    "slot_index": int(index),
+                    "expected": expected_record,
+                    "actual": actual_record,
+                },
+                expected_identity_keys=[
+                    record.get("identity_key") for record in expected_records
+                ],
+                actual_identity_keys=[
+                    record.get("identity_key") for record in actual_records
+                ],
+            )
+    return {
+        "stage": str(stage),
+        "ok": True,
+        "pair_count": len(actual_records),
+        "identity_keys": [record.get("identity_key") for record in actual_records],
+    }
+
+
+def _coverage_stage_result(
+    stage: str,
+    *,
+    expected_entries: Sequence[object] | None,
+    actual_entries: Sequence[object] | None,
+    default_dataset_index: int = 0,
+) -> dict[str, object]:
+    expected_records = _ordered_stage_records(
+        expected_entries,
+        default_dataset_index=default_dataset_index,
+    )
+    actual_records = _ordered_stage_records(
+        actual_entries,
+        default_dataset_index=default_dataset_index,
+    )
+    expected_by_key: dict[tuple[object, ...], dict[str, object]] = {}
+    for record in expected_records:
+        identity_key = record.get("identity_key")
+        if identity_key is None:
+            return _failed_stage_result(
+                stage,
+                failure_reason="missing_expected_identity_key",
+                failed_pair=record,
+            )
+        expected_by_key[identity_key] = record
+    actual_by_key: dict[tuple[object, ...], dict[str, object]] = {}
+    for record in actual_records:
+        identity_key = record.get("identity_key")
+        if identity_key is None:
+            return _failed_stage_result(
+                stage,
+                failure_reason="missing_actual_identity_key",
+                failed_pair=record,
+            )
+        if identity_key in actual_by_key:
+            return _failed_stage_result(
+                stage,
+                failure_reason="duplicate_actual_identity_key",
+                failed_pair={
+                    "identity_key": identity_key,
+                    "first": actual_by_key[identity_key],
+                    "second": record,
+                },
+            )
+        if str(record.get("match_status", "") or "").strip().lower() != "matched":
+            return _failed_stage_result(
+                stage,
+                failure_reason="unresolved_full_beam_correspondence",
+                failed_pair=record,
+            )
+        actual_by_key[identity_key] = record
+    expected_keys = set(expected_by_key.keys())
+    actual_keys = set(actual_by_key.keys())
+    if expected_keys != actual_keys:
+        return _failed_stage_result(
+            stage,
+            failure_reason="identity_coverage_drift",
+            expected_identity_keys=sorted(expected_keys, key=repr),
+            actual_identity_keys=sorted(actual_keys, key=repr),
+        )
+    for identity_key in sorted(expected_keys, key=repr):
+        expected_record = expected_by_key[identity_key]
+        actual_record = actual_by_key[identity_key]
+        if expected_record.get("identity") != actual_record.get("identity"):
+            return _failed_stage_result(
+                stage,
+                failure_reason="canonical_identity_drift",
+                failed_pair={
+                    "identity_key": identity_key,
+                    "expected": expected_record,
+                    "actual": actual_record,
+                },
+            )
+    return {
+        "stage": str(stage),
+        "ok": True,
+        "pair_count": len(actual_by_key),
+        "identity_keys": sorted(expected_keys, key=repr),
+    }
+
+
+def _flatten_fixed_correspondence_groups(
+    grouped: Mapping[int, Sequence[object]] | None,
+) -> list[dict[str, object]]:
+    flattened: list[dict[str, object]] = []
+    if not isinstance(grouped, Mapping):
+        return flattened
+    for dataset_index in sorted(grouped.keys()):
+        for raw_entry in grouped.get(dataset_index, ()) or ():
+            if isinstance(raw_entry, Mapping):
+                flattened.append(dict(raw_entry))
+    return flattened
+
+
+def _full_beam_record_is_fixed(entry: Mapping[str, object] | None) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    match_status = str(entry.get("match_status", "") or "").strip().lower()
+    resolution_kind = str(entry.get("resolution_kind", "") or "").strip().lower()
+    match_kind = str(entry.get("match_kind", "") or "").strip().lower()
+    return (
+        match_status == "matched"
+        and resolution_kind == "fixed_source"
+        and match_kind in {"", "fixed_correspondence"}
+    )
+
+
+def _fixed_correspondence_stage_result(
+    stage: str,
+    *,
+    expected_entries: Sequence[object] | None,
+    actual_entries: Sequence[object] | None,
+    final_metric_name: str,
+    default_dataset_index: int = 0,
+) -> dict[str, object]:
+    if str(final_metric_name).strip() != "full_beam_fixed_correspondence":
+        return _failed_stage_result(
+            stage,
+            failure_reason="unexpected_final_metric_name",
+            final_metric_name=str(final_metric_name),
+        )
+    grouped = opt._build_geometry_fit_fixed_correspondence_groups(actual_entries)
+    actual_records = [
+        _downstream_stage_record(
+            entry,
+            default_dataset_index=default_dataset_index,
+        )
+        for entry in _flatten_fixed_correspondence_groups(grouped)
+    ]
+    expected_records = [
+        _downstream_stage_record(
+            entry,
+            default_dataset_index=default_dataset_index,
+        )
+        for entry in expected_entries or ()
+        if isinstance(entry, Mapping)
+    ]
+    for record in actual_records:
+        if not _full_beam_record_is_fixed(record):
+            return _failed_stage_result(
+                stage,
+                failure_reason="non_fixed_full_beam_correspondence",
+                failed_pair=record,
+                final_metric_name=str(final_metric_name),
+            )
+    expected_sorted = sorted(expected_records, key=_deterministic_identity_sort_key)
+    actual_sorted = sorted(actual_records, key=_deterministic_identity_sort_key)
+    if len(expected_sorted) != len(actual_sorted):
+        return _failed_stage_result(
+            stage,
+            failure_reason="pair_count_drift",
+            expected_count=len(expected_sorted),
+            actual_count=len(actual_sorted),
+            final_metric_name=str(final_metric_name),
+        )
+    for index, (expected_record, actual_record) in enumerate(
+        zip(expected_sorted, actual_sorted)
+    ):
+        if (
+            expected_record.get("identity_key") != actual_record.get("identity_key")
+            or expected_record.get("identity") != actual_record.get("identity")
+        ):
+            return _failed_stage_result(
+                stage,
+                failure_reason="canonical_identity_drift",
+                failed_pair={
+                    "slot_index": int(index),
+                    "expected": expected_record,
+                    "actual": actual_record,
+                },
+                final_metric_name=str(final_metric_name),
+            )
+    return {
+        "stage": str(stage),
+        "ok": True,
+        "pair_count": len(actual_sorted),
+        "identity_keys": [
+            record.get("identity_key") for record in actual_sorted
+        ],
+        "final_metric_name": str(final_metric_name),
+    }
+
+
+def _filter_stage_entries_for_dataset(
+    entries: Sequence[object] | None,
+    *,
+    dataset_index: int,
+) -> list[dict[str, object]]:
+    return [
+        dict(entry)
+        for entry in entries or ()
+        if isinstance(entry, Mapping)
+        and _entry_dataset_index(entry, default=int(dataset_index)) == int(dataset_index)
+    ]
+
+
+def _full_beam_point_match_entries(result: object) -> list[dict[str, object]]:
+    raw_entries = getattr(result, "point_match_diagnostics", None)
+    if isinstance(raw_entries, Sequence) and not isinstance(
+        raw_entries,
+        (str, bytes, bytearray),
+    ):
+        direct_entries = [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
+        if direct_entries:
+            return direct_entries
+    full_beam_summary = getattr(result, "full_beam_polish_summary", None)
+    if isinstance(full_beam_summary, Mapping):
+        raw_entries = full_beam_summary.get("point_match_diagnostics", ())
+        if isinstance(raw_entries, Sequence) and not isinstance(
+            raw_entries,
+            (str, bytes, bytearray),
+        ):
+            return [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
+    return []
+
+
+def _validate_downstream_identity_input(
+    saved_state: Mapping[str, object] | None,
+    *,
+    background_index: int,
+) -> dict[str, object]:
+    geometry_state = (
+        saved_state.get("geometry", {})
+        if isinstance(saved_state, Mapping) and isinstance(saved_state.get("geometry"), Mapping)
+        else {}
+    )
+    peak_records = geometry_state.get("peak_records")
+    q_group_rows = geometry_state.get("q_group_rows")
+    all_entries = _all_saved_manual_pair_entries(saved_state)
+    background_entries = _saved_entries_for_background(
+        saved_state,
+        background_index=int(background_index),
+    )
+    if not _empty_saved_sequence(peak_records):
+        return _failed_stage_result(
+            "input_contract",
+            failure_reason="peak_records_not_empty",
+            peak_records_count=(
+                len(peak_records)
+                if isinstance(peak_records, Sequence)
+                and not isinstance(peak_records, (str, bytes, bytearray))
+                else None
+            ),
+        )
+    if not _empty_saved_sequence(q_group_rows):
+        return _failed_stage_result(
+            "input_contract",
+            failure_reason="q_group_rows_not_empty",
+            q_group_rows_count=(
+                len(q_group_rows)
+                if isinstance(q_group_rows, Sequence)
+                and not isinstance(q_group_rows, (str, bytes, bytearray))
+                else None
+            ),
+        )
+    if not background_entries:
+        return _failed_stage_result(
+            "input_contract",
+            failure_reason="missing_manual_pairs_for_background",
+            background_index=int(background_index),
+        )
+    for entry in all_entries:
+        if (
+            entry.get("source_reflection_namespace") != "full_reflection"
+            or bool(entry.get("source_reflection_is_full", False)) is not True
+        ):
+            return _failed_stage_result(
+                "input_contract",
+                failure_reason="non_canonical_manual_pair",
+                failed_pair=_identity_payload(entry),
+            )
+    return {
+        "stage": "input_contract",
+        "ok": True,
+        "pair_count": len(background_entries),
+        "all_manual_pair_count": len(all_entries),
+    }
 
 def _build_group_cache(
     *,
@@ -1749,6 +2335,321 @@ def _run_fresh_all_contract_validation(
     return result
 
 
+def _run_downstream_identity_validation(
+    state_path: Path,
+    *,
+    background_index: int,
+) -> dict[str, object]:
+    payload = load_gui_state_file(state_path)
+    saved_state = dict(payload["state"])
+    saved_entries = _saved_entries_for_background(
+        saved_state,
+        background_index=int(background_index),
+    )
+    result = {
+        "state_path": str(state_path),
+        "background_index": int(background_index),
+        "saved_pair_count": int(len(saved_entries)),
+        "identity_fields_checked": list(CANONICAL_IDENTITY_FIELDS),
+        "stage_order": list(DOWNSTREAM_IDENTITY_STAGE_ORDER),
+        "stage_results": [],
+        "final_metric_name": None,
+    }
+
+    input_contract = _validate_downstream_identity_input(
+        saved_state,
+        background_index=int(background_index),
+    )
+    result["stage_results"].append(input_contract)
+    if not bool(input_contract.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "invalid_downstream_identity_input"
+        result["failed_stage"] = "input_contract"
+        result["failed_pair"] = input_contract.get("failed_pair", input_contract)
+        return result
+
+    captured = _capture_execution_setup(
+        saved_state=saved_state,
+        state_path=state_path,
+    )
+    prepare_result = captured["prepare_result"]
+    prepared_run = getattr(prepare_result, "prepared_run", None)
+    if prepared_run is None:
+        stage_result = _failed_stage_result(
+            "preflight_normalized_pairs",
+            failure_reason="prepare_runtime_geometry_fit_run_failed",
+            error_text=str(
+                getattr(prepare_result, "error_text", None)
+                or captured.get("execution_error_text")
+                or "Geometry fit preflight failed."
+            ),
+        )
+        result["stage_results"].append(stage_result)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "preflight_normalized_pairs"
+        result["failed_pair"] = stage_result.get("failed_pair", stage_result)
+        return result
+
+    prepare_kwargs = (
+        dict(captured.get("prepare_kwargs", {}))
+        if isinstance(captured.get("prepare_kwargs"), Mapping)
+        else {}
+    )
+    bindings = prepare_kwargs.get("bindings")
+    params = (
+        dict(prepare_kwargs.get("params", {}) or {})
+        if isinstance(prepare_kwargs.get("params", {}) or {}, Mapping)
+        else {}
+    )
+    downstream_runtime_cfg = prepared_run.geometry_runtime_cfg
+    if bindings is not None and callable(getattr(bindings, "build_runtime_config", None)):
+        try:
+            downstream_runtime_cfg = gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+                bindings.build_runtime_config(dict(params or {})),
+                joint_background_mode=bool(
+                    getattr(prepared_run, "joint_background_mode", False)
+                ),
+            )
+        except Exception:
+            downstream_runtime_cfg = prepared_run.geometry_runtime_cfg
+    downstream_prepared_run = replace(
+        prepared_run,
+        geometry_runtime_cfg=(
+            dict(downstream_runtime_cfg)
+            if isinstance(downstream_runtime_cfg, Mapping)
+            else downstream_runtime_cfg
+        ),
+    )
+
+    current_dataset = (
+        dict(downstream_prepared_run.current_dataset)
+        if isinstance(downstream_prepared_run.current_dataset, Mapping)
+        else {}
+    )
+    current_dataset_index = _entry_dataset_index(current_dataset, default=0)
+    preflight_entries = [
+        dict(entry)
+        for entry in current_dataset.get("measured_for_fit", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
+    preflight_stage = _ordered_stage_result(
+        "preflight_normalized_pairs",
+        expected_entries=saved_entries,
+        actual_entries=preflight_entries,
+        default_dataset_index=int(current_dataset_index),
+    )
+    result["stage_results"].append(preflight_stage)
+    if not bool(preflight_stage.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "preflight_normalized_pairs"
+        result["failed_pair"] = preflight_stage.get("failed_pair", preflight_stage)
+        return result
+
+    execute_kwargs = (
+        dict(captured.get("execute_kwargs", {}))
+        if isinstance(captured.get("execute_kwargs"), Mapping)
+        else {}
+    )
+    setup = execute_kwargs.get("setup")
+    postprocess_config = getattr(setup, "postprocess_config", None)
+    solver_inputs = getattr(postprocess_config, "solver_inputs", None)
+    var_names = list(
+        execute_kwargs.get(
+            "var_names",
+            (
+                prepare_kwargs.get("var_names", ())
+                if isinstance(prepare_kwargs, Mapping)
+                else ()
+            ),
+        )
+        or ()
+    )
+    if solver_inputs is None:
+        stage_result = _failed_stage_result(
+            "solver_request_measured_peaks",
+            failure_reason="missing_execution_setup",
+        )
+        result["stage_results"].append(stage_result)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "solver_request_measured_peaks"
+        result["failed_pair"] = stage_result.get("failed_pair", stage_result)
+        return result
+
+    try:
+        request = gui_geometry_fit.build_geometry_fit_solver_request(
+            prepared_run=downstream_prepared_run,
+            var_names=var_names,
+            solver_inputs=solver_inputs,
+        )
+    except Exception as exc:
+        stage_result = _failed_stage_result(
+            "solver_request_measured_peaks",
+            failure_reason="solver_request_build_failed",
+            error_text=str(exc),
+        )
+        result["stage_results"].append(stage_result)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "solver_request_measured_peaks"
+        result["failed_pair"] = stage_result.get("failed_pair", stage_result)
+        return result
+    solver_entries = [
+        dict(entry)
+        for entry in request.measured_peaks or ()
+        if isinstance(entry, Mapping)
+    ]
+    solver_stage = _ordered_stage_result(
+        "solver_request_measured_peaks",
+        expected_entries=preflight_entries,
+        actual_entries=solver_entries,
+        default_dataset_index=int(current_dataset_index),
+    )
+    result["stage_results"].append(solver_stage)
+    if not bool(solver_stage.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "solver_request_measured_peaks"
+        result["failed_pair"] = solver_stage.get("failed_pair", solver_stage)
+        return result
+
+    try:
+        dataset_contexts = opt._build_geometry_fit_dataset_contexts(
+            request.miller,
+            request.intensities,
+            request.params,
+            request.measured_peaks,
+            None,
+            request.dataset_specs,
+        )
+    except Exception as exc:
+        stage_result = _failed_stage_result(
+            "subset_measured_entries",
+            failure_reason="subset_context_build_failed",
+            error_text=str(exc),
+        )
+        result["stage_results"].append(stage_result)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "subset_measured_entries"
+        result["failed_pair"] = stage_result.get("failed_pair", stage_result)
+        return result
+    if current_dataset_index >= len(dataset_contexts):
+        stage_result = _failed_stage_result(
+            "subset_measured_entries",
+            failure_reason="missing_dataset_context",
+            dataset_index=int(current_dataset_index),
+            dataset_context_count=int(len(dataset_contexts)),
+        )
+        result["stage_results"].append(stage_result)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "subset_measured_entries"
+        result["failed_pair"] = stage_result.get("failed_pair", stage_result)
+        return result
+    subset_entries = [
+        dict(entry)
+        for entry in dataset_contexts[int(current_dataset_index)].subset.measured_entries
+        if isinstance(entry, Mapping)
+    ]
+    subset_stage = _ordered_stage_result(
+        "subset_measured_entries",
+        expected_entries=solver_entries,
+        actual_entries=subset_entries,
+        default_dataset_index=int(current_dataset_index),
+    )
+    result["stage_results"].append(subset_stage)
+    if not bool(subset_stage.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "subset_measured_entries"
+        result["failed_pair"] = subset_stage.get("failed_pair", subset_stage)
+        return result
+
+    try:
+        solve_result = gui_geometry_fit.solve_geometry_fit_request(
+            request,
+            solve_fit=opt.fit_geometry_parameters,
+        )
+    except Exception as exc:
+        stage_result = _failed_stage_result(
+            "seed_correspondence_records",
+            failure_reason="solve_geometry_fit_request_failed",
+            error_text=str(exc),
+        )
+        result["stage_results"].append(stage_result)
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "seed_correspondence_records"
+        result["failed_pair"] = stage_result.get("failed_pair", stage_result)
+        return result
+
+    full_beam_summary = (
+        getattr(solve_result, "full_beam_polish_summary", None)
+        if isinstance(getattr(solve_result, "full_beam_polish_summary", None), Mapping)
+        else {}
+    )
+    seed_entries = _filter_stage_entries_for_dataset(
+        full_beam_summary.get("seed_correspondence_records", ()),
+        dataset_index=int(current_dataset_index),
+    )
+    seed_stage = _ordered_stage_result(
+        "seed_correspondence_records",
+        expected_entries=subset_entries,
+        actual_entries=seed_entries,
+        default_dataset_index=int(current_dataset_index),
+    )
+    result["stage_results"].append(seed_stage)
+    if not bool(seed_stage.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "seed_correspondence_records"
+        result["failed_pair"] = seed_stage.get("failed_pair", seed_stage)
+        return result
+
+    full_beam_entries = _filter_stage_entries_for_dataset(
+        _full_beam_point_match_entries(solve_result),
+        dataset_index=int(current_dataset_index),
+    )
+    coverage_stage = _coverage_stage_result(
+        "full_beam_identity_coverage",
+        expected_entries=seed_entries,
+        actual_entries=full_beam_entries,
+        default_dataset_index=int(current_dataset_index),
+    )
+    result["stage_results"].append(coverage_stage)
+    if not bool(coverage_stage.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "full_beam_identity_coverage"
+        result["failed_pair"] = coverage_stage.get("failed_pair", coverage_stage)
+        return result
+
+    result["final_metric_name"] = str(
+        getattr(solve_result, "final_metric_name", "") or ""
+    )
+    fixed_stage = _fixed_correspondence_stage_result(
+        "full_beam_fixed_correspondence",
+        expected_entries=seed_entries,
+        actual_entries=full_beam_entries,
+        final_metric_name=result["final_metric_name"],
+        default_dataset_index=int(current_dataset_index),
+    )
+    result["stage_results"].append(fixed_stage)
+    if not bool(fixed_stage.get("ok", False)):
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["failed_stage"] = "full_beam_fixed_correspondence"
+        result["failed_pair"] = fixed_stage.get("failed_pair", fixed_stage)
+        return result
+
+    result["ok"] = True
+    result["classification"] = "pass"
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Validate fresh grouped-pick emission and saved-state preflight rebinding.",
@@ -1762,7 +2663,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("full", "fresh", "fresh-all", "compatibility"),
+        choices=("full", "fresh", "fresh-all", "compatibility", "downstream-identity"),
         default="full",
         help="Validation mode. Default: full (aliases fresh-all milestone-6 gate).",
     )
@@ -1784,7 +2685,10 @@ def main() -> int:
     )
     requested_mode = str(args.mode)
     effective_mode = "fresh-all" if requested_mode == "full" else requested_mode
-    if effective_mode == "compatibility" and export_fresh_state_path is not None:
+    if (
+        export_fresh_state_path is not None
+        and effective_mode not in {"fresh", "fresh-all"}
+    ):
         parser.error(
             "--export-fresh-state requires --mode fresh, --mode fresh-all, or --mode full."
         )
@@ -1800,6 +2704,11 @@ def main() -> int:
             resolved_state_path,
             background_index=int(args.background_index),
             export_fresh_state_path=export_fresh_state_path,
+        )
+    elif effective_mode == "downstream-identity":
+        result = _run_downstream_identity_validation(
+            resolved_state_path,
+            background_index=int(args.background_index),
         )
     elif effective_mode == "compatibility":
         result = _run_saved_state_compatibility_validation(

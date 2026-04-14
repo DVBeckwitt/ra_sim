@@ -1105,6 +1105,41 @@ def _load_new2_probe_module():
     return module
 
 
+def _write_probe_state(
+    tmp_path,
+    *,
+    entries,
+    peak_records=None,
+    q_group_rows=None,
+):
+    state_path = tmp_path / "probe_state.json"
+    save_gui_state_file(
+        state_path,
+        {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(entry) for entry in entries],
+                    }
+                ],
+                "peak_records": list(peak_records or []),
+                "q_group_rows": list(q_group_rows or []),
+            },
+        },
+    )
+    return state_path
+
+
 def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coords() -> None:
     calls: dict[str, object] = {}
 
@@ -2682,6 +2717,281 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
     )
     assert result["exported_fresh_state_path"] == str(export_path.resolve())
     assert result["exported_state_compatibility"]["ok"] is True
+
+
+def test_downstream_identity_validation_rejects_non_canonical_input(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    state_path = _write_probe_state(
+        tmp_path,
+        entries=[
+            {
+                "pair_id": "bg0:pair0",
+                "hkl": (1, 0, 0),
+                "source_reflection_index": 100,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+        peak_records=["stale"],
+    )
+
+    monkeypatch.setattr(
+        probe,
+        "_capture_execution_setup",
+        lambda **kwargs: pytest.fail("input contract should fail before preflight"),
+    )
+
+    result = probe._run_downstream_identity_validation(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "invalid_downstream_identity_input"
+    assert result["failed_stage"] == "input_contract"
+    assert [stage["stage"] for stage in result["stage_results"]] == ["input_contract"]
+
+
+def test_downstream_identity_validation_stops_at_subset_drift(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 100,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 101,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+    ]
+    state_path = _write_probe_state(tmp_path, entries=saved_entries)
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+    )
+    prepared_run = replace(
+        prepared_run,
+        current_dataset={
+            **prepared_run.current_dataset,
+            "dataset_index": 0,
+            "measured_for_fit": [dict(entry) for entry in saved_entries],
+        },
+        dataset_specs=[{"dataset_index": 0, "theta_initial": 3.0}],
+    )
+    setup = geometry_fit.GeometryFitRuntimeExecutionSetup(
+        ui_bindings="unused",
+        postprocess_config=postprocess_config,
+    )
+
+    monkeypatch.setattr(
+        probe,
+        "_capture_execution_setup",
+        lambda **kwargs: {
+            "prepare_kwargs": {"var_names": ["gamma"]},
+            "prepare_result": SimpleNamespace(prepared_run=prepared_run, error_text=None),
+            "execute_kwargs": {"setup": setup, "var_names": ["gamma"]},
+        },
+    )
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "build_geometry_fit_solver_request",
+        lambda **kwargs: SimpleNamespace(
+            measured_peaks=[dict(entry) for entry in saved_entries],
+            miller="miller",
+            intensities="intensity",
+            params={},
+            dataset_specs=[{"dataset_index": 0}],
+        ),
+    )
+    drifted_subset_entries = [dict(entry) for entry in saved_entries]
+    drifted_subset_entries[1]["source_peak_index"] = 0
+    monkeypatch.setattr(
+        probe.opt,
+        "_build_geometry_fit_dataset_contexts",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                subset=SimpleNamespace(
+                    measured_entries=[dict(entry) for entry in drifted_subset_entries]
+                )
+            )
+        ],
+    )
+    solve_calls: list[str] = []
+
+    def _fail_if_solver_runs(*args, **kwargs):
+        solve_calls.append("solve")
+        pytest.fail("solver should not run after subset-stage drift")
+
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "solve_geometry_fit_request",
+        _fail_if_solver_runs,
+    )
+
+    result = probe._run_downstream_identity_validation(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "seam_failure"
+    assert result["failed_stage"] == "subset_measured_entries"
+    assert solve_calls == []
+    assert [stage["stage"] for stage in result["stage_results"]] == [
+        "input_contract",
+        "preflight_normalized_pairs",
+        "solver_request_measured_peaks",
+        "subset_measured_entries",
+    ]
+
+
+def test_downstream_identity_validation_preserves_canonical_identity(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 100,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 101,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+    ]
+    state_path = _write_probe_state(tmp_path, entries=saved_entries)
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+    )
+    prepared_run = replace(
+        prepared_run,
+        current_dataset={
+            **prepared_run.current_dataset,
+            "dataset_index": 0,
+            "measured_for_fit": [dict(entry) for entry in saved_entries],
+        },
+        dataset_specs=[{"dataset_index": 0, "theta_initial": 3.0}],
+    )
+    setup = geometry_fit.GeometryFitRuntimeExecutionSetup(
+        ui_bindings="unused",
+        postprocess_config=postprocess_config,
+    )
+
+    monkeypatch.setattr(
+        probe,
+        "_capture_execution_setup",
+        lambda **kwargs: {
+            "prepare_kwargs": {"var_names": ["gamma"]},
+            "prepare_result": SimpleNamespace(prepared_run=prepared_run, error_text=None),
+            "execute_kwargs": {"setup": setup, "var_names": ["gamma"]},
+        },
+    )
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "build_geometry_fit_solver_request",
+        lambda **kwargs: SimpleNamespace(
+            measured_peaks=[dict(entry) for entry in saved_entries],
+            miller="miller",
+            intensities="intensity",
+            params={},
+            dataset_specs=[{"dataset_index": 0}],
+        ),
+    )
+    monkeypatch.setattr(
+        probe.opt,
+        "_build_geometry_fit_dataset_contexts",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                subset=SimpleNamespace(
+                    measured_entries=[dict(entry) for entry in saved_entries]
+                )
+            )
+        ],
+    )
+    seed_records = [
+        {
+            **dict(entry),
+            "dataset_index": 0,
+            "overlay_match_index": slot_index,
+            "match_input_index": slot_index,
+            "match_status": "matched",
+            "frozen_locator_kind": "trusted_branch",
+            "frozen_table_namespace": "full_reflection",
+        }
+        for slot_index, entry in enumerate(saved_entries)
+    ]
+    point_match_diagnostics = list(
+        reversed(
+            [
+                {
+                    **dict(entry),
+                    "dataset_index": 0,
+                    "overlay_match_index": slot_index,
+                    "match_input_index": slot_index,
+                    "match_status": "matched",
+                    "match_kind": "fixed_correspondence",
+                    "resolution_kind": "fixed_source",
+                }
+                for slot_index, entry in enumerate(saved_entries)
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "solve_geometry_fit_request",
+        lambda *args, **kwargs: SimpleNamespace(
+            full_beam_polish_summary={
+                "seed_correspondence_records": seed_records,
+                "point_match_diagnostics": [],
+            },
+            point_match_diagnostics=point_match_diagnostics,
+            final_metric_name="full_beam_fixed_correspondence",
+        ),
+    )
+
+    result = probe._run_downstream_identity_validation(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["ok"] is True
+    assert result["classification"] == "pass"
+    assert result["final_metric_name"] == "full_beam_fixed_correspondence"
+    assert [stage["stage"] for stage in result["stage_results"]] == list(
+        probe.DOWNSTREAM_IDENTITY_STAGE_ORDER
+    )
+    assert result["stage_results"][-2]["ok"] is True
+    assert result["stage_results"][-1]["ok"] is True
 
 
 def test_fresh_one_pair_gui_state_save_reload_preflight_resolves_without_generic_fallback(
@@ -5509,7 +5819,12 @@ def test_solver_request_to_subset_mapping_and_seed_correspondence_preserves_trus
     )
 
     seed_record = dict(result.full_beam_polish_summary["seed_correspondence_records"][0])
-    for record in (subset_entry, seed_record):
+    full_beam_record = dict(result.point_match_diagnostics[0])
+    fixed_groups = opt._build_geometry_fit_fixed_correspondence_groups(
+        result.point_match_diagnostics
+    )
+    fixed_record = dict(fixed_groups[0][0])
+    for record in (subset_entry, seed_record, full_beam_record, fixed_record):
         for field in (
             "pair_id",
             "hkl",
@@ -5522,6 +5837,8 @@ def test_solver_request_to_subset_mapping_and_seed_correspondence_preserves_trus
             assert record.get(field) == solver_pair[field]
     assert seed_record["frozen_locator_kind"] == "trusted_branch"
     assert seed_record["frozen_table_namespace"] == "full_reflection"
+    assert full_beam_record["resolution_kind"] == "fixed_source"
+    assert full_beam_record["match_status"] == "matched"
 
 
 def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() -> None:

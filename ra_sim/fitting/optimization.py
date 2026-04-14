@@ -9706,6 +9706,45 @@ def _branch_representative_row(
     return best_row, "resolved_source_peak"
 
 
+def _trusted_source_row_fallback(
+    rows: Sequence[np.ndarray],
+    *,
+    row_index: int | None,
+    measured_hkl: object = None,
+) -> Tuple[Optional[np.ndarray], str]:
+    """Return one safe trusted-row fallback when branch recovery is ambiguous."""
+
+    if row_index is None:
+        return None, "missing_source_row_index"
+    if row_index < 0 or row_index >= len(rows):
+        return None, "source_row_out_of_range"
+    try:
+        row = np.asarray(rows[int(row_index)], dtype=float).reshape(-1)
+    except Exception:
+        return None, "source_row_parse_failed"
+    if row.shape[0] < 7:
+        return None, "source_row_parse_failed"
+    try:
+        sim_col = float(row[1])
+        sim_row = float(row[2])
+    except Exception:
+        return None, "source_row_parse_failed"
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None, "invalid_simulated_point"
+    row_branch = source_branch_index_from_phi_deg(row[3])
+    if row_branch is not None and len(rows) != 1:
+        return None, "source_row_has_explicit_branch"
+    measured_hkl_key = _normalized_hkl_key(measured_hkl)
+    if measured_hkl_key is not None:
+        try:
+            row_hkl = tuple(int(round(float(v))) for v in row[4:7])
+        except Exception:
+            return None, "source_row_parse_failed"
+        if row_hkl != measured_hkl_key:
+            return None, "source_hkl_mismatch"
+    return np.asarray(row[:7], dtype=float), "resolved_source_row_fallback"
+
+
 def _resolve_max_position_peak(
     max_positions: np.ndarray,
     *,
@@ -9900,6 +9939,25 @@ def _resolve_fixed_source_matches(
                     sim_col = float(legacy_peak_point[0])
                     sim_row = float(legacy_peak_point[1])
                     resolved_from_peak = True
+                elif trusted_full_reflection and source_row_key is not None:
+                    fallback_row, fallback_reason = _trusted_source_row_fallback(
+                        rows,
+                        row_index=int(source_row_key[1]),
+                        measured_hkl=entry.get("hkl"),
+                    )
+                    if fallback_row is not None:
+                        sim_col = float(fallback_row[1])
+                        sim_row = float(fallback_row[2])
+                        resolved_from_peak = True
+                        legacy_peak_reason = str(fallback_reason)
+                        try:
+                            sim_hkl = (
+                                int(round(float(fallback_row[4]))),
+                                int(round(float(fallback_row[5]))),
+                                int(round(float(fallback_row[6]))),
+                            )
+                        except Exception:
+                            sim_hkl = None
                 elif source_row_key is None or trusted_full_reflection:
                     _store_resolution_diag(
                         entry,
@@ -10326,6 +10384,22 @@ def _resolve_geometry_fit_correspondence(
                     table_idx=table_idx,
                     peak_idx=peak_idx,
                     sim_hkl=fallback_hkl,
+                )
+        elif frozen_kind == "trusted_branch":
+            trusted_row, trusted_reason = _trusted_source_row_fallback(
+                rows,
+                row_index=_nonnegative_index(correspondence.get("source_row_index")),
+                measured_hkl=correspondence.get("hkl"),
+            )
+            if trusted_row is not None:
+                return (
+                    float(trusted_row[1]),
+                    float(trusted_row[2]),
+                ), _payload(
+                    str(trusted_reason),
+                    table_idx=table_idx,
+                    peak_idx=peak_idx,
+                    sim_hkl=_branch_sim_hkl(trusted_row),
                 )
         return None, _payload(str(branch_reason), table_idx=table_idx, peak_idx=peak_idx)
 

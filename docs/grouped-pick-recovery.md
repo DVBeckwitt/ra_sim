@@ -74,6 +74,12 @@ See also:
 - Next active work is downstream identity validation from preflight-normalized
   pairs through solver input, subset mapping, seed correspondence, and
   full-beam correspondence.
+- The downstream harness now exists and runs on fresh canonical exports.
+  Current earliest failing seam on both `new2_fresh_all.json` and
+  `new3_fresh_all.json` is the last gate:
+  `final_metric_name` stays `central_point_match` instead of reaching
+  `full_beam_fixed_correspondence`, even though canonical identity now survives
+  through seed correspondence and full-beam identity coverage.
 
 ## What Must Be True Next
 
@@ -125,6 +131,16 @@ Milestone 7 completes when:
 - same canonical identity survives full-beam fixed correspondence
 - `new3_fresh_all.json` passes same downstream identity chain
 - only then full geometry fit is reused as meaningful acceptance check
+
+Current Milestone 7 status:
+
+- `new2_fresh_all.json`: passes input contract, preflight, solver request,
+  subset mapping, seed correspondence, and full-beam identity coverage; fails
+  final full-beam fixed-correspondence acceptance because
+  `final_metric_name=central_point_match`
+- `new3_fresh_all.json`: same current failure shape
+- earliest remaining seam is now full-beam fixed-correspondence acceptance, not
+  earlier identity transport
 
 Until then, treat fit output as secondary evidence. Primary signal remains seam
 integrity at each boundary.
