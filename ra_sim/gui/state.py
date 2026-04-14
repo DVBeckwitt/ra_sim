@@ -697,6 +697,10 @@ class AppShellViewState:
     help_preferences_frame: Any = None
     fit2d_error_sound_var: Any = None
     fit2d_error_sound_checkbutton: Any = None
+    geometry_fit_caked_roi_enabled_var: Any = None
+    geometry_fit_caked_roi_enabled_checkbutton: Any = None
+    geometry_fit_caked_roi_preview_var: Any = None
+    geometry_fit_caked_roi_preview_checkbutton: Any = None
     setup_body: Any = None
     setup_canvas: Any = None
     match_body: Any = None

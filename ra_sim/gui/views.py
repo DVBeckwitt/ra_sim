@@ -1073,6 +1073,8 @@ def create_app_shell(
     root: tk.Misc,
     view_state: AppShellViewState,
     fit2d_error_sound_var: Any | None = None,
+    geometry_fit_caked_roi_enabled_var: Any | None = None,
+    geometry_fit_caked_roi_preview_var: Any | None = None,
 ) -> None:
     """Create the shared top-level GUI shell and notebook layout."""
 
@@ -1434,7 +1436,13 @@ def create_app_shell(
 
     help_preferences_frame = None
     fit2d_error_sound_checkbutton = None
-    if fit2d_error_sound_var is not None:
+    geometry_fit_caked_roi_enabled_checkbutton = None
+    geometry_fit_caked_roi_preview_checkbutton = None
+    if (
+        fit2d_error_sound_var is not None
+        or geometry_fit_caked_roi_enabled_var is not None
+        or geometry_fit_caked_roi_preview_var is not None
+    ):
         help_preferences_frame = ttk.LabelFrame(
             help_body,
             text="Preferences",
@@ -1452,12 +1460,27 @@ def create_app_shell(
             justify=tk.LEFT,
             wraplength=420,
         ).pack(anchor=tk.W)
-        fit2d_error_sound_checkbutton = ttk.Checkbutton(
-            help_preferences_frame,
-            text="Enable Fit2D mode (theme + error noise)",
-            variable=fit2d_error_sound_var,
-        )
-        fit2d_error_sound_checkbutton.pack(anchor=tk.W, pady=(8, 0))
+        if fit2d_error_sound_var is not None:
+            fit2d_error_sound_checkbutton = ttk.Checkbutton(
+                help_preferences_frame,
+                text="Enable Fit2D mode (theme + error noise)",
+                variable=fit2d_error_sound_var,
+            )
+            fit2d_error_sound_checkbutton.pack(anchor=tk.W, pady=(8, 0))
+        if geometry_fit_caked_roi_enabled_var is not None:
+            geometry_fit_caked_roi_enabled_checkbutton = ttk.Checkbutton(
+                help_preferences_frame,
+                text="Use branch-restricted geometry-fit caking",
+                variable=geometry_fit_caked_roi_enabled_var,
+            )
+            geometry_fit_caked_roi_enabled_checkbutton.pack(anchor=tk.W, pady=(8, 0))
+        if geometry_fit_caked_roi_preview_var is not None:
+            geometry_fit_caked_roi_preview_checkbutton = ttk.Checkbutton(
+                help_preferences_frame,
+                text="Preview branch ROI on detector/caked view",
+                variable=geometry_fit_caked_roi_preview_var,
+            )
+            geometry_fit_caked_roi_preview_checkbutton.pack(anchor=tk.W, pady=(8, 0))
 
     help_contact_frame = ttk.LabelFrame(help_body, text="Contact", padding=10)
     help_contact_frame.pack(fill=tk.X, pady=(10, 0))
@@ -1542,6 +1565,14 @@ def create_app_shell(
     view_state.help_preferences_frame = help_preferences_frame
     view_state.fit2d_error_sound_var = fit2d_error_sound_var
     view_state.fit2d_error_sound_checkbutton = fit2d_error_sound_checkbutton
+    view_state.geometry_fit_caked_roi_enabled_var = geometry_fit_caked_roi_enabled_var
+    view_state.geometry_fit_caked_roi_enabled_checkbutton = (
+        geometry_fit_caked_roi_enabled_checkbutton
+    )
+    view_state.geometry_fit_caked_roi_preview_var = geometry_fit_caked_roi_preview_var
+    view_state.geometry_fit_caked_roi_preview_checkbutton = (
+        geometry_fit_caked_roi_preview_checkbutton
+    )
     view_state.setup_body = setup_body
     view_state.setup_canvas = setup_canvas
     view_state.match_body = match_body

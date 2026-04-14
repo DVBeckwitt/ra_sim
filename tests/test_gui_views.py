@@ -1223,23 +1223,53 @@ def test_create_app_shell_adds_fit2d_help_preference_when_var_is_supplied(
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
     fit2d_var = _FakeVar(False)
+    roi_enabled_var = _FakeVar(True)
+    roi_preview_var = _FakeVar(False)
     view_state = state.AppShellViewState()
 
     views.create_app_shell(
         root=object(),
         view_state=view_state,
         fit2d_error_sound_var=fit2d_var,
+        geometry_fit_caked_roi_enabled_var=roi_enabled_var,
+        geometry_fit_caked_roi_preview_var=roi_preview_var,
     )
 
     assert isinstance(view_state.help_body, _FakeFrame)
     assert isinstance(view_state.help_preferences_frame, _FakeFrame)
     assert view_state.help_preferences_frame.kwargs["text"] == "Preferences"
     assert view_state.fit2d_error_sound_var is fit2d_var
+    assert view_state.geometry_fit_caked_roi_enabled_var is roi_enabled_var
+    assert view_state.geometry_fit_caked_roi_preview_var is roi_preview_var
     assert view_state.fit2d_error_sound_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit2d_error_sound_checkbutton.variable is fit2d_var
     assert (
         view_state.fit2d_error_sound_checkbutton.kwargs["text"]
         == "Enable Fit2D mode (theme + error noise)"
+    )
+    assert (
+        view_state.geometry_fit_caked_roi_enabled_checkbutton
+        is _FakeCheckbutton.created[1]
+    )
+    assert (
+        view_state.geometry_fit_caked_roi_enabled_checkbutton.variable
+        is roi_enabled_var
+    )
+    assert (
+        view_state.geometry_fit_caked_roi_enabled_checkbutton.kwargs["text"]
+        == "Use branch-restricted geometry-fit caking"
+    )
+    assert (
+        view_state.geometry_fit_caked_roi_preview_checkbutton
+        is _FakeCheckbutton.created[2]
+    )
+    assert (
+        view_state.geometry_fit_caked_roi_preview_checkbutton.variable
+        is roi_preview_var
+    )
+    assert (
+        view_state.geometry_fit_caked_roi_preview_checkbutton.kwargs["text"]
+        == "Preview branch ROI on detector/caked view"
     )
     assert any("Fit2D mode enables" in label.text for label in _FakeLabel.created)
 

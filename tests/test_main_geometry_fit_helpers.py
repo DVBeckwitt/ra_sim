@@ -1,4 +1,7 @@
-from ra_sim.gui.geometry_fit import build_geometry_fit_runtime_config
+from ra_sim.gui.geometry_fit import (
+    build_geometry_fit_runtime_config,
+    read_geometry_fit_caked_roi_config,
+)
 
 
 def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_bounds() -> None:
@@ -116,3 +119,33 @@ def test_main_build_geometry_fit_runtime_config_keeps_parallel_settings_while_fo
     }
     assert runtime_cfg["use_numba"] is True
     assert runtime_cfg["allow_unsafe_runtime"] is False
+
+
+def test_main_geometry_fit_caked_roi_defaults_and_runtime_override() -> None:
+    runtime_cfg = build_geometry_fit_runtime_config(
+        {},
+        {"gamma": 1.0},
+        {"gamma": {"window": 0.2, "pull": 0.0}},
+        {"gamma": (-5.0, 5.0)},
+    )
+
+    assert runtime_cfg["caked_roi"] == {
+        "enabled": True,
+        "half_width_px": 15.0,
+        "max_detector_fraction": 0.35,
+    }
+    assert read_geometry_fit_caked_roi_config({}) == runtime_cfg["caked_roi"]
+
+    disabled_runtime_cfg = build_geometry_fit_runtime_config(
+        {"caked_roi": {"half_width_px": 4.0}},
+        {"gamma": 1.0},
+        {"gamma": {"window": 0.2, "pull": 0.0}},
+        {"gamma": (-5.0, 5.0)},
+        caked_roi_enabled=False,
+    )
+
+    assert disabled_runtime_cfg["caked_roi"] == {
+        "enabled": False,
+        "half_width_px": 4.0,
+        "max_detector_fraction": 0.35,
+    }

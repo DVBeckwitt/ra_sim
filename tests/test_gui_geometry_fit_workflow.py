@@ -8480,9 +8480,8 @@ def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> 
     assert action.prepare_result.log_path == (
         tmp_path / "geometry_fit_log_20260328_130001.txt"
     )
-    assert action.prepare_result.log_path.read_text(encoding="utf-8").startswith(
-        "Geometry fit aborted before solver start: 20260328_130001"
-    )
+    log_text = action.prepare_result.log_path.read_text(encoding="utf-8")
+    assert "Geometry fit aborted before solver start: 20260328_130001" in log_text
     assert progress_texts == ["Geometry fit failed: boom"]
     assert cmd_events == ["failed: boom"]
 
@@ -10187,3 +10186,150 @@ def test_validate_geometry_fit_live_source_rows_drops_trusted_deadband_branch() 
             "branch_candidates": [],
         }
     ]
+
+
+def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> None:
+    source_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 20.0,
+            "detector_y": 20.0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 24.0,
+            "detector_y": 20.0,
+        },
+            {
+                "hkl": (1, 0, 0),
+                "q_group_key": ("selected", 1),
+                "source_table_index": 0,
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 2,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "detector_x": 80.0,
+                "detector_y": 80.0,
+            },
+        {
+            "hkl": (2, 0, 0),
+            "q_group_key": ("other", 2),
+            "source_table_index": 1,
+            "source_reflection_index": 9,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 60.0,
+            "detector_y": 60.0,
+        },
+    ]
+
+    selection = geometry_fit.build_geometry_fit_caked_roi_selection(
+        source_rows,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("selected", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+        image_shape=(128, 128),
+        fit_config={"caked_roi": {"half_width_px": 0.0}},
+    )
+
+    assert selection["valid"] is True
+    assert selection["resolved_pair_count"] == 1
+    assert selection["selected_branch_count"] == 1
+    pixels = set(zip(selection["rows"].tolist(), selection["cols"].tolist()))
+    assert (20, 20) in pixels
+    assert (20, 22) in pixels
+    assert (80, 80) not in pixels
+    assert (60, 60) not in pixels
+
+
+def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large() -> None:
+    source_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 5.0,
+            "detector_y": 25.0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 45.0,
+            "detector_y": 25.0,
+        },
+    ]
+
+    selection = geometry_fit.build_geometry_fit_caked_roi_selection(
+        source_rows,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("selected", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+        image_shape=(50, 50),
+        fit_config={
+            "caked_roi": {
+                "half_width_px": 8.0,
+                "max_detector_fraction": 0.05,
+            }
+        },
+    )
+
+    assert selection["valid"] is False
+    assert selection["fallback_reason"] == "roi_too_large"
+    assert selection["pixel_count"] > 0
+    assert selection["fraction"] > 0.05

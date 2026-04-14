@@ -1720,6 +1720,8 @@ measured_peaks = []
 root = gui_views.create_root_window("RA-SIM Simulation")
 root.minsize(1200, 760)
 fit2d_error_sound_var = tk.BooleanVar(value=False)
+geometry_fit_caked_roi_enabled_var = tk.BooleanVar(value=True)
+geometry_fit_caked_roi_preview_var = tk.BooleanVar(value=False)
 
 
 def _runtime_report_callback_exception(exc_type, exc_value, exc_tb):
@@ -1759,6 +1761,8 @@ gui_views.create_app_shell(
     root=root,
     view_state=app_shell_view_state,
     fit2d_error_sound_var=fit2d_error_sound_var,
+    geometry_fit_caked_roi_enabled_var=geometry_fit_caked_roi_enabled_var,
+    geometry_fit_caked_roi_preview_var=geometry_fit_caked_roi_preview_var,
 )
 gui_fit2d_error_sound.bind_fit2d_backspace_error_sound(
     root,
@@ -4062,6 +4066,360 @@ def _geometry_fit_caked_view_for_index(
     )
 
 
+def _current_geometry_fit_caked_roi_enabled() -> bool:
+    """Return whether geometry-fit branch-restricted caking is enabled."""
+
+    try:
+        return bool(geometry_fit_caked_roi_enabled_var.get())
+    except Exception:
+        return True
+
+
+def _current_geometry_fit_caked_roi_preview_enabled() -> bool:
+    """Return whether the detector/caked ROI preview is enabled."""
+
+    try:
+        return bool(geometry_fit_caked_roi_preview_var.get())
+    except Exception:
+        return False
+
+
+def _current_geometry_fit_caked_roi_selection(
+    *,
+    force_enabled: bool = False,
+) -> Mapping[str, object] | None:
+    """Return the current selected-branch detector ROI for geometry-fit preview/use."""
+
+    background_index = int(background_runtime_state.current_background_index)
+    required_pairs = [
+        dict(entry)
+        for entry in (_geometry_manual_pairs_for_index(int(background_index)) or ())
+        if isinstance(entry, Mapping)
+    ]
+    if not required_pairs:
+        return None
+
+    native_background = _get_current_background_native()
+    if native_background is None:
+        return None
+    native_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    if len(native_shape) < 2 or native_shape[0] <= 0 or native_shape[1] <= 0:
+        return None
+
+    snapshot = dict(simulation_runtime_state.source_row_snapshots.get(int(background_index)) or {})
+    source_rows = [
+        dict(entry)
+        for entry in (snapshot.get("rows") or ())
+        if isinstance(entry, Mapping)
+    ]
+    if not source_rows:
+        source_rows = [
+            dict(entry)
+            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
+            if isinstance(entry, Mapping)
+        ]
+    if not source_rows:
+        return None
+
+    selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection(
+        source_rows,
+        required_pairs=required_pairs,
+        image_shape=native_shape,
+        fit_config=fit_config,
+        enabled_override=(
+            True if force_enabled else _current_geometry_fit_caked_roi_enabled()
+        ),
+    )
+    return selection if isinstance(selection, Mapping) else None
+
+
+def _rotate_native_detector_pixels_for_display(
+    rows: np.ndarray,
+    cols: np.ndarray,
+    *,
+    native_shape: tuple[int, int],
+    k: int,
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
+    """Rotate native detector pixel indices into display-space indices."""
+
+    disp_rows = np.asarray(rows, dtype=np.int64).reshape(-1)
+    disp_cols = np.asarray(cols, dtype=np.int64).reshape(-1)
+    height = int(native_shape[0])
+    width = int(native_shape[1])
+    for _ in range(int(k) % 4):
+        disp_rows, disp_cols, height, width = (
+            (int(width) - 1) - disp_cols,
+            disp_rows,
+            int(width),
+            int(height),
+        )
+    return disp_rows, disp_cols, (int(height), int(width))
+
+
+def _mask_detector_display_image(
+    image: np.ndarray | None,
+    *,
+    selection: Mapping[str, object] | None,
+    native_shape: tuple[int, int],
+) -> np.ndarray | None:
+    """Mask one detector-space display image down to the selected branch ROI."""
+
+    if image is None or not isinstance(selection, Mapping):
+        return image
+    if not bool(selection.get("valid", False)):
+        return image
+    try:
+        rows = np.asarray(selection.get("rows"), dtype=np.int64).reshape(-1)
+        cols = np.asarray(selection.get("cols"), dtype=np.int64).reshape(-1)
+    except Exception:
+        return image
+    if rows.size <= 0 or cols.size != rows.size:
+        return image
+
+    display_image = np.asarray(image)
+    if display_image.ndim != 2 or display_image.size <= 0:
+        return image
+
+    disp_rows, disp_cols, display_shape = _rotate_native_detector_pixels_for_display(
+        rows,
+        cols,
+        native_shape=native_shape,
+        k=DISPLAY_ROTATE_K,
+    )
+    if tuple(int(v) for v in display_image.shape[:2]) != tuple(display_shape):
+        return image
+
+    valid = (
+        (disp_rows >= 0)
+        & (disp_rows < int(display_shape[0]))
+        & (disp_cols >= 0)
+        & (disp_cols < int(display_shape[1]))
+    )
+    if not np.any(valid):
+        return image
+
+    masked = np.zeros_like(display_image)
+    masked[disp_rows[valid], disp_cols[valid]] = display_image[disp_rows[valid], disp_cols[valid]]
+    return masked
+
+
+def _current_geometry_fit_preview_integrator() -> FastAzimuthalIntegrator | None:
+    """Build the live integrator used to project detector ROI pixels into caked space."""
+
+    try:
+        return _build_analysis_integrator(
+            {
+                "center": np.asarray(
+                    [float(center_x_var.get()), float(center_y_var.get())],
+                    dtype=np.float64,
+                ),
+                "distance_m": float(corto_detector_var.get()),
+                "pixel_size_m": float(pixel_size_m),
+                "wavelength_m": float(wave_m),
+            }
+        )
+    except Exception:
+        return None
+
+
+def _nearest_sorted_axis_indices(
+    axis_values: Sequence[float] | None,
+    sample_values: np.ndarray,
+) -> np.ndarray | None:
+    """Return nearest-bin indices on one sorted axis for many sample values."""
+
+    try:
+        axis = np.asarray(axis_values, dtype=float).reshape(-1)
+        samples = np.asarray(sample_values, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if axis.size <= 0 or samples.size <= 0:
+        return None
+    if axis.size == 1:
+        return np.zeros(samples.shape, dtype=np.int64)
+
+    insertion = np.searchsorted(axis, samples, side="left")
+    insertion = np.clip(insertion, 1, axis.size - 1)
+    left = axis[insertion - 1]
+    right = axis[insertion]
+    choose_left = np.abs(samples - left) <= np.abs(right - samples)
+    return np.where(choose_left, insertion - 1, insertion).astype(np.int64, copy=False)
+
+
+def _geometry_fit_caked_roi_preview_mask(
+    *,
+    selection: Mapping[str, object] | None,
+    native_shape: tuple[int, int],
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+) -> np.ndarray | None:
+    """Return a caked-bin mask corresponding to the current detector ROI preview."""
+
+    if not isinstance(selection, Mapping) or not bool(selection.get("valid", False)):
+        return None
+    ai = _current_geometry_fit_preview_integrator()
+    two_theta_map, phi_map = _detector_angular_maps_for_shape(ai, native_shape)
+    if two_theta_map is None or phi_map is None:
+        return None
+
+    try:
+        rows = np.asarray(selection.get("rows"), dtype=np.int64).reshape(-1)
+        cols = np.asarray(selection.get("cols"), dtype=np.int64).reshape(-1)
+    except Exception:
+        return None
+    if rows.size <= 0 or cols.size != rows.size:
+        return None
+
+    radial = np.asarray(radial_axis, dtype=float).reshape(-1)
+    azimuth = np.asarray(azimuth_axis, dtype=float).reshape(-1)
+    if radial.size <= 0 or azimuth.size <= 0:
+        return None
+
+    valid = (
+        (rows >= 0)
+        & (rows < int(two_theta_map.shape[0]))
+        & (cols >= 0)
+        & (cols < int(two_theta_map.shape[1]))
+    )
+    if not np.any(valid):
+        return None
+
+    two_theta_values = np.asarray(two_theta_map[rows[valid], cols[valid]], dtype=float)
+    phi_values = _wrap_phi_range(
+        np.asarray(phi_map[rows[valid], cols[valid]], dtype=float)
+    )
+    finite = np.isfinite(two_theta_values) & np.isfinite(phi_values)
+    if not np.any(finite):
+        return None
+
+    radial_idx = _nearest_sorted_axis_indices(radial, two_theta_values[finite])
+    azimuth_idx = _nearest_sorted_axis_indices(azimuth, phi_values[finite])
+    if radial_idx is None or azimuth_idx is None:
+        return None
+
+    mask = np.zeros((int(azimuth.size), int(radial.size)), dtype=bool)
+    mask[azimuth_idx, radial_idx] = True
+    return mask
+
+
+def _mask_caked_display_image(
+    image: np.ndarray | None,
+    *,
+    caked_mask: np.ndarray | None,
+) -> np.ndarray | None:
+    """Mask one caked image down to the previewed branch ROI."""
+
+    if image is None or caked_mask is None:
+        return image
+    caked_image = np.asarray(image)
+    if caked_image.ndim != 2 or tuple(caked_image.shape) != tuple(caked_mask.shape):
+        return image
+    masked = np.zeros_like(caked_image)
+    masked[caked_mask] = caked_image[caked_mask]
+    return masked
+
+
+def _geometry_fit_caked_roi_preview_display_sources(
+    *,
+    show_caked_image: bool,
+    simulation_image: np.ndarray | None,
+    background_image: np.ndarray | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Resolve the primary/secondary rasters used while ROI preview is enabled."""
+
+    preview_sim_image, preview_background_image = _geometry_fit_caked_roi_preview_images(
+        show_caked_image=bool(show_caked_image),
+        simulation_image=simulation_image,
+        background_image=background_image,
+    )
+    primary_source = (
+        preview_sim_image if isinstance(preview_sim_image, np.ndarray) else simulation_image
+    )
+    secondary_source = (
+        preview_background_image
+        if isinstance(preview_background_image, np.ndarray)
+        else background_image
+    )
+    if (
+        _current_geometry_fit_caked_roi_preview_enabled()
+        and isinstance(preview_background_image, np.ndarray)
+    ):
+        return np.asarray(preview_background_image), None
+    return primary_source, secondary_source
+
+
+def _hide_geometry_fit_caked_roi_preview_aux_artists() -> None:
+    """Hide non-raster artists so ROI preview shows only the selected regions."""
+
+    _clear_all_geometry_overlay_artists(redraw=False)
+    try:
+        gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
+            qr_cylinder_overlay_runtime_bindings_factory(),
+            redraw=False,
+        )
+    except Exception:
+        pass
+    gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
+    for artist_name in ("center_marker", "selected_peak_marker", "integration_region_overlay"):
+        artist = globals().get(artist_name)
+        setter = getattr(artist, "set_visible", None)
+        if callable(setter):
+            try:
+                setter(False)
+            except Exception:
+                continue
+
+
+def _geometry_fit_caked_roi_preview_images(
+    *,
+    show_caked_image: bool,
+    simulation_image: np.ndarray | None,
+    background_image: np.ndarray | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Return detector/caked display images masked to the selected branch ROI."""
+
+    if not _current_geometry_fit_caked_roi_preview_enabled():
+        return simulation_image, background_image
+
+    selection = _current_geometry_fit_caked_roi_selection(force_enabled=True)
+    if not isinstance(selection, Mapping) or not bool(selection.get("valid", False)):
+        return simulation_image, background_image
+
+    native_background = _get_current_background_native()
+    if native_background is None:
+        return simulation_image, background_image
+    native_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    if len(native_shape) < 2 or native_shape[0] <= 0 or native_shape[1] <= 0:
+        return simulation_image, background_image
+
+    if not show_caked_image:
+        return (
+            _mask_detector_display_image(
+                simulation_image,
+                selection=selection,
+                native_shape=native_shape,
+            ),
+            _mask_detector_display_image(
+                background_image,
+                selection=selection,
+                native_shape=native_shape,
+            ),
+        )
+
+    caked_mask = _geometry_fit_caked_roi_preview_mask(
+        selection=selection,
+        native_shape=native_shape,
+        radial_axis=simulation_runtime_state.last_caked_radial_values,
+        azimuth_axis=simulation_runtime_state.last_caked_azimuth_values,
+    )
+    if caked_mask is None:
+        return simulation_image, background_image
+    return (
+        _mask_caked_display_image(simulation_image, caked_mask=caked_mask),
+        _mask_caked_display_image(background_image, caked_mask=caked_mask),
+    )
+
+
 def _peak_maximum_near_in_image(
     image: np.ndarray | None,
     col: float,
@@ -5316,6 +5674,8 @@ def _sync_center_marker(*, redraw: bool) -> None:
     marker_x = float(center_col)
     marker_y = float(center_row)
     visible = _beam_center_spot_enabled()
+    if visible and _current_geometry_fit_caked_roi_preview_enabled():
+        visible = False
     show_caked_var = getattr(analysis_view_controls_view_state, "show_caked_2d_var", None)
     show_caked = bool(getattr(show_caked_var, "get", lambda: False)())
     if visible and show_caked:
@@ -6160,13 +6520,25 @@ def apply_scale_factor_to_existing_results(
                 background_runtime_state.visible
                 and background_runtime_state.current_background_display is not None
             ):
+                _preview_sim_unused, preview_background_display = (
+                    _geometry_fit_caked_roi_preview_images(
+                        show_caked_image=False,
+                        simulation_image=None,
+                        background_image=background_runtime_state.current_background_display,
+                    )
+                )
+                background_preview_source = (
+                    preview_background_display
+                    if isinstance(preview_background_display, np.ndarray)
+                    else background_runtime_state.current_background_display
+                )
                 _store_primary_raster_source(
                     background_display,
-                    background_runtime_state.current_background_display,
+                    background_preview_source,
                 )
                 _apply_intensity_display_range(
                     background_display,
-                    background_runtime_state.current_background_display,
+                    background_preview_source,
                     background_min_var.get(),
                     background_max_var.get(),
                 )
@@ -6209,16 +6581,42 @@ def apply_scale_factor_to_existing_results(
         reset_override=update_limits,
     )
 
+    preview_background_source = None
+    if show_caked_image:
+        if (
+            background_runtime_state.visible
+            and simulation_runtime_state.last_caked_background_image_unscaled is not None
+        ):
+            preview_background_source = (
+                simulation_runtime_state.last_caked_background_image_unscaled * scale
+            )
+    elif (
+        background_runtime_state.visible
+        and background_runtime_state.current_background_display is not None
+    ):
+        preview_background_source = background_runtime_state.current_background_display
+
+    simulation_source = scaled_caked if show_caked_image else global_image_buffer
+    simulation_preview_source, background_preview_source = (
+        _geometry_fit_caked_roi_preview_display_sources(
+            show_caked_image=bool(show_caked_image),
+            simulation_image=simulation_source,
+            background_image=preview_background_source,
+        )
+    )
+    if not isinstance(simulation_preview_source, np.ndarray):
+        simulation_preview_source = simulation_source
+
     if not show_caked_image:
-        _store_primary_raster_source(image_display, global_image_buffer)
+        _store_primary_raster_source(image_display, simulation_preview_source)
         _apply_intensity_display_range(
             image_display,
-            global_image_buffer,
+            simulation_preview_source,
             display_controls_view_state.simulation_min_var.get(),
             display_controls_view_state.simulation_max_var.get(),
         )
     else:
-        _store_primary_raster_source(image_display, scaled_caked)
+        _store_primary_raster_source(image_display, simulation_preview_source)
     _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
 
     if show_caked_image:
@@ -6227,13 +6625,40 @@ def apply_scale_factor_to_existing_results(
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
         _apply_intensity_display_range(
             image_display,
-            scaled_caked,
+            simulation_preview_source,
             caked_min,
             caked_max,
         )
         if not simulation_runtime_state.caked_limits_user_override:
             vmin_caked_var.set(caked_min)
             vmax_caked_var.set(caked_max)
+
+    if not show_caked_image:
+        if isinstance(background_preview_source, np.ndarray):
+            _store_primary_raster_source(
+                background_display,
+                background_preview_source,
+            )
+            _apply_intensity_display_range(
+                background_display,
+                background_preview_source,
+                display_controls_view_state.background_min_var.get(),
+                display_controls_view_state.background_max_var.get(),
+            )
+            background_display.set_visible(True)
+        else:
+            background_display.set_visible(False)
+    elif isinstance(background_preview_source, np.ndarray):
+        _store_primary_raster_source(background_display, background_preview_source)
+        background_display.set_visible(True)
+        _apply_intensity_display_range(
+            background_display,
+            background_preview_source,
+            display_controls_view_state.background_min_var.get(),
+            display_controls_view_state.background_max_var.get(),
+        )
+    else:
+        background_display.set_visible(False)
 
     colorbar_main.update_normal(image_display)
     caked_colorbar.update_normal(image_display)
@@ -6273,46 +6698,6 @@ def apply_scale_factor_to_existing_results(
         _render_analysis_peak_overlays(redraw=False)
         if "canvas_1d" in globals():
             canvas_1d.draw_idle()
-
-    _apply_intensity_display_range(
-        background_display,
-        _primary_raster_source_payload(background_display)[0],
-        display_controls_view_state.background_min_var.get(),
-        display_controls_view_state.background_max_var.get(),
-    )
-
-    if not show_caked_image:
-        if (
-            background_runtime_state.visible
-            and background_runtime_state.current_background_display is not None
-        ):
-            _store_primary_raster_source(
-                background_display,
-                background_runtime_state.current_background_display,
-            )
-            background_display.set_visible(True)
-        else:
-            background_display.set_visible(False)
-    else:
-        if (
-            background_runtime_state.visible
-            and simulation_runtime_state.last_caked_background_image_unscaled is not None
-        ):
-            caked_background = np.asarray(
-                simulation_runtime_state.last_caked_background_image_unscaled,
-                dtype=float,
-            )
-            _store_primary_raster_source(background_display, caked_background)
-            _apply_intensity_display_range(
-                background_display,
-                caked_background,
-                display_controls_view_state.background_min_var.get(),
-                display_controls_view_state.background_max_var.get(),
-            )
-            background_display.set_visible(True)
-        else:
-            background_display.set_visible(False)
-    _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
 
     if update_canvas:
         _request_main_canvas_redraw(force_matplotlib=False)
@@ -6425,14 +6810,23 @@ def caking(
     *,
     npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS,
     npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
+    rows=None,
+    cols=None,
 ):
+    integrate_kwargs = {
+        "npt_rad": int(max(1, npt_rad)),
+        "npt_azim": int(max(1, npt_azim)),
+        "correctSolidAngle": True,
+        "unit": "2th_deg",
+    }
+    if rows is None or cols is None:
+        integrate_kwargs["method"] = "lut"
+    else:
+        integrate_kwargs["rows"] = rows
+        integrate_kwargs["cols"] = cols
     return ai.integrate2d(
         data,
-        npt_rad=int(max(1, npt_rad)),
-        npt_azim=int(max(1, npt_azim)),
-        correctSolidAngle=True,
-        method="lut",
-        unit="2th_deg",
+        **integrate_kwargs,
     )
 
 
@@ -8293,6 +8687,11 @@ def _defer_nonessential_redraw() -> bool:
 
 
 def _refresh_settled_overlays() -> None:
+    if _current_geometry_fit_caked_roi_preview_enabled():
+        _hide_geometry_fit_caked_roi_preview_aux_artists()
+        _request_main_canvas_redraw(force_matplotlib=False)
+        _request_overlay_canvas_redraw(force=True)
+        return
     if not _geometry_overlays_enabled():
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_all_geometry_overlay_artists(redraw=True)
@@ -9561,6 +9960,30 @@ def schedule_update():
         manual_pick_armed=bool(geometry_runtime_state.manual_pick_armed),
     )
     _refresh_run_status_bar()
+
+
+def _refresh_geometry_fit_caked_roi_preview(*_args) -> None:
+    """Refresh the main raster display after ROI preview toggles change."""
+
+    try:
+        apply_scale_factor_to_existing_results(
+            update_limits=False,
+            update_1d=False,
+            update_canvas=True,
+            update_chi_square=True,
+        )
+        _refresh_settled_overlays()
+    except Exception:
+        schedule_update()
+
+
+try:
+    geometry_fit_caked_roi_preview_var.trace_add(
+        "write",
+        _refresh_geometry_fit_caked_roi_preview,
+    )
+except Exception:
+    pass
 
 
 def _should_collect_hit_tables_for_update() -> bool:
@@ -10840,11 +11263,29 @@ def do_update():
 
         current_scale = _get_scale_factor_value(default=1.0)
         scaled_caked_for_limits = caked_img * current_scale
-        _store_primary_raster_source(image_display, scaled_caked_for_limits)
-        auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
+        caked_background_source = None
+        if (
+            background_runtime_state.visible
+            and simulation_runtime_state.last_caked_background_image_unscaled is not None
+        ):
+            caked_background_source = np.asarray(
+                simulation_runtime_state.last_caked_background_image_unscaled,
+                dtype=float,
+            )
+        display_primary_source, display_secondary_source = (
+            _geometry_fit_caked_roi_preview_display_sources(
+                show_caked_image=True,
+                simulation_image=scaled_caked_for_limits,
+                background_image=caked_background_source,
+            )
+        )
+        if not isinstance(display_primary_source, np.ndarray):
+            display_primary_source = scaled_caked_for_limits
+        _store_primary_raster_source(image_display, display_primary_source)
+        auto_vmin, auto_vmax = _auto_caked_limits(display_primary_source)
 
         if not display_controls_state.simulation_limits_user_override:
-            _update_simulation_sliders_from_image(scaled_caked_for_limits, reset_override=True)
+            _update_simulation_sliders_from_image(display_primary_source, reset_override=True)
 
         if not simulation_runtime_state.caked_limits_user_override:
             vmin_caked_var.set(auto_vmin)
@@ -10873,21 +11314,14 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
         _apply_intensity_display_range(
             image_display,
-            scaled_caked_for_limits,
+            display_primary_source,
             vmin_val,
             display_vmax,
         )
 
         background_caked_available = False
-        if (
-            background_runtime_state.visible
-            and simulation_runtime_state.last_caked_background_image_unscaled is not None
-        ):
-            bg_caked = np.asarray(
-                simulation_runtime_state.last_caked_background_image_unscaled,
-                dtype=float,
-            )
-            _store_primary_raster_source(background_display, bg_caked)
+        if isinstance(display_secondary_source, np.ndarray):
+            _store_primary_raster_source(background_display, display_secondary_source)
             bg_display_vmax = vmax_val
             if not math.isfinite(bg_display_vmax):
                 bg_display_vmax = auto_vmax
@@ -10943,7 +11377,24 @@ def do_update():
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
-        _store_primary_raster_source(image_display, global_image_buffer)
+        detector_background_source = (
+            background_runtime_state.current_background_display
+            if (
+                background_runtime_state.visible
+                and background_runtime_state.current_background_display is not None
+            )
+            else None
+        )
+        display_primary_source, display_secondary_source = (
+            _geometry_fit_caked_roi_preview_display_sources(
+                show_caked_image=False,
+                simulation_image=global_image_buffer,
+                background_image=detector_background_source,
+            )
+        )
+        if not isinstance(display_primary_source, np.ndarray):
+            display_primary_source = global_image_buffer
+        _store_primary_raster_source(image_display, display_primary_source)
         gui_canvas_interactions.restore_axis_view(
             ax,
             preserved_limits=preserved_primary_limits,
@@ -10956,13 +11407,10 @@ def do_update():
         ax.set_xlabel("X (pixels)")
         ax.set_ylabel("Y (pixels)")
         ax.set_title("")
-        if (
-            background_runtime_state.visible
-            and background_runtime_state.current_background_display is not None
-        ):
+        if isinstance(display_secondary_source, np.ndarray):
             _store_primary_raster_source(
                 background_display,
-                background_runtime_state.current_background_display,
+                display_secondary_source,
             )
             background_display.set_clim(
                 display_controls_view_state.background_min_var.get(),
@@ -10975,7 +11423,7 @@ def do_update():
 
     gui_main_figure_chrome.apply_main_figure_axes_chrome(
         ax,
-        axes_visible=bool(show_caked_image),
+        axes_visible=bool(caked_display_available),
     )
 
     # 1D integration
@@ -20920,6 +21368,7 @@ def _run_async_geometry_fit_worker_job(
         int,
         gui_geometry_fit.GeometryFitBackgroundCacheBundle,
     ] = {}
+    worker_geometry_fit_caking_ai: FastAzimuthalIntegrator | None = None
 
     def _set_worker_source_snapshot_diagnostics(**kwargs) -> None:
         worker_source_snapshot_diagnostics.clear()
@@ -21093,6 +21542,171 @@ def _run_async_geometry_fit_worker_job(
             intersection_cache=_copy_optional_values(intersection_cache),
             cache_metadata=(dict(cache_metadata) if isinstance(cache_metadata, Mapping) else None),
         )
+
+    def _worker_geometry_fit_caking_integrator() -> FastAzimuthalIntegrator | None:
+        nonlocal worker_geometry_fit_caking_ai
+        if worker_geometry_fit_caking_ai is not None:
+            return worker_geometry_fit_caking_ai
+        params_local = dict(job_data.get("params", {}) or {})
+        center_value = np.asarray(
+            params_local.get("center", [np.nan, np.nan]),
+            dtype=np.float64,
+        ).reshape(-1)
+        pixel_size_value = params_local.get(
+            "pixel_size_m",
+            params_local.get("pixel_size"),
+        )
+        try:
+            worker_geometry_fit_caking_ai = _build_analysis_integrator(
+                {
+                    "center": center_value,
+                    "distance_m": float(params_local.get("corto_detector", np.nan)),
+                    "pixel_size_m": float(pixel_size_value),
+                    "wavelength_m": float(params_local.get("lambda", np.nan)),
+                }
+            )
+        except Exception:
+            worker_geometry_fit_caking_ai = None
+        return worker_geometry_fit_caking_ai
+
+    def _store_worker_caked_view_for_background(
+        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+    ) -> dict[str, object]:
+        caked_views_by_background = job_data.setdefault("caked_views_by_background", {})
+        background_images = dict(job_data.get("background_images", {}) or {})
+        background_payload = dict(background_images.get(int(bundle.background_index)) or {})
+        native_background = background_payload.get("native")
+        if native_background is None:
+            return {
+                "roi_enabled": False,
+                "roi_used_restricted_cake": False,
+                "roi_pixel_count": 0,
+                "roi_fraction": 0.0,
+                "roi_fallback_reason": "missing_native_background",
+                "roi_half_width_px": 0.0,
+            }
+
+        backend_background = np.asarray(native_background, dtype=np.float64)
+        apply_backend_orientation = job_data.get("apply_background_backend_orientation")
+        if callable(apply_backend_orientation):
+            try:
+                oriented_background = apply_backend_orientation(backend_background)
+            except Exception:
+                oriented_background = backend_background
+            if oriented_background is not None:
+                backend_background = np.asarray(oriented_background, dtype=np.float64)
+
+        roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection(
+            bundle.stored_rows,
+            required_pairs=list(
+                dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                    int(bundle.background_index),
+                    (),
+                )
+                or ()
+            ),
+            image_shape=backend_background.shape[:2],
+            fit_config=dict(job_data.get("geometry_runtime_cfg", {}) or {}),
+        )
+        roi_enabled = bool(roi_selection.get("enabled", False))
+        roi_pixel_count = int(roi_selection.get("pixel_count", 0) or 0)
+        roi_fraction = float(roi_selection.get("fraction", 0.0) or 0.0)
+        roi_half_width_px = float(roi_selection.get("half_width_px", 0.0) or 0.0)
+        roi_fallback_reason = roi_selection.get("fallback_reason")
+        roi_used_restricted_cake = bool(roi_selection.get("valid", False))
+
+        rows = cols = None
+        if roi_used_restricted_cake:
+            try:
+                rows = np.asarray(roi_selection.get("rows"), dtype=np.int32)
+                cols = np.asarray(roi_selection.get("cols"), dtype=np.int32)
+            except Exception:
+                rows = cols = None
+                roi_used_restricted_cake = False
+                roi_fallback_reason = "invalid_roi_pixels"
+
+        ai = _worker_geometry_fit_caking_integrator()
+        if ai is None:
+            return {
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": False,
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": "missing_integrator",
+                "roi_half_width_px": float(roi_half_width_px),
+            }
+
+        try:
+            with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+                res2 = caking(
+                    backend_background,
+                    ai,
+                    rows=rows,
+                    cols=cols,
+                )
+        except Exception as exc:
+            if roi_used_restricted_cake:
+                roi_used_restricted_cake = False
+                roi_fallback_reason = (
+                    f"restricted_cake_exception:{type(exc).__name__}"
+                )
+                with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+                    res2 = caking(backend_background, ai)
+            else:
+                return {
+                    "roi_enabled": bool(roi_enabled),
+                    "roi_used_restricted_cake": False,
+                    "roi_pixel_count": int(roi_pixel_count),
+                    "roi_fraction": float(roi_fraction),
+                    "roi_fallback_reason": f"full_cake_exception:{type(exc).__name__}",
+                    "roi_half_width_px": float(roi_half_width_px),
+                }
+
+        caked_payload = _prepare_caked_display_payload(res2)
+        if not isinstance(caked_payload, Mapping):
+            return {
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": "invalid_caked_payload",
+                "roi_half_width_px": float(roi_half_width_px),
+            }
+
+        try:
+            caked_views_by_background[int(bundle.background_index)] = {
+                "background": np.asarray(caked_payload.get("image"), dtype=np.float64).copy(),
+                "radial_axis": np.asarray(caked_payload.get("radial"), dtype=np.float64).copy(),
+                "azimuth_axis": np.asarray(caked_payload.get("azimuth"), dtype=np.float64).copy(),
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": (
+                    str(roi_fallback_reason) if roi_fallback_reason is not None else None
+                ),
+                "roi_half_width_px": float(roi_half_width_px),
+            }
+        except Exception:
+            return {
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": "store_caked_payload_failed",
+                "roi_half_width_px": float(roi_half_width_px),
+            }
+
+        return {
+            "roi_enabled": bool(roi_enabled),
+            "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+            "roi_pixel_count": int(roi_pixel_count),
+            "roi_fraction": float(roi_fraction),
+            "roi_fallback_reason": (
+                str(roi_fallback_reason) if roi_fallback_reason is not None else None
+            ),
+            "roi_half_width_px": float(roi_half_width_px),
+        }
 
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
@@ -21522,6 +22136,7 @@ def _run_async_geometry_fit_worker_job(
                     "background_label": str(background_label),
                     "cache_source": str(bundle.cache_source or "unknown"),
                     "row_count": int(len(bundle.projected_rows or ())),
+                    **dict(_store_worker_caked_view_for_background(bundle) or {}),
                     "message": (
                         "preflight: source cache ready for "
                         f"background {int(background_idx) + 1} "
@@ -22012,6 +22627,9 @@ geometry_fit_runtime_workflow = gui_runtime_geometry_fit.build_runtime_geometry_
         "current_constraint_state": _current_geometry_fit_constraint_state,
         "current_parameter_domains": _current_geometry_fit_parameter_domains,
         "current_candidate_param_names": _current_geometry_fit_candidate_param_names,
+        "current_caked_roi_enabled": (
+            lambda: bool(geometry_fit_caked_roi_enabled_var.get())
+        ),
     },
     action_bootstrap_kwargs={
         "value_callbacks_factory": _geometry_fit_runtime_values,

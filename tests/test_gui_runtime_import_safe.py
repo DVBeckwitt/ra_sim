@@ -391,6 +391,24 @@ def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
     assert "_clear_deferred_overlays(clear_qr_overlay=False)" in source
 
 
+def test_runtime_impl_uses_roi_preview_display_sources_for_main_redraw() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "display_primary_source, display_secondary_source = (" in source
+    assert "_geometry_fit_caked_roi_preview_display_sources(" in source
+    assert "simulation_image=scaled_caked_for_limits," in source
+    assert "simulation_image=global_image_buffer," in source
+
+
+def test_runtime_impl_hides_aux_artists_while_roi_preview_is_enabled() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "if _current_geometry_fit_caked_roi_preview_enabled():" in source
+    assert "_hide_geometry_fit_caked_roi_preview_aux_artists()" in source
+    assert "_request_overlay_canvas_redraw(force=True)" in source
+    assert "visible and _current_geometry_fit_caked_roi_preview_enabled()" in source
+
+
 def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

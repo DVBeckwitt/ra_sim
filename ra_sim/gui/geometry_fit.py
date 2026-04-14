@@ -2364,15 +2364,374 @@ def _geometry_fit_config_section(
 ) -> Mapping[str, object]:
     """Return one normalized geometry-fit config mapping section."""
 
-    fit_geometry_cfg = (
-        fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
-    )
-    if not isinstance(fit_geometry_cfg, Mapping):
+    if not isinstance(fit_config, Mapping):
         return {}
-    section_cfg = fit_geometry_cfg.get(section, {}) or {}
+    fit_geometry_cfg = fit_config.get("geometry", {})
+    if "geometry" in fit_config and isinstance(fit_geometry_cfg, Mapping):
+        container_cfg = fit_geometry_cfg
+    else:
+        container_cfg = fit_config
+    section_cfg = container_cfg.get(section, {}) or {}
     if not isinstance(section_cfg, Mapping):
         return {}
     return section_cfg
+
+
+def read_geometry_fit_caked_roi_config(
+    fit_config: Mapping[str, object] | None,
+    *,
+    enabled_override: object | None = None,
+) -> dict[str, object]:
+    """Return normalized branch-restricted caking settings for geometry fit."""
+
+    section_cfg = _geometry_fit_config_section(fit_config, "caked_roi")
+
+    enabled = enabled_override
+    if enabled is None:
+        enabled = section_cfg.get("enabled", True)
+
+    half_width_px = _geometry_fit_cache_finite_float(section_cfg.get("half_width_px"))
+    if half_width_px is None or half_width_px < 0.0:
+        half_width_px = 15.0
+
+    max_detector_fraction = _geometry_fit_cache_finite_float(
+        section_cfg.get("max_detector_fraction")
+    )
+    if (
+        max_detector_fraction is None
+        or max_detector_fraction <= 0.0
+        or max_detector_fraction > 1.0
+    ):
+        max_detector_fraction = 0.35
+
+    return {
+        "enabled": bool(enabled),
+        "half_width_px": float(half_width_px),
+        "max_detector_fraction": float(max_detector_fraction),
+    }
+
+
+def _geometry_fit_caked_roi_branch_selection(
+    validation: Mapping[str, object] | None,
+) -> dict[str, set[tuple[object, int]]]:
+    """Return the selected branch identities resolved from active manual pairs."""
+
+    selected_q_groups: set[tuple[object, int]] = set()
+    selected_reflections: set[tuple[object, int]] = set()
+    selected_tables: set[tuple[object, int]] = set()
+    selected_hkls: set[tuple[object, int]] = set()
+
+    for raw_entry in (
+        validation.get("resolved_pairs", ()) if isinstance(validation, Mapping) else ()
+    ):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        branch_idx = _geometry_fit_coerce_nonnegative_index(
+            raw_entry.get("source_branch_index")
+        )
+        if branch_idx not in {0, 1}:
+            continue
+
+        q_group_key = _geometry_fit_cache_jsonable(raw_entry.get("q_group_key"))
+        if q_group_key is not None:
+            try:
+                q_group_token = json.dumps(q_group_key, sort_keys=True)
+            except Exception:
+                q_group_token = repr(q_group_key)
+            selected_q_groups.add((q_group_token, int(branch_idx)))
+
+        reflection_idx = _geometry_fit_coerce_nonnegative_index(
+            raw_entry.get("source_reflection_index")
+        )
+        if reflection_idx is not None:
+            selected_reflections.add((int(reflection_idx), int(branch_idx)))
+
+        table_idx = _geometry_fit_coerce_nonnegative_index(
+            raw_entry.get("source_table_index")
+        )
+        if table_idx is not None:
+            selected_tables.add((int(table_idx), int(branch_idx)))
+
+        hkl_key = _geometry_fit_normalized_hkl(raw_entry.get("hkl"))
+        if hkl_key is not None:
+            selected_hkls.add((tuple(int(v) for v in hkl_key), int(branch_idx)))
+
+    return {
+        "q_groups": selected_q_groups,
+        "reflections": selected_reflections,
+        "tables": selected_tables,
+        "hkls": selected_hkls,
+    }
+
+
+def _geometry_fit_caked_roi_row_matches_selection(
+    entry: Mapping[str, object] | None,
+    selected_branches: Mapping[str, set[tuple[object, int]]] | None,
+) -> bool:
+    """Return whether one canonical source row belongs to the selected branches."""
+
+    if not isinstance(entry, Mapping):
+        return False
+    is_canonical, _reason = _geometry_fit_is_canonical_live_source_entry(entry)
+    if not is_canonical:
+        return False
+    branch_idx = _geometry_fit_source_branch_index(entry)
+    if branch_idx not in {0, 1}:
+        return False
+
+    q_group_key = _geometry_fit_cache_jsonable(entry.get("q_group_key"))
+    if q_group_key is not None:
+        try:
+            q_group_token = json.dumps(q_group_key, sort_keys=True)
+        except Exception:
+            q_group_token = repr(q_group_key)
+        if (q_group_token, int(branch_idx)) in (
+            selected_branches.get("q_groups", set()) if isinstance(selected_branches, Mapping) else set()
+        ):
+            return True
+
+    reflection_idx = _geometry_fit_coerce_nonnegative_index(
+        entry.get("source_reflection_index")
+    )
+    if reflection_idx is not None and (int(reflection_idx), int(branch_idx)) in (
+        selected_branches.get("reflections", set())
+        if isinstance(selected_branches, Mapping)
+        else set()
+    ):
+        return True
+
+    table_idx = _geometry_fit_coerce_nonnegative_index(entry.get("source_table_index"))
+    if table_idx is not None and (int(table_idx), int(branch_idx)) in (
+        selected_branches.get("tables", set())
+        if isinstance(selected_branches, Mapping)
+        else set()
+    ):
+        return True
+
+    hkl_key = _geometry_fit_normalized_hkl(entry.get("hkl"))
+    if hkl_key is not None and (tuple(int(v) for v in hkl_key), int(branch_idx)) in (
+        selected_branches.get("hkls", set())
+        if isinstance(selected_branches, Mapping)
+        else set()
+    ):
+        return True
+
+    return False
+
+
+def _geometry_fit_caked_roi_native_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return one native detector-space ``(col, row)`` point for ROI rasterization."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    candidate_keys = (
+        ("detector_x", "detector_y"),
+        ("refined_sim_native_x", "refined_sim_native_y"),
+        ("sim_col_raw", "sim_row_raw"),
+    )
+    for col_key, row_key in candidate_keys:
+        col_val = _geometry_fit_cache_finite_float(entry.get(col_key))
+        row_val = _geometry_fit_cache_finite_float(entry.get(row_key))
+        if col_val is None or row_val is None:
+            continue
+        return float(col_val), float(row_val)
+    return None
+
+
+def _geometry_fit_caked_roi_disk_offsets(radius: float) -> list[tuple[int, int]]:
+    """Return integer dilation offsets for one detector-space disk."""
+
+    if not np.isfinite(radius) or radius <= 0.0:
+        return [(0, 0)]
+    pixel_radius = int(math.ceil(float(radius)))
+    offsets: list[tuple[int, int]] = []
+    radius_sq = float(radius) * float(radius)
+    for drow in range(-pixel_radius, pixel_radius + 1):
+        for dcol in range(-pixel_radius, pixel_radius + 1):
+            if float(drow * drow + dcol * dcol) <= radius_sq + 1.0e-9:
+                offsets.append((int(drow), int(dcol)))
+    return offsets or [(0, 0)]
+
+
+def build_geometry_fit_caked_roi_selection(
+    source_rows: Sequence[object] | None,
+    *,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
+    image_shape: Sequence[object] | None = None,
+    fit_config: Mapping[str, object] | None = None,
+    enabled_override: object | None = None,
+) -> dict[str, object]:
+    """Build the detector-space ROI used for branch-restricted geometry-fit caking."""
+
+    roi_cfg = read_geometry_fit_caked_roi_config(
+        fit_config,
+        enabled_override=enabled_override,
+    )
+    enabled = bool(roi_cfg.get("enabled", True))
+    half_width_px = float(roi_cfg.get("half_width_px", 15.0))
+    max_detector_fraction = float(roi_cfg.get("max_detector_fraction", 0.35))
+
+    result: dict[str, object] = {
+        "enabled": bool(enabled),
+        "valid": False,
+        "rows": np.empty((0,), dtype=np.int32),
+        "cols": np.empty((0,), dtype=np.int32),
+        "pixel_count": 0,
+        "fraction": 0.0,
+        "fallback_reason": None,
+        "half_width_px": float(half_width_px),
+        "max_detector_fraction": float(max_detector_fraction),
+        "resolved_pair_count": 0,
+        "selected_branch_count": 0,
+    }
+    if not enabled:
+        result["fallback_reason"] = "disabled"
+        return result
+
+    try:
+        height = int(image_shape[0]) if image_shape is not None else 0
+        width = int(image_shape[1]) if image_shape is not None else 0
+    except Exception:
+        height = 0
+        width = 0
+    if height <= 0 or width <= 0:
+        result["fallback_reason"] = "invalid_image_shape"
+        return result
+
+    source_rows_list = [
+        dict(entry)
+        for entry in (source_rows or ())
+        if isinstance(entry, Mapping)
+    ]
+    if not source_rows_list:
+        result["fallback_reason"] = "no_source_rows"
+        return result
+
+    validation = validate_geometry_fit_live_source_rows(
+        source_rows_list,
+        required_pairs=required_pairs,
+    )
+    resolved_pairs = [
+        dict(entry)
+        for entry in (validation.get("resolved_pairs", ()) or ())
+        if isinstance(entry, Mapping)
+    ]
+    result["resolved_pair_count"] = int(len(resolved_pairs))
+    if required_pairs and not validation.get("valid", False):
+        result["fallback_reason"] = "pair_validation_failed"
+        return result
+    if required_pairs and not resolved_pairs:
+        result["fallback_reason"] = "no_resolved_pairs"
+        return result
+
+    selected_branches = _geometry_fit_caked_roi_branch_selection(validation)
+    selected_rows = [
+        dict(entry)
+        for entry in source_rows_list
+        if _geometry_fit_caked_roi_row_matches_selection(entry, selected_branches)
+    ]
+    if not selected_rows:
+        result["fallback_reason"] = "no_selected_branch_rows"
+        return result
+
+    grouped_points: dict[tuple[object, int], list[tuple[int, int, float, float]]] = defaultdict(list)
+    for source_order, entry in enumerate(selected_rows):
+        point = _geometry_fit_caked_roi_native_point(entry)
+        if point is None:
+            continue
+        col_val, row_val = point
+        if not (np.isfinite(col_val) and np.isfinite(row_val)):
+            continue
+        branch_idx = _geometry_fit_source_branch_index(entry)
+        if branch_idx not in {0, 1}:
+            continue
+        q_group_key = _geometry_fit_cache_jsonable(entry.get("q_group_key"))
+        if q_group_key is not None:
+            try:
+                group_token = json.dumps(q_group_key, sort_keys=True)
+            except Exception:
+                group_token = repr(q_group_key)
+        else:
+            group_token = repr(
+                (
+                    _geometry_fit_coerce_nonnegative_index(
+                        entry.get("source_reflection_index")
+                    ),
+                    _geometry_fit_coerce_nonnegative_index(entry.get("source_table_index")),
+                    _geometry_fit_normalized_hkl(entry.get("hkl")),
+                )
+            )
+        row_index = _geometry_fit_coerce_nonnegative_index(entry.get("source_row_index"))
+        if row_index is None:
+            row_index = int(source_order)
+        grouped_points[(group_token, int(branch_idx))].append(
+            (int(row_index), int(source_order), float(col_val), float(row_val))
+        )
+
+    result["selected_branch_count"] = int(len(grouped_points))
+    if not grouped_points:
+        result["fallback_reason"] = "no_native_detector_points"
+        return result
+
+    offsets = _geometry_fit_caked_roi_disk_offsets(half_width_px)
+    linear_indices: set[int] = set()
+
+    for point_group in grouped_points.values():
+        ordered_group = sorted(point_group, key=lambda item: (int(item[0]), int(item[1])))
+        sampled_points: list[tuple[float, float]] = []
+        for point_index, (_row_index, _source_order, col_val, row_val) in enumerate(ordered_group):
+            sampled_points.append((float(col_val), float(row_val)))
+            if point_index >= len(ordered_group) - 1:
+                continue
+            next_col = float(ordered_group[point_index + 1][2])
+            next_row = float(ordered_group[point_index + 1][3])
+            delta_col = next_col - float(col_val)
+            delta_row = next_row - float(row_val)
+            step_count = max(
+                1,
+                int(math.ceil(math.hypot(delta_col, delta_row) / 0.5)),
+            )
+            for step_index in range(1, step_count):
+                frac = float(step_index) / float(step_count)
+                sampled_points.append(
+                    (
+                        float(col_val) + delta_col * frac,
+                        float(row_val) + delta_row * frac,
+                    )
+                )
+
+        for col_val, row_val in sampled_points:
+            if not (np.isfinite(col_val) and np.isfinite(row_val)):
+                continue
+            for drow, dcol in offsets:
+                row_idx = int(round(float(row_val) + float(drow)))
+                col_idx = int(round(float(col_val) + float(dcol)))
+                if row_idx < 0 or row_idx >= int(height) or col_idx < 0 or col_idx >= int(width):
+                    continue
+                linear_indices.add(int(row_idx) * int(width) + int(col_idx))
+
+    if not linear_indices:
+        result["fallback_reason"] = "empty_detector_roi"
+        return result
+
+    ordered_indices = np.asarray(sorted(linear_indices), dtype=np.int64)
+    rows = (ordered_indices // int(width)).astype(np.int32, copy=False)
+    cols = (ordered_indices % int(width)).astype(np.int32, copy=False)
+    pixel_count = int(rows.size)
+    fraction = float(pixel_count) / float(max(1, int(height) * int(width)))
+
+    result["rows"] = rows
+    result["cols"] = cols
+    result["pixel_count"] = int(pixel_count)
+    result["fraction"] = float(fraction)
+    if fraction > max_detector_fraction:
+        result["fallback_reason"] = "roi_too_large"
+        return result
+
+    result["valid"] = True
+    return result
 
 
 def read_runtime_geometry_fit_parameter_domains(
@@ -2689,6 +3048,7 @@ def build_runtime_geometry_fit_config_factory(
     current_constraint_state: Callable[[Sequence[str] | None], Mapping[str, object]],
     current_parameter_domains: Callable[[Sequence[str] | None], Mapping[str, object]],
     current_candidate_param_names: Callable[[], Sequence[str]] | None = None,
+    current_caked_roi_enabled: Callable[[], object] | None = None,
 ) -> Callable[[Sequence[str], Mapping[str, object]], dict[str, object]]:
     """Build the live geometry-fit refinement-config factory from runtime readers."""
 
@@ -2708,12 +3068,19 @@ def build_runtime_geometry_fit_config_factory(
             name: fit_params.get(name)
             for name in candidate_names
         }
+        caked_roi_enabled = None
+        if callable(current_caked_roi_enabled):
+            try:
+                caked_roi_enabled = current_caked_roi_enabled()
+            except Exception:
+                caked_roi_enabled = None
         return build_geometry_fit_runtime_config(
             base_config,
             current_params,
             {},
             current_parameter_domains(candidate_names),
             candidate_param_names=candidate_names,
+            caked_roi_enabled=caked_roi_enabled,
         )
 
     return _build
@@ -2726,6 +3093,7 @@ def build_geometry_fit_runtime_config(
     parameter_domains,
     *,
     candidate_param_names: Sequence[str] | None = None,
+    caked_roi_enabled: object | None = None,
 ):
     runtime_cfg = copy.deepcopy(base_config) if isinstance(base_config, dict) else {}
     if not isinstance(runtime_cfg, dict):
@@ -2812,6 +3180,10 @@ def build_geometry_fit_runtime_config(
         bounds_cfg[str(name)] = [float(lo), float(hi)]
 
     runtime_cfg["candidate_param_names"] = active_names
+    runtime_cfg["caked_roi"] = read_geometry_fit_caked_roi_config(
+        runtime_cfg,
+        enabled_override=caked_roi_enabled,
+    )
 
     return runtime_cfg
 
