@@ -3081,6 +3081,8 @@ def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagno
             "match_kind": "fixed_correspondence",
             "match_status": "matched",
             "resolution_kind": "fixed_source",
+            "resolution_reason": "resolved",
+            "match_radius_exceeded": False,
             "resolved_table_index": 3,
             "resolved_peak_index": 1,
             "distance_px": 2.0,
@@ -3101,6 +3103,8 @@ def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagno
             "match_kind": "fixed_correspondence",
             "match_status": "matched",
             "resolution_kind": "fixed_source",
+            "resolution_reason": "resolved",
+            "match_radius_exceeded": False,
             "resolved_table_index": 3,
             "resolved_peak_index": 1,
             "distance_px": 3.0,
@@ -3160,14 +3164,27 @@ def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagno
     assert comparison["candidate_identity_key_count"] == 1
     assert len(comparison["paired_entries"]) == 1
     paired_entry = comparison["paired_entries"][0]
+    assert paired_entry["pair_id"] == "bg0:pair0"
+    assert paired_entry["hkl"] == (1, 0, 0)
+    assert paired_entry["source_reflection_index"] == 100
+    assert paired_entry["source_branch_index"] == 0
+    assert paired_entry["source_peak_index"] == 0
     assert paired_entry["start_weighted_dx_px"] == 1.25
     assert paired_entry["candidate_weighted_dx_px"] == 0.25
     assert paired_entry["start_resolved_table_index"] == 3
     assert paired_entry["candidate_resolved_table_index"] == 3
+    assert paired_entry["start_resolution_reason"] == "resolved"
+    assert paired_entry["candidate_resolution_reason"] == "resolved"
+    assert paired_entry["start_match_radius_exceeded"] is False
+    assert paired_entry["candidate_match_radius_exceeded"] is False
+    assert paired_entry["delta_px"] == 1.0
     assert paired_entry["coverage_drift"] is False
     assert paired_entry["resolved_correspondence_drift"] is False
     assert paired_entry["start_weighted_dx_px"] != 999.0
     assert paired_entry["candidate_weighted_dx_px"] != 999.0
+    assert comparison["ranked_by_delta_px"][0]["pair_id"] == "bg0:pair0"
+    assert comparison["ranked_by_candidate_distance_px"][0]["pair_id"] == "bg0:pair0"
+    assert comparison["ranked_by_delta_sq_px"][0]["pair_id"] == "bg0:pair0"
 
 
 def test_downstream_identity_validation_promotes_coverage_mismatch_classification(

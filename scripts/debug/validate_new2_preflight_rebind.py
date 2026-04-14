@@ -1024,6 +1024,12 @@ def _full_beam_comparison_record(
                 "sigma_weight": _float_or_none(entry.get("sigma_weight")),
                 "priority_weight": _float_or_none(entry.get("priority_weight")),
                 "weight": _float_or_none(entry.get("weight")),
+                "match_radius_exceeded": bool(entry.get("match_radius_exceeded", False)),
+                "resolution_reason": (
+                    str(entry.get("resolution_reason"))
+                    if entry.get("resolution_reason") is not None
+                    else None
+                ),
             }
         )
     return record
@@ -1062,6 +1068,26 @@ def _build_full_beam_rejection_comparison(
     *,
     dataset_index: int,
 ) -> dict[str, object]:
+    def _pair_delta_value(
+        start_value: object,
+        candidate_value: object,
+    ) -> float | None:
+        start_number = _float_or_none(start_value)
+        candidate_number = _float_or_none(candidate_value)
+        if start_number is None or candidate_number is None:
+            return None
+        return float(candidate_number - start_number)
+
+    def _pair_delta_sq_value(
+        start_value: object,
+        candidate_value: object,
+    ) -> float | None:
+        start_number = _float_or_none(start_value)
+        candidate_number = _float_or_none(candidate_value)
+        if start_number is None or candidate_number is None:
+            return None
+        return float(candidate_number * candidate_number - start_number * start_number)
+
     start_entries = _filter_stage_entries_for_dataset(
         _point_match_entries_from_mapping(
             full_beam_polish_summary,
@@ -1135,8 +1161,49 @@ def _build_full_beam_rejection_comparison(
         identity_drift_count += int(identity_drift)
         coverage_drift_count += int(coverage_drift)
         resolved_correspondence_drift_count += int(resolved_correspondence_drift)
+        pair_id = None
+        if isinstance(start_record, Mapping):
+            pair_id = start_record.get("pair_id")
+        if pair_id is None and isinstance(candidate_record, Mapping):
+            pair_id = candidate_record.get("pair_id")
+        identity_payload = (
+            start_record.get("identity")
+            if isinstance(start_record, Mapping)
+            else (
+                candidate_record.get("identity")
+                if isinstance(candidate_record, Mapping)
+                else {}
+            )
+        )
+        start_distance_px = (
+            start_record.get("distance_px") if isinstance(start_record, Mapping) else None
+        )
+        candidate_distance_px = (
+            candidate_record.get("distance_px") if isinstance(candidate_record, Mapping) else None
+        )
+        delta_px = _pair_delta_value(start_distance_px, candidate_distance_px)
+        delta_sq = _pair_delta_sq_value(start_distance_px, candidate_distance_px)
         paired_entries.append(
             {
+                "pair_id": pair_id,
+                "hkl": (
+                    identity_payload.get("hkl") if isinstance(identity_payload, Mapping) else None
+                ),
+                "source_reflection_index": (
+                    identity_payload.get("source_reflection_index")
+                    if isinstance(identity_payload, Mapping)
+                    else None
+                ),
+                "source_branch_index": (
+                    identity_payload.get("source_branch_index")
+                    if isinstance(identity_payload, Mapping)
+                    else None
+                ),
+                "source_peak_index": (
+                    identity_payload.get("source_peak_index")
+                    if isinstance(identity_payload, Mapping)
+                    else None
+                ),
                 "identity_key": identity_key,
                 "start_match_status": (
                     start_record.get("match_status") if isinstance(start_record, Mapping) else None
@@ -1167,10 +1234,30 @@ def _build_full_beam_rejection_comparison(
                     else None
                 ),
                 "start_distance_px": (
-                    start_record.get("distance_px") if isinstance(start_record, Mapping) else None
+                    start_distance_px
                 ),
                 "candidate_distance_px": (
-                    candidate_record.get("distance_px")
+                    candidate_distance_px
+                ),
+                "delta_px": delta_px,
+                "delta_sq_px": delta_sq,
+                "start_match_radius_exceeded": (
+                    start_record.get("match_radius_exceeded")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_match_radius_exceeded": (
+                    candidate_record.get("match_radius_exceeded")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_resolution_reason": (
+                    start_record.get("resolution_reason")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_resolution_reason": (
+                    candidate_record.get("resolution_reason")
                     if isinstance(candidate_record, Mapping)
                     else None
                 ),
@@ -1245,6 +1332,33 @@ def _build_full_beam_rejection_comparison(
         comparison_classification = "resolved_correspondence_drift"
     else:
         comparison_classification = "objective_acceptance_mismatch"
+    ranked_by_delta_px = sorted(
+        paired_entries,
+        key=lambda entry: (
+            _float_or_none(entry.get("delta_px"))
+            if _float_or_none(entry.get("delta_px")) is not None
+            else float("-inf")
+        ),
+        reverse=True,
+    )
+    ranked_by_candidate_distance_px = sorted(
+        paired_entries,
+        key=lambda entry: (
+            _float_or_none(entry.get("candidate_distance_px"))
+            if _float_or_none(entry.get("candidate_distance_px")) is not None
+            else float("-inf")
+        ),
+        reverse=True,
+    )
+    ranked_by_delta_sq_px = sorted(
+        paired_entries,
+        key=lambda entry: (
+            _float_or_none(entry.get("delta_sq_px"))
+            if _float_or_none(entry.get("delta_sq_px")) is not None
+            else float("-inf")
+        ),
+        reverse=True,
+    )
     return {
         "comparison_classification": str(comparison_classification),
         "start_identity_key_count": int(len(start_records)),
@@ -1261,6 +1375,9 @@ def _build_full_beam_rejection_comparison(
         "coverage_drift_count": int(coverage_drift_count),
         "resolved_correspondence_drift_count": int(resolved_correspondence_drift_count),
         "paired_entries": paired_entries,
+        "ranked_by_delta_px": ranked_by_delta_px,
+        "ranked_by_candidate_distance_px": ranked_by_candidate_distance_px,
+        "ranked_by_delta_sq_px": ranked_by_delta_sq_px,
     }
 
 

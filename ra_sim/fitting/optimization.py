@@ -16030,6 +16030,92 @@ def fit_geometry_parameters(
         ) -> Dict[str, object]:
             return copy.deepcopy(dict(summary_in)) if isinstance(summary_in, Mapping) else {}
 
+        def _full_beam_acceptance_peak_metrics(
+            point_match_diagnostics_in: Sequence[object] | None,
+            point_match_summary_in: Mapping[str, object] | None,
+        ) -> Dict[str, object]:
+            matched_entries = [
+                dict(entry)
+                for entry in point_match_diagnostics_in or ()
+                if isinstance(entry, Mapping)
+                and str(entry.get("match_status", "")).strip().lower() == "matched"
+            ]
+            finite_all_distances = np.asarray(
+                [
+                    float(entry.get("distance_px", np.nan))
+                    for entry in matched_entries
+                    if np.isfinite(float(entry.get("distance_px", np.nan)))
+                ],
+                dtype=float,
+            )
+            in_radius_entries = [
+                entry
+                for entry in matched_entries
+                if not bool(entry.get("match_radius_exceeded", False))
+            ]
+            finite_in_radius_distances = np.asarray(
+                [
+                    float(entry.get("distance_px", np.nan))
+                    for entry in in_radius_entries
+                    if np.isfinite(float(entry.get("distance_px", np.nan)))
+                ],
+                dtype=float,
+            )
+            acceptance_distances = (
+                finite_in_radius_distances
+                if finite_in_radius_distances.size
+                else finite_all_distances
+            )
+            acceptance_scope = (
+                "matched_within_radius"
+                if finite_in_radius_distances.size
+                else "all_matched"
+            )
+
+            def _rms(distances: np.ndarray) -> float:
+                if not distances.size:
+                    return float("nan")
+                return float(np.sqrt(np.mean(distances * distances)))
+
+            def _mean(distances: np.ndarray) -> float:
+                if not distances.size:
+                    return float("nan")
+                return float(np.mean(distances))
+
+            def _peak(distances: np.ndarray) -> float:
+                if not distances.size:
+                    return float("nan")
+                return float(np.max(distances))
+
+            out = {
+                "acceptance_scope": str(acceptance_scope),
+                "all_matched_pair_count": int(len(matched_entries)),
+                "in_radius_matched_pair_count": int(len(in_radius_entries)),
+                "match_radius_exceeded_count": int(
+                    max(len(matched_entries) - len(in_radius_entries), 0)
+                ),
+                "all_matched_rms_px": _rms(finite_all_distances),
+                "all_matched_mean_px": _mean(finite_all_distances),
+                "all_matched_peak_max_px": _peak(finite_all_distances),
+                "acceptance_rms_px": _rms(acceptance_distances),
+                "acceptance_mean_px": _mean(acceptance_distances),
+                "acceptance_peak_max_px": _peak(acceptance_distances),
+            }
+            if not finite_all_distances.size and isinstance(point_match_summary_in, Mapping):
+                out["all_matched_rms_px"] = float(
+                    point_match_summary_in.get("unweighted_peak_rms_px", np.nan)
+                )
+                out["all_matched_mean_px"] = float(
+                    point_match_summary_in.get("unweighted_peak_mean_px", np.nan)
+                )
+                out["all_matched_peak_max_px"] = float(
+                    point_match_summary_in.get("unweighted_peak_max_px", np.nan)
+                )
+                out["acceptance_rms_px"] = float(out["all_matched_rms_px"])
+                out["acceptance_mean_px"] = float(out["all_matched_mean_px"])
+                out["acceptance_peak_max_px"] = float(out["all_matched_peak_max_px"])
+            return out
+
         start_residual, start_pm_diagnostics, start_pm_summary = _full_beam_point_match_evaluator(
             start_local,
             collect_diagnostics=True,
@@ -16055,20 +16141,38 @@ def fit_geometry_parameters(
         selected_pm_summary = _copy_point_match_summary_for_summary(start_pm_summary)
         selected_cost = float(start_cost)
         start_matched = int(start_pm_summary.get("matched_pair_count", 0))
+        start_acceptance_metrics = _full_beam_acceptance_peak_metrics(
+            start_pm_diagnostics,
+            start_pm_summary,
+        )
         summary["matched_pair_count_before"] = int(start_matched)
         summary["fixed_source_resolved_count"] = int(
             start_pm_summary.get("fixed_source_resolved_count", 0)
         )
         try:
-            start_point_rms = float(start_pm_summary.get("unweighted_peak_rms_px", np.nan))
+            start_point_rms = float(start_acceptance_metrics.get("acceptance_rms_px", np.nan))
         except Exception:
             start_point_rms = float("nan")
         try:
-            start_peak_max = float(start_pm_summary.get("unweighted_peak_max_px", np.nan))
+            start_peak_max = float(
+                start_acceptance_metrics.get("acceptance_peak_max_px", np.nan)
+            )
         except Exception:
             start_peak_max = float("nan")
         summary["start_rms_px"] = float(start_point_rms)
         summary["start_peak_max_px"] = float(start_peak_max)
+        summary["start_all_match_rms_px"] = float(
+            start_acceptance_metrics.get("all_matched_rms_px", np.nan)
+        )
+        summary["start_all_match_peak_max_px"] = float(
+            start_acceptance_metrics.get("all_matched_peak_max_px", np.nan)
+        )
+        summary["start_acceptance_metric_scope"] = str(
+            start_acceptance_metrics.get("acceptance_scope", "all_matched")
+        )
+        summary["start_match_radius_exceeded_count"] = int(
+            start_acceptance_metrics.get("match_radius_exceeded_count", 0)
+        )
 
         if int(start_matched) <= 0:
             summary.update(
@@ -16155,12 +16259,18 @@ def fit_geometry_parameters(
 
         improvement_tol = max(1.0e-9 * max(abs(float(start_cost)), 1.0), 1.0e-12)
         trial_matched = int(trial_pm_summary.get("matched_pair_count", 0))
+        trial_acceptance_metrics = _full_beam_acceptance_peak_metrics(
+            trial_pm_diagnostics,
+            trial_pm_summary,
+        )
         try:
-            trial_point_rms = float(trial_pm_summary.get("unweighted_peak_rms_px", np.nan))
+            trial_point_rms = float(trial_acceptance_metrics.get("acceptance_rms_px", np.nan))
         except Exception:
             trial_point_rms = float("nan")
         try:
-            trial_peak_max = float(trial_pm_summary.get("unweighted_peak_max_px", np.nan))
+            trial_peak_max = float(
+                trial_acceptance_metrics.get("acceptance_peak_max_px", np.nan)
+            )
         except Exception:
             trial_peak_max = float("nan")
         point_rms_tol = max(
@@ -16234,6 +16344,18 @@ def fit_geometry_parameters(
                 "candidate_matched_pair_count": int(trial_matched),
                 "candidate_rms_px": float(trial_point_rms),
                 "candidate_peak_max_px": float(trial_peak_max),
+                "candidate_all_match_rms_px": float(
+                    trial_acceptance_metrics.get("all_matched_rms_px", np.nan)
+                ),
+                "candidate_all_match_peak_max_px": float(
+                    trial_acceptance_metrics.get("all_matched_peak_max_px", np.nan)
+                ),
+                "candidate_acceptance_metric_scope": str(
+                    trial_acceptance_metrics.get("acceptance_scope", "all_matched")
+                ),
+                "candidate_match_radius_exceeded_count": int(
+                    trial_acceptance_metrics.get("match_radius_exceeded_count", 0)
+                ),
                 "start_point_match_diagnostics": start_pm_diagnostics_summary,
                 "start_point_match_summary": start_pm_summary_public,
                 "candidate_point_match_diagnostics": trial_pm_diagnostics_summary,

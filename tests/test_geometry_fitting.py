@@ -3553,6 +3553,150 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
     assert int(result.point_match_summary["matched_pair_count"]) == 2
 
 
+def test_full_beam_polish_accepts_when_only_outside_radius_pairs_regress(monkeypatch):
+    solve_calls = []
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        beam_x_array = np.asarray(args[16], dtype=np.float64)
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+
+        if beam_x_array.size > 1 and gamma >= 0.5:
+            hit_tables = [
+                np.array(
+                    [[10.0, 4.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.array(
+                    [[10.0, 42.0, 8.0, 0.0, 0.0, 1.0, 0.0]],
+                    dtype=np.float64,
+                ),
+            ]
+        else:
+            hit_tables = [
+                np.array(
+                    [[10.0, 5.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.array(
+                    [[10.0, 38.0, 8.0, 0.0, 0.0, 1.0, 0.0]],
+                    dtype=np.float64,
+                ),
+            ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        call_index = len(solve_calls)
+        x = np.array([0.0], dtype=float) if call_index == 0 else np.array([1.0], dtype=float)
+        solve_calls.append(x.copy())
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 60
+    miller = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    intensities = np.array([25.0, 20.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    measured = [
+        {
+            "label": "1,0,0",
+            "hkl": (1, 0, 0),
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "sigma_px": 1.0,
+        },
+        {
+            "label": "0,1,0",
+            "hkl": (0, 1, 0),
+            "x": 8.0,
+            "y": 8.0,
+            "source_table_index": 1,
+            "source_row_index": 0,
+            "sigma_px": 1000.0,
+        },
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "loss": "linear",
+                "weighted_matching": False,
+                "use_measurement_uncertainty": True,
+                "stagnation_probe": False,
+            },
+            "full_beam_polish": {
+                "enabled": True,
+                "max_nfev": 10,
+                "match_radius_px": 24.0,
+            },
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert len(solve_calls) >= 2
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0]))
+    assert isinstance(result.full_beam_polish_summary, dict)
+    assert bool(result.full_beam_polish_summary["accepted"]) is True
+    assert result.final_metric_name == "full_beam_fixed_correspondence"
+    assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 2
+    assert int(result.full_beam_polish_summary["matched_pair_count_after"]) == 2
+    assert str(result.full_beam_polish_summary["start_acceptance_metric_scope"]) == (
+        "matched_within_radius"
+    )
+    assert str(result.full_beam_polish_summary["candidate_acceptance_metric_scope"]) == (
+        "matched_within_radius"
+    )
+    assert int(result.full_beam_polish_summary["start_match_radius_exceeded_count"]) == 1
+    assert int(result.full_beam_polish_summary["candidate_match_radius_exceeded_count"]) == 1
+    assert np.isclose(float(result.full_beam_polish_summary["start_rms_px"]), 1.0)
+    assert np.isclose(float(result.full_beam_polish_summary["candidate_rms_px"]), 0.0)
+    assert float(result.full_beam_polish_summary["candidate_all_match_rms_px"]) > float(
+        result.full_beam_polish_summary["start_all_match_rms_px"]
+    )
+    start_diags = list(result.full_beam_polish_summary["start_point_match_diagnostics"])
+    candidate_diags = list(result.full_beam_polish_summary["candidate_point_match_diagnostics"])
+    outlier_start = next(entry for entry in start_diags if entry["hkl"] == (0, 1, 0))
+    outlier_candidate = next(entry for entry in candidate_diags if entry["hkl"] == (0, 1, 0))
+    assert outlier_start["match_status"] == "matched"
+    assert outlier_candidate["match_status"] == "matched"
+    assert bool(outlier_start["match_radius_exceeded"]) is True
+    assert bool(outlier_candidate["match_radius_exceeded"]) is True
+    assert outlier_candidate["distance_px"] > outlier_start["distance_px"]
+
+
 def test_full_beam_polish_rejection_preserves_central_point_match_result(monkeypatch):
     def fake_process(*args, **kwargs):
         miller_arg = np.asarray(args[0], dtype=np.float64)
