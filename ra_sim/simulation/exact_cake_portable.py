@@ -299,6 +299,7 @@ class FastAzimuthalIntegrator:
             center_col_px=float(poni2) / float(pixel_col),
         )
         self._detector_map_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+        self._solid_angle_cache: dict[tuple[int, int], np.ndarray] = {}
         self._cake_lut_cache: dict[
             tuple[tuple[int, int], int, float, float, int, float, float],
             DetectorCakeLUT,
@@ -346,7 +347,7 @@ class FastAzimuthalIntegrator:
         )
         norm = normalization
         if norm is None and bool(correctSolidAngle):
-            norm = flat_solid_angle_normalization(image_arr.shape, self.geometry)
+            norm = self._solid_angle_for_shape(image_arr.shape)
         exact_geometry = DetectorCakeGeometry(
             pixel_size_m=float(self.geometry.pixel_size_m),
             distance_m=float(self.geometry.distance_m),
@@ -399,6 +400,18 @@ class FastAzimuthalIntegrator:
             raw_azimuth_deg.setflags(write=False)
             cached = (two_theta_deg, raw_azimuth_deg)
             self._detector_map_cache[detector_shape] = cached
+        return cached
+
+    def _solid_angle_for_shape(self, shape: tuple[int, ...]) -> np.ndarray:
+        detector_shape = tuple(int(v) for v in tuple(shape)[:2])
+        cached = self._solid_angle_cache.get(detector_shape)
+        if cached is None:
+            cached = np.asarray(
+                flat_solid_angle_normalization(detector_shape, self.geometry),
+                dtype=np.float32,
+            )
+            cached.setflags(write=False)
+            self._solid_angle_cache[detector_shape] = cached
         return cached
 
     def _cached_cake_lut(

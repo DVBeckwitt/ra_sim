@@ -387,9 +387,10 @@ def test_fast_azimuthal_integrator_reuses_solid_angle_normalization(monkeypatch)
     integrator.integrate2d(image, npt_rad=8, npt_azim=6, correctSolidAngle=True, method="lut", unit="2th_deg")
     integrator.integrate2d(image, npt_rad=8, npt_azim=6, correctSolidAngle=True, method="lut", unit="2th_deg")
 
-    assert norm_calls == [(4, 4), (4, 4)]
+    assert norm_calls == [(4, 4)]
     assert len(passed_normalizations) == 2
-    assert passed_normalizations[0] is not passed_normalizations[1]
+    assert passed_normalizations[0] is passed_normalizations[1]
+    assert not passed_normalizations[0].flags.writeable
 
 
 def test_exact_cake_lut_matches_direct_integration() -> None:
