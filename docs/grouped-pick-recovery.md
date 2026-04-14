@@ -48,7 +48,9 @@ See also:
 - If you only remember one sentence:
   raw `new2/new3` are diagnostic sources, fresh-all exports are the acceptance
   artifacts, identity transport and trusted full-reflection replay are green,
-  and the current blocker is full-beam polish acceptance / scoring.
+  `new2_fresh_all.json` now reaches `full_beam_fixed_correspondence`, and
+  `new3_fresh_all.json` is down to a late optimizer objective / acceptance
+  mismatch with stable fixed correspondences.
 
 ## What Changed In Approach
 
@@ -111,12 +113,25 @@ See also:
   The old full-beam replay failure is fixed: trusted full-reflection seed
   records now remap into subset-local full-beam tables instead of dying with
   `source_table_out_of_range`.
-- Current earliest failing seam on both `new2_fresh_all.json` and
-  `new3_fresh_all.json` is still the last gate, but now for a narrower reason:
-  full-beam polish runs, preserves matched-pair count, slightly improves cost,
-  then is rejected because unweighted RMS / peak max regress. That leaves
-  `final_metric_name=central_point_match` instead of
-  `full_beam_fixed_correspondence`.
+- Latest diagnostics-only pass now retains both
+  `start_point_match_diagnostics` / `candidate_point_match_diagnostics` and
+  both summaries inside `full_beam_polish_summary`.
+- The downstream validator now reads those optimizer-captured diagnostics
+  directly, pairs them by stable identity key, carries weight fields through
+  comparison output, and promotes coverage failure to explicit top-level
+  classification `identity_key_coverage_mismatch`.
+- Full-beam behavior pass now keeps resolved fixed correspondences resolved
+  during full-beam polish even when detector distance exceeds the full-beam
+  radius, and marks those rows with
+  `resolution_reason="outside_match_radius"`.
+- Downstream validator now accepts `match_kind="full_beam_fixed"` as valid
+  full-beam fixed correspondence output.
+- After that behavior pass:
+  - `new2_fresh_all.json` passes downstream identity fully and ends with
+    `final_metric_name=full_beam_fixed_correspondence`
+  - `new3_fresh_all.json` no longer fails coverage; it still rejects final
+    promotion because full-beam polish reports
+    `reason="point_rms_regressed, peak_offset_regressed"`
 
 ## Implemented Recovery Work
 
@@ -148,6 +163,21 @@ See also:
 - Added full-beam replay diagnostics that preserve
   `frozen_table_index`, `frozen_table_namespace`,
   `resolved_table_index`, and `trusted_full_reflection_remapped`.
+- Added diagnostics retention for rejected full-beam polish so
+  `full_beam_polish_summary` now keeps:
+  `start_point_match_diagnostics`, `candidate_point_match_diagnostics`,
+  `start_point_match_summary`, and `candidate_point_match_summary`.
+- Updated downstream validator to pair optimizer-captured start/candidate
+  full-beam diagnostics directly instead of recomputing groups, and to emit
+  weighted residual fields in paired comparison output.
+- Added explicit validator classification
+  `identity_key_coverage_mismatch` for selected-side full-beam coverage
+  failures before fixed-correspondence promotion.
+- Kept resolved full-beam fixed correspondences as matched rows during
+  full-beam polish even when they exceed the full-beam radius, while exposing
+  `outside_match_radius` in diagnostics.
+- Updated downstream validator to treat `match_kind="full_beam_fixed"` as valid
+  full-beam fixed-correspondence output.
 - Added regression coverage for:
   - stale sentinel-id canonicalization reporting
   - fresh-all export ordering and empty transient lists
@@ -155,9 +185,13 @@ See also:
   - downstream input-contract rejection
   - downstream earliest-failure stop behavior
   - downstream happy-path identity preservation
+  - downstream optimizer-captured full-beam start/candidate comparison
+  - downstream explicit coverage-mismatch classification promotion
+  - full-beam resolved fixed correspondence retained outside radius
   - trusted deadband source-row fallback
   - trusted full-reflection replay remap into subset-local tables
   - fail-closed trusted full-reflection replay miss
+  - rejected full-beam polish retaining both start/candidate diagnostic sets
 
 ## Validation Commands
 
@@ -178,6 +212,8 @@ See also:
   python -m pytest tests/test_gui_geometry_fit_workflow.py -k "probe_main_aliases_full_to_fresh_all or downstream_identity_validation_rejects_non_canonical_input or downstream_identity_validation_stops_at_subset_drift or downstream_identity_validation_preserves_canonical_identity or solver_request_to_subset_mapping_and_seed_correspondence_preserves_trusted_identity"
   python -m pytest tests/test_geometry_fitting.py -k "trusted_deadband_source_row_fallback or legacy_branch_alias or keeps_distinct_branches or preserves_trusted_identity_payload"
   python -m pytest tests/test_geometry_fitting.py -k "full_beam_polish_remaps_trusted_full_reflection_indices_into_subset_local_tables or trusted_full_reflection_index_missing_from_subset"
+  python -m pytest tests/test_geometry_fitting.py -k "full_beam_polish_rejects_unweighted_rms_regression or full_beam_polish_rejection_preserves_central_point_match_result"
+  python -m pytest tests/test_gui_geometry_fit_workflow.py -k "downstream_identity_validation_uses_optimizer_captured_full_beam_diagnostics or downstream_identity_validation_promotes_coverage_mismatch_classification"
   ```
 
 ## What To Not Forget
@@ -189,6 +225,12 @@ See also:
 - Canonical equality excludes `pair_id`. Keep `pair_id` as diagnostic only.
 - Raw full-beam diagnostic list order is not the acceptance order. Coverage is
   checked first; fixed-correspondence comparison is deterministic.
+- On rejected full-beam polish, truth source is
+  `full_beam_polish_summary.start_point_match_diagnostics` /
+  `candidate_point_match_diagnostics`, not recomputed validator groups.
+- `identity_key_coverage_mismatch` now means selected-side full-beam output
+  still contains unresolved or duplicate fixed correspondences, even if
+  optimizer-captured start/candidate sets remain stable.
 - Do not use full end-to-end fit as the primary gate again until the final
   full-beam fixed-correspondence acceptance seam is green.
 
@@ -246,16 +288,20 @@ Milestone 7 completes when:
 Current Milestone 7 status:
 
 - `new2_fresh_all.json`: passes input contract, preflight, solver request,
-  subset mapping, seed correspondence, full-beam identity coverage, and trusted
-  full-reflection replay remap; full-beam polish then rejects candidate with
-  `reason="point_rms_regressed, peak_offset_regressed"` and leaves
+  subset mapping, seed correspondence, and trusted full-reflection replay
+  remap and now reaches
+  `final_metric_name=full_beam_fixed_correspondence`
+- `new3_fresh_all.json`: passes input contract, preflight, solver request,
+  subset mapping, seed correspondence, trusted full-reflection replay remap,
+  and full-beam identity coverage; fixed-correspondence identities remain
+  stable with `identity_drift_count=0`, `coverage_drift_count=0`, and
+  `resolved_correspondence_drift_count=0`, but final promotion still rejects
+  with `reason="point_rms_regressed, peak_offset_regressed"` and leaves
   `final_metric_name=central_point_match`
-- `new3_fresh_all.json`: same new failure shape after trusted replay remap
-- earliest remaining seam is now full-beam polish scoring / acceptance, not
-  earlier identity transport or trusted replay index-space resolution
-- this means next code question is optimizer-side full-beam metric /
-  acceptance behavior, not save-load identity loss, branch stamping,
-  grouped-candidate regeneration, or full-reflection replay remapping
+- earliest remaining seam is now only the late optimizer objective /
+  acceptance gate on `new3_fresh_all.json`
+- next code question stays optimizer-side scoring / acceptance for `new3`, not
+  upstream identity work, replay remap, or selected-side coverage classification
 
 Until then, treat fit output as secondary evidence. Primary signal remains seam
 integrity at each boundary.

@@ -2959,7 +2959,7 @@ def test_downstream_identity_validation_preserves_canonical_identity(
                     "overlay_match_index": slot_index,
                     "match_input_index": slot_index,
                     "match_status": "matched",
-                    "match_kind": "fixed_correspondence",
+                    "match_kind": "full_beam_fixed",
                     "resolution_kind": "fixed_source",
                 }
                 for slot_index, entry in enumerate(saved_entries)
@@ -2992,6 +2992,323 @@ def test_downstream_identity_validation_preserves_canonical_identity(
     )
     assert result["stage_results"][-2]["ok"] is True
     assert result["stage_results"][-1]["ok"] is True
+
+
+def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagnostics(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 100,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+        }
+    ]
+    state_path = _write_probe_state(tmp_path, entries=saved_entries)
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+    )
+    prepared_run = replace(
+        prepared_run,
+        current_dataset={
+            **prepared_run.current_dataset,
+            "dataset_index": 0,
+            "measured_for_fit": [dict(entry) for entry in saved_entries],
+        },
+        dataset_specs=[{"dataset_index": 0, "theta_initial": 3.0}],
+    )
+    setup = geometry_fit.GeometryFitRuntimeExecutionSetup(
+        ui_bindings="unused",
+        postprocess_config=postprocess_config,
+    )
+
+    monkeypatch.setattr(
+        probe,
+        "_capture_execution_setup",
+        lambda **kwargs: {
+            "prepare_kwargs": {"var_names": ["gamma"]},
+            "prepare_result": SimpleNamespace(prepared_run=prepared_run, error_text=None),
+            "execute_kwargs": {"setup": setup, "var_names": ["gamma"]},
+        },
+    )
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "build_geometry_fit_solver_request",
+        lambda **kwargs: SimpleNamespace(
+            measured_peaks=[dict(entry) for entry in saved_entries],
+            miller="miller",
+            intensities="intensity",
+            params={},
+            dataset_specs=[{"dataset_index": 0}],
+        ),
+    )
+    monkeypatch.setattr(
+        probe.opt,
+        "_build_geometry_fit_dataset_contexts",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                subset=SimpleNamespace(
+                    measured_entries=[dict(entry) for entry in saved_entries]
+                )
+            )
+        ],
+    )
+    seed_records = [
+        {
+            **dict(entry),
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_input_index": 0,
+            "match_status": "matched",
+            "frozen_locator_kind": "trusted_branch",
+            "frozen_table_namespace": "full_reflection",
+        }
+        for entry in saved_entries
+    ]
+    selected_full_beam_diag = [
+        {
+            **dict(saved_entries[0]),
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_input_index": 0,
+            "match_kind": "fixed_correspondence",
+            "match_status": "matched",
+            "resolution_kind": "fixed_source",
+            "resolved_table_index": 3,
+            "resolved_peak_index": 1,
+            "distance_px": 2.0,
+            "weighted_dx_px": 1.25,
+            "weighted_dy_px": -0.5,
+            "distance_weight": 0.5,
+            "sigma_weight": 2.0,
+            "priority_weight": 1.0,
+            "weight": 1.0,
+        }
+    ]
+    candidate_full_beam_diag = [
+        {
+            **dict(saved_entries[0]),
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_input_index": 0,
+            "match_kind": "fixed_correspondence",
+            "match_status": "matched",
+            "resolution_kind": "fixed_source",
+            "resolved_table_index": 3,
+            "resolved_peak_index": 1,
+            "distance_px": 3.0,
+            "weighted_dx_px": 0.25,
+            "weighted_dy_px": 0.5,
+            "distance_weight": 0.25,
+            "sigma_weight": 4.0,
+            "priority_weight": 1.0,
+            "weight": 1.0,
+        }
+    ]
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "solve_geometry_fit_request",
+        lambda *args, **kwargs: SimpleNamespace(
+            full_beam_polish_summary={
+                "accepted": False,
+                "reason": "point_rms_regressed",
+                "seed_correspondence_records": seed_records,
+                "point_match_diagnostics": selected_full_beam_diag,
+                "start_point_match_diagnostics": selected_full_beam_diag,
+                "candidate_point_match_diagnostics": candidate_full_beam_diag,
+                "start_point_match_summary": {"matched_pair_count": 1},
+                "candidate_point_match_summary": {"matched_pair_count": 1},
+            },
+            point_match_diagnostics=[
+                {
+                    **dict(saved_entries[0]),
+                    "dataset_index": 0,
+                    "overlay_match_index": 0,
+                    "match_input_index": 0,
+                    "match_kind": "fixed_correspondence",
+                    "match_status": "matched",
+                    "resolution_kind": "fixed_source",
+                    "resolved_table_index": 99,
+                    "resolved_peak_index": 99,
+                    "distance_px": 99.0,
+                    "weighted_dx_px": 999.0,
+                    "weighted_dy_px": 999.0,
+                }
+            ],
+            final_metric_name="central_point_match",
+        ),
+    )
+
+    result = probe._run_downstream_identity_validation(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["ok"] is False
+    assert result["failed_stage"] == "full_beam_fixed_correspondence"
+    assert result["failed_pair"]["failure_reason"] == "unexpected_final_metric_name"
+    comparison = result["full_beam_point_match_comparison"]
+    assert comparison["comparison_classification"] == "objective_acceptance_mismatch"
+    assert comparison["start_identity_key_count"] == 1
+    assert comparison["candidate_identity_key_count"] == 1
+    assert len(comparison["paired_entries"]) == 1
+    paired_entry = comparison["paired_entries"][0]
+    assert paired_entry["start_weighted_dx_px"] == 1.25
+    assert paired_entry["candidate_weighted_dx_px"] == 0.25
+    assert paired_entry["start_resolved_table_index"] == 3
+    assert paired_entry["candidate_resolved_table_index"] == 3
+    assert paired_entry["coverage_drift"] is False
+    assert paired_entry["resolved_correspondence_drift"] is False
+    assert paired_entry["start_weighted_dx_px"] != 999.0
+    assert paired_entry["candidate_weighted_dx_px"] != 999.0
+
+
+def test_downstream_identity_validation_promotes_coverage_mismatch_classification(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_new2_probe_module()
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 100,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+        }
+    ]
+    state_path = _write_probe_state(tmp_path, entries=saved_entries)
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+    )
+    prepared_run = replace(
+        prepared_run,
+        current_dataset={
+            **prepared_run.current_dataset,
+            "dataset_index": 0,
+            "measured_for_fit": [dict(entry) for entry in saved_entries],
+        },
+        dataset_specs=[{"dataset_index": 0, "theta_initial": 3.0}],
+    )
+    setup = geometry_fit.GeometryFitRuntimeExecutionSetup(
+        ui_bindings="unused",
+        postprocess_config=postprocess_config,
+    )
+
+    monkeypatch.setattr(
+        probe,
+        "_capture_execution_setup",
+        lambda **kwargs: {
+            "prepare_kwargs": {"var_names": ["gamma"]},
+            "prepare_result": SimpleNamespace(prepared_run=prepared_run, error_text=None),
+            "execute_kwargs": {"setup": setup, "var_names": ["gamma"]},
+        },
+    )
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "build_geometry_fit_solver_request",
+        lambda **kwargs: SimpleNamespace(
+            measured_peaks=[dict(entry) for entry in saved_entries],
+            miller="miller",
+            intensities="intensity",
+            params={},
+            dataset_specs=[{"dataset_index": 0}],
+        ),
+    )
+    monkeypatch.setattr(
+        probe.opt,
+        "_build_geometry_fit_dataset_contexts",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                subset=SimpleNamespace(
+                    measured_entries=[dict(entry) for entry in saved_entries]
+                )
+            )
+        ],
+    )
+    seed_records = [
+        {
+            **dict(entry),
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_input_index": 0,
+            "match_status": "matched",
+            "frozen_locator_kind": "trusted_branch",
+            "frozen_table_namespace": "full_reflection",
+        }
+        for entry in saved_entries
+    ]
+    missing_full_beam_diag = [
+        {
+            **dict(saved_entries[0]),
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_input_index": 0,
+            "match_kind": "full_beam_fixed",
+            "match_status": "missing_pair",
+            "resolution_kind": "fixed_source",
+            "resolved_table_index": 3,
+            "resolved_peak_index": 1,
+            "distance_weight": 1.0,
+            "sigma_weight": 2.0,
+            "priority_weight": 1.0,
+            "weight": 2.0,
+            "weighted_dx_px": 0.0,
+            "weighted_dy_px": 0.0,
+        }
+    ]
+    monkeypatch.setattr(
+        probe.gui_geometry_fit,
+        "solve_geometry_fit_request",
+        lambda *args, **kwargs: SimpleNamespace(
+            full_beam_polish_summary={
+                "accepted": False,
+                "reason": "point_rms_regressed",
+                "seed_correspondence_records": seed_records,
+                "point_match_diagnostics": missing_full_beam_diag,
+                "start_point_match_diagnostics": missing_full_beam_diag,
+                "candidate_point_match_diagnostics": missing_full_beam_diag,
+                "start_point_match_summary": {"matched_pair_count": 0},
+                "candidate_point_match_summary": {"matched_pair_count": 0},
+            },
+            point_match_diagnostics=[
+                {
+                    **dict(saved_entries[0]),
+                    "dataset_index": 0,
+                    "overlay_match_index": 0,
+                    "match_input_index": 0,
+                    "match_kind": "fixed_correspondence",
+                    "match_status": "matched",
+                    "resolution_kind": "fixed_source",
+                }
+            ],
+            final_metric_name="central_point_match",
+        ),
+    )
+
+    result = probe._run_downstream_identity_validation(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "identity_key_coverage_mismatch"
+    assert result["failed_stage"] == "full_beam_identity_coverage"
+    assert (
+        result["stage_results"][-1]["coverage_mismatch_classification"]
+        == "identity_key_coverage_mismatch"
+    )
+    assert result["stage_results"][-1]["failure_reason"] == "unresolved_full_beam_correspondence"
 
 
 def test_fresh_one_pair_gui_state_save_reload_preflight_resolves_without_generic_fallback(

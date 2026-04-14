@@ -15594,69 +15594,74 @@ def fit_geometry_parameters(
                     dx = float(sim_point[0] - measured_point[0])
                     dy = float(sim_point[1] - measured_point[1])
                     pair_dist = float(math.hypot(dx, dy))
-                    if pair_dist <= float(full_beam_polish_match_radius_px):
-                        matched_pair_count_local += 1
-                        matched_distances.append(float(pair_dist))
-                        if weighted_matching:
-                            distance_weight = 1.0 / math.sqrt(
-                                1.0 + (pair_dist / solver_f_scale) ** 2
-                            )
-                        else:
-                            distance_weight = 1.0
-                        weight_fields = _weight_fields(
-                            entry,
-                            measured_point=measured_point,
-                            dx=dx,
-                            dy=dy,
-                            distance_weight=float(distance_weight),
+                    matched_pair_count_local += 1
+                    matched_distances.append(float(pair_dist))
+                    if weighted_matching:
+                        distance_weight = 1.0 / math.sqrt(
+                            1.0 + (pair_dist / solver_f_scale) ** 2
                         )
-                        residual_components[slot, 0] = float(weight_fields["weighted_dx_px"])
-                        residual_components[slot, 1] = float(weight_fields["weighted_dy_px"])
-                        _add_diag(
-                            base_diag,
-                            {
-                                "match_kind": "full_beam_fixed",
-                                "match_status": "matched",
-                                "resolution_reason": str(
-                                    resolution_payload.get("resolution_reason", "resolved")
-                                ),
-                                "resolved_table_index": resolution_payload.get(
-                                    "resolved_table_index"
-                                ),
-                                "resolved_peak_index": resolution_payload.get(
-                                    "resolved_peak_index"
-                                ),
-                                "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
-                                "trusted_full_reflection_remapped": bool(
-                                    resolution_payload.get(
-                                        "trusted_full_reflection_remapped",
-                                        False,
-                                    )
-                                ),
-                                "measured_x": float(measured_point[0]),
-                                "measured_y": float(measured_point[1]),
-                                "simulated_x": float(sim_point[0]),
-                                "simulated_y": float(sim_point[1]),
-                                "dx_px": float(dx),
-                                "dy_px": float(dy),
-                                "distance_px": float(pair_dist),
-                                "placement_error_px": float(
-                                    entry.get("placement_error_px", np.nan)
-                                ),
-                                "distance_weight": float(distance_weight),
-                                "weight": float(
-                                    float(distance_weight)
-                                    * float(weight_fields.get("sigma_weight", 1.0))
-                                    * float(weight_fields.get("priority_weight", 1.0))
-                                ),
-                                "measured_radius_px": _point_radius_px(measured_point),
-                                "simulated_radius_px": _point_radius_px(sim_point),
-                                **weight_fields,
-                            },
-                        )
-                        continue
-                    resolution_payload = dict(resolution_payload)
-                    resolution_payload["resolution_reason"] = "outside_match_radius"
+                    else:
+                        distance_weight = 1.0
+                    weight_fields = _weight_fields(
+                        entry,
+                        measured_point=measured_point,
+                        dx=dx,
+                        dy=dy,
+                        distance_weight=float(distance_weight),
+                    )
+                    residual_components[slot, 0] = float(weight_fields["weighted_dx_px"])
+                    residual_components[slot, 1] = float(weight_fields["weighted_dy_px"])
+                    resolution_reason = str(
+                        resolution_payload.get("resolution_reason", "resolved")
+                    )
+                    match_radius_exceeded = bool(
+                        np.isfinite(pair_dist)
+                        and pair_dist > float(full_beam_polish_match_radius_px)
+                    )
+                    if match_radius_exceeded:
+                        resolution_reason = "outside_match_radius"
+                    _add_diag(
+                        base_diag,
+                        {
+                            "match_kind": "full_beam_fixed",
+                            "match_status": "matched",
+                            "resolution_reason": resolution_reason,
+                            "resolved_table_index": resolution_payload.get(
+                                "resolved_table_index"
+                            ),
+                            "resolved_peak_index": resolution_payload.get(
+                                "resolved_peak_index"
+                            ),
+                            "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
+                            "trusted_full_reflection_remapped": bool(
+                                resolution_payload.get(
+                                    "trusted_full_reflection_remapped",
+                                    False,
+                                )
+                            ),
+                            "match_radius_exceeded": bool(match_radius_exceeded),
+                            "measured_x": float(measured_point[0]),
+                            "measured_y": float(measured_point[1]),
+                            "simulated_x": float(sim_point[0]),
+                            "simulated_y": float(sim_point[1]),
+                            "dx_px": float(dx),
+                            "dy_px": float(dy),
+                            "distance_px": float(pair_dist),
+                            "placement_error_px": float(
+                                entry.get("placement_error_px", np.nan)
+                            ),
+                            "distance_weight": float(distance_weight),
+                            "weight": float(
+                                float(distance_weight)
+                                * float(weight_fields.get("sigma_weight", 1.0))
+                                * float(weight_fields.get("priority_weight", 1.0))
+                            ),
+                            "measured_radius_px": _point_radius_px(measured_point),
+                            "simulated_radius_px": _point_radius_px(sim_point),
+                            **weight_fields,
+                        },
+                    )
+                    continue
 
                 missing_pair_count_local += 1
                 weight_fields = _weight_fields(
@@ -16011,6 +16016,20 @@ def fit_geometry_parameters(
                 return np.asarray(prior_residual, dtype=float)
             return np.asarray(residual_arr, dtype=float)
 
+        def _copy_point_match_diagnostics_for_summary(
+            diagnostics_in: Sequence[object] | None,
+        ) -> List[Dict[str, object]]:
+            return [
+                copy.deepcopy(dict(entry))
+                for entry in diagnostics_in or ()
+                if isinstance(entry, Mapping)
+            ]
+
+        def _copy_point_match_summary_for_summary(
+            summary_in: Mapping[str, object] | None,
+        ) -> Dict[str, object]:
+            return copy.deepcopy(dict(summary_in)) if isinstance(summary_in, Mapping) else {}
+
         start_residual, start_pm_diagnostics, start_pm_summary = _full_beam_point_match_evaluator(
             start_local,
             collect_diagnostics=True,
@@ -16026,10 +16045,14 @@ def fit_geometry_parameters(
         else:
             start_fun = np.asarray(start_residual, dtype=float)
         start_cost = float(_robust_cost(start_fun, loss=solver_loss, f_scale=solver_f_scale))
+        start_pm_diagnostics_summary = _copy_point_match_diagnostics_for_summary(
+            start_pm_diagnostics
+        )
+        start_pm_summary_public = _copy_point_match_summary_for_summary(start_pm_summary)
         selected_x = np.asarray(start_x, dtype=float)
         selected_fun = np.asarray(start_fun, dtype=float)
-        selected_pm_diagnostics = list(start_pm_diagnostics)
-        selected_pm_summary = dict(start_pm_summary)
+        selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(start_pm_diagnostics)
+        selected_pm_summary = _copy_point_match_summary_for_summary(start_pm_summary)
         selected_cost = float(start_cost)
         start_matched = int(start_pm_summary.get("matched_pair_count", 0))
         summary["matched_pair_count_before"] = int(start_matched)
@@ -16057,8 +16080,16 @@ def fit_geometry_parameters(
                     "matched_pair_count_after": int(
                         selected_pm_summary.get("matched_pair_count", 0)
                     ),
-                    "point_match_diagnostics": selected_pm_diagnostics,
-                    "point_match_summary": selected_pm_summary,
+                    "start_point_match_diagnostics": start_pm_diagnostics_summary,
+                    "start_point_match_summary": start_pm_summary_public,
+                    "candidate_point_match_diagnostics": [],
+                    "candidate_point_match_summary": {},
+                    "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
+                        selected_pm_diagnostics
+                    ),
+                    "point_match_summary": _copy_point_match_summary_for_summary(
+                        selected_pm_summary
+                    ),
                     "fun": selected_fun,
                 }
             )
@@ -16107,8 +16138,16 @@ def fit_geometry_parameters(
                     "matched_pair_count_after": int(
                         selected_pm_summary.get("matched_pair_count", 0)
                     ),
-                    "point_match_diagnostics": selected_pm_diagnostics,
-                    "point_match_summary": selected_pm_summary,
+                    "start_point_match_diagnostics": start_pm_diagnostics_summary,
+                    "start_point_match_summary": start_pm_summary_public,
+                    "candidate_point_match_diagnostics": [],
+                    "candidate_point_match_summary": {},
+                    "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
+                        selected_pm_diagnostics
+                    ),
+                    "point_match_summary": _copy_point_match_summary_for_summary(
+                        selected_pm_summary
+                    ),
                     "fun": selected_fun,
                 }
             )
@@ -16151,11 +16190,15 @@ def fit_geometry_parameters(
             )
         )
         accepted = bool(cost_improved and matched_ok and point_rms_ok and peak_max_ok)
+        trial_pm_diagnostics_summary = _copy_point_match_diagnostics_for_summary(
+            trial_pm_diagnostics
+        )
+        trial_pm_summary_public = _copy_point_match_summary_for_summary(trial_pm_summary)
         if accepted:
             selected_x = np.asarray(trial_x, dtype=float)
             selected_fun = np.asarray(trial_fun, dtype=float)
-            selected_pm_diagnostics = list(trial_pm_diagnostics)
-            selected_pm_summary = dict(trial_pm_summary)
+            selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(trial_pm_diagnostics)
+            selected_pm_summary = _copy_point_match_summary_for_summary(trial_pm_summary)
             selected_cost = float(trial_cost)
             final_metric_residual_fn = _full_beam_residual
             final_metric_point_match_evaluator = _full_beam_point_match_evaluator
@@ -16191,8 +16234,16 @@ def fit_geometry_parameters(
                 "candidate_matched_pair_count": int(trial_matched),
                 "candidate_rms_px": float(trial_point_rms),
                 "candidate_peak_max_px": float(trial_peak_max),
-                "point_match_diagnostics": selected_pm_diagnostics,
-                "point_match_summary": selected_pm_summary,
+                "start_point_match_diagnostics": start_pm_diagnostics_summary,
+                "start_point_match_summary": start_pm_summary_public,
+                "candidate_point_match_diagnostics": trial_pm_diagnostics_summary,
+                "candidate_point_match_summary": trial_pm_summary_public,
+                "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
+                    selected_pm_diagnostics
+                ),
+                "point_match_summary": _copy_point_match_summary_for_summary(
+                    selected_pm_summary
+                ),
                 "fun": selected_fun,
             }
         )

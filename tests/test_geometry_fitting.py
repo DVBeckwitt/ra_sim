@@ -3515,6 +3515,41 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
     )
     assert np.isclose(float(result.full_beam_polish_summary["start_rms_px"]), 1.0)
     assert np.isclose(float(result.full_beam_polish_summary["candidate_rms_px"]), np.sqrt(8.0))
+    start_pm_diagnostics = result.full_beam_polish_summary["start_point_match_diagnostics"]
+    candidate_pm_diagnostics = result.full_beam_polish_summary[
+        "candidate_point_match_diagnostics"
+    ]
+    assert len(start_pm_diagnostics) == 2
+    assert len(candidate_pm_diagnostics) == 2
+    for entry in list(start_pm_diagnostics) + list(candidate_pm_diagnostics):
+        assert "weighted_dx_px" in entry
+        assert "weighted_dy_px" in entry
+        assert "distance_weight" in entry
+        assert "sigma_weight" in entry
+        assert "priority_weight" in entry
+        assert "weight" in entry
+    assert int(
+        result.full_beam_polish_summary["start_point_match_summary"]["matched_pair_count"]
+    ) == 2
+    assert int(
+        result.full_beam_polish_summary["candidate_point_match_summary"]["matched_pair_count"]
+    ) == 2
+    assert np.isclose(
+        float(
+            result.full_beam_polish_summary["start_point_match_summary"][
+                "unweighted_peak_rms_px"
+            ]
+        ),
+        1.0,
+    )
+    assert np.isclose(
+        float(
+            result.full_beam_polish_summary["candidate_point_match_summary"][
+                "unweighted_peak_rms_px"
+            ]
+        ),
+        np.sqrt(8.0),
+    )
     assert int(result.point_match_summary["matched_pair_count"]) == 2
 
 
@@ -3661,6 +3696,126 @@ def test_full_beam_polish_rejection_preserves_central_point_match_result(monkeyp
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
     assert str(result.full_beam_polish_summary["reason"]) == "no_seed_correspondences"
+
+
+def test_full_beam_polish_keeps_resolved_fixed_correspondence_outside_match_radius(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        miller_local = np.asarray(args[0], dtype=np.float64)
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = []
+        for row in miller_local:
+            h, k, l = (int(round(float(v))) for v in row[:3])
+            if (h, k, l) == (1, 0, 0):
+                hit_tables.append(
+                    np.asarray(
+                        [
+                            [1.0, 2.0, 2.0, -10.0, 1.0, 0.0, 0.0],
+                            [1.0, 8.75, 8.0, 10.0, 1.0, 0.0, 0.0],
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+            else:
+                hit_tables.append(
+                    np.asarray(
+                        [[1.0, 50.0, 50.0, 0.0, float(h), float(k), float(l)]],
+                        dtype=np.float64,
+                    )
+                )
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array(
+        [[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [7.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 10.0, 7.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    measured = [
+        {
+            "pair_id": "bg0:pair0",
+            "fit_run_id": "fit-123",
+            "label": "1,0,0",
+            "hkl": (1, 0, 0),
+            "x": 8.0,
+            "y": 8.0,
+            "sigma_px": 1.0,
+            "source_table_index": 99,
+            "source_reflection_index": 1,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": True,
+                "stagnation_probe": False,
+            },
+            "full_beam_polish": {
+                "enabled": True,
+                "max_nfev": 10,
+                "match_radius_px": 0.5,
+            },
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert bool(result.success) is True
+    assert bool(result.full_beam_polish_summary["accepted"]) is True
+    assert result.final_metric_name == "full_beam_fixed_correspondence"
+    assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 1
+    assert int(result.full_beam_polish_summary["matched_pair_count_after"]) == 1
+    start_diag = dict(result.full_beam_polish_summary["start_point_match_diagnostics"][0])
+    final_diag = dict(result.point_match_diagnostics[0])
+    for entry in (start_diag, final_diag):
+        assert entry["match_status"] == "matched"
+        assert entry["match_kind"] == "full_beam_fixed"
+        assert entry["resolution_reason"] == "outside_match_radius"
+        assert bool(entry["match_radius_exceeded"]) is True
+        assert np.isclose(float(entry["distance_px"]), 0.75)
 
 
 def test_fit_geometry_parameters_uses_manual_peak_sigma_by_default(monkeypatch):

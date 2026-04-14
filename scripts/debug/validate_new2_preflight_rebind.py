@@ -126,6 +126,14 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
+def _float_or_none(value: object) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    return float(number) if np.isfinite(number) else None
+
+
 def _canonical_identity(entry: Mapping[str, object] | None) -> tuple[object, ...] | None:
     if not isinstance(entry, Mapping):
         return None
@@ -735,6 +743,20 @@ def _coverage_stage_result(
     actual_entries: Sequence[object] | None,
     default_dataset_index: int = 0,
 ) -> dict[str, object]:
+    def _coverage_failure(
+        failure_reason: str,
+        *,
+        failed_pair: Mapping[str, object] | None = None,
+        **extra: object,
+    ) -> dict[str, object]:
+        return _failed_stage_result(
+            stage,
+            failure_reason=str(failure_reason),
+            failed_pair=failed_pair,
+            coverage_mismatch_classification="identity_key_coverage_mismatch",
+            **extra,
+        )
+
     expected_records = _ordered_stage_records(
         expected_entries,
         default_dataset_index=default_dataset_index,
@@ -747,8 +769,7 @@ def _coverage_stage_result(
     for record in expected_records:
         identity_key = record.get("identity_key")
         if identity_key is None:
-            return _failed_stage_result(
-                stage,
+            return _coverage_failure(
                 failure_reason="missing_expected_identity_key",
                 failed_pair=record,
             )
@@ -757,14 +778,12 @@ def _coverage_stage_result(
     for record in actual_records:
         identity_key = record.get("identity_key")
         if identity_key is None:
-            return _failed_stage_result(
-                stage,
+            return _coverage_failure(
                 failure_reason="missing_actual_identity_key",
                 failed_pair=record,
             )
         if identity_key in actual_by_key:
-            return _failed_stage_result(
-                stage,
+            return _coverage_failure(
                 failure_reason="duplicate_actual_identity_key",
                 failed_pair={
                     "identity_key": identity_key,
@@ -773,8 +792,7 @@ def _coverage_stage_result(
                 },
             )
         if str(record.get("match_status", "") or "").strip().lower() != "matched":
-            return _failed_stage_result(
-                stage,
+            return _coverage_failure(
                 failure_reason="unresolved_full_beam_correspondence",
                 failed_pair=record,
             )
@@ -782,8 +800,7 @@ def _coverage_stage_result(
     expected_keys = set(expected_by_key.keys())
     actual_keys = set(actual_by_key.keys())
     if expected_keys != actual_keys:
-        return _failed_stage_result(
-            stage,
+        return _coverage_failure(
             failure_reason="identity_coverage_drift",
             expected_identity_keys=sorted(expected_keys, key=repr),
             actual_identity_keys=sorted(actual_keys, key=repr),
@@ -831,7 +848,7 @@ def _full_beam_record_is_fixed(entry: Mapping[str, object] | None) -> bool:
     return (
         match_status == "matched"
         and resolution_kind == "fixed_source"
-        and match_kind in {"", "fixed_correspondence"}
+        and match_kind in {"", "fixed_correspondence", "full_beam_fixed"}
     )
 
 
@@ -841,14 +858,24 @@ def _fixed_correspondence_stage_result(
     expected_entries: Sequence[object] | None,
     actual_entries: Sequence[object] | None,
     final_metric_name: str,
+    full_beam_polish_summary: Mapping[str, object] | None = None,
     default_dataset_index: int = 0,
 ) -> dict[str, object]:
     if str(final_metric_name).strip() != "full_beam_fixed_correspondence":
-        return _failed_stage_result(
+        result = _failed_stage_result(
             stage,
             failure_reason="unexpected_final_metric_name",
             final_metric_name=str(final_metric_name),
         )
+        if isinstance(full_beam_polish_summary, Mapping):
+            result["full_beam_polish_summary"] = copy.deepcopy(
+                dict(full_beam_polish_summary)
+            )
+            result["full_beam_point_match_comparison"] = _build_full_beam_rejection_comparison(
+                full_beam_polish_summary,
+                dataset_index=int(default_dataset_index),
+            )
+        return result
     grouped = opt._build_geometry_fit_fixed_correspondence_groups(actual_entries)
     actual_records = [
         _downstream_stage_record(
@@ -924,7 +951,31 @@ def _filter_stage_entries_for_dataset(
     ]
 
 
+def _point_match_entries_from_mapping(
+    payload: Mapping[str, object] | None,
+    key: str,
+) -> list[dict[str, object]]:
+    if not isinstance(payload, Mapping):
+        return []
+    raw_entries = payload.get(str(key), ())
+    if not isinstance(raw_entries, Sequence) or isinstance(
+        raw_entries,
+        (str, bytes, bytearray),
+    ):
+        return []
+    return [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
+
+
 def _full_beam_point_match_entries(result: object) -> list[dict[str, object]]:
+    full_beam_summary = getattr(result, "full_beam_polish_summary", None)
+    final_metric_name = str(getattr(result, "final_metric_name", "") or "").strip()
+    if final_metric_name != "full_beam_fixed_correspondence":
+        summary_entries = _point_match_entries_from_mapping(
+            full_beam_summary,
+            "point_match_diagnostics",
+        )
+        if summary_entries:
+            return summary_entries
     raw_entries = getattr(result, "point_match_diagnostics", None)
     if isinstance(raw_entries, Sequence) and not isinstance(
         raw_entries,
@@ -933,15 +984,284 @@ def _full_beam_point_match_entries(result: object) -> list[dict[str, object]]:
         direct_entries = [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
         if direct_entries:
             return direct_entries
-    full_beam_summary = getattr(result, "full_beam_polish_summary", None)
     if isinstance(full_beam_summary, Mapping):
-        raw_entries = full_beam_summary.get("point_match_diagnostics", ())
-        if isinstance(raw_entries, Sequence) and not isinstance(
-            raw_entries,
-            (str, bytes, bytearray),
-        ):
-            return [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
+        summary_entries = _point_match_entries_from_mapping(
+            full_beam_summary,
+            "point_match_diagnostics",
+        )
+        if summary_entries:
+            return summary_entries
     return []
+
+
+def _full_beam_comparison_record(
+    entry: Mapping[str, object] | None,
+    *,
+    default_dataset_index: int = 0,
+    slot_index: int | None = None,
+) -> dict[str, object]:
+    record = _downstream_stage_record(
+        entry,
+        default_dataset_index=default_dataset_index,
+        slot_index=slot_index,
+    )
+    if isinstance(entry, Mapping):
+        record.update(
+            {
+                "match_status": (
+                    str(entry.get("match_status"))
+                    if entry.get("match_status") is not None
+                    else None
+                ),
+                "resolved_table_index": _int_or_none(entry.get("resolved_table_index")),
+                "resolved_peak_index": _int_or_none(entry.get("resolved_peak_index")),
+                "distance_px": _float_or_none(entry.get("distance_px")),
+                "dx_px": _float_or_none(entry.get("dx_px")),
+                "dy_px": _float_or_none(entry.get("dy_px")),
+                "weighted_dx_px": _float_or_none(entry.get("weighted_dx_px")),
+                "weighted_dy_px": _float_or_none(entry.get("weighted_dy_px")),
+                "distance_weight": _float_or_none(entry.get("distance_weight")),
+                "sigma_weight": _float_or_none(entry.get("sigma_weight")),
+                "priority_weight": _float_or_none(entry.get("priority_weight")),
+                "weight": _float_or_none(entry.get("weight")),
+            }
+        )
+    return record
+
+
+def _full_beam_records_by_identity_key(
+    records: Sequence[Mapping[str, object]] | None,
+) -> tuple[
+    dict[tuple[object, ...], dict[str, object]],
+    list[tuple[object, ...] | None],
+    list[dict[str, object]],
+]:
+    by_key: dict[tuple[object, ...], dict[str, object]] = {}
+    ordered_keys: list[tuple[object, ...] | None] = []
+    duplicates: list[dict[str, object]] = []
+    for record in records or ():
+        key = record.get("identity_key")
+        ordered_keys.append(key)
+        if key is None:
+            continue
+        if key in by_key:
+            duplicates.append(
+                {
+                    "identity_key": key,
+                    "first": dict(by_key[key]),
+                    "second": dict(record),
+                }
+            )
+            continue
+        by_key[key] = dict(record)
+    return by_key, ordered_keys, duplicates
+
+
+def _build_full_beam_rejection_comparison(
+    full_beam_polish_summary: Mapping[str, object] | None,
+    *,
+    dataset_index: int,
+) -> dict[str, object]:
+    start_entries = _filter_stage_entries_for_dataset(
+        _point_match_entries_from_mapping(
+            full_beam_polish_summary,
+            "start_point_match_diagnostics",
+        ),
+        dataset_index=int(dataset_index),
+    )
+    candidate_entries = _filter_stage_entries_for_dataset(
+        _point_match_entries_from_mapping(
+            full_beam_polish_summary,
+            "candidate_point_match_diagnostics",
+        ),
+        dataset_index=int(dataset_index),
+    )
+    start_records = [
+        _full_beam_comparison_record(
+            entry,
+            default_dataset_index=int(dataset_index),
+            slot_index=int(slot_index),
+        )
+        for slot_index, entry in enumerate(start_entries)
+    ]
+    candidate_records = [
+        _full_beam_comparison_record(
+            entry,
+            default_dataset_index=int(dataset_index),
+            slot_index=int(slot_index),
+        )
+        for slot_index, entry in enumerate(candidate_entries)
+    ]
+    start_by_key, start_ordered_keys, start_duplicates = _full_beam_records_by_identity_key(
+        start_records
+    )
+    candidate_by_key, candidate_ordered_keys, candidate_duplicates = (
+        _full_beam_records_by_identity_key(candidate_records)
+    )
+    start_identity_keys = sorted(start_by_key.keys(), key=repr)
+    candidate_identity_keys = sorted(candidate_by_key.keys(), key=repr)
+    coverage_mismatch = bool(
+        len(start_records) != len(candidate_records)
+        or start_identity_keys != candidate_identity_keys
+        or start_duplicates
+        or candidate_duplicates
+    )
+    paired_entries: list[dict[str, object]] = []
+    identity_drift_count = 0
+    coverage_drift_count = 0
+    resolved_correspondence_drift_count = 0
+    all_identity_keys = sorted(
+        set(start_by_key.keys()) | set(candidate_by_key.keys()),
+        key=repr,
+    )
+    for identity_key in all_identity_keys:
+        start_record = start_by_key.get(identity_key)
+        candidate_record = candidate_by_key.get(identity_key)
+        coverage_drift = start_record is None or candidate_record is None
+        identity_drift = bool(
+            coverage_drift
+            or start_record.get("identity_key") != candidate_record.get("identity_key")
+            or start_record.get("identity") != candidate_record.get("identity")
+        )
+        resolved_correspondence_drift = bool(
+            not coverage_drift
+            and (
+                start_record.get("resolved_table_index")
+                != candidate_record.get("resolved_table_index")
+                or start_record.get("resolved_peak_index")
+                != candidate_record.get("resolved_peak_index")
+            )
+        )
+        identity_drift_count += int(identity_drift)
+        coverage_drift_count += int(coverage_drift)
+        resolved_correspondence_drift_count += int(resolved_correspondence_drift)
+        paired_entries.append(
+            {
+                "identity_key": identity_key,
+                "start_match_status": (
+                    start_record.get("match_status") if isinstance(start_record, Mapping) else None
+                ),
+                "candidate_match_status": (
+                    candidate_record.get("match_status")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_resolved_table_index": (
+                    start_record.get("resolved_table_index")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_resolved_table_index": (
+                    candidate_record.get("resolved_table_index")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_resolved_peak_index": (
+                    start_record.get("resolved_peak_index")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_resolved_peak_index": (
+                    candidate_record.get("resolved_peak_index")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_distance_px": (
+                    start_record.get("distance_px") if isinstance(start_record, Mapping) else None
+                ),
+                "candidate_distance_px": (
+                    candidate_record.get("distance_px")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_weighted_dx_px": (
+                    start_record.get("weighted_dx_px")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_weighted_dx_px": (
+                    candidate_record.get("weighted_dx_px")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_weighted_dy_px": (
+                    start_record.get("weighted_dy_px")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_weighted_dy_px": (
+                    candidate_record.get("weighted_dy_px")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_distance_weight": (
+                    start_record.get("distance_weight")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_distance_weight": (
+                    candidate_record.get("distance_weight")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_sigma_weight": (
+                    start_record.get("sigma_weight")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_sigma_weight": (
+                    candidate_record.get("sigma_weight")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_priority_weight": (
+                    start_record.get("priority_weight")
+                    if isinstance(start_record, Mapping)
+                    else None
+                ),
+                "candidate_priority_weight": (
+                    candidate_record.get("priority_weight")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "start_weight": (
+                    start_record.get("weight") if isinstance(start_record, Mapping) else None
+                ),
+                "candidate_weight": (
+                    candidate_record.get("weight")
+                    if isinstance(candidate_record, Mapping)
+                    else None
+                ),
+                "identity_drift": bool(identity_drift),
+                "coverage_drift": bool(coverage_drift),
+                "resolved_correspondence_drift": bool(resolved_correspondence_drift),
+            }
+        )
+    if coverage_mismatch:
+        comparison_classification = "identity_key_coverage_mismatch"
+    elif identity_drift_count > 0:
+        comparison_classification = "canonical_identity_drift"
+    elif resolved_correspondence_drift_count > 0:
+        comparison_classification = "resolved_correspondence_drift"
+    else:
+        comparison_classification = "objective_acceptance_mismatch"
+    return {
+        "comparison_classification": str(comparison_classification),
+        "start_identity_key_count": int(len(start_records)),
+        "candidate_identity_key_count": int(len(candidate_records)),
+        "start_identity_key_digest": _stable_digest(start_identity_keys),
+        "candidate_identity_key_digest": _stable_digest(candidate_identity_keys),
+        "start_identity_keys": start_identity_keys,
+        "candidate_identity_keys": candidate_identity_keys,
+        "start_identity_key_order_digest": _stable_digest(start_ordered_keys),
+        "candidate_identity_key_order_digest": _stable_digest(candidate_ordered_keys),
+        "start_duplicate_identity_keys": start_duplicates,
+        "candidate_duplicate_identity_keys": candidate_duplicates,
+        "identity_drift_count": int(identity_drift_count),
+        "coverage_drift_count": int(coverage_drift_count),
+        "resolved_correspondence_drift_count": int(resolved_correspondence_drift_count),
+        "paired_entries": paired_entries,
+    }
 
 
 def _validate_downstream_identity_input(
@@ -2591,6 +2911,9 @@ def _run_downstream_identity_validation(
         if isinstance(getattr(solve_result, "full_beam_polish_summary", None), Mapping)
         else {}
     )
+    result["final_metric_name"] = str(
+        getattr(solve_result, "final_metric_name", "") or ""
+    )
     seed_entries = _filter_stage_entries_for_dataset(
         full_beam_summary.get("seed_correspondence_records", ()),
         dataset_index=int(current_dataset_index),
@@ -2622,19 +2945,24 @@ def _run_downstream_identity_validation(
     result["stage_results"].append(coverage_stage)
     if not bool(coverage_stage.get("ok", False)):
         result["ok"] = False
-        result["classification"] = "seam_failure"
+        result["classification"] = str(
+            coverage_stage.get("coverage_mismatch_classification", "seam_failure")
+        )
         result["failed_stage"] = "full_beam_identity_coverage"
         result["failed_pair"] = coverage_stage.get("failed_pair", coverage_stage)
+        if isinstance(full_beam_summary, Mapping):
+            result["full_beam_polish_summary"] = copy.deepcopy(dict(full_beam_summary))
+            result["full_beam_point_match_comparison"] = _build_full_beam_rejection_comparison(
+                full_beam_summary,
+                dataset_index=int(current_dataset_index),
+            )
         return result
-
-    result["final_metric_name"] = str(
-        getattr(solve_result, "final_metric_name", "") or ""
-    )
     fixed_stage = _fixed_correspondence_stage_result(
         "full_beam_fixed_correspondence",
         expected_entries=seed_entries,
         actual_entries=full_beam_entries,
         final_metric_name=result["final_metric_name"],
+        full_beam_polish_summary=full_beam_summary,
         default_dataset_index=int(current_dataset_index),
     )
     result["stage_results"].append(fixed_stage)
@@ -2643,6 +2971,14 @@ def _run_downstream_identity_validation(
         result["classification"] = "seam_failure"
         result["failed_stage"] = "full_beam_fixed_correspondence"
         result["failed_pair"] = fixed_stage.get("failed_pair", fixed_stage)
+        if isinstance(fixed_stage.get("full_beam_polish_summary"), Mapping):
+            result["full_beam_polish_summary"] = copy.deepcopy(
+                dict(fixed_stage["full_beam_polish_summary"])
+            )
+        if isinstance(fixed_stage.get("full_beam_point_match_comparison"), Mapping):
+            result["full_beam_point_match_comparison"] = copy.deepcopy(
+                dict(fixed_stage["full_beam_point_match_comparison"])
+            )
         return result
 
     result["ok"] = True
