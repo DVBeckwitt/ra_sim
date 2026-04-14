@@ -48,9 +48,8 @@ See also:
 - If you only remember one sentence:
   raw `new2/new3` are diagnostic sources, fresh-all exports are the acceptance
   artifacts, identity transport and trusted full-reflection replay are green,
-  `new2_fresh_all.json` now reaches `full_beam_fixed_correspondence`, and
-  `new3_fresh_all.json` is down to a late optimizer objective / acceptance
-  mismatch with stable fixed correspondences.
+  and both `new2_fresh_all.json` and `new3_fresh_all.json` now end at
+  `full_beam_fixed_correspondence`.
 
 ## What Changed In Approach
 
@@ -126,12 +125,15 @@ See also:
   `resolution_reason="outside_match_radius"`.
 - Downstream validator now accepts `match_kind="full_beam_fixed"` as valid
   full-beam fixed correspondence output.
-- After that behavior pass:
+- Final optimizer pass now promotes full-beam polish using the all-resolved
+  fixed-correspondence point-match objective basis, excluding priors. Raw
+  detector-space peak metrics stay in `full_beam_polish_summary` as
+  diagnostic-only fields.
+- After that final pass:
   - `new2_fresh_all.json` passes downstream identity fully and ends with
     `final_metric_name=full_beam_fixed_correspondence`
-  - `new3_fresh_all.json` no longer fails coverage; it still rejects final
-    promotion because full-beam polish reports
-    `reason="point_rms_regressed, peak_offset_regressed"`
+  - `new3_fresh_all.json` also passes downstream identity fully and ends with
+    `final_metric_name=full_beam_fixed_correspondence`
 
 ## Implemented Recovery Work
 
@@ -293,15 +295,11 @@ Current Milestone 7 status:
   `final_metric_name=full_beam_fixed_correspondence`
 - `new3_fresh_all.json`: passes input contract, preflight, solver request,
   subset mapping, seed correspondence, trusted full-reflection replay remap,
-  and full-beam identity coverage; fixed-correspondence identities remain
-  stable with `identity_drift_count=0`, `coverage_drift_count=0`, and
-  `resolved_correspondence_drift_count=0`, but final promotion still rejects
-  with `reason="point_rms_regressed, peak_offset_regressed"` and leaves
-  `final_metric_name=central_point_match`
-- earliest remaining seam is now only the late optimizer objective /
-  acceptance gate on `new3_fresh_all.json`
-- next code question stays optimizer-side scoring / acceptance for `new3`, not
-  upstream identity work, replay remap, or selected-side coverage classification
+  and full-beam fixed correspondence and now also reaches
+  `final_metric_name=full_beam_fixed_correspondence`
+- Milestone 7 is complete on current code. The next objective is no longer seam
+  repair; it is end-to-end geometry-fit quality on the background images.
 
-Until then, treat fit output as secondary evidence. Primary signal remains seam
-integrity at each boundary.
+With milestone 7 closed, seam integrity is established. Treat accepted
+end-to-end geometry fit and background-overlay quality as the primary signal
+again.

@@ -3353,7 +3353,7 @@ def test_full_beam_polish_rejects_match_count_regression(monkeypatch):
             "y": 8.0,
             "source_table_index": 1,
             "source_row_index": 0,
-            "sigma_px": 1000.0,
+            "sigma_px": 1.0,
         },
     ]
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
@@ -3394,7 +3394,7 @@ def test_full_beam_polish_rejects_match_count_regression(monkeypatch):
     assert int(result.point_match_summary["matched_pair_count"]) == 2
 
 
-def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
+def test_full_beam_polish_rejects_objective_aligned_metric_regression(monkeypatch):
     solve_calls = []
 
     def fake_process(*args, **kwargs):
@@ -3476,7 +3476,7 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
             "y": 8.0,
             "source_table_index": 1,
             "source_row_index": 0,
-            "sigma_px": 1000.0,
+            "sigma_px": 1.0,
         },
     ]
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
@@ -3508,13 +3508,17 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
     assert str(result.full_beam_polish_summary["status"]) == "rejected"
-    assert "point_rms_regressed" in str(result.full_beam_polish_summary["reason"])
-    assert "peak_offset_regressed" in str(result.full_beam_polish_summary["reason"])
-    assert float(result.full_beam_polish_summary["candidate_cost"]) < float(
+    assert "point_match_cost_regressed" in str(result.full_beam_polish_summary["reason"])
+    assert "weighted_rms_regressed" in str(result.full_beam_polish_summary["reason"])
+    assert float(result.full_beam_polish_summary["candidate_cost"]) > float(
         result.full_beam_polish_summary["start_cost"]
     )
-    assert np.isclose(float(result.full_beam_polish_summary["start_rms_px"]), 1.0)
-    assert np.isclose(float(result.full_beam_polish_summary["candidate_rms_px"]), np.sqrt(8.0))
+    assert float(result.full_beam_polish_summary["candidate_point_match_cost"]) > float(
+        result.full_beam_polish_summary["start_point_match_cost"]
+    )
+    assert float(result.full_beam_polish_summary["candidate_weighted_rms_px"]) > float(
+        result.full_beam_polish_summary["start_weighted_rms_px"]
+    )
     start_pm_diagnostics = result.full_beam_polish_summary["start_point_match_diagnostics"]
     candidate_pm_diagnostics = result.full_beam_polish_summary[
         "candidate_point_match_diagnostics"
@@ -3553,7 +3557,9 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
     assert int(result.point_match_summary["matched_pair_count"]) == 2
 
 
-def test_full_beam_polish_accepts_when_only_outside_radius_pairs_regress(monkeypatch):
+def test_full_beam_polish_accepts_objective_aligned_improvement_despite_raw_peak_regression(
+    monkeypatch,
+):
     solve_calls = []
 
     def fake_process(*args, **kwargs):
@@ -3635,6 +3641,9 @@ def test_full_beam_polish_accepts_when_only_outside_radius_pairs_regress(monkeyp
             "y": 8.0,
             "source_table_index": 1,
             "source_row_index": 0,
+            "source_reflection_index": 1,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
             "sigma_px": 1000.0,
         },
     ]
@@ -3673,21 +3682,54 @@ def test_full_beam_polish_accepts_when_only_outside_radius_pairs_regress(monkeyp
     assert result.final_metric_name == "full_beam_fixed_correspondence"
     assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 2
     assert int(result.full_beam_polish_summary["matched_pair_count_after"]) == 2
+    assert str(result.full_beam_polish_summary["acceptance_metric_scope"]) == (
+        "all_resolved_fixed_correspondences"
+    )
     assert str(result.full_beam_polish_summary["start_acceptance_metric_scope"]) == (
-        "matched_within_radius"
+        "all_resolved_fixed_correspondences"
     )
     assert str(result.full_beam_polish_summary["candidate_acceptance_metric_scope"]) == (
-        "matched_within_radius"
+        "all_resolved_fixed_correspondences"
+    )
+    assert float(result.full_beam_polish_summary["candidate_point_match_cost"]) < float(
+        result.full_beam_polish_summary["start_point_match_cost"]
     )
     assert int(result.full_beam_polish_summary["start_match_radius_exceeded_count"]) == 1
     assert int(result.full_beam_polish_summary["candidate_match_radius_exceeded_count"]) == 1
-    assert np.isclose(float(result.full_beam_polish_summary["start_rms_px"]), 1.0)
-    assert np.isclose(float(result.full_beam_polish_summary["candidate_rms_px"]), 0.0)
+    assert float(result.full_beam_polish_summary["candidate_weighted_rms_px"]) < float(
+        result.full_beam_polish_summary["start_weighted_rms_px"]
+    )
     assert float(result.full_beam_polish_summary["candidate_all_match_rms_px"]) > float(
         result.full_beam_polish_summary["start_all_match_rms_px"]
     )
+    assert float(result.full_beam_polish_summary["candidate_all_match_peak_max_px"]) > float(
+        result.full_beam_polish_summary["start_all_match_peak_max_px"]
+    )
     start_diags = list(result.full_beam_polish_summary["start_point_match_diagnostics"])
     candidate_diags = list(result.full_beam_polish_summary["candidate_point_match_diagnostics"])
+    start_identity = sorted(
+        (
+            tuple(entry["hkl"]),
+            entry.get("source_reflection_index"),
+            entry.get("source_branch_index"),
+            entry.get("source_peak_index"),
+            entry.get("resolved_table_index"),
+            entry.get("resolved_peak_index"),
+        )
+        for entry in start_diags
+    )
+    candidate_identity = sorted(
+        (
+            tuple(entry["hkl"]),
+            entry.get("source_reflection_index"),
+            entry.get("source_branch_index"),
+            entry.get("source_peak_index"),
+            entry.get("resolved_table_index"),
+            entry.get("resolved_peak_index"),
+        )
+        for entry in candidate_diags
+    )
+    assert start_identity == candidate_identity
     outlier_start = next(entry for entry in start_diags if entry["hkl"] == (0, 1, 0))
     outlier_candidate = next(entry for entry in candidate_diags if entry["hkl"] == (0, 1, 0))
     assert outlier_start["match_status"] == "matched"

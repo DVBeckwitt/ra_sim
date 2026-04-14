@@ -3122,7 +3122,7 @@ def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagno
         lambda *args, **kwargs: SimpleNamespace(
             full_beam_polish_summary={
                 "accepted": False,
-                "reason": "point_rms_regressed",
+                "reason": "weighted_rms_regressed",
                 "seed_correspondence_records": seed_records,
                 "point_match_diagnostics": selected_full_beam_diag,
                 "start_point_match_diagnostics": selected_full_beam_diag,
@@ -3290,7 +3290,7 @@ def test_downstream_identity_validation_promotes_coverage_mismatch_classificatio
         lambda *args, **kwargs: SimpleNamespace(
             full_beam_polish_summary={
                 "accepted": False,
-                "reason": "point_rms_regressed",
+                "reason": "weighted_rms_regressed",
                 "seed_correspondence_records": seed_records,
                 "point_match_diagnostics": missing_full_beam_diag,
                 "start_point_match_diagnostics": missing_full_beam_diag,
