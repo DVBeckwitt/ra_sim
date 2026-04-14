@@ -24,7 +24,6 @@ from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from threading import Thread
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Mapping, Sequence
@@ -6434,83 +6433,6 @@ def caking(
     )
 
 
-def _schedule_exact_cake_geometry_warmup(ai, detector_shape) -> None:
-    if ai is None or not hasattr(ai, "warm_geometry_cache"):
-        return
-    if detector_shape is None or len(detector_shape) < 2:
-        return
-    detector_shape = tuple(int(v) for v in tuple(detector_shape)[:2])
-    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
-        return
-
-    geometry = getattr(ai, "geometry", None)
-    if geometry is None:
-        return
-
-    warmup_sig = (
-        geometry,
-        detector_shape,
-        int(DEFAULT_ANALYSIS_RADIAL_BINS),
-        int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
-    )
-    completed_sig = getattr(
-        simulation_runtime_state,
-        "exact_cake_geometry_warmup_signature",
-        None,
-    )
-    inflight_sig = getattr(
-        simulation_runtime_state,
-        "exact_cake_geometry_warmup_inflight_signature",
-        None,
-    )
-    warmup_thread = getattr(
-        simulation_runtime_state,
-        "exact_cake_geometry_warmup_thread",
-        None,
-    )
-    if completed_sig == warmup_sig or inflight_sig == warmup_sig:
-        return
-    if warmup_thread is not None and warmup_thread.is_alive():
-        return
-
-    simulation_runtime_state.exact_cake_geometry_warmup_inflight_signature = warmup_sig
-
-    def _warm() -> None:
-        success = False
-        try:
-            ai.warm_geometry_cache(
-                shape=detector_shape,
-                npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS,
-                npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
-                correctSolidAngle=True,
-                engine="auto",
-                workers="auto",
-            )
-            success = True
-        except Exception:
-            success = False
-        finally:
-            if success:
-                simulation_runtime_state.exact_cake_geometry_warmup_signature = warmup_sig
-            if (
-                getattr(
-                    simulation_runtime_state,
-                    "exact_cake_geometry_warmup_inflight_signature",
-                    None,
-                )
-                == warmup_sig
-            ):
-                simulation_runtime_state.exact_cake_geometry_warmup_inflight_signature = None
-
-    warmup_thread = Thread(
-        target=_warm,
-        name="ra-sim-exact-cake-geometry-warmup",
-        daemon=True,
-    )
-    simulation_runtime_state.exact_cake_geometry_warmup_thread = warmup_thread
-    warmup_thread.start()
-
-
 def _copy_intersection_cache_tables(cache):
     return _primary_cache_helpers.copy_intersection_cache_tables(cache)
 
@@ -6804,9 +6726,6 @@ simulation_runtime_state.last_caked_intersection_cache = None
 simulation_runtime_state.last_res2_background = None
 simulation_runtime_state.last_res2_sim = None
 simulation_runtime_state.ai_cache = {}
-simulation_runtime_state.exact_cake_geometry_warmup_signature = None
-simulation_runtime_state.exact_cake_geometry_warmup_inflight_signature = None
-simulation_runtime_state.exact_cake_geometry_warmup_thread = None
 
 
 def _clear_1d_plot_cache_and_lines():
@@ -10692,14 +10611,6 @@ def do_update():
         image_signature_summary=_live_cache_signature_summary(new_sim_image_sig),
     )
     ai = simulation_runtime_state.ai_cache["ai"]
-    warm_detector_shape = None
-    if native_background is not None:
-        warm_detector_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
-    elif simulation_runtime_state.unscaled_image is not None:
-        warm_detector_shape = tuple(
-            int(v) for v in np.asarray(simulation_runtime_state.unscaled_image).shape[:2]
-        )
-    _schedule_exact_cake_geometry_warmup(ai, warm_detector_shape)
     sim_caking_sig = (
         new_sim_image_sig,
         sig,

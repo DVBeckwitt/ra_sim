@@ -31,12 +31,9 @@ azimuth_deg = result.azimuthal_deg
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass
 import math
 from pathlib import Path
-from threading import Lock
-from typing import TypeVar
 
 import numpy as np
 
@@ -59,50 +56,6 @@ class PortableGeometry:
     distance_m: float
     center_row_px: float
     center_col_px: float
-
-
-K = TypeVar("K")
-V = TypeVar("V")
-_SHARED_DETECTOR_MAP_CACHE_MAX_ENTRIES = 2
-_SHARED_CAKE_LUT_CACHE_MAX_ENTRIES = 2
-_SHARED_DETECTOR_MAP_CACHE: OrderedDict[
-    tuple[PortableGeometry, tuple[int, int]],
-    tuple[np.ndarray, np.ndarray],
-] = OrderedDict()
-_SHARED_CAKE_LUT_CACHE: OrderedDict[
-    tuple[DetectorCakeGeometry, tuple[int, int], int, float, float, int, float, float],
-    DetectorCakeLUT,
-] = OrderedDict()
-_SHARED_DETECTOR_MAP_CACHE_LOCK = Lock()
-_SHARED_CAKE_LUT_CACHE_LOCK = Lock()
-
-
-def _lru_get(cache: OrderedDict[K, V], lock: Lock, key: K) -> V | None:
-    with lock:
-        cached = cache.pop(key, None)
-        if cached is not None:
-            cache[key] = cached
-        return cached
-
-
-def _lru_put(
-    cache: OrderedDict[K, V],
-    lock: Lock,
-    key: K,
-    value: V,
-    *,
-    max_entries: int,
-) -> V:
-    with lock:
-        cached = cache.pop(key, None)
-        if cached is not None:
-            cache[key] = cached
-            return cached
-        cache[key] = value
-        while len(cache) > int(max_entries):
-            cache.popitem(last=False)
-        return value
-
 
 def _parse_poni_file_simple(poni_path: str | Path) -> dict[str, float]:
     values: dict[str, float] = {}
@@ -345,60 +298,23 @@ class FastAzimuthalIntegrator:
             center_row_px=float(poni1) / float(pixel_row),
             center_col_px=float(poni2) / float(pixel_col),
         )
-        self._solid_angle_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._detector_map_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+        self._cake_lut_cache: dict[
+            tuple[tuple[int, int], int, float, float, int, float, float],
+            DetectorCakeLUT,
+        ] = {}
 
     def twoThetaArray(self, *, shape: tuple[int, int], unit: str | None = None) -> np.ndarray:
         two_theta_deg, _raw_azimuth_deg = self._detector_maps_for_shape(shape)
         if _normalize_two_theta_unit(unit) == "deg":
-            return two_theta_deg
+            return np.array(two_theta_deg, copy=True)
         return np.deg2rad(two_theta_deg)
 
     def chiArray(self, *, shape: tuple[int, int], unit: str | None = None) -> np.ndarray:
         _two_theta_deg, raw_azimuth_deg = self._detector_maps_for_shape(shape)
         if _normalize_angle_unit(unit) == "deg":
-            return raw_azimuth_deg
+            return np.array(raw_azimuth_deg, copy=True)
         return np.deg2rad(raw_azimuth_deg)
-
-    def warm_geometry_cache(
-        self,
-        *,
-        shape: tuple[int, int] | tuple[int, ...],
-        npt_rad: int = 1000,
-        npt_azim: int = 720,
-        correctSolidAngle: bool = True,
-        engine: str = "auto",
-        workers: int | str | None = "auto",
-    ) -> None:
-        detector_shape = tuple(int(v) for v in tuple(shape)[:2])
-        if len(detector_shape) < 2 or detector_shape[0] <= 0 or detector_shape[1] <= 0:
-            return
-
-        self._detector_maps_for_shape(detector_shape)
-        if bool(correctSolidAngle):
-            self._solid_angle_for_shape(detector_shape)
-
-        radial_deg, azimuthal_deg = build_angle_axes(
-            npt_rad=int(max(1, npt_rad)),
-            npt_azim=int(max(1, npt_azim)),
-            tth_min_deg=0.0,
-            tth_max_deg=detector_two_theta_max_deg(detector_shape, self.geometry),
-            azimuth_min_deg=-180.0,
-            azimuth_max_deg=180.0,
-        )
-        exact_geometry = DetectorCakeGeometry(
-            pixel_size_m=float(self.geometry.pixel_size_m),
-            distance_m=float(self.geometry.distance_m),
-            center_row_px=float(self.geometry.center_row_px),
-            center_col_px=float(self.geometry.center_col_px),
-        )
-        self._cached_cake_lut(
-            detector_shape,
-            radial_deg,
-            azimuthal_deg,
-            exact_geometry,
-            engine=engine,
-            workers=workers,
-        )
 
     def integrate2d(
         self,
@@ -430,7 +346,7 @@ class FastAzimuthalIntegrator:
         )
         norm = normalization
         if norm is None and bool(correctSolidAngle):
-            norm = self._solid_angle_for_shape(image_arr.shape)
+            norm = flat_solid_angle_normalization(image_arr.shape, self.geometry)
         exact_geometry = DetectorCakeGeometry(
             pixel_size_m=float(self.geometry.pixel_size_m),
             distance_m=float(self.geometry.distance_m),
@@ -474,32 +390,10 @@ class FastAzimuthalIntegrator:
         shape: tuple[int, int],
     ) -> tuple[np.ndarray, np.ndarray]:
         detector_shape = tuple(int(v) for v in tuple(shape)[:2])
-        cache_key = (self.geometry, detector_shape)
-        cached = _lru_get(
-            _SHARED_DETECTOR_MAP_CACHE,
-            _SHARED_DETECTOR_MAP_CACHE_LOCK,
-            cache_key,
-        )
+        cached = self._detector_map_cache.get(detector_shape)
         if cached is None:
             cached = detector_pixel_angular_maps(detector_shape, self.geometry)
-            cached[0].setflags(write=False)
-            cached[1].setflags(write=False)
-            cached = _lru_put(
-                _SHARED_DETECTOR_MAP_CACHE,
-                _SHARED_DETECTOR_MAP_CACHE_LOCK,
-                cache_key,
-                cached,
-                max_entries=_SHARED_DETECTOR_MAP_CACHE_MAX_ENTRIES,
-            )
-        return cached
-
-    def _solid_angle_for_shape(self, shape: tuple[int, ...]) -> np.ndarray:
-        detector_shape = tuple(int(v) for v in tuple(shape)[:2])
-        cached = self._solid_angle_cache.get(detector_shape)
-        if cached is None:
-            cached = flat_solid_angle_normalization(detector_shape, self.geometry)
-            cached.setflags(write=False)
-            self._solid_angle_cache[detector_shape] = cached
+            self._detector_map_cache[detector_shape] = cached
         return cached
 
     def _cached_cake_lut(
@@ -517,7 +411,6 @@ class FastAzimuthalIntegrator:
             return None
         detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
         key = (
-            geometry,
             detector_shape,
             int(radial_deg.size),
             float(radial_deg[0]),
@@ -526,11 +419,7 @@ class FastAzimuthalIntegrator:
             float(azimuthal_deg[0]),
             float(azimuthal_deg[-1]),
         )
-        cached = _lru_get(
-            _SHARED_CAKE_LUT_CACHE,
-            _SHARED_CAKE_LUT_CACHE_LOCK,
-            key,
-        )
+        cached = self._cake_lut_cache.get(key)
         if cached is not None:
             return cached
         try:
@@ -543,13 +432,8 @@ class FastAzimuthalIntegrator:
             )
         except (MemoryError, RuntimeError):
             return None
-        return _lru_put(
-            _SHARED_CAKE_LUT_CACHE,
-            _SHARED_CAKE_LUT_CACHE_LOCK,
-            key,
-            built,
-            max_entries=_SHARED_CAKE_LUT_CACHE_MAX_ENTRIES,
-        )
+        self._cake_lut_cache[key] = built
+        return built
 
 
 def convert_image_to_angle_space(

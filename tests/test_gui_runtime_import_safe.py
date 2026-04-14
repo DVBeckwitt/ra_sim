@@ -152,22 +152,6 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "from ra_sim.simulation.exact_cake_portable import FastAzimuthalIntegrator" in source
     assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
     assert "start_exact_cake_numba_warmup_in_background()" in source
-    assert "def _schedule_exact_cake_geometry_warmup(ai, detector_shape) -> None:" in source
-    assert "ai.warm_geometry_cache(" in source
-    assert "_schedule_exact_cake_geometry_warmup(ai, warm_detector_shape)" in source
-
-
-def test_runtime_impl_ai_cache_signature_ignores_flat_backend_noops() -> None:
-    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    signature_prefix = source.split('ai_cache_action = "reuse"', 1)[0]
-    sig_block = signature_prefix.rsplit("sig = (", 1)[1]
-
-    assert "corto_det_up" in sig_block
-    assert "center_x_up" in sig_block
-    assert "center_y_up" in sig_block
-    assert "Gamma_updated" not in sig_block
-    assert "gamma_updated" not in sig_block
-    assert "wave_m" not in sig_block
 
 
 def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:

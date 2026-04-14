@@ -25,7 +25,6 @@ def test_view_azimuthal_radial_preserves_full_cake_azimuth(monkeypatch) -> None:
                     dtype=float,
                 ),
                 radial=np.asarray([10.0, 20.0], dtype=float),
-                radial_deg=np.asarray([10.0, 20.0], dtype=float),
                 azimuthal=np.asarray([-170.0, 10.0, 100.0], dtype=float),
                 azimuthal_deg=np.asarray([-170.0, 10.0, 100.0], dtype=float),
             )

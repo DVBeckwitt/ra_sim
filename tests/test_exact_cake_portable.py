@@ -28,7 +28,7 @@ def test_fast_azimuthal_integrator_detector_maps_match_flat_geometry() -> None:
     assert np.allclose(chi, expected_chi)
 
 
-def test_fast_azimuthal_integrator_detector_maps_reuse_readonly_cache() -> None:
+def test_fast_azimuthal_integrator_detector_maps_return_copies() -> None:
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
         dist=5.0,
         poni1=20.0,
@@ -42,18 +42,18 @@ def test_fast_azimuthal_integrator_detector_maps_reuse_readonly_cache() -> None:
     two_theta_second = integrator.twoThetaArray(shape=(21, 21), unit="2th_deg")
     chi_second = integrator.chiArray(shape=(21, 21), unit="deg")
 
-    assert two_theta_first is two_theta_second
-    assert chi_first is chi_second
-    assert not two_theta_first.flags.writeable
-    assert not chi_first.flags.writeable
+    assert two_theta_first is not two_theta_second
+    assert chi_first is not chi_second
+    assert two_theta_first.flags.writeable
+    assert chi_first.flags.writeable
 
-    with pytest.raises(ValueError):
-        two_theta_first[0, 0] = 0.0
-    with pytest.raises(ValueError):
-        chi_first[0, 0] = 0.0
+    two_theta_first[0, 0] = 0.0
+    chi_first[0, 0] = 0.0
+    assert two_theta_second[0, 0] != 0.0
+    assert chi_second[0, 0] != 0.0
 
 
-def test_fast_azimuthal_integrator_detector_maps_reuse_shared_cache_across_instances(
+def test_fast_azimuthal_integrator_detector_maps_cache_per_instance(
     monkeypatch,
 ) -> None:
     map_calls: list[tuple[tuple[int, int], exact_cake_portable.PortableGeometry]] = []
@@ -66,7 +66,6 @@ def test_fast_azimuthal_integrator_detector_maps_reuse_shared_cache_across_insta
             np.full(detector_shape, -2.5, dtype=np.float64),
         )
 
-    exact_cake_portable._SHARED_DETECTOR_MAP_CACHE.clear()
     monkeypatch.setattr(exact_cake_portable, "detector_pixel_angular_maps", _fake_maps)
 
     integrator_a = exact_cake_portable.FastAzimuthalIntegrator(
@@ -87,11 +86,8 @@ def test_fast_azimuthal_integrator_detector_maps_reuse_shared_cache_across_insta
     two_theta_a = integrator_a.twoThetaArray(shape=(21, 21), unit="2th_deg")
     two_theta_b = integrator_b.twoThetaArray(shape=(21, 21), unit="2th_deg")
 
-    assert len(map_calls) == 1
-    assert two_theta_a is two_theta_b
-    assert not two_theta_a.flags.writeable
-
-    exact_cake_portable._SHARED_DETECTOR_MAP_CACHE.clear()
+    assert len(map_calls) == 2
+    assert two_theta_a is not two_theta_b
 
 
 def test_exact_cake_auto_workers_default_to_8(monkeypatch) -> None:
@@ -371,88 +367,9 @@ def test_fast_azimuthal_integrator_reuses_solid_angle_normalization(monkeypatch)
     integrator.integrate2d(image, npt_rad=8, npt_azim=6, correctSolidAngle=True, method="lut", unit="2th_deg")
     integrator.integrate2d(image, npt_rad=8, npt_azim=6, correctSolidAngle=True, method="lut", unit="2th_deg")
 
-    assert norm_calls == [(4, 4)]
+    assert norm_calls == [(4, 4), (4, 4)]
     assert len(passed_normalizations) == 2
-    assert passed_normalizations[0] is passed_normalizations[1]
-    assert not passed_normalizations[0].flags.writeable
-
-
-def test_fast_azimuthal_integrator_warm_geometry_cache_primes_live_caches(monkeypatch) -> None:
-    map_calls: list[tuple[int, int]] = []
-    norm_calls: list[tuple[int, int]] = []
-    lut_calls: list[tuple[tuple[int, int], int, int]] = []
-
-    def _fake_maps(image_shape, geometry):
-        del geometry
-        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
-        map_calls.append(detector_shape)
-        return (
-            np.full(detector_shape, 1.5, dtype=np.float64),
-            np.full(detector_shape, -2.5, dtype=np.float64),
-        )
-
-    def _fake_norm(image_shape, geometry):
-        del geometry
-        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
-        norm_calls.append(detector_shape)
-        return np.full(detector_shape, 7.0, dtype=np.float32)
-
-    def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
-        del geometry, workers
-        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
-        lut_calls.append((detector_shape, len(radial_deg), len(azimuthal_deg)))
-        return exact_cake.DetectorCakeLUT(
-            image_shape=detector_shape,
-            n_rad=int(len(radial_deg)),
-            n_az=int(len(azimuthal_deg)),
-            matrix=np.eye(int(len(radial_deg) * len(azimuthal_deg)), int(np.prod(image_shape[:2])), dtype=np.float32),
-            count_flat=np.ones(int(len(radial_deg) * len(azimuthal_deg)), dtype=np.float64),
-        )
-
-    def _fake_integrate_lut(image, radial_deg, azimuthal_deg, lut, *, normalization=None, mask=None):
-        del image, normalization, mask
-        return exact_cake.DetectorCakeResult(
-            radial_deg=np.asarray(radial_deg, dtype=np.float64),
-            azimuthal_deg=np.asarray(azimuthal_deg, dtype=np.float64),
-            intensity=np.zeros((lut.n_az, lut.n_rad), dtype=np.float32),
-            sum_signal=np.zeros((lut.n_az, lut.n_rad), dtype=np.float64),
-            sum_normalization=np.ones((lut.n_az, lut.n_rad), dtype=np.float64),
-            count=np.ones((lut.n_az, lut.n_rad), dtype=np.float64),
-        )
-
-    exact_cake_portable._SHARED_DETECTOR_MAP_CACHE.clear()
-    exact_cake_portable._SHARED_CAKE_LUT_CACHE.clear()
-    monkeypatch.setattr(exact_cake_portable, "detector_pixel_angular_maps", _fake_maps)
-    monkeypatch.setattr(exact_cake_portable, "flat_solid_angle_normalization", _fake_norm)
-    monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
-    monkeypatch.setattr(exact_cake_portable, "integrate_detector_to_cake_lut", _fake_integrate_lut)
-
-    integrator = exact_cake_portable.FastAzimuthalIntegrator(
-        dist=0.3,
-        poni1=0.01,
-        poni2=0.02,
-        pixel1=1.0e-4,
-        pixel2=1.0e-4,
-    )
-    image = np.arange(16, dtype=np.float32).reshape(4, 4)
-
-    integrator.warm_geometry_cache(shape=image.shape, npt_rad=8, npt_azim=6)
-    integrator.twoThetaArray(shape=image.shape, unit="2th_deg")
-    integrator.integrate2d(
-        image,
-        npt_rad=8,
-        npt_azim=6,
-        correctSolidAngle=True,
-        method="lut",
-        unit="2th_deg",
-    )
-
-    assert map_calls == [(4, 4)]
-    assert norm_calls == [(4, 4)]
-    assert lut_calls == [((4, 4), 8, 6)]
-
-    exact_cake_portable._SHARED_DETECTOR_MAP_CACHE.clear()
-    exact_cake_portable._SHARED_CAKE_LUT_CACHE.clear()
+    assert passed_normalizations[0] is not passed_normalizations[1]
 
 
 def test_exact_cake_lut_matches_direct_integration() -> None:
@@ -579,7 +496,7 @@ def test_fast_azimuthal_integrator_reuses_cake_lut(monkeypatch) -> None:
     assert lut_calls == [((4, 4), 8, 6)]
 
 
-def test_fast_azimuthal_integrator_reuses_shared_cake_lut_across_instances(monkeypatch) -> None:
+def test_fast_azimuthal_integrator_cake_lut_cache_is_per_instance(monkeypatch) -> None:
     lut_calls: list[tuple[tuple[int, int], int, int]] = []
 
     def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
@@ -604,7 +521,6 @@ def test_fast_azimuthal_integrator_reuses_shared_cake_lut_across_instances(monke
             count=np.ones((lut.n_az, lut.n_rad), dtype=np.float64),
         )
 
-    exact_cake_portable._SHARED_CAKE_LUT_CACHE.clear()
     monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
     monkeypatch.setattr(exact_cake_portable, "integrate_detector_to_cake_lut", _fake_integrate_lut)
 
@@ -627,6 +543,4 @@ def test_fast_azimuthal_integrator_reuses_shared_cake_lut_across_instances(monke
     integrator_a.integrate2d(image, npt_rad=8, npt_azim=6, method="lut", unit="2th_deg")
     integrator_b.integrate2d(image, npt_rad=8, npt_azim=6, method="lut", unit="2th_deg")
 
-    assert lut_calls == [((4, 4), 8, 6)]
-
-    exact_cake_portable._SHARED_CAKE_LUT_CACHE.clear()
+    assert lut_calls == [((4, 4), 8, 6), ((4, 4), 8, 6)]
