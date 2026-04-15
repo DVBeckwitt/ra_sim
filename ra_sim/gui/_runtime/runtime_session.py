@@ -11208,32 +11208,6 @@ def do_update():
                     _refresh_run_status_bar()
                     simulation_runtime_state.update_running = False
                     return
-            elif (
-                not has_cached_simulation
-                and simulation_runtime_state.worker_active_job is None
-                and simulation_runtime_state.worker_queued_job is None
-            ):
-                if "progress_label" in globals() and progress_label is not None:
-                    progress_label.config(text="Computing initial simulation...")
-                sync_result = _run_simulation_generation_job(
-                    {
-                        **simulation_job,
-                        "job_id": 0,
-                    }
-                )
-                _apply_ready_simulation_result(sync_result)
-                simulation_runtime_state.last_sim_signature = new_sim_image_sig
-                simulation_runtime_state.last_simulation_signature = new_sim_sig
-                simulation_runtime_state.primary_filter_signature = (
-                    primary_requested_filter_signature
-                )
-                _capture_geometry_source_snapshot()
-                image_generation_cached = False
-                image_generation_elapsed_ms = float(
-                    sync_result.get("image_generation_elapsed_ms", 0.0)
-                )
-                simulation_runtime_state.update_phase = "applying"
-                _refresh_run_status_bar()
             else:
                 request_status = _request_async_simulation_job(simulation_job)
                 if (
@@ -11241,7 +11215,13 @@ def do_update():
                     and "progress_label" in globals()
                     and progress_label is not None
                 ):
-                    progress_label.config(text="Computing simulation in background...")
+                    progress_label.config(
+                        text=(
+                            "Simulation loading in background..."
+                            if not has_cached_simulation
+                            else "Computing simulation in background..."
+                        )
+                    )
                 _trace_update(
                     "do_update_return_waiting_for_simulation",
                     request_status=str(request_status),

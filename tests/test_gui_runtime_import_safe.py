@@ -533,6 +533,18 @@ def test_runtime_impl_enables_async_preview_calculations_in_runtime_update_paths
     assert "PREVIEW_CALCULATIONS_ENABLED\n                and bool(live_geometry_preview_var.get())" in source
 
 
+def test_runtime_impl_never_blocks_startup_on_initial_simulation() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    block_start = source.index("has_cached_simulation = (")
+    block_end = source.index("elif ready_simulation_result is None and need_hit_table_refresh:")
+    block = source[block_start:block_end]
+
+    assert "_run_simulation_generation_job(" not in block
+    assert "request_status = _request_async_simulation_job(simulation_job)" in block
+    assert '"Simulation loading in background..."' in block
+
+
 def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
