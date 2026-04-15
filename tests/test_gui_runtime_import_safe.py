@@ -140,6 +140,59 @@ def test_runtime_impl_wrapper_import_is_lazy() -> None:
             sys.modules["ra_sim.gui._runtime.runtime_session"] = previous_session
 
 
+def test_runtime_impl_prompts_from_root_only_before_full_runtime_bootstrap() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
+    prompt_line = "resolved_mode = gui_bootstrap.choose_startup_mode_dialog(root)"
+    prompt_index = source.index(prompt_line, main_start)
+    ensure_root_index = source.index("ensure_runtime_root_initialized()", main_start)
+
+    assert ensure_root_index < prompt_index
+
+
+def test_runtime_impl_runtime_context_builders_gate_staged_initializers() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    state_start = source.index("def build_runtime_state_context() -> RuntimeContext:")
+    window_start = source.index("def build_runtime_window_context(context: RuntimeContext) -> RuntimeContext:")
+    plot_start = source.index("def build_runtime_plot_context(context: RuntimeContext) -> RuntimeContext:")
+    controls_start = source.index("def build_runtime_controls_context(context: RuntimeContext) -> RuntimeContext:")
+    benchmark_start = source.index("_STARTUP_BENCHMARK_ENABLED = str(")
+
+    state_block = source[state_start:window_start]
+    window_block = source[window_start:plot_start]
+    plot_block = source[plot_start:controls_start]
+    controls_block = source[controls_start:benchmark_start]
+
+    assert "ensure_runtime_state_initialized()" in state_block
+    assert "ensure_runtime_shell_initialized()" in window_block
+    assert "ensure_runtime_plot_initialized()" in plot_block
+    assert "ensure_runtime_controls_initialized()" in controls_block
+
+
+def test_runtime_impl_keeps_default_bound_constants_eager() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert source.index('QR_CYLINDER_DISPLAY_MODE_OFF = "Off"') < source.index(
+        "def _qr_cylinder_display_mode("
+    )
+    assert source.index("DEFAULT_ANALYSIS_RADIAL_BINS = 1000") < source.index("def caking(")
+    assert source.index("INITIAL_PREVIEW_MAX_SAMPLES = 24") < source.index(
+        "def _build_preview_simulation_job("
+    )
+
+
+def test_runtime_impl_gates_raster_projection_helpers_until_controls_stage() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _sync_primary_raster_geometry(")
+    helper_end = source.index("def _maybe_refresh_run_status_bar()", helper_start)
+    helper_block = source[helper_start:helper_end]
+
+    assert '_RUNTIME_CONTROLS_INITIALIZED", False' in helper_block
+    assert "if controls_ready" in helper_block
+    assert "apply_projection(artist)" in helper_block
+
+
 def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
