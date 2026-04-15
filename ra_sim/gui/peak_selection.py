@@ -1223,10 +1223,10 @@ def _peak_overlay_intersection_entries(
     *,
     fallback_a: float,
     fallback_c: float,
-) -> list[tuple[np.ndarray, float, float, str]]:
+) -> list[tuple[np.ndarray, float, float, str, str]]:
     """Return intersection-cache tables with resolved source metadata."""
 
-    entries: list[tuple[np.ndarray, float, float, str]] = []
+    entries: list[tuple[np.ndarray, float, float, str, str]] = []
 
     primary_defaults = _peak_overlay_source_defaults(
         getattr(simulation_runtime_state, "stored_primary_peak_table_lattice", None),
@@ -1244,13 +1244,15 @@ def _peak_overlay_intersection_entries(
         (
             getattr(simulation_runtime_state, "stored_primary_intersection_cache", None),
             primary_defaults,
+            "stored_primary_intersection_cache",
         ),
         (
             getattr(simulation_runtime_state, "stored_secondary_intersection_cache", None),
             secondary_defaults,
+            "stored_secondary_intersection_cache",
         ),
     )
-    for cache_tables, defaults in cache_sources:
+    for cache_tables, defaults, cache_attr_name in cache_sources:
         if not isinstance(cache_tables, (list, tuple)):
             continue
         av_used, cv_used, source_label = defaults
@@ -1261,7 +1263,15 @@ def _peak_overlay_intersection_entries(
                 continue
             if table_arr.ndim != 2 or table_arr.shape[0] <= 0:
                 continue
-            entries.append((table_arr, float(av_used), float(cv_used), str(source_label)))
+            entries.append(
+                (
+                    table_arr,
+                    float(av_used),
+                    float(cv_used),
+                    str(source_label),
+                    str(cache_attr_name),
+                )
+            )
     if entries:
         return entries
 
@@ -1283,7 +1293,15 @@ def _peak_overlay_intersection_entries(
                 continue
             if table_arr.ndim != 2 or table_arr.shape[0] <= 0:
                 continue
-            entries.append((table_arr, float(av_used), float(cv_used), str(source_label)))
+            entries.append(
+                (
+                    table_arr,
+                    float(av_used),
+                    float(cv_used),
+                    str(source_label),
+                    str(attr_name),
+                )
+            )
         if entries:
             break
     return entries
@@ -1399,10 +1417,11 @@ def _peak_overlay_cache_row_caked_coords(
         [float, float], tuple[float, float] | None
     ]
     | None,
+    prefer_cached_coords: bool = False,
 ) -> tuple[float, float] | None:
     """Return cached or projected ``(2theta, phi)`` display coordinates for one row."""
 
-    if row.shape[0] >= 16:
+    if prefer_cached_coords and row.shape[0] >= 16:
         try:
             cached_two_theta = float(row[14])
             cached_phi = float(row[15])
@@ -1483,6 +1502,11 @@ def ensure_runtime_peak_overlay_data(
     max_hits_raw = _runtime_int(max_hits_per_reflection, 0)
     min_separation_value = _runtime_float(min_separation_px, 0.0)
     show_caked = _runtime_bool(caked_view_enabled_factory, False)
+    last_caked_cache_current = (
+        getattr(simulation_runtime_state, "last_caked_intersection_cache_transform_bundle", None)
+        is getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
+        and getattr(simulation_runtime_state, "last_caked_transform_bundle", None) is not None
+    )
     peak_sig = (
         simulation_runtime_state.last_simulation_signature,
         id(max_positions_local),
@@ -1505,6 +1529,14 @@ def ensure_runtime_peak_overlay_data(
         ),
         id(getattr(simulation_runtime_state, "last_caked_radial_values", None)),
         id(getattr(simulation_runtime_state, "last_caked_azimuth_values", None)),
+        id(getattr(simulation_runtime_state, "last_caked_transform_bundle", None)),
+        id(
+            getattr(
+                simulation_runtime_state,
+                "last_caked_intersection_cache_transform_bundle",
+                None,
+            )
+        ),
         getattr(simulation_runtime_state, "last_analysis_signature", None),
     )
     retain_cache = _retain_peak_overlay_cache()
@@ -1554,7 +1586,7 @@ def ensure_runtime_peak_overlay_data(
             max_positions_local,
             peak_table_lattice_local if isinstance(peak_table_lattice_local, (list, tuple)) else None,
         )
-        for tbl_arr, av_used, cv_used, source_label in intersection_entries:
+        for tbl_arr, av_used, cv_used, source_label, cache_attr_name in intersection_entries:
             if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0 or tbl_arr.shape[1] < 9:
                 continue
 
@@ -1576,6 +1608,11 @@ def ensure_runtime_peak_overlay_data(
                 ):
                     continue
 
+                prefer_cached_coords = (
+                    bool(show_caked)
+                    and str(cache_attr_name) == "last_caked_intersection_cache"
+                    and last_caked_cache_current
+                )
                 caked_coords = _peak_overlay_cache_row_caked_coords(
                     np.asarray(row, dtype=float).reshape(-1),
                     native_col=float(cx),
@@ -1583,6 +1620,7 @@ def ensure_runtime_peak_overlay_data(
                     native_detector_coords_to_caked_display_coords=(
                         native_detector_coords_to_caked_display_coords
                     ),
+                    prefer_cached_coords=prefer_cached_coords,
                 )
                 if bool(show_caked) and caked_coords is not None:
                     disp_cx = float(caked_coords[0])

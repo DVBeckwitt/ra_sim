@@ -13087,6 +13087,8 @@ def do_update():
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
         _set_live_caked_transform_bundle(None)
+        simulation_runtime_state.last_caked_intersection_cache = None
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
         simulation_runtime_state.last_q_space_image_unscaled = None
         simulation_runtime_state.last_q_space_extent = None
         simulation_runtime_state.last_q_space_background_image_unscaled = None
@@ -20806,6 +20808,13 @@ def _analysis_cache_overlay_tables(show_caked: bool) -> list[object]:
     return list(cache_tables or [])
 
 
+def _analysis_cache_overlay_table_uses_live_caked_cache(table: object) -> bool:
+    cache_tables = getattr(simulation_runtime_state, "last_caked_intersection_cache", None)
+    if not isinstance(cache_tables, (list, tuple)):
+        return False
+    return any(candidate is table for candidate in cache_tables)
+
+
 def _analysis_cache_overlay_coords(
     table: object,
     *,
@@ -20819,7 +20828,10 @@ def _analysis_cache_overlay_coords(
         return None
 
     if bool(show_caked):
-        use_cached_caked_coords = _live_caked_intersection_cache_matches_active_bundle()
+        use_cached_caked_coords = bool(
+            _analysis_cache_overlay_table_uses_live_caked_cache(table)
+            and _live_caked_intersection_cache_matches_active_bundle()
+        )
         x_vals = np.full(arr.shape[0], np.nan, dtype=float)
         y_vals = np.full(arr.shape[0], np.nan, dtype=float)
         if use_cached_caked_coords and arr.shape[1] >= 16:

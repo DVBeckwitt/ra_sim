@@ -580,13 +580,14 @@ def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cach
     assert record["hkl_raw"] == (1.0, 0.0, 2.0)
     assert record["intensity"] == 8.0
     assert record["qz"] == 0.75
-    assert record["q_group_key"] == "group-key"
+    assert "q_group_key" not in record
     assert record["phi"] == 0.125
     assert np.isnan(record["two_theta_deg"])
     assert np.isnan(record["phi_deg"])
     assert record["source_table_index"] == 0
     assert record["source_row_index"] == 0
     assert record["source_label"] == "primary"
+    assert record["label"] == "1,0,2"
     assert record["av"] == 4.0
     assert record["cv"] == 6.0
     assert np.isclose(
@@ -756,7 +757,7 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_cen
     assert record["hkl_raw"] == (1.0, 0.0, 2.0)
     assert record["intensity"] == 8.0
     assert record["qz"] == 0.75
-    assert record["q_group_key"] == "group-key"
+    assert "q_group_key" not in record
     assert record["q_group_nominal_hkl"] is True
     assert record["phi"] == 0.375
     assert np.isnan(record["two_theta_deg"])
@@ -764,6 +765,7 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_cen
     assert record["source_table_index"] == 0
     assert record["source_row_index"] == 0
     assert record["source_label"] == "primary"
+    assert record["label"] == "1,0,2"
     assert record["av"] == 4.0
     assert record["cv"] == 6.0
     assert np.isclose(
@@ -773,9 +775,10 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_intersection_cache_cen
 
 
 def test_peak_selection_runtime_peak_overlay_data_uses_cached_caked_coords() -> None:
+    bundle = object()
     runtime_state = state.SimulationRuntimeState(
         stored_max_positions_local=None,
-        stored_primary_intersection_cache=[
+        last_caked_intersection_cache=[
             np.asarray(
                 [
                     [
@@ -800,6 +803,8 @@ def test_peak_selection_runtime_peak_overlay_data_uses_cached_caked_coords() -> 
                 dtype=float,
             )
         ],
+        last_caked_transform_bundle=bundle,
+        last_caked_intersection_cache_transform_bundle=bundle,
         stored_sim_image=np.zeros((64, 64), dtype=float),
     )
 
@@ -831,15 +836,153 @@ def test_peak_selection_runtime_peak_overlay_data_uses_cached_caked_coords() -> 
     assert record["intensity"] == 8.0
     assert record["qr"] == 1.5
     assert record["qz"] == 2.5
-    assert record["q_group_key"] == "group-key"
+    assert "q_group_key" not in record
     assert record["phi"] == 0.375
     assert record["two_theta_deg"] == 17.5
     assert record["phi_deg"] == -32.0
     assert record["source_label"] == "primary"
+    assert record["label"] == "1,0,2"
     assert record["av"] == 4.0
     assert record["cv"] == 6.0
     assert "source_table_index" not in record
     assert "source_row_index" not in record
+
+
+def test_peak_selection_runtime_peak_overlay_data_reprojects_stale_caked_cache() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=None,
+        last_caked_intersection_cache=[
+            np.asarray(
+                [
+                    [
+                        1.5,
+                        2.5,
+                        40.0,
+                        50.0,
+                        8.0,
+                        0.375,
+                        1.0,
+                        0.0,
+                        2.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        17.5,
+                        -32.0,
+                    ]
+                ],
+                dtype=float,
+            )
+        ],
+        last_caked_transform_bundle=object(),
+        last_caked_intersection_cache_transform_bundle=object(),
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+    projector_calls: list[tuple[float, float]] = []
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale caked cache rows should not use raw display conversion")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
+        caked_view_enabled_factory=True,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            projector_calls.append((float(col), float(row))) or (91.0, -44.0)
+        ),
+    )
+
+    assert ok is True
+    assert projector_calls == [(40.0, 50.0)]
+    assert runtime_state.peak_positions == [(91.0, -44.0)]
+    assert runtime_state.peak_records[0]["two_theta_deg"] == 91.0
+    assert runtime_state.peak_records[0]["phi_deg"] == -44.0
+
+
+def test_peak_selection_runtime_peak_overlay_data_rebuilds_cache_when_bundle_changes() -> None:
+    bundle_a = object()
+    bundle_b = object()
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig",),
+        stored_max_positions_local=None,
+        last_caked_intersection_cache=[
+            np.asarray(
+                [
+                    [
+                        1.5,
+                        2.5,
+                        40.0,
+                        50.0,
+                        8.0,
+                        0.375,
+                        1.0,
+                        0.0,
+                        2.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        np.nan,
+                        np.nan,
+                    ]
+                ],
+                dtype=float,
+            )
+        ],
+        last_caked_transform_bundle=bundle_a,
+        last_caked_intersection_cache_transform_bundle=bundle_a,
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+    projector_results = iter(((21.0, -31.0), (92.0, -45.0)))
+    projector_calls: list[tuple[float, float]] = []
+
+    def _project(col: float, row: float) -> tuple[float, float]:
+        projector_calls.append((float(col), float(row)))
+        return next(projector_results)
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("caked cache rows should not use raw display conversion")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
+        caked_view_enabled_factory=True,
+        native_detector_coords_to_caked_display_coords=_project,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(21.0, -31.0)]
+    first_sig = runtime_state.peak_overlay_cache["sig"]
+
+    runtime_state.peak_positions.clear()
+    runtime_state.peak_millers.clear()
+    runtime_state.peak_intensities.clear()
+    runtime_state.peak_records.clear()
+    runtime_state.last_caked_transform_bundle = bundle_b
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("bundle change should still use caked reprojection")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
+        caked_view_enabled_factory=True,
+        native_detector_coords_to_caked_display_coords=_project,
+    )
+
+    assert ok is True
+    assert projector_calls == [(40.0, 50.0), (40.0, 50.0)]
+    assert runtime_state.peak_positions == [(92.0, -45.0)]
+    assert runtime_state.peak_overlay_cache["sig"] != first_sig
 
 
 def test_peak_selection_runtime_peak_overlay_data_clears_state_when_unavailable() -> None:

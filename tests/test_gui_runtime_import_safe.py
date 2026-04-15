@@ -1575,6 +1575,73 @@ def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(
     np.testing.assert_allclose(y_vals, [-44.0])
 
 
+def test_analysis_cache_overlay_coords_ignores_detector_cache_caked_columns_even_when_bundle_matches(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        pass
+
+    live_bundle = FakeBundle()
+    detector_cache_table = np.asarray(
+        [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
+        dtype=float,
+    )
+    projector_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_transform_bundle",
+        live_bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache_transform_bundle",
+        live_bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache",
+        [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_detector_coords_to_live_caked_coords",
+        lambda col, row: (
+            projector_calls.append((float(col), float(row))) or (82.0, -41.0)
+        ),
+    )
+
+    x_vals, y_vals = runtime_session._analysis_cache_overlay_coords(
+        detector_cache_table,
+        show_caked=True,
+    )
+
+    assert projector_calls == [(40.0, 50.0)]
+    np.testing.assert_allclose(x_vals, [82.0])
+    np.testing.assert_allclose(y_vals, [-41.0])
+
+
+def test_runtime_impl_detector_view_reset_clears_caked_cache_provenance() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    branch_anchor = source.index(
+        "        ax.set_title(\"\")\n        _sync_primary_raster_geometry(view_mode=analysis_space_display_mode)\n    else:\n"
+    )
+    branch_end = source.index("        detector_background_source = (", branch_anchor)
+    branch_source = source[branch_anchor:branch_end]
+
+    assert "simulation_runtime_state.last_caked_intersection_cache = None" in branch_source
+    assert (
+        "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None"
+        in branch_source
+    )
+
+
 def test_runtime_impl_prepare_q_space_payload_uses_direct_detector_remap() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     helper_start = source.index("def _prepare_q_space_display_payload(")
