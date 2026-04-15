@@ -379,6 +379,39 @@ def test_build_q_group_cache_uses_caked_angles_when_present() -> None:
     assert cache.visible_entries[0]["_viewport_point"] == (21.0, -8.0)
 
 
+def test_normalize_view_mode_accepts_q_space() -> None:
+    assert tk_primary_viewport._normalize_view_mode(None) == "detector"
+    assert tk_primary_viewport._normalize_view_mode({"simulation": ("q_space", 1, 2, 3)}) == "q_space"
+
+
+def test_build_q_group_cache_prefers_q_space_coordinates_when_present() -> None:
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=240,
+        height=120,
+        xlim=(0.0, 1.0),
+        ylim=(-0.5, 0.5),
+    )
+    grouped_candidates = {
+        ("q", 3): [
+            {
+                "qr": 0.2,
+                "qz": 0.1,
+                "display_col": 500.0,
+                "display_row": 500.0,
+            }
+        ]
+    }
+
+    cache = tk_primary_viewport._build_q_group_cache(
+        grouped_candidates,
+        view_state,
+        view_mode="q_space",
+    )
+
+    assert len(cache.visible_entries) == 1
+    assert cache.visible_entries[0]["_viewport_point"] == (0.2, 0.1)
+
+
 def test_render_layer_patch_matches_matplotlib_detector_orientation() -> None:
     viewport = tk_primary_viewport._TkPrimaryViewport(
         tk_module=_FakeTkModule(),

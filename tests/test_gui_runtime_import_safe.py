@@ -1,4 +1,5 @@
 import ast
+import contextlib
 import importlib
 import json
 import py_compile
@@ -540,10 +541,11 @@ def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> Non
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "def _restore_caked_display_payload_from_cached_results(" in source
-    assert "missing_caked_payload = bool(" in source
+    assert "missing_analysis_payload = bool(" in source
     assert "_restore_caked_display_payload_from_cached_results(" in source
     assert "simulation_runtime_state.last_caked_image_unscaled is None" in source
     assert "simulation_runtime_state.last_caked_extent is None" in source
+    assert "_get_current_background_native()" in source
 
 
 def test_runtime_impl_preserves_primary_axis_limits_across_same_mode_redraws() -> None:
@@ -683,9 +685,12 @@ def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() ->
     apply_source = source[apply_start:apply_end]
 
     assert "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache" in restore_source
+    assert "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (" in restore_source
     assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in restore_source
     assert "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache" in apply_source
+    assert "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (" in apply_source
     assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in apply_source
+    assert "simulation_runtime_state.last_caked_transform_bundle = (" in source
 
 
 def test_runtime_live_caked_projection_helper_uses_bound_callback(
@@ -1485,6 +1490,290 @@ def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata()
     assert '"raw_azimuth_axis": np.asarray(' in helper_source
     assert '"transform_bundle": normalized_payload.get("transform_bundle")' in helper_source
     assert '"detector_shape": tuple(normalized_payload.get("detector_shape", ()))' in helper_source
+
+
+def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        pass
+
+    bundle = FakeBundle()
+    projector_calls: list[tuple[object, float, float]] = []
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or (float(col) + 0.5, float(row) - 0.25)
+        ),
+    )
+
+    transformed = runtime_session._prepare_caked_intersection_cache(
+        [
+            np.asarray(
+                [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]],
+                dtype=float,
+            )
+        ],
+        transform_bundle=bundle,
+    )
+
+    out = np.asarray(transformed[0], dtype=float)
+    assert projector_calls == [(bundle, 40.0, 50.0)]
+    assert out.shape == (1, 16)
+    np.testing.assert_allclose(out[0, :9], [1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0])
+    assert out[0, 14] == 40.5
+    assert out[0, 15] == 49.75
+
+
+def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        pass
+
+    live_bundle = FakeBundle()
+    stale_cache_bundle = FakeBundle()
+    projector_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_transform_bundle",
+        live_bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache_transform_bundle",
+        stale_cache_bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_detector_coords_to_live_caked_coords",
+        lambda col, row: (
+            projector_calls.append((float(col), float(row))) or (91.0, -44.0)
+        ),
+    )
+
+    x_vals, y_vals = runtime_session._analysis_cache_overlay_coords(
+        np.asarray(
+            [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
+            dtype=float,
+        ),
+        show_caked=True,
+    )
+
+    assert projector_calls == [(40.0, 50.0)]
+    np.testing.assert_allclose(x_vals, [91.0])
+    np.testing.assert_allclose(y_vals, [-44.0])
+
+
+def test_runtime_impl_prepare_q_space_payload_uses_direct_detector_remap() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _prepare_q_space_display_payload(")
+    helper_end = source.index("def _store_q_space_display_payload(", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert "detector_image: np.ndarray | None" in helper_source
+    assert "convert_image_to_q_space(" in helper_source
+    assert "caked_image_to_q_space_payload" not in helper_source
+    assert "center_row_px=float(center_array[0])" in helper_source
+    assert "center_col_px=float(center_array[1])" in helper_source
+
+
+def test_runtime_impl_run_analysis_job_builds_q_space_from_detector_images() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _run_analysis_job(")
+    helper_end = source.index("def _submit_async_analysis_job(", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert "sim_q_space = _prepare_q_space_display_payload(\n        sim_image," in helper_source
+    assert "bg_q_space = _prepare_q_space_display_payload(\n        bg_array," in helper_source
+    assert "sim_q_space = _prepare_q_space_display_payload(\n        sim_caked," not in helper_source
+    assert "bg_q_space = _prepare_q_space_display_payload(\n        bg_caked," not in helper_source
+
+
+def test_runtime_impl_q_space_view_mode_is_not_gated_on_caked_toggle() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _current_app_shell_view_mode() -> str:")
+    helper_end = source.index("def _active_caked_primary_view()", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert 'if selected_mode == "q_space":\n        return "q_space"' in helper_source
+    assert helper_source.index('if selected_mode == "q_space":') < helper_source.index("if show_caked:")
+
+
+def test_runtime_impl_fast_viewer_layer_versions_report_q_space_extent() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _fast_viewer_layer_versions() -> dict[str, object]:")
+    helper_end = source.index("def _initialize_runtime_plot_block_03()", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert "active_mode = _resolved_primary_analysis_display_mode()" in helper_source
+    assert 'if active_mode == "q_space":' in helper_source
+    assert '"last_q_space_extent"' in helper_source
+    assert '"simulation": (\n            active_mode,' in helper_source
+
+
+def test_run_analysis_job_can_emit_sim_q_space_without_caked_payload(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _job: object())
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda image, _ai, **_kwargs: {
+            "shape": tuple(np.asarray(image).shape),
+        },
+    )
+    monkeypatch.setattr(runtime_session, "_prepare_caked_display_payload", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_prepare_caked_intersection_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "temporary_numba_thread_limit", lambda *_args, **_kwargs: contextlib.nullcontext())
+    monkeypatch.setattr(runtime_session, "default_reserved_cpu_worker_count", lambda: 1)
+
+    result = runtime_session._run_analysis_job(
+        {
+            "job_id": 7,
+            "signature": ("analysis", 1),
+            "epoch": 3,
+            "image": np.eye(8, dtype=np.float64),
+            "background_image": None,
+            "npt_rad": 48,
+            "npt_azim": 40,
+            "is_preview": False,
+            "cached_bg_res2": None,
+            "cached_bg_caked": None,
+            "intersection_cache": None,
+            "sim_cache_sig": ("sim", 1),
+            "bg_cache_sig": None,
+            "sim_caking_sig": ("cake", 1),
+            "bg_caking_sig": None,
+            "distance_m": 0.5,
+            "center": np.array([4.0, 4.0], dtype=np.float64),
+            "pixel_size_m": 1.0e-4,
+            "wavelength_m": 1.24e-10,
+            "gamma_deg": 0.0,
+            "Gamma_deg": 0.0,
+            "chi_deg": 0.0,
+            "psi_deg": 0.0,
+            "psi_z_deg": 0.0,
+            "theta_initial_deg": 0.0,
+            "cor_angle_deg": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+        }
+    )
+
+    assert result["sim_caked"] is None
+    assert result["bg_caked"] is None
+    assert isinstance(result["sim_q_space"], dict)
+    assert result["bg_q_space"] is None
+    assert np.asarray(result["sim_q_space"]["image"], dtype=float).size > 0
+    assert np.asarray(result["sim_q_space"]["qr"], dtype=float).size == 48
+    assert np.asarray(result["sim_q_space"]["qz"], dtype=float).size == 40
+
+
+def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: float) -> None:
+            self._value = value
+
+        def get(self) -> float:
+            return float(self._value)
+
+    background_native = np.arange(16, dtype=np.float64).reshape(4, 4)
+    q_space_inputs: list[np.ndarray] = []
+    stored_payloads: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            analysis_preview_bins=(8, 6),
+            last_res2_sim=object(),
+            last_res2_background=object(),
+            ai_cache={"ai": None, "detector_shape": (4, 4)},
+            stored_intersection_cache=(),
+            unscaled_image=np.ones((4, 4), dtype=np.float64),
+            last_caked_image_unscaled=None,
+            last_caked_radial_values=None,
+            last_caked_azimuth_values=None,
+            last_caked_extent=None,
+            last_caked_intersection_cache=None,
+            last_caked_background_image_unscaled=None,
+            last_q_space_image_unscaled=None,
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.ones((2, 2), dtype=np.float64),
+            "radial": np.array([1.0, 2.0], dtype=np.float64),
+            "azimuth": np.array([-1.0, 1.0], dtype=np.float64),
+            "transform_bundle": None,
+            "extent": [0.0, 1.0, 0.0, 1.0],
+        },
+    )
+    monkeypatch.setattr(runtime_session, "_set_live_caked_transform_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_prepare_caked_intersection_cache", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_q_space_display_payload",
+        lambda detector_image, **_kwargs: (
+            q_space_inputs.append(np.asarray(detector_image, dtype=np.float64).copy())
+            or {
+                "image": np.asarray(detector_image, dtype=np.float64),
+                "qr": np.array([0.0, 1.0], dtype=np.float64),
+                "qz": np.array([0.0, 1.0], dtype=np.float64),
+                "sum_signal": np.ones((2, 2), dtype=np.float64),
+                "sum_normalization": np.ones((2, 2), dtype=np.float64),
+                "count": np.ones((2, 2), dtype=np.float64),
+                "extent": [0.0, 1.0, 0.0, 1.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_q_space_display_payload",
+        lambda **kwargs: stored_payloads.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_current_background_backend",
+        lambda: (_ for _ in ()).throw(AssertionError("restore should use native background")),
+    )
+    monkeypatch.setattr(runtime_session, "_get_current_background_native", lambda: background_native)
+    monkeypatch.setattr(runtime_session, "center_x_var", _Var(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _Var(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _Var(0.5), raising=False)
+    monkeypatch.setattr(runtime_session, "gamma_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "cor_angle_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zs_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zb_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
+    monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
+    monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
+    monkeypatch.setattr(runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0)
+
+    restored = runtime_session._restore_caked_display_payload_from_cached_results(background_visible=True)
+
+    assert restored is True
+    assert len(q_space_inputs) == 2
+    np.testing.assert_array_equal(q_space_inputs[1], background_native)
+    assert len(stored_payloads) == 1
 
 
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:

@@ -189,8 +189,8 @@ def _normalize_view_mode(layer_versions: Mapping[str, object] | None) -> str:
     simulation_version = layer_versions.get("simulation")
     if isinstance(simulation_version, Sequence) and simulation_version:
         first = str(simulation_version[0] or "").strip().lower()
-        if first == "caked":
-            return "caked"
+        if first in {"caked", "q_space"}:
+            return first
     return "detector"
 
 
@@ -312,7 +312,16 @@ def _extract_qgroup_display_point(
     view_mode: str,
 ) -> tuple[float, float] | None:
     ordered_keys: tuple[tuple[str, str], ...]
-    if str(view_mode) == "caked":
+    normalized_mode = str(view_mode).strip().lower()
+    if normalized_mode == "q_space":
+        ordered_keys = (
+            ("qr", "qz"),
+            ("qr_value", "qz_value"),
+            ("display_col", "display_row"),
+            ("sim_col_local", "sim_row_local"),
+            ("sim_col", "sim_row"),
+        )
+    elif normalized_mode == "caked":
         ordered_keys = (
             ("two_theta_deg", "phi_deg"),
             ("display_col", "display_row"),

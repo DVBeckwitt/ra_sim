@@ -107,6 +107,17 @@ class _BeamContext:
     all_q: np.ndarray
 
 
+@dataclass(frozen=True)
+class NominalProjectionFrame:
+    i_plane: np.ndarray
+    r_sample: np.ndarray
+    detector_pos: np.ndarray
+    n_det_rot: np.ndarray
+    e1_det: np.ndarray
+    e2_det: np.ndarray
+    u_i_lab: np.ndarray
+
+
 def compute_g_vec(h: int, k: int, l: int, a: float, c: float) -> np.ndarray:
     """Return the reciprocal-space G vector used by the diffraction kernels."""
 
@@ -241,6 +252,83 @@ def _build_sample_frame(geometry: IntersectionGeometry):
     return r_sample, n_surf, p0_rot
 
 
+def build_nominal_projection_frame(
+    *,
+    distance_cor_to_detector: float,
+    gamma_deg: float,
+    Gamma_deg: float,
+    chi_deg: float,
+    psi_deg: float,
+    psi_z_deg: float,
+    zs: float,
+    zb: float,
+    theta_initial_deg: float,
+    cor_angle_deg: float,
+    n_detector: np.ndarray | None = None,
+    unit_x: np.ndarray | None = None,
+    beam_x: float = 0.0,
+    beam_y: float = 0.0,
+    dtheta: float = 0.0,
+    dphi: float = 0.0,
+) -> NominalProjectionFrame:
+    """Return one shared detector/sample projection frame for one nominal beam."""
+
+    geometry = IntersectionGeometry(
+        image_size=1,
+        center_col=0.0,
+        center_row=0.0,
+        distance_cor_to_detector=float(distance_cor_to_detector),
+        gamma_deg=float(gamma_deg),
+        Gamma_deg=float(Gamma_deg),
+        chi_deg=float(chi_deg),
+        psi_deg=float(psi_deg),
+        psi_z_deg=float(psi_z_deg),
+        zs=float(zs),
+        zb=float(zb),
+        theta_initial_deg=float(theta_initial_deg),
+        cor_angle_deg=float(cor_angle_deg),
+        n_detector=(
+            np.asarray(n_detector, dtype=np.float64)
+            if n_detector is not None
+            else np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        ),
+        unit_x=(
+            np.asarray(unit_x, dtype=np.float64)
+            if unit_x is not None
+            else np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        ),
+    )
+
+    detector_pos, n_det_rot, e1_det, e2_det = _build_detector_frame(geometry)
+    r_sample, n_surf, p0_rot = _build_sample_frame(geometry)
+    beam_start = np.array(
+        [float(beam_x), -20e-3, -float(geometry.zb) + float(beam_y)],
+        dtype=np.float64,
+    )
+    u_i_lab = np.array(
+        [
+            cos(float(dtheta)) * sin(float(dphi)),
+            cos(float(dtheta)) * cos(float(dphi)),
+            sin(float(dtheta)),
+        ],
+        dtype=np.float64,
+    )
+
+    ix, iy, iz, valid_int = intersect_line_plane(beam_start, u_i_lab, p0_rot, n_surf)
+    if not valid_int:
+        raise ValueError("Beam sample does not intersect the sample plane.")
+
+    return NominalProjectionFrame(
+        i_plane=np.array([ix, iy, iz], dtype=np.float64),
+        r_sample=r_sample,
+        detector_pos=detector_pos,
+        n_det_rot=n_det_rot,
+        e1_det=e1_det,
+        e2_det=e2_det,
+        u_i_lab=u_i_lab,
+    )
+
+
 def _build_single_beam_context(
     *,
     geometry: IntersectionGeometry,
@@ -260,27 +348,31 @@ def _build_single_beam_context(
     if wavelength <= 0.0:
         raise ValueError("Beam wavelength must be positive.")
 
-    detector_pos, n_det_rot, e1_det, e2_det = _build_detector_frame(geometry)
-    r_sample, n_surf, p0_rot = _build_sample_frame(geometry)
-
-    beam_start = np.array(
-        [float(beam_x), -20e-3, -float(geometry.zb) + float(beam_y)],
-        dtype=np.float64,
+    frame = build_nominal_projection_frame(
+        distance_cor_to_detector=float(geometry.distance_cor_to_detector),
+        gamma_deg=float(geometry.gamma_deg),
+        Gamma_deg=float(geometry.Gamma_deg),
+        chi_deg=float(geometry.chi_deg),
+        psi_deg=float(geometry.psi_deg),
+        psi_z_deg=float(geometry.psi_z_deg),
+        zs=float(geometry.zs),
+        zb=float(geometry.zb),
+        theta_initial_deg=float(geometry.theta_initial_deg),
+        cor_angle_deg=float(geometry.cor_angle_deg),
+        n_detector=np.asarray(geometry.n_detector, dtype=np.float64),
+        unit_x=np.asarray(geometry.unit_x, dtype=np.float64),
+        beam_x=float(beam_x),
+        beam_y=float(beam_y),
+        dtheta=float(dtheta),
+        dphi=float(dphi),
     )
-    k_in = np.array(
-        [
-            cos(float(dtheta)) * sin(float(dphi)),
-            cos(float(dtheta)) * cos(float(dphi)),
-            sin(float(dtheta)),
-        ],
-        dtype=np.float64,
-    )
-
-    ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, p0_rot, n_surf)
-    if not valid_int:
-        raise ValueError("Beam sample does not intersect the sample plane.")
-
-    i_plane = np.array([ix, iy, iz], dtype=np.float64)
+    r_sample, n_surf, _p0_rot = _build_sample_frame(geometry)
+    detector_pos = np.asarray(frame.detector_pos, dtype=np.float64)
+    n_det_rot = np.asarray(frame.n_det_rot, dtype=np.float64)
+    e1_det = np.asarray(frame.e1_det, dtype=np.float64)
+    e2_det = np.asarray(frame.e2_det, dtype=np.float64)
+    k_in = np.asarray(frame.u_i_lab, dtype=np.float64)
+    i_plane = np.asarray(frame.i_plane, dtype=np.float64)
     kn_dot = float(np.dot(k_in, n_surf))
     kn_dot = float(np.clip(kn_dot, -1.0, 1.0))
     th_i_prime = (pi / 2.0) - acos(kn_dot)

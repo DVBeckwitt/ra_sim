@@ -141,6 +141,7 @@ from ra_sim.simulation.exact_cake_portable import (
     resolve_cake_transform_bundle,
     start_exact_cake_geometry_warmup_in_background,
 )
+from ra_sim.simulation.exact_qspace_portable import convert_image_to_q_space
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.simulation.types import (
     BeamSamples,
@@ -2408,6 +2409,13 @@ def _fast_viewer_layer_versions() -> dict[str, object]:
         show_caked = bool(show_caked_var.get()) if show_caked_var is not None else False
     except Exception:
         show_caked = False
+    active_mode = _resolved_primary_analysis_display_mode()
+    if active_mode == "q_space":
+        active_extent = tuple(getattr(simulation_runtime_state, "last_q_space_extent", ()) or ())
+    elif active_mode == "caked" or show_caked:
+        active_extent = tuple(getattr(simulation_runtime_state, "last_caked_extent", ()) or ())
+    else:
+        active_extent = ()
 
     return {
         "background": (
@@ -2419,11 +2427,11 @@ def _fast_viewer_layer_versions() -> dict[str, object]:
             id(getattr(background_runtime_state, "current_background_display", None)),
         ),
         "simulation": (
-            "caked" if show_caked else "detector",
+            active_mode,
             getattr(simulation_runtime_state, "last_unscaled_image_signature", None),
             getattr(simulation_runtime_state, "last_analysis_signature", None),
             getattr(simulation_runtime_state, "last_simulation_signature", None),
-            tuple(getattr(simulation_runtime_state, "last_caked_extent", ()) or ()),
+            active_extent,
         ),
         "overlay": getattr(
             globals().get("integration_range_drag_state"),
@@ -7867,6 +7875,9 @@ def _set_live_caked_transform_bundle(bundle: CakeTransformBundle | None) -> None
     ai = simulation_runtime_state.ai_cache.get("ai")
     if isinstance(bundle, CakeTransformBundle):
         simulation_runtime_state.ai_cache["detector_shape"] = bundle.detector_shape
+    simulation_runtime_state.last_caked_transform_bundle = (
+        bundle if isinstance(bundle, CakeTransformBundle) else None
+    )
     if isinstance(ai, FastAzimuthalIntegrator):
         setattr(
             ai,
@@ -8110,30 +8121,11 @@ def _snap_caked_axis_value(axis_values, value):
 def _prepare_caked_intersection_cache(
     intersection_cache,
     *,
-    center,
-    detector_distance,
-    pixel_size,
+    transform_bundle: CakeTransformBundle | None,
 ):
     source_tables = _copy_intersection_cache_tables(intersection_cache)
     if not source_tables:
         return source_tables
-
-    try:
-        center_arr = np.asarray(center, dtype=float).reshape(-1)
-    except Exception:
-        center_arr = np.empty((0,), dtype=float)
-    if center_arr.size < 2 or not np.isfinite(center_arr[0]) or not np.isfinite(center_arr[1]):
-        return source_tables
-
-    if not (np.isfinite(detector_distance) and float(detector_distance) > 0.0):
-        return source_tables
-    if not (np.isfinite(pixel_size) and float(pixel_size) > 0.0):
-        return source_tables
-
-    center_row = float(center_arr[0])
-    center_col = float(center_arr[1])
-    detector_distance = float(detector_distance)
-    pixel_size = float(pixel_size)
 
     transformed = []
     for table in source_tables:
@@ -8146,31 +8138,47 @@ def _prepare_caked_intersection_cache(
             transformed.append(arr.copy())
             continue
 
-        # Keep the raw detector-space columns intact and refresh the trailing
-        # 2theta / phi slots from detector geometry.
         out_cols = max(int(arr.shape[1]), 16)
         out = np.full((arr.shape[0], out_cols), np.nan, dtype=float)
         if arr.shape[0] > 0 and arr.shape[1] > 0:
-            out[:, : arr.shape[1]] = arr
-        if arr.shape[0] == 0 or arr.shape[1] < 4:
+            out[:, :arr.shape[1]] = arr
+
+        if (
+            arr.shape[0] == 0
+            or arr.shape[1] < 4
+            or not isinstance(transform_bundle, CakeTransformBundle)
+        ):
             transformed.append(out)
             continue
 
         cols = np.asarray(arr[:, 2], dtype=float)
         rows = np.asarray(arr[:, 3], dtype=float)
         valid = np.isfinite(cols) & np.isfinite(rows)
-        if np.any(valid):
-            dx = (cols[valid] - center_col) * pixel_size
-            dy = (center_row - rows[valid]) * pixel_size
-            radius = np.hypot(dx, dy)
-            out[valid, 14] = np.degrees(np.arctan2(radius, detector_distance))
-            out[valid, 15] = np.asarray(
-                raw_phi_to_gui_phi(np.degrees(np.arctan2(-dy, dx))),
-                dtype=float,
+
+        for idx in np.flatnonzero(valid):
+            two_theta, phi = detector_pixel_to_caked_bin(
+                transform_bundle,
+                float(cols[idx]),
+                float(rows[idx]),
             )
+            if two_theta is None or phi is None:
+                continue
+            if np.isfinite(two_theta) and np.isfinite(phi):
+                out[idx, 14] = float(two_theta)
+                out[idx, 15] = float(phi)
         transformed.append(out)
 
     return transformed
+
+
+def _live_caked_intersection_cache_matches_active_bundle() -> bool:
+    live_bundle = getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
+    cache_bundle = getattr(
+        simulation_runtime_state,
+        "last_caked_intersection_cache_transform_bundle",
+        None,
+    )
+    return isinstance(live_bundle, CakeTransformBundle) and cache_bundle is live_bundle
 
 
 def _initialize_runtime_controls_block_24() -> None:
@@ -8194,6 +8202,7 @@ def _initialize_runtime_controls_block_24() -> None:
     simulation_runtime_state.last_caked_azimuth_values = None
     _set_live_caked_transform_bundle(None)
     simulation_runtime_state.last_caked_intersection_cache = None
+    simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
     simulation_runtime_state.last_q_space_image_unscaled = None
     simulation_runtime_state.last_q_space_extent = None
     simulation_runtime_state.last_q_space_background_image_unscaled = None
@@ -8756,7 +8765,7 @@ def _current_app_shell_view_mode() -> str:
         getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
     )
     if selected_mode == "q_space":
-        return "q_space" if show_caked else "detector"
+        return "q_space"
     if show_caked:
         return "caked"
     return "detector"
@@ -9387,6 +9396,7 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_caked_azimuth_values = None
     _set_live_caked_transform_bundle(None)
     simulation_runtime_state.last_caked_intersection_cache = None
+    simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
     simulation_runtime_state.last_q_space_image_unscaled = None
     simulation_runtime_state.last_q_space_extent = None
     simulation_runtime_state.last_q_space_background_image_unscaled = None
@@ -10744,6 +10754,50 @@ def _caked_geometry_cache_signature(
     )
 
 
+def _q_space_geometry_cache_signature(
+    *,
+    distance_m: object,
+    center_x: object,
+    center_y: object,
+    pixel_size_m: object,
+    wavelength_m: object,
+    gamma_deg: object,
+    Gamma_deg: object,
+    chi_deg: object,
+    psi_deg: object,
+    psi_z_deg: object,
+    theta_initial_deg: object,
+    cor_angle_deg: object,
+    zs: object,
+    zb: object,
+) -> tuple[float | None, ...]:
+    rounded_values: list[float | None] = []
+    rounding_places = (9, 6, 6, 12, 12, 6, 6, 6, 6, 6, 6, 6, 9, 9)
+    raw_values = (
+        distance_m,
+        center_x,
+        center_y,
+        pixel_size_m,
+        wavelength_m,
+        gamma_deg,
+        Gamma_deg,
+        chi_deg,
+        psi_deg,
+        psi_z_deg,
+        theta_initial_deg,
+        cor_angle_deg,
+        zs,
+        zb,
+    )
+    for raw_value, decimals in zip(raw_values, rounding_places, strict=False):
+        try:
+            float_value = float(raw_value)
+        except Exception:
+            float_value = float("nan")
+        rounded_values.append(round(float_value, decimals) if np.isfinite(float_value) else None)
+    return tuple(rounded_values)
+
+
 def _prepare_caked_display_payload(
     res2,
     *,
@@ -10829,18 +10883,74 @@ def _prepare_caked_display_payload(
 
 
 def _prepare_q_space_display_payload(
-    caked_payload: Mapping[str, object] | None,
+    detector_image: np.ndarray | None,
     *,
+    npt_rad: object,
+    npt_azim: object,
+    distance_m: object,
+    center: object,
+    pixel_size_m: object,
     wavelength_m: object,
+    gamma_deg: object,
+    Gamma_deg: object,
+    chi_deg: object,
+    psi_deg: object,
+    psi_z_deg: object,
+    theta_initial_deg: object,
+    cor_angle_deg: object,
+    zs: object,
+    zb: object,
 ) -> dict[str, object] | None:
-    if not isinstance(caked_payload, Mapping):
+    if detector_image is None:
         return None
-    return gui_controllers.caked_image_to_q_space_payload(
-        caked_payload.get("image"),
-        caked_payload.get("radial"),
-        caked_payload.get("azimuth"),
-        wavelength_m=wavelength_m,
+    image_array = np.asarray(detector_image, dtype=np.float64)
+    detector_shape = tuple(int(v) for v in image_array.shape[:2])
+    if len(detector_shape) < 2 or detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None
+    center_array = np.asarray(center, dtype=np.float64).reshape(-1)
+    if center_array.size < 2:
+        return None
+    result = convert_image_to_q_space(
+        image_array,
+        pixel_size_m=float(pixel_size_m),
+        distance_m=float(distance_m),
+        center_row_px=float(center_array[0]),
+        center_col_px=float(center_array[1]),
+        wavelength_m=float(wavelength_m),
+        gamma_deg=float(gamma_deg),
+        Gamma_deg=float(Gamma_deg),
+        chi_deg=float(chi_deg),
+        psi_deg=float(psi_deg),
+        psi_z_deg=float(psi_z_deg),
+        theta_initial_deg=float(theta_initial_deg),
+        cor_angle_deg=float(cor_angle_deg),
+        zs=float(zs),
+        zb=float(zb),
+        npt_rad=int(max(2, int(npt_rad))),
+        npt_azim=int(max(2, int(npt_azim))),
+        correct_solid_angle=True,
+        method="lut",
     )
+    qr_axis = np.asarray(result.qr, dtype=np.float64)
+    qz_axis = np.asarray(result.qz, dtype=np.float64)
+    if qr_axis.size < 2 or qz_axis.size < 2:
+        return None
+    qr_step = float(qr_axis[1] - qr_axis[0])
+    qz_step = float(qz_axis[1] - qz_axis[0])
+    return {
+        "image": np.asarray(result.intensity, dtype=np.float64),
+        "qr": qr_axis,
+        "qz": qz_axis,
+        "sum_signal": np.asarray(result.sum_signal, dtype=np.float64),
+        "sum_normalization": np.asarray(result.sum_normalization, dtype=np.float64),
+        "count": np.asarray(result.count, dtype=np.float64),
+        "extent": [
+            max(0.0, float(qr_axis[0] - 0.5 * qr_step)),
+            float(qr_axis[-1] + 0.5 * qr_step),
+            float(qz_axis[0] - 0.5 * qz_step),
+            float(qz_axis[-1] + 0.5 * qz_step),
+        ],
+    }
 
 
 def _store_q_space_display_payload(
@@ -10883,36 +10993,70 @@ def _restore_caked_display_payload_from_cached_results(
 ) -> bool:
     """Rebuild caked display arrays from the current cached analysis results."""
 
+    analysis_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
+    if (
+        not isinstance(analysis_bins, tuple)
+        or len(analysis_bins) != 2
+        or not all(isinstance(value, int) and value > 0 for value in analysis_bins)
+    ):
+        analysis_bins = (
+            int(DEFAULT_ANALYSIS_RADIAL_BINS),
+            int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
+        )
     sim_caked = _prepare_caked_display_payload(
         simulation_runtime_state.last_res2_sim,
         ai=simulation_runtime_state.ai_cache.get("ai"),
         detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
     )
-    if not isinstance(sim_caked, dict):
+    if isinstance(sim_caked, dict):
+        resolved_bundle = sim_caked.get("transform_bundle")
+        detector_shape = sim_caked.get("detector_shape")
+        if (
+            not isinstance(resolved_bundle, CakeTransformBundle)
+            and detector_shape is not None
+        ):
+            resolved_bundle = resolve_cake_transform_bundle(
+                simulation_runtime_state.ai_cache.get("ai"),
+                detector_shape,
+                sim_caked.get("radial_axis", sim_caked.get("radial")),
+                gui_azimuth_deg=sim_caked.get("azimuth_axis", sim_caked.get("azimuth")),
+                raw_azimuth_deg=sim_caked.get("raw_azimuth_axis", sim_caked.get("raw_azimuth")),
+                transform_bundle=sim_caked.get("transform_bundle"),
+                require_gui_display_match=True,
+            )
+        resolved_bundle = (
+            resolved_bundle if isinstance(resolved_bundle, CakeTransformBundle) else None
+        )
+        simulation_runtime_state.last_caked_image_unscaled = np.asarray(
+            sim_caked.get("image"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_caked_radial_values = np.asarray(
+            sim_caked.get("radial"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_caked_azimuth_values = np.asarray(
+            sim_caked.get("azimuth"),
+            dtype=float,
+        )
+        _set_live_caked_transform_bundle(resolved_bundle)
+        simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
+        caked_intersection_cache = _prepare_caked_intersection_cache(
+            getattr(simulation_runtime_state, "stored_intersection_cache", ()),
+            transform_bundle=resolved_bundle,
+        )
+        simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (
+            resolved_bundle
+        )
+    else:
+        simulation_runtime_state.last_caked_image_unscaled = None
+        simulation_runtime_state.last_caked_radial_values = None
+        simulation_runtime_state.last_caked_azimuth_values = None
         _set_live_caked_transform_bundle(None)
-        return False
-
-    simulation_runtime_state.last_caked_image_unscaled = np.asarray(
-        sim_caked.get("image"),
-        dtype=float,
-    )
-    simulation_runtime_state.last_caked_radial_values = np.asarray(
-        sim_caked.get("radial"),
-        dtype=float,
-    )
-    simulation_runtime_state.last_caked_azimuth_values = np.asarray(
-        sim_caked.get("azimuth"),
-        dtype=float,
-    )
-    _set_live_caked_transform_bundle(sim_caked.get("transform_bundle"))
-    simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
-    caked_intersection_cache = _prepare_caked_intersection_cache(
-        getattr(simulation_runtime_state, "stored_intersection_cache", ()),
-        center=(float(center_x_var.get()), float(center_y_var.get())),
-        detector_distance=float(corto_detector_var.get()),
-        pixel_size=float(pixel_size_m),
-    )
-    simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
+        simulation_runtime_state.last_caked_extent = None
+        simulation_runtime_state.last_caked_intersection_cache = None
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
 
     bg_caked = None
     if background_visible and simulation_runtime_state.last_res2_background is not None:
@@ -10930,15 +11074,56 @@ def _restore_caked_display_payload_from_cached_results(
         simulation_runtime_state.last_caked_background_image_unscaled = None
     _store_q_space_display_payload(
         sim_payload=_prepare_q_space_display_payload(
-            sim_caked,
+            simulation_runtime_state.unscaled_image,
+            npt_rad=int(analysis_bins[0]),
+            npt_azim=int(analysis_bins[1]),
+            distance_m=float(corto_detector_var.get()),
+            center=np.asarray(
+                [float(center_x_var.get()), float(center_y_var.get())],
+                dtype=np.float64,
+            ),
+            pixel_size_m=float(pixel_size_m),
             wavelength_m=lambda_ * 1.0e-10,
+            gamma_deg=float(gamma_var.get()),
+            Gamma_deg=float(Gamma_var.get()),
+            chi_deg=float(chi_var.get()),
+            psi_deg=float(psi),
+            psi_z_deg=float(psi_z_var.get()),
+            theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
+            cor_angle_deg=float(cor_angle_var.get()),
+            zs=float(zs_var.get()),
+            zb=float(zb_var.get()),
         ),
         bg_payload=_prepare_q_space_display_payload(
-            bg_caked,
+            (
+                _get_current_background_native()
+                if background_visible and simulation_runtime_state.last_res2_background is not None
+                else None
+            ),
+            npt_rad=int(analysis_bins[0]),
+            npt_azim=int(analysis_bins[1]),
+            distance_m=float(corto_detector_var.get()),
+            center=np.asarray(
+                [float(center_x_var.get()), float(center_y_var.get())],
+                dtype=np.float64,
+            ),
+            pixel_size_m=float(pixel_size_m),
             wavelength_m=lambda_ * 1.0e-10,
+            gamma_deg=float(gamma_var.get()),
+            Gamma_deg=float(Gamma_var.get()),
+            chi_deg=float(chi_var.get()),
+            psi_deg=float(psi),
+            psi_z_deg=float(psi_z_var.get()),
+            theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
+            cor_angle_deg=float(cor_angle_var.get()),
+            zs=float(zs_var.get()),
+            zb=float(zb_var.get()),
         ),
     )
-    return True
+    return bool(
+        isinstance(sim_caked, dict)
+        or simulation_runtime_state.last_q_space_image_unscaled is not None
+    )
 
 
 def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
@@ -10967,6 +11152,27 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         ai=ai,
         detector_shape=sim_image.shape,
     )
+    resolved_bundle = None
+    if isinstance(sim_caked, dict):
+        resolved_bundle = sim_caked.get("transform_bundle")
+        detector_shape = sim_caked.get("detector_shape")
+        if (
+            not isinstance(resolved_bundle, CakeTransformBundle)
+            and detector_shape is not None
+        ):
+            resolved_bundle = resolve_cake_transform_bundle(
+                ai,
+                detector_shape,
+                sim_caked.get("radial_axis", sim_caked.get("radial")),
+                gui_azimuth_deg=sim_caked.get("azimuth_axis", sim_caked.get("azimuth")),
+                raw_azimuth_deg=sim_caked.get("raw_azimuth_axis", sim_caked.get("raw_azimuth")),
+                transform_bundle=sim_caked.get("transform_bundle"),
+                require_gui_display_match=True,
+            )
+        if isinstance(resolved_bundle, CakeTransformBundle):
+            sim_caked["transform_bundle"] = resolved_bundle
+        else:
+            resolved_bundle = None
     if isinstance(cached_bg_caked, dict):
         bg_caked = dict(cached_bg_caked)
     else:
@@ -10976,18 +11182,44 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
             detector_shape=bg_array.shape if bg_array is not None else sim_image.shape,
         )
     sim_q_space = _prepare_q_space_display_payload(
-        sim_caked,
+        sim_image,
+        npt_rad=npt_rad,
+        npt_azim=npt_azim,
+        distance_m=job.get("distance_m"),
+        center=job.get("center"),
+        pixel_size_m=job.get("pixel_size_m"),
         wavelength_m=job.get("wavelength_m"),
+        gamma_deg=job.get("gamma_deg"),
+        Gamma_deg=job.get("Gamma_deg"),
+        chi_deg=job.get("chi_deg"),
+        psi_deg=job.get("psi_deg"),
+        psi_z_deg=job.get("psi_z_deg"),
+        theta_initial_deg=job.get("theta_initial_deg"),
+        cor_angle_deg=job.get("cor_angle_deg"),
+        zs=job.get("zs"),
+        zb=job.get("zb"),
     )
     bg_q_space = _prepare_q_space_display_payload(
-        bg_caked,
+        bg_array,
+        npt_rad=npt_rad,
+        npt_azim=npt_azim,
+        distance_m=job.get("distance_m"),
+        center=job.get("center"),
+        pixel_size_m=job.get("pixel_size_m"),
         wavelength_m=job.get("wavelength_m"),
+        gamma_deg=job.get("gamma_deg"),
+        Gamma_deg=job.get("Gamma_deg"),
+        chi_deg=job.get("chi_deg"),
+        psi_deg=job.get("psi_deg"),
+        psi_z_deg=job.get("psi_z_deg"),
+        theta_initial_deg=job.get("theta_initial_deg"),
+        cor_angle_deg=job.get("cor_angle_deg"),
+        zs=job.get("zs"),
+        zb=job.get("zb"),
     )
     sim_caked_intersection_cache = _prepare_caked_intersection_cache(
         intersection_cache,
-        center=job.get("center"),
-        detector_distance=float(job.get("distance_m", float("nan"))),
-        pixel_size=float(job.get("pixel_size_m", float("nan"))),
+        transform_bundle=resolved_bundle,
     )
 
     return {
@@ -11239,6 +11471,10 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
 
     sim_caked = result.get("sim_caked")
     if isinstance(sim_caked, dict):
+        resolved_bundle = sim_caked.get("transform_bundle")
+        resolved_bundle = (
+            resolved_bundle if isinstance(resolved_bundle, CakeTransformBundle) else None
+        )
         simulation_runtime_state.last_caked_image_unscaled = np.asarray(
             sim_caked.get("image"),
             dtype=float,
@@ -11251,12 +11487,15 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
             sim_caked.get("azimuth"),
             dtype=float,
         )
-        _set_live_caked_transform_bundle(sim_caked.get("transform_bundle"))
+        _set_live_caked_transform_bundle(resolved_bundle)
         simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
         caked_intersection_cache = _copy_intersection_cache_tables(
             result.get("sim_caked_intersection_cache", [])
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (
+            resolved_bundle
+        )
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
@@ -11264,6 +11503,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         _set_live_caked_transform_bundle(None)
         simulation_runtime_state.last_caked_extent = None
         simulation_runtime_state.last_caked_intersection_cache = None
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
 
     bg_caked = result.get("bg_caked")
     if isinstance(bg_caked, dict):
@@ -12442,6 +12682,10 @@ def do_update():
         )
 
     show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+    q_space_requested = bool(
+        simulation_runtime_state.unscaled_image is not None
+        and _current_app_shell_view_mode() == "q_space"
+    )
     show_1d_requested = bool(analysis_view_controls_view_state.show_1d_var.get())
     one_d_analysis_requested = bool(
         (not qr_cylinder_replace_requested)
@@ -12451,11 +12695,35 @@ def do_update():
     caked_analysis_requested = bool(
         show_caked_2d and simulation_runtime_state.unscaled_image is not None
     )
+    q_space_geometry_sig = (
+        _q_space_geometry_cache_signature(
+            distance_m=corto_det_up,
+            center_x=center_x_up,
+            center_y=center_y_up,
+            pixel_size_m=pixel_size_m,
+            wavelength_m=wave_m,
+            gamma_deg=gamma_updated,
+            Gamma_deg=Gamma_updated,
+            chi_deg=chi_updated,
+            psi_deg=psi,
+            psi_z_deg=psi_z_updated,
+            theta_initial_deg=theta_init_up,
+            cor_angle_deg=cor_angle_updated,
+            zs=zs_updated,
+            zb=zb_updated,
+        )
+        if q_space_requested
+        else None
+    )
     analysis_requested = bool(
         simulation_runtime_state.unscaled_image is not None
-        and (caked_analysis_requested or one_d_analysis_requested)
+        and (caked_analysis_requested or one_d_analysis_requested or q_space_requested)
     )
-    analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
+    analysis_sig = (
+        (sim_caking_sig, bg_caking_sig, q_space_geometry_sig)
+        if analysis_requested
+        else None
+    )
     if analysis_sig is not None:
         _schedule_exact_cake_numba_warmup_once()
         _schedule_forward_simulation_numba_warmup_once()
@@ -12501,14 +12769,18 @@ def do_update():
         and simulation_runtime_state.last_analysis_signature == analysis_sig
         and simulation_runtime_state.last_res2_sim is not None
     )
-    missing_caked_payload = bool(
-        show_caked_2d
-        and analysis_result_current
+    missing_analysis_payload = bool(
+        analysis_result_current
         and (
-            simulation_runtime_state.last_caked_image_unscaled is None
-            or simulation_runtime_state.last_caked_extent is None
+            (
+                show_caked_2d
+                and (
+                    simulation_runtime_state.last_caked_image_unscaled is None
+                    or simulation_runtime_state.last_caked_extent is None
+                )
+            )
             or (
-                _current_app_shell_view_mode() == "q_space"
+                q_space_requested
                 and (
                     simulation_runtime_state.last_q_space_image_unscaled is None
                     or simulation_runtime_state.last_q_space_extent is None
@@ -12516,12 +12788,12 @@ def do_update():
             )
         )
     )
-    if missing_caked_payload:
+    if missing_analysis_payload:
         _trace_live_cache_event(
             "analysis",
             "restore_payload",
             outcome="requested",
-            reason="missing_caked_payload",
+            reason="missing_analysis_payload",
             background_visible=bool(background_runtime_state.visible),
         )
         _restore_caked_display_payload_from_cached_results(
@@ -12533,12 +12805,24 @@ def do_update():
             outcome=(
                 "restored"
                 if (
-                    simulation_runtime_state.last_caked_image_unscaled is not None
-                    and simulation_runtime_state.last_caked_extent is not None
+                    (
+                        not show_caked_2d
+                        or (
+                            simulation_runtime_state.last_caked_image_unscaled is not None
+                            and simulation_runtime_state.last_caked_extent is not None
+                        )
+                    )
+                    and (
+                        not q_space_requested
+                        or (
+                            simulation_runtime_state.last_q_space_image_unscaled is not None
+                            and simulation_runtime_state.last_q_space_extent is not None
+                        )
+                    )
                 )
                 else "missing"
             ),
-            reason="missing_caked_payload",
+            reason="missing_analysis_payload",
             background_visible=bool(background_runtime_state.visible),
         )
     analysis_result_matches_target = bool(
@@ -12623,6 +12907,15 @@ def do_update():
                 ).copy(),
                 "pixel_size_m": float(pixel_size_m),
                 "wavelength_m": float(wave_m),
+                "gamma_deg": float(gamma_updated),
+                "Gamma_deg": float(Gamma_updated),
+                "chi_deg": float(chi_updated),
+                "psi_deg": float(psi),
+                "psi_z_deg": float(psi_z_updated),
+                "theta_initial_deg": float(theta_init_up),
+                "cor_angle_deg": float(cor_angle_updated),
+                "zs": float(zs_updated),
+                "zb": float(zb_updated),
                 "sim_caking_sig": sim_caking_sig,
                 "bg_caking_sig": bg_caking_sig,
             }
@@ -20526,9 +20819,10 @@ def _analysis_cache_overlay_coords(
         return None
 
     if bool(show_caked):
+        use_cached_caked_coords = _live_caked_intersection_cache_matches_active_bundle()
         x_vals = np.full(arr.shape[0], np.nan, dtype=float)
         y_vals = np.full(arr.shape[0], np.nan, dtype=float)
-        if arr.shape[1] >= 16:
+        if use_cached_caked_coords and arr.shape[1] >= 16:
             x_vals[:] = arr[:, 14]
             y_vals[:] = arr[:, 15]
         invalid = ~(np.isfinite(x_vals) & np.isfinite(y_vals))
