@@ -58,6 +58,42 @@ def _build_process_args(num_samples: int):
     return args
 
 
+def _build_qr_process_args() -> tuple[object, ...]:
+    return (
+        {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}},
+        8,
+        4.0,
+        7.0,
+        1.54,
+        np.zeros((8, 8), dtype=np.float64),
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        0.5,
+        0.4,
+        0.2,
+        np.ones(1, dtype=np.float64),
+        0.0,
+        0.0,
+        np.array([4.0, 4.0], dtype=np.float64),
+        0.0,
+        0.0,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        0,
+    )
+
+
 def test_process_peaks_parallel_safe_clusters_and_expands_outputs(monkeypatch) -> None:
     args = _build_process_args(128)
     best_indices = np.full(1, -1, dtype=np.int64)
@@ -225,39 +261,88 @@ def test_process_qr_rods_parallel_safe_accepts_enable_safe_cache(monkeypatch) ->
     )
 
     result = diffraction.process_qr_rods_parallel_safe(
-        {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}},
-        8,
-        4.0,
-        7.0,
-        1.54,
-        np.zeros((8, 8), dtype=np.float64),
-        0.1,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0 + 0.0j,
-        np.zeros(1, dtype=np.float64),
-        np.zeros(1, dtype=np.float64),
-        np.zeros(1, dtype=np.float64),
-        np.zeros(1, dtype=np.float64),
-        0.5,
-        0.4,
-        0.2,
-        np.ones(1, dtype=np.float64),
-        0.0,
-        0.0,
-        np.array([4.0, 4.0], dtype=np.float64),
-        0.0,
-        0.0,
-        np.array([1.0, 0.0, 0.0], dtype=np.float64),
-        np.array([0.0, 1.0, 0.0], dtype=np.float64),
-        0,
+        *_build_qr_process_args(),
         enable_safe_cache=True,
     )
 
     assert observed["enable_safe_cache"] is True
+    assert np.array_equal(result[-1], np.array([1], dtype=np.int32))
+
+
+def test_process_qr_rods_parallel_safe_can_prefer_python_runner(monkeypatch) -> None:
+    call_order: list[str] = []
+
+    def fake_compiled(*_args, **_kwargs):
+        call_order.append("compiled")
+        raise AssertionError("compiled runner should be skipped")
+
+    def fake_python(*_args, **_kwargs):
+        call_order.append("python")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, 1), dtype=np.int64),
+            [],
+            np.array([1], dtype=np.int32),
+        )
+
+    fake_compiled.py_func = fake_python
+    monkeypatch.setattr(diffraction, "process_qr_rods_parallel", fake_compiled)
+
+    result = diffraction.process_qr_rods_parallel_safe(
+        *_build_qr_process_args(),
+        prefer_python_runner=True,
+    )
+
+    assert call_order == ["python"]
+    assert np.array_equal(result[-1], np.array([1], dtype=np.int32))
+
+
+def test_process_qr_rods_parallel_safe_forwards_safe_runner_stats(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_qr_dict_to_arrays(_qr_dict):
+        return (
+            np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
+            np.array([1.0], dtype=np.float64),
+            np.array([1], dtype=np.int32),
+            None,
+        )
+
+    def fake_process_peaks_parallel_safe(*args, **kwargs):
+        del args
+        observed["prefer_python_runner"] = kwargs.get("prefer_python_runner")
+        safe_stats_out = kwargs.get("_safe_stats_out")
+        if isinstance(safe_stats_out, dict):
+            safe_stats_out["used_python_runner"] = True
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, 1), dtype=np.int64),
+            [],
+        )
+
+    monkeypatch.setattr(
+        "ra_sim.utils.stacking_fault.qr_dict_to_arrays",
+        fake_qr_dict_to_arrays,
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "process_peaks_parallel_safe",
+        fake_process_peaks_parallel_safe,
+    )
+
+    safe_stats: dict[str, object] = {}
+    result = diffraction.process_qr_rods_parallel_safe(
+        *_build_qr_process_args(),
+        prefer_python_runner=True,
+        _safe_stats_out=safe_stats,
+    )
+
+    assert observed["prefer_python_runner"] is True
+    assert safe_stats["used_python_runner"] is True
     assert np.array_equal(result[-1], np.array([1], dtype=np.int32))

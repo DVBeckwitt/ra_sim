@@ -326,14 +326,18 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "start_exact_cake_geometry_warmup_in_background," in source
     assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
     assert "start_forward_simulation_numba_warmup_in_background" in source
+    assert "start_qr_rod_simulation_numba_warmup_in_background" in source
     assert "def _schedule_exact_cake_numba_warmup_once() -> None:" in source
     assert "def _schedule_forward_simulation_numba_warmup_once() -> None:" in source
+    assert "def _schedule_qr_rod_simulation_numba_warmup_once() -> None:" in source
     assert "simulation_runtime_state.exact_cake_numba_warmup_scheduled" in source
     assert "simulation_runtime_state.forward_simulation_numba_warmup_scheduled" in source
+    assert "simulation_runtime_state.qr_rod_simulation_numba_warmup_scheduled" in source
     assert "root.after_idle(start_exact_cake_numba_warmup_in_background)" in source
     assert (
         "root.after_idle(start_forward_simulation_numba_warmup_in_background)" in source
     )
+    assert "root.after_idle(start_qr_rod_simulation_numba_warmup_in_background)" in source
 
 
 def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_and_wavelength() -> None:
@@ -1040,6 +1044,9 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     forward_warmup_index = startup_block.index(
         "start_forward_simulation_numba_warmup_in_background()"
     )
+    rod_warmup_index = startup_block.index(
+        "start_qr_rod_simulation_numba_warmup_in_background()"
+    )
 
     assert "def _show_initial_simulation_loading_overlay() -> None:" in source
     assert '"Loading first simulation may take longer"' in source
@@ -1048,13 +1055,21 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert "root.update_idletasks()" in startup_block
     assert "start_exact_cake_numba_warmup_in_background()" not in startup_block
     assert "_schedule_forward_simulation_numba_warmup_once()" not in startup_block
+    assert "_schedule_qr_rod_simulation_numba_warmup_once()" not in startup_block
     assert forward_warmup_index < startup_block.index(
+        "runtime_context = build_runtime_state_context()"
+    )
+    assert rod_warmup_index < startup_block.index(
         "runtime_context = build_runtime_state_context()"
     )
     assert forward_warmup_index < startup_block.index(
         "_bootstrap_structure_model_state_for_startup()"
     )
+    assert rod_warmup_index < startup_block.index(
+        "_bootstrap_structure_model_state_for_startup()"
+    )
     assert forward_warmup_index < startup_block.index("do_update()")
+    assert rod_warmup_index < startup_block.index("do_update()")
     assert "_run_simulation_generation_job(" in block
     assert 'progress_label.config(text="Computing initial simulation...")' in block
 
@@ -1066,6 +1081,7 @@ def test_runtime_impl_defers_exact_cake_numba_warmup_until_after_startup_work() 
     assert "if simulation_runtime_state.stored_sim_image is not None:" in source
     assert source.count("_schedule_exact_cake_numba_warmup_once()") >= 2
     assert source.count("_schedule_forward_simulation_numba_warmup_once()") >= 2
+    assert source.count("_schedule_qr_rod_simulation_numba_warmup_once()") >= 2
 
 
 def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:

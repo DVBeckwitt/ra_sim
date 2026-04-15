@@ -1427,6 +1427,10 @@ geometry_fit_background_selection_var = None
 fit_theta_checkbutton = None
 _geometry_fit_runtime_value_callbacks = None
 _geometry_fit_var_map: dict[str, object] = {}
+_native_detector_coords_to_caked_display_coords = None
+_scattering_angles_to_detector_pixel = None
+_detector_pixel_to_scattering_angles = None
+_get_detector_angular_maps = None
 
 
 def _geometry_fit_runtime_values() -> gui_geometry_fit.GeometryFitRuntimeValueCallbacks:
@@ -25310,6 +25314,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             _emit_startup_benchmark_event("after_idle_startup_task")
             try:
                 start_forward_simulation_numba_warmup_in_background()
+                start_qr_rod_simulation_numba_warmup_in_background()
             except Exception:
                 pass
             runtime_context = build_runtime_state_context()

@@ -211,9 +211,77 @@ def test_simulate_uses_reserved_cpu_worker_count_for_numba_thread_limit(monkeypa
     assert seen == [10]
 
 
+def test_forward_warmup_matches_real_startup_overloads(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
+    seen_requests: list[SimulationRequest] = []
+
+    def fake_run_simulation_request(request, *, peak_runner=None):
+        del peak_runner
+        seen_requests.append(request)
+        _set_forward_safe_run_result(False)
+        return _fake_simulation_result(request)
+
+    monkeypatch.setattr(engine, "_run_simulation_request", fake_run_simulation_request)
+
+    warmed = engine.warmup_forward_simulation_numba()
+
+    assert warmed is True
+    assert len(seen_requests) == 2
+    base_request, weighted_request = seen_requests
+    assert base_request.accumulate_image is True
+    assert np.array_equal(
+        base_request.beam.n2_sample_array,
+        np.array([1.0 + 0.0j], dtype=np.complex128),
+    )
+    assert base_request.beam.sample_weights is None
+    assert weighted_request.accumulate_image is True
+    assert np.array_equal(
+        weighted_request.beam.n2_sample_array,
+        np.array([1.0 + 0.0j], dtype=np.complex128),
+    )
+    assert np.array_equal(
+        weighted_request.beam.sample_weights,
+        np.array([1.0], dtype=np.float64),
+    )
+
+
+def test_forward_weighted_warmup_failure_does_not_clear_base_state(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
+    warmup_calls = 0
+
+    def fake_run_simulation_request(request, *, peak_runner=None):
+        del peak_runner
+        nonlocal warmup_calls
+        warmup_calls += 1
+        _set_forward_safe_run_result(warmup_calls > 1)
+        return _fake_simulation_result(request)
+
+    monkeypatch.setattr(engine, "_run_simulation_request", fake_run_simulation_request)
+
+    warmed = engine.warmup_forward_simulation_numba()
+
+    assert warmed is True
+    assert warmup_calls == 2
+    assert engine._FORWARD_SIMULATION_NUMBA_WARMED is True
+    assert engine._FORWARD_SIMULATION_NUMBA_WARMUP_FAILED is False
+    assert engine._FORWARD_SIMULATION_NUMBA_DISABLED is False
+    assert engine._FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED is False
+    assert engine._FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED is True
+
+
 def test_forward_warmup_does_not_mark_warmed_on_python_fallback(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
 
     def fake_run_simulation_request(request, *, peak_runner=None):
@@ -233,6 +301,8 @@ def test_forward_warmup_does_not_mark_warmed_on_python_fallback(monkeypatch) -> 
 def test_simulate_skips_repeat_forward_warmup_after_failure(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", True)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
     warmup_calls = 0
 
@@ -258,6 +328,8 @@ def test_simulate_skips_repeat_forward_warmup_after_failure(monkeypatch) -> None
 def test_simulate_serializes_first_real_forward_run_after_warmup_failure(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", True)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
     warmup_calls = 0
     active_real_calls = 0
@@ -302,6 +374,8 @@ def test_simulate_serializes_first_real_forward_run_after_warmup_failure(monkeyp
 def test_simulate_clears_forward_warmed_state_after_python_fallback(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", True)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
     def fake_run_simulation_request(request, *, peak_runner=None):
         _set_forward_safe_run_result(True)
@@ -319,6 +393,8 @@ def test_simulate_clears_forward_warmed_state_after_python_fallback(monkeypatch)
 def test_simulate_prefers_python_runner_after_forward_numba_is_disabled(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", True)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", True)
     seen: dict[str, object] = {}
 
@@ -349,6 +425,8 @@ def test_simulate_prefers_python_runner_after_forward_numba_is_disabled(monkeypa
 def test_simulate_disables_forward_numba_after_serialized_real_call_exception(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
     seen: dict[str, object] = {"warmup_calls": 0, "real_calls": 0}
 
@@ -395,6 +473,8 @@ def test_simulate_disables_forward_numba_after_serialized_real_call_exception(mo
 def test_simulate_waiter_uses_python_runner_after_forward_numba_is_disabled(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", True)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
     seen: dict[str, object] = {"real_calls": 0, "python_calls": 0}
     state_lock = threading.Lock()
@@ -454,6 +534,8 @@ def test_simulate_keeps_forward_numba_disabled_after_concurrent_fallback_and_suc
 ) -> None:
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMED", True)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", True)
+    monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
     seen: dict[str, int] = {"fallback_calls": 0, "success_calls": 0}
     shared_stats = {"used_python_runner": False}
@@ -511,6 +593,58 @@ def test_simulate_keeps_forward_numba_disabled_after_concurrent_fallback_and_suc
     assert engine._FORWARD_SIMULATION_NUMBA_WARMED is False
     assert engine._FORWARD_SIMULATION_NUMBA_WARMUP_FAILED is True
     assert engine._FORWARD_SIMULATION_NUMBA_DISABLED is True
+
+
+def test_qr_rod_warmup_matches_real_startup_request(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_QR_ROD_SIMULATION_NUMBA_WARMED", False)
+    monkeypatch.setattr(engine, "_QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    seen: dict[str, object] = {}
+
+    def fake_simulate_qr_rods(qr_dict, request, *, peak_runner=None):
+        seen["qr_dict"] = qr_dict
+        seen["request"] = request
+        seen["peak_runner"] = peak_runner
+        engine._set_last_qr_rod_simulation_safe_run_used_python_runner(False)
+        return _fake_simulation_result(request)
+
+    monkeypatch.setattr(engine, "simulate_qr_rods", fake_simulate_qr_rods)
+
+    warmed = engine.warmup_qr_rod_simulation_numba()
+
+    assert warmed is True
+    assert engine.warmup_qr_rod_simulation_numba() is False
+    qr_dict = seen["qr_dict"]
+    request = seen["request"]
+    assert seen["peak_runner"] is engine.process_qr_rods_parallel_safe
+    assert qr_dict[1]["hk"] == (1, 0)
+    assert np.array_equal(qr_dict[1]["L"], np.array([0.0], dtype=np.float64))
+    assert np.array_equal(qr_dict[1]["I"], np.array([1.0], dtype=np.float64))
+    assert qr_dict[1]["deg"] == 1
+    assert request.accumulate_image is True
+    assert np.array_equal(
+        request.beam.n2_sample_array,
+        np.array([1.0 + 0.0j], dtype=np.complex128),
+    )
+
+
+def test_qr_rod_warmup_skips_repeat_after_failure(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_QR_ROD_SIMULATION_NUMBA_WARMED", False)
+    monkeypatch.setattr(engine, "_QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED", False)
+    warmup_calls = 0
+
+    def fake_simulate_qr_rods(qr_dict, request, *, peak_runner=None):
+        del qr_dict, request, peak_runner
+        nonlocal warmup_calls
+        warmup_calls += 1
+        raise RuntimeError("warmup failed")
+
+    monkeypatch.setattr(engine, "simulate_qr_rods", fake_simulate_qr_rods)
+
+    assert engine.warmup_qr_rod_simulation_numba() is False
+    assert engine.warmup_qr_rod_simulation_numba() is False
+    assert warmup_calls == 1
+    assert engine._QR_ROD_SIMULATION_NUMBA_WARMED is False
+    assert engine._QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED is True
 
 
 def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:

@@ -6725,7 +6725,7 @@ def process_qr_rods_parallel(
 def process_qr_rods_parallel_safe(*args, **kwargs):
     """Run ``process_qr_rods_parallel`` with Python fallback if needed."""
 
-    prefer_python_runner = bool(kwargs.pop("prefer_python_runner", False))
+    prefer_python_runner = bool(kwargs.get("prefer_python_runner", False))
     py_runner = getattr(process_qr_rods_parallel, "py_func", None)
     runners = []
     if prefer_python_runner and callable(py_runner):
