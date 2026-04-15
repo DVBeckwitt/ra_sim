@@ -580,6 +580,7 @@ def test_runtime_live_caked_projection_helper_uses_bound_callback(
         runtime_session,
         "_native_detector_coords_to_caked_display_coords",
         _record,
+        raising=False,
     )
     monkeypatch.setattr(
         runtime_session,
@@ -608,6 +609,53 @@ def test_runtime_live_caked_projection_helper_uses_bound_callback(
         34.0,
     )
     assert callback_calls == [(1.25, 2.5)]
+
+
+def _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session) -> None:
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("preview mask should not call legacy analytic helpers")
+
+    monkeypatch.setattr(runtime_session, "_detector_angular_maps_for_shape", _fail)
+    monkeypatch.setattr(runtime_session, "raw_phi_to_gui_phi", _fail)
+    monkeypatch.setattr(runtime_session, "_get_detector_angular_maps", _fail)
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_pixel_to_scattering_angles",
+        _fail,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_scattering_angles_to_detector_pixel",
+        _fail,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_angular_maps",
+        _fail,
+        raising=False,
+    )
+
+
+def _preview_mask_regression_inputs() -> dict[str, object]:
+    return {
+        "selection": {
+            "valid": True,
+            "rows": np.array([0, 2, 9], dtype=np.int64),
+            "cols": np.array([1, 1, 0], dtype=np.int64),
+        },
+        "native_shape": (3, 3),
+        "radial_axis": np.array([10.0, 20.0], dtype=float),
+        "azimuth_axis": np.array([-5.0, 5.0], dtype=float),
+        "expected_mask": np.array(
+            [
+                [True, False],
+                [False, True],
+            ],
+            dtype=bool,
+        ),
+    }
 
 
 def test_runtime_geometry_fit_roi_projector_does_not_call_legacy_projection_paths(
@@ -679,6 +727,203 @@ def test_runtime_geometry_fit_roi_projector_does_not_call_legacy_projection_path
     assert projector is not None
     assert projector(1.5, -10.0) == (12.0, 34.0)
     assert bundle_calls == [bundle]
+
+
+def test_runtime_geometry_fit_caked_roi_preview_mask_uses_live_exact_bundle_only(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session)
+    inputs = _preview_mask_regression_inputs()
+    live_bundle = runtime_session.CakeTransformBundle(
+        detector_shape=inputs["native_shape"],
+        radial_deg=np.array([10.0, 20.0], dtype=float),
+        raw_azimuth_deg=np.array([85.0, 95.0], dtype=float),
+        gui_azimuth_deg=np.array([-5.0, 5.0], dtype=float),
+        lut=SimpleNamespace(),
+    )
+    projection_calls: list[tuple[object, float, float]] = []
+
+    def _record_detector_pixel_to_caked_bin(bundle, col, row):
+        projection_calls.append((bundle, float(col), float(row)))
+        if (float(col), float(row)) == (1.0, 0.0):
+            return (10.2, -4.0)
+        if (float(col), float(row)) == (1.0, 2.0):
+            return (19.6, 4.0)
+        return (None, None)
+
+    def _fail_integrator():
+        raise AssertionError("preview mask should reuse matching live bundle")
+
+    def _fail_build_bundle(*_args, **_kwargs):
+        raise AssertionError("preview mask should not rebuild matching live bundle")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_live_caked_transform_bundle",
+        lambda: live_bundle,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_preview_integrator",
+        _fail_integrator,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "build_cake_transform_bundle",
+        _fail_build_bundle,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        _record_detector_pixel_to_caked_bin,
+    )
+
+    mask = runtime_session._geometry_fit_caked_roi_preview_mask(
+        selection=inputs["selection"],
+        native_shape=inputs["native_shape"],
+        radial_axis=inputs["radial_axis"],
+        azimuth_axis=inputs["azimuth_axis"],
+    )
+
+    np.testing.assert_array_equal(mask, inputs["expected_mask"])
+    assert projection_calls == [
+        (live_bundle, 1.0, 0.0),
+        (live_bundle, 1.0, 2.0),
+    ]
+
+
+def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_exact_bundle_without_legacy_helpers(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session)
+    inputs = _preview_mask_regression_inputs()
+    ai = runtime_session.FastAzimuthalIntegrator(
+        dist=0.25,
+        poni1=0.0015,
+        poni2=0.0020,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    expected_raw_azimuth = np.asarray(
+        runtime_session.gui_phi_to_raw_phi(inputs["azimuth_axis"]),
+        dtype=float,
+    )
+    expected_raw_azimuth = np.sort(expected_raw_azimuth, kind="stable")
+    original_build_bundle = runtime_session.build_cake_transform_bundle
+    build_calls: list[tuple[object, tuple[int, int], tuple[float, ...], tuple[float, ...]]] = []
+    projection_calls: list[tuple[object, float, float]] = []
+
+    def _fake_build_bundle(ai_arg, detector_shape, radial_deg, raw_azimuth_deg):
+        build_calls.append(
+            (
+                ai_arg,
+                tuple(detector_shape),
+                tuple(np.asarray(radial_deg, dtype=float)),
+                tuple(np.asarray(raw_azimuth_deg, dtype=float)),
+            )
+        )
+        return original_build_bundle(ai_arg, detector_shape, radial_deg, raw_azimuth_deg)
+
+    def _record_detector_pixel_to_caked_bin(bundle, col, row):
+        projection_calls.append((bundle, float(col), float(row)))
+        if (float(col), float(row)) == (1.0, 0.0):
+            return (10.2, -4.0)
+        if (float(col), float(row)) == (1.0, 2.0):
+            return (19.6, 4.0)
+        return (None, None)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_live_caked_transform_bundle",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_preview_integrator",
+        lambda: ai,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "build_cake_transform_bundle",
+        _fake_build_bundle,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        _record_detector_pixel_to_caked_bin,
+    )
+
+    mask = runtime_session._geometry_fit_caked_roi_preview_mask(
+        selection=inputs["selection"],
+        native_shape=inputs["native_shape"],
+        radial_axis=inputs["radial_axis"],
+        azimuth_axis=inputs["azimuth_axis"],
+    )
+
+    np.testing.assert_array_equal(mask, inputs["expected_mask"])
+    assert len(build_calls) == 1
+    assert build_calls[0][0] is ai
+    assert build_calls[0][1] == inputs["native_shape"]
+    assert build_calls[0][2] == (10.0, 20.0)
+    assert build_calls[0][3] == tuple(expected_raw_azimuth)
+    assert np.all(np.diff(np.asarray(build_calls[0][3], dtype=float)) > 0.0)
+    rebuilt_bundle = projection_calls[0][0]
+    assert isinstance(rebuilt_bundle, runtime_session.CakeTransformBundle)
+    assert projection_calls == [
+        (rebuilt_bundle, 1.0, 0.0),
+        (rebuilt_bundle, 1.0, 2.0),
+    ]
+
+
+def test_runtime_geometry_fit_caked_roi_preview_mask_returns_none_without_valid_bundle(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session)
+    inputs = _preview_mask_regression_inputs()
+    ai = runtime_session.FastAzimuthalIntegrator(
+        dist=0.25,
+        poni1=0.0015,
+        poni2=0.0020,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+
+    def _fail_projection(*_args, **_kwargs):
+        raise AssertionError("preview mask should return None before pixel projection")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_live_caked_transform_bundle",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_preview_integrator",
+        lambda: ai,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "build_cake_transform_bundle",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        _fail_projection,
+    )
+
+    assert (
+        runtime_session._geometry_fit_caked_roi_preview_mask(
+            selection=inputs["selection"],
+            native_shape=inputs["native_shape"],
+            radial_axis=inputs["radial_axis"],
+            azimuth_axis=inputs["azimuth_axis"],
+        )
+        is None
+    )
 
 
 def test_runtime_impl_worker_roi_precomputes_projection_context_before_selection() -> None:
