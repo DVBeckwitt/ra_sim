@@ -32,8 +32,13 @@ from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 import matplotlib
-import matplotlib.pyplot as plt
+
+# Force TkAgg before importing figure/canvas helpers.
+matplotlib.use("TkAgg")
+
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import ListedColormap, LogNorm, Normalize
+from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 import CifFile
 
@@ -215,9 +220,6 @@ turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]  # make the 0-bin white
 turbo_white0 = ListedColormap(turbo_rgba, name="turbo_white0")
 turbo_white0.set_bad("white")  # NaNs will also show white
 
-
-# Force TkAgg backend to ensure GUI usage
-matplotlib.use("TkAgg")
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
@@ -1955,9 +1957,10 @@ def _shutdown_gui():
 
 root.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 
-fig, ax = plt.subplots(figsize=(8, 8))
+fig = Figure(figsize=(8, 8))
+ax = fig.add_subplot(111)
 ax.set_aspect("auto")
-matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+matplotlib_canvas = FigureCanvasTkAgg(
     fig,
     master=app_shell_view_state.canvas_frame,
 )
@@ -7165,7 +7168,7 @@ def _mount_analysis_figure(parent) -> None:
             pass
         canvas_1d = None
 
-    canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+    canvas_1d = FigureCanvasTkAgg(
         fig_1d,
         master=parent,
     )
@@ -7197,7 +7200,9 @@ def _ensure_analysis_figure() -> None:
     if fig_1d is not None and ax_1d_radial is not None and ax_1d_azim is not None:
         return
 
-    fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
+    fig_1d = Figure(figsize=(5, 8))
+    ax_1d_radial = fig_1d.add_subplot(211)
+    ax_1d_azim = fig_1d.add_subplot(212)
 
     (line_1d_rad,) = ax_1d_radial.plot([], [], "b-", label="Simulated (2θ)")
     (line_1d_rad_bg,) = ax_1d_radial.plot([], [], "r--", label="Background (2θ)")
