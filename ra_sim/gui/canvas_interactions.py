@@ -936,22 +936,42 @@ def handle_runtime_canvas_scroll(
     limits = _current_live_limits(bindings)
     if limits is None:
         return False
+    xlim, ylim = limits
+    preview_limits = _stored_preview_limits(bindings)
 
     step = _scroll_step(event)
     if not np.isfinite(step) or abs(step) <= 0.0:
         return False
 
-    xlim, ylim = limits
-    anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
-        bindings.axis,
-        event,
-    )
-    anchor_x = float(xlim[0]) + (
-        (float(xlim[1]) - float(xlim[0])) * float(anchor_fraction_x)
-    )
-    anchor_y = float(ylim[0]) + (
-        (float(ylim[1]) - float(ylim[0])) * float(anchor_fraction_y)
-    )
+    try:
+        event_xdata = float(getattr(event, "xdata", np.nan))
+        event_ydata = float(getattr(event, "ydata", np.nan))
+    except Exception:
+        event_xdata = np.nan
+        event_ydata = np.nan
+
+    if preview_limits is not None:
+        # Legacy Matplotlib preview keeps event.xdata/ydata stale until commit.
+        anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
+            bindings.axis,
+            event,
+        )
+        anchor_x = float(xlim[0]) + (
+            (float(xlim[1]) - float(xlim[0])) * float(anchor_fraction_x)
+        )
+        anchor_y = float(ylim[0]) + (
+            (float(ylim[1]) - float(ylim[0])) * float(anchor_fraction_y)
+        )
+    elif (
+        getattr(event, "inaxes", None) is bindings.axis
+        and np.isfinite(event_xdata)
+        and np.isfinite(event_ydata)
+    ):
+        anchor_x = float(event_xdata)
+        anchor_y = float(event_ydata)
+    else:
+        anchor_x = 0.5 * (float(xlim[0]) + float(xlim[1]))
+        anchor_y = 0.5 * (float(ylim[0]) + float(ylim[1]))
 
     zoom_base = 1.2
     if step > 0.0:
