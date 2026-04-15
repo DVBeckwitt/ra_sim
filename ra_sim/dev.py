@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from ra_sim.test_tiers import fast_test_paths, integration_test_paths
+from ra_sim.user_paths import dev_cache_dir
 
 FAST_MARKER = "fast"
 INTEGRATION_MARKER = "integration"
@@ -57,9 +59,27 @@ def _python_module_command(*args: str) -> list[str]:
     return [sys.executable, *args]
 
 
+def _subprocess_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(os.environ if base_env is None else base_env)
+    cache_defaults = {
+        "PYTHONPYCACHEPREFIX": dev_cache_dir("pycache"),
+        "MYPY_CACHE_DIR": dev_cache_dir("mypy"),
+        "RUFF_CACHE_DIR": dev_cache_dir("ruff"),
+    }
+    for key, path in cache_defaults.items():
+        if key in env:
+            continue
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        env[key] = str(path)
+    return env
+
+
 def _run(command: Sequence[str], *, cwd: Path) -> int:
     print("+", " ".join(command))
-    completed = subprocess.run(command, cwd=str(cwd), check=False)
+    completed = subprocess.run(command, cwd=str(cwd), check=False, env=_subprocess_env())
     return int(completed.returncode)
 
 

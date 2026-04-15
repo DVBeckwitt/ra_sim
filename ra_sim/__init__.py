@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+
+from .user_paths import user_cache_root
 
 
 def _ensure_numba_cache_dir() -> None:
@@ -12,7 +13,7 @@ def _ensure_numba_cache_dir() -> None:
     if "NUMBA_CACHE_DIR" in os.environ:
         return
 
-    cache_dir = Path.home() / ".cache" / "ra_sim" / "numba"
+    cache_dir = user_cache_root() / "numba"
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except Exception:

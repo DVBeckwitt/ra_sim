@@ -6637,6 +6637,8 @@ def process_qr_rods_parallel(
     accumulate_image=True,
     sample_qr_ring_once=True,
     enable_safe_cache=None,
+    prefer_python_runner=False,
+    _safe_stats_out=None,
     exit_projection_mode=EXIT_PROJECTION_INTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
@@ -6706,6 +6708,8 @@ def process_qr_rods_parallel(
         accumulate_image=accumulate_image,
         sample_qr_ring_once=sample_qr_ring_once,
         enable_safe_cache=enable_safe_cache,
+        prefer_python_runner=prefer_python_runner,
+        _safe_stats_out=_safe_stats_out,
         exit_projection_mode=exit_projection_mode,
         projection_debug_counters=projection_debug_counters,
         projection_debug_reject_counts=projection_debug_reject_counts,
@@ -6721,13 +6725,25 @@ def process_qr_rods_parallel(
 def process_qr_rods_parallel_safe(*args, **kwargs):
     """Run ``process_qr_rods_parallel`` with Python fallback if needed."""
 
-    try:
-        return process_qr_rods_parallel(*args, **kwargs)
-    except Exception:
-        py_runner = getattr(process_qr_rods_parallel, "py_func", None)
-        if callable(py_runner):
-            return py_runner(*args, **kwargs)
-        raise
+    prefer_python_runner = bool(kwargs.pop("prefer_python_runner", False))
+    py_runner = getattr(process_qr_rods_parallel, "py_func", None)
+    runners = []
+    if prefer_python_runner and callable(py_runner):
+        runners.append(py_runner)
+    runners.append(process_qr_rods_parallel)
+    if (not prefer_python_runner) and callable(py_runner):
+        runners.append(py_runner)
+
+    last_exc = None
+    for runner in runners:
+        try:
+            return runner(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("process_qr_rods_parallel_safe could not resolve a runner")
 
 
 def debug_detector_paths(

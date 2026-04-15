@@ -16,7 +16,12 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import numpy as np
+
+from ra_sim.user_paths import user_cache_root, user_data_root
 
 
 DEFAULT_STATE_PATHS = (
@@ -24,7 +29,7 @@ DEFAULT_STATE_PATHS = (
     Path(r"C:\Users\Kenpo\.local\share\ra_sim\new3_fresh_all.json"),
     Path(r"C:\Users\Kenpo\.local\share\ra_sim\new3.json"),
 )
-DEFAULT_CACHE_LOG_DIR = Path.home() / ".cache" / "ra_sim" / "logs"
+DEFAULT_CACHE_LOG_DIR = user_cache_root() / "logs"
 HEARTBEAT_INTERVAL_SECONDS = 20.0
 PAIR_PHASE_BEFORE = "seed_correspondence"
 PAIR_PHASE_AFTER = "acceptance_residuals"
@@ -1146,7 +1151,7 @@ def _write_report_files(report: Mapping[str, object], run_dir: Path, stem: str) 
 
 
 def _default_output_root() -> Path:
-    return Path.home() / ".local" / "share" / "ra_sim" / "fit_quality_baseline" / date.today().isoformat()
+    return user_data_root() / "fit_quality_baseline" / date.today().isoformat()
 
 
 def run_baseline(

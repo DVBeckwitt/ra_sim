@@ -32,15 +32,28 @@ RodRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any, Any]]
 _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK = Lock()
 _FORWARD_SIMULATION_NUMBA_WARMED = False
 _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED = False
+_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED = False
 _FORWARD_SIMULATION_NUMBA_DISABLED = False
 _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD: Thread | None = None
 _FORWARD_SIMULATION_SAFE_RUN_STATE = local()
+_QR_ROD_SIMULATION_NUMBA_WARMUP_LOCK = Lock()
+_QR_ROD_SIMULATION_NUMBA_WARMED = False
+_QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED = False
+_QR_ROD_SIMULATION_NUMBA_WARMUP_THREAD: Thread | None = None
+_QR_ROD_SIMULATION_SAFE_RUN_STATE = local()
 
 
 def _set_last_forward_simulation_safe_run_used_python_runner(
     used_python_runner: bool | None,
 ) -> None:
     _FORWARD_SIMULATION_SAFE_RUN_STATE.used_python_runner = used_python_runner
+
+
+def _set_last_qr_rod_simulation_safe_run_used_python_runner(
+    used_python_runner: bool | None,
+) -> None:
+    _QR_ROD_SIMULATION_SAFE_RUN_STATE.used_python_runner = used_python_runner
 
 
 def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
@@ -92,6 +105,17 @@ def _capture_hit_tables_for_intersection_cache(
 def _last_forward_simulation_safe_run_used_python_runner() -> bool | None:
     used_python_runner = getattr(
         _FORWARD_SIMULATION_SAFE_RUN_STATE,
+        "used_python_runner",
+        None,
+    )
+    if used_python_runner is None:
+        return None
+    return bool(used_python_runner)
+
+
+def _last_qr_rod_simulation_safe_run_used_python_runner() -> bool | None:
+    used_python_runner = getattr(
+        _QR_ROD_SIMULATION_SAFE_RUN_STATE,
         "used_python_runner",
         None,
     )
@@ -325,6 +349,13 @@ def _run_simulation_request(
 
 
 def _build_forward_simulation_numba_warmup_request() -> SimulationRequest:
+    return _build_forward_simulation_numba_warmup_request_with_overrides()
+
+
+def _build_forward_simulation_numba_warmup_request_with_overrides(
+    *,
+    sample_weights: np.ndarray | None = None,
+) -> SimulationRequest:
     return SimulationRequest(
         miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
         intensities=np.array([1.0], dtype=np.float64),
@@ -356,8 +387,8 @@ def _build_forward_simulation_numba_warmup_request() -> SimulationRequest:
             theta_array=np.array([0.0], dtype=np.float64),
             phi_array=np.array([0.0], dtype=np.float64),
             wavelength_array=np.array([1.0], dtype=np.float64),
-            sample_weights=None,
-            n2_sample_array=None,
+            sample_weights=sample_weights,
+            n2_sample_array=np.array([1.0 + 0.0j], dtype=np.complex128),
         ),
         mosaic=MosaicParams(
             sigma_mosaic_deg=0.2,
@@ -375,9 +406,68 @@ def _build_forward_simulation_numba_warmup_request() -> SimulationRequest:
         thickness=0.0,
         optics_mode=0,
         collect_hit_tables=True,
-        accumulate_image=False,
+        accumulate_image=True,
         exit_projection_mode="internal",
     )
+
+
+def _build_weighted_forward_simulation_numba_warmup_request() -> SimulationRequest:
+    return _build_forward_simulation_numba_warmup_request_with_overrides(
+        sample_weights=np.array([1.0], dtype=np.float64)
+    )
+
+
+def _build_qr_rod_simulation_numba_warmup_qr_dict() -> dict[int, dict[str, Any]]:
+    return {
+        1: {
+            "hk": (1, 0),
+            "L": np.array([0.0], dtype=np.float64),
+            "I": np.array([1.0], dtype=np.float64),
+            "deg": 1,
+        }
+    }
+
+
+def _apply_qr_rod_simulation_numba_warmup_result(
+    used_python_runner: bool | None,
+) -> bool:
+    global _QR_ROD_SIMULATION_NUMBA_WARMED
+    global _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED
+
+    if used_python_runner is True:
+        _QR_ROD_SIMULATION_NUMBA_WARMED = False
+        _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        return False
+    _QR_ROD_SIMULATION_NUMBA_WARMED = True
+    _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED = False
+    return True
+
+
+def _warmup_forward_simulation_numba_weighted_locked() -> None:
+    global _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED
+
+    if (
+        _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED
+        or _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED
+        or _FORWARD_SIMULATION_NUMBA_DISABLED
+    ):
+        return
+    try:
+        _run_simulation_request(
+            _build_weighted_forward_simulation_numba_warmup_request(),
+            peak_runner=process_peaks_parallel_safe,
+        )
+    except Exception:
+        _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED = True
+        return
+    if _last_forward_simulation_safe_run_used_python_runner() is True:
+        _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED = True
+        return
+    _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED = True
+    _FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED = False
 
 
 def warmup_forward_simulation_numba() -> bool:
@@ -388,23 +478,53 @@ def warmup_forward_simulation_numba() -> bool:
     global _FORWARD_SIMULATION_NUMBA_DISABLED
     with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
         if (
-            _FORWARD_SIMULATION_NUMBA_WARMED
-            or _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+            _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
             or _FORWARD_SIMULATION_NUMBA_DISABLED
         ):
             return False
+        if not _FORWARD_SIMULATION_NUMBA_WARMED:
+            try:
+                _run_simulation_request(
+                    _build_forward_simulation_numba_warmup_request(),
+                    peak_runner=process_peaks_parallel_safe,
+                )
+                warmed = _apply_forward_simulation_numba_warmup_result(
+                    _last_forward_simulation_safe_run_used_python_runner()
+                )
+            except Exception:
+                _FORWARD_SIMULATION_NUMBA_WARMED = False
+                _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+                _FORWARD_SIMULATION_NUMBA_DISABLED = False
+                return False
+            if not warmed:
+                return False
+            _warmup_forward_simulation_numba_weighted_locked()
+            return True
+        _warmup_forward_simulation_numba_weighted_locked()
+        return False
+
+
+def warmup_qr_rod_simulation_numba() -> bool:
+    """Compile the rod-simulation hot path once with tiny dummy inputs."""
+
+    global _QR_ROD_SIMULATION_NUMBA_WARMED
+    global _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED
+
+    with _QR_ROD_SIMULATION_NUMBA_WARMUP_LOCK:
+        if _QR_ROD_SIMULATION_NUMBA_WARMED or _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED:
+            return False
         try:
-            _run_simulation_request(
+            simulate_qr_rods(
+                _build_qr_rod_simulation_numba_warmup_qr_dict(),
                 _build_forward_simulation_numba_warmup_request(),
-                peak_runner=process_peaks_parallel_safe,
+                peak_runner=process_qr_rods_parallel_safe,
             )
-            return _apply_forward_simulation_numba_warmup_result(
-                _last_forward_simulation_safe_run_used_python_runner()
+            return _apply_qr_rod_simulation_numba_warmup_result(
+                _last_qr_rod_simulation_safe_run_used_python_runner()
             )
         except Exception:
-            _FORWARD_SIMULATION_NUMBA_WARMED = False
-            _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
-            _FORWARD_SIMULATION_NUMBA_DISABLED = False
+            _QR_ROD_SIMULATION_NUMBA_WARMED = False
+            _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED = True
             return False
 
 
@@ -428,6 +548,26 @@ def start_forward_simulation_numba_warmup_in_background() -> bool:
             daemon=True,
         )
         _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD = thread
+        thread.start()
+        return True
+
+
+def start_qr_rod_simulation_numba_warmup_in_background() -> bool:
+    """Start one daemon rod warmup thread if not yet warmed."""
+
+    global _QR_ROD_SIMULATION_NUMBA_WARMUP_THREAD
+    with _QR_ROD_SIMULATION_NUMBA_WARMUP_LOCK:
+        if _QR_ROD_SIMULATION_NUMBA_WARMED or _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED:
+            return False
+        thread = _QR_ROD_SIMULATION_NUMBA_WARMUP_THREAD
+        if thread is not None and thread.is_alive():
+            return False
+        thread = Thread(
+            target=warmup_qr_rod_simulation_numba,
+            name="qr-rod-simulation-numba-warmup",
+            daemon=True,
+        )
+        _QR_ROD_SIMULATION_NUMBA_WARMUP_THREAD = thread
         thread.start()
         return True
 
@@ -540,6 +680,11 @@ def simulate_qr_rods(
         rod_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
     if peak_runner is process_qr_rods_parallel_safe and projection_debug_active:
         rod_kwargs["enable_safe_cache"] = False
+    safe_run_stats_out: dict[str, Any] | None = None
+    if peak_runner is process_qr_rods_parallel_safe:
+        safe_run_stats_out = {}
+        rod_kwargs["_safe_stats_out"] = safe_run_stats_out
+        _set_last_qr_rod_simulation_safe_run_used_python_runner(None)
 
     rod_args = (
         qr_dict,
@@ -578,6 +723,11 @@ def simulate_qr_rods(
             *rod_args,
             **rod_kwargs,
         )
+        if safe_run_stats_out is not None:
+            _set_last_qr_rod_simulation_safe_run_used_python_runner(
+                safe_run_stats_out.get("used_python_runner")
+            )
+            rod_kwargs.pop("_safe_stats_out", None)
         cache_hit_tables = _capture_hit_tables_for_intersection_cache(
             hit_tables=hit_tables,
             collect_hit_tables_requested=bool(request.collect_hit_tables),

@@ -73,6 +73,7 @@ include = ["ra_sim*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+cache_dir = "~/.cache/ra_sim/dev/pytest"
 markers = [
   "fast: quick local-feedback tier used by ra-sim-dev check",
   "integration: slower end-to-end or workflow-heavy tests",
@@ -82,6 +83,7 @@ markers = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+cache-dir = "~/.cache/ra_sim/dev/ruff"
 
 [tool.ruff.lint]
 # Keep enforcement incremental: parser/runtime-critical issues plus a small
@@ -94,6 +96,7 @@ select = ["E9", "F63", "F7", "F82", "UP015", "UP018"]
 
 [tool.mypy]
 python_version = "3.11"
+cache_dir = "~/.cache/ra_sim/dev/mypy"
 ignore_missing_imports = true
 warn_unused_configs = true
 show_error_codes = true

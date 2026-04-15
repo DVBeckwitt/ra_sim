@@ -20,6 +20,8 @@ import warnings
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ra_sim.user_paths import user_data_root
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -54,7 +56,7 @@ from ra_sim.utils.parallel import (
 )
 
 
-DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "init.json"
+DEFAULT_STATE_PATH = user_data_root() / "init.json"
 SUMMARY_METRIC_NAMES = [
     "visible_peak_count",
     "total_peak_weight",

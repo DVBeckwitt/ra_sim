@@ -27,6 +27,12 @@ The GUI depends on Tkinter. Windows and macOS Python distributions usually
 include it already. Some Linux environments require an extra system package
 such as `python3-tk` or `python3.11-tk`.
 
+Developer-tool caches now default to `~/.cache/ra_sim/dev/` so local `mypy`,
+`pytest`, and `ruff` cache output stays out of the repo root. Python bytecode
+redirection uses the same tree when the repo `sitecustomize.py` is importable,
+including `ra_sim.dev` and `python -m ...` launches from the repo root. Older
+repo-local cache folders are not migrated automatically.
+
 ## Local Configuration And Data
 
 The repository does not bundle raw detector data or private experiment files.

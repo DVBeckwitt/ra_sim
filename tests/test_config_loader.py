@@ -200,6 +200,23 @@ def test_loader_get_temp_dir_uses_temp_root_and_caches_per_config_dir(
     assert temp_dir_a.exists()
 
 
+def test_loader_default_dirs_follow_user_cache_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+
+    assert loader.get_dir("overlay_dir") == home / ".cache" / "ra_sim" / "overlays"
+    assert loader.get_dir("debug_log_dir") == home / ".cache" / "ra_sim" / "logs"
+    assert loader.get_dir("temp_root") == home / ".cache" / "ra_sim"
+    assert loader.get_dir("file_dialog_dir") == home / ".local" / "share" / "ra_sim"
+    assert loader.DEFAULT_DIRS["overlay_dir"] == str(home / ".cache" / "ra_sim" / "overlays")
+    assert loader.DEFAULT_DIRS["file_dialog_dir"] == str(home / ".local" / "share" / "ra_sim")
+
+
 def test_repo_instrument_defaults_weight_p0_fully_by_default() -> None:
     instrument_path = Path(__file__).resolve().parents[1] / "config" / "instrument.yaml"
     instrument = yaml.safe_load(instrument_path.read_text(encoding="utf-8"))

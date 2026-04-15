@@ -74,6 +74,26 @@ Manual verification recipe:
 3. confirm new cache artifacts appear in `NUMBA_CACHE_DIR`
 4. rerun same simulation with `NUMBA_DEBUG_CACHE=1` and confirm cache read hits in output
 
+## Developer Tool Caches
+
+When you run RA-SIM development commands from the repository, tool caches stay
+under the user cache root instead of the worktree.
+
+- Python bytecode: `~/.cache/ra_sim/dev/pycache`
+- `mypy`: `~/.cache/ra_sim/dev/mypy`
+- `pytest`: `~/.cache/ra_sim/dev/pytest`
+- `ruff`: `~/.cache/ra_sim/dev/ruff`
+
+The tool-specific `mypy`/`pytest`/`ruff` cache dirs apply to both
+`python -m ra_sim.dev ...` and direct `pytest`/`mypy`/`ruff` runs from the
+repository root. Python bytecode redirection applies when the repo
+`sitecustomize.py` is importable, which is guaranteed for `ra_sim.dev` and
+`python -m ...` launches from the repository root.
+
+Existing repo-local cache folders are not migrated or removed automatically.
+It is safe to delete stale `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, and
+`__pycache__/` directories manually when they are no longer needed.
+
 ## Good Debug Hygiene
 
 - Prefer config-based toggles over ad hoc path edits.

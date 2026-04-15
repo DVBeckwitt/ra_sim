@@ -25,6 +25,8 @@ config/*local*.yaml
 *.npz
 
 # Local tool caches and temp output
+/.cache/
+.mypy_cache/
 .pycache_check/
 .pytest_tmp/
 .pytest_cache/

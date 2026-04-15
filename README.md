@@ -257,6 +257,20 @@ From `config/dir_paths.yaml`:
 `debug_log_dir` is also where per-run artifact bundles are written as
 `run_bundle_<stamp>.zip`.
 
+Developer tool caches stay out of the worktree by default:
+
+- Python bytecode for `ra_sim.dev` and `python -m ...` launches that import the
+  repo `sitecustomize.py`: `~/.cache/ra_sim/dev/pycache`
+- `mypy`: `~/.cache/ra_sim/dev/mypy`
+- `pytest`: `~/.cache/ra_sim/dev/pytest`
+- `ruff`: `~/.cache/ra_sim/dev/ruff`
+
+Direct `pytest`/`mypy`/`ruff` runs use the tool-specific cache dirs above, but
+`__pycache__` redirection depends on the repo `sitecustomize.py` being importable.
+
+Older repo-root cache folders such as `.mypy_cache/`, `.pytest_cache/`,
+`.ruff_cache/`, and `__pycache__/` are not migrated or deleted automatically.
+
 ## Usage
 
 ### Launcher vs Shared CLI
@@ -609,6 +623,10 @@ ra-sim-dev test-integration
 ra-sim-dev hooks
 ra-sim-dev lock
 ```
+
+RA-SIM dev commands now default their caches to `~/.cache/ra_sim/dev/` instead
+of creating repo-root cache folders. Direct tool runs share the configured
+`mypy`/`pytest`/`ruff` cache dirs there.
 
 ### Validation Notes
 

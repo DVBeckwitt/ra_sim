@@ -6,10 +6,13 @@ import copy
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from ra_sim.user_paths import user_cache_root, user_data_root
 
 from .models import ConfigBundle
 from .validation import ensure_mapping
@@ -18,13 +21,33 @@ ENV_CONFIG_DIR = "RA_SIM_CONFIG_DIR"
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 FILE_PATHS_FILENAME = "file_paths.yaml"
 FILE_PATHS_EXAMPLE_FILENAME = "file_paths.example.yaml"
-DEFAULT_DIRS: dict[str, str] = {
-    "downloads": str(Path.home() / "Downloads"),
-    "overlay_dir": str(Path.home() / ".cache" / "ra_sim" / "overlays"),
-    "debug_log_dir": str(Path.home() / ".cache" / "ra_sim" / "logs"),
-    "file_dialog_dir": str(Path.home() / ".local" / "share" / "ra_sim"),
-    "temp_root": str(Path.home() / ".cache" / "ra_sim"),
-}
+def default_dirs() -> dict[str, str]:
+    """Return the default directory mapping for the active user."""
+
+    cache_root = user_cache_root()
+    return {
+        "downloads": str(Path.home() / "Downloads"),
+        "overlay_dir": str(cache_root / "overlays"),
+        "debug_log_dir": str(cache_root / "logs"),
+        "file_dialog_dir": str(user_data_root()),
+        "temp_root": str(cache_root),
+    }
+
+
+class _DefaultDirs(Mapping[str, str]):
+    """Mapping view over the current per-user default directories."""
+
+    def __getitem__(self, key: str) -> str:
+        return default_dirs()[key]
+
+    def __iter__(self):
+        return iter(default_dirs())
+
+    def __len__(self) -> int:
+        return len(default_dirs())
+
+
+DEFAULT_DIRS: Mapping[str, str] = _DefaultDirs()
 
 
 def _path_base_dir(config_dir: Path) -> Path:

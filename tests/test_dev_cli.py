@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from ra_sim import dev
 
 
@@ -59,3 +61,52 @@ def test_parser_exposes_format_and_hook_commands() -> None:
     for command in ("format", "format-check", "hooks"):
         args = parser.parse_args([command])
         assert args.command == command
+
+
+def test_subprocess_env_defaults_to_user_cache_dirs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    env = dev._subprocess_env({})
+
+    assert env["PYTHONPYCACHEPREFIX"] == str(tmp_path / ".cache" / "ra_sim" / "dev" / "pycache")
+    assert env["MYPY_CACHE_DIR"] == str(tmp_path / ".cache" / "ra_sim" / "dev" / "mypy")
+    assert env["RUFF_CACHE_DIR"] == str(tmp_path / ".cache" / "ra_sim" / "dev" / "ruff")
+
+
+def test_subprocess_env_preserves_explicit_user_overrides(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "unused")
+    existing = {
+        "PYTHONPYCACHEPREFIX": str(tmp_path / "custom-pyc"),
+        "MYPY_CACHE_DIR": str(tmp_path / "custom-mypy"),
+        "RUFF_CACHE_DIR": str(tmp_path / "custom-ruff"),
+    }
+
+    env = dev._subprocess_env(existing)
+
+    assert env["PYTHONPYCACHEPREFIX"] == existing["PYTHONPYCACHEPREFIX"]
+    assert env["MYPY_CACHE_DIR"] == existing["MYPY_CACHE_DIR"]
+    assert env["RUFF_CACHE_DIR"] == existing["RUFF_CACHE_DIR"]
+
+
+def test_subprocess_env_skips_unwritable_cache_dirs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    def _boom(self, parents=False, exist_ok=False) -> None:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "mkdir", _boom)
+
+    env = dev._subprocess_env({})
+
+    assert "PYTHONPYCACHEPREFIX" not in env
+    assert "MYPY_CACHE_DIR" not in env
+    assert "RUFF_CACHE_DIR" not in env
