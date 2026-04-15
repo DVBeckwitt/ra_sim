@@ -30,7 +30,12 @@ from ra_sim.fitting.optimization import (
     _detector_pixels_to_fit_space,
     _fit_space_pixel_size_provenance,
 )
+from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.simulation.exact_cake_portable import (
+    CakeTransformBundle,
+    detector_pixel_to_caked_bin,
+)
 from ra_sim.utils.calculations import (
     SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
     d_spacing,
@@ -189,6 +194,13 @@ class GeometryFitRuntimeManualDatasetBindings:
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]]
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
     orient_image_for_fit: Callable[..., object]
+    backend_detector_coords_to_native_detector_coords: (
+        Callable[
+            [float, float, Sequence[object] | None],
+            tuple[float | None, float | None],
+        ]
+        | None
+    ) = None
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None
     geometry_manual_rebuild_source_rows_for_background: (
         Callable[..., object]
@@ -768,9 +780,6 @@ def _geometry_fit_is_canonical_live_source_entry(
     branch_idx = _geometry_fit_source_branch_index(entry)
     if branch_idx not in {0, 1}:
         return False, _geometry_fit_source_branch_reason(entry) or "missing_branch"
-    peak_idx = _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
-    if peak_idx not in {0, 1} or int(peak_idx) != int(branch_idx):
-        return False, "peak_not_branch"
     if not _geometry_fit_trusted_full_reflection_identity(entry):
         return False, "untrusted_full_identity"
     return True, None
@@ -1622,6 +1631,13 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
+    backend_detector_coords_to_native_detector_coords: (
+        Callable[
+            [float, float, Sequence[object] | None],
+            tuple[float | None, float | None],
+        ]
+        | None
+    ) = None,
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
     geometry_manual_rebuild_source_rows_for_background: (
         Callable[..., object]
@@ -1676,6 +1692,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         select_fit_orientation=select_fit_orientation,
         apply_orientation_to_entries=apply_orientation_to_entries,
         orient_image_for_fit=orient_image_for_fit,
+        backend_detector_coords_to_native_detector_coords=(
+            backend_detector_coords_to_native_detector_coords
+        ),
         pick_uses_caked_space=pick_uses_caked_space,
         geometry_manual_caked_view_for_index=geometry_manual_caked_view_for_index,
         geometry_manual_refresh_pair_entry=geometry_manual_refresh_pair_entry,
@@ -1702,6 +1721,13 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
+    backend_detector_coords_to_native_detector_coords: (
+        Callable[
+            [float, float, Sequence[object] | None],
+            tuple[float | None, float | None],
+        ]
+        | None
+    ) = None,
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
     geometry_manual_rebuild_source_rows_for_background: (
         Callable[..., object]
@@ -1761,6 +1787,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             select_fit_orientation=select_fit_orientation,
             apply_orientation_to_entries=apply_orientation_to_entries,
             orient_image_for_fit=orient_image_for_fit,
+            backend_detector_coords_to_native_detector_coords=(
+                backend_detector_coords_to_native_detector_coords
+            ),
             pick_uses_caked_space=pick_uses_caked_space,
             geometry_manual_caked_view_for_index=(
                 geometry_manual_caked_view_for_index
@@ -2527,10 +2556,9 @@ def _geometry_fit_caked_roi_angle_point(
     if not isinstance(entry, Mapping):
         return None
     candidate_keys = (
-        ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("background_two_theta_deg", "background_phi_deg"),
         ("simulated_two_theta_deg", "simulated_phi_deg"),
         ("two_theta_deg", "phi_deg"),
-        ("caked_x", "caked_y"),
     )
     for two_theta_key, phi_key in candidate_keys:
         two_theta_val = _geometry_fit_cache_finite_float(entry.get(two_theta_key))
@@ -2554,25 +2582,27 @@ def _geometry_fit_caked_roi_native_point(
 
     if not isinstance(entry, Mapping):
         return None
-    if callable(fit_space_to_detector_point):
-        fit_space_point = _geometry_fit_caked_roi_angle_point(entry)
-        if fit_space_point is not None:
-            try:
-                projected_point = fit_space_to_detector_point(
-                    float(fit_space_point[0]),
-                    float(fit_space_point[1]),
-                )
-            except Exception:
-                projected_point = None
-            if (
-                isinstance(projected_point, tuple)
-                and len(projected_point) >= 2
-                and projected_point[0] is not None
-                and projected_point[1] is not None
-                and np.isfinite(float(projected_point[0]))
-                and np.isfinite(float(projected_point[1]))
-            ):
-                return float(projected_point[0]), float(projected_point[1])
+    fit_space_point = _geometry_fit_caked_roi_angle_point(entry)
+    if fit_space_point is not None:
+        if not callable(fit_space_to_detector_point):
+            return None
+        try:
+            projected_point = fit_space_to_detector_point(
+                float(fit_space_point[0]),
+                float(fit_space_point[1]),
+            )
+        except Exception:
+            projected_point = None
+        if (
+            isinstance(projected_point, tuple)
+            and len(projected_point) >= 2
+            and projected_point[0] is not None
+            and projected_point[1] is not None
+            and np.isfinite(float(projected_point[0]))
+            and np.isfinite(float(projected_point[1]))
+        ):
+            return float(projected_point[0]), float(projected_point[1])
+        return None
     candidate_keys = (
         ("detector_x", "detector_y"),
         ("refined_sim_native_x", "refined_sim_native_y"),
@@ -5456,6 +5486,7 @@ def build_geometry_manual_fit_dataset(
     dynamic_reanchor_caked_background: np.ndarray | None = None
     dynamic_reanchor_radial_axis: np.ndarray | None = None
     dynamic_reanchor_azimuth_axis: np.ndarray | None = None
+    dynamic_reanchor_transform_bundle: CakeTransformBundle | None = None
     dynamic_reanchor_use_caked_space = False
     dynamic_reanchor_enabled = (
         isinstance(experimental_image_for_fit, np.ndarray)
@@ -5481,6 +5512,7 @@ def build_geometry_manual_fit_dataset(
         caked_background_local = None
         radial_axis_local = None
         azimuth_axis_local = None
+        dynamic_reanchor_transform_bundle = None
         if isinstance(raw_caked_view, Mapping):
             caked_background_local = raw_caked_view.get(
                 "background_image",
@@ -5488,6 +5520,7 @@ def build_geometry_manual_fit_dataset(
             )
             radial_axis_local = raw_caked_view.get("radial_axis")
             azimuth_axis_local = raw_caked_view.get("azimuth_axis")
+            dynamic_reanchor_transform_bundle = raw_caked_view.get("transform_bundle")
         elif isinstance(raw_caked_view, (list, tuple)) and len(raw_caked_view) >= 3:
             caked_background_local = raw_caked_view[0]
             radial_axis_local = raw_caked_view[1]
@@ -5551,6 +5584,76 @@ def build_geometry_manual_fit_dataset(
             dynamic_reanchor_background_image,
             dtype=np.float64,
         )
+        try:
+            dynamic_reanchor_backend_shape = tuple(
+                int(v) for v in np.asarray(backend_background).shape[:2]
+            )
+        except Exception:
+            dynamic_reanchor_backend_shape = ()
+
+        def _fit_detector_coords_to_native_detector_coords(
+            detector_col: float,
+            detector_row: float,
+        ) -> tuple[float | None, float | None]:
+            backend_col = float(detector_col)
+            backend_row = float(detector_row)
+            if len(dynamic_reanchor_backend_shape) >= 2:
+                try:
+                    backend_points = (
+                        gui_geometry_overlay.inverse_transform_points_orientation(
+                        [(float(detector_col), float(detector_row))],
+                        tuple(dynamic_reanchor_backend_shape),
+                        orientation_choice,
+                    )
+                    )
+                except Exception:
+                    return None, None
+                if not backend_points:
+                    return None, None
+                try:
+                    backend_col = float(backend_points[0][0])
+                    backend_row = float(backend_points[0][1])
+                except Exception:
+                    return None, None
+            if not (np.isfinite(backend_col) and np.isfinite(backend_row)):
+                return None, None
+
+            native_mapper = (
+                manual_dataset_bindings.backend_detector_coords_to_native_detector_coords
+            )
+            if callable(native_mapper):
+                try:
+                    native_point = native_mapper(
+                        float(backend_col),
+                        float(backend_row),
+                        native_background.shape,
+                    )
+                except TypeError:
+                    try:
+                        native_point = native_mapper(
+                            float(backend_col),
+                            float(backend_row),
+                        )
+                    except Exception:
+                        native_point = None
+                except Exception:
+                    native_point = None
+                if (
+                    isinstance(native_point, tuple)
+                    and len(native_point) >= 2
+                    and native_point[0] is not None
+                    and native_point[1] is not None
+                ):
+                    try:
+                        native_col = float(native_point[0])
+                        native_row = float(native_point[1])
+                    except Exception:
+                        return None, None
+                    if np.isfinite(native_col) and np.isfinite(native_row):
+                        return float(native_col), float(native_row)
+                return None, None
+
+            return float(backend_col), float(backend_row)
 
         def _dynamic_reanchor_callback(
             measured_entry: Mapping[str, object] | None,
@@ -5614,22 +5717,66 @@ def build_geometry_manual_fit_dataset(
                     )
                 except Exception:
                     Gamma_value = 0.0
-                sim_two_theta_arr, sim_phi_arr = _detector_pixels_to_fit_space(
-                    np.array([sim_col], dtype=np.float64),
-                    np.array([sim_row], dtype=np.float64),
-                    center=center_value,
-                    detector_distance=float(detector_distance),
-                    pixel_size=float(pixel_size),
-                    gamma_deg=float(gamma_value),
-                    Gamma_deg=float(Gamma_value),
-                )
-                sim_two_theta = (
-                    float(sim_two_theta_arr[0])
-                    if sim_two_theta_arr.size > 0
-                    else float("nan")
-                )
-                sim_phi = (
-                    float(sim_phi_arr[0]) if sim_phi_arr.size > 0 else float("nan")
+
+                def _detector_point_to_caked_angles(
+                    detector_col: float,
+                    detector_row: float,
+                ) -> tuple[float, float]:
+                    native_detector_point = _fit_detector_coords_to_native_detector_coords(
+                        float(detector_col),
+                        float(detector_row),
+                    )
+                    if (
+                        not isinstance(native_detector_point, tuple)
+                        or len(native_detector_point) < 2
+                        or native_detector_point[0] is None
+                        or native_detector_point[1] is None
+                    ):
+                        return float("nan"), float("nan")
+                    native_detector_col = float(native_detector_point[0])
+                    native_detector_row = float(native_detector_point[1])
+                    if not (
+                        np.isfinite(native_detector_col)
+                        and np.isfinite(native_detector_row)
+                    ):
+                        return float("nan"), float("nan")
+                    if isinstance(dynamic_reanchor_transform_bundle, CakeTransformBundle):
+                        try:
+                            bundle_two_theta, bundle_phi = detector_pixel_to_caked_bin(
+                                dynamic_reanchor_transform_bundle,
+                                float(native_detector_col),
+                                float(native_detector_row),
+                            )
+                        except Exception:
+                            bundle_two_theta, bundle_phi = (None, None)
+                        if (
+                            bundle_two_theta is not None
+                            and bundle_phi is not None
+                            and np.isfinite(float(bundle_two_theta))
+                            and np.isfinite(float(bundle_phi))
+                        ):
+                            return float(bundle_two_theta), float(bundle_phi)
+                    projected_two_theta, projected_phi = _detector_pixels_to_fit_space(
+                        np.array([native_detector_col], dtype=np.float64),
+                        np.array([native_detector_row], dtype=np.float64),
+                        center=center_value,
+                        detector_distance=float(detector_distance),
+                        pixel_size=float(pixel_size),
+                        gamma_deg=float(gamma_value),
+                        Gamma_deg=float(Gamma_value),
+                    )
+                    return (
+                        float(projected_two_theta[0])
+                        if projected_two_theta.size > 0
+                        else float("nan"),
+                        float(projected_phi[0])
+                        if projected_phi.size > 0
+                        else float("nan"),
+                    )
+
+                sim_two_theta, sim_phi = _detector_point_to_caked_angles(
+                    float(sim_col),
+                    float(sim_row),
                 )
                 sim_col_local = gui_manual_geometry.caked_axis_to_image_index(
                     float(sim_two_theta),
@@ -5681,26 +5828,18 @@ def build_geometry_manual_fit_dataset(
                             measured_detector_col is not None
                             and measured_detector_row is not None
                         ):
-                            (
-                                measured_two_theta_arr,
-                                measured_phi_arr,
-                            ) = _detector_pixels_to_fit_space(
-                                np.array([measured_detector_col], dtype=np.float64),
-                                np.array([measured_detector_row], dtype=np.float64),
-                                center=center_value,
-                                detector_distance=float(detector_distance),
-                                pixel_size=float(pixel_size),
-                                gamma_deg=float(gamma_value),
-                                Gamma_deg=float(Gamma_value),
+                            measured_two_theta, measured_phi = (
+                                _detector_point_to_caked_angles(
+                                    float(measured_detector_col),
+                                    float(measured_detector_row),
+                                )
                             )
                             if (
-                                measured_two_theta_arr.size > 0
-                                and measured_phi_arr.size > 0
-                                and np.isfinite(measured_two_theta_arr[0])
-                                and np.isfinite(measured_phi_arr[0])
+                                np.isfinite(measured_two_theta)
+                                and np.isfinite(measured_phi)
                             ):
-                                raw_col = float(measured_two_theta_arr[0])
-                                raw_row = float(measured_phi_arr[0])
+                                raw_col = float(measured_two_theta)
+                                raw_row = float(measured_phi)
             if raw_col is None or raw_row is None:
                 seed_entry["sim_col"] = float(sim_col)
                 seed_entry["sim_row"] = float(sim_row)

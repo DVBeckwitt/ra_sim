@@ -1,9 +1,12 @@
 import numpy as np
 
 from ra_sim.gui.geometry_overlay import (
+    compose_orientation_transforms,
     display_to_native_sim_coords,
     inverse_orientation_transform,
+    inverse_transform_points_orientation,
     native_sim_to_display_coords,
+    orientation_output_shape,
     select_fit_orientation,
     transform_points_orientation,
 )
@@ -33,11 +36,65 @@ def test_inverse_orientation_transform_roundtrips_real_world_orientation_choice(
     inverse_choice = inverse_orientation_transform(shape, orientation_choice)
     roundtrip = transform_points_orientation(
         transformed,
-        shape,
+        orientation_output_shape(
+            shape,
+            indexing_mode=orientation_choice["indexing_mode"],
+            k=orientation_choice["k"],
+        ),
         **inverse_choice,
     )
 
     assert np.allclose(roundtrip, native_points, atol=1e-6)
+
+
+def test_inverse_orientation_helpers_roundtrip_non_square_rotations() -> None:
+    shape = (6, 7)
+    native_points = [
+        (0.0, 0.0),
+        (1.0, 2.0),
+        (3.0, 4.0),
+        (6.0, 5.0),
+    ]
+
+    for orientation_choice in (
+        {
+            "k": 1,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+            "indexing_mode": "xy",
+        },
+        {
+            "k": 3,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+            "indexing_mode": "xy",
+        },
+    ):
+        transformed = transform_points_orientation(
+            native_points,
+            shape,
+            **orientation_choice,
+        )
+        inverse_choice = inverse_orientation_transform(shape, orientation_choice)
+        roundtrip_from_choice = transform_points_orientation(
+            transformed,
+            orientation_output_shape(
+                shape,
+                indexing_mode=orientation_choice["indexing_mode"],
+                k=orientation_choice["k"],
+            ),
+            **inverse_choice,
+        )
+        roundtrip_from_helper = inverse_transform_points_orientation(
+            transformed,
+            shape,
+            orientation_choice,
+        )
+
+        assert np.allclose(roundtrip_from_choice, native_points, atol=1e-6)
+        assert np.allclose(roundtrip_from_helper, native_points, atol=1e-6)
 
 
 def test_native_sim_display_coordinate_helpers_roundtrip() -> None:
@@ -99,3 +156,44 @@ def test_select_fit_orientation_recovers_known_transform() -> None:
     assert selected["label"] == "rot90° CCW + flip_x + flip_y + order=yx + indexing=xy"
     assert diagnostics["reason"] == "selected_best"
     assert diagnostics["best_label"] == selected["label"]
+
+
+def test_compose_orientation_transforms_respects_intermediate_non_square_shape() -> None:
+    shape = (6, 7)
+    native_points = [
+        (0.0, 0.0),
+        (1.0, 2.0),
+        (3.0, 4.0),
+        (6.0, 5.0),
+    ]
+    first = {
+        "k": 1,
+        "flip_x": False,
+        "flip_y": False,
+        "flip_order": "yx",
+        "indexing_mode": "xy",
+    }
+    second = {
+        "k": 3,
+        "flip_x": False,
+        "flip_y": False,
+        "flip_order": "yx",
+        "indexing_mode": "xy",
+    }
+
+    sequential = transform_points_orientation(
+        transform_points_orientation(native_points, shape, **first),
+        orientation_output_shape(
+            shape,
+            indexing_mode=first["indexing_mode"],
+            k=first["k"],
+        ),
+        **second,
+    )
+    combined = transform_points_orientation(
+        native_points,
+        shape,
+        **compose_orientation_transforms(shape, first, second),
+    )
+
+    assert np.allclose(combined, sequential, atol=1e-6)

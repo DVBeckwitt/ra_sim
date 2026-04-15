@@ -1,6 +1,8 @@
 import ast
 import importlib
+import json
 import py_compile
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,6 +142,80 @@ def test_runtime_impl_wrapper_import_is_lazy() -> None:
             sys.modules["ra_sim.gui._runtime.runtime_session"] = previous_session
 
 
+def test_runtime_session_defers_scipy_gui_modules_until_first_use() -> None:
+    script = """
+import importlib
+import json
+import sys
+from types import SimpleNamespace
+
+lazy_modules = [
+    "ra_sim.gui.analysis_peak_tools",
+    "ra_sim.gui.ordered_structure_fit",
+]
+for name in lazy_modules:
+    sys.modules.pop(name, None)
+sys.modules.pop("ra_sim.gui._runtime.runtime_session", None)
+
+runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+after_import = {name: (name in sys.modules) for name in lazy_modules}
+
+runtime_session.analysis_peak_selection_state = SimpleNamespace(
+    radial_fit_results=[],
+    azimuth_fit_results=[],
+)
+runtime_session._ANALYSIS_PEAK_EMPTY_RESULTS_TEXT = "Fit results will appear here."
+original_peak_getter = runtime_session._get_analysis_peak_tools_module
+runtime_session._get_analysis_peak_tools_module = (
+    lambda: (_ for _ in ()).throw(AssertionError("peak tools imported too early"))
+)
+empty_text = runtime_session._analysis_peak_fit_results_text()
+runtime_session._get_analysis_peak_tools_module = original_peak_getter
+after_empty_text = {name: (name in sys.modules) for name in lazy_modules}
+
+peak_module = runtime_session._get_analysis_peak_tools_module()
+ordered_module = runtime_session._get_ordered_structure_fit_module()
+after_getters = {name: (name in sys.modules) for name in lazy_modules}
+
+print(
+    json.dumps(
+        {
+            "after_import": after_import,
+            "empty_text": empty_text,
+            "after_empty_text": after_empty_text,
+            "peak_module": getattr(peak_module, "__name__", ""),
+            "ordered_module": getattr(ordered_module, "__name__", ""),
+            "after_getters": after_getters,
+        }
+    )
+)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        text=True,
+    )
+    payload = json.loads(result.stdout.strip())
+
+    assert payload["after_import"] == {
+        "ra_sim.gui.analysis_peak_tools": False,
+        "ra_sim.gui.ordered_structure_fit": False,
+    }
+    assert payload["empty_text"] == "Fit results will appear here."
+    assert payload["after_empty_text"] == {
+        "ra_sim.gui.analysis_peak_tools": False,
+        "ra_sim.gui.ordered_structure_fit": False,
+    }
+    assert payload["peak_module"] == "ra_sim.gui.analysis_peak_tools"
+    assert payload["ordered_module"] == "ra_sim.gui.ordered_structure_fit"
+    assert payload["after_getters"] == {
+        "ra_sim.gui.analysis_peak_tools": True,
+        "ra_sim.gui.ordered_structure_fit": True,
+    }
+
+
 def test_runtime_impl_prompts_from_root_only_before_full_runtime_bootstrap() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
@@ -193,6 +269,44 @@ def test_runtime_impl_gates_raster_projection_helpers_until_controls_stage() -> 
     assert "apply_projection(artist)" in helper_block
 
 
+def test_runtime_impl_uses_tiny_startup_placeholder_rasters() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "global_image_buffer = np.zeros((1, 1), dtype=np.float32)" in source
+    assert "np.zeros_like(global_image_buffer)" in source
+    assert "_ensure_global_image_buffer_shape(simulation_runtime_state.unscaled_image)" in source
+
+
+def test_runtime_impl_expands_global_image_buffer_for_first_real_frame() -> None:
+    resize_buffer = _load_runtime_session_function("_ensure_global_image_buffer_shape")
+    resize_buffer.__globals__["global_image_buffer"] = np.zeros((1, 1), dtype=np.float32)
+    source = np.arange(12, dtype=np.float64).reshape(3, 4)
+
+    resized = resize_buffer(source)
+
+    assert resized.shape == source.shape
+    assert resized.dtype == np.float64
+    assert resize_buffer.__globals__["global_image_buffer"] is resized
+    assert resize_buffer(source) is resized
+
+
+def test_runtime_impl_lazy_allocates_job_result_images() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index("def _run_simulation_generation_job(")
+    block_end = source.index("def _submit_async_simulation_job(", block_start)
+    block = source[block_start:block_end]
+
+    primary_run_index = block.index('if bool(job["run_primary"]):')
+    secondary_run_index = block.index('if bool(job["run_secondary"]):')
+    img1_fallback_index = block.index("if img1 is None:")
+    img2_fallback_index = block.index("if img2 is None:")
+
+    assert block.index("img1 = None") < primary_run_index < img1_fallback_index
+    assert block.index("img2 = None") < secondary_run_index < img2_fallback_index
+    assert "if img1 is None:" in block
+    assert "if img2 is None:" in block
+
+
 def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -211,7 +325,15 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "FastAzimuthalIntegrator," in source
     assert "start_exact_cake_geometry_warmup_in_background," in source
     assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
-    assert "start_exact_cake_numba_warmup_in_background()" in source
+    assert "start_forward_simulation_numba_warmup_in_background" in source
+    assert "def _schedule_exact_cake_numba_warmup_once() -> None:" in source
+    assert "def _schedule_forward_simulation_numba_warmup_once() -> None:" in source
+    assert "simulation_runtime_state.exact_cake_numba_warmup_scheduled" in source
+    assert "simulation_runtime_state.forward_simulation_numba_warmup_scheduled" in source
+    assert "root.after_idle(start_exact_cake_numba_warmup_in_background)" in source
+    assert (
+        "root.after_idle(start_forward_simulation_numba_warmup_in_background)" in source
+    )
 
 
 def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_and_wavelength() -> None:
@@ -261,6 +383,62 @@ def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_an
     assert "np.asarray(simulation_runtime_state.unscaled_image).shape" in source
     assert "npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS" in source
     assert "npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS" in source
+
+
+def test_runtime_caking_does_not_call_exact_integrator(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    exact_cake = importlib.import_module("ra_sim.simulation.exact_cake")
+    exact_cake_portable = importlib.import_module("ra_sim.simulation.exact_cake_portable")
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("live caking should not call exact integration")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "integrate_detector_to_cake_exact",
+        _fail,
+        raising=False,
+    )
+    monkeypatch.setattr(exact_cake, "integrate_detector_to_cake_exact", _fail)
+    monkeypatch.setattr(exact_cake_portable, "integrate_detector_to_cake_exact", _fail)
+
+    calls: list[dict[str, object]] = []
+
+    class _FakeAI:
+        def integrate2d(self, data, **kwargs):
+            calls.append(
+                {
+                    "data_shape": tuple(np.asarray(data).shape),
+                    "kwargs": dict(kwargs),
+                }
+            )
+            return "lut-result"
+
+    result = runtime_session.caking(
+        np.ones((3, 4), dtype=float),
+        _FakeAI(),
+        npt_rad=32,
+        npt_azim=64,
+        rows=np.array([0, 1], dtype=np.int32),
+        cols=np.array([2, 3], dtype=np.int32),
+    )
+
+    assert result == "lut-result"
+    assert len(calls) == 1
+    assert calls[0]["data_shape"] == (3, 4)
+    assert calls[0]["kwargs"]["npt_rad"] == 32
+    assert calls[0]["kwargs"]["npt_azim"] == 64
+    assert calls[0]["kwargs"]["correctSolidAngle"] is True
+    assert calls[0]["kwargs"]["method"] == "lut"
+    assert calls[0]["kwargs"]["unit"] == "2th_deg"
+    np.testing.assert_array_equal(
+        calls[0]["kwargs"]["rows"],
+        np.array([0, 1], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        calls[0]["kwargs"]["cols"],
+        np.array([2, 3], dtype=np.int32),
+    )
 
 
 def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:
@@ -506,14 +684,275 @@ def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() ->
     assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in apply_source
 
 
-def test_runtime_impl_uses_bound_caked_projection_callback_for_live_overlay_coords() -> None:
+def test_runtime_live_caked_projection_helper_uses_bound_callback(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("live caked helper should use bound callback only")
+
+    callback_calls: list[tuple[float, float]] = []
+
+    def _record(col: float, row: float):
+        callback_calls.append((float(col), float(row)))
+        return (12.0, 34.0)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_detector_coords_to_caked_display_coords",
+        _record,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_scattering_angles_to_detector_pixel",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_pixel_to_scattering_angles",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_detector_angular_maps",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_angular_maps",
+        _fail,
+        raising=False,
+    )
+
+    assert runtime_session._native_detector_coords_to_live_caked_coords(1.25, 2.5) == (
+        12.0,
+        34.0,
+    )
+    assert callback_calls == [(1.25, 2.5)]
+
+
+def test_runtime_geometry_fit_roi_projector_does_not_call_legacy_projection_paths(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    bundle = runtime_session.CakeTransformBundle(
+        detector_shape=(6, 6),
+        radial_deg=np.array([1.0, 2.0], dtype=float),
+        raw_azimuth_deg=np.array([-10.0, 10.0], dtype=float),
+        gui_azimuth_deg=np.array([-10.0, 10.0], dtype=float),
+        lut=SimpleNamespace(),
+    )
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("ROI projector should not call legacy projection paths")
+
+    bundle_calls: list[object] = []
+
+    def _record_caked_point_to_detector_pixel(
+        ai,
+        detector_shape,
+        radial_deg,
+        azimuth_deg,
+        two_theta_deg,
+        phi_deg,
+        *,
+        transform_bundle=None,
+    ):
+        del ai, detector_shape, radial_deg, azimuth_deg, two_theta_deg, phi_deg
+        bundle_calls.append(transform_bundle)
+        return (12.0, 34.0)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "caked_point_to_detector_pixel",
+        _record_caked_point_to_detector_pixel,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_scattering_angles_to_detector_pixel",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_pixel_to_scattering_angles",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_detector_angular_maps",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_angular_maps",
+        _fail,
+        raising=False,
+    )
+
+    projector = runtime_session._geometry_fit_caked_roi_fit_space_to_detector_point(
+        detector_shape=(6, 6),
+        radial_axis=None,
+        azimuth_axis=None,
+        ai=None,
+        transform_bundle=bundle,
+    )
+
+    assert projector is not None
+    assert projector(1.5, -10.0) == (12.0, 34.0)
+    assert bundle_calls == [bundle]
+
+
+def test_runtime_impl_worker_roi_precomputes_projection_context_before_selection() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    helper_start = source.index("def _native_detector_coords_to_live_caked_coords(")
-    helper_end = source.index("def _scattering_angles_to_detector_pixel(", helper_start)
+    store_start = source.index("def _store_worker_caked_view_for_background(")
+    store_end = source.index("def _build_source_rows_for_rebuild(", store_start)
+    store_source = source[store_start:store_end]
+
+    helper_idx = store_source.index("_geometry_fit_worker_caked_projection_view(")
+    selection_idx = store_source.index(
+        "roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection("
+    )
+
+    assert helper_idx < selection_idx
+    assert "background_caked_view.update(precomputed_caked_view)" in store_source
+    assert 'analysis_bins = job_data.get("analysis_bins")' in store_source
+    assert "npt_rad=precompute_npt_rad" in store_source
+    assert "npt_azim=precompute_npt_azim" in store_source
+
+
+def test_runtime_worker_caked_projection_view_builds_same_axes_metadata(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    ai = runtime_session.FastAzimuthalIntegrator(
+        dist=0.25,
+        poni1=0.0015,
+        poni2=0.0020,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    bundle = runtime_session.CakeTransformBundle(
+        detector_shape=(6, 8),
+        radial_deg=np.array([0.5, 1.5], dtype=float),
+        raw_azimuth_deg=np.array([-135.0, 45.0], dtype=float),
+        gui_azimuth_deg=np.array([-135.0, 45.0], dtype=float),
+        lut=SimpleNamespace(),
+    )
+    calls: list[tuple[object, ...]] = []
+
+    def _fake_two_theta_max(detector_shape, geometry):
+        calls.append(("two_theta_max", tuple(detector_shape), geometry))
+        return 12.0
+
+    def _fake_build_angle_axes(
+        *,
+        npt_rad,
+        npt_azim,
+        tth_min_deg,
+        tth_max_deg,
+        azimuth_min_deg,
+        azimuth_max_deg,
+    ):
+        calls.append(
+            (
+                "axes",
+                npt_rad,
+                npt_azim,
+                tth_min_deg,
+                tth_max_deg,
+                azimuth_min_deg,
+                azimuth_max_deg,
+            )
+        )
+        return (
+            np.array([0.5, 1.5], dtype=float),
+            np.array([-135.0, 45.0], dtype=float),
+        )
+
+    def _fake_build_bundle(ai_arg, detector_shape, radial_deg, raw_azimuth_deg):
+        calls.append(
+            (
+                "bundle",
+                ai_arg,
+                tuple(detector_shape),
+                tuple(np.asarray(radial_deg, dtype=float)),
+                tuple(np.asarray(raw_azimuth_deg, dtype=float)),
+            )
+        )
+        return bundle
+
+    monkeypatch.setattr(runtime_session, "detector_two_theta_max_deg", _fake_two_theta_max)
+    monkeypatch.setattr(runtime_session, "build_angle_axes", _fake_build_angle_axes)
+    monkeypatch.setattr(runtime_session, "build_cake_transform_bundle", _fake_build_bundle)
+
+    projection_view = runtime_session._geometry_fit_worker_caked_projection_view(
+        detector_shape=(6, 8),
+        ai=ai,
+        npt_rad=17,
+        npt_azim=19,
+    )
+
+    assert projection_view is not None
+    np.testing.assert_array_equal(
+        projection_view["radial_axis"],
+        np.array([0.5, 1.5], dtype=float),
+    )
+    np.testing.assert_array_equal(
+        projection_view["raw_azimuth_axis"],
+        np.array([-135.0, 45.0], dtype=float),
+    )
+    expected_gui = np.asarray(
+        runtime_session.raw_phi_to_gui_phi(np.array([-135.0, 45.0], dtype=float)),
+        dtype=float,
+    )
+    expected_order = np.asarray(np.argsort(expected_gui, kind="stable"), dtype=np.int32)
+    np.testing.assert_array_equal(
+        projection_view["raw_to_gui_row_permutation"],
+        expected_order,
+    )
+    np.testing.assert_allclose(
+        projection_view["azimuth_axis"],
+        expected_gui[expected_order],
+    )
+    assert projection_view["transform_bundle"] is bundle
+    assert calls[0][:2] == ("two_theta_max", (6, 8))
+    assert calls[1] == (
+        "axes",
+        17,
+        19,
+        0.0,
+        12.0,
+        -180.0,
+        180.0,
+    )
+    assert calls[2] == (
+        "bundle",
+        ai,
+        (6, 8),
+        (0.5, 1.5),
+        (-135.0, 45.0),
+    )
+
+
+def test_runtime_impl_geometry_fit_async_job_captures_analysis_bins() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _build_geometry_fit_async_job(")
+    helper_end = source.index("def _handle_geometry_fit_worker_event(", helper_start)
     helper_source = source[helper_start:helper_end]
 
-    assert "return _native_detector_coords_to_caked_display_coords(\n        col,\n        row,\n    )" in helper_source
-    assert "ai=" not in helper_source
+    assert '"analysis_bins": analysis_bins' in helper_source
+    assert '"npt_rad": int(analysis_bins[0])' in helper_source
+    assert '"npt_azim": int(analysis_bins[1])' in helper_source
+
+
+def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _prepare_caked_display_payload(")
+    helper_end = source.index("def _prepare_q_space_display_payload(", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert '"raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=float)' in helper_source
+    assert '"raw_to_gui_row_permutation": np.asarray(' in helper_source
+    assert '"transform_bundle": transform_bundle' in helper_source
 
 
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:
@@ -596,7 +1035,7 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     block_end = source.index("elif ready_simulation_result is None and need_hit_table_refresh:")
     block = source[block_start:block_end]
     startup_start = source.index("def _run_initial_startup_work():")
-    startup_end = source.index("# Start the exact-cake Numba warmup in the background")
+    startup_end = source.index("root.after_idle(_run_initial_startup_work)")
     startup_block = source[startup_start:startup_end]
 
     assert "def _show_initial_simulation_loading_overlay() -> None:" in source
@@ -604,8 +1043,18 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert "_show_initial_simulation_loading_overlay()" in startup_block
     assert "matplotlib_canvas.draw()" in startup_block
     assert "root.update_idletasks()" in startup_block
+    assert "start_exact_cake_numba_warmup_in_background()" not in startup_block
     assert "_run_simulation_generation_job(" in block
     assert 'progress_label.config(text="Computing initial simulation...")' in block
+
+
+def test_runtime_impl_defers_exact_cake_numba_warmup_until_after_startup_work() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "if analysis_sig is not None:" in source
+    assert "if simulation_runtime_state.stored_sim_image is not None:" in source
+    assert source.count("_schedule_exact_cake_numba_warmup_once()") >= 2
+    assert source.count("_schedule_forward_simulation_numba_warmup_once()") >= 2
 
 
 def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
@@ -703,6 +1152,23 @@ def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
     assert "root.after_idle(_run_initial_startup_work)" in source
 
 
+def test_runtime_impl_builds_shell_before_deferred_runtime_state_load() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
+    startup_start = source.index("def _run_initial_startup_work():", main_start)
+    startup_end = source.index("root.after_idle(_run_initial_startup_work)", startup_start)
+    pre_startup_block = source[main_start:startup_start]
+    startup_block = source[startup_start:startup_end]
+
+    assert "runtime_context = RuntimeContext(" in pre_startup_block
+    assert "runtime_context = build_runtime_window_context(runtime_context)" in pre_startup_block
+    assert "build_runtime_state_context()" not in pre_startup_block
+    assert "root.deiconify()" in pre_startup_block
+    assert "runtime_context = build_runtime_state_context()" in startup_block
+    assert "runtime_context = build_runtime_plot_context(runtime_context)" in startup_block
+    assert "runtime_context = build_runtime_controls_context(runtime_context)" in startup_block
+
+
 def test_runtime_impl_lazy_builds_excel_dataframes() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -777,6 +1243,18 @@ def _mapping_call_field_name(node: ast.Call) -> tuple[str | None, str | None]:
 
 def _python_sources(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if path.is_file())
+
+
+def _load_runtime_session_function(function_name: str):
+    tree = ast.parse(RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            module = ast.Module(body=[node], type_ignores=[])
+            ast.fix_missing_locations(module)
+            namespace = {"np": np}
+            exec(compile(module, str(RUNTIME_SESSION_SOURCE_PATH), "exec"), namespace)
+            return namespace[function_name]
+    raise AssertionError(f"Function {function_name!r} not found in runtime_session.py")
 
 
 def _raw_field_reads(path: Path, *, field_name: str) -> list[int]:

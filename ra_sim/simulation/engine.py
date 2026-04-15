@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from threading import Lock, Thread, local
 from typing import Any, Callable
 
 import numpy as np
@@ -16,11 +17,30 @@ from .diffraction import (
     process_peaks_parallel_safe,
     process_qr_rods_parallel_safe,
 )
-from .types import SimulationRequest, SimulationResult
+from .types import (
+    BeamSamples,
+    DebyeWallerParams,
+    DetectorGeometry,
+    MosaicParams,
+    SimulationRequest,
+    SimulationResult,
+)
 
 
 PeakRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any]]
 RodRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any, Any]]
+_FORWARD_SIMULATION_NUMBA_WARMUP_LOCK = Lock()
+_FORWARD_SIMULATION_NUMBA_WARMED = False
+_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+_FORWARD_SIMULATION_NUMBA_DISABLED = False
+_FORWARD_SIMULATION_NUMBA_WARMUP_THREAD: Thread | None = None
+_FORWARD_SIMULATION_SAFE_RUN_STATE = local()
+
+
+def _set_last_forward_simulation_safe_run_used_python_runner(
+    used_python_runner: bool | None,
+) -> None:
+    _FORWARD_SIMULATION_SAFE_RUN_STATE.used_python_runner = used_python_runner
 
 
 def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
@@ -69,7 +89,64 @@ def _capture_hit_tables_for_intersection_cache(
     return rerun_result[1]
 
 
-def simulate(
+def _last_forward_simulation_safe_run_used_python_runner() -> bool | None:
+    used_python_runner = getattr(
+        _FORWARD_SIMULATION_SAFE_RUN_STATE,
+        "used_python_runner",
+        None,
+    )
+    if used_python_runner is None:
+        return None
+    return bool(used_python_runner)
+
+
+def _apply_forward_simulation_numba_safe_run_result(
+    used_python_runner: bool | None,
+) -> None:
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
+
+    if used_python_runner is True:
+        _FORWARD_SIMULATION_NUMBA_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        _FORWARD_SIMULATION_NUMBA_DISABLED = True
+        return
+    if _FORWARD_SIMULATION_NUMBA_DISABLED:
+        _FORWARD_SIMULATION_NUMBA_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        _FORWARD_SIMULATION_NUMBA_DISABLED = True
+        return
+    _FORWARD_SIMULATION_NUMBA_WARMED = True
+    _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+    _FORWARD_SIMULATION_NUMBA_DISABLED = False
+
+
+def _apply_forward_simulation_numba_warmup_result(
+    used_python_runner: bool | None,
+) -> bool:
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
+
+    if used_python_runner is True:
+        _FORWARD_SIMULATION_NUMBA_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        _FORWARD_SIMULATION_NUMBA_DISABLED = False
+        return False
+    _FORWARD_SIMULATION_NUMBA_WARMED = True
+    _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+    _FORWARD_SIMULATION_NUMBA_DISABLED = False
+    return True
+
+
+def _record_forward_simulation_numba_safe_run_result() -> None:
+    used_python_runner = _last_forward_simulation_safe_run_used_python_runner()
+    with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+        _apply_forward_simulation_numba_safe_run_result(used_python_runner)
+
+
+def _run_simulation_request(
     request: SimulationRequest,
     *,
     peak_runner: PeakRunner = process_peaks_parallel_safe,
@@ -132,6 +209,13 @@ def simulate(
         peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
     if peak_runner is process_peaks_parallel_safe and projection_debug_active:
         peak_kwargs["enable_safe_cache"] = False
+    if peak_runner is process_peaks_parallel_safe and _FORWARD_SIMULATION_NUMBA_DISABLED:
+        peak_kwargs["prefer_python_runner"] = True
+    safe_run_stats_out: dict[str, Any] | None = None
+    if peak_runner is process_peaks_parallel_safe:
+        safe_run_stats_out = {}
+        peak_kwargs["_safe_stats_out"] = safe_run_stats_out
+        _set_last_forward_simulation_safe_run_used_python_runner(None)
 
     peak_args = (
         request.miller,
@@ -171,6 +255,11 @@ def simulate(
             *peak_args,
             **peak_kwargs,
         )
+        if safe_run_stats_out is not None:
+            _set_last_forward_simulation_safe_run_used_python_runner(
+                safe_run_stats_out.get("used_python_runner")
+            )
+            peak_kwargs.pop("_safe_stats_out", None)
         cache_hit_tables = _capture_hit_tables_for_intersection_cache(
             hit_tables=hit_tables,
             collect_hit_tables_requested=bool(request.collect_hit_tables),
@@ -233,6 +322,155 @@ def simulate(
             "background": projection_debug_background,
         },
     )
+
+
+def _build_forward_simulation_numba_warmup_request() -> SimulationRequest:
+    return SimulationRequest(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        geometry=DetectorGeometry(
+            image_size=2,
+            av=1.0,
+            cv=1.0,
+            lambda_angstrom=1.0,
+            distance_m=0.1,
+            gamma_deg=0.0,
+            Gamma_deg=0.0,
+            chi_deg=0.0,
+            psi_deg=0.0,
+            psi_z_deg=0.0,
+            zs=0.0,
+            zb=0.0,
+            center=np.array([1.0, 1.0], dtype=np.float64),
+            theta_initial_deg=0.0,
+            cor_angle_deg=0.0,
+            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            pixel_size_m=1.0e-4,
+            sample_width_m=0.0,
+            sample_length_m=0.0,
+        ),
+        beam=BeamSamples(
+            beam_x_array=np.array([0.0], dtype=np.float64),
+            beam_y_array=np.array([0.0], dtype=np.float64),
+            theta_array=np.array([0.0], dtype=np.float64),
+            phi_array=np.array([0.0], dtype=np.float64),
+            wavelength_array=np.array([1.0], dtype=np.float64),
+            sample_weights=None,
+            n2_sample_array=None,
+        ),
+        mosaic=MosaicParams(
+            sigma_mosaic_deg=0.2,
+            gamma_mosaic_deg=0.1,
+            eta=0.05,
+            solve_q_steps=1000,
+            solve_q_rel_tol=5.0e-4,
+            solve_q_mode=0,
+        ),
+        debye_waller=DebyeWallerParams(x=0.0, y=0.0),
+        n2=1.0 + 0.0j,
+        image_buffer=np.zeros((2, 2), dtype=np.float64),
+        save_flag=0,
+        record_status=False,
+        thickness=0.0,
+        optics_mode=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        exit_projection_mode="internal",
+    )
+
+
+def warmup_forward_simulation_numba() -> bool:
+    """Compile the forward-simulation hot path once with tiny dummy inputs."""
+
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
+    with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+        if (
+            _FORWARD_SIMULATION_NUMBA_WARMED
+            or _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+            or _FORWARD_SIMULATION_NUMBA_DISABLED
+        ):
+            return False
+        try:
+            _run_simulation_request(
+                _build_forward_simulation_numba_warmup_request(),
+                peak_runner=process_peaks_parallel_safe,
+            )
+            return _apply_forward_simulation_numba_warmup_result(
+                _last_forward_simulation_safe_run_used_python_runner()
+            )
+        except Exception:
+            _FORWARD_SIMULATION_NUMBA_WARMED = False
+            _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+            _FORWARD_SIMULATION_NUMBA_DISABLED = False
+            return False
+
+
+def start_forward_simulation_numba_warmup_in_background() -> bool:
+    """Start one daemon warmup thread if available and not yet warmed."""
+
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD
+    with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+        if (
+            _FORWARD_SIMULATION_NUMBA_WARMED
+            or _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+            or _FORWARD_SIMULATION_NUMBA_DISABLED
+        ):
+            return False
+        thread = _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD
+        if thread is not None and thread.is_alive():
+            return False
+        thread = Thread(
+            target=warmup_forward_simulation_numba,
+            name="forward-simulation-numba-warmup",
+            daemon=True,
+        )
+        _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD = thread
+        thread.start()
+        return True
+
+
+def simulate(
+    request: SimulationRequest,
+    *,
+    peak_runner: PeakRunner = process_peaks_parallel_safe,
+) -> SimulationResult:
+    """Run a diffraction simulation from a typed request."""
+
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
+
+    if peak_runner is process_peaks_parallel_safe:
+        if not _FORWARD_SIMULATION_NUMBA_DISABLED:
+            warmup_forward_simulation_numba()
+        if (
+            not _FORWARD_SIMULATION_NUMBA_WARMED
+            and not _FORWARD_SIMULATION_NUMBA_DISABLED
+        ):
+            with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+                if (
+                    not _FORWARD_SIMULATION_NUMBA_WARMED
+                    and not _FORWARD_SIMULATION_NUMBA_DISABLED
+                ):
+                    try:
+                        result = _run_simulation_request(request, peak_runner=peak_runner)
+                    except Exception:
+                        _FORWARD_SIMULATION_NUMBA_WARMED = False
+                        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+                        _FORWARD_SIMULATION_NUMBA_DISABLED = True
+                        raise
+                    _apply_forward_simulation_numba_safe_run_result(
+                        _last_forward_simulation_safe_run_used_python_runner()
+                    )
+                    return result
+
+    result = _run_simulation_request(request, peak_runner=peak_runner)
+    if peak_runner is process_peaks_parallel_safe:
+        _record_forward_simulation_numba_safe_run_result()
+    return result
 
 
 def simulate_qr_rods(

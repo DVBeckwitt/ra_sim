@@ -5,6 +5,15 @@ import numpy as np
 import pytest
 
 from ra_sim.fitting import optimization as opt
+from ra_sim.simulation import engine as sim_engine
+from ra_sim.simulation.types import (
+    DetectorGeometry,
+    BeamSamples,
+    DebyeWallerParams,
+    MosaicParams,
+    SimulationRequest,
+    SimulationResult,
+)
 
 
 def _base_params(image_size: int, *, optics_mode: int = 0) -> dict:
@@ -145,6 +154,60 @@ def _process_wrapper_args(image_size: int):
         float(params["cor_angle"]),
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
         np.array([0.0, 1.0, 0.0], dtype=np.float64),
+    )
+
+
+def _build_forward_warmup_request() -> SimulationRequest:
+    return SimulationRequest(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        geometry=DetectorGeometry(
+            image_size=4,
+            av=1.0,
+            cv=1.0,
+            lambda_angstrom=1.0,
+            distance_m=0.1,
+            gamma_deg=0.0,
+            Gamma_deg=0.0,
+            chi_deg=0.0,
+            psi_deg=0.0,
+            psi_z_deg=0.0,
+            zs=0.0,
+            zb=0.0,
+            center=np.array([2.0, 2.0], dtype=np.float64),
+            theta_initial_deg=0.0,
+            cor_angle_deg=0.0,
+            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            pixel_size_m=1.0e-4,
+            sample_width_m=0.0,
+            sample_length_m=0.0,
+        ),
+        beam=BeamSamples(
+            beam_x_array=np.array([0.0], dtype=np.float64),
+            beam_y_array=np.array([0.0], dtype=np.float64),
+            theta_array=np.array([0.0], dtype=np.float64),
+            phi_array=np.array([0.0], dtype=np.float64),
+            wavelength_array=np.array([1.0], dtype=np.float64),
+        ),
+        mosaic=MosaicParams(
+            sigma_mosaic_deg=0.2,
+            gamma_mosaic_deg=0.1,
+            eta=0.05,
+            solve_q_steps=1000,
+            solve_q_rel_tol=5.0e-4,
+            solve_q_mode=0,
+        ),
+        debye_waller=DebyeWallerParams(x=0.0, y=0.0),
+        n2=1.0 + 0.0j,
+        image_buffer=np.zeros((4, 4), dtype=np.float64),
+        save_flag=0,
+        record_status=False,
+        thickness=0.0,
+        optics_mode=0,
+        collect_hit_tables=True,
+        accumulate_image=True,
+        exit_projection_mode="internal",
     )
 
 
@@ -906,6 +969,63 @@ def test_process_peaks_wrapper_serializes_first_numba_warmup(monkeypatch):
     assert len(process_calls) == 2
     assert max_active_calls == 1
     assert opt._NUMBA_PROCESS_PEAKS_WARMED is True
+
+
+def test_simulate_forward_warmup_serializes_first_compile(monkeypatch):
+    call_lock = threading.Lock()
+    active_warmup_calls = 0
+    max_active_warmup_calls = 0
+    run_calls = 0
+    warmup_started = threading.Event()
+    warmup_complete = threading.Event()
+
+    def fake_run_simulation_request(request: SimulationRequest, *, peak_runner=None):
+        nonlocal active_warmup_calls, max_active_warmup_calls, run_calls
+        if int(request.geometry.image_size) == 2:
+            with call_lock:
+                active_warmup_calls += 1
+                max_active_warmup_calls = max(max_active_warmup_calls, active_warmup_calls)
+                run_calls += 1
+            warmup_started.set()
+            warmup_complete.wait(timeout=5.0)
+            with call_lock:
+                active_warmup_calls -= 1
+        else:
+            with call_lock:
+                run_calls += 1
+
+        return SimulationResult(
+            image=np.zeros(
+                (int(request.geometry.image_size), int(request.geometry.image_size)),
+                dtype=np.float64,
+            ),
+            hit_tables=[],
+            q_data=np.empty((0, 0, 0), dtype=np.float64),
+            q_count=np.empty(0, dtype=np.float64),
+            all_status=np.empty(0, dtype=np.float64),
+            miss_tables=[],
+        )
+
+    monkeypatch.setattr(sim_engine, "_FORWARD_SIMULATION_NUMBA_WARMED", False)
+    monkeypatch.setattr(sim_engine, "_FORWARD_SIMULATION_NUMBA_WARMUP_THREAD", None)
+    monkeypatch.setattr(
+        sim_engine,
+        "_run_simulation_request",
+        fake_run_simulation_request,
+    )
+
+    request = _build_forward_warmup_request()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(sim_engine.simulate, request) for _ in range(2)]
+        warmup_started.wait(timeout=5.0)
+        warmup_complete.set()
+        for future in futures:
+            future.result(timeout=5.0)
+
+    assert max_active_warmup_calls == 1
+    assert run_calls >= 3
+    assert sim_engine._FORWARD_SIMULATION_NUMBA_WARMED is True
 
 
 def test_process_peaks_wrapper_disables_numba_after_python_fallback(monkeypatch):

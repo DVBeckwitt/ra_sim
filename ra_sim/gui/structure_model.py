@@ -71,8 +71,29 @@ def normalize_occupancy_label(raw_label, fallback_idx):
     return f"site_{int(fallback_idx) + 1}"
 
 
-def extract_occupancy_site_metadata(cif_block, cif_path):
+def _raw_occupancy_site_labels(cif_block):
+    raw_labels = cif_block.get("_atom_site_label")
+    if raw_labels is None:
+        raw_labels = cif_block.get("_atom_site_type_symbol")
+    if raw_labels is None:
+        return []
+    if isinstance(raw_labels, str):
+        raw_labels = [raw_labels]
+
+    unique_labels = []
+    for idx, raw in enumerate(raw_labels):
+        label = normalize_occupancy_label(raw, idx)
+        if label not in unique_labels:
+            unique_labels.append(label)
+    return unique_labels
+
+
+def extract_occupancy_site_metadata(cif_block, cif_path, *, expand_structure=False):
     """Return (unique labels, expanded-site -> unique-label index mapping)."""
+
+    raw_unique_labels = _raw_occupancy_site_labels(cif_block)
+    if not bool(expand_structure):
+        return raw_unique_labels, []
 
     try:
         xtl = dif.Crystal(str(cif_path))
@@ -105,20 +126,7 @@ def extract_occupancy_site_metadata(cif_block, cif_path):
     except Exception:
         pass
 
-    raw_labels = cif_block.get("_atom_site_label")
-    if raw_labels is None:
-        raw_labels = cif_block.get("_atom_site_type_symbol")
-    if raw_labels is None:
-        return [], []
-    if isinstance(raw_labels, str):
-        raw_labels = [raw_labels]
-
-    unique_labels = []
-    for idx, raw in enumerate(raw_labels):
-        label = normalize_occupancy_label(raw, idx)
-        if label not in unique_labels:
-            unique_labels.append(label)
-    return unique_labels, []
+    return raw_unique_labels, []
 
 
 def expand_occupancy_values_for_generated_sites(
@@ -148,6 +156,68 @@ def expand_occupancy_values_for_generated_sites(
         else:
             expanded.append(float(fallback))
     return expanded
+
+
+def _occupancy_values_need_expanded_map(occ_values, unique_site_count):
+    target_len = int(max(1, unique_site_count))
+    normalized = _ensure_numeric_vector(occ_values, [1.0], target_len)
+    if len(normalized) <= 1:
+        return False
+
+    first = float(normalized[0])
+    return any(
+        not math.isclose(float(value), first, rel_tol=0.0, abs_tol=1e-12)
+        for value in normalized[1:]
+    )
+
+
+def ensure_expanded_occupancy_site_metadata(
+    state: StructureModelState,
+    *,
+    occ_values=None,
+) -> None:
+    """Populate generated-site occupancy mapping only when non-uniform inputs need it."""
+
+    if state.occupancy_site_expanded_map:
+        return
+
+    site_count = len(state.occupancy_site_labels) or max(1, len(state.occ))
+    source_occ = state.occ if occ_values is None else occ_values
+    if not _occupancy_values_need_expanded_map(source_occ, site_count):
+        return
+
+    resolved_labels, resolved_map = extract_occupancy_site_metadata(
+        state.blk,
+        state.cif_file,
+        expand_structure=True,
+    )
+    if not resolved_map:
+        return
+
+    merged_labels = list(state.occupancy_site_labels)
+    if not merged_labels:
+        merged_labels = list(resolved_labels)
+
+    label_to_idx = {str(label): idx for idx, label in enumerate(merged_labels)}
+    resolved_idx_to_merged = {}
+    for idx, label in enumerate(resolved_labels):
+        mapped = label_to_idx.get(label)
+        if mapped is None:
+            mapped = len(merged_labels)
+            merged_labels.append(label)
+            label_to_idx[label] = mapped
+        resolved_idx_to_merged[idx] = mapped
+
+    state.occupancy_site_labels = list(merged_labels)
+    state.occupancy_site_count = int(len(merged_labels) or max(1, len(state.occ)))
+    state.occupancy_site_expanded_map = [
+        int(resolved_idx_to_merged.get(int(raw_idx), 0)) for raw_idx in resolved_map
+    ]
+    state.occ = _ensure_numeric_vector(
+        state.occ,
+        state.occ or [1.0],
+        state.occupancy_site_count,
+    )
 
 
 def as_cif_list(raw_value):
@@ -225,11 +295,7 @@ def extract_atom_site_fractional_metadata(cif_block):
     rows = []
     for idx, base_label in enumerate(base_labels):
         seen[base_label] = seen.get(base_label, 0) + 1
-        display = (
-            f"{base_label} #{seen[base_label]}"
-            if totals[base_label] > 1
-            else base_label
-        )
+        display = f"{base_label} #{seen[base_label]}" if totals[base_label] > 1 else base_label
         rows.append(
             {
                 "row_index": int(idx),
@@ -505,9 +571,7 @@ def capture_primary_cif_reload_snapshot(
         occupancy_site_expanded_map=list(state.occupancy_site_expanded_map),
         occ=list(state.occ),
         current_occ_values=[float(value) for value in current_occ_values],
-        atom_site_fractional_metadata=[
-            dict(row) for row in state.atom_site_fractional_metadata
-        ],
+        atom_site_fractional_metadata=[dict(row) for row in state.atom_site_fractional_metadata],
         current_atom_site_values=[
             (float(x_val), float(y_val), float(z_val))
             for (x_val, y_val, z_val) in current_atom_site_values
@@ -570,8 +634,7 @@ def prepare_primary_cif_reload_plan(
 
     new_atom_site_metadata = extract_atom_site_fractional_metadata(new_blk)
     new_atom_site_values = [
-        (float(row["x"]), float(row["y"]), float(row["z"]))
-        for row in new_atom_site_metadata
+        (float(row["x"]), float(row["y"]), float(row["z"])) for row in new_atom_site_metadata
     ]
 
     return PrimaryCifReloadPlan(
@@ -605,9 +668,7 @@ def apply_primary_cif_reload_plan(
     state.occupancy_site_expanded_map = list(plan.occupancy_site_expanded_map)
     state.occupancy_site_count = int(plan.occupancy_site_count)
     state.occ = list(plan.occ)
-    state.atom_site_fractional_metadata = [
-        dict(row) for row in plan.atom_site_fractional_metadata
-    ]
+    state.atom_site_fractional_metadata = [dict(row) for row in plan.atom_site_fractional_metadata]
     if occ_vars is not None:
         state.occ_vars = list(occ_vars)
     if atom_site_fract_vars is not None:
@@ -644,11 +705,7 @@ def restore_primary_cif_reload_snapshot(
         if snapshot.occupancy_site_labels
         else max(1, len(snapshot.current_occ_values))
     )
-    state.occ = (
-        list(snapshot.occ)
-        if snapshot.occ
-        else list(snapshot.current_occ_values)
-    )
+    state.occ = list(snapshot.occ) if snapshot.occ else list(snapshot.current_occ_values)
     state.atom_site_fractional_metadata = [
         dict(row) for row in snapshot.atom_site_fractional_metadata
     ]
@@ -817,6 +874,7 @@ def build_diffuse_ht_request(
         if occupancy_values is None
         else [float(value) for value in occupancy_values]
     )
+    ensure_expanded_occupancy_site_metadata(state, occ_values=current_occ)
     occ_vals = expand_occupancy_values_for_generated_sites(
         current_occ,
         occupancy_site_labels=state.occupancy_site_labels,
@@ -965,9 +1023,7 @@ def export_diffuse_ht_txt_with_dialog(
         raise
 
     try:
-        initial_dir = (
-            str(get_download_dir()) if callable(get_download_dir) else None
-        )
+        initial_dir = str(get_download_dir()) if callable(get_download_dir) else None
     except Exception:
         initial_dir = None
     if not initial_dir:
@@ -1025,15 +1081,14 @@ def build_ht_cache(
         fallback_points=rod_points_value,
         fallback_l_step=gui_controllers.DEFAULT_ROD_L_STEP,
     )
+    ensure_expanded_occupancy_site_metadata(state, occ_values=occ_vals)
     occ_expanded = expand_occupancy_values_for_generated_sites(
         occ_vals,
         occupancy_site_labels=state.occupancy_site_labels,
         occupancy_site_expanded_map=state.occupancy_site_expanded_map,
     )
     active_cif_path = (
-        str(cif_path_override)
-        if cif_path_override is not None
-        else str(state.cif_file)
+        str(cif_path_override) if cif_path_override is not None else str(state.cif_file)
     )
     curves_raw = ht_Iinf_dict(
         cif_path=active_cif_path,
@@ -1336,22 +1391,14 @@ def build_initial_structure_model_state(
         deg_dict2 = {tuple(h): d for h, d in zip(miller2, degeneracy2)}
         details_dict1 = {tuple(miller1[i]): details1[i] for i in range(len(miller1))}
         details_dict2 = {tuple(miller2[i]): details2[i] for i in range(len(miller2))}
-        state.intensities_cif1 = np.array(
-            [int1_dict.get(tuple(h), 0.0) for h in state.miller]
-        )
-        state.intensities_cif2 = np.array(
-            [int2_dict.get(tuple(h), 0.0) for h in state.miller]
-        )
+        state.intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in state.miller])
+        state.intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in state.miller])
         state.degeneracy = np.array(
-            [
-                deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0)
-                for h in state.miller
-            ],
+            [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in state.miller],
             dtype=np.int32,
         )
         state.details = [
-            details_dict1.get(tuple(h), []) + details_dict2.get(tuple(h), [])
-            for h in state.miller
+            details_dict1.get(tuple(h), []) + details_dict2.get(tuple(h), []) for h in state.miller
         ]
         state.intensities = combine_weighted_intensities(
             state.intensities_cif1,
@@ -1489,7 +1536,12 @@ def rebuild_diffraction_inputs(
         and math.isclose(float(a_axis), state.last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(float(c_axis), state.last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(iodine_z_current, state.last_iodine_z_for_ht, rel_tol=1e-9, abs_tol=1e-9)
-        and math.isclose(float(phi_l_divisor_current), float(state.last_phi_l_divisor), rel_tol=1e-9, abs_tol=1e-9)
+        and math.isclose(
+            float(phi_l_divisor_current),
+            float(state.last_phi_l_divisor),
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        )
         and phase_delta_expression_current == state.last_phase_delta_expression
         and state.last_finite_stack == bool(finite_stack_flag)
         and (not finite_stack_flag or state.last_stack_layers == int(layers))
@@ -1509,10 +1561,21 @@ def rebuild_diffraction_inputs(
             or cache["p"] != p_val
             or list(cache["occ"]) != list(new_occ)
             or cache.get("two_theta_max") != state.two_theta_range[1]
-            or not math.isclose(cache.get("a", float("nan")), float(a_axis), rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(cache.get("iodine_z", float("nan")), iodine_z_current, rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(cache.get("phi_l_divisor", float("nan")), float(phi_l_divisor_current), rel_tol=1e-9, abs_tol=1e-9)
+            or not math.isclose(
+                cache.get("a", float("nan")), float(a_axis), rel_tol=1e-9, abs_tol=1e-9
+            )
+            or not math.isclose(
+                cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9
+            )
+            or not math.isclose(
+                cache.get("iodine_z", float("nan")), iodine_z_current, rel_tol=1e-9, abs_tol=1e-9
+            )
+            or not math.isclose(
+                cache.get("phi_l_divisor", float("nan")),
+                float(phi_l_divisor_current),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
             or cache.get("phase_delta_expression", "") != phase_delta_expression_current
             or bool(cache.get("finite_stack")) != bool(finite_stack_flag)
             or (finite_stack_flag and cache.get("stack_layers") != int(layers))
@@ -1537,10 +1600,7 @@ def rebuild_diffraction_inputs(
         return cache
 
     active_ht_entries = active_weighted_ht_entries(p_vals, weights)
-    caches = [
-        get_cache(label, p_value)
-        for label, p_value, _weight in active_ht_entries
-    ]
+    caches = [get_cache(label, p_value) for label, p_value, _weight in active_ht_entries]
 
     combined_ht_local = combine_ht_dicts(
         caches,
@@ -1602,12 +1662,8 @@ def rebuild_diffraction_inputs(
         state.miller = np.array(sorted(union), dtype=float)
         int1 = {tuple(h): v for h, v in zip(m1, i1)}
         int2 = {tuple(h): v for h, v in zip(m2, i2)}
-        state.intensities_cif1 = np.array(
-            [int1.get(tuple(h), 0.0) for h in state.miller]
-        )
-        state.intensities_cif2 = np.array(
-            [int2.get(tuple(h), 0.0) for h in state.miller]
-        )
+        state.intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in state.miller])
+        state.intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in state.miller])
         state.intensities = combine_weighted_intensities(
             state.intensities_cif1,
             state.intensities_cif2,
@@ -1625,15 +1681,11 @@ def rebuild_diffraction_inputs(
         simulation_runtime_state.sim_miller2_all = np.asarray(m2, dtype=np.float64)
         simulation_runtime_state.sim_intens2_all = np.asarray(i2, dtype=np.float64)
         state.degeneracy = np.array(
-            [
-                deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0)
-                for h in state.miller
-            ],
+            [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in state.miller],
             dtype=np.int32,
         )
         state.details = [
-            det_dict1.get(tuple(h), []) + det_dict2.get(tuple(h), [])
-            for h in state.miller
+            det_dict1.get(tuple(h), []) + det_dict2.get(tuple(h), []) for h in state.miller
         ]
     else:
         state.miller = np.asarray(m1, dtype=np.float64)

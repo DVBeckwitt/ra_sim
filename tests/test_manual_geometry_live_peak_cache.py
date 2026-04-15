@@ -416,6 +416,8 @@ def test_refresh_geometry_manual_pair_entry_keeps_saved_caked_angles_as_truth() 
     assert refreshed["detector_y"] == 140.0
     assert refreshed["x"] == 140.0
     assert refreshed["y"] == 140.0
+    assert refreshed["background_two_theta_deg"] == 150.0
+    assert refreshed["background_phi_deg"] == 160.0
     assert refreshed["caked_x"] == 150.0
     assert refreshed["caked_y"] == 160.0
     assert refreshed["raw_caked_x"] == 151.0
@@ -424,6 +426,46 @@ def test_refresh_geometry_manual_pair_entry_keeps_saved_caked_angles_as_truth() 
 
     display_point = (float(refreshed["caked_x"]) - 10.0, float(refreshed["caked_y"]) - 20.0)
     assert display_point == (140.0, 140.0)
+
+
+def test_refresh_geometry_manual_pair_entry_prefers_canonical_background_angles() -> None:
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "0,0,3",
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "background_two_theta_deg": 150.0,
+            "background_phi_deg": 160.0,
+            "caked_x": 40.0,
+            "caked_y": 50.0,
+            "raw_caked_x": 41.0,
+            "raw_caked_y": 51.0,
+        },
+        background_display_shape=(200, 200),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            float(two_theta) - 10.0,
+            float(phi) - 20.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
+        display_rotate_k=0,
+    )
+
+    assert refreshed is not None
+    assert refreshed["background_two_theta_deg"] == 150.0
+    assert refreshed["background_phi_deg"] == 160.0
+    assert refreshed["caked_x"] == 150.0
+    assert refreshed["caked_y"] == 160.0
+    assert refreshed["x"] == 140.0
+    assert refreshed["y"] == 140.0
 
 
 def test_refresh_geometry_manual_pair_entry_migrates_legacy_peak_branch_once() -> None:
@@ -451,5 +493,5 @@ def test_refresh_geometry_manual_pair_entry_migrates_legacy_peak_branch_once() -
     )
 
     assert refreshed is not None
-    assert refreshed["source_branch_index"] == 1
-    assert refreshed["source_peak_index"] == 1
+    assert "source_branch_index" not in refreshed
+    assert "source_peak_index" not in refreshed

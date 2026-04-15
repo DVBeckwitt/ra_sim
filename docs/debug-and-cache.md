@@ -45,6 +45,35 @@ Retention modes:
 - `auto`: retain when the active feature benefits from reuse
 - `always`: retain whenever built
 
+## Numba on-disk compilation cache
+
+RA-SIM sets `NUMBA_CACHE_DIR` at package import time for stable startup behavior.
+When `NUMBA_CACHE_DIR` is unset, RA-SIM defaults to `~/.cache/ra_sim/numba`.
+If a value is already set, RA-SIM leaves it unchanged.
+
+RA-SIM does not force a Numba CPU mode. `NUMBA_CPU_NAME=generic` is not
+enabled by default.
+
+To inspect cache activity:
+
+1. `set NUMBA_DEBUG_CACHE=1` before launch (or `export NUMBA_DEBUG_CACHE=1` on
+   macOS/Linux)
+2. run one simulation (`python -m ra_sim simulate ...` or `ra-sim simulate ...`)
+3. watch console output for cache write/hit events from the Numba cache loader
+
+Known limitations:
+
+- first import/first run of a new kernel still compiles once before reuse
+- cache hit behavior can vary across hosts, Python versions, and Numba releases
+- if the default path is not writable, RA-SIM keeps startup best-effort and may not use on-disk caching
+
+Manual verification recipe:
+
+1. remove `~/.cache/ra_sim/numba` (or platform equivalent configured in `NUMBA_CACHE_DIR`)
+2. run one simulation with `NUMBA_DEBUG_CACHE=1`
+3. confirm new cache artifacts appear in `NUMBA_CACHE_DIR`
+4. rerun same simulation with `NUMBA_DEBUG_CACHE=1` and confirm cache read hits in output
+
 ## Good Debug Hygiene
 
 - Prefer config-based toggles over ad hoc path edits.

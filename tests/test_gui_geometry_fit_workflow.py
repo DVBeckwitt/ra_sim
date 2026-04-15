@@ -3600,15 +3600,15 @@ def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_cak
         orientation_cfg={},
     )
 
-    assert dataset["initial_pairs_display"][0]["bg_display"] == (140.0, 140.0)
-    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 150.0
-    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == 160.0
-    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 150.0
-    assert dataset["measured_for_fit"][0]["background_phi_deg"] == 160.0
-    assert dataset["measured_for_fit"][0]["background_detector_x"] == 140.0
-    assert dataset["measured_for_fit"][0]["background_detector_y"] == 140.0
-    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 150.0
-    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == 160.0
+    assert dataset["initial_pairs_display"][0]["bg_display"] == (13.0, -56.0)
+    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == -36.0
+    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["measured_for_fit"][0]["background_phi_deg"] == -36.0
+    assert dataset["measured_for_fit"][0]["background_detector_x"] == 13.0
+    assert dataset["measured_for_fit"][0]["background_detector_y"] == -56.0
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == -36.0
 
 
 def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
@@ -3994,6 +3994,25 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
             "cfg": dict(cfg),
         },
     )
+    bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(6, 7),
+        radial_deg=np.array([20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
+        lut=object(),
+    )
+    projector_calls: list[tuple[object, float, float]] = []
+    monkeypatch.setattr(
+        geometry_fit,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or {(50.0, 51.0): (24.5, -34.5)}.get(
+                (float(col), float(row)),
+                (None, None),
+            )
+        ),
+    )
 
     valid_source_row = {
         "q_group_key": ("q", 1),
@@ -4061,6 +4080,7 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
             "background": np.zeros((6, 7), dtype=np.float64),
             "radial_axis": radial_axis,
             "azimuth_axis": azimuth_axis,
+            "transform_bundle": bundle,
         },
     )
 
@@ -4085,25 +4105,16 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
         local_params=local_params,
         dataset_ctx=SimpleNamespace(dataset_index=0),
     )
-    expected_two_theta, expected_phi = geometry_fit._detector_pixels_to_fit_space(
-        np.array([50.0], dtype=np.float64),
-        np.array([51.0], dtype=np.float64),
-        center=local_params["center"],
-        detector_distance=float(local_params["corto_detector"]),
-        pixel_size=float(local_params["pixel_size"]),
-        gamma_deg=float(local_params["gamma"]),
-        Gamma_deg=float(local_params["Gamma"]),
-    )
-
     assert calls["raw"] == (150.0, 160.0)
     assert calls["shape"] == (6, 7)
     assert calls["use_caked_space"] is True
     assert np.allclose(calls["radial_axis"], radial_axis)
     assert np.allclose(calls["azimuth_axis"], azimuth_axis)
-    assert calls["candidate"]["sim_col"] == pytest.approx(float(expected_two_theta[0]))
-    assert calls["candidate"]["sim_row"] == pytest.approx(float(expected_phi[0]))
+    assert calls["candidate"]["sim_col"] == pytest.approx(24.5)
+    assert calls["candidate"]["sim_row"] == pytest.approx(-34.5)
     assert np.isfinite(float(calls["candidate"]["sim_col_local"]))
     assert np.isfinite(float(calls["candidate"]["sim_row_local"]))
+    assert projector_calls == [(bundle, 50.0, 51.0)]
     assert callable(calls["matcher"])
     assert result["background_two_theta_deg"] == pytest.approx(22.5)
     assert result["background_phi_deg"] == pytest.approx(-35.5)
@@ -4153,6 +4164,28 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
             "shape": tuple(np.asarray(image).shape),
             "cfg": dict(cfg),
         },
+    )
+    bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(6, 7),
+        radial_deg=np.array([20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
+        lut=object(),
+    )
+    projector_calls: list[tuple[object, float, float]] = []
+    monkeypatch.setattr(
+        geometry_fit,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or {
+                (50.0, 51.0): (24.5, -34.5),
+                (30.0, 40.0): (22.25, -36.75),
+            }.get(
+                (float(col), float(row)),
+                (None, None),
+            )
+        ),
     )
 
     valid_source_row = {
@@ -4217,6 +4250,7 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
             "background": np.zeros((6, 7), dtype=np.float64),
             "radial_axis": radial_axis,
             "azimuth_axis": azimuth_axis,
+            "transform_bundle": bundle,
         },
     )
 
@@ -4241,33 +4275,239 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
         local_params=local_params,
         dataset_ctx=SimpleNamespace(dataset_index=0),
     )
-    expected_sim_two_theta, expected_sim_phi = geometry_fit._detector_pixels_to_fit_space(
-        np.array([50.0], dtype=np.float64),
-        np.array([51.0], dtype=np.float64),
-        center=local_params["center"],
-        detector_distance=float(local_params["corto_detector"]),
-        pixel_size=float(local_params["pixel_size"]),
-        gamma_deg=float(local_params["gamma"]),
-        Gamma_deg=float(local_params["Gamma"]),
-    )
-    expected_raw_two_theta, expected_raw_phi = geometry_fit._detector_pixels_to_fit_space(
-        np.array([30.0], dtype=np.float64),
-        np.array([40.0], dtype=np.float64),
-        center=local_params["center"],
-        detector_distance=float(local_params["corto_detector"]),
-        pixel_size=float(local_params["pixel_size"]),
-        gamma_deg=float(local_params["gamma"]),
-        Gamma_deg=float(local_params["Gamma"]),
-    )
-
     assert calls["shape"] == (6, 7)
     assert calls["use_caked_space"] is True
     assert np.allclose(calls["radial_axis"], radial_axis)
     assert np.allclose(calls["azimuth_axis"], azimuth_axis)
-    assert calls["candidate"]["sim_col"] == pytest.approx(float(expected_sim_two_theta[0]))
-    assert calls["candidate"]["sim_row"] == pytest.approx(float(expected_sim_phi[0]))
-    assert calls["raw"][0] == pytest.approx(float(expected_raw_two_theta[0]))
-    assert calls["raw"][1] == pytest.approx(float(expected_raw_phi[0]))
+    assert calls["candidate"]["sim_col"] == pytest.approx(24.5)
+    assert calls["candidate"]["sim_row"] == pytest.approx(-34.5)
+    assert calls["raw"][0] == pytest.approx(22.25)
+    assert calls["raw"][1] == pytest.approx(-36.75)
+    assert projector_calls == [
+        (bundle, 50.0, 51.0),
+        (bundle, 30.0, 40.0),
+    ]
+    assert callable(calls["matcher"])
+    assert result["background_two_theta_deg"] == pytest.approx(22.5)
+    assert result["background_phi_deg"] == pytest.approx(-35.5)
+    assert result["fit_space_anchor_override"] is True
+
+
+def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+    radial_axis = np.linspace(20.0, 26.0, 7, dtype=np.float64)
+    azimuth_axis = np.linspace(-40.0, -35.0, 6, dtype=np.float64)
+    orientation_choice = {
+        "indexing_mode": "xy",
+        "k": 1,
+        "flip_x": False,
+        "flip_y": False,
+        "flip_order": "yx",
+        "label": "rot90-ccw",
+    }
+    orientation_transform = {
+        key: orientation_choice[key]
+        for key in ("indexing_mode", "k", "flip_x", "flip_y", "flip_order")
+    }
+    backend_shape = (6, 7)
+    sim_backend_point = (1.0, 2.0)
+    measured_backend_point = (3.0, 4.0)
+    sim_fit_point = geometry_overlay.transform_points_orientation(
+        [sim_backend_point],
+        backend_shape,
+        **orientation_transform,
+    )[0]
+    measured_fit_point = geometry_overlay.transform_points_orientation(
+        [measured_backend_point],
+        backend_shape,
+        **orientation_transform,
+    )[0]
+
+    def _fake_refine(
+        candidate,
+        raw_col,
+        raw_row,
+        *,
+        display_background,
+        cache_data,
+        use_caked_space,
+        radial_axis=None,
+        azimuth_axis=None,
+        match_simulated_peaks_to_peak_context,
+    ):
+        calls["candidate"] = dict(candidate)
+        calls["raw"] = (float(raw_col), float(raw_row))
+        calls["shape"] = tuple(np.asarray(display_background).shape)
+        calls["cache_data"] = dict(cache_data)
+        calls["use_caked_space"] = bool(use_caked_space)
+        calls["radial_axis"] = np.asarray(radial_axis, dtype=np.float64)
+        calls["azimuth_axis"] = np.asarray(azimuth_axis, dtype=np.float64)
+        calls["matcher"] = match_simulated_peaks_to_peak_context
+        return 22.5, -35.5
+
+    monkeypatch.setattr(
+        geometry_fit.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        _fake_refine,
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_background_peak_context",
+        lambda image, cfg: {
+            "img_valid": True,
+            "shape": tuple(np.asarray(image).shape),
+            "cfg": dict(cfg),
+        },
+    )
+    bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(6, 7),
+        radial_deg=np.array([20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
+        lut=object(),
+    )
+    projector_calls: list[tuple[object, float, float]] = []
+    monkeypatch.setattr(
+        geometry_fit,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or {
+                (50.0, 51.0): (24.5, -34.5),
+                (30.0, 40.0): (22.25, -36.75),
+            }.get(
+                (float(col), float(row)),
+                (None, None),
+            )
+        ),
+    )
+
+    backend_inverse_calls: list[tuple[float, float, tuple[int, int] | None]] = []
+    backend_to_native = {
+        sim_backend_point: (50.0, 51.0),
+        measured_backend_point: (30.0, 40.0),
+    }
+    valid_source_row = {
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "hkl": (1, 1, 0),
+        "sim_col": 18.0,
+        "sim_row": 19.0,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((6, 7), dtype=np.float64),
+            np.zeros((6, 7), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: np.asarray(
+            image,
+            dtype=np.float64,
+        ),
+        backend_detector_coords_to_native_detector_coords=lambda col, row, native_shape=None: (
+            backend_inverse_calls.append(
+                (
+                    float(col),
+                    float(row),
+                    (
+                        tuple(int(v) for v in tuple(native_shape)[:2])
+                        if native_shape is not None
+                        else None
+                    ),
+                )
+            )
+            or backend_to_native.get((float(col), float(row)), (None, None))
+        ),
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [
+                dict(valid_source_row)
+            ]
+        ),
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(valid_source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda peaks: {
+            (1, 2): dict(valid_source_row)
+        },
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            dict(orientation_choice),
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: np.asarray(image, dtype=np.float64),
+        geometry_manual_match_config=lambda: {"search_radius": 4.0},
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background": np.zeros((6, 7), dtype=np.float64),
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "transform_bundle": bundle,
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+    callback = dataset["spec"]["dynamic_reanchor_callback"]
+    local_params = {
+        "center": [32.0, 32.0],
+        "corto_detector": 100.0,
+        "pixel_size": 1.0,
+        "gamma": 0.0,
+        "Gamma": 0.0,
+    }
+    measured_entry = dict(dataset["measured_for_fit"][0])
+    measured_entry.pop("background_detector_x", None)
+    measured_entry.pop("background_detector_y", None)
+    measured_entry["detector_x"] = float(measured_fit_point[0])
+    measured_entry["detector_y"] = float(measured_fit_point[1])
+
+    result = callback(
+        measured_entry,
+        sim_fit_point,
+        local_params=local_params,
+        dataset_ctx=SimpleNamespace(dataset_index=0),
+    )
+
+    assert backend_inverse_calls == [
+        (1.0, 2.0, (6, 7)),
+        (3.0, 4.0, (6, 7)),
+    ]
+    assert projector_calls == [
+        (bundle, 50.0, 51.0),
+        (bundle, 30.0, 40.0),
+    ]
+    assert calls["raw"] == (22.25, -36.75)
+    assert calls["shape"] == (6, 7)
+    assert calls["use_caked_space"] is True
+    assert np.allclose(calls["radial_axis"], radial_axis)
+    assert np.allclose(calls["azimuth_axis"], azimuth_axis)
+    assert calls["candidate"]["sim_col"] == pytest.approx(24.5)
+    assert calls["candidate"]["sim_row"] == pytest.approx(-34.5)
     assert callable(calls["matcher"])
     assert result["background_two_theta_deg"] == pytest.approx(22.5)
     assert result["background_phi_deg"] == pytest.approx(-35.5)
@@ -10361,96 +10601,10 @@ def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> 
             "source_row_index": 0,
             "source_branch_index": 0,
             "source_peak_index": 0,
-            "detector_x": 20.0,
-            "detector_y": 20.0,
-        },
-        {
-            "hkl": (1, 0, 0),
-            "q_group_key": ("selected", 1),
-            "source_table_index": 0,
-            "source_reflection_index": 7,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "source_row_index": 1,
-            "source_branch_index": 0,
-            "source_peak_index": 0,
-            "detector_x": 24.0,
-            "detector_y": 20.0,
-        },
-            {
-                "hkl": (1, 0, 0),
-                "q_group_key": ("selected", 1),
-                "source_table_index": 0,
-                "source_reflection_index": 7,
-                "source_reflection_namespace": "full_reflection",
-                "source_reflection_is_full": True,
-                "source_row_index": 2,
-                "source_branch_index": 1,
-                "source_peak_index": 1,
-                "detector_x": 80.0,
-                "detector_y": 80.0,
-            },
-        {
-            "hkl": (2, 0, 0),
-            "q_group_key": ("other", 2),
-            "source_table_index": 1,
-            "source_reflection_index": 9,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "source_row_index": 0,
-            "source_branch_index": 0,
-            "source_peak_index": 0,
-            "detector_x": 60.0,
-            "detector_y": 60.0,
-        },
-    ]
-
-    selection = geometry_fit.build_geometry_fit_caked_roi_selection(
-        source_rows,
-        required_pairs=[
-            {
-                "pair_id": "bg0:pair0",
-                "overlay_match_index": 0,
-                "hkl": (1, 0, 0),
-                "q_group_key": ("selected", 1),
-                "source_reflection_index": 7,
-                "source_reflection_namespace": "full_reflection",
-                "source_reflection_is_full": True,
-                "source_row_index": 0,
-                "source_branch_index": 0,
-                "source_peak_index": 0,
-            }
-        ],
-        image_shape=(128, 128),
-        fit_config={"caked_roi": {"half_width_px": 0.0}},
-    )
-
-    assert selection["valid"] is True
-    assert selection["resolved_pair_count"] == 1
-    assert selection["selected_branch_count"] == 1
-    pixels = set(zip(selection["rows"].tolist(), selection["cols"].tolist()))
-    assert (20, 20) in pixels
-    assert (20, 22) in pixels
-    assert (80, 80) not in pixels
-    assert (60, 60) not in pixels
-
-
-def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -> None:
-    source_rows = [
-        {
-            "hkl": (1, 0, 0),
-            "q_group_key": ("selected", 1),
-            "source_table_index": 0,
-            "source_reflection_index": 7,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "source_row_index": 0,
-            "source_branch_index": 0,
-            "source_peak_index": 0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": -10.0,
             "detector_x": 80.0,
             "detector_y": 80.0,
-            "two_theta_deg": 1.0,
-            "phi_deg": -10.0,
         },
         {
             "hkl": (1, 0, 0),
@@ -10462,10 +10616,10 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
             "source_row_index": 1,
             "source_branch_index": 0,
             "source_peak_index": 0,
+            "background_two_theta_deg": 2.0,
+            "background_phi_deg": -10.0,
             "detector_x": 84.0,
             "detector_y": 80.0,
-            "two_theta_deg": 2.0,
-            "phi_deg": -10.0,
         },
         {
             "hkl": (1, 0, 0),
@@ -10477,10 +10631,25 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
             "source_row_index": 2,
             "source_branch_index": 1,
             "source_peak_index": 1,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": 10.0,
             "detector_x": 40.0,
             "detector_y": 40.0,
-            "two_theta_deg": 1.0,
-            "phi_deg": 10.0,
+        },
+        {
+            "hkl": (2, 0, 0),
+            "q_group_key": ("other", 2),
+            "source_table_index": 1,
+            "source_reflection_index": 9,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "background_two_theta_deg": 3.0,
+            "background_phi_deg": -20.0,
+            "detector_x": 60.0,
+            "detector_y": 60.0,
         },
     ]
 
@@ -10488,6 +10657,7 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
         (1.0, -10.0): (20.0, 20.0),
         (2.0, -10.0): (24.0, 20.0),
         (1.0, 10.0): (40.0, 40.0),
+        (3.0, -20.0): (60.0, 60.0),
     }
 
     def _project(two_theta_deg: float, phi_deg: float):
@@ -10515,11 +10685,129 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
     )
 
     assert selection["valid"] is True
+    assert selection["resolved_pair_count"] == 1
+    assert selection["selected_branch_count"] == 1
     pixels = set(zip(selection["rows"].tolist(), selection["cols"].tolist()))
     assert (20, 20) in pixels
     assert (20, 22) in pixels
     assert (80, 80) not in pixels
-    assert (40, 40) not in pixels
+    assert (60, 60) not in pixels
+
+
+def test_build_geometry_fit_caked_roi_selection_does_not_reuse_stale_detector_coords_when_projection_fails() -> None:
+    source_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 80.0,
+            "detector_y": 80.0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": -10.0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 84.0,
+            "detector_y": 80.0,
+            "background_two_theta_deg": 2.0,
+            "background_phi_deg": -10.0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 2,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "detector_x": 40.0,
+            "detector_y": 40.0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": 10.0,
+        },
+    ]
+
+    def _project(two_theta_deg: float, phi_deg: float):
+        del two_theta_deg, phi_deg
+        return None
+
+    selection = geometry_fit.build_geometry_fit_caked_roi_selection(
+        source_rows,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("selected", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+        image_shape=(128, 128),
+        fit_config={"caked_roi": {"half_width_px": 0.0}},
+        fit_space_to_detector_point=_project,
+    )
+
+    assert selection["valid"] is False
+    assert selection["fallback_reason"] == "no_native_detector_points"
+    assert selection["pixel_count"] == 0
+    assert selection["selected_branch_count"] == 0
+    assert selection["rows"].size == 0
+    assert selection["cols"].size == 0
+
+
+def test_geometry_fit_caked_roi_angle_point_uses_canonical_angles_only() -> None:
+    assert geometry_fit._geometry_fit_caked_roi_angle_point(
+        {
+            "background_two_theta_deg": 23.0,
+            "background_phi_deg": -36.0,
+            "caked_x": 150.0,
+            "caked_y": 160.0,
+        }
+    ) == pytest.approx((23.0, -36.0))
+    assert geometry_fit._geometry_fit_caked_roi_angle_point(
+        {
+            "caked_x": 150.0,
+            "caked_y": 160.0,
+        }
+    ) is None
+
+
+def test_geometry_fit_canonical_live_source_entry_ignores_source_peak_mirror() -> None:
+    is_canonical, reason = geometry_fit._geometry_fit_is_canonical_live_source_entry(
+        {
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 1,
+        }
+    )
+
+    assert is_canonical is True
+    assert reason is None
 
 
 def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large() -> None:
@@ -10534,8 +10822,10 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
             "source_row_index": 0,
             "source_branch_index": 0,
             "source_peak_index": 0,
-            "detector_x": 5.0,
-            "detector_y": 25.0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": -10.0,
+            "detector_x": 80.0,
+            "detector_y": 80.0,
         },
         {
             "hkl": (1, 0, 0),
@@ -10547,10 +10837,20 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
             "source_row_index": 1,
             "source_branch_index": 0,
             "source_peak_index": 0,
-            "detector_x": 45.0,
-            "detector_y": 25.0,
+            "background_two_theta_deg": 2.0,
+            "background_phi_deg": -10.0,
+            "detector_x": 84.0,
+            "detector_y": 80.0,
         },
     ]
+
+    projection_map = {
+        (1.0, -10.0): (5.0, 25.0),
+        (2.0, -10.0): (45.0, 25.0),
+    }
+
+    def _project(two_theta_deg: float, phi_deg: float):
+        return projection_map.get((float(two_theta_deg), float(phi_deg)))
 
     selection = geometry_fit.build_geometry_fit_caked_roi_selection(
         source_rows,
@@ -10575,6 +10875,7 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
                 "max_detector_fraction": 0.05,
             }
         },
+        fit_space_to_detector_point=_project,
     )
 
     assert selection["valid"] is False

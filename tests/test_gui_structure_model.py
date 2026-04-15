@@ -37,6 +37,24 @@ def test_extract_atom_site_fractional_metadata_handles_duplicate_labels_and_frac
     assert rows[2]["z"] == 0.25
 
 
+def test_extract_occupancy_site_metadata_defaults_to_raw_cif_labels(monkeypatch) -> None:
+    class _CrystalShouldNotRun:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("unexpected Crystal expansion")
+
+    monkeypatch.setattr(structure_model.dif, "Crystal", _CrystalShouldNotRun)
+
+    labels, expanded_map = structure_model.extract_occupancy_site_metadata(
+        {
+            "_atom_site_label": ["I1", "Nb1", "I1"],
+        },
+        "unused.cif",
+    )
+
+    assert labels == ["I1", "Nb1"]
+    assert expanded_map == []
+
+
 def test_active_primary_cif_path_writes_override_and_reuses_cached_temp(tmp_path) -> None:
     cif_path = tmp_path / "sample.cif"
     cif_path.write_text(
@@ -158,8 +176,12 @@ def test_build_initial_structure_model_state_initializes_single_cif(monkeypatch)
         two_theta_range=(0.0, 50.0),
         include_rods_flag=False,
         combine_weighted_intensities=lambda a, _b, **_kwargs: np.asarray(a, dtype=float),
-        miller_generator=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected second CIF call")),
-        inject_fractional_reflections=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected rod injection")),
+        miller_generator=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected second CIF call")
+        ),
+        inject_fractional_reflections=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected rod injection")
+        ),
     )
 
     assert state.has_second_cif is False
@@ -324,6 +346,77 @@ def test_build_ht_cache_derives_l_step_from_rod_points_per_gz(monkeypatch) -> No
     assert cache["rod_points_per_gz"] == 100
     assert np.isclose(cache["L_step"], 0.01)
     assert np.array_equal(cache["ht"][(1, 0)]["L"], np.array([1.0]))
+
+
+def test_build_ht_cache_resolves_expanded_map_lazily_for_non_uniform_occupancies(
+    monkeypatch,
+) -> None:
+    captured = {}
+    extract_calls = []
+
+    def fake_extract(_cif_block, _cif_path, *, expand_structure=False):
+        extract_calls.append(bool(expand_structure))
+        if expand_structure:
+            return ["I1", "Nb1"], [0, 1, 0]
+        return ["I1", "Nb1"], []
+
+    def fake_ht_iinf_dict(**kwargs):
+        captured.update(kwargs)
+        return {
+            (1, 0): {
+                "L": np.array([1.0], dtype=float),
+                "I": np.array([2.0], dtype=float),
+            }
+        }
+
+    monkeypatch.setattr(structure_model, "extract_occupancy_site_metadata", fake_extract)
+    monkeypatch.setattr(structure_model, "ht_Iinf_dict", fake_ht_iinf_dict)
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_qr_dict",
+        lambda curves: {1: {"L": curves[(1, 0)]["L"], "I": curves[(1, 0)]["I"]}},
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_arrays",
+        lambda curves: (
+            np.array([[1.0, 0.0, 1.0]]),
+            np.array([2.0]),
+            np.array([1]),
+            [["detail"]],
+        ),
+    )
+
+    state = structure_model.StructureModelState(
+        cif_file="primary.cif",
+        cf=None,
+        blk={"_atom_site_label": ["I1", "Nb1"]},
+        occupancy_site_labels=["I1", "Nb1"],
+        occupancy_site_expanded_map=[],
+        occ=[0.8, 0.6],
+        mx=8,
+        lambda_angstrom=1.54,
+        two_theta_range=(0.0, 30.0),
+    )
+
+    structure_model.build_ht_cache(
+        state,
+        0.1,
+        [0.8, 0.6],
+        3.0,
+        2.0 * np.pi,
+        0.2,
+        1.0,
+        True,
+        8,
+        "0",
+        100,
+        cif_path_override="primary.cif",
+    )
+
+    assert extract_calls == [True]
+    assert state.occupancy_site_expanded_map == [0, 1, 0]
+    assert captured["occ"] == [0.8, 0.6, 0.8]
 
 
 def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> None:
@@ -602,9 +695,7 @@ def test_primary_cif_reload_helpers_apply_and_restore(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(
         structure_model,
         "extract_atom_site_fractional_metadata",
-        lambda *_args, **_kwargs: [
-            {"row_index": 0, "label": "I1", "x": 0.4, "y": 0.5, "z": 0.6}
-        ],
+        lambda *_args, **_kwargs: [{"row_index": 0, "label": "I1", "x": 0.4, "y": 0.5, "z": 0.6}],
     )
     monkeypatch.setattr(
         structure_model,
@@ -763,13 +854,10 @@ def test_primary_cif_dialog_helpers_choose_initial_dir_and_apply_selection(tmp_p
     )
 
     assert applied is True
-    assert (
-        structure_model.primary_cif_dialog_initial_dir(
-            str(current_cif),
-            tmp_path / "fallback",
-        )
-        == str(current_cif.parent)
-    )
+    assert structure_model.primary_cif_dialog_initial_dir(
+        str(current_cif),
+        tmp_path / "fallback",
+    ) == str(current_cif.parent)
     assert calls == [
         (
             "dialog",

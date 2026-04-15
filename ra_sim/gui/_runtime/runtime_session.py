@@ -123,10 +123,21 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.engine import (
     simulate as simulate_request,
     simulate_qr_rods as simulate_qr_rods_request,
+    start_forward_simulation_numba_warmup_in_background,
 )
 from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background
 from ra_sim.simulation.exact_cake_portable import (
+    CakeTransformBundle,
     FastAzimuthalIntegrator,
+    build_angle_axes,
+    build_cake_transform_bundle,
+    build_cake_transform_bundle_from_result,
+    caked_point_to_detector_pixel,
+    detector_two_theta_max_deg,
+    detector_pixel_to_caked_bin,
+    gui_phi_to_raw_phi,
+    prepare_gui_phi_display,
+    raw_phi_to_gui_phi,
     start_exact_cake_geometry_warmup_in_background,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
@@ -143,7 +154,6 @@ from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import analysis_figure_controls as gui_analysis_figure_controls
 from ra_sim.gui import analysis_quick_controls as gui_analysis_quick_controls
 from ra_sim.gui import analysis_visibility as gui_analysis_visibility
-from ra_sim.gui import analysis_peak_tools as gui_analysis_peak_tools
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import canvas_interactions as gui_canvas_interactions
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
@@ -175,7 +185,6 @@ from ra_sim.gui._runtime.live_cache_helpers import (
 from ra_sim.gui import tk_primary_viewport as gui_tk_primary_viewport
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
-from ra_sim.gui import ordered_structure_fit as gui_ordered_structure_fit
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
@@ -242,6 +251,12 @@ if (
 """
 
 _AZIMUTHAL_INTEGRATOR_CLS = None
+# SciPy-backed GUI helpers are imported lazily to keep GUI startup responsive.
+_ANALYSIS_PEAK_TOOLS_MODULE = None
+_ORDERED_STRUCTURE_FIT_MODULE = None
+_ANALYSIS_PEAK_PROFILE_GAUSSIAN = "gaussian"
+_ANALYSIS_PEAK_PROFILE_LORENTZIAN = "lorentzian"
+_ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT = "pseudo_voigt"
 
 
 def _get_azimuthal_integrator_cls():
@@ -250,6 +265,50 @@ def _get_azimuthal_integrator_cls():
     if _AZIMUTHAL_INTEGRATOR_CLS is None:
         _AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator
     return _AZIMUTHAL_INTEGRATOR_CLS
+
+
+def _get_analysis_peak_tools_module():
+    global _ANALYSIS_PEAK_TOOLS_MODULE
+
+    if _ANALYSIS_PEAK_TOOLS_MODULE is None:
+        from ra_sim.gui import analysis_peak_tools as analysis_peak_tools_module
+
+        _ANALYSIS_PEAK_TOOLS_MODULE = analysis_peak_tools_module
+    return _ANALYSIS_PEAK_TOOLS_MODULE
+
+
+def _get_ordered_structure_fit_module():
+    global _ORDERED_STRUCTURE_FIT_MODULE
+
+    if _ORDERED_STRUCTURE_FIT_MODULE is None:
+        from ra_sim.gui import ordered_structure_fit as ordered_structure_fit_module
+
+        _ORDERED_STRUCTURE_FIT_MODULE = ordered_structure_fit_module
+    return _ORDERED_STRUCTURE_FIT_MODULE
+
+
+def _normalize_ordered_structure_scale(raw_value: object, *, fallback: float = 1.0) -> float:
+    """Keep ordered-structure scale validation SciPy-free until fit tools are needed."""
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(fallback)
+    if not math.isfinite(value):
+        value = float(fallback)
+    return float(max(0.0, value))
+
+
+def _normalize_coordinate_window(raw_value: object, *, fallback: float = 0.02) -> float:
+    """Keep ordered-structure coord-window validation SciPy-free until fit tools are needed."""
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(fallback)
+    if not math.isfinite(value) or value <= 0.0:
+        value = float(fallback)
+    return float(max(1.0e-6, value))
 
 
 ###############################################################################
@@ -1511,16 +1570,21 @@ def _get_current_background_backend() -> np.ndarray | None:
 def _backend_background_to_native_detector_coords(
     col: float,
     row: float,
+    native_shape: Sequence[object] | None = None,
 ) -> tuple[float | None, float | None]:
     """Undo backend-only background orientation for one detector-space point."""
 
-    native_background = _get_current_background_native()
-    if native_background is None:
-        return None, None
+    if native_shape is None:
+        native_background = _get_current_background_native()
+        if native_background is None:
+            return None, None
+        resolved_native_shape = np.asarray(native_background).shape[:2]
+    else:
+        resolved_native_shape = tuple(native_shape[:2])
     return gui_background.background_backend_point_to_native_coords(
         float(col),
         float(row),
-        native_shape=np.asarray(native_background).shape[:2],
+        native_shape=resolved_native_shape,
         flip_x=background_runtime_state.backend_flip_x,
         flip_y=background_runtime_state.backend_flip_y,
         rotation_k=background_runtime_state.backend_rotation_k,
@@ -1873,6 +1937,9 @@ def _initialize_runtime_root_block_02() -> None:
     root.report_callback_exception = _runtime_report_callback_exception
 
 def _initialize_runtime_shell_block_01() -> None:
+    global progress_label_positions, progress_label_geometry, ordered_structure_progressbar, progress_label_ordered_structure, mosaic_progressbar, progress_label_mosaic, progress_label
+    global update_timing_label, chi_square_label
+
     _ensure_runtime_update_trace_hooks()
     gui_views.create_app_shell(
         root=root,
@@ -1913,6 +1980,33 @@ def _initialize_runtime_shell_block_01() -> None:
         or workspace_panels_view_state.workspace_debug_frame is None
     ):
         raise RuntimeError("Workspace panels were not created.")
+
+    gui_views.create_status_panel(
+        parent=app_shell_view_state.status_frame,
+        view_state=status_panel_view_state,
+    )
+    progress_label_positions = status_panel_view_state.progress_label_positions
+    progress_label_geometry = status_panel_view_state.progress_label_geometry
+    ordered_structure_progressbar = status_panel_view_state.ordered_structure_progressbar
+    progress_label_ordered_structure = status_panel_view_state.progress_label_ordered_structure
+    mosaic_progressbar = status_panel_view_state.mosaic_progressbar
+    progress_label_mosaic = status_panel_view_state.progress_label_mosaic
+    progress_label = status_panel_view_state.progress_label
+    update_timing_label = status_panel_view_state.update_timing_label
+    chi_square_label = status_panel_view_state.chi_square_label
+    if (
+        progress_label_positions is None
+        or progress_label_geometry is None
+        or ordered_structure_progressbar is None
+        or progress_label_ordered_structure is None
+        or mosaic_progressbar is None
+        or progress_label_mosaic is None
+        or progress_label is None
+        or update_timing_label is None
+        or chi_square_label is None
+    ):
+        raise RuntimeError("Status panel was not created.")
+    progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
 
 
 
@@ -2027,7 +2121,8 @@ def _initialize_runtime_plot_block_01() -> None:
     )
     FAST_VIEWER_EMBEDDED_SURFACE_ENABLED = False
 
-    global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+    # Seed imshow with a tiny placeholder; expand to detector size on first result.
+    global_image_buffer = np.zeros((1, 1), dtype=np.float32)
     simulation_runtime_state.unscaled_image = None
 
     # ── replace the original imshow call ────────────────────────────
@@ -4396,8 +4491,8 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
 
 def _geometry_fit_caked_view_for_index(
     index: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Return active caked background image plus axes for one background index."""
+) -> dict[str, object] | None:
+    """Return active caked background view plus canonical transform metadata."""
 
     if int(index) != int(background_runtime_state.current_background_index):
         return None
@@ -4414,6 +4509,7 @@ def _geometry_fit_caked_view_for_index(
             simulation_runtime_state.last_caked_azimuth_values,
             dtype=np.float64,
         )
+        transform_bundle = _current_live_caked_transform_bundle()
     except Exception:
         return None
     if (
@@ -4423,11 +4519,28 @@ def _geometry_fit_caked_view_for_index(
         or azimuth_axis.size <= 0
     ):
         return None
-    return (
-        np.asarray(caked_background, dtype=np.float64).copy(),
-        np.asarray(radial_axis, dtype=np.float64).copy(),
-        np.asarray(azimuth_axis, dtype=np.float64).copy(),
+    if isinstance(transform_bundle, CakeTransformBundle):
+        raw_azimuth_axis = np.asarray(
+            transform_bundle.raw_azimuth_deg,
+            dtype=np.float64,
+        ).copy()
+    else:
+        raw_azimuth_axis = np.asarray(
+            gui_phi_to_raw_phi(azimuth_axis),
+            dtype=np.float64,
+        ).copy()
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+        dtype=np.int32,
     )
+    return {
+        "background": np.asarray(caked_background, dtype=np.float64).copy(),
+        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
+        "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64).copy(),
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+        "transform_bundle": transform_bundle,
+    }
 
 
 def _current_geometry_fit_caked_roi_enabled() -> bool:
@@ -4494,7 +4607,11 @@ def _current_geometry_fit_caked_roi_selection(
             True if force_enabled else _current_geometry_fit_caked_roi_enabled()
         ),
         fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
-            _current_geometry_fit_params()
+            detector_shape=native_shape,
+            radial_axis=simulation_runtime_state.last_caked_radial_values,
+            azimuth_axis=simulation_runtime_state.last_caked_azimuth_values,
+            ai=simulation_runtime_state.ai_cache.get("ai"),
+            transform_bundle=_current_live_caked_transform_bundle(),
         ),
     )
     return selection if isinstance(selection, Mapping) else None
@@ -4651,9 +4768,29 @@ def _geometry_fit_caked_roi_preview_mask(
     if not np.any(valid):
         return None
 
+    bundle = _current_live_caked_transform_bundle()
+    if bundle is not None:
+        mask = np.zeros((int(azimuth.size), int(radial.size)), dtype=bool)
+        for row_idx, col_idx in zip(rows[valid], cols[valid]):
+            two_theta_value, phi_value = detector_pixel_to_caked_bin(
+                bundle,
+                float(col_idx),
+                float(row_idx),
+            )
+            if two_theta_value is None or phi_value is None:
+                continue
+            radial_idx = _nearest_sorted_axis_indices(radial, [two_theta_value])
+            azimuth_idx = _nearest_sorted_axis_indices(azimuth, [phi_value])
+            if radial_idx is None or azimuth_idx is None:
+                continue
+            mask[azimuth_idx, radial_idx] = True
+        if np.any(mask):
+            return mask
+
     two_theta_values = np.asarray(two_theta_map[rows[valid], cols[valid]], dtype=float)
-    phi_values = _wrap_phi_range(
-        np.asarray(phi_map[rows[valid], cols[valid]], dtype=float)
+    phi_values = np.asarray(
+        raw_phi_to_gui_phi(np.asarray(phi_map[rows[valid], cols[valid]], dtype=float)),
+        dtype=float,
     )
     finite = np.isfinite(two_theta_values) & np.isfinite(phi_values)
     if not np.any(finite):
@@ -4835,8 +4972,8 @@ def _detector_pixel_to_scattering_angles(
     dy = (center_row - float(row)) * float(pixel_size)
     radius = float(np.hypot(dx, dy))
     two_theta = float(np.degrees(np.arctan2(radius, float(detector_distance))))
-    phi = float(np.degrees(np.arctan2(dx, dy)))
-    return two_theta, _wrap_phi_range(phi)
+    raw_phi = float(np.degrees(np.arctan2(-dy, dx)))
+    return two_theta, float(raw_phi_to_gui_phi(raw_phi))
 
 
 def _native_detector_coords_to_live_caked_coords(
@@ -4887,44 +5024,126 @@ def _scattering_angles_to_detector_pixel(
 
 
 def _geometry_fit_caked_roi_fit_space_to_detector_point(
-    params_local: Mapping[str, object] | None,
+    *,
+    detector_shape: Sequence[object] | None,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    ai: FastAzimuthalIntegrator | None = None,
+    transform_bundle: CakeTransformBundle | None = None,
 ) -> Callable[[float, float], tuple[float | None, float | None] | None] | None:
     """Build one fit-space `(2theta, phi)` to detector-point projector for ROI use."""
 
-    if not isinstance(params_local, Mapping):
+    try:
+        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
+    except Exception:
         return None
-    center_value = params_local.get("center")
-    try:
-        detector_distance = float(params_local.get("corto_detector", np.nan))
-    except Exception:
-        detector_distance = float("nan")
-    try:
-        pixel_size = float(
-            params_local.get(
-                "pixel_size_m",
-                params_local.get("pixel_size", np.nan),
-            )
-        )
-    except Exception:
-        pixel_size = float("nan")
-    if center_value is None or not np.isfinite(detector_distance) or not np.isfinite(
-        pixel_size
-    ):
+    if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
+        return None
+    bundle = (
+        transform_bundle
+        if isinstance(transform_bundle, CakeTransformBundle)
+        and tuple(transform_bundle.detector_shape) == tuple(normalized_shape)
+        else None
+    )
+    if bundle is not None:
+        radial = np.asarray(bundle.radial_deg, dtype=np.float64).reshape(-1)
+        azimuth = np.asarray(bundle.gui_azimuth_deg, dtype=np.float64).reshape(-1)
+    else:
+        try:
+            radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+            azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        if radial.size <= 0 or azimuth.size <= 0:
+            return None
+    exact_ai = ai if isinstance(ai, FastAzimuthalIntegrator) else None
+    if bundle is None and exact_ai is None:
         return None
 
     def _project(
         two_theta_deg: float,
         phi_deg: float,
     ) -> tuple[float | None, float | None] | None:
-        return _scattering_angles_to_detector_pixel(
+        return caked_point_to_detector_pixel(
+            exact_ai,
+            normalized_shape,
+            radial,
+            azimuth,
             float(two_theta_deg),
             float(phi_deg),
-            center=center_value,
-            detector_distance=float(detector_distance),
-            pixel_size=float(pixel_size),
+            transform_bundle=bundle,
         )
 
     return _project
+
+
+def _geometry_fit_worker_caked_projection_view(
+    *,
+    detector_shape: Sequence[object] | None,
+    ai: FastAzimuthalIntegrator | None,
+    npt_rad: int | None = None,
+    npt_azim: int | None = None,
+) -> dict[str, object] | None:
+    """Build exact-cake axis metadata for worker ROI filtering before first cake."""
+
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    try:
+        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
+    except Exception:
+        return None
+    if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
+        return None
+
+    radial_bins = (
+        int(max(1, npt_rad))
+        if npt_rad is not None
+        else int(max(1, DEFAULT_ANALYSIS_RADIAL_BINS))
+    )
+    azimuth_bins = (
+        int(max(1, npt_azim))
+        if npt_azim is not None
+        else int(max(1, DEFAULT_ANALYSIS_AZIMUTH_BINS))
+    )
+    try:
+        radial_axis, raw_azimuth_axis = build_angle_axes(
+            npt_rad=radial_bins,
+            npt_azim=azimuth_bins,
+            tth_min_deg=0.0,
+            tth_max_deg=detector_two_theta_max_deg(
+                normalized_shape,
+                ai.geometry,
+            ),
+            azimuth_min_deg=-180.0,
+            azimuth_max_deg=180.0,
+        )
+        transform_bundle = build_cake_transform_bundle(
+            ai,
+            normalized_shape,
+            radial_axis,
+            raw_azimuth_axis,
+        )
+    except Exception:
+        return None
+    if not isinstance(transform_bundle, CakeTransformBundle):
+        return None
+
+    gui_azimuth_axis = np.asarray(
+        raw_phi_to_gui_phi(raw_azimuth_axis),
+        dtype=np.float64,
+    )
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(gui_azimuth_axis, kind="stable"),
+        dtype=np.int32,
+    )
+    gui_azimuth_axis = gui_azimuth_axis[raw_to_gui_row_permutation]
+    return {
+        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
+        "azimuth_axis": np.asarray(gui_azimuth_axis, dtype=np.float64).copy(),
+        "raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=np.float64).copy(),
+        "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+        "transform_bundle": transform_bundle,
+    }
 
 
 def _caked_axis_to_image_index(
@@ -5000,7 +5219,8 @@ def _initialize_runtime_controls_block_04() -> None:
             center=lambda: [float(center_x_var.get()), float(center_y_var.get())],
             detector_distance=lambda: float(corto_detector_var.get()),
             pixel_size=float(pixel_size_m),
-            wrap_phi_range=lambda value: globals()["_wrap_phi_range"](value),
+            caked_transform_bundle=_current_live_caked_transform_bundle,
+            wrap_phi_range=lambda value: raw_phi_to_gui_phi(value),
             rotate_point_for_display=_rotate_point_for_display,
             display_rotate_k=DISPLAY_ROTATE_K,
             current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
@@ -5108,6 +5328,7 @@ def _initialize_runtime_controls_block_04() -> None:
             ),
             build_grouped_candidates=_geometry_manual_pick_candidates,
             build_simulated_lookup=_geometry_manual_simulated_lookup,
+            project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
             entry_display_coords=_geometry_manual_entry_display_coords,
             auto_match_background_context=(
                 lambda *args, **kwargs: globals()["_auto_match_background_context"](
@@ -7050,6 +7271,18 @@ def _update_chi_square_display(force=False):
     chi_square_label.config(text=text)
 
 
+def _ensure_global_image_buffer_shape(source_image: object) -> np.ndarray:
+    global global_image_buffer
+
+    source = np.asarray(source_image)
+    if (
+        getattr(global_image_buffer, "shape", None) != source.shape
+        or getattr(global_image_buffer, "dtype", None) != np.float64
+    ):
+        global_image_buffer = np.empty(source.shape, dtype=np.float64)
+    return global_image_buffer
+
+
 def apply_scale_factor_to_existing_results(
     update_limits=False,
     *,
@@ -7121,6 +7354,7 @@ def apply_scale_factor_to_existing_results(
         return
 
     scale = _get_scale_factor_value(default=1.0)
+    _ensure_global_image_buffer_shape(simulation_runtime_state.unscaled_image)
     if abs(float(scale) - 1.0) <= 1e-12:
         np.copyto(global_image_buffer, simulation_runtime_state.unscaled_image, casting="unsafe")
     else:
@@ -7416,22 +7650,28 @@ def _initialize_runtime_controls_block_23() -> None:
 
 
 
-PHI_ZERO_OFFSET_DEGREES = -90.0
 DEFAULT_ANALYSIS_RADIAL_BINS = 1000
 DEFAULT_ANALYSIS_AZIMUTH_BINS = 720
 
 
-def _adjust_phi_zero(phi_values):
-    """Center azimuths at ``PHI_ZERO_OFFSET_DEGREES`` and mirror about the x-axis."""
+def _current_live_caked_transform_bundle() -> CakeTransformBundle | None:
+    ai = simulation_runtime_state.ai_cache.get("ai")
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    bundle = getattr(ai, "_live_caked_transform_bundle", None)
+    return bundle if isinstance(bundle, CakeTransformBundle) else None
 
-    return PHI_ZERO_OFFSET_DEGREES - np.asarray(phi_values)
 
-
-def _wrap_phi_range(phi_values):
-    """Wrap azimuthal values into the ``[-180, 180)`` interval."""
-
-    wrapped = ((np.asarray(phi_values) + 180.0) % 360.0) - 180.0
-    return wrapped
+def _set_live_caked_transform_bundle(bundle: CakeTransformBundle | None) -> None:
+    ai = simulation_runtime_state.ai_cache.get("ai")
+    if isinstance(bundle, CakeTransformBundle):
+        simulation_runtime_state.ai_cache["detector_shape"] = bundle.detector_shape
+    if isinstance(ai, FastAzimuthalIntegrator):
+        setattr(
+            ai,
+            "_live_caked_transform_bundle",
+            bundle if isinstance(bundle, CakeTransformBundle) else None,
+        )
 
 
 def caking(
@@ -7447,11 +7687,10 @@ def caking(
         "npt_rad": int(max(1, npt_rad)),
         "npt_azim": int(max(1, npt_azim)),
         "correctSolidAngle": True,
+        "method": "lut",
         "unit": "2th_deg",
     }
-    if rows is None or cols is None:
-        integrate_kwargs["method"] = "lut"
-    else:
+    if rows is not None or cols is not None:
         integrate_kwargs["rows"] = rows
         integrate_kwargs["cols"] = cols
     return ai.integrate2d(
@@ -7578,7 +7817,7 @@ def _set_image_origin(image_display, origin):
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     intensity = res2.intensity
     radial_2theta = res2.radial
-    azimuth_vals = _adjust_phi_zero(res2.azimuthal)
+    azimuth_vals = np.asarray(raw_phi_to_gui_phi(res2.azimuthal), dtype=float)
 
     tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
     phi_min = float(phi_min)
@@ -7641,7 +7880,7 @@ def _detector_angular_maps_for_shape(ai, detector_shape):
     if two_theta is None or phi_vals is None:
         return None, None
 
-    return np.asarray(two_theta, dtype=float), _adjust_phi_zero(phi_vals)
+    return np.asarray(two_theta, dtype=float), np.asarray(phi_vals, dtype=float)
 
 
 def _get_detector_angular_maps(ai):
@@ -7724,7 +7963,10 @@ def _prepare_caked_intersection_cache(
             dy = (center_row - rows[valid]) * pixel_size
             radius = np.hypot(dx, dy)
             out[valid, 14] = np.degrees(np.arctan2(radius, detector_distance))
-            out[valid, 15] = _wrap_phi_range(np.degrees(np.arctan2(dx, dy)))
+            out[valid, 15] = np.asarray(
+                raw_phi_to_gui_phi(np.degrees(np.arctan2(-dy, dx))),
+                dtype=float,
+            )
         transformed.append(out)
 
     return transformed
@@ -7749,6 +7991,7 @@ def _initialize_runtime_controls_block_24() -> None:
     simulation_runtime_state.last_caked_background_image_unscaled = None
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
+    _set_live_caked_transform_bundle(None)
     simulation_runtime_state.last_caked_intersection_cache = None
     simulation_runtime_state.last_q_space_image_unscaled = None
     simulation_runtime_state.last_q_space_extent = None
@@ -8080,7 +8323,7 @@ def _current_ordered_structure_scale() -> float:
     var = globals().get("ordered_structure_scale_var")
     fallback = defaults.get("ordered_structure_scale", 1.0)
     if var is None:
-        return gui_ordered_structure_fit.normalize_ordered_structure_scale(
+        return _normalize_ordered_structure_scale(
             fallback,
             fallback=1.0,
         )
@@ -8088,7 +8331,7 @@ def _current_ordered_structure_scale() -> float:
         raw_value = var.get()
     except Exception:
         raw_value = fallback
-    return gui_ordered_structure_fit.normalize_ordered_structure_scale(
+    return _normalize_ordered_structure_scale(
         raw_value,
         fallback=float(fallback),
     )
@@ -8345,6 +8588,28 @@ def _analysis_integration_outputs_visible() -> bool:
         popout_open=gui_views.analysis_popout_window_open(analysis_popout_view_state),
         assume_visible_when_unknown=True,
     )
+
+
+def _schedule_exact_cake_numba_warmup_once() -> None:
+    if bool(getattr(simulation_runtime_state, "exact_cake_numba_warmup_scheduled", False)):
+        return
+    simulation_runtime_state.exact_cake_numba_warmup_scheduled = True
+    try:
+        root.after_idle(start_exact_cake_numba_warmup_in_background)
+    except Exception:
+        simulation_runtime_state.exact_cake_numba_warmup_scheduled = False
+
+
+def _schedule_forward_simulation_numba_warmup_once() -> None:
+    if bool(
+        getattr(simulation_runtime_state, "forward_simulation_numba_warmup_scheduled", False)
+    ):
+        return
+    simulation_runtime_state.forward_simulation_numba_warmup_scheduled = True
+    try:
+        root.after_idle(start_forward_simulation_numba_warmup_in_background)
+    except Exception:
+        simulation_runtime_state.forward_simulation_numba_warmup_scheduled = False
 
 
 def _refresh_analysis_integration_if_visible() -> None:
@@ -8907,6 +9172,7 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_caked_background_image_unscaled = None
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
+    _set_live_caked_transform_bundle(None)
     simulation_runtime_state.last_caked_intersection_cache = None
     simulation_runtime_state.last_q_space_image_unscaled = None
     simulation_runtime_state.last_q_space_extent = None
@@ -9812,8 +10078,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     )
     capture_primary_hit_tables_raw = bool(job.get("capture_primary_hit_tables_raw", False))
 
-    img1 = np.zeros((image_size, image_size), dtype=np.float64)
-    img2 = np.zeros((image_size, image_size), dtype=np.float64)
+    img1 = None
+    img2 = None
     raw_hit_tables1: list[object] = []
     raw_hit_tables2: list[object] = []
     cache1: list[object] = []
@@ -9856,6 +10122,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 image_size=image_size,
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
             )
+
+        if img1 is None:
+            img1 = np.zeros((image_size, image_size), dtype=np.float64)
+        if img2 is None:
+            img2 = np.zeros((image_size, image_size), dtype=np.float64)
 
         projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         return {
@@ -10260,18 +10531,26 @@ def _caked_geometry_cache_signature(
     )
 
 
-def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
+def _prepare_caked_display_payload(
+    res2,
+    *,
+    ai: FastAzimuthalIntegrator | None = None,
+    detector_shape: tuple[int, ...] | list[int] | None = None,
+) -> dict[str, object] | None:
     if res2 is None:
         return None
 
-    caked_img = np.asarray(res2.intensity, dtype=float)
-    radial_vals = np.asarray(res2.radial, dtype=float)
-    azimuth_vals = _wrap_phi_range(_adjust_phi_zero(res2.azimuthal))
-
-    if azimuth_vals.size:
-        azimuth_order = np.argsort(azimuth_vals)
-        azimuth_vals = azimuth_vals[azimuth_order]
-        caked_img = caked_img[azimuth_order, :]
+    transform_bundle = build_cake_transform_bundle_from_result(
+        ai,
+        detector_shape if detector_shape is not None else (),
+        res2,
+    )
+    raw_azimuth_axis = np.asarray(res2.azimuthal, dtype=float)
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+        dtype=np.int32,
+    )
+    caked_img, radial_vals, azimuth_vals = prepare_gui_phi_display(res2)
 
     radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
     if np.any(radial_mask):
@@ -10294,6 +10573,13 @@ def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
         "image": np.asarray(caked_img, dtype=float),
         "radial": np.asarray(radial_vals, dtype=float),
         "azimuth": np.asarray(azimuth_vals, dtype=float),
+        "raw_azimuth": np.asarray(raw_azimuth_axis, dtype=float),
+        "raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=float),
+        "raw_to_gui_row_permutation": np.asarray(
+            raw_to_gui_row_permutation,
+            dtype=np.int32,
+        ),
+        "transform_bundle": transform_bundle,
         "extent": [
             radial_min,
             radial_max,
@@ -10358,8 +10644,13 @@ def _restore_caked_display_payload_from_cached_results(
 ) -> bool:
     """Rebuild caked display arrays from the current cached analysis results."""
 
-    sim_caked = _prepare_caked_display_payload(simulation_runtime_state.last_res2_sim)
+    sim_caked = _prepare_caked_display_payload(
+        simulation_runtime_state.last_res2_sim,
+        ai=simulation_runtime_state.ai_cache.get("ai"),
+        detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+    )
     if not isinstance(sim_caked, dict):
+        _set_live_caked_transform_bundle(None)
         return False
 
     simulation_runtime_state.last_caked_image_unscaled = np.asarray(
@@ -10374,6 +10665,7 @@ def _restore_caked_display_payload_from_cached_results(
         sim_caked.get("azimuth"),
         dtype=float,
     )
+    _set_live_caked_transform_bundle(sim_caked.get("transform_bundle"))
     simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
     caked_intersection_cache = _prepare_caked_intersection_cache(
         getattr(simulation_runtime_state, "stored_intersection_cache", ()),
@@ -10385,7 +10677,11 @@ def _restore_caked_display_payload_from_cached_results(
 
     bg_caked = None
     if background_visible and simulation_runtime_state.last_res2_background is not None:
-        bg_caked = _prepare_caked_display_payload(simulation_runtime_state.last_res2_background)
+        bg_caked = _prepare_caked_display_payload(
+            simulation_runtime_state.last_res2_background,
+            ai=simulation_runtime_state.ai_cache.get("ai"),
+            detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+        )
     if isinstance(bg_caked, dict):
         simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(
             bg_caked.get("image"),
@@ -10427,11 +10723,19 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
             bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
         else:
             bg_res2 = None
-    sim_caked = _prepare_caked_display_payload(sim_res2)
+    sim_caked = _prepare_caked_display_payload(
+        sim_res2,
+        ai=ai,
+        detector_shape=sim_image.shape,
+    )
     if isinstance(cached_bg_caked, dict):
         bg_caked = dict(cached_bg_caked)
     else:
-        bg_caked = _prepare_caked_display_payload(bg_res2)
+        bg_caked = _prepare_caked_display_payload(
+            bg_res2,
+            ai=ai,
+            detector_shape=bg_array.shape if bg_array is not None else sim_image.shape,
+        )
     sim_q_space = _prepare_q_space_display_payload(
         sim_caked,
         wavelength_m=job.get("wavelength_m"),
@@ -10708,6 +11012,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
             sim_caked.get("azimuth"),
             dtype=float,
         )
+        _set_live_caked_transform_bundle(sim_caked.get("transform_bundle"))
         simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
         caked_intersection_cache = _copy_intersection_cache_tables(
             result.get("sim_caked_intersection_cache", [])
@@ -10717,6 +11022,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        _set_live_caked_transform_bundle(None)
         simulation_runtime_state.last_caked_extent = None
         simulation_runtime_state.last_caked_intersection_cache = None
 
@@ -11911,6 +12217,9 @@ def do_update():
         and (caked_analysis_requested or one_d_analysis_requested)
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
+    if analysis_sig is not None:
+        _schedule_exact_cake_numba_warmup_once()
+        _schedule_forward_simulation_numba_warmup_once()
     desired_analysis_preview = bool(
         LIVE_DRAG_PREVIEW_ENABLED
         and PREVIEW_CALCULATIONS_ENABLED
@@ -12244,6 +12553,7 @@ def do_update():
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        _set_live_caked_transform_bundle(None)
         simulation_runtime_state.last_q_space_image_unscaled = None
         simulation_runtime_state.last_q_space_extent = None
         simulation_runtime_state.last_q_space_background_image_unscaled = None
@@ -12362,6 +12672,9 @@ def do_update():
         next_phase=str(simulation_runtime_state.update_phase),
         analysis_result_current=bool(analysis_result_current),
     )
+    if simulation_runtime_state.stored_sim_image is not None:
+        _schedule_exact_cake_numba_warmup_once()
+        _schedule_forward_simulation_numba_warmup_once()
     simulation_runtime_state.update_running = False
     if "progress_label" in globals() and progress_label is not None:
         try:
@@ -12928,8 +13241,7 @@ def _attach_geometry_fit_background_selection_trace() -> None:
 
 
 def _initialize_runtime_controls_block_35() -> None:
-    global geometry_fit_background_selection_var, progress_label_positions, progress_label_geometry, ordered_structure_progressbar, progress_label_ordered_structure, mosaic_progressbar, progress_label_mosaic, progress_label
-    global update_timing_label, chi_square_label
+    global geometry_fit_background_selection_var
 
     gui_views.create_geometry_fit_background_controls(
         parent=app_shell_view_state.match_backgrounds_frame,
@@ -12974,33 +13286,6 @@ def _initialize_runtime_controls_block_35() -> None:
             ),
         ],
     )
-
-    gui_views.create_status_panel(
-        parent=app_shell_view_state.status_frame,
-        view_state=status_panel_view_state,
-    )
-    progress_label_positions = status_panel_view_state.progress_label_positions
-    progress_label_geometry = status_panel_view_state.progress_label_geometry
-    ordered_structure_progressbar = status_panel_view_state.ordered_structure_progressbar
-    progress_label_ordered_structure = status_panel_view_state.progress_label_ordered_structure
-    mosaic_progressbar = status_panel_view_state.mosaic_progressbar
-    progress_label_mosaic = status_panel_view_state.progress_label_mosaic
-    progress_label = status_panel_view_state.progress_label
-    update_timing_label = status_panel_view_state.update_timing_label
-    chi_square_label = status_panel_view_state.chi_square_label
-    if (
-        progress_label_positions is None
-        or progress_label_geometry is None
-        or ordered_structure_progressbar is None
-        or progress_label_ordered_structure is None
-        or mosaic_progressbar is None
-        or progress_label_mosaic is None
-        or progress_label is None
-        or update_timing_label is None
-        or chi_square_label is None
-    ):
-        raise RuntimeError("Status panel was not created.")
-    progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
 
     hbn_geometry_debug_view_state.report_text = (
         "No hBN geometry debug report yet.\nImport an hBN bundle to generate one."
@@ -18782,8 +19067,9 @@ def _format_ordered_structure_result_text(result, *, mask_roi_count: int) -> str
 def on_revert_last_ordered_fit():
     """Restore the last accepted ordered-structure fit snapshot."""
 
+    ordered_structure_fit = _get_ordered_structure_fit_module()
     snapshot = app_state.ordered_structure_fit_snapshot
-    restored = gui_ordered_structure_fit.restore_ordered_structure_snapshot(
+    restored = ordered_structure_fit.restore_ordered_structure_snapshot(
         snapshot,
         occupancy_vars=_occupancy_control_vars(),
         atom_site_vars=_atom_site_fractional_control_vars(),
@@ -18805,6 +19091,7 @@ def on_revert_last_ordered_fit():
 def on_fit_ordered_structure_click():
     """Run the ordered-structure detector-space intensity refinement."""
 
+    ordered_structure_fit = _get_ordered_structure_fit_module()
     measured_image = _get_current_background_backend()
     if measured_image is None:
         progress_label_ordered_structure.config(
@@ -18844,11 +19131,11 @@ def on_fit_ordered_structure_click():
 
     occupancy_values = list(_current_occupancy_values())
     atom_site_values = list(_current_atom_site_fractional_values())
-    parameter_specs: list[gui_ordered_structure_fit.OrderedStructureParameterSpec] = []
+    parameter_specs: list[object] = []
     occupancy_param_names: list[str] = []
     atom_param_names: list[dict[str, str]] = []
 
-    coord_window = gui_ordered_structure_fit.normalize_coordinate_window(
+    coord_window = _normalize_coordinate_window(
         ordered_structure_coord_window_var.get(),
         fallback=ordered_structure_coord_window_default,
     )
@@ -18860,7 +19147,7 @@ def on_fit_ordered_structure_click():
         if idx >= len(occupancy_values) or not bool(toggle_var.get()):
             continue
         parameter_specs.append(
-            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+            ordered_structure_fit.OrderedStructureParameterSpec(
                 name=name,
                 value=float(occupancy_values[idx]),
                 lower=0.0,
@@ -18879,7 +19166,7 @@ def on_fit_ordered_structure_click():
                 continue
             current_value = float(base_values[axis_index])
             parameter_specs.append(
-                gui_ordered_structure_fit.OrderedStructureParameterSpec(
+                ordered_structure_fit.OrderedStructureParameterSpec(
                     name=name,
                     value=current_value,
                     lower=current_value - float(coord_window),
@@ -18899,7 +19186,7 @@ def on_fit_ordered_structure_click():
 
     if bool(ordered_structure_fit_debye_x_var.get()):
         parameter_specs.append(
-            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+            ordered_structure_fit.OrderedStructureParameterSpec(
                 name="debye_x",
                 value=debye_x_current,
                 lower=0.0,
@@ -18908,7 +19195,7 @@ def on_fit_ordered_structure_click():
         )
     if bool(ordered_structure_fit_debye_y_var.get()):
         parameter_specs.append(
-            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+            ordered_structure_fit.OrderedStructureParameterSpec(
                 name="debye_y",
                 value=debye_y_current,
                 lower=0.0,
@@ -19070,7 +19357,7 @@ def on_fit_ordered_structure_click():
             return
 
     try:
-        mask = gui_ordered_structure_fit.build_hybrid_ordered_structure_mask(
+        mask = ordered_structure_fit.build_hybrid_ordered_structure_mask(
             image_shape=measured_arr.shape,
             primary_hit_tables=primary_hit_tables,
             max_reflections=int(ordered_structure_fit_mask_cfg.get("max_reflections", 24)),
@@ -19090,7 +19377,7 @@ def on_fit_ordered_structure_click():
         )
         return
 
-    snapshot = gui_ordered_structure_fit.capture_ordered_structure_snapshot(
+    snapshot = ordered_structure_fit.capture_ordered_structure_snapshot(
         occupancy_values=occupancy_values,
         atom_site_values=atom_site_values,
         debye_x=debye_x_current,
@@ -19315,7 +19602,7 @@ def on_fit_ordered_structure_click():
     ordered_structure_progressbar.start(10)
     root.update_idletasks()
     try:
-        result = gui_ordered_structure_fit.fit_ordered_structure_parameters(
+        result = ordered_structure_fit.fit_ordered_structure_parameters(
             measured_image=measured_arr,
             mask=mask,
             parameter_specs=parameter_specs,
@@ -19359,7 +19646,7 @@ def on_fit_ordered_structure_click():
         return
 
     app_state.ordered_structure_fit_snapshot = snapshot
-    gui_ordered_structure_fit.apply_ordered_structure_values(
+    ordered_structure_fit.apply_ordered_structure_values(
         result.parameter_values,
         occupancy_vars=_occupancy_control_vars(),
         occupancy_param_names=occupancy_param_names,
@@ -19754,9 +20041,9 @@ def _initialize_runtime_controls_block_43() -> None:
 
     _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT = "Fit results will appear here."
     _ANALYSIS_PEAK_MODEL_COLORS = {
-        gui_analysis_peak_tools.PROFILE_GAUSSIAN: "#2a9d8f",
-        gui_analysis_peak_tools.PROFILE_LORENTZIAN: "#f4a261",
-        gui_analysis_peak_tools.PROFILE_PSEUDO_VOIGT: "#d62828",
+        _ANALYSIS_PEAK_PROFILE_GAUSSIAN: "#2a9d8f",
+        _ANALYSIS_PEAK_PROFILE_LORENTZIAN: "#f4a261",
+        _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT: "#d62828",
     }
 
 
@@ -19813,14 +20100,21 @@ def _update_analysis_peak_pick_button_label() -> None:
 
 
 def _analysis_peak_fit_results_text() -> str:
+    if (
+        not analysis_peak_selection_state.radial_fit_results
+        and not analysis_peak_selection_state.azimuth_fit_results
+    ):
+        return _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT
+
+    analysis_peak_tools = _get_analysis_peak_tools_module()
     lines = [
         line
         for line in (
-            gui_analysis_peak_tools.format_peak_fit_axis_summary(
+            analysis_peak_tools.format_peak_fit_axis_summary(
                 "Radial",
                 analysis_peak_selection_state.radial_fit_results,
             ),
-            gui_analysis_peak_tools.format_peak_fit_axis_summary(
+            analysis_peak_tools.format_peak_fit_axis_summary(
                 "Azimuth",
                 analysis_peak_selection_state.azimuth_fit_results,
             ),
@@ -19957,7 +20251,7 @@ def _analysis_peak_axis_value(
 ) -> float:
     if str(axis_kind) == "radial":
         return float(peak_entry.get("two_theta_deg", np.nan))
-    return gui_analysis_peak_tools.align_angle_to_axis(
+    return _get_analysis_peak_tools_module().align_angle_to_axis(
         float(peak_entry.get("phi_deg", np.nan)),
         axis_values,
     )
@@ -20120,7 +20414,11 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
             )
             if not np.isfinite(axis_value):
                 continue
-            y_value = gui_analysis_peak_tools.sample_curve_value(x_curve, y_curve, axis_value)
+            y_value = _get_analysis_peak_tools_module().sample_curve_value(
+                x_curve,
+                y_curve,
+                axis_value,
+            )
             try:
                 vline_artist = axis_obj.axvline(
                     axis_value,
@@ -20340,8 +20638,9 @@ def _zoom_to_current_analysis_region(*, redraw: bool) -> None:
     x_hi = max(tth_min, tth_max) + tth_pad
 
     azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
-    phi_lo = gui_analysis_peak_tools.align_angle_to_axis(phi_min, azimuth_axis)
-    phi_hi = gui_analysis_peak_tools.align_angle_to_axis(phi_max, azimuth_axis)
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    phi_lo = analysis_peak_tools.align_angle_to_axis(phi_min, azimuth_axis)
+    phi_hi = analysis_peak_tools.align_angle_to_axis(phi_max, azimuth_axis)
     if phi_hi < phi_lo:
         phi_lo, phi_hi = phi_hi, phi_lo
     phi_pad = max(0.6, 0.05 * abs(phi_hi - phi_lo))
@@ -20450,7 +20749,8 @@ def _select_analysis_peak_from_canvas_click(
     phi_deg: float,
 ) -> bool:
     range_values = _current_analysis_range_values()
-    if not gui_analysis_peak_tools.integration_region_contains(
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    if not analysis_peak_tools.integration_region_contains(
         two_theta_deg,
         phi_deg,
         tth_min=float(range_values["tth_min"]),
@@ -20533,7 +20833,8 @@ def _select_analysis_peak_from_canvas_click(
         return True
 
     radial_tol, azimuth_tol = _analysis_peak_duplicate_tolerances()
-    match_index = gui_analysis_peak_tools.match_selected_peak_index(
+    wrapped_refined_phi = float(analysis_peak_tools.wrap_angle_degrees(refined_phi))
+    match_index = analysis_peak_tools.match_selected_peak_index(
         analysis_peak_selection_state.selected_peaks,
         two_theta_deg=float(refined_tth),
         phi_deg=float(refined_phi),
@@ -20545,13 +20846,13 @@ def _select_analysis_peak_from_canvas_click(
         analysis_peak_selection_state.selected_peaks.pop(int(match_index))
         status_text = (
             f"Removed peak near 2theta={float(refined_tth):.4f} deg, "
-            f"phi={float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)):.4f} deg."
+            f"phi={wrapped_refined_phi:.4f} deg."
         )
     else:
         analysis_peak_selection_state.selected_peaks.append(
             {
                 "two_theta_deg": float(refined_tth),
-                "phi_deg": float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)),
+                "phi_deg": wrapped_refined_phi,
                 "source": str(source_payload.get("source", "simulated")),
                 "raw_two_theta_deg": float(two_theta_deg),
                 "raw_phi_deg": float(phi_deg),
@@ -20560,7 +20861,7 @@ def _select_analysis_peak_from_canvas_click(
         status_text = (
             f"Selected peak {len(analysis_peak_selection_state.selected_peaks)} at "
             f"2theta={float(refined_tth):.4f} deg, "
-            f"phi={float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)):.4f} deg."
+            f"phi={wrapped_refined_phi:.4f} deg."
         )
 
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
@@ -20582,18 +20883,19 @@ def _fit_selected_analysis_peaks() -> None:
             pass
         return
 
+    analysis_peak_tools = _get_analysis_peak_tools_module()
     model_specs = (
         (
             getattr(analysis_peak_tools_view_state.fit_gaussian_var, "get", lambda: False)(),
-            gui_analysis_peak_tools.PROFILE_GAUSSIAN,
+            _ANALYSIS_PEAK_PROFILE_GAUSSIAN,
         ),
         (
             getattr(analysis_peak_tools_view_state.fit_lorentzian_var, "get", lambda: False)(),
-            gui_analysis_peak_tools.PROFILE_LORENTZIAN,
+            _ANALYSIS_PEAK_PROFILE_LORENTZIAN,
         ),
         (
             getattr(analysis_peak_tools_view_state.fit_pseudo_voigt_var, "get", lambda: True)(),
-            gui_analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+            _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT,
         ),
     )
     models = [model for enabled, model in model_specs if bool(enabled)]
@@ -20643,7 +20945,7 @@ def _fit_selected_analysis_peaks() -> None:
                 dtype=float,
             )
             center_guess = float(axis_centers[idx])
-            window_half_width = gui_analysis_peak_tools.recommended_peak_window_half_width(
+            window_half_width = analysis_peak_tools.recommended_peak_window_half_width(
                 axis_centers,
                 idx,
                 axis_values=x_curve,
@@ -20651,7 +20953,7 @@ def _fit_selected_analysis_peaks() -> None:
                 region_bounds=(float(x_curve[0]), float(x_curve[-1])),
             )
             for model in models:
-                fit_result = gui_analysis_peak_tools.fit_peak_profile(
+                fit_result = analysis_peak_tools.fit_peak_profile(
                     x_curve,
                     y_curve,
                     center_guess=center_guess,
@@ -21995,7 +22297,7 @@ def _build_geometry_fit_async_job(
         required_indices = [int(primary_index)]
 
     background_images: dict[int, dict[str, np.ndarray]] = {}
-    caked_views_by_background: dict[int, dict[str, np.ndarray]] = {}
+    caked_views_by_background: dict[int, dict[str, object]] = {}
     manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
     source_snapshots: dict[int, dict[str, object]] = {}
     requested_signatures: dict[int, object] = {}
@@ -22090,24 +22392,71 @@ def _build_geometry_fit_async_job(
             else {}
         )
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
-        if isinstance(caked_view_payload, tuple) and len(caked_view_payload) >= 3:
+        if isinstance(caked_view_payload, Mapping):
             try:
                 caked_views_by_background[int(current_background_index)] = {
                     "background": np.asarray(
-                        caked_view_payload[0],
+                        caked_view_payload.get("background"),
                         dtype=np.float64,
                     ).copy(),
                     "radial_axis": np.asarray(
-                        caked_view_payload[1],
+                        caked_view_payload.get("radial_axis"),
                         dtype=np.float64,
                     ).copy(),
                     "azimuth_axis": np.asarray(
-                        caked_view_payload[2],
+                        caked_view_payload.get("azimuth_axis"),
                         dtype=np.float64,
                     ).copy(),
+                    "raw_azimuth_axis": np.asarray(
+                        caked_view_payload.get("raw_azimuth_axis"),
+                        dtype=np.float64,
+                    ).copy(),
+                    "raw_to_gui_row_permutation": np.asarray(
+                        caked_view_payload.get("raw_to_gui_row_permutation"),
+                        dtype=np.int32,
+                    ).copy(),
+                    "transform_bundle": caked_view_payload.get("transform_bundle"),
                 }
             except Exception:
                 pass
+
+    analysis_bins: tuple[int, int]
+    current_caked_view = caked_views_by_background.get(int(current_background_index))
+    try:
+        current_radial_axis = np.asarray(
+            dict(current_caked_view or {}).get("radial_axis"),
+            dtype=np.float64,
+        )
+        current_azimuth_axis = np.asarray(
+            dict(current_caked_view or {}).get("azimuth_axis"),
+            dtype=np.float64,
+        )
+    except Exception:
+        current_radial_axis = None
+        current_azimuth_axis = None
+    if (
+        isinstance(current_radial_axis, np.ndarray)
+        and current_radial_axis.size > 0
+        and isinstance(current_azimuth_axis, np.ndarray)
+        and current_azimuth_axis.size > 0
+    ):
+        analysis_bins = (
+            int(current_radial_axis.size),
+            int(current_azimuth_axis.size),
+        )
+    else:
+        preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
+        if (
+            isinstance(preview_bins, tuple)
+            and len(preview_bins) == 2
+            and all(int(value) > 0 for value in preview_bins)
+        ):
+            analysis_bins = (int(preview_bins[0]), int(preview_bins[1]))
+        else:
+            analysis_bins = (
+                int(DEFAULT_ANALYSIS_RADIAL_BINS),
+                int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
+            )
 
     simulation_runtime_state.geometry_fit_job_counter = (
         int(simulation_runtime_state.geometry_fit_job_counter) + 1
@@ -22143,6 +22492,9 @@ def _build_geometry_fit_async_job(
         "osc_files": [str(path) for path in (manual_dataset_bindings.osc_files or ())],
         "image_size": int(manual_dataset_bindings.image_size),
         "display_rotate_k": int(manual_dataset_bindings.display_rotate_k),
+        "analysis_bins": analysis_bins,
+        "npt_rad": int(analysis_bins[0]),
+        "npt_azim": int(analysis_bins[1]),
         "background_images": background_images,
         "caked_views_by_background": caked_views_by_background,
         "manual_pairs_by_background": manual_pairs_by_background,
@@ -22322,7 +22674,7 @@ def _run_async_geometry_fit_worker_job(
 
     def _load_caked_view_by_index_snapshot(
         index: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    ) -> dict[str, object] | None:
         caked_payload = dict(
             dict(job_data.get("caked_views_by_background", {}) or {}).get(int(index)) or {}
         )
@@ -22341,6 +22693,14 @@ def _run_async_geometry_fit_worker_job(
                 caked_payload.get("azimuth_axis"),
                 dtype=np.float64,
             ).copy()
+            raw_azimuth_axis = np.asarray(
+                caked_payload.get("raw_azimuth_axis"),
+                dtype=np.float64,
+            ).copy()
+            raw_to_gui_row_permutation = np.asarray(
+                caked_payload.get("raw_to_gui_row_permutation"),
+                dtype=np.int32,
+            ).copy()
         except Exception:
             return None
         if (
@@ -22350,7 +22710,14 @@ def _run_async_geometry_fit_worker_job(
             or azimuth_axis.size <= 0
         ):
             return None
-        return caked_background, radial_axis, azimuth_axis
+        return {
+            "background": caked_background,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+            "transform_bundle": caked_payload.get("transform_bundle"),
+        }
 
     def _project_source_rows(raw_rows: Sequence[object] | None) -> Sequence[object]:
         project_rows = job_data.get("project_rows")
@@ -22555,6 +22922,50 @@ def _run_async_geometry_fit_worker_job(
             if oriented_background is not None:
                 backend_background = np.asarray(oriented_background, dtype=np.float64)
 
+        worker_ai = _worker_geometry_fit_caking_integrator()
+        background_caked_view = dict(
+            caked_views_by_background.get(int(bundle.background_index)) or {}
+        )
+        if not isinstance(background_caked_view.get("transform_bundle"), CakeTransformBundle):
+            # Non-current worker backgrounds need same-axes exact-cake metadata
+            # before the first caked payload exists, otherwise ROI projection drops
+            # every angle-backed source row on the first pass.
+            analysis_bins = job_data.get("analysis_bins")
+            if not (
+                isinstance(analysis_bins, (tuple, list))
+                and len(analysis_bins) >= 2
+            ):
+                analysis_bins = getattr(
+                    simulation_runtime_state,
+                    "analysis_preview_bins",
+                    None,
+                )
+            try:
+                precompute_npt_rad = (
+                    int(max(1, analysis_bins[0]))
+                    if isinstance(analysis_bins, (tuple, list))
+                    and len(analysis_bins) >= 2
+                    else int(max(1, job_data.get("npt_rad")))
+                )
+            except Exception:
+                precompute_npt_rad = None
+            try:
+                precompute_npt_azim = (
+                    int(max(1, analysis_bins[1]))
+                    if isinstance(analysis_bins, (tuple, list))
+                    and len(analysis_bins) >= 2
+                    else int(max(1, job_data.get("npt_azim")))
+                )
+            except Exception:
+                precompute_npt_azim = None
+            precomputed_caked_view = _geometry_fit_worker_caked_projection_view(
+                detector_shape=backend_background.shape[:2],
+                ai=worker_ai,
+                npt_rad=precompute_npt_rad,
+                npt_azim=precompute_npt_azim,
+            )
+            if isinstance(precomputed_caked_view, dict):
+                background_caked_view.update(precomputed_caked_view)
         roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection(
             bundle.stored_rows,
             required_pairs=list(
@@ -22567,7 +22978,11 @@ def _run_async_geometry_fit_worker_job(
             image_shape=backend_background.shape[:2],
             fit_config=dict(job_data.get("geometry_runtime_cfg", {}) or {}),
             fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
-                job_data.get("params", {})
+                detector_shape=backend_background.shape[:2],
+                radial_axis=background_caked_view.get("radial_axis"),
+                azimuth_axis=background_caked_view.get("azimuth_axis"),
+                ai=worker_ai,
+                transform_bundle=background_caked_view.get("transform_bundle"),
             ),
         )
         roi_enabled = bool(roi_selection.get("enabled", False))
@@ -22587,7 +23002,7 @@ def _run_async_geometry_fit_worker_job(
                 roi_used_restricted_cake = False
                 roi_fallback_reason = "invalid_roi_pixels"
 
-        ai = _worker_geometry_fit_caking_integrator()
+        ai = worker_ai
         if ai is None:
             return {
                 "roi_enabled": bool(roi_enabled),
@@ -22624,7 +23039,11 @@ def _run_async_geometry_fit_worker_job(
                     "roi_half_width_px": float(roi_half_width_px),
                 }
 
-        caked_payload = _prepare_caked_display_payload(res2)
+        caked_payload = _prepare_caked_display_payload(
+            res2,
+            ai=ai,
+            detector_shape=backend_background.shape,
+        )
         if not isinstance(caked_payload, Mapping):
             return {
                 "roi_enabled": bool(roi_enabled),
@@ -22640,6 +23059,15 @@ def _run_async_geometry_fit_worker_job(
                 "background": np.asarray(caked_payload.get("image"), dtype=np.float64).copy(),
                 "radial_axis": np.asarray(caked_payload.get("radial"), dtype=np.float64).copy(),
                 "azimuth_axis": np.asarray(caked_payload.get("azimuth"), dtype=np.float64).copy(),
+                "raw_azimuth_axis": np.asarray(
+                    caked_payload.get("raw_azimuth_axis", caked_payload.get("raw_azimuth")),
+                    dtype=np.float64,
+                ).copy(),
+                "raw_to_gui_row_permutation": np.asarray(
+                    caked_payload.get("raw_to_gui_row_permutation"),
+                    dtype=np.int32,
+                ).copy(),
+                "transform_bundle": caked_payload.get("transform_bundle"),
                 "roi_enabled": bool(roi_enabled),
                 "roi_used_restricted_cake": bool(roi_used_restricted_cake),
                 "roi_pixel_count": int(roi_pixel_count),
@@ -23563,6 +23991,9 @@ def _initialize_runtime_controls_block_50() -> None:
             "geometry_manual_pairs_for_index": _geometry_manual_pairs_for_index,
             "load_background_by_index": _load_background_image_by_index,
             "apply_background_backend_orientation": (_apply_background_backend_orientation),
+            "backend_detector_coords_to_native_detector_coords": (
+                _backend_background_to_native_detector_coords
+            ),
             "geometry_manual_simulated_peaks_for_params": (_geometry_manual_simulated_peaks_for_params),
             "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
             "geometry_manual_source_rows_for_background": (_geometry_manual_source_rows_for_background),
@@ -24076,7 +24507,7 @@ def _initialize_runtime_controls_block_53() -> None:
         if isinstance(ordered_structure_fit_cfg, dict)
         else {}
     )
-    ordered_structure_coord_window_default = gui_ordered_structure_fit.normalize_coordinate_window(
+    ordered_structure_coord_window_default = _normalize_coordinate_window(
         ordered_structure_fit_defaults_cfg.get("coord_window", 0.02),
         fallback=0.02,
     )
@@ -24109,7 +24540,7 @@ def _commit_ordered_structure_scale_entry(_event=None) -> None:
         raw_value = ordered_structure_scale_var.get()
     except Exception:
         raw_value = _current_ordered_structure_scale()
-    normalized = gui_ordered_structure_fit.normalize_ordered_structure_scale(
+    normalized = _normalize_ordered_structure_scale(
         raw_value,
         fallback=_current_ordered_structure_scale(),
     )
@@ -24132,7 +24563,7 @@ def _commit_ordered_structure_coord_window_entry(_event=None) -> None:
         raw_value = ordered_structure_coord_window_default
     ordered_structure_coord_window_var.set(
         float(
-            gui_ordered_structure_fit.normalize_coordinate_window(
+            _normalize_coordinate_window(
                 raw_value,
                 fallback=ordered_structure_coord_window_default,
             )
@@ -24840,140 +25271,156 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         package_launcher.launch_mosaic_visualizer()
         return
 
-    runtime_context = build_runtime_state_context()
+    runtime_context = RuntimeContext(
+        state=app_state,
+        simulation_runtime_state=simulation_runtime_state,
+        background_runtime_state=background_runtime_state,
+    )
     runtime_context = build_runtime_window_context(runtime_context)
-    runtime_context = build_runtime_plot_context(runtime_context)
-    runtime_context = build_runtime_controls_context(runtime_context)
     _ = runtime_context
 
     gui_views.apply_launch_window_context(root)
+    _set_structure_bootstrap_controls_enabled(False)
+    progress_label.config(text="Loading startup data...")
     try:
         root.deiconify()
     except tk.TclError:
         pass
     _emit_startup_benchmark_event("window_deiconified")
-    _set_structure_bootstrap_controls_enabled(
-        bool(getattr(structure_model_state, "bootstrap_complete", False))
-    )
-
-    params_file_path = get_path("parameters_file")
-    profile_loaded = False
-    if os.path.exists(params_file_path):
-        simulation_runtime_state.startup_updates_suspended = True
-        simulation_runtime_state.pending_startup_refresh = False
-        try:
-            load_parameters(
-                params_file_path,
-                theta_initial_var,
-                cor_angle_var,
-                gamma_var,
-                Gamma_var,
-                chi_var,
-                zs_var,
-                zb_var,
-                sample_width_var,
-                sample_length_var,
-                sample_depth_var,
-                debye_x_var,
-                debye_y_var,
-                corto_detector_var,
-                sigma_mosaic_var,
-                gamma_mosaic_var,
-                eta_var,
-                a_var,
-                c_var,
-                center_x_var,
-                center_y_var,
-                resolution_var,
-                custom_samples_var,
-                rod_points_per_gz_var,
-                bandwidth_percent_var=bandwidth_percent_var,
-                optics_mode_var=optics_mode_var,
-                phase_delta_expr_var=phase_delta_expr_var,
-                phi_l_divisor_var=phi_l_divisor_var,
-                sf_prune_bias_var=sf_prune_bias_var,
-                solve_q_steps_var=solve_q_steps_var,
-                solve_q_rel_tol_var=solve_q_rel_tol_var,
-                solve_q_mode_var=solve_q_mode_var,
-            )
-        finally:
-            simulation_runtime_state.startup_updates_suspended = False
-        if finite_stack_controls_view_state.phase_delta_entry_var is not None:
-            gui_views.set_finite_stack_phase_delta_entry_text(
-                finite_stack_controls_view_state,
-                _current_phase_delta_expression(),
-            )
-        if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
-            gui_views.set_finite_stack_phi_l_divisor_entry_text(
-                finite_stack_controls_view_state,
-                gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
-            )
-        _apply_rod_points_per_gz(trigger_update=False)
-        ensure_valid_resolution_choice()
-        profile_loaded = True
-    else:
-        ensure_valid_resolution_choice()
-
-    sample_count = int(max(1, simulation_runtime_state.num_samples))
-    cif_summary = Path(_current_primary_cif_path()).name
-    if structure_model_state.cif_file2:
-        cif_summary = f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
-    print(
-        "Startup ready: "
-        f"profile={'loaded' if profile_loaded else 'defaults'}; "
-        f"sampling={sample_count} samples; "
-        f"sf_prune={current_sf_prune_bias():+.2f}; "
-        f"q_mode={gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(solve_q_mode_var.get())}; "
-        f"q_steps={current_solve_q_values().steps}; "
-        f"q_tol={current_solve_q_values().rel_tol:.2e}; "
-        f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
-        f"cif={cif_summary}"
-    )
-
-    gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
-    simulation_runtime_state.update_pending = None
-    gui_controllers.clear_tk_after_token(
-        root,
-        simulation_runtime_state.integration_update_pending,
-    )
-    simulation_runtime_state.integration_update_pending = None
-
-    post_startup_tasks: list[gui_runtime_startup.StartupTask] = []
-    if not structure_model_controls_built:
-        post_startup_tasks.append(
-            gui_runtime_startup.StartupTask(
-                "structure controls",
-                _rebuild_structure_model_controls,
-            )
-        )
-    if write_excel:
-        post_startup_tasks.append(
-            gui_runtime_startup.StartupTask(
-                "initial Excel export",
-                export_initial_excel,
-            )
-        )
-
-    def _handle_post_startup_error(task_name: str, exc: Exception) -> None:
-        progress_label.config(text=f"Startup post-processing failed during {task_name}: {exc}")
-        try:
-            import traceback
-
-            traceback.print_exc()
-        except Exception:
-            pass
-
-    post_startup_task_runner = gui_runtime_startup.build_runtime_startup_task_runner(
-        root=root,
-        tasks=post_startup_tasks,
-        on_error=_handle_post_startup_error,
-        initial_delay_ms=200,
-        inter_task_delay_ms=75,
-    )
 
     def _run_initial_startup_work():
+        nonlocal runtime_context
+
         try:
             _emit_startup_benchmark_event("after_idle_startup_task")
+            runtime_context = build_runtime_state_context()
+            runtime_context = build_runtime_window_context(runtime_context)
+            runtime_context = build_runtime_plot_context(runtime_context)
+            runtime_context = build_runtime_controls_context(runtime_context)
+            _ = runtime_context
+            _set_structure_bootstrap_controls_enabled(
+                bool(getattr(structure_model_state, "bootstrap_complete", False))
+            )
+            params_file_path = get_path("parameters_file")
+            profile_loaded = False
+            if os.path.exists(params_file_path):
+                simulation_runtime_state.startup_updates_suspended = True
+                simulation_runtime_state.pending_startup_refresh = False
+                try:
+                    load_parameters(
+                        params_file_path,
+                        theta_initial_var,
+                        cor_angle_var,
+                        gamma_var,
+                        Gamma_var,
+                        chi_var,
+                        zs_var,
+                        zb_var,
+                        sample_width_var,
+                        sample_length_var,
+                        sample_depth_var,
+                        debye_x_var,
+                        debye_y_var,
+                        corto_detector_var,
+                        sigma_mosaic_var,
+                        gamma_mosaic_var,
+                        eta_var,
+                        a_var,
+                        c_var,
+                        center_x_var,
+                        center_y_var,
+                        resolution_var,
+                        custom_samples_var,
+                        rod_points_per_gz_var,
+                        bandwidth_percent_var=bandwidth_percent_var,
+                        optics_mode_var=optics_mode_var,
+                        phase_delta_expr_var=phase_delta_expr_var,
+                        phi_l_divisor_var=phi_l_divisor_var,
+                        sf_prune_bias_var=sf_prune_bias_var,
+                        solve_q_steps_var=solve_q_steps_var,
+                        solve_q_rel_tol_var=solve_q_rel_tol_var,
+                        solve_q_mode_var=solve_q_mode_var,
+                    )
+                finally:
+                    simulation_runtime_state.startup_updates_suspended = False
+                if finite_stack_controls_view_state.phase_delta_entry_var is not None:
+                    gui_views.set_finite_stack_phase_delta_entry_text(
+                        finite_stack_controls_view_state,
+                        _current_phase_delta_expression(),
+                    )
+                if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
+                    gui_views.set_finite_stack_phi_l_divisor_entry_text(
+                        finite_stack_controls_view_state,
+                        gui_controllers.format_finite_stack_phi_l_divisor(
+                            _current_phi_l_divisor()
+                        ),
+                    )
+                _apply_rod_points_per_gz(trigger_update=False)
+                ensure_valid_resolution_choice()
+                profile_loaded = True
+            else:
+                ensure_valid_resolution_choice()
+
+            sample_count = int(max(1, simulation_runtime_state.num_samples))
+            cif_summary = Path(_current_primary_cif_path()).name
+            if structure_model_state.cif_file2:
+                cif_summary = (
+                    f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
+                )
+            print(
+                "Startup ready: "
+                f"profile={'loaded' if profile_loaded else 'defaults'}; "
+                f"sampling={sample_count} samples; "
+                f"sf_prune={current_sf_prune_bias():+.2f}; "
+                f"q_mode={gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(solve_q_mode_var.get())}; "
+                f"q_steps={current_solve_q_values().steps}; "
+                f"q_tol={current_solve_q_values().rel_tol:.2e}; "
+                f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
+                f"cif={cif_summary}"
+            )
+
+            gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
+            simulation_runtime_state.update_pending = None
+            gui_controllers.clear_tk_after_token(
+                root,
+                simulation_runtime_state.integration_update_pending,
+            )
+            simulation_runtime_state.integration_update_pending = None
+
+            post_startup_tasks: list[gui_runtime_startup.StartupTask] = []
+            if not structure_model_controls_built:
+                post_startup_tasks.append(
+                    gui_runtime_startup.StartupTask(
+                        "structure controls",
+                        _rebuild_structure_model_controls,
+                    )
+                )
+            if write_excel:
+                post_startup_tasks.append(
+                    gui_runtime_startup.StartupTask(
+                        "initial Excel export",
+                        export_initial_excel,
+                    )
+                )
+
+            def _handle_post_startup_error(task_name: str, exc: Exception) -> None:
+                progress_label.config(
+                    text=f"Startup post-processing failed during {task_name}: {exc}"
+                )
+                try:
+                    import traceback
+
+                    traceback.print_exc()
+                except Exception:
+                    pass
+
+            post_startup_task_runner = gui_runtime_startup.build_runtime_startup_task_runner(
+                root=root,
+                tasks=post_startup_tasks,
+                on_error=_handle_post_startup_error,
+                initial_delay_ms=200,
+                inter_task_delay_ms=75,
+            )
             progress_label.config(text="Initializing structure model...")
             _bootstrap_structure_model_state_for_startup()
             _set_structure_bootstrap_controls_enabled(True)
@@ -25013,10 +25460,6 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 post_startup_task_runner.schedule()
             if _STARTUP_BENCHMARK_AUTO_EXIT:
                 root.after(750 if post_startup_task_runner.has_tasks() else 150, _shutdown_gui)
-
-    # Start the exact-cake Numba warmup in the background so the first caked
-    # conversion is less likely to pay the JIT compile cost on the UI path.
-    start_exact_cake_numba_warmup_in_background()
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)
