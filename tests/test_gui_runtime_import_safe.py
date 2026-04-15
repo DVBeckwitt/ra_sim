@@ -214,6 +214,23 @@ def test_runtime_impl_expands_global_image_buffer_for_first_real_frame() -> None
     assert resize_buffer(source) is resized
 
 
+def test_runtime_impl_lazy_allocates_job_result_images() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index("def _run_simulation_generation_job(")
+    block_end = source.index("def _submit_async_simulation_job(", block_start)
+    block = source[block_start:block_end]
+
+    primary_run_index = block.index('if bool(job["run_primary"]):')
+    secondary_run_index = block.index('if bool(job["run_secondary"]):')
+    img1_fallback_index = block.index("if img1 is None:")
+    img2_fallback_index = block.index("if img2 is None:")
+
+    assert block.index("img1 = None") < primary_run_index < img1_fallback_index
+    assert block.index("img2 = None") < secondary_run_index < img2_fallback_index
+    assert "if img1 is None:" in block
+    assert "if img2 is None:" in block
+
+
 def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

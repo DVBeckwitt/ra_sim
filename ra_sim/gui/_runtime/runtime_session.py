@@ -143,7 +143,6 @@ from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import analysis_figure_controls as gui_analysis_figure_controls
 from ra_sim.gui import analysis_quick_controls as gui_analysis_quick_controls
 from ra_sim.gui import analysis_visibility as gui_analysis_visibility
-from ra_sim.gui import analysis_peak_tools as gui_analysis_peak_tools
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import canvas_interactions as gui_canvas_interactions
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
@@ -175,7 +174,6 @@ from ra_sim.gui._runtime.live_cache_helpers import (
 from ra_sim.gui import tk_primary_viewport as gui_tk_primary_viewport
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
-from ra_sim.gui import ordered_structure_fit as gui_ordered_structure_fit
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
@@ -242,6 +240,12 @@ if (
 """
 
 _AZIMUTHAL_INTEGRATOR_CLS = None
+# SciPy-backed GUI helpers are imported lazily to keep GUI startup responsive.
+_ANALYSIS_PEAK_TOOLS_MODULE = None
+_ORDERED_STRUCTURE_FIT_MODULE = None
+_ANALYSIS_PEAK_PROFILE_GAUSSIAN = "gaussian"
+_ANALYSIS_PEAK_PROFILE_LORENTZIAN = "lorentzian"
+_ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT = "pseudo_voigt"
 
 
 def _get_azimuthal_integrator_cls():
@@ -250,6 +254,50 @@ def _get_azimuthal_integrator_cls():
     if _AZIMUTHAL_INTEGRATOR_CLS is None:
         _AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator
     return _AZIMUTHAL_INTEGRATOR_CLS
+
+
+def _get_analysis_peak_tools_module():
+    global _ANALYSIS_PEAK_TOOLS_MODULE
+
+    if _ANALYSIS_PEAK_TOOLS_MODULE is None:
+        from ra_sim.gui import analysis_peak_tools as analysis_peak_tools_module
+
+        _ANALYSIS_PEAK_TOOLS_MODULE = analysis_peak_tools_module
+    return _ANALYSIS_PEAK_TOOLS_MODULE
+
+
+def _get_ordered_structure_fit_module():
+    global _ORDERED_STRUCTURE_FIT_MODULE
+
+    if _ORDERED_STRUCTURE_FIT_MODULE is None:
+        from ra_sim.gui import ordered_structure_fit as ordered_structure_fit_module
+
+        _ORDERED_STRUCTURE_FIT_MODULE = ordered_structure_fit_module
+    return _ORDERED_STRUCTURE_FIT_MODULE
+
+
+def _normalize_ordered_structure_scale(raw_value: object, *, fallback: float = 1.0) -> float:
+    """Keep ordered-structure scale validation SciPy-free until fit tools are needed."""
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(fallback)
+    if not math.isfinite(value):
+        value = float(fallback)
+    return float(max(0.0, value))
+
+
+def _normalize_coordinate_window(raw_value: object, *, fallback: float = 0.02) -> float:
+    """Keep ordered-structure coord-window validation SciPy-free until fit tools are needed."""
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(fallback)
+    if not math.isfinite(value) or value <= 0.0:
+        value = float(fallback)
+    return float(max(1.0e-6, value))
 
 
 ###############################################################################
@@ -8094,7 +8142,7 @@ def _current_ordered_structure_scale() -> float:
     var = globals().get("ordered_structure_scale_var")
     fallback = defaults.get("ordered_structure_scale", 1.0)
     if var is None:
-        return gui_ordered_structure_fit.normalize_ordered_structure_scale(
+        return _normalize_ordered_structure_scale(
             fallback,
             fallback=1.0,
         )
@@ -8102,7 +8150,7 @@ def _current_ordered_structure_scale() -> float:
         raw_value = var.get()
     except Exception:
         raw_value = fallback
-    return gui_ordered_structure_fit.normalize_ordered_structure_scale(
+    return _normalize_ordered_structure_scale(
         raw_value,
         fallback=float(fallback),
     )
@@ -9836,8 +9884,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     )
     capture_primary_hit_tables_raw = bool(job.get("capture_primary_hit_tables_raw", False))
 
-    img1 = np.zeros((image_size, image_size), dtype=np.float64)
-    img2 = np.zeros((image_size, image_size), dtype=np.float64)
+    img1 = None
+    img2 = None
     raw_hit_tables1: list[object] = []
     raw_hit_tables2: list[object] = []
     cache1: list[object] = []
@@ -9880,6 +9928,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 image_size=image_size,
                 hit_tables_to_max_positions=hit_tables_to_max_positions,
             )
+
+        if img1 is None:
+            img1 = np.zeros((image_size, image_size), dtype=np.float64)
+        if img2 is None:
+            img2 = np.zeros((image_size, image_size), dtype=np.float64)
 
         projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         return {
@@ -18810,8 +18863,9 @@ def _format_ordered_structure_result_text(result, *, mask_roi_count: int) -> str
 def on_revert_last_ordered_fit():
     """Restore the last accepted ordered-structure fit snapshot."""
 
+    ordered_structure_fit = _get_ordered_structure_fit_module()
     snapshot = app_state.ordered_structure_fit_snapshot
-    restored = gui_ordered_structure_fit.restore_ordered_structure_snapshot(
+    restored = ordered_structure_fit.restore_ordered_structure_snapshot(
         snapshot,
         occupancy_vars=_occupancy_control_vars(),
         atom_site_vars=_atom_site_fractional_control_vars(),
@@ -18833,6 +18887,7 @@ def on_revert_last_ordered_fit():
 def on_fit_ordered_structure_click():
     """Run the ordered-structure detector-space intensity refinement."""
 
+    ordered_structure_fit = _get_ordered_structure_fit_module()
     measured_image = _get_current_background_backend()
     if measured_image is None:
         progress_label_ordered_structure.config(
@@ -18872,11 +18927,11 @@ def on_fit_ordered_structure_click():
 
     occupancy_values = list(_current_occupancy_values())
     atom_site_values = list(_current_atom_site_fractional_values())
-    parameter_specs: list[gui_ordered_structure_fit.OrderedStructureParameterSpec] = []
+    parameter_specs: list[object] = []
     occupancy_param_names: list[str] = []
     atom_param_names: list[dict[str, str]] = []
 
-    coord_window = gui_ordered_structure_fit.normalize_coordinate_window(
+    coord_window = _normalize_coordinate_window(
         ordered_structure_coord_window_var.get(),
         fallback=ordered_structure_coord_window_default,
     )
@@ -18888,7 +18943,7 @@ def on_fit_ordered_structure_click():
         if idx >= len(occupancy_values) or not bool(toggle_var.get()):
             continue
         parameter_specs.append(
-            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+            ordered_structure_fit.OrderedStructureParameterSpec(
                 name=name,
                 value=float(occupancy_values[idx]),
                 lower=0.0,
@@ -18907,7 +18962,7 @@ def on_fit_ordered_structure_click():
                 continue
             current_value = float(base_values[axis_index])
             parameter_specs.append(
-                gui_ordered_structure_fit.OrderedStructureParameterSpec(
+                ordered_structure_fit.OrderedStructureParameterSpec(
                     name=name,
                     value=current_value,
                     lower=current_value - float(coord_window),
@@ -18927,7 +18982,7 @@ def on_fit_ordered_structure_click():
 
     if bool(ordered_structure_fit_debye_x_var.get()):
         parameter_specs.append(
-            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+            ordered_structure_fit.OrderedStructureParameterSpec(
                 name="debye_x",
                 value=debye_x_current,
                 lower=0.0,
@@ -18936,7 +18991,7 @@ def on_fit_ordered_structure_click():
         )
     if bool(ordered_structure_fit_debye_y_var.get()):
         parameter_specs.append(
-            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+            ordered_structure_fit.OrderedStructureParameterSpec(
                 name="debye_y",
                 value=debye_y_current,
                 lower=0.0,
@@ -19098,7 +19153,7 @@ def on_fit_ordered_structure_click():
             return
 
     try:
-        mask = gui_ordered_structure_fit.build_hybrid_ordered_structure_mask(
+        mask = ordered_structure_fit.build_hybrid_ordered_structure_mask(
             image_shape=measured_arr.shape,
             primary_hit_tables=primary_hit_tables,
             max_reflections=int(ordered_structure_fit_mask_cfg.get("max_reflections", 24)),
@@ -19118,7 +19173,7 @@ def on_fit_ordered_structure_click():
         )
         return
 
-    snapshot = gui_ordered_structure_fit.capture_ordered_structure_snapshot(
+    snapshot = ordered_structure_fit.capture_ordered_structure_snapshot(
         occupancy_values=occupancy_values,
         atom_site_values=atom_site_values,
         debye_x=debye_x_current,
@@ -19343,7 +19398,7 @@ def on_fit_ordered_structure_click():
     ordered_structure_progressbar.start(10)
     root.update_idletasks()
     try:
-        result = gui_ordered_structure_fit.fit_ordered_structure_parameters(
+        result = ordered_structure_fit.fit_ordered_structure_parameters(
             measured_image=measured_arr,
             mask=mask,
             parameter_specs=parameter_specs,
@@ -19387,7 +19442,7 @@ def on_fit_ordered_structure_click():
         return
 
     app_state.ordered_structure_fit_snapshot = snapshot
-    gui_ordered_structure_fit.apply_ordered_structure_values(
+    ordered_structure_fit.apply_ordered_structure_values(
         result.parameter_values,
         occupancy_vars=_occupancy_control_vars(),
         occupancy_param_names=occupancy_param_names,
@@ -19782,9 +19837,9 @@ def _initialize_runtime_controls_block_43() -> None:
 
     _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT = "Fit results will appear here."
     _ANALYSIS_PEAK_MODEL_COLORS = {
-        gui_analysis_peak_tools.PROFILE_GAUSSIAN: "#2a9d8f",
-        gui_analysis_peak_tools.PROFILE_LORENTZIAN: "#f4a261",
-        gui_analysis_peak_tools.PROFILE_PSEUDO_VOIGT: "#d62828",
+        _ANALYSIS_PEAK_PROFILE_GAUSSIAN: "#2a9d8f",
+        _ANALYSIS_PEAK_PROFILE_LORENTZIAN: "#f4a261",
+        _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT: "#d62828",
     }
 
 
@@ -19841,14 +19896,15 @@ def _update_analysis_peak_pick_button_label() -> None:
 
 
 def _analysis_peak_fit_results_text() -> str:
+    analysis_peak_tools = _get_analysis_peak_tools_module()
     lines = [
         line
         for line in (
-            gui_analysis_peak_tools.format_peak_fit_axis_summary(
+            analysis_peak_tools.format_peak_fit_axis_summary(
                 "Radial",
                 analysis_peak_selection_state.radial_fit_results,
             ),
-            gui_analysis_peak_tools.format_peak_fit_axis_summary(
+            analysis_peak_tools.format_peak_fit_axis_summary(
                 "Azimuth",
                 analysis_peak_selection_state.azimuth_fit_results,
             ),
@@ -19985,7 +20041,7 @@ def _analysis_peak_axis_value(
 ) -> float:
     if str(axis_kind) == "radial":
         return float(peak_entry.get("two_theta_deg", np.nan))
-    return gui_analysis_peak_tools.align_angle_to_axis(
+    return _get_analysis_peak_tools_module().align_angle_to_axis(
         float(peak_entry.get("phi_deg", np.nan)),
         axis_values,
     )
@@ -20148,7 +20204,11 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
             )
             if not np.isfinite(axis_value):
                 continue
-            y_value = gui_analysis_peak_tools.sample_curve_value(x_curve, y_curve, axis_value)
+            y_value = _get_analysis_peak_tools_module().sample_curve_value(
+                x_curve,
+                y_curve,
+                axis_value,
+            )
             try:
                 vline_artist = axis_obj.axvline(
                     axis_value,
@@ -20368,8 +20428,9 @@ def _zoom_to_current_analysis_region(*, redraw: bool) -> None:
     x_hi = max(tth_min, tth_max) + tth_pad
 
     azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
-    phi_lo = gui_analysis_peak_tools.align_angle_to_axis(phi_min, azimuth_axis)
-    phi_hi = gui_analysis_peak_tools.align_angle_to_axis(phi_max, azimuth_axis)
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    phi_lo = analysis_peak_tools.align_angle_to_axis(phi_min, azimuth_axis)
+    phi_hi = analysis_peak_tools.align_angle_to_axis(phi_max, azimuth_axis)
     if phi_hi < phi_lo:
         phi_lo, phi_hi = phi_hi, phi_lo
     phi_pad = max(0.6, 0.05 * abs(phi_hi - phi_lo))
@@ -20478,7 +20539,8 @@ def _select_analysis_peak_from_canvas_click(
     phi_deg: float,
 ) -> bool:
     range_values = _current_analysis_range_values()
-    if not gui_analysis_peak_tools.integration_region_contains(
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    if not analysis_peak_tools.integration_region_contains(
         two_theta_deg,
         phi_deg,
         tth_min=float(range_values["tth_min"]),
@@ -20561,7 +20623,8 @@ def _select_analysis_peak_from_canvas_click(
         return True
 
     radial_tol, azimuth_tol = _analysis_peak_duplicate_tolerances()
-    match_index = gui_analysis_peak_tools.match_selected_peak_index(
+    wrapped_refined_phi = float(analysis_peak_tools.wrap_angle_degrees(refined_phi))
+    match_index = analysis_peak_tools.match_selected_peak_index(
         analysis_peak_selection_state.selected_peaks,
         two_theta_deg=float(refined_tth),
         phi_deg=float(refined_phi),
@@ -20573,13 +20636,13 @@ def _select_analysis_peak_from_canvas_click(
         analysis_peak_selection_state.selected_peaks.pop(int(match_index))
         status_text = (
             f"Removed peak near 2theta={float(refined_tth):.4f} deg, "
-            f"phi={float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)):.4f} deg."
+            f"phi={wrapped_refined_phi:.4f} deg."
         )
     else:
         analysis_peak_selection_state.selected_peaks.append(
             {
                 "two_theta_deg": float(refined_tth),
-                "phi_deg": float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)),
+                "phi_deg": wrapped_refined_phi,
                 "source": str(source_payload.get("source", "simulated")),
                 "raw_two_theta_deg": float(two_theta_deg),
                 "raw_phi_deg": float(phi_deg),
@@ -20588,7 +20651,7 @@ def _select_analysis_peak_from_canvas_click(
         status_text = (
             f"Selected peak {len(analysis_peak_selection_state.selected_peaks)} at "
             f"2theta={float(refined_tth):.4f} deg, "
-            f"phi={float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)):.4f} deg."
+            f"phi={wrapped_refined_phi:.4f} deg."
         )
 
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
@@ -20610,18 +20673,19 @@ def _fit_selected_analysis_peaks() -> None:
             pass
         return
 
+    analysis_peak_tools = _get_analysis_peak_tools_module()
     model_specs = (
         (
             getattr(analysis_peak_tools_view_state.fit_gaussian_var, "get", lambda: False)(),
-            gui_analysis_peak_tools.PROFILE_GAUSSIAN,
+            _ANALYSIS_PEAK_PROFILE_GAUSSIAN,
         ),
         (
             getattr(analysis_peak_tools_view_state.fit_lorentzian_var, "get", lambda: False)(),
-            gui_analysis_peak_tools.PROFILE_LORENTZIAN,
+            _ANALYSIS_PEAK_PROFILE_LORENTZIAN,
         ),
         (
             getattr(analysis_peak_tools_view_state.fit_pseudo_voigt_var, "get", lambda: True)(),
-            gui_analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+            _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT,
         ),
     )
     models = [model for enabled, model in model_specs if bool(enabled)]
@@ -20671,7 +20735,7 @@ def _fit_selected_analysis_peaks() -> None:
                 dtype=float,
             )
             center_guess = float(axis_centers[idx])
-            window_half_width = gui_analysis_peak_tools.recommended_peak_window_half_width(
+            window_half_width = analysis_peak_tools.recommended_peak_window_half_width(
                 axis_centers,
                 idx,
                 axis_values=x_curve,
@@ -20679,7 +20743,7 @@ def _fit_selected_analysis_peaks() -> None:
                 region_bounds=(float(x_curve[0]), float(x_curve[-1])),
             )
             for model in models:
-                fit_result = gui_analysis_peak_tools.fit_peak_profile(
+                fit_result = analysis_peak_tools.fit_peak_profile(
                     x_curve,
                     y_curve,
                     center_guess=center_guess,
@@ -24104,7 +24168,7 @@ def _initialize_runtime_controls_block_53() -> None:
         if isinstance(ordered_structure_fit_cfg, dict)
         else {}
     )
-    ordered_structure_coord_window_default = gui_ordered_structure_fit.normalize_coordinate_window(
+    ordered_structure_coord_window_default = _normalize_coordinate_window(
         ordered_structure_fit_defaults_cfg.get("coord_window", 0.02),
         fallback=0.02,
     )
@@ -24137,7 +24201,7 @@ def _commit_ordered_structure_scale_entry(_event=None) -> None:
         raw_value = ordered_structure_scale_var.get()
     except Exception:
         raw_value = _current_ordered_structure_scale()
-    normalized = gui_ordered_structure_fit.normalize_ordered_structure_scale(
+    normalized = _normalize_ordered_structure_scale(
         raw_value,
         fallback=_current_ordered_structure_scale(),
     )
@@ -24160,7 +24224,7 @@ def _commit_ordered_structure_coord_window_entry(_event=None) -> None:
         raw_value = ordered_structure_coord_window_default
     ordered_structure_coord_window_var.set(
         float(
-            gui_ordered_structure_fit.normalize_coordinate_window(
+            _normalize_coordinate_window(
                 raw_value,
                 fallback=ordered_structure_coord_window_default,
             )
