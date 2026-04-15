@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+import hashlib
 import math
 from pathlib import Path
 import threading
@@ -56,7 +57,8 @@ _GEOMETRY_WARMUP_COMPLETION_LIMIT = 16
 
 
 _SharedDetectorMapKey = tuple["PortableGeometry", tuple[int, int]]
-_SharedCakeLutKey = tuple["PortableGeometry", tuple[int, int], int, float, float, int, float, float]
+_Float64ArrayCacheToken = tuple[tuple[int, ...], bytes]
+_SharedCakeLutKey = tuple["PortableGeometry", tuple[int, int], _Float64ArrayCacheToken, _Float64ArrayCacheToken]
 _GeometryWarmupKey = tuple[int, tuple[int, int], int, int]
 
 _PROCESS_DETECTOR_MAP_CACHE: OrderedDict[_SharedDetectorMapKey, tuple[np.ndarray, np.ndarray]] = OrderedDict()
@@ -114,6 +116,12 @@ def _shared_detector_map_cache_key(
     return geometry, detector_shape
 
 
+def _float64_array_cache_token(values: np.ndarray) -> _Float64ArrayCacheToken:
+    contiguous = np.ascontiguousarray(np.asarray(values, dtype=np.float64))
+    digest = hashlib.blake2b(contiguous.tobytes(order="C"), digest_size=16).digest()
+    return tuple(int(v) for v in contiguous.shape), digest
+
+
 def _shared_cake_lut_cache_key(
     geometry: PortableGeometry,
     detector_shape: tuple[int, int],
@@ -123,12 +131,8 @@ def _shared_cake_lut_cache_key(
     return (
         geometry,
         detector_shape,
-        int(radial_deg.size),
-        float(radial_deg[0]),
-        float(radial_deg[-1]),
-        int(azimuthal_deg.size),
-        float(azimuthal_deg[0]),
-        float(azimuthal_deg[-1]),
+        _float64_array_cache_token(radial_deg),
+        _float64_array_cache_token(azimuthal_deg),
     )
 
 
@@ -336,6 +340,153 @@ def gui_phi_to_raw_phi(
     phi_values: np.ndarray | list[float] | tuple[float, ...] | float,
 ) -> np.ndarray:
     return ((PHI_ZERO_OFFSET_DEGREES - np.asarray(phi_values, dtype=np.float64) + 180.0) % 360.0) - 180.0
+
+
+def _float64_vector_or_none(
+    values: np.ndarray | list[float] | tuple[float, ...] | None,
+) -> np.ndarray | None:
+    try:
+        vector = np.asarray(values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if vector.size <= 0 or not np.all(np.isfinite(vector)):
+        return None
+    return vector
+
+
+def _display_gui_azimuth_axis_from_raw(
+    raw_azimuth_deg: np.ndarray | list[float] | tuple[float, ...] | None,
+) -> np.ndarray | None:
+    raw_axis = _float64_vector_or_none(raw_azimuth_deg)
+    if raw_axis is None:
+        return None
+    gui_axis = _float64_vector_or_none(raw_phi_to_gui_phi(raw_axis))
+    if gui_axis is None or gui_axis.shape != raw_axis.shape:
+        return None
+    order = np.argsort(gui_axis, kind="stable")
+    return np.asarray(gui_axis[order], dtype=np.float64)
+
+
+def _cake_axes_exactly_equal(lhs: object, rhs: object) -> bool:
+    lhs_vec = _float64_vector_or_none(lhs)
+    rhs_vec = _float64_vector_or_none(rhs)
+    if lhs_vec is None or rhs_vec is None or lhs_vec.shape != rhs_vec.shape:
+        return False
+    return bool(np.array_equal(lhs_vec, rhs_vec))
+
+
+def _cake_transform_bundle_matches_axes(
+    bundle: object,
+    *,
+    detector_shape: tuple[int, int],
+    radial_deg: np.ndarray,
+    raw_azimuth_deg: np.ndarray,
+) -> bool:
+    return bool(
+        isinstance(bundle, CakeTransformBundle)
+        and tuple(int(v) for v in bundle.detector_shape) == tuple(detector_shape)
+        and _cake_axes_exactly_equal(bundle.radial_deg, radial_deg)
+        and _cake_axes_exactly_equal(bundle.raw_azimuth_deg, raw_azimuth_deg)
+    )
+
+
+def resolve_cake_transform_bundle(
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...] | list[int],
+    radial_deg: np.ndarray | list[float] | tuple[float, ...] | None,
+    *,
+    gui_azimuth_deg: np.ndarray | list[float] | tuple[float, ...] | None = None,
+    raw_azimuth_deg: np.ndarray | list[float] | tuple[float, ...] | None = None,
+    transform_bundle: CakeTransformBundle | None = None,
+    require_gui_display_match: bool = False,
+    engine: str = "auto",
+    workers: int | str | None = "auto",
+) -> CakeTransformBundle | None:
+    """Return one exact-cake bundle tied to one exact detector shape + axes tuple."""
+
+    candidate_bundles: list[object] = [transform_bundle]
+    if isinstance(ai, FastAzimuthalIntegrator):
+        candidate_bundles.append(getattr(ai, "_live_caked_transform_bundle", None))
+
+    normalized_shape = _normalize_detector_shape(tuple(detector_shape))
+    if normalized_shape is None:
+        for candidate in candidate_bundles:
+            if isinstance(candidate, CakeTransformBundle):
+                normalized_shape = _normalize_detector_shape(candidate.detector_shape)
+                if normalized_shape is not None:
+                    break
+    radial_axis = _float64_vector_or_none(radial_deg)
+    if radial_axis is None and normalized_shape is not None:
+        for candidate in candidate_bundles:
+            if (
+                isinstance(candidate, CakeTransformBundle)
+                and tuple(int(v) for v in candidate.detector_shape)
+                == tuple(normalized_shape)
+            ):
+                radial_axis = _float64_vector_or_none(candidate.radial_deg)
+                if radial_axis is not None:
+                    break
+    gui_axis = _float64_vector_or_none(gui_azimuth_deg)
+    raw_axis = _float64_vector_or_none(raw_azimuth_deg)
+    if normalized_shape is None or radial_axis is None:
+        return None
+    if raw_axis is None:
+        if gui_axis is not None:
+            raw_axis = _float64_vector_or_none(
+                np.sort(
+                    np.asarray(gui_phi_to_raw_phi(gui_axis), dtype=np.float64),
+                    kind="stable",
+                )
+            )
+        else:
+            for candidate in candidate_bundles:
+                if (
+                    isinstance(candidate, CakeTransformBundle)
+                    and tuple(int(v) for v in candidate.detector_shape) == tuple(normalized_shape)
+                    and _cake_axes_exactly_equal(candidate.radial_deg, radial_axis)
+                ):
+                    raw_axis = _float64_vector_or_none(candidate.raw_azimuth_deg)
+                    break
+    if raw_axis is None:
+        return None
+    if gui_axis is not None and gui_axis.shape != raw_axis.shape:
+        return None
+    if require_gui_display_match:
+        display_gui_axis = _display_gui_azimuth_axis_from_raw(raw_axis)
+        if (
+            display_gui_axis is None
+            or gui_axis is None
+            or not _cake_axes_exactly_equal(display_gui_axis, gui_axis)
+        ):
+            return None
+
+    for candidate in candidate_bundles:
+        if _cake_transform_bundle_matches_axes(
+            candidate,
+            detector_shape=normalized_shape,
+            radial_deg=radial_axis,
+            raw_azimuth_deg=raw_axis,
+        ):
+            return candidate
+
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    rebuilt = build_cake_transform_bundle(
+        ai,
+        normalized_shape,
+        radial_axis,
+        raw_axis,
+        engine=engine,
+        workers=workers,
+    )
+    if not _cake_transform_bundle_matches_axes(
+        rebuilt,
+        detector_shape=normalized_shape,
+        radial_deg=radial_axis,
+        raw_azimuth_deg=raw_axis,
+    ):
+        return None
+    return rebuilt
 
 
 def _matrix_row_indices_and_weights(
@@ -996,46 +1147,19 @@ def caked_point_to_detector_pixel(
 ) -> tuple[float | None, float | None]:
     """Continuously invert one displayed caked point via forward exact-cake LUT rows."""
 
-    normalized_shape = _normalize_detector_shape(tuple(detector_shape))
-    if normalized_shape is None:
-        return None, None
-
     if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg)):
         return None, None
 
-    bundle = transform_bundle
+    bundle = resolve_cake_transform_bundle(
+        ai,
+        detector_shape,
+        radial_deg,
+        gui_azimuth_deg=gui_phi_deg,
+        transform_bundle=transform_bundle,
+        engine=engine,
+        workers=workers,
+    )
     if not isinstance(bundle, CakeTransformBundle):
-        if not isinstance(ai, FastAzimuthalIntegrator):
-            return None, None
-        live_bundle = getattr(ai, "_live_caked_transform_bundle", None)
-        if (
-            isinstance(live_bundle, CakeTransformBundle)
-            and live_bundle.detector_shape == normalized_shape
-        ):
-            bundle = live_bundle
-    if not isinstance(bundle, CakeTransformBundle):
-        try:
-            radial_axis = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
-            gui_phi_axis = np.asarray(gui_phi_deg, dtype=np.float64).reshape(-1)
-        except Exception:
-            return None, None
-        if radial_axis.size <= 0 or gui_phi_axis.size <= 0:
-            return None, None
-        if not np.all(np.isfinite(radial_axis)) or not np.all(np.isfinite(gui_phi_axis)):
-            return None, None
-        raw_azimuth_axis = np.asarray(gui_phi_to_raw_phi(gui_phi_axis), dtype=np.float64).reshape(-1)
-        raw_azimuth_axis = np.sort(raw_azimuth_axis)
-        bundle = build_cake_transform_bundle(
-            ai,
-            normalized_shape,
-            radial_axis,
-            raw_azimuth_axis,
-            engine=engine,
-            workers=workers,
-        )
-    if not isinstance(bundle, CakeTransformBundle):
-        return None, None
-    if bundle.detector_shape != normalized_shape:
         return None, None
     matrix = getattr(bundle.lut, "matrix", None)
     if matrix is None:
@@ -1054,7 +1178,7 @@ def caked_point_to_detector_pixel(
     if len(bin_weights) <= 0:
         return None, None
     return _detector_pixel_centroid_from_cake_bin_weights(
-        normalized_shape,
+        bundle.detector_shape,
         matrix,
         bin_weights,
     )
@@ -1497,4 +1621,5 @@ __all__ = [
     "gui_phi_to_raw_phi",
     "prepare_gui_phi_display",
     "raw_phi_to_gui_phi",
+    "resolve_cake_transform_bundle",
 ]

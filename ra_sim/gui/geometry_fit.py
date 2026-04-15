@@ -34,7 +34,11 @@ from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
+    FastAzimuthalIntegrator,
     detector_pixel_to_caked_bin,
+    gui_phi_to_raw_phi,
+    raw_phi_to_gui_phi,
+    resolve_cake_transform_bundle,
 )
 from ra_sim.utils.calculations import (
     SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
@@ -68,6 +72,250 @@ GEOMETRY_FIT_ACCEPT_MAX_RMS_PX = 100.0
 GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX = 150.0
 GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX = 1.0e-6
 GEOMETRY_FIT_LEGACY_REBIND_CAKED_TIE_TOLERANCE = 1.0e-6
+GEOMETRY_FIT_EXACT_CAKE_AXIS_TOLERANCE = 1.0e-9
+
+
+def _geometry_fit_float64_vector(
+    values: object,
+) -> np.ndarray | None:
+    try:
+        vector = np.asarray(values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if vector.size <= 0 or not np.all(np.isfinite(vector)):
+        return None
+    return vector
+
+
+def _geometry_fit_detector_shape_2d(
+    shape: object,
+) -> tuple[int, int] | None:
+    try:
+        detector_shape = tuple(int(v) for v in tuple(shape)[:2])
+    except Exception:
+        return None
+    if len(detector_shape) < 2 or detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None
+    return detector_shape
+
+
+def _geometry_fit_axes_match(
+    lhs: object,
+    rhs: object,
+) -> bool:
+    lhs_vec = _geometry_fit_float64_vector(lhs)
+    rhs_vec = _geometry_fit_float64_vector(rhs)
+    if lhs_vec is None or rhs_vec is None or lhs_vec.shape != rhs_vec.shape:
+        return False
+    return bool(np.array_equal(lhs_vec, rhs_vec))
+
+
+def _geometry_fit_raw_azimuth_axis_from_display_axis(
+    azimuth_axis: object,
+) -> np.ndarray | None:
+    gui_azimuth_vec = _geometry_fit_float64_vector(azimuth_axis)
+    if gui_azimuth_vec is None:
+        return None
+    try:
+        raw_azimuth_vec = np.sort(
+            np.asarray(gui_phi_to_raw_phi(gui_azimuth_vec), dtype=np.float64),
+            kind="stable",
+        )
+    except Exception:
+        return None
+    return _geometry_fit_float64_vector(raw_azimuth_vec)
+
+
+def _geometry_fit_display_azimuth_axis_from_raw_axis(
+    raw_azimuth_axis: object,
+) -> np.ndarray | None:
+    raw_azimuth_vec = _geometry_fit_float64_vector(raw_azimuth_axis)
+    if raw_azimuth_vec is None:
+        return None
+    try:
+        gui_azimuth_vec = np.asarray(
+            raw_phi_to_gui_phi(raw_azimuth_vec),
+            dtype=np.float64,
+        )
+    except Exception:
+        return None
+    if gui_azimuth_vec.shape != raw_azimuth_vec.shape or not np.all(
+        np.isfinite(gui_azimuth_vec)
+    ):
+        return None
+    order = np.argsort(gui_azimuth_vec, kind="stable")
+    return _geometry_fit_float64_vector(gui_azimuth_vec[order])
+
+
+def _geometry_fit_center_from_params(
+    params: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(params, Mapping):
+        return None
+    center_value = params.get("center")
+    if isinstance(center_value, Sequence) and len(center_value) >= 2:
+        try:
+            center_row = float(center_value[0])
+            center_col = float(center_value[1])
+        except Exception:
+            center_row = center_col = float("nan")
+        if np.isfinite(center_row) and np.isfinite(center_col):
+            return float(center_row), float(center_col)
+    try:
+        center_row = float(params.get("center_x", np.nan))
+        center_col = float(params.get("center_y", np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(center_row) and np.isfinite(center_col)):
+        return None
+    return float(center_row), float(center_col)
+
+
+def _geometry_fit_caked_bundle_matches_display(
+    bundle: object,
+    *,
+    detector_shape: object,
+    radial_axis: object,
+    azimuth_axis: object,
+    raw_azimuth_axis: object,
+) -> bool:
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    radial_vec = _geometry_fit_float64_vector(radial_axis)
+    gui_azimuth_vec = _geometry_fit_float64_vector(azimuth_axis)
+    raw_azimuth_vec = _geometry_fit_float64_vector(raw_azimuth_axis)
+    if (
+        normalized_shape is None
+        or radial_vec is None
+        or gui_azimuth_vec is None
+        or raw_azimuth_vec is None
+    ):
+        return False
+    return isinstance(
+        resolve_cake_transform_bundle(
+            None,
+            normalized_shape,
+            radial_vec,
+            gui_azimuth_deg=gui_azimuth_vec,
+            raw_azimuth_deg=raw_azimuth_vec,
+            transform_bundle=(
+                bundle if isinstance(bundle, CakeTransformBundle) else None
+            ),
+            require_gui_display_match=True,
+        ),
+        CakeTransformBundle
+    )
+
+
+def _geometry_fit_rebuild_dynamic_reanchor_caked_bundle(
+    *,
+    detector_shape: object,
+    radial_axis: object,
+    azimuth_axis: object,
+    raw_azimuth_axis: object | None,
+    params: Mapping[str, object] | None,
+) -> CakeTransformBundle | None:
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    radial_vec = _geometry_fit_float64_vector(radial_axis)
+    gui_azimuth_vec = _geometry_fit_float64_vector(azimuth_axis)
+    if (
+        normalized_shape is None
+        or radial_vec is None
+        or gui_azimuth_vec is None
+    ):
+        return None
+    raw_azimuth_vec = _geometry_fit_float64_vector(raw_azimuth_axis)
+    if raw_azimuth_vec is None:
+        raw_azimuth_vec = _geometry_fit_raw_azimuth_axis_from_display_axis(
+            gui_azimuth_vec
+        )
+    if raw_azimuth_vec is None or raw_azimuth_vec.shape != gui_azimuth_vec.shape:
+        return None
+    center = _geometry_fit_center_from_params(params)
+    if center is None:
+        return None
+    try:
+        detector_distance = float(
+            params.get("corto_detector", np.nan)
+            if isinstance(params, Mapping)
+            else np.nan
+        )
+    except Exception:
+        detector_distance = float("nan")
+    pixel_size = float(
+        _fit_space_pixel_size_provenance(params or {}).get("value", np.nan)
+    )
+    if (
+        not np.isfinite(detector_distance)
+        or detector_distance <= 0.0
+        or not np.isfinite(pixel_size)
+        or pixel_size <= 0.0
+    ):
+        return None
+    try:
+        ai = FastAzimuthalIntegrator(
+            dist=float(detector_distance),
+            poni1=float(center[0]) * float(pixel_size),
+            poni2=float(center[1]) * float(pixel_size),
+            pixel1=float(pixel_size),
+            pixel2=float(pixel_size),
+        )
+        rebuilt = resolve_cake_transform_bundle(
+            ai,
+            normalized_shape,
+            radial_vec,
+            gui_azimuth_deg=gui_azimuth_vec,
+            raw_azimuth_deg=raw_azimuth_vec,
+            require_gui_display_match=True,
+        )
+    except Exception:
+        rebuilt = None
+    return rebuilt if isinstance(rebuilt, CakeTransformBundle) else None
+
+
+def _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
+    *,
+    detector_shape: object,
+    radial_axis: object,
+    azimuth_axis: object,
+    raw_azimuth_axis: object | None,
+    transform_bundle: object,
+    params: Mapping[str, object] | None,
+) -> CakeTransformBundle | None:
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    radial_vec = _geometry_fit_float64_vector(radial_axis)
+    gui_azimuth_vec = _geometry_fit_float64_vector(azimuth_axis)
+    raw_azimuth_vec = _geometry_fit_float64_vector(raw_azimuth_axis)
+    if raw_azimuth_vec is None:
+        raw_azimuth_vec = _geometry_fit_raw_azimuth_axis_from_display_axis(
+            azimuth_axis
+        )
+    if (
+        normalized_shape is None
+        or radial_vec is None
+        or gui_azimuth_vec is None
+        or raw_azimuth_vec is None
+    ):
+        return None
+    resolved_bundle = resolve_cake_transform_bundle(
+        None,
+        normalized_shape,
+        radial_vec,
+        gui_azimuth_deg=gui_azimuth_vec,
+        raw_azimuth_deg=raw_azimuth_vec,
+        transform_bundle=(
+            transform_bundle if isinstance(transform_bundle, CakeTransformBundle) else None
+        ),
+        require_gui_display_match=True,
+    )
+    if isinstance(resolved_bundle, CakeTransformBundle):
+        return resolved_bundle
+    return _geometry_fit_rebuild_dynamic_reanchor_caked_bundle(
+        detector_shape=normalized_shape,
+        radial_axis=radial_vec,
+        azimuth_axis=gui_azimuth_vec,
+        raw_azimuth_axis=raw_azimuth_vec,
+        params=params,
+    )
 
 
 def geometry_fit_all_logging_disabled(
@@ -5481,13 +5729,15 @@ def build_geometry_manual_fit_dataset(
     )
     dynamic_reanchor_callback = None
     dynamic_reanchor_match_cfg: dict[str, object] = {}
-    dynamic_reanchor_background_context: dict[str, object] | None = None
-    dynamic_reanchor_background_image: np.ndarray | None = None
+    dynamic_reanchor_detector_background_context: dict[str, object] | None = None
+    dynamic_reanchor_caked_background_context: dict[str, object] | None = None
+    dynamic_reanchor_detector_image: np.ndarray | None = None
     dynamic_reanchor_caked_background: np.ndarray | None = None
     dynamic_reanchor_radial_axis: np.ndarray | None = None
     dynamic_reanchor_azimuth_axis: np.ndarray | None = None
-    dynamic_reanchor_transform_bundle: CakeTransformBundle | None = None
-    dynamic_reanchor_use_caked_space = False
+    dynamic_reanchor_raw_azimuth_axis: np.ndarray | None = None
+    dynamic_reanchor_transform_bundle: object = None
+    dynamic_reanchor_caked_view_ready = False
     dynamic_reanchor_enabled = (
         isinstance(experimental_image_for_fit, np.ndarray)
         and experimental_image_for_fit.ndim == 2
@@ -5512,6 +5762,7 @@ def build_geometry_manual_fit_dataset(
         caked_background_local = None
         radial_axis_local = None
         azimuth_axis_local = None
+        raw_azimuth_axis_local = None
         dynamic_reanchor_transform_bundle = None
         if isinstance(raw_caked_view, Mapping):
             caked_background_local = raw_caked_view.get(
@@ -5520,6 +5771,7 @@ def build_geometry_manual_fit_dataset(
             )
             radial_axis_local = raw_caked_view.get("radial_axis")
             azimuth_axis_local = raw_caked_view.get("azimuth_axis")
+            raw_azimuth_axis_local = raw_caked_view.get("raw_azimuth_axis")
             dynamic_reanchor_transform_bundle = raw_caked_view.get("transform_bundle")
         elif isinstance(raw_caked_view, (list, tuple)) and len(raw_caked_view) >= 3:
             caked_background_local = raw_caked_view[0]
@@ -5549,6 +5801,14 @@ def build_geometry_manual_fit_dataset(
                 )
         except Exception:
             dynamic_reanchor_azimuth_axis = None
+        try:
+            if raw_azimuth_axis_local is not None:
+                dynamic_reanchor_raw_azimuth_axis = np.asarray(
+                    raw_azimuth_axis_local,
+                    dtype=np.float64,
+                )
+        except Exception:
+            dynamic_reanchor_raw_azimuth_axis = None
         if (
             isinstance(dynamic_reanchor_caked_background, np.ndarray)
             and dynamic_reanchor_caked_background.ndim == 2
@@ -5558,38 +5818,47 @@ def build_geometry_manual_fit_dataset(
             and isinstance(dynamic_reanchor_azimuth_axis, np.ndarray)
             and dynamic_reanchor_azimuth_axis.size > 0
         ):
-            dynamic_reanchor_use_caked_space = True
+            dynamic_reanchor_caked_view_ready = True
     if dynamic_reanchor_enabled:
-        dynamic_reanchor_background_image = (
-            dynamic_reanchor_caked_background
-            if dynamic_reanchor_use_caked_space
-            and isinstance(dynamic_reanchor_caked_background, np.ndarray)
-            else experimental_image_for_fit
+        dynamic_reanchor_detector_image = np.asarray(
+            experimental_image_for_fit,
+            dtype=np.float64,
         )
         try:
             built_background_context = build_background_peak_context(
-                dynamic_reanchor_background_image,
+                dynamic_reanchor_detector_image,
                 dict(dynamic_reanchor_match_cfg),
             )
         except Exception:
             built_background_context = None
         if isinstance(built_background_context, Mapping):
-            dynamic_reanchor_background_context = dict(built_background_context)
-
-        dynamic_reanchor_cache_data = {
-            "match_config": dict(dynamic_reanchor_match_cfg),
-            "background_context": dynamic_reanchor_background_context,
-        }
-        dynamic_reanchor_image = np.asarray(
-            dynamic_reanchor_background_image,
-            dtype=np.float64,
-        )
+            dynamic_reanchor_detector_background_context = dict(
+                built_background_context
+            )
+        if (
+            dynamic_reanchor_caked_view_ready
+            and isinstance(dynamic_reanchor_caked_background, np.ndarray)
+        ):
+            try:
+                built_caked_context = build_background_peak_context(
+                    dynamic_reanchor_caked_background,
+                    dict(dynamic_reanchor_match_cfg),
+                )
+            except Exception:
+                built_caked_context = None
+            if isinstance(built_caked_context, Mapping):
+                dynamic_reanchor_caked_background_context = dict(
+                    built_caked_context
+                )
         try:
             dynamic_reanchor_backend_shape = tuple(
                 int(v) for v in np.asarray(backend_background).shape[:2]
             )
         except Exception:
             dynamic_reanchor_backend_shape = ()
+        dynamic_reanchor_native_shape = _geometry_fit_detector_shape_2d(
+            np.asarray(native_background).shape[:2]
+        )
 
         def _fit_detector_coords_to_native_detector_coords(
             detector_col: float,
@@ -5680,43 +5949,39 @@ def build_geometry_manual_fit_dataset(
             seed_entry = dict(measured_entry)
             raw_col = None
             raw_row = None
-            if dynamic_reanchor_use_caked_space:
-                active_params = (
-                    local_params
-                    if isinstance(local_params, Mapping)
-                    else params_i
+            active_params = (
+                local_params
+                if isinstance(local_params, Mapping)
+                else params_i
+            )
+            active_caked_bundle = (
+                _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
+                    detector_shape=dynamic_reanchor_native_shape,
+                    radial_axis=dynamic_reanchor_radial_axis,
+                    azimuth_axis=dynamic_reanchor_azimuth_axis,
+                    raw_azimuth_axis=dynamic_reanchor_raw_azimuth_axis,
+                    transform_bundle=dynamic_reanchor_transform_bundle,
+                    params=active_params,
                 )
-                pixel_size = float(
-                    _fit_space_pixel_size_provenance(active_params).get(
-                        "value",
-                        np.nan,
-                    )
-                )
-                try:
-                    center_value = active_params.get("center", params_i.get("center"))
-                except Exception:
-                    center_value = params_i.get("center")
-                try:
-                    detector_distance = float(
-                        active_params.get(
-                            "corto_detector",
-                            params_i.get("corto_detector", np.nan),
-                        )
-                    )
-                except Exception:
-                    detector_distance = float("nan")
-                try:
-                    gamma_value = float(
-                        active_params.get("gamma", params_i.get("gamma", 0.0))
-                    )
-                except Exception:
-                    gamma_value = 0.0
-                try:
-                    Gamma_value = float(
-                        active_params.get("Gamma", params_i.get("Gamma", 0.0))
-                    )
-                except Exception:
-                    Gamma_value = 0.0
+                if dynamic_reanchor_caked_view_ready
+                else None
+            )
+            use_caked_reanchor = isinstance(active_caked_bundle, CakeTransformBundle)
+            dynamic_reanchor_cache_data = {
+                "match_config": dict(dynamic_reanchor_match_cfg),
+                "background_context": (
+                    dynamic_reanchor_caked_background_context
+                    if use_caked_reanchor
+                    else dynamic_reanchor_detector_background_context
+                ),
+            }
+            dynamic_reanchor_image = (
+                np.asarray(dynamic_reanchor_caked_background, dtype=np.float64)
+                if use_caked_reanchor
+                and isinstance(dynamic_reanchor_caked_background, np.ndarray)
+                else np.asarray(dynamic_reanchor_detector_image, dtype=np.float64)
+            )
+            if use_caked_reanchor:
 
                 def _detector_point_to_caked_angles(
                     detector_col: float,
@@ -5740,39 +6005,22 @@ def build_geometry_manual_fit_dataset(
                         and np.isfinite(native_detector_row)
                     ):
                         return float("nan"), float("nan")
-                    if isinstance(dynamic_reanchor_transform_bundle, CakeTransformBundle):
-                        try:
-                            bundle_two_theta, bundle_phi = detector_pixel_to_caked_bin(
-                                dynamic_reanchor_transform_bundle,
-                                float(native_detector_col),
-                                float(native_detector_row),
-                            )
-                        except Exception:
-                            bundle_two_theta, bundle_phi = (None, None)
-                        if (
-                            bundle_two_theta is not None
-                            and bundle_phi is not None
-                            and np.isfinite(float(bundle_two_theta))
-                            and np.isfinite(float(bundle_phi))
-                        ):
-                            return float(bundle_two_theta), float(bundle_phi)
-                    projected_two_theta, projected_phi = _detector_pixels_to_fit_space(
-                        np.array([native_detector_col], dtype=np.float64),
-                        np.array([native_detector_row], dtype=np.float64),
-                        center=center_value,
-                        detector_distance=float(detector_distance),
-                        pixel_size=float(pixel_size),
-                        gamma_deg=float(gamma_value),
-                        Gamma_deg=float(Gamma_value),
-                    )
-                    return (
-                        float(projected_two_theta[0])
-                        if projected_two_theta.size > 0
-                        else float("nan"),
-                        float(projected_phi[0])
-                        if projected_phi.size > 0
-                        else float("nan"),
-                    )
+                    try:
+                        bundle_two_theta, bundle_phi = detector_pixel_to_caked_bin(
+                            active_caked_bundle,
+                            float(native_detector_col),
+                            float(native_detector_row),
+                        )
+                    except Exception:
+                        bundle_two_theta, bundle_phi = (None, None)
+                    if (
+                        bundle_two_theta is None
+                        or bundle_phi is None
+                        or not np.isfinite(float(bundle_two_theta))
+                        or not np.isfinite(float(bundle_phi))
+                    ):
+                        return float("nan"), float("nan")
+                    return float(bundle_two_theta), float(bundle_phi)
 
                 sim_two_theta, sim_phi = _detector_point_to_caked_angles(
                     float(sim_col),
@@ -5863,9 +6111,17 @@ def build_geometry_manual_fit_dataset(
                         float(raw_row),
                         display_background=dynamic_reanchor_image,
                         cache_data=dynamic_reanchor_cache_data,
-                        use_caked_space=bool(dynamic_reanchor_use_caked_space),
-                        radial_axis=dynamic_reanchor_radial_axis,
-                        azimuth_axis=dynamic_reanchor_azimuth_axis,
+                        use_caked_space=bool(use_caked_reanchor),
+                        radial_axis=(
+                            dynamic_reanchor_radial_axis
+                            if use_caked_reanchor
+                            else None
+                        ),
+                        azimuth_axis=(
+                            dynamic_reanchor_azimuth_axis
+                            if use_caked_reanchor
+                            else None
+                        ),
                         match_simulated_peaks_to_peak_context=(
                             match_simulated_peaks_to_peak_context
                         ),
@@ -5875,7 +6131,7 @@ def build_geometry_manual_fit_dataset(
                 return None
             if not (np.isfinite(refined_col) and np.isfinite(refined_row)):
                 return None
-            if dynamic_reanchor_use_caked_space:
+            if use_caked_reanchor:
                 return {
                     "background_two_theta_deg": float(refined_col),
                     "background_phi_deg": float(refined_row),

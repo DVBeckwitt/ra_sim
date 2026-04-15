@@ -132,13 +132,13 @@ from ra_sim.simulation.exact_cake_portable import (
     FastAzimuthalIntegrator,
     build_angle_axes,
     build_cake_transform_bundle,
-    build_cake_transform_bundle_from_result,
     caked_point_to_detector_pixel,
     detector_two_theta_max_deg,
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
     prepare_gui_phi_display,
     raw_phi_to_gui_phi,
+    resolve_cake_transform_bundle,
     start_exact_cake_geometry_warmup_in_background,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
@@ -4515,6 +4515,7 @@ def _geometry_fit_caked_view_for_index(
             dtype=np.float64,
         )
         transform_bundle = _current_live_caked_transform_bundle()
+        detector_shape = simulation_runtime_state.ai_cache.get("detector_shape")
     except Exception:
         return None
     if (
@@ -4524,28 +4525,28 @@ def _geometry_fit_caked_view_for_index(
         or azimuth_axis.size <= 0
     ):
         return None
-    if isinstance(transform_bundle, CakeTransformBundle):
-        raw_azimuth_axis = np.asarray(
-            transform_bundle.raw_azimuth_deg,
-            dtype=np.float64,
-        ).copy()
-    else:
-        raw_azimuth_axis = np.asarray(
-            gui_phi_to_raw_phi(azimuth_axis),
-            dtype=np.float64,
-        ).copy()
-    raw_to_gui_row_permutation = np.asarray(
-        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
-        dtype=np.int32,
+    if detector_shape is None and isinstance(transform_bundle, CakeTransformBundle):
+        detector_shape = transform_bundle.detector_shape
+    if detector_shape is None:
+        native_background = _get_current_background_native()
+        if native_background is not None:
+            detector_shape = np.asarray(native_background).shape[:2]
+    return _normalize_geometry_fit_caked_view_payload(
+        {
+            "background": caked_background,
+            "detector_shape": detector_shape,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": (
+                np.asarray(transform_bundle.raw_azimuth_deg, dtype=np.float64)
+                if isinstance(transform_bundle, CakeTransformBundle)
+                else None
+            ),
+            "transform_bundle": transform_bundle,
+        },
+        detector_shape=detector_shape,
+        ai=simulation_runtime_state.ai_cache.get("ai"),
     )
-    return {
-        "background": np.asarray(caked_background, dtype=np.float64).copy(),
-        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
-        "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64).copy(),
-        "raw_azimuth_axis": raw_azimuth_axis,
-        "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
-        "transform_bundle": transform_bundle,
-    }
 
 
 def _current_geometry_fit_caked_roi_enabled() -> bool:
@@ -4735,6 +4736,175 @@ def _nearest_sorted_axis_indices(
     return np.where(choose_left, insertion - 1, insertion).astype(np.int64, copy=False)
 
 
+def _canonical_raw_azimuth_axis_from_gui_axis(
+    axis_values: Sequence[float] | None,
+) -> np.ndarray | None:
+    """Return exact-cake-ready raw azimuth bins for one GUI-order caked axis."""
+
+    try:
+        gui_axis = np.asarray(axis_values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if gui_axis.size <= 0 or not np.all(np.isfinite(gui_axis)):
+        return None
+    raw_axis = np.asarray(gui_phi_to_raw_phi(gui_axis), dtype=np.float64).reshape(-1)
+    if raw_axis.size != gui_axis.size or not np.all(np.isfinite(raw_axis)):
+        return None
+    return np.asarray(np.sort(raw_axis, kind="stable"), dtype=np.float64)
+
+
+def _geometry_fit_detector_shape_2d(
+    detector_shape: Sequence[object] | None,
+) -> tuple[int, int] | None:
+    try:
+        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
+    except Exception:
+        return None
+    if (
+        len(normalized_shape) < 2
+        or int(normalized_shape[0]) <= 0
+        or int(normalized_shape[1]) <= 0
+    ):
+        return None
+    return int(normalized_shape[0]), int(normalized_shape[1])
+
+
+def _normalize_geometry_fit_caked_view_payload(
+    payload: Mapping[str, object] | None,
+    *,
+    detector_shape: Sequence[object] | None = None,
+    ai: FastAzimuthalIntegrator | None = None,
+) -> dict[str, object] | None:
+    if not isinstance(payload, Mapping):
+        return None
+
+    transform_bundle = payload.get("transform_bundle")
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
+        normalized_shape = _geometry_fit_detector_shape_2d(
+            payload.get("detector_shape")
+        )
+    if normalized_shape is None and isinstance(transform_bundle, CakeTransformBundle):
+        normalized_shape = _geometry_fit_detector_shape_2d(
+            transform_bundle.detector_shape
+        )
+    if normalized_shape is None:
+        return None
+
+    background_value = payload.get(
+        "background",
+        payload.get("background_image", payload.get("image")),
+    )
+    background = None
+    if background_value is not None:
+        try:
+            background = np.asarray(background_value, dtype=np.float64).copy()
+        except Exception:
+            return None
+        if background.ndim != 2 or background.size <= 0:
+            return None
+
+    radial_source = payload.get("radial_axis", payload.get("radial"))
+    if radial_source is None and isinstance(transform_bundle, CakeTransformBundle):
+        radial_source = transform_bundle.radial_deg
+    azimuth_source = payload.get("azimuth_axis", payload.get("azimuth"))
+    if azimuth_source is None and isinstance(transform_bundle, CakeTransformBundle):
+        bundle_gui_axis = np.asarray(
+            raw_phi_to_gui_phi(transform_bundle.raw_azimuth_deg),
+            dtype=np.float64,
+        ).reshape(-1)
+        azimuth_source = bundle_gui_axis[
+            np.argsort(bundle_gui_axis, kind="stable")
+        ]
+    try:
+        radial_axis = np.asarray(
+            radial_source,
+            dtype=np.float64,
+        ).reshape(-1)
+        azimuth_axis = np.asarray(
+            azimuth_source,
+            dtype=np.float64,
+        ).reshape(-1)
+    except Exception:
+        return None
+    if (
+        radial_axis.size <= 0
+        or azimuth_axis.size <= 0
+        or not np.all(np.isfinite(radial_axis))
+        or not np.all(np.isfinite(azimuth_axis))
+    ):
+        return None
+
+    raw_azimuth_value = payload.get(
+        "raw_azimuth_axis",
+        payload.get("raw_azimuth"),
+    )
+    if raw_azimuth_value is None:
+        raw_azimuth_axis = _canonical_raw_azimuth_axis_from_gui_axis(azimuth_axis)
+    else:
+        try:
+            raw_azimuth_axis = np.asarray(
+                raw_azimuth_value,
+                dtype=np.float64,
+            ).reshape(-1)
+        except Exception:
+            return None
+    if (
+        raw_azimuth_axis is None
+        or raw_azimuth_axis.size != azimuth_axis.size
+        or not np.all(np.isfinite(raw_azimuth_axis))
+    ):
+        return None
+    raw_azimuth_axis = np.asarray(raw_azimuth_axis, dtype=np.float64).copy()
+
+    canonical_row_permutation = np.asarray(
+        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+        dtype=np.int32,
+    )
+    raw_to_gui_value = payload.get("raw_to_gui_row_permutation")
+    try:
+        raw_to_gui_row_permutation = np.asarray(
+            raw_to_gui_value if raw_to_gui_value is not None else canonical_row_permutation,
+            dtype=np.int32,
+        ).reshape(-1)
+    except Exception:
+        raw_to_gui_row_permutation = canonical_row_permutation
+    if (
+        raw_to_gui_row_permutation.shape != canonical_row_permutation.shape
+        or not np.array_equal(raw_to_gui_row_permutation, canonical_row_permutation)
+    ):
+        raw_to_gui_row_permutation = canonical_row_permutation
+
+    resolved_bundle = resolve_cake_transform_bundle(
+        ai,
+        normalized_shape,
+        radial_axis,
+        gui_azimuth_deg=azimuth_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        transform_bundle=(
+            transform_bundle if isinstance(transform_bundle, CakeTransformBundle) else None
+        ),
+        require_gui_display_match=True,
+    )
+
+    normalized_payload = {
+        "detector_shape": tuple(int(v) for v in normalized_shape),
+        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
+        "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64).copy(),
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "raw_to_gui_row_permutation": np.asarray(
+            raw_to_gui_row_permutation,
+            dtype=np.int32,
+        ).copy(),
+        "transform_bundle": (
+            resolved_bundle if isinstance(resolved_bundle, CakeTransformBundle) else None
+        ),
+    }
+    if background is not None:
+        normalized_payload["background"] = background
+    return normalized_payload
+
+
 def _geometry_fit_caked_roi_preview_mask(
     *,
     selection: Mapping[str, object] | None,
@@ -4746,68 +4916,85 @@ def _geometry_fit_caked_roi_preview_mask(
 
     if not isinstance(selection, Mapping) or not bool(selection.get("valid", False)):
         return None
-    ai = _current_geometry_fit_preview_integrator()
-    two_theta_map, phi_map = _detector_angular_maps_for_shape(ai, native_shape)
-    if two_theta_map is None or phi_map is None:
-        return None
-
     try:
+        normalized_shape = tuple(int(v) for v in tuple(native_shape)[:2])
         rows = np.asarray(selection.get("rows"), dtype=np.int64).reshape(-1)
         cols = np.asarray(selection.get("cols"), dtype=np.int64).reshape(-1)
+        radial = np.asarray(radial_axis, dtype=float).reshape(-1)
+        azimuth = np.asarray(azimuth_axis, dtype=float).reshape(-1)
     except Exception:
         return None
-    if rows.size <= 0 or cols.size != rows.size:
+    if (
+        len(normalized_shape) < 2
+        or normalized_shape[0] <= 0
+        or normalized_shape[1] <= 0
+        or rows.size <= 0
+        or cols.size != rows.size
+    ):
         return None
-
-    radial = np.asarray(radial_axis, dtype=float).reshape(-1)
-    azimuth = np.asarray(azimuth_axis, dtype=float).reshape(-1)
     if radial.size <= 0 or azimuth.size <= 0:
         return None
 
     valid = (
         (rows >= 0)
-        & (rows < int(two_theta_map.shape[0]))
+        & (rows < int(normalized_shape[0]))
         & (cols >= 0)
-        & (cols < int(two_theta_map.shape[1]))
+        & (cols < int(normalized_shape[1]))
     )
     if not np.any(valid):
         return None
 
-    bundle = _current_live_caked_transform_bundle()
-    if bundle is not None:
-        mask = np.zeros((int(azimuth.size), int(radial.size)), dtype=bool)
-        for row_idx, col_idx in zip(rows[valid], cols[valid]):
-            two_theta_value, phi_value = detector_pixel_to_caked_bin(
-                bundle,
-                float(col_idx),
-                float(row_idx),
-            )
-            if two_theta_value is None or phi_value is None:
-                continue
-            radial_idx = _nearest_sorted_axis_indices(radial, [two_theta_value])
-            azimuth_idx = _nearest_sorted_axis_indices(azimuth, [phi_value])
-            if radial_idx is None or azimuth_idx is None:
-                continue
-            mask[azimuth_idx, radial_idx] = True
-        if np.any(mask):
-            return mask
-
-    two_theta_values = np.asarray(two_theta_map[rows[valid], cols[valid]], dtype=float)
-    phi_values = np.asarray(
-        raw_phi_to_gui_phi(np.asarray(phi_map[rows[valid], cols[valid]], dtype=float)),
-        dtype=float,
+    live_bundle = _current_live_caked_transform_bundle()
+    caked_view_payload = _normalize_geometry_fit_caked_view_payload(
+        {
+            "detector_shape": normalized_shape,
+            "radial_axis": radial,
+            "azimuth_axis": azimuth,
+            "transform_bundle": live_bundle,
+        },
+        detector_shape=normalized_shape,
+        ai=None,
     )
-    finite = np.isfinite(two_theta_values) & np.isfinite(phi_values)
-    if not np.any(finite):
-        return None
-
-    radial_idx = _nearest_sorted_axis_indices(radial, two_theta_values[finite])
-    azimuth_idx = _nearest_sorted_axis_indices(azimuth, phi_values[finite])
-    if radial_idx is None or azimuth_idx is None:
+    if not isinstance(
+        caked_view_payload.get("transform_bundle")
+        if isinstance(caked_view_payload, Mapping)
+        else None,
+        CakeTransformBundle,
+    ):
+        caked_view_payload = _normalize_geometry_fit_caked_view_payload(
+            {
+                "detector_shape": normalized_shape,
+                "radial_axis": radial,
+                "azimuth_axis": azimuth,
+                "transform_bundle": live_bundle,
+            },
+            detector_shape=normalized_shape,
+            ai=_current_geometry_fit_preview_integrator(),
+        )
+    bundle = (
+        caked_view_payload.get("transform_bundle")
+        if isinstance(caked_view_payload, Mapping)
+        else None
+    )
+    if not isinstance(bundle, CakeTransformBundle):
         return None
 
     mask = np.zeros((int(azimuth.size), int(radial.size)), dtype=bool)
-    mask[azimuth_idx, radial_idx] = True
+    for row_idx, col_idx in zip(rows[valid], cols[valid]):
+        two_theta_value, phi_value = detector_pixel_to_caked_bin(
+            bundle,
+            float(col_idx),
+            float(row_idx),
+        )
+        if two_theta_value is None or phi_value is None:
+            continue
+        radial_idx = _nearest_sorted_axis_indices(radial, [two_theta_value])
+        azimuth_idx = _nearest_sorted_axis_indices(azimuth, [phi_value])
+        if radial_idx is None or azimuth_idx is None:
+            continue
+        mask[azimuth_idx, radial_idx] = True
+    if not np.any(mask):
+        return None
     return mask
 
 
@@ -4991,6 +5178,15 @@ def _native_detector_coords_to_live_caked_coords(
     )
 
 
+def _current_qr_cylinder_caked_projection_context() -> Mapping[str, object] | None:
+    try:
+        background_index = int(background_runtime_state.current_background_index)
+    except Exception:
+        return None
+    payload = _geometry_fit_caked_view_for_index(background_index)
+    return payload if isinstance(payload, Mapping) else None
+
+
 def _scattering_angles_to_detector_pixel(
     two_theta_deg: float,
     phi_deg: float,
@@ -5038,32 +5234,27 @@ def _geometry_fit_caked_roi_fit_space_to_detector_point(
 ) -> Callable[[float, float], tuple[float | None, float | None] | None] | None:
     """Build one fit-space `(2theta, phi)` to detector-point projector for ROI use."""
 
-    try:
-        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
-    except Exception:
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
         return None
-    if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
-        return None
-    bundle = (
-        transform_bundle
-        if isinstance(transform_bundle, CakeTransformBundle)
-        and tuple(transform_bundle.detector_shape) == tuple(normalized_shape)
-        else None
-    )
-    if bundle is not None:
-        radial = np.asarray(bundle.radial_deg, dtype=np.float64).reshape(-1)
-        azimuth = np.asarray(bundle.gui_azimuth_deg, dtype=np.float64).reshape(-1)
-    else:
-        try:
-            radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
-            azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
-        except Exception:
-            return None
-        if radial.size <= 0 or azimuth.size <= 0:
-            return None
     exact_ai = ai if isinstance(ai, FastAzimuthalIntegrator) else None
-    if bundle is None and exact_ai is None:
+    normalized_payload = _normalize_geometry_fit_caked_view_payload(
+        {
+            "detector_shape": normalized_shape,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "transform_bundle": transform_bundle,
+        },
+        detector_shape=normalized_shape,
+        ai=exact_ai,
+    )
+    if not isinstance(normalized_payload, Mapping):
         return None
+    bundle = normalized_payload.get("transform_bundle")
+    if not isinstance(bundle, CakeTransformBundle):
+        return None
+    radial = np.asarray(normalized_payload.get("radial_axis"), dtype=np.float64).reshape(-1)
+    azimuth = np.asarray(normalized_payload.get("azimuth_axis"), dtype=np.float64).reshape(-1)
 
     def _project(
         two_theta_deg: float,
@@ -5093,11 +5284,8 @@ def _geometry_fit_worker_caked_projection_view(
 
     if not isinstance(ai, FastAzimuthalIntegrator):
         return None
-    try:
-        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
-    except Exception:
-        return None
-    if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
         return None
 
     radial_bins = (
@@ -5142,13 +5330,18 @@ def _geometry_fit_worker_caked_projection_view(
         dtype=np.int32,
     )
     gui_azimuth_axis = gui_azimuth_axis[raw_to_gui_row_permutation]
-    return {
-        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
-        "azimuth_axis": np.asarray(gui_azimuth_axis, dtype=np.float64).copy(),
-        "raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=np.float64).copy(),
-        "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
-        "transform_bundle": transform_bundle,
-    }
+    return _normalize_geometry_fit_caked_view_payload(
+        {
+            "detector_shape": normalized_shape,
+            "radial_axis": radial_axis,
+            "azimuth_axis": gui_azimuth_axis,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+            "transform_bundle": transform_bundle,
+        },
+        detector_shape=normalized_shape,
+        ai=ai,
+    )
 
 
 def _caked_axis_to_image_index(
@@ -5427,6 +5620,9 @@ def _initialize_runtime_controls_block_05() -> None:
                 ),
                 "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
                 "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
+                "get_caked_projection_context": (
+                    lambda: _current_qr_cylinder_caked_projection_context()
+                ),
                 "native_sim_to_display_coords": _native_sim_to_display_coords,
                 "draw_idle_factory": (lambda: canvas.draw_idle if "canvas" in globals() else None),
                 "set_status_text_factory": (
@@ -10557,11 +10753,6 @@ def _prepare_caked_display_payload(
     if res2 is None:
         return None
 
-    transform_bundle = build_cake_transform_bundle_from_result(
-        ai,
-        detector_shape if detector_shape is not None else (),
-        res2,
-    )
     raw_azimuth_axis = np.asarray(res2.azimuthal, dtype=float)
     raw_to_gui_row_permutation = np.asarray(
         np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
@@ -10586,17 +10777,48 @@ def _prepare_caked_display_payload(
     else:
         azimuth_min, azimuth_max = -180.0, 180.0
 
+    normalized_payload = _normalize_geometry_fit_caked_view_payload(
+        {
+            "background": caked_img,
+            "detector_shape": detector_shape,
+            "radial_axis": radial_vals,
+            "azimuth_axis": azimuth_vals,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+            "transform_bundle": None,
+        },
+        detector_shape=detector_shape,
+        ai=ai if isinstance(ai, FastAzimuthalIntegrator) else None,
+    )
+    if not isinstance(normalized_payload, Mapping):
+        return None
     return {
-        "image": np.asarray(caked_img, dtype=float),
-        "radial": np.asarray(radial_vals, dtype=float),
-        "azimuth": np.asarray(azimuth_vals, dtype=float),
-        "raw_azimuth": np.asarray(raw_azimuth_axis, dtype=float),
-        "raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=float),
+        "image": np.asarray(normalized_payload.get("background"), dtype=float),
+        "background": np.asarray(normalized_payload.get("background"), dtype=float),
+        "radial": np.asarray(normalized_payload.get("radial_axis"), dtype=float),
+        "radial_axis": np.asarray(
+            normalized_payload.get("radial_axis"),
+            dtype=float,
+        ),
+        "azimuth": np.asarray(normalized_payload.get("azimuth_axis"), dtype=float),
+        "azimuth_axis": np.asarray(
+            normalized_payload.get("azimuth_axis"),
+            dtype=float,
+        ),
+        "raw_azimuth": np.asarray(
+            normalized_payload.get("raw_azimuth_axis"),
+            dtype=float,
+        ),
+        "raw_azimuth_axis": np.asarray(
+            normalized_payload.get("raw_azimuth_axis"),
+            dtype=float,
+        ),
         "raw_to_gui_row_permutation": np.asarray(
-            raw_to_gui_row_permutation,
+            normalized_payload.get("raw_to_gui_row_permutation"),
             dtype=np.int32,
         ),
-        "transform_bundle": transform_bundle,
+        "transform_bundle": normalized_payload.get("transform_bundle"),
+        "detector_shape": tuple(normalized_payload.get("detector_shape", ())),
         "extent": [
             radial_min,
             radial_max,
@@ -22435,6 +22657,10 @@ def _build_geometry_fit_async_job(
                         dtype=np.int32,
                     ).copy(),
                     "transform_bundle": caked_view_payload.get("transform_bundle"),
+                    "detector_shape": tuple(
+                        int(v)
+                        for v in tuple(caked_view_payload.get("detector_shape", ()))[:2]
+                    ),
                 }
             except Exception:
                 pass
@@ -22699,44 +22925,11 @@ def _run_async_geometry_fit_worker_job(
         )
         if not caked_payload:
             return None
-        try:
-            caked_background = np.asarray(
-                caked_payload.get("background"),
-                dtype=np.float64,
-            ).copy()
-            radial_axis = np.asarray(
-                caked_payload.get("radial_axis"),
-                dtype=np.float64,
-            ).copy()
-            azimuth_axis = np.asarray(
-                caked_payload.get("azimuth_axis"),
-                dtype=np.float64,
-            ).copy()
-            raw_azimuth_axis = np.asarray(
-                caked_payload.get("raw_azimuth_axis"),
-                dtype=np.float64,
-            ).copy()
-            raw_to_gui_row_permutation = np.asarray(
-                caked_payload.get("raw_to_gui_row_permutation"),
-                dtype=np.int32,
-            ).copy()
-        except Exception:
-            return None
-        if (
-            caked_background.ndim != 2
-            or caked_background.size <= 0
-            or radial_axis.size <= 0
-            or azimuth_axis.size <= 0
-        ):
-            return None
-        return {
-            "background": caked_background,
-            "radial_axis": radial_axis,
-            "azimuth_axis": azimuth_axis,
-            "raw_azimuth_axis": raw_azimuth_axis,
-            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
-            "transform_bundle": caked_payload.get("transform_bundle"),
-        }
+        return _normalize_geometry_fit_caked_view_payload(
+            caked_payload,
+            detector_shape=caked_payload.get("detector_shape"),
+            ai=_worker_geometry_fit_caking_integrator(),
+        )
 
     def _project_source_rows(raw_rows: Sequence[object] | None) -> Sequence[object]:
         project_rows = job_data.get("project_rows")
@@ -23087,6 +23280,10 @@ def _run_async_geometry_fit_worker_job(
                     dtype=np.int32,
                 ).copy(),
                 "transform_bundle": caked_payload.get("transform_bundle"),
+                "detector_shape": tuple(
+                    int(v)
+                    for v in tuple(caked_payload.get("detector_shape", ()))[:2]
+                ),
                 "roi_enabled": bool(roi_enabled),
                 "roi_used_restricted_cake": bool(roi_used_restricted_cake),
                 "roi_pixel_count": int(roi_pixel_count),

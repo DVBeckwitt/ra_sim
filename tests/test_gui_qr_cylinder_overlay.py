@@ -55,6 +55,26 @@ def _reset_loader_cache() -> None:
     loader.clear_config_cache()
 
 
+def _caked_projection_context(
+    *,
+    detector_shape: tuple[int, int] = (4, 4),
+) -> dict[str, object]:
+    bundle = qr_cylinder_overlay.CakeTransformBundle(
+        detector_shape=detector_shape,
+        radial_deg=np.array([1.0, 2.0, 3.0], dtype=float),
+        raw_azimuth_deg=np.array([-100.0, -90.0, -80.0], dtype=float),
+        gui_azimuth_deg=np.array([10.0, 0.0, -10.0], dtype=float),
+        lut=SimpleNamespace(),
+    )
+    return {
+        "detector_shape": detector_shape,
+        "radial_axis": np.array([1.0, 2.0, 3.0], dtype=float),
+        "azimuth_axis": np.array([-10.0, 0.0, 10.0], dtype=float),
+        "raw_azimuth_axis": np.array([-100.0, -90.0, -80.0], dtype=float),
+        "transform_bundle": bundle,
+    }
+
+
 def test_qr_cylinder_overlay_config_and_signature_normalize_values() -> None:
     config = qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
         render_in_caked_space=1,
@@ -98,7 +118,8 @@ def test_qr_cylinder_overlay_config_and_signature_normalize_values() -> None:
     )
     assert signature[1] is True
     assert signature[2] == 512
-    assert signature[-2:] == (1.2, 0.3)
+    assert signature[-3:-1] == (1.2, 0.3)
+    assert signature[-1] is None
 
 
 def test_qr_cylinder_overlay_render_config_factory_reads_live_values() -> None:
@@ -184,8 +205,7 @@ def test_qr_cylinder_overlay_path_builder_projects_detector_space_paths() -> Non
     paths = qr_cylinder_overlay.build_qr_cylinder_overlay_paths(
         [{"source": "primary", "m": 1, "qr": 0.25}],
         config=config,
-        two_theta_map=None,
-        phi_map_deg=None,
+        projection_context=None,
         native_sim_to_display_coords=lambda col, row, shape: (
             col + float(shape[1]),
             row + float(shape[0]),
@@ -225,39 +245,37 @@ def test_qr_cylinder_overlay_path_builder_projects_caked_space_paths() -> None:
         wavelength=1.54,
         n2=1.1 + 0.0j,
     )
-    two_theta_map = np.asarray(
-        [
-            [1.0, 2.0, 3.0, 4.0],
-            [5.0, 6.0, 7.0, 8.0],
-            [9.0, 10.0, 11.0, 12.0],
-            [13.0, 14.0, 15.0, 16.0],
-        ],
-        dtype=float,
-    )
-    phi_map = np.asarray(
-        [
-            [10.0, 20.0, 30.0, 40.0],
-            [50.0, 60.0, 70.0, 80.0],
-            [90.0, 100.0, 110.0, 120.0],
-            [130.0, 140.0, 150.0, 160.0],
-        ],
-        dtype=float,
-    )
+    context = _caked_projection_context()
 
-    paths = qr_cylinder_overlay.build_qr_cylinder_overlay_paths(
-        [{"source": "secondary", "m": 2, "qr": 0.5}],
-        config=config,
-        two_theta_map=two_theta_map,
-        phi_map_deg=phi_map,
-        native_sim_to_display_coords=lambda col, row, shape: (col, row),
-        project_traces=lambda **_kwargs: [
-            SimpleNamespace(
-                detector_col=np.asarray([0.0, 1.0, 2.0], dtype=float),
-                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
-                valid_mask=np.asarray([True, True, True], dtype=bool),
-            )
-        ],
-    )
+    def _project_to_caked(bundle, col, row):
+        assert bundle is context["transform_bundle"]
+        if (float(col), float(row)) == (0.0, 0.0):
+            return (1.0, 10.0)
+        if (float(col), float(row)) == (1.0, 1.0):
+            return (6.0, 60.0)
+        if (float(col), float(row)) == (2.0, 2.0):
+            return (11.0, 110.0)
+        return (None, None)
+
+    detector_pixel_to_caked_bin_original = qr_cylinder_overlay.detector_pixel_to_caked_bin
+    qr_cylinder_overlay.detector_pixel_to_caked_bin = _project_to_caked
+
+    try:
+        paths = qr_cylinder_overlay.build_qr_cylinder_overlay_paths(
+            [{"source": "secondary", "m": 2, "qr": 0.5}],
+            config=config,
+            projection_context=context,
+            native_sim_to_display_coords=lambda col, row, shape: (col, row),
+            project_traces=lambda **_kwargs: [
+                SimpleNamespace(
+                    detector_col=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                    detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                    valid_mask=np.asarray([True, True, True], dtype=bool),
+                )
+            ],
+        )
+    finally:
+        qr_cylinder_overlay.detector_pixel_to_caked_bin = detector_pixel_to_caked_bin_original
 
     assert len(paths) == 1
     assert paths[0]["source"] == "secondary"
@@ -393,8 +411,7 @@ def test_refresh_runtime_qr_cylinder_overlay_builds_and_reuses_cached_paths(
 
     assert len(build_calls) == 1
     assert build_calls[0][0] == entries
-    assert build_calls[0][1]["two_theta_map"] is None
-    assert build_calls[0][1]["phi_map_deg"] is None
+    assert build_calls[0][1]["projection_context"] is None
     assert bindings.overlay_cache["paths"] == fake_paths
     assert len(draw_calls) == 2
     assert draw_calls[0][0] == "axis"
@@ -460,14 +477,12 @@ def test_refresh_runtime_qr_cylinder_overlay_can_disable_path_retention(
     assert bindings.overlay_cache == {"signature": None, "paths": []}
 
 
-def test_refresh_runtime_qr_cylinder_overlay_passes_detector_maps_for_caked_view(
+def test_refresh_runtime_qr_cylinder_overlay_passes_caked_projection_context_for_caked_view(
     monkeypatch,
 ) -> None:
     build_calls = []
     draw_calls = []
-    ai = object()
-    two_theta_map = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=float)
-    phi_map_deg = np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=float)
+    projection_context = _caked_projection_context()
 
     monkeypatch.setattr(
         qr_cylinder_overlay,
@@ -488,19 +503,19 @@ def test_refresh_runtime_qr_cylinder_overlay_passes_detector_maps_for_caked_view
         overlay_enabled_factory=lambda: True,
         get_active_entries=lambda: [{"source": "secondary", "m": 2, "qr": 0.5}],
         render_config_factory=lambda: _overlay_config(render_in_caked_space=True),
-        ai_factory=lambda: ai,
-        get_detector_angular_maps=lambda ai_arg: (
-            (two_theta_map, phi_map_deg) if ai_arg is ai else (None, None)
+        ai_factory=lambda: None,
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("caked overlay should not request detector angle maps")
         ),
         native_sim_to_display_coords=lambda col, row, shape: (col, row),
+        get_caked_projection_context=lambda: projection_context,
         draw_idle=lambda: None,
         set_status_text=lambda _text: None,
     )
 
     qr_cylinder_overlay.refresh_runtime_qr_cylinder_overlay(bindings, redraw=True)
 
-    assert build_calls[0]["two_theta_map"] is two_theta_map
-    assert build_calls[0]["phi_map_deg"] is phi_map_deg
+    assert build_calls[0]["projection_context"] is projection_context
     assert draw_calls[0][0] == "axis"
 
 

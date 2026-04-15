@@ -189,6 +189,32 @@ def _make_runtime_action_execution_bindings(
     )
 
 
+def _make_stub_caked_bundle(
+    *,
+    detector_shape: tuple[int, int],
+    radial_axis,
+    azimuth_axis,
+):
+    radial_vec = np.asarray(radial_axis, dtype=np.float64).copy()
+    gui_display_axis = np.asarray(azimuth_axis, dtype=np.float64).copy()
+    raw_azimuth_vec = np.asarray(
+        geometry_fit.gui_phi_to_raw_phi(gui_display_axis),
+        dtype=np.float64,
+    )
+    raw_azimuth_vec = np.sort(raw_azimuth_vec, kind="stable")
+    gui_azimuth_vec = np.asarray(
+        geometry_fit.raw_phi_to_gui_phi(raw_azimuth_vec),
+        dtype=np.float64,
+    )
+    return geometry_fit.CakeTransformBundle(
+        detector_shape=tuple(int(v) for v in detector_shape),
+        radial_deg=radial_vec,
+        raw_azimuth_deg=np.asarray(raw_azimuth_vec, dtype=np.float64).copy(),
+        gui_azimuth_deg=np.asarray(gui_azimuth_vec, dtype=np.float64).copy(),
+        lut=object(),
+    )
+
+
 def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_first() -> None:
     calls: dict[str, object] = {
         "selection": [],
@@ -3951,7 +3977,7 @@ def test_geometry_fit_dynamic_reanchor_uses_background_detector_cache_as_raw_see
     assert callable(calls["matcher"])
 
 
-def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit_space_override(
+def test_geometry_fit_dynamic_reanchor_uses_exact_caked_bundle_without_analytic_fallback(
     monkeypatch,
 ) -> None:
     calls: dict[str, object] = {}
@@ -3994,12 +4020,17 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
             "cfg": dict(cfg),
         },
     )
-    bundle = geometry_fit.CakeTransformBundle(
+    monkeypatch.setattr(
+        geometry_fit,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic caked fallback should not run")
+        ),
+    )
+    bundle = _make_stub_caked_bundle(
         detector_shape=(6, 7),
-        radial_deg=np.array([20.0], dtype=np.float64),
-        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
-        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
-        lut=object(),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
     )
     projector_calls: list[tuple[object, float, float]] = []
     monkeypatch.setattr(
@@ -4080,6 +4111,7 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
             "background": np.zeros((6, 7), dtype=np.float64),
             "radial_axis": radial_axis,
             "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": np.asarray(bundle.raw_azimuth_deg, dtype=np.float64),
             "transform_bundle": bundle,
         },
     )
@@ -4165,12 +4197,10 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
             "cfg": dict(cfg),
         },
     )
-    bundle = geometry_fit.CakeTransformBundle(
+    bundle = _make_stub_caked_bundle(
         detector_shape=(6, 7),
-        radial_deg=np.array([20.0], dtype=np.float64),
-        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
-        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
-        lut=object(),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
     )
     projector_calls: list[tuple[object, float, float]] = []
     monkeypatch.setattr(
@@ -4293,6 +4323,198 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
     assert result["fit_space_anchor_override"] is True
 
 
+@pytest.mark.parametrize(
+    "bundle_factory",
+    [
+        lambda radial_axis, azimuth_axis: None,
+        (
+            lambda radial_axis, azimuth_axis: geometry_fit.CakeTransformBundle(
+                detector_shape=(9, 9),
+                radial_deg=np.asarray(radial_axis, dtype=np.float64).copy(),
+                raw_azimuth_deg=np.asarray(
+                    geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
+                    dtype=np.float64,
+                ).copy(),
+                gui_azimuth_deg=np.asarray(azimuth_axis, dtype=np.float64).copy(),
+                lut=object(),
+            )
+        ),
+    ],
+    ids=["missing_bundle", "invalid_bundle"],
+)
+def test_geometry_fit_dynamic_reanchor_missing_or_invalid_bundle_falls_back_to_detector_space(
+    monkeypatch,
+    bundle_factory,
+) -> None:
+    calls: dict[str, object] = {}
+    radial_axis = np.linspace(20.0, 26.0, 7, dtype=np.float64)
+    azimuth_axis = np.linspace(-40.0, -35.0, 6, dtype=np.float64)
+    raw_azimuth_axis = np.asarray(
+        geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
+        dtype=np.float64,
+    )
+    rebuild_calls: list[tuple[tuple[int, int], int, int]] = []
+
+    def _fake_refine(
+        candidate,
+        raw_col,
+        raw_row,
+        *,
+        display_background,
+        cache_data,
+        use_caked_space,
+        radial_axis=None,
+        azimuth_axis=None,
+        match_simulated_peaks_to_peak_context,
+    ):
+        calls["candidate"] = dict(candidate)
+        calls["raw"] = (float(raw_col), float(raw_row))
+        calls["shape"] = tuple(np.asarray(display_background).shape)
+        calls["cache_data"] = dict(cache_data)
+        calls["use_caked_space"] = bool(use_caked_space)
+        calls["radial_axis"] = radial_axis
+        calls["azimuth_axis"] = azimuth_axis
+        calls["matcher"] = match_simulated_peaks_to_peak_context
+        return 44.0, 45.0
+
+    monkeypatch.setattr(
+        geometry_fit.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        _fake_refine,
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_background_peak_context",
+        lambda image, cfg: {
+            "img_valid": True,
+            "shape": tuple(np.asarray(image).shape),
+            "cfg": dict(cfg),
+        },
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "resolve_cake_transform_bundle",
+        lambda ai, detector_shape, radial_deg, *, raw_azimuth_deg=None, **_kwargs: (
+            rebuild_calls.append(
+                (
+                    tuple(int(v) for v in tuple(detector_shape)[:2]),
+                    int(np.asarray(radial_deg, dtype=np.float64).size),
+                    int(np.asarray(raw_azimuth_deg, dtype=np.float64).size),
+                )
+            )
+            or None
+        )
+        if ai is not None
+        else None,
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "detector_pixel_to_caked_bin",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked projection should not run without a valid bundle")
+        ),
+    )
+
+    valid_source_row = {
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "hkl": (1, 1, 0),
+        "sim_col": 18.0,
+        "sim_row": 19.0,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((6, 7), dtype=np.float64),
+            np.zeros((6, 7), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [
+                dict(valid_source_row)
+            ]
+        ),
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(valid_source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda peaks: {
+            (1, 2): dict(valid_source_row)
+        },
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "xy",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: np.asarray(image, dtype=np.float64),
+        geometry_manual_match_config=lambda: {"search_radius": 4.0},
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background": np.ones((6, 7), dtype=np.float64),
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "transform_bundle": bundle_factory(radial_axis, azimuth_axis),
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+    callback = dataset["spec"]["dynamic_reanchor_callback"]
+    result = callback(
+        dict(dataset["measured_for_fit"][0]),
+        (50.0, 51.0),
+        local_params={
+            "center": [32.0, 32.0],
+            "corto_detector": 100.0,
+            "pixel_size": 1.0,
+        },
+        dataset_ctx=SimpleNamespace(dataset_index=0),
+    )
+
+    assert result["detector_x"] == 44.0
+    assert result["detector_y"] == 45.0
+    assert "fit_space_anchor_override" not in result
+    assert calls["shape"] == (6, 7)
+    assert calls["raw"] == (30.0, 40.0)
+    assert calls["candidate"]["sim_col"] == 50.0
+    assert calls["candidate"]["sim_row"] == 51.0
+    assert calls["use_caked_space"] is False
+    assert calls["radial_axis"] is None
+    assert calls["azimuth_axis"] is None
+    assert callable(calls["matcher"])
+    assert rebuild_calls == [((6, 7), 7, 6)]
+
+
 def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
     monkeypatch,
 ) -> None:
@@ -4361,12 +4583,10 @@ def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
             "cfg": dict(cfg),
         },
     )
-    bundle = geometry_fit.CakeTransformBundle(
+    bundle = _make_stub_caked_bundle(
         detector_shape=(6, 7),
-        radial_deg=np.array([20.0], dtype=np.float64),
-        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
-        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
-        lut=object(),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
     )
     projector_calls: list[tuple[object, float, float]] = []
     monkeypatch.setattr(

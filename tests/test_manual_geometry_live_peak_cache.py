@@ -31,6 +31,13 @@ def _build_lookup(entries):
     return lookup
 
 
+def _fail_projection_legacy_path(message: str):
+    def _fail(*_args, **_kwargs):
+        raise AssertionError(message)
+
+    return _fail
+
+
 def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> None:
     peak_record = {
         "display_col": 13.5,
@@ -179,6 +186,126 @@ def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_previe
     assert ("q_group", "primary", 1, 2) not in cache_data["grouped_candidates"]
     assert cache_state["signature"] == cache_data["signature"]
     assert cache_state["data"]["simulated_lookup"][(7, 9)]["sim_col"] == 44.0
+
+
+def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analytic_forward_path(
+    monkeypatch,
+) -> None:
+    bundle = mg.CakeTransformBundle(
+        detector_shape=(8, 8),
+        radial_deg=np.linspace(10.0, 17.0, 8, dtype=float),
+        raw_azimuth_deg=np.linspace(-4.0, 3.0, 8, dtype=float),
+        gui_azimuth_deg=np.linspace(-4.0, 3.0, 8, dtype=float),
+        lut=object(),
+    )
+    forwarded_prefer_cache: list[bool] = []
+    cached_entry = {
+        "label": "1,0,0",
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 90.0,
+        "sim_row": 80.0,
+        "sim_col_raw": 3.0,
+        "sim_row_raw": 4.0,
+        "caked_x": 66.0,
+        "caked_y": 55.0,
+        "raw_caked_x": 65.0,
+        "raw_caked_y": 54.0,
+    }
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (13.0, 2.0)
+            if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+            else (None, None)
+        ),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8, dtype=float),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8, dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (
+            float(col),
+            float(row),
+        ),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
+    )
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            True,
+            ("old-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                True,
+                ("old-bg",),
+                1,
+                ("('q_group', 'primary', 1, 0)",),
+            ),
+            "simulated_peaks": [dict(cached_entry)],
+            "simulated_lookup": {(1, 2): dict(cached_entry)},
+            "grouped_candidates": {
+                ("q_group", "primary", 1, 0): [dict(cached_entry)]
+            },
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            True,
+            ("new-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache)) or []
+        ),
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [True, False]
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "existing_cache_data.simulated_peaks(reprojected)"
+    )
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 13.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_row"] == 2.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col_raw"] == 3.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_row_raw"] == 4.0
+    assert cache_data["simulated_lookup"][(1, 2)]["caked_x"] == 13.0
+    assert cache_data["simulated_lookup"][(1, 2)]["caked_y"] == 2.0
+    assert next_sig[3] == ("new-bg",)
+    assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0][
+        "caked_x"
+    ] == 13.0
 
 
 def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenance() -> None:
@@ -466,6 +593,100 @@ def test_refresh_geometry_manual_pair_entry_prefers_canonical_background_angles(
     assert refreshed["caked_y"] == 160.0
     assert refreshed["x"] == 140.0
     assert refreshed["y"] == 140.0
+
+
+def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_not_analytic_inverse(
+    monkeypatch,
+) -> None:
+    bundle = mg.CakeTransformBundle(
+        detector_shape=(200, 200),
+        radial_deg=np.array([10.0, 12.0], dtype=float),
+        raw_azimuth_deg=np.array([-5.0, 5.0], dtype=float),
+        gui_azimuth_deg=np.array([-5.0, 5.0], dtype=float),
+        lut=object(),
+    )
+    inverse_calls: list[tuple[float, float, object]] = []
+
+    monkeypatch.setattr(
+        mg,
+        "_caked_point_to_detector_pixel",
+        lambda _ai, detector_shape, radial_deg, azimuth_deg, two_theta, phi, **kwargs: (
+            inverse_calls.append(
+                (
+                    float(two_theta),
+                    float(phi),
+                    kwargs.get("transform_bundle"),
+                )
+            )
+            or (140.0, 141.0)
+        ),
+    )
+
+    def _caked_angles_to_background_display(two_theta: float, phi: float):
+        return mg.caked_angles_to_background_display_coords(
+            two_theta,
+            phi,
+            ai=object(),
+            native_background=np.ones((200, 200), dtype=float),
+            caked_radial_values=bundle.radial_deg,
+            caked_azimuth_values=bundle.gui_azimuth_deg,
+            get_detector_angular_maps=_fail_projection_legacy_path(
+                "detector angular maps should not be used"
+            ),
+            scattering_angles_to_detector_pixel=_fail_projection_legacy_path(
+                "analytic inverse fallback should not be used"
+            ),
+            center=[0.0, 0.0],
+            detector_distance=1.0,
+            pixel_size=1.0,
+            transform_bundle=bundle,
+            rotate_point_for_display=lambda col, row, _shape, _k: (
+                float(col),
+                float(row),
+            ),
+            display_rotate_k=0,
+        )
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "0,0,3",
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "detector_x": 30.0,
+            "detector_y": 40.0,
+            "background_two_theta_deg": 150.0,
+            "background_phi_deg": 160.0,
+            "caked_x": 40.0,
+            "caked_y": 50.0,
+            "raw_caked_x": 41.0,
+            "raw_caked_y": 51.0,
+        },
+        background_display_shape=(200, 200),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        caked_angles_to_background_display_coords=_caked_angles_to_background_display,
+        native_detector_coords_to_caked_display_coords=_fail_projection_legacy_path(
+            "detector-to-caked backfill should not run for canonical angles"
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
+        display_rotate_k=0,
+    )
+
+    assert refreshed is not None
+    assert refreshed["detector_x"] == 140.0
+    assert refreshed["detector_y"] == 141.0
+    assert refreshed["x"] == 140.0
+    assert refreshed["y"] == 141.0
+    assert refreshed["background_two_theta_deg"] == 150.0
+    assert refreshed["background_phi_deg"] == 160.0
+    assert refreshed["caked_x"] == 150.0
+    assert refreshed["caked_y"] == 160.0
+    assert refreshed["raw_caked_x"] == 41.0
+    assert refreshed["raw_caked_y"] == 51.0
+    assert inverse_calls == [(150.0, 160.0, bundle)]
 
 
 def test_refresh_geometry_manual_pair_entry_migrates_legacy_peak_branch_once() -> None:
