@@ -8347,6 +8347,16 @@ def _analysis_integration_outputs_visible() -> bool:
     )
 
 
+def _schedule_exact_cake_numba_warmup_once() -> None:
+    if bool(getattr(simulation_runtime_state, "exact_cake_numba_warmup_scheduled", False)):
+        return
+    simulation_runtime_state.exact_cake_numba_warmup_scheduled = True
+    try:
+        root.after_idle(start_exact_cake_numba_warmup_in_background)
+    except Exception:
+        simulation_runtime_state.exact_cake_numba_warmup_scheduled = False
+
+
 def _refresh_analysis_integration_if_visible() -> None:
     if not _analysis_integration_outputs_visible():
         return
@@ -11911,6 +11921,8 @@ def do_update():
         and (caked_analysis_requested or one_d_analysis_requested)
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
+    if analysis_sig is not None:
+        _schedule_exact_cake_numba_warmup_once()
     desired_analysis_preview = bool(
         LIVE_DRAG_PREVIEW_ENABLED
         and PREVIEW_CALCULATIONS_ENABLED
@@ -12362,6 +12374,8 @@ def do_update():
         next_phase=str(simulation_runtime_state.update_phase),
         analysis_result_current=bool(analysis_result_current),
     )
+    if simulation_runtime_state.stored_sim_image is not None:
+        _schedule_exact_cake_numba_warmup_once()
     simulation_runtime_state.update_running = False
     if "progress_label" in globals() and progress_label is not None:
         try:
@@ -25013,10 +25027,6 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 post_startup_task_runner.schedule()
             if _STARTUP_BENCHMARK_AUTO_EXIT:
                 root.after(750 if post_startup_task_runner.has_tasks() else 150, _shutdown_gui)
-
-    # Start the exact-cake Numba warmup in the background so the first caked
-    # conversion is less likely to pay the JIT compile cost on the UI path.
-    start_exact_cake_numba_warmup_in_background()
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)

@@ -211,7 +211,9 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "FastAzimuthalIntegrator," in source
     assert "start_exact_cake_geometry_warmup_in_background," in source
     assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
-    assert "start_exact_cake_numba_warmup_in_background()" in source
+    assert "def _schedule_exact_cake_numba_warmup_once() -> None:" in source
+    assert "simulation_runtime_state.exact_cake_numba_warmup_scheduled" in source
+    assert "root.after_idle(start_exact_cake_numba_warmup_in_background)" in source
 
 
 def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_and_wavelength() -> None:
@@ -596,7 +598,7 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     block_end = source.index("elif ready_simulation_result is None and need_hit_table_refresh:")
     block = source[block_start:block_end]
     startup_start = source.index("def _run_initial_startup_work():")
-    startup_end = source.index("# Start the exact-cake Numba warmup in the background")
+    startup_end = source.index("root.after_idle(_run_initial_startup_work)")
     startup_block = source[startup_start:startup_end]
 
     assert "def _show_initial_simulation_loading_overlay() -> None:" in source
@@ -604,8 +606,17 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert "_show_initial_simulation_loading_overlay()" in startup_block
     assert "matplotlib_canvas.draw()" in startup_block
     assert "root.update_idletasks()" in startup_block
+    assert "start_exact_cake_numba_warmup_in_background()" not in startup_block
     assert "_run_simulation_generation_job(" in block
     assert 'progress_label.config(text="Computing initial simulation...")' in block
+
+
+def test_runtime_impl_defers_exact_cake_numba_warmup_until_after_startup_work() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "if analysis_sig is not None:" in source
+    assert "if simulation_runtime_state.stored_sim_image is not None:" in source
+    assert source.count("_schedule_exact_cake_numba_warmup_once()") >= 2
 
 
 def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
