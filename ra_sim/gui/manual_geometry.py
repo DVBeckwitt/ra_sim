@@ -3803,8 +3803,6 @@ def make_runtime_geometry_manual_projection_callbacks(
         col: float,
         row: float,
     ) -> tuple[float, float] | None:
-        if detector_pixel_to_scattering_angles is None:
-            return None
         return native_detector_coords_to_caked_display_coords(
             col,
             row,
@@ -5468,25 +5466,23 @@ def native_detector_coords_to_caked_display_coords(
     caked_radial_values: Sequence[float] | None = None,
     caked_azimuth_values: Sequence[float] | None = None,
 ) -> tuple[float, float] | None:
-    """Project one native detector pixel into the active caked display axes."""
+    """Project one native detector point into continuous caked display coords.
 
-    def _snap_axis_value(
-        axis_values: Sequence[float] | None,
-        value: float,
-    ) -> float:
-        if axis_values is None:
-            return float(value)
-        try:
-            axis = np.asarray(axis_values, dtype=float).reshape(-1)
-        except Exception:
-            return float(value)
-        if axis.size <= 0:
-            return float(value)
-        finite_axis = axis[np.isfinite(axis)]
-        if finite_axis.size <= 0 or not np.isfinite(value):
-            return float(value)
-        best_idx = int(np.argmin(np.abs(finite_axis - float(value))))
-        return float(finite_axis[best_idx])
+    Legacy angular-map and analytic parameters remain in the signature for
+    call-site compatibility, but live projection now uses only the active exact
+    cake transform bundle. No bundle means no projection.
+    """
+
+    del (
+        get_detector_angular_maps,
+        detector_pixel_to_scattering_angles,
+        center,
+        detector_distance,
+        pixel_size,
+        wrap_phi_range,
+        caked_radial_values,
+        caked_azimuth_values,
+    )
 
     try:
         col_val = float(col)
@@ -5501,49 +5497,9 @@ def native_detector_coords_to_caked_display_coords(
         col_val,
         row_val,
     )
-    if bundle_two_theta is not None and bundle_phi is not None:
-        return (
-            _snap_axis_value(caked_radial_values, float(bundle_two_theta)),
-            _snap_axis_value(caked_azimuth_values, float(bundle_phi)),
-        )
-
-    try:
-        two_theta_map, phi_map = get_detector_angular_maps(ai)
-    except Exception:
-        two_theta_map, phi_map = None, None
-    if two_theta_map is not None and phi_map is not None:
-        try:
-            height, width = two_theta_map.shape[:2]
-            if height > 0 and width > 0:
-                col_idx = min(max(int(round(col_val)), 0), width - 1)
-                row_idx = min(max(int(round(row_val)), 0), height - 1)
-                two_theta = float(two_theta_map[row_idx, col_idx])
-                phi = float(phi_map[row_idx, col_idx])
-                if np.isfinite(two_theta) and np.isfinite(phi):
-                    wrapped_phi = float(wrap_phi_range(phi))
-                    return (
-                        _snap_axis_value(caked_radial_values, float(two_theta)),
-                        _snap_axis_value(caked_azimuth_values, wrapped_phi),
-                    )
-        except Exception:
-            pass
-
-    try:
-        two_theta, phi = detector_pixel_to_scattering_angles(
-            col_val,
-            row_val,
-            center,
-            float(detector_distance),
-            float(pixel_size),
-        )
-    except Exception:
+    if bundle_two_theta is None or bundle_phi is None:
         return None
-    if two_theta is None or phi is None:
-        return None
-    return (
-        _snap_axis_value(caked_radial_values, float(two_theta)),
-        _snap_axis_value(caked_azimuth_values, float(phi)),
-    )
+    return float(bundle_two_theta), float(bundle_phi)
 
 
 def should_collect_hit_tables_for_update(

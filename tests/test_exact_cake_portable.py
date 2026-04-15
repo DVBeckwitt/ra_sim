@@ -15,6 +15,32 @@ def _clear_exact_cake_process_caches() -> None:
     exact_cake_portable._clear_shared_exact_cake_caches()
 
 
+def _make_transform_bundle(
+    *,
+    detector_shape: tuple[int, int],
+    radial_deg: np.ndarray,
+    raw_azimuth_deg: np.ndarray,
+    matrix: np.ndarray,
+) -> exact_cake_portable.CakeTransformBundle:
+    lut = exact_cake.DetectorCakeLUT(
+        image_shape=tuple(int(v) for v in detector_shape),
+        n_rad=int(len(radial_deg)),
+        n_az=int(len(raw_azimuth_deg)),
+        matrix=np.asarray(matrix, dtype=np.float32),
+        count_flat=np.ones(int(len(radial_deg) * len(raw_azimuth_deg)), dtype=np.float64),
+    )
+    return exact_cake_portable.CakeTransformBundle(
+        detector_shape=tuple(int(v) for v in detector_shape),
+        radial_deg=np.asarray(radial_deg, dtype=np.float64),
+        raw_azimuth_deg=np.asarray(raw_azimuth_deg, dtype=np.float64),
+        gui_azimuth_deg=np.asarray(
+            exact_cake_portable.raw_phi_to_gui_phi(raw_azimuth_deg),
+            dtype=np.float64,
+        ),
+        lut=lut,
+    )
+
+
 def test_fast_azimuthal_integrator_detector_maps_match_flat_geometry() -> None:
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
         dist=5.0,
@@ -172,6 +198,58 @@ def test_fast_azimuthal_integrator_warm_geometry_cache_prebuilds_common_caches(
     assert map_calls == [(4, 4)]
     assert norm_calls == [(4, 4)]
     assert lut_calls == [((4, 4), 8, 6)]
+
+
+def test_detector_pixel_to_caked_bin_bilinearly_blends_lut_projection() -> None:
+    matrix = np.eye(4, dtype=np.float32)
+    bundle = _make_transform_bundle(
+        detector_shape=(2, 2),
+        radial_deg=np.array([10.0, 30.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-170.0, 170.0], dtype=np.float64),
+        matrix=matrix,
+    )
+
+    two_theta, phi = exact_cake_portable.detector_pixel_to_caked_bin(
+        bundle,
+        0.25,
+        0.75,
+    )
+
+    pixel_weights = np.array([0.1875, 0.0625, 0.5625, 0.1875], dtype=np.float64)
+    expected_two_theta = float(np.dot(np.array([10.0, 30.0, 10.0, 30.0]), pixel_weights))
+    raw_angles = np.array([-170.0, -170.0, 170.0, 170.0], dtype=np.float64)
+    radians = np.deg2rad(raw_angles)
+    expected_raw_phi = float(
+        np.degrees(
+            np.arctan2(
+                np.sum(np.sin(radians) * pixel_weights),
+                np.sum(np.cos(radians) * pixel_weights),
+            )
+        )
+    )
+    expected_phi = float(exact_cake_portable.raw_phi_to_gui_phi(expected_raw_phi))
+
+    assert two_theta == pytest.approx(expected_two_theta)
+    assert phi == pytest.approx(expected_phi)
+
+
+def test_detector_pixel_to_caked_bin_keeps_integer_pixel_exact() -> None:
+    matrix = np.eye(4, dtype=np.float32)
+    bundle = _make_transform_bundle(
+        detector_shape=(2, 2),
+        radial_deg=np.array([10.0, 30.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-170.0, 170.0], dtype=np.float64),
+        matrix=matrix,
+    )
+
+    two_theta, phi = exact_cake_portable.detector_pixel_to_caked_bin(
+        bundle,
+        1.0,
+        0.0,
+    )
+
+    assert two_theta == pytest.approx(30.0)
+    assert phi == pytest.approx(float(exact_cake_portable.raw_phi_to_gui_phi(-170.0)))
 
 
 def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(

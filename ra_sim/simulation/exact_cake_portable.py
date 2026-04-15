@@ -340,6 +340,50 @@ def _weighted_wrapped_angle_mean_deg(
     return float(np.degrees(np.arctan2(y, x)))
 
 
+def _bilinear_detector_pixel_weights(
+    detector_shape: tuple[int, int],
+    col: float,
+    row: float,
+) -> tuple[tuple[int, float], ...]:
+    height, width = (int(detector_shape[0]), int(detector_shape[1]))
+    if height <= 0 or width <= 0:
+        return ()
+    if not (
+        np.isfinite(col)
+        and np.isfinite(row)
+        and 0.0 <= float(col) <= float(width - 1)
+        and 0.0 <= float(row) <= float(height - 1)
+    ):
+        return ()
+
+    col0 = int(math.floor(float(col)))
+    row0 = int(math.floor(float(row)))
+    col1 = min(col0 + 1, width - 1)
+    row1 = min(row0 + 1, height - 1)
+    tx = float(col) - float(col0)
+    ty = float(row) - float(row0)
+
+    weights_by_pixel: dict[int, float] = {}
+    for pixel_col, pixel_row, weight in (
+        (col0, row0, (1.0 - tx) * (1.0 - ty)),
+        (col1, row0, tx * (1.0 - ty)),
+        (col0, row1, (1.0 - tx) * ty),
+        (col1, row1, tx * ty),
+    ):
+        weight_value = float(weight)
+        if weight_value <= 0.0:
+            continue
+        pixel_index = int(int(pixel_row) * width + int(pixel_col))
+        weights_by_pixel[pixel_index] = (
+            float(weights_by_pixel.get(pixel_index, 0.0)) + weight_value
+        )
+    return tuple(
+        (int(pixel_index), float(weight))
+        for pixel_index, weight in weights_by_pixel.items()
+        if weight > 0.0
+    )
+
+
 def cake_transform_bundle_lut_t(bundle: CakeTransformBundle) -> object:
     transposed = bundle.lut_t
     if transposed is not None:
@@ -455,30 +499,71 @@ def detector_pixel_to_caked_bin(
     height, width = transform_bundle.detector_shape
     if height <= 0 or width <= 0:
         return None, None
-    col_idx = min(max(int(round(col_val)), 0), width - 1)
-    row_idx = min(max(int(round(row_val)), 0), height - 1)
-    pixel_index = int(row_idx * width + col_idx)
     matrix = cake_transform_bundle_lut_t(transform_bundle)
-    row_payload = _matrix_row_indices_and_weights(matrix, pixel_index)
-    if row_payload is None:
-        return None, None
-    bin_indices, weights = row_payload
-    valid = np.isfinite(bin_indices) & np.isfinite(weights) & (weights > 0.0)
-    if not np.any(valid):
-        return None, None
-    bin_indices = np.asarray(bin_indices[valid], dtype=np.int64)
-    weights = np.asarray(weights[valid], dtype=np.float64)
-    weight_sum = float(np.sum(weights))
-    if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+    pixel_weights = _bilinear_detector_pixel_weights(
+        transform_bundle.detector_shape,
+        col_val,
+        row_val,
+    )
+    if len(pixel_weights) <= 0:
         return None, None
     n_rad = int(transform_bundle.radial_deg.size)
-    radial_indices = np.asarray(bin_indices % n_rad, dtype=np.int64)
-    azimuth_indices = np.asarray(bin_indices // n_rad, dtype=np.int64)
-    radial_value = float(np.sum(transform_bundle.radial_deg[radial_indices] * weights) / weight_sum)
-    gui_phi_value = _weighted_wrapped_angle_mean_deg(
-        transform_bundle.gui_azimuth_deg[azimuth_indices],
-        weights,
+    n_az = int(transform_bundle.raw_azimuth_deg.size)
+    if n_rad <= 0 or n_az <= 0:
+        return None, None
+    max_bin_index = int(n_rad * n_az)
+
+    radial_numerator = 0.0
+    total_weight = 0.0
+    raw_angle_chunks: list[np.ndarray] = []
+    raw_weight_chunks: list[np.ndarray] = []
+
+    for pixel_index, detector_weight in pixel_weights:
+        row_payload = _matrix_row_indices_and_weights(matrix, int(pixel_index))
+        if row_payload is None:
+            continue
+        bin_indices, weights = row_payload
+        valid = (
+            np.isfinite(bin_indices)
+            & np.isfinite(weights)
+            & (weights > 0.0)
+        )
+        if not np.any(valid):
+            continue
+        bin_indices = np.asarray(bin_indices[valid], dtype=np.int64)
+        valid_bins = (bin_indices >= 0) & (bin_indices < max_bin_index)
+        if not np.any(valid_bins):
+            continue
+        bin_indices = np.asarray(bin_indices[valid_bins], dtype=np.int64)
+        combined_weights = (
+            np.asarray(weights[valid][valid_bins], dtype=np.float64)
+            * float(detector_weight)
+        )
+        combined_weight_sum = float(np.sum(combined_weights))
+        if not np.isfinite(combined_weight_sum) or combined_weight_sum <= 0.0:
+            continue
+        radial_indices = np.asarray(bin_indices % n_rad, dtype=np.int64)
+        azimuth_indices = np.asarray(bin_indices // n_rad, dtype=np.int64)
+        radial_numerator += float(
+            np.sum(transform_bundle.radial_deg[radial_indices] * combined_weights)
+        )
+        total_weight += combined_weight_sum
+        raw_angle_chunks.append(
+            np.asarray(transform_bundle.raw_azimuth_deg[azimuth_indices], dtype=np.float64)
+        )
+        raw_weight_chunks.append(np.asarray(combined_weights, dtype=np.float64))
+
+    if total_weight <= 0.0 or len(raw_angle_chunks) <= 0:
+        return None, None
+
+    radial_value = float(radial_numerator / total_weight)
+    raw_phi_value = _weighted_wrapped_angle_mean_deg(
+        np.concatenate(raw_angle_chunks),
+        np.concatenate(raw_weight_chunks),
     )
+    gui_phi_value = float(raw_phi_to_gui_phi(raw_phi_value))
+    if not (np.isfinite(radial_value) and np.isfinite(gui_phi_value)):
+        return None, None
     return radial_value, gui_phi_value
 
 def _parse_poni_file_simple(poni_path: str | Path) -> dict[str, float]:
