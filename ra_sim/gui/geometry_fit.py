@@ -2519,13 +2519,60 @@ def _geometry_fit_caked_roi_row_matches_selection(
     return False
 
 
-def _geometry_fit_caked_roi_native_point(
+def _geometry_fit_caked_roi_angle_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    """Return one native detector-space ``(col, row)`` point for ROI rasterization."""
+    """Return one fit-space ``(2theta_deg, phi_deg)`` point for ROI rasterization."""
 
     if not isinstance(entry, Mapping):
         return None
+    candidate_keys = (
+        ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("simulated_two_theta_deg", "simulated_phi_deg"),
+        ("two_theta_deg", "phi_deg"),
+        ("caked_x", "caked_y"),
+    )
+    for two_theta_key, phi_key in candidate_keys:
+        two_theta_val = _geometry_fit_cache_finite_float(entry.get(two_theta_key))
+        phi_val = _geometry_fit_cache_finite_float(entry.get(phi_key))
+        if two_theta_val is None or phi_val is None:
+            continue
+        return float(two_theta_val), float(phi_val)
+    return None
+
+
+def _geometry_fit_caked_roi_native_point(
+    entry: Mapping[str, object] | None,
+    *,
+    fit_space_to_detector_point: Callable[
+        [float, float],
+        tuple[float | None, float | None] | None,
+    ]
+    | None = None,
+) -> tuple[float, float] | None:
+    """Return one detector-space ``(col, row)`` point for ROI rasterization."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    if callable(fit_space_to_detector_point):
+        fit_space_point = _geometry_fit_caked_roi_angle_point(entry)
+        if fit_space_point is not None:
+            try:
+                projected_point = fit_space_to_detector_point(
+                    float(fit_space_point[0]),
+                    float(fit_space_point[1]),
+                )
+            except Exception:
+                projected_point = None
+            if (
+                isinstance(projected_point, tuple)
+                and len(projected_point) >= 2
+                and projected_point[0] is not None
+                and projected_point[1] is not None
+                and np.isfinite(float(projected_point[0]))
+                and np.isfinite(float(projected_point[1]))
+            ):
+                return float(projected_point[0]), float(projected_point[1])
     candidate_keys = (
         ("detector_x", "detector_y"),
         ("refined_sim_native_x", "refined_sim_native_y"),
@@ -2562,6 +2609,11 @@ def build_geometry_fit_caked_roi_selection(
     image_shape: Sequence[object] | None = None,
     fit_config: Mapping[str, object] | None = None,
     enabled_override: object | None = None,
+    fit_space_to_detector_point: Callable[
+        [float, float],
+        tuple[float | None, float | None] | None,
+    ]
+    | None = None,
 ) -> dict[str, object]:
     """Build the detector-space ROI used for branch-restricted geometry-fit caking."""
 
@@ -2638,7 +2690,10 @@ def build_geometry_fit_caked_roi_selection(
 
     grouped_points: dict[tuple[object, int], list[tuple[int, int, float, float]]] = defaultdict(list)
     for source_order, entry in enumerate(selected_rows):
-        point = _geometry_fit_caked_roi_native_point(entry)
+        point = _geometry_fit_caked_roi_native_point(
+            entry,
+            fit_space_to_detector_point=fit_space_to_detector_point,
+        )
         if point is None:
             continue
         col_val, row_val = point
@@ -5608,6 +5663,44 @@ def build_geometry_manual_fit_dataset(
                             measured_entry.get("background_phi_deg"),
                         )
                     )
+                    if raw_col is None or raw_row is None:
+                        measured_detector_col = _finite_float(
+                            measured_entry.get("background_detector_x")
+                        )
+                        measured_detector_row = _finite_float(
+                            measured_entry.get("background_detector_y")
+                        )
+                        if measured_detector_col is None or measured_detector_row is None:
+                            measured_detector_col = _finite_float(
+                                measured_entry.get("detector_x")
+                            )
+                            measured_detector_row = _finite_float(
+                                measured_entry.get("detector_y")
+                            )
+                        if (
+                            measured_detector_col is not None
+                            and measured_detector_row is not None
+                        ):
+                            (
+                                measured_two_theta_arr,
+                                measured_phi_arr,
+                            ) = _detector_pixels_to_fit_space(
+                                np.array([measured_detector_col], dtype=np.float64),
+                                np.array([measured_detector_row], dtype=np.float64),
+                                center=center_value,
+                                detector_distance=float(detector_distance),
+                                pixel_size=float(pixel_size),
+                                gamma_deg=float(gamma_value),
+                                Gamma_deg=float(Gamma_value),
+                            )
+                            if (
+                                measured_two_theta_arr.size > 0
+                                and measured_phi_arr.size > 0
+                                and np.isfinite(measured_two_theta_arr[0])
+                                and np.isfinite(measured_phi_arr[0])
+                            ):
+                                raw_col = float(measured_two_theta_arr[0])
+                                raw_row = float(measured_phi_arr[0])
             if raw_col is None or raw_row is None:
                 seed_entry["sim_col"] = float(sim_col)
                 seed_entry["sim_row"] = float(sim_row)
@@ -5644,20 +5737,10 @@ def build_geometry_manual_fit_dataset(
             if not (np.isfinite(refined_col) and np.isfinite(refined_row)):
                 return None
             if dynamic_reanchor_use_caked_space:
-                detector_col = _finite_float(measured_entry.get("background_detector_x"))
-                detector_row = _finite_float(measured_entry.get("background_detector_y"))
-                if detector_col is None or detector_row is None:
-                    detector_col = _finite_float(measured_entry.get("detector_x"))
-                    detector_row = _finite_float(measured_entry.get("detector_y"))
-                if detector_col is None or detector_row is None:
-                    return {"measured_reanchor_motion_px": 0.0}
                 return {
-                    "x": float(detector_col),
-                    "y": float(detector_row),
-                    "detector_x": float(detector_col),
-                    "detector_y": float(detector_row),
-                    "background_detector_x": float(detector_col),
-                    "background_detector_y": float(detector_row),
+                    "background_two_theta_deg": float(refined_col),
+                    "background_phi_deg": float(refined_row),
+                    "fit_space_anchor_override": True,
                     "measured_reanchor_motion_px": 0.0,
                 }
             return {

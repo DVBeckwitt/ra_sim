@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -4262,6 +4262,9 @@ def _current_geometry_fit_caked_roi_selection(
         enabled_override=(
             True if force_enabled else _current_geometry_fit_caked_roi_enabled()
         ),
+        fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
+            _current_geometry_fit_params()
+        ),
     )
     return selection if isinstance(selection, Mapping) else None
 
@@ -4650,6 +4653,49 @@ def _scattering_angles_to_detector_pixel(
     col = center_col + dx / float(pixel_size)
     row = center_row - dy / float(pixel_size)
     return float(col), float(row)
+
+
+def _geometry_fit_caked_roi_fit_space_to_detector_point(
+    params_local: Mapping[str, object] | None,
+) -> Callable[[float, float], tuple[float | None, float | None] | None] | None:
+    """Build one fit-space `(2theta, phi)` to detector-point projector for ROI use."""
+
+    if not isinstance(params_local, Mapping):
+        return None
+    center_value = params_local.get("center")
+    try:
+        detector_distance = float(params_local.get("corto_detector", np.nan))
+    except Exception:
+        detector_distance = float("nan")
+    try:
+        pixel_size = float(
+            params_local.get(
+                "pixel_size_m",
+                params_local.get("pixel_size", np.nan),
+            )
+        )
+    except Exception:
+        pixel_size = float("nan")
+    if center_value is None or not np.isfinite(detector_distance) or not np.isfinite(
+        pixel_size
+    ):
+        return None
+
+    def _project(
+        two_theta_deg: float,
+        phi_deg: float,
+    ) -> tuple[float | None, float | None] | None:
+        return _scattering_angles_to_detector_pixel(
+            float(two_theta_deg),
+            float(phi_deg),
+            center=center_value,
+            detector_distance=float(detector_distance),
+            pixel_size=float(pixel_size),
+        )
+
+    return _project
+
+
 def _caked_axis_to_image_index(
     value: float,
     axis_values: Sequence[float] | None,
@@ -22093,6 +22139,9 @@ def _run_async_geometry_fit_worker_job(
             ),
             image_shape=backend_background.shape[:2],
             fit_config=dict(job_data.get("geometry_runtime_cfg", {}) or {}),
+            fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
+                job_data.get("params", {})
+            ),
         )
         roi_enabled = bool(roi_selection.get("enabled", False))
         roi_pixel_count = int(roi_selection.get("pixel_count", 0) or 0)
