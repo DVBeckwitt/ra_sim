@@ -362,6 +362,40 @@ def test_resolve_cake_transform_bundle_reuses_matching_bundle() -> None:
     assert resolved is bundle
 
 
+def test_resolve_cake_transform_bundle_reuses_bundle_with_roundtrip_gui_axis_noise() -> None:
+    radial_axis = np.linspace(10.0, 20.0, 8, dtype=np.float64)
+    gui_azimuth_axis = np.linspace(-179.5, 179.5, 720, dtype=np.float64)
+    raw_azimuth_axis = np.sort(
+        np.asarray(
+            exact_cake_portable.gui_phi_to_raw_phi(gui_azimuth_axis),
+            dtype=np.float64,
+        ),
+        kind="stable",
+    )
+    bundle = _make_transform_bundle(
+        detector_shape=(3, 4),
+        radial_deg=radial_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        matrix=np.eye(
+            int(radial_axis.size * raw_azimuth_axis.size),
+            12,
+            dtype=np.float32,
+        ),
+    )
+
+    resolved = exact_cake_portable.resolve_cake_transform_bundle(
+        None,
+        (3, 4),
+        radial_axis,
+        gui_azimuth_deg=gui_azimuth_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        transform_bundle=bundle,
+        require_gui_display_match=True,
+    )
+
+    assert resolved is bundle
+
+
 def test_resolve_cake_transform_bundle_rebuilds_mismatched_bundle_from_exact_axes(
     monkeypatch,
 ) -> None:

@@ -51,6 +51,7 @@ from ra_sim.simulation.exact_cake import (
 
 
 PHI_ZERO_OFFSET_DEGREES = -90.0
+_EXACT_CAKE_AXIS_TOLERANCE = 1.0e-9
 _PROCESS_DETECTOR_MAP_CACHE_LIMIT = 2
 _PROCESS_CAKE_LUT_CACHE_LIMIT = 2
 _GEOMETRY_WARMUP_COMPLETION_LIMIT = 16
@@ -372,7 +373,14 @@ def _cake_axes_exactly_equal(lhs: object, rhs: object) -> bool:
     rhs_vec = _float64_vector_or_none(rhs)
     if lhs_vec is None or rhs_vec is None or lhs_vec.shape != rhs_vec.shape:
         return False
-    return bool(np.array_equal(lhs_vec, rhs_vec))
+    return bool(
+        np.allclose(
+            lhs_vec,
+            rhs_vec,
+            atol=_EXACT_CAKE_AXIS_TOLERANCE,
+            rtol=0.0,
+        )
+    )
 
 
 def _cake_transform_bundle_matches_axes(

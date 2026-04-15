@@ -3982,7 +3982,23 @@ def test_geometry_fit_dynamic_reanchor_uses_exact_caked_bundle_without_analytic_
 ) -> None:
     calls: dict[str, object] = {}
     radial_axis = np.linspace(20.0, 26.0, 7, dtype=np.float64)
-    azimuth_axis = np.linspace(-40.0, -35.0, 6, dtype=np.float64)
+    azimuth_axis = np.linspace(-179.5, 179.5, 6, dtype=np.float64)
+    roundtripped_azimuth_axis = np.asarray(
+        geometry_fit.raw_phi_to_gui_phi(
+            np.sort(
+                np.asarray(
+                    geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
+                    dtype=np.float64,
+                ),
+                kind="stable",
+            )
+        ),
+        dtype=np.float64,
+    )
+    roundtripped_azimuth_axis = roundtripped_azimuth_axis[
+        np.argsort(roundtripped_azimuth_axis, kind="stable")
+    ]
+    assert not np.array_equal(azimuth_axis, roundtripped_azimuth_axis)
 
     def _fake_refine(
         candidate,
