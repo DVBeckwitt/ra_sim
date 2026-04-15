@@ -193,6 +193,27 @@ def test_runtime_impl_gates_raster_projection_helpers_until_controls_stage() -> 
     assert "apply_projection(artist)" in helper_block
 
 
+def test_runtime_impl_uses_tiny_startup_placeholder_rasters() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "global_image_buffer = np.zeros((1, 1), dtype=np.float32)" in source
+    assert "np.zeros_like(global_image_buffer)" in source
+    assert "_ensure_global_image_buffer_shape(simulation_runtime_state.unscaled_image)" in source
+
+
+def test_runtime_impl_expands_global_image_buffer_for_first_real_frame() -> None:
+    resize_buffer = _load_runtime_session_function("_ensure_global_image_buffer_shape")
+    resize_buffer.__globals__["global_image_buffer"] = np.zeros((1, 1), dtype=np.float32)
+    source = np.arange(12, dtype=np.float64).reshape(3, 4)
+
+    resized = resize_buffer(source)
+
+    assert resized.shape == source.shape
+    assert resized.dtype == np.float64
+    assert resize_buffer.__globals__["global_image_buffer"] is resized
+    assert resize_buffer(source) is resized
+
+
 def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -788,6 +809,18 @@ def _mapping_call_field_name(node: ast.Call) -> tuple[str | None, str | None]:
 
 def _python_sources(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if path.is_file())
+
+
+def _load_runtime_session_function(function_name: str):
+    tree = ast.parse(RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            module = ast.Module(body=[node], type_ignores=[])
+            ast.fix_missing_locations(module)
+            namespace = {"np": np}
+            exec(compile(module, str(RUNTIME_SESSION_SOURCE_PATH), "exec"), namespace)
+            return namespace[function_name]
+    raise AssertionError(f"Function {function_name!r} not found in runtime_session.py")
 
 
 def _raw_field_reads(path: Path, *, field_name: str) -> list[int]:

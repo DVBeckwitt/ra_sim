@@ -2027,7 +2027,8 @@ def _initialize_runtime_plot_block_01() -> None:
     )
     FAST_VIEWER_EMBEDDED_SURFACE_ENABLED = False
 
-    global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+    # Seed imshow with a tiny placeholder; expand to detector size on first result.
+    global_image_buffer = np.zeros((1, 1), dtype=np.float32)
     simulation_runtime_state.unscaled_image = None
 
     # ── replace the original imshow call ────────────────────────────
@@ -7050,6 +7051,18 @@ def _update_chi_square_display(force=False):
     chi_square_label.config(text=text)
 
 
+def _ensure_global_image_buffer_shape(source_image: object) -> np.ndarray:
+    global global_image_buffer
+
+    source = np.asarray(source_image)
+    if (
+        getattr(global_image_buffer, "shape", None) != source.shape
+        or getattr(global_image_buffer, "dtype", None) != np.float64
+    ):
+        global_image_buffer = np.empty(source.shape, dtype=np.float64)
+    return global_image_buffer
+
+
 def apply_scale_factor_to_existing_results(
     update_limits=False,
     *,
@@ -7121,6 +7134,7 @@ def apply_scale_factor_to_existing_results(
         return
 
     scale = _get_scale_factor_value(default=1.0)
+    _ensure_global_image_buffer_shape(simulation_runtime_state.unscaled_image)
     if abs(float(scale) - 1.0) <= 1e-12:
         np.copyto(global_image_buffer, simulation_runtime_state.unscaled_image, casting="unsafe")
     else:
