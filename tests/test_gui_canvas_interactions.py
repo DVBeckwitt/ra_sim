@@ -434,7 +434,10 @@ def test_canvas_first_manual_pick_click_does_not_immediately_place_background_po
             "group_key": ("q", 1),
             "group_entries": [{"label": "sim-1"}],
             "pending_entries": [],
-            "zoom_active": False,
+            "zoom_active": True,
+            "zoom_center": (12.0, 18.0),
+            "saved_xlim": (1.0, 2.0),
+            "saved_ylim": (3.0, 4.0),
         }
         peak_state.suppress_drag_press_once = True
 
@@ -492,10 +495,20 @@ def test_canvas_first_manual_pick_click_does_not_immediately_place_background_po
     )
 
     assert canvas_interactions.handle_runtime_canvas_click(bindings, click_event) is True
+    assert (
+        getattr(geometry_runtime, "_manual_pick_skip_release_once", False) is True
+    )
     assert peak_state.suppress_drag_press_once is True
     assert canvas_interactions.handle_runtime_canvas_press(bindings, click_event) is True
     assert peak_state.suppress_drag_press_once is False
+    assert manual_state.pick_session["zoom_active"] is False
+    assert manual_state.pick_session["zoom_center"] is None
+    assert manual_state.pick_session["saved_xlim"] is None
+    assert manual_state.pick_session["saved_ylim"] is None
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert (
+        getattr(geometry_runtime, "_manual_pick_skip_release_once", False) is False
+    )
 
     assert calls == [
         ("toggle", 12.0, 18.0),
@@ -581,7 +594,7 @@ def test_canvas_press_does_not_start_integration_drag_while_hkl_pick_is_armed() 
     assert drag_callbacks.calls == []
 
 
-def test_canvas_click_places_manual_qr_pick_session_on_button_press() -> None:
+def test_canvas_detector_view_manual_pick_session_places_on_release_without_zoom_preview() -> None:
     axis = _FakeAxis()
     peak_callbacks = _PeakCallbacks()
     drag_callbacks = _DragCallbacks()
@@ -589,7 +602,13 @@ def test_canvas_click_places_manual_qr_pick_session_on_button_press() -> None:
     geometry_runtime = state.GeometryRuntimeState(manual_pick_armed=True)
     preview_state = state.GeometryPreviewState()
     manual_state = state.ManualGeometryState(
-        pick_session={"group_key": ("q", 1), "zoom_active": False}
+        pick_session={
+            "group_key": ("q", 1),
+            "zoom_active": True,
+            "zoom_center": (15.0, 25.0),
+            "saved_xlim": (10.0, 20.0),
+            "saved_ylim": (30.0, 40.0),
+        }
     )
     calls = []
 
@@ -609,8 +628,7 @@ def test_canvas_click_places_manual_qr_pick_session_on_button_press() -> None:
         clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
         apply_geometry_manual_pick_zoom=lambda col, row, **kwargs: calls.append(
             ("zoom", float(col), float(row), kwargs)
-        )
-        or manual_state.pick_session.update({"zoom_active": True}),
+        ),
         update_geometry_manual_pick_preview=lambda col, row, **kwargs: calls.append(
             ("preview", float(col), float(row), kwargs)
         ),
@@ -632,7 +650,7 @@ def test_canvas_click_places_manual_qr_pick_session_on_button_press() -> None:
         draw_idle=lambda: calls.append(("draw",)),
     )
 
-    press_event = _FakeEvent(
+    click_event = _FakeEvent(
         button=1,
         inaxes=axis,
         xdata=15.0,
@@ -640,34 +658,29 @@ def test_canvas_click_places_manual_qr_pick_session_on_button_press() -> None:
         x=110.0,
         y=70.0,
     )
-    assert canvas_interactions.handle_runtime_canvas_click(bindings, press_event) is True
+    motion_event = _FakeEvent(button=1, inaxes=axis, xdata=16.0, ydata=26.0)
+    release_event = _FakeEvent(button=1, inaxes=axis, xdata=17.0, ydata=27.0)
+    cancel_release = _FakeEvent(button=1, inaxes=None, xdata=None, ydata=None)
+
+    assert canvas_interactions.handle_runtime_canvas_click(bindings, click_event) is True
     assert calls == []
 
-    assert canvas_interactions.handle_runtime_canvas_press(bindings, press_event) is True
-    assert calls[0][0] == "zoom"
-    assert calls[0][1:3] == (15.0, 25.0)
-    assert calls[0][3]["anchor_fraction_x"] == 0.5
-    assert calls[0][3]["anchor_fraction_y"] == 0.5
-    assert calls[1] == ("preview", 15.0, 25.0, {"force": True})
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, click_event) is True
+    assert manual_state.pick_session["zoom_active"] is False
+    assert manual_state.pick_session["zoom_center"] is None
+    assert manual_state.pick_session["saved_xlim"] is None
+    assert manual_state.pick_session["saved_ylim"] is None
+    assert calls == []
 
-    motion_event = _FakeEvent(button=1, inaxes=axis, xdata=16.0, ydata=26.0)
     assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is True
-    assert calls[2] == ("preview", 16.0, 26.0, {})
+    assert calls == []
 
-    release_event = _FakeEvent(button=1, inaxes=axis, xdata=17.0, ydata=27.0)
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
-    assert calls[3] == ("place", 17.0, 27.0)
+    assert calls == [("place", 17.0, 27.0)]
 
     calls.clear()
-    cancel_release = _FakeEvent(button=1, inaxes=None, xdata=None, ydata=None)
     assert canvas_interactions.handle_runtime_canvas_release(bindings, cancel_release) is True
-    assert calls == [
-        ("clear", {"redraw": False}),
-        ("restore", {"redraw": False}),
-        ("render", {"update_status": False}),
-        ("status", "Manual point placement canceled: release inside the image."),
-        ("draw",),
-    ]
+    assert calls == []
     assert drag_callbacks.calls == []
 
 

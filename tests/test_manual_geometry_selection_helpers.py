@@ -1839,6 +1839,34 @@ def test_cancel_geometry_manual_pick_session_clears_session_and_triggers_callbac
     assert ("status", "done") in calls
 
 
+def test_cancel_geometry_manual_pick_session_skips_restore_in_detector_mode() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [],
+        "background_index": 0,
+    }
+    calls: list[tuple[str, object]] = []
+
+    cleared = mg.cancel_geometry_manual_pick_session(
+        session,
+        current_background_index=0,
+        restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
+        clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_status_text=lambda text: calls.append(("status", text)),
+        message="done",
+        use_caked_space=False,
+    )
+
+    assert cleared == {}
+    assert ("restore", False) not in calls
+    assert ("clear", False) in calls
+    assert ("render", False) in calls
+    assert ("button", None) in calls
+    assert ("status", "done") in calls
+
+
 def test_match_geometry_manual_group_to_background_builds_source_lookup() -> None:
     matches = mg.match_geometry_manual_group_to_background(
         [{"label": "1,0,0", "source_table_index": 3, "source_row_index": 8}],
@@ -3285,7 +3313,7 @@ def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     assert set_sessions[-1] == {}
     assert ("undo", None) in calls
     assert ("clear", False) in calls
-    assert ("restore", False) in calls
+    assert ("restore", False) not in calls
     assert ("render", False) in calls
     assert saved_entry_sets
     assert saved_entry_sets[-1][0]["label"] == "kept"

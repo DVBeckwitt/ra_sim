@@ -4632,6 +4632,7 @@ def make_runtime_geometry_manual_callbacks(
                 restore_view=restore_view,
                 redraw=redraw,
                 message=message,
+                use_caked_space=_use_caked_space(),
             )
         )
 
@@ -4917,7 +4918,8 @@ def geometry_manual_place_selection_at(
         candidate_source_key=candidate_source_key,
     )
     if not remaining_candidates:
-        restore_view_fn(redraw=False)
+        if use_caked_space:
+            restore_view_fn(redraw=False)
         clear_preview_artists_fn(redraw=False)
         set_pick_session_fn({})
         render_current_pairs_fn(update_status=False)
@@ -5112,7 +5114,8 @@ def geometry_manual_place_selection_at(
     candidate_label = str(candidate.get("label", "")) if isinstance(candidate, dict) else ""
 
     clear_preview_artists_fn(redraw=False)
-    restore_view_fn(redraw=False)
+    if use_caked_space:
+        restore_view_fn(redraw=False)
     next_session["zoom_active"] = False
     next_session["zoom_center"] = None
     next_session["saved_xlim"] = None
@@ -5170,6 +5173,7 @@ def cancel_geometry_manual_pick_session(
     restore_view: bool = True,
     redraw: bool = True,
     message: str | None = None,
+    use_caked_space: bool = True,
 ) -> dict[str, object]:
     """Discard any in-progress manual Qr/Qz placement state."""
 
@@ -5178,7 +5182,7 @@ def cancel_geometry_manual_pick_session(
         current_background_index=current_background_index,
         require_current_background=False,
     )
-    if restore_view:
+    if restore_view and use_caked_space:
         restore_view_fn(redraw=False)
     clear_preview_artists_fn(redraw=False)
     if had_session and redraw:

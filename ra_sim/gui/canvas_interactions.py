@@ -390,6 +390,37 @@ def _manual_pick_zoom_active(bindings: CanvasInteractionBindings) -> bool:
     return bool(isinstance(session, dict) and session.get("zoom_active", False))
 
 
+def _manual_pick_skip_release_once(bindings: CanvasInteractionBindings) -> bool:
+    return bool(
+        getattr(
+            bindings.geometry_runtime_state,
+            "_manual_pick_skip_release_once",
+            False,
+        )
+    )
+
+
+def _set_manual_pick_skip_release_once(
+    bindings: CanvasInteractionBindings,
+    enabled: bool,
+) -> None:
+    setattr(
+        bindings.geometry_runtime_state,
+        "_manual_pick_skip_release_once",
+        bool(enabled),
+    )
+
+
+def _clear_manual_pick_zoom_state(bindings: CanvasInteractionBindings) -> None:
+    session = getattr(bindings.geometry_manual_state, "pick_session", None)
+    if not isinstance(session, dict):
+        return
+    session["zoom_active"] = False
+    session["zoom_center"] = None
+    session["saved_xlim"] = None
+    session["saved_ylim"] = None
+
+
 def _start_pan_session(
     bindings: CanvasInteractionBindings,
     event: Any,
@@ -605,6 +636,7 @@ def handle_runtime_canvas_click(
             return True
         if bool(bindings.geometry_runtime_state.manual_pick_armed):
             setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
+            _set_manual_pick_skip_release_once(bindings, False)
             _set_mode(
                 bindings.set_geometry_manual_pick_mode,
                 False,
@@ -638,10 +670,16 @@ def handle_runtime_canvas_click(
             return False
         if bool(bindings.manual_pick_session_active()):
             return True
+        _set_manual_pick_skip_release_once(bindings, False)
         bindings.toggle_geometry_manual_selection_at(
             float(manual_pick_coords[0]),
             float(manual_pick_coords[1]),
         )
+        if (
+            not _runtime_caked_view_enabled(bindings)
+            and bool(bindings.manual_pick_session_active())
+        ):
+            _set_manual_pick_skip_release_once(bindings, True)
         return True
 
     analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
@@ -705,6 +743,12 @@ def handle_runtime_canvas_press(
             return True
 
     if bool(bindings.peak_selection_state.suppress_drag_press_once):
+        if (
+            bool(bindings.geometry_runtime_state.manual_pick_armed)
+            and bool(bindings.manual_pick_session_active())
+            and not _runtime_caked_view_enabled(bindings)
+        ):
+            _clear_manual_pick_zoom_state(bindings)
         bindings.peak_selection_state.suppress_drag_press_once = False
         return True
 
@@ -720,6 +764,9 @@ def handle_runtime_canvas_press(
     ):
         if getattr(event, "button", None) != 1:
             return False
+        if not _runtime_caked_view_enabled(bindings):
+            _clear_manual_pick_zoom_state(bindings)
+            return _manual_pick_click_coords(bindings, event) is not None
         manual_pick_coords = _manual_pick_click_coords(bindings, event)
         if manual_pick_coords is None:
             return False
@@ -802,15 +849,17 @@ def handle_runtime_canvas_motion(
         bool(bindings.geometry_runtime_state.manual_pick_armed)
         and bool(bindings.manual_pick_session_active())
     ):
+        manual_pick_coords = _manual_pick_click_coords(bindings, event)
+        if not _runtime_caked_view_enabled(bindings):
+            return manual_pick_coords is not None
         if _manual_pick_zoom_active(bindings):
-            manual_pick_coords = _manual_pick_click_coords(bindings, event)
             if manual_pick_coords is not None:
                 bindings.update_geometry_manual_pick_preview(
                     float(manual_pick_coords[0]),
                     float(manual_pick_coords[1]),
                 )
             return True
-        return _manual_pick_click_coords(bindings, event) is not None
+        return manual_pick_coords is not None
 
     on_motion = getattr(bindings.integration_range_drag_callbacks, "on_motion", None)
     if not callable(on_motion):
@@ -836,6 +885,18 @@ def handle_runtime_canvas_release(
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
         if bool(bindings.manual_pick_session_active()):
+            if not _runtime_caked_view_enabled(bindings):
+                _clear_manual_pick_zoom_state(bindings)
+                if _manual_pick_skip_release_once(bindings):
+                    _set_manual_pick_skip_release_once(bindings, False)
+                    return True
+                manual_pick_coords = _manual_pick_click_coords(bindings, event)
+                if manual_pick_coords is not None:
+                    bindings.place_geometry_manual_selection_at(
+                        float(manual_pick_coords[0]),
+                        float(manual_pick_coords[1]),
+                    )
+                return True
             if not _manual_pick_zoom_active(bindings):
                 return True
             manual_pick_coords = _manual_pick_click_coords(bindings, event)
@@ -854,6 +915,7 @@ def handle_runtime_canvas_release(
                 )
                 _draw_idle(bindings)
             return True
+        _set_manual_pick_skip_release_once(bindings, False)
         return _manual_pick_click_coords(bindings, event) is not None
 
     on_release = getattr(bindings.integration_range_drag_callbacks, "on_release", None)
