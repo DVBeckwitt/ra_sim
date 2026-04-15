@@ -1234,60 +1234,40 @@ def build_initial_structure_model_state(
         state.defaults.get("rod_points_per_gz"),
         gui_controllers.default_rod_points_per_gz(default_c_axis),
     )
-    state.ht_cache_multi = {
-        "p0": build_ht_cache(
-            state,
-            state.defaults["p0"],
-            state.occ,
-            default_a_axis,
-            default_c_axis,
-            state.defaults["iodine_z"],
-            state.defaults["phi_l_divisor"],
-            state.defaults["finite_stack"],
-            state.defaults["stack_layers"],
-            state.defaults["phase_delta_expression"],
-            default_rod_points_per_gz,
-        ),
-        "p1": build_ht_cache(
-            state,
-            state.defaults["p1"],
-            state.occ,
-            default_a_axis,
-            default_c_axis,
-            state.defaults["iodine_z"],
-            state.defaults["phi_l_divisor"],
-            state.defaults["finite_stack"],
-            state.defaults["stack_layers"],
-            state.defaults["phase_delta_expression"],
-            default_rod_points_per_gz,
-        ),
-        "p2": build_ht_cache(
-            state,
-            state.defaults["p2"],
-            state.occ,
-            default_a_axis,
-            default_c_axis,
-            state.defaults["iodine_z"],
-            state.defaults["phi_l_divisor"],
-            state.defaults["finite_stack"],
-            state.defaults["stack_layers"],
-            state.defaults["phase_delta_expression"],
-            default_rod_points_per_gz,
-        ),
-    }
-
     weights_init = np.array(
         [state.defaults["w0"], state.defaults["w1"], state.defaults["w2"]],
         dtype=float,
     )
     weights_init /= weights_init.sum() if weights_init.sum() else 1.0
+    weighted_ht_defaults = [
+        ("p0", state.defaults["p0"], float(weights_init[0])),
+        ("p1", state.defaults["p1"], float(weights_init[1])),
+        ("p2", state.defaults["p2"], float(weights_init[2])),
+    ]
+    active_ht_defaults = [
+        (label, p_value, weight)
+        for label, p_value, weight in weighted_ht_defaults
+        if weight != 0.0
+    ]
+    state.ht_cache_multi = {
+        label: build_ht_cache(
+            state,
+            p_value,
+            state.occ,
+            default_a_axis,
+            default_c_axis,
+            state.defaults["iodine_z"],
+            state.defaults["phi_l_divisor"],
+            state.defaults["finite_stack"],
+            state.defaults["stack_layers"],
+            state.defaults["phase_delta_expression"],
+            default_rod_points_per_gz,
+        )
+        for label, p_value, _weight in active_ht_defaults
+    }
     combined_ht = combine_ht_dicts(
-        [
-            state.ht_cache_multi["p0"],
-            state.ht_cache_multi["p1"],
-            state.ht_cache_multi["p2"],
-        ],
-        weights_init,
+        [state.ht_cache_multi[label] for label, _p_value, _weight in active_ht_defaults],
+        [weight for _label, _p_value, weight in active_ht_defaults],
     )
     combined_qr = ht_dict_to_qr_dict(combined_ht)
     miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(combined_ht)

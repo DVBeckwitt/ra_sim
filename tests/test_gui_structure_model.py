@@ -171,6 +171,99 @@ def test_build_initial_structure_model_state_initializes_single_cif(monkeypatch)
     assert state.last_occ_for_ht == [1.0]
 
 
+def test_build_initial_structure_model_state_skips_zero_weight_ht_caches(monkeypatch) -> None:
+    calls = []
+
+    def fake_build_ht_cache(_state, p_value, *_args, **_kwargs):
+        calls.append(float(p_value))
+        return {
+            "p": float(p_value),
+            "occ": (1.0,),
+            "ht": {(1, 0): {"L": np.array([1.0]), "I": np.array([2.0])}},
+            "qr": {1: {"L": np.array([1.0]), "I": np.array([2.0])}},
+            "arrays": (
+                np.array([[1.0, 0.0, 1.0]]),
+                np.array([2.0]),
+                np.array([1]),
+                [["d"]],
+            ),
+            "two_theta_max": 1.0,
+            "a": 1.0,
+            "c": 2.0,
+            "iodine_z": 0.2,
+            "phi_l_divisor": 1.0,
+            "phase_delta_expression": "0",
+            "finite_stack": True,
+            "stack_layers": 8,
+            "rod_points_per_gz": 500,
+            "cif_path": "primary.cif",
+        }
+
+    monkeypatch.setattr(structure_model, "build_ht_cache", fake_build_ht_cache)
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_arrays",
+        lambda _curves: (
+            np.array([[1.0, 0.0, 1.0]]),
+            np.array([2.0]),
+            np.array([1]),
+            [["d"]],
+        ),
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_qr_dict",
+        lambda _curves: {1: {"L": np.array([1.0]), "I": np.array([2.0])}},
+    )
+
+    state = structure_model.build_initial_structure_model_state(
+        cif_file="primary.cif",
+        cf=object(),
+        blk={"dummy": True},
+        cif_file2=None,
+        occupancy_site_labels=["I1"],
+        occupancy_site_expanded_map=[],
+        occ=[1.0],
+        atom_site_fractional_metadata=[],
+        av=1.0,
+        bv=1.0,
+        cv=2.0,
+        av2=None,
+        cv2=None,
+        defaults={
+            "a": 1.0,
+            "c": 2.0,
+            "p0": 0.1,
+            "p1": 0.2,
+            "p2": 0.3,
+            "w0": 100.0,
+            "w1": 0.0,
+            "w2": 0.0,
+            "iodine_z": 0.2,
+            "phi_l_divisor": 1.0,
+            "phase_delta_expression": "0",
+            "finite_stack": True,
+            "stack_layers": 8,
+        },
+        mx=8,
+        lambda_angstrom=1.54,
+        intensity_threshold=1.0,
+        two_theta_range=(0.0, 50.0),
+        include_rods_flag=False,
+        combine_weighted_intensities=lambda a, _b, **_kwargs: np.asarray(a, dtype=float),
+        miller_generator=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected second CIF call")
+        ),
+        inject_fractional_reflections=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected rod injection")
+        ),
+    )
+
+    assert calls == [0.1]
+    assert set(state.ht_cache_multi) == {"p0"}
+    assert state.last_weights == [1.0, 0.0, 0.0]
+
+
 def test_build_ht_cache_derives_l_step_from_rod_points_per_gz(monkeypatch) -> None:
     captured = {}
 
