@@ -427,6 +427,133 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
     assert calls == [("filters", {"trigger_update": False}), ("schedule", None)]
 
 
+def test_rebuild_diffraction_inputs_skips_zero_weight_ht_caches(monkeypatch) -> None:
+    calls = []
+
+    def fake_build_ht_cache(_state, p_value, *_args, **_kwargs):
+        calls.append(float(p_value))
+        return {
+            "p": float(p_value),
+            "occ": (1.0,),
+            "ht": {(1, 0): {"L": np.array([1.0]), "I": np.array([5.0])}},
+            "qr": {1: {"L": np.array([1.0]), "I": np.array([5.0])}},
+            "arrays": (),
+            "two_theta_max": 10.0,
+            "a": 1.0,
+            "c": 2.0,
+            "iodine_z": 0.2,
+            "phi_l_divisor": 1.0,
+            "phase_delta_expression": "0",
+            "finite_stack": True,
+            "stack_layers": 8,
+            "rod_points_per_gz": 500,
+            "cif_path": "primary.cif",
+        }
+
+    monkeypatch.setattr(structure_model, "build_ht_cache", fake_build_ht_cache)
+    monkeypatch.setattr(
+        structure_model,
+        "combine_ht_dicts",
+        lambda _caches, _weights: {(1, 0): {"L": np.array([1.0]), "I": np.array([5.0])}},
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_qr_dict",
+        lambda _curves: {1: {"L": np.array([1.0]), "I": np.array([5.0])}},
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "ht_dict_to_arrays",
+        lambda _curves: (
+            np.array([[1.0, 0.0, 1.0]]),
+            np.array([5.0]),
+            np.array([2]),
+            [["detail"]],
+        ),
+    )
+
+    state = structure_model.StructureModelState(
+        cif_file="primary.cif",
+        cf=None,
+        blk=None,
+        occ=[1.0],
+        defaults={"a": 1.0, "c": 2.0},
+        mx=8,
+        lambda_angstrom=1.54,
+        intensity_threshold=1.0,
+        two_theta_range=(0.0, 10.0),
+        has_second_cif=False,
+    )
+    runtime_state = SimpleNamespace(
+        last_sim_signature="old-image",
+        last_simulation_signature="old",
+        sim_miller1_all=None,
+        sim_intens1_all=None,
+        sim_primary_qr_all=None,
+        sim_miller2_all=None,
+        sim_intens2_all=None,
+    )
+    override_state = SimpleNamespace(temp_path=None, source_path=None, signature=None)
+
+    structure_model.rebuild_diffraction_inputs(
+        state,
+        new_occ=[1.0],
+        p_vals=[0.1, 0.2, 0.3],
+        weights=[1.0, 0.0, 0.0],
+        a_axis=1.0,
+        c_axis=2.0,
+        finite_stack_flag=True,
+        layers=8,
+        phase_delta_expression_current="0",
+        phi_l_divisor_current=1.0,
+        atom_site_values=[],
+        iodine_z_current=0.2,
+        rod_points_per_gz=500,
+        atom_site_override_state=override_state,
+        simulation_runtime_state=runtime_state,
+        combine_weighted_intensities=lambda a, _b, **_kwargs: np.asarray(a, dtype=float),
+        build_intensity_dataframes=lambda *_args: ("summary", "details"),
+        apply_bragg_qr_filters=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        weight1=1.0,
+        weight2=0.0,
+        force=True,
+        trigger_update=True,
+    )
+
+    assert calls == [0.1]
+    assert set(state.ht_cache_multi) == {"p0"}
+
+    structure_model.rebuild_diffraction_inputs(
+        state,
+        new_occ=[1.0],
+        p_vals=[0.1, 0.2, 0.3],
+        weights=[0.0, 1.0, 0.0],
+        a_axis=1.0,
+        c_axis=2.0,
+        finite_stack_flag=True,
+        layers=8,
+        phase_delta_expression_current="0",
+        phi_l_divisor_current=1.0,
+        atom_site_values=[],
+        iodine_z_current=0.2,
+        rod_points_per_gz=500,
+        atom_site_override_state=override_state,
+        simulation_runtime_state=runtime_state,
+        combine_weighted_intensities=lambda a, _b, **_kwargs: np.asarray(a, dtype=float),
+        build_intensity_dataframes=lambda *_args: ("summary", "details"),
+        apply_bragg_qr_filters=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        weight1=1.0,
+        weight2=0.0,
+        force=True,
+        trigger_update=True,
+    )
+
+    assert calls == [0.1, 0.2]
+    assert set(state.ht_cache_multi) == {"p0", "p1"}
+
+
 def test_primary_cif_reload_helpers_apply_and_restore(monkeypatch, tmp_path) -> None:
     cif_path = tmp_path / "updated.cif"
     cif_path.write_text(

@@ -1117,6 +1117,19 @@ def combine_ht_dicts(caches, weights):
     return out
 
 
+def active_weighted_ht_entries(p_values, weights):
+    return [
+        (label, p_value, float(weight))
+        for label, p_value, weight in zip(
+            ("p0", "p1", "p2"),
+            p_values,
+            weights,
+            strict=True,
+        )
+        if float(weight) != 0.0
+    ]
+
+
 def build_lightweight_structure_model_state(
     *,
     cif_file: str,
@@ -1234,21 +1247,13 @@ def build_initial_structure_model_state(
         state.defaults.get("rod_points_per_gz"),
         gui_controllers.default_rod_points_per_gz(default_c_axis),
     )
-    weights_init = np.array(
-        [state.defaults["w0"], state.defaults["w1"], state.defaults["w2"]],
-        dtype=float,
+    weights_init = gui_controllers.normalize_stacking_weight_values(
+        [state.defaults["w0"], state.defaults["w1"], state.defaults["w2"]]
     )
-    weights_init /= weights_init.sum() if weights_init.sum() else 1.0
-    weighted_ht_defaults = [
-        ("p0", state.defaults["p0"], float(weights_init[0])),
-        ("p1", state.defaults["p1"], float(weights_init[1])),
-        ("p2", state.defaults["p2"], float(weights_init[2])),
-    ]
-    active_ht_defaults = [
-        (label, p_value, weight)
-        for label, p_value, weight in weighted_ht_defaults
-        if weight != 0.0
-    ]
+    active_ht_defaults = active_weighted_ht_entries(
+        [state.defaults["p0"], state.defaults["p1"], state.defaults["p2"]],
+        weights_init,
+    )
     state.ht_cache_multi = {
         label: build_ht_cache(
             state,
@@ -1531,13 +1536,16 @@ def rebuild_diffraction_inputs(
             state.ht_cache_multi[label] = cache
         return cache
 
+    active_ht_entries = active_weighted_ht_entries(p_vals, weights)
     caches = [
-        get_cache("p0", p_vals[0]),
-        get_cache("p1", p_vals[1]),
-        get_cache("p2", p_vals[2]),
+        get_cache(label, p_value)
+        for label, p_value, _weight in active_ht_entries
     ]
 
-    combined_ht_local = combine_ht_dicts(caches, weights)
+    combined_ht_local = combine_ht_dicts(
+        caches,
+        [weight for _label, _p_value, weight in active_ht_entries],
+    )
     combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
     arrays_local = ht_dict_to_arrays(combined_ht_local)
     state.ht_curves_cache = {
