@@ -34,6 +34,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, LogNorm, Normalize
+from matplotlib.patches import Rectangle
 import CifFile
 
 from ra_sim.io.osc_reader import read_osc
@@ -1948,6 +1949,74 @@ integration_region_overlay = ax.imshow(
     interpolation="nearest",
 )
 integration_region_overlay.set_visible(False)
+
+
+_initial_simulation_loading_overlay_artists: list[object] = []
+
+
+def _clear_initial_simulation_loading_overlay(*, redraw: bool = False) -> None:
+    while _initial_simulation_loading_overlay_artists:
+        artist = _initial_simulation_loading_overlay_artists.pop()
+        try:
+            artist.remove()
+        except Exception:
+            pass
+    if bool(redraw):
+        try:
+            matplotlib_canvas.draw()
+        except Exception:
+            pass
+
+
+def _show_initial_simulation_loading_overlay() -> None:
+    _clear_initial_simulation_loading_overlay(redraw=False)
+    text_artist = ax.text(
+        0.5,
+        0.56,
+        "Loading first simulation may take longer",
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=11,
+        color="#102A43",
+        zorder=10,
+        bbox=dict(
+            boxstyle="round,pad=0.45",
+            facecolor="#F7FAFC",
+            edgecolor="#BCCCDC",
+            alpha=0.96,
+        ),
+    )
+    bar_x = 0.31
+    bar_y = 0.485
+    bar_w = 0.38
+    bar_h = 0.026
+    track_artist = Rectangle(
+        (bar_x, bar_y),
+        bar_w,
+        bar_h,
+        transform=ax.transAxes,
+        facecolor="#E2E8F0",
+        edgecolor="#BCCCDC",
+        linewidth=1.0,
+        alpha=0.96,
+        zorder=10,
+    )
+    fill_artist = Rectangle(
+        (bar_x + 0.01, bar_y + 0.004),
+        bar_w * 0.58,
+        max(bar_h - 0.008, 0.0),
+        transform=ax.transAxes,
+        facecolor="#4F81BD",
+        edgecolor="none",
+        alpha=0.96,
+        zorder=11,
+    )
+    ax.add_patch(track_artist)
+    ax.add_patch(fill_artist)
+    _initial_simulation_loading_overlay_artists.extend(
+        [text_artist, track_artist, fill_artist]
+    )
 
 
 def _apply_axes_image_origin(image_display, origin):
@@ -10586,6 +10655,7 @@ def do_update():
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "applying"
     _refresh_run_status_bar()
+    _clear_initial_simulation_loading_overlay(redraw=False)
     update_start_time = perf_counter()
     image_generation_elapsed_ms = 0.0
     image_generation_cached = True
@@ -11208,6 +11278,32 @@ def do_update():
                     _refresh_run_status_bar()
                     simulation_runtime_state.update_running = False
                     return
+            elif (
+                not has_cached_simulation
+                and simulation_runtime_state.worker_active_job is None
+                and simulation_runtime_state.worker_queued_job is None
+            ):
+                if "progress_label" in globals() and progress_label is not None:
+                    progress_label.config(text="Computing initial simulation...")
+                sync_result = _run_simulation_generation_job(
+                    {
+                        **simulation_job,
+                        "job_id": 0,
+                    }
+                )
+                _apply_ready_simulation_result(sync_result)
+                simulation_runtime_state.last_sim_signature = new_sim_image_sig
+                simulation_runtime_state.last_simulation_signature = new_sim_sig
+                simulation_runtime_state.primary_filter_signature = (
+                    primary_requested_filter_signature
+                )
+                _capture_geometry_source_snapshot()
+                image_generation_cached = False
+                image_generation_elapsed_ms = float(
+                    sync_result.get("image_generation_elapsed_ms", 0.0)
+                )
+                simulation_runtime_state.update_phase = "applying"
+                _refresh_run_status_bar()
             else:
                 request_status = _request_async_simulation_job(simulation_job)
                 if (
@@ -11215,13 +11311,7 @@ def do_update():
                     and "progress_label" in globals()
                     and progress_label is not None
                 ):
-                    progress_label.config(
-                        text=(
-                            "Simulation loading in background..."
-                            if not has_cached_simulation
-                            else "Computing simulation in background..."
-                        )
-                    )
+                    progress_label.config(text="Computing simulation in background...")
                 _trace_update(
                     "do_update_return_waiting_for_simulation",
                     request_status=str(request_status),
@@ -24377,6 +24467,9 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             _bootstrap_structure_model_state_for_startup()
             _set_structure_bootstrap_controls_enabled(True)
             progress_label.config(text="Initializing simulation...")
+            _show_initial_simulation_loading_overlay()
+            matplotlib_canvas.draw()
+            root.update_idletasks()
             do_update()
         except Exception as exc:
             progress_label.config(text=f"Startup initialization failed: {exc}")

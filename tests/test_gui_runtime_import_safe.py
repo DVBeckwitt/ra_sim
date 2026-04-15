@@ -533,16 +533,23 @@ def test_runtime_impl_enables_async_preview_calculations_in_runtime_update_paths
     assert "PREVIEW_CALCULATIONS_ENABLED\n                and bool(live_geometry_preview_var.get())" in source
 
 
-def test_runtime_impl_never_blocks_startup_on_initial_simulation() -> None:
+def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     block_start = source.index("has_cached_simulation = (")
     block_end = source.index("elif ready_simulation_result is None and need_hit_table_refresh:")
     block = source[block_start:block_end]
+    startup_start = source.index("def _run_initial_startup_work():")
+    startup_end = source.index("# Start the exact-cake Numba warmup in the background")
+    startup_block = source[startup_start:startup_end]
 
-    assert "_run_simulation_generation_job(" not in block
-    assert "request_status = _request_async_simulation_job(simulation_job)" in block
-    assert '"Simulation loading in background..."' in block
+    assert "def _show_initial_simulation_loading_overlay() -> None:" in source
+    assert '"Loading first simulation may take longer"' in source
+    assert "_show_initial_simulation_loading_overlay()" in startup_block
+    assert "matplotlib_canvas.draw()" in startup_block
+    assert "root.update_idletasks()" in startup_block
+    assert "_run_simulation_generation_job(" in block
+    assert 'progress_label.config(text="Computing initial simulation...")' in block
 
 
 def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
