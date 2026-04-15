@@ -1041,12 +1041,6 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     startup_start = source.index("def _run_initial_startup_work():")
     startup_end = source.index("root.after_idle(_run_initial_startup_work)")
     startup_block = source[startup_start:startup_end]
-    forward_warmup_index = startup_block.index(
-        "start_forward_simulation_numba_warmup_in_background()"
-    )
-    rod_warmup_index = startup_block.index(
-        "start_qr_rod_simulation_numba_warmup_in_background()"
-    )
 
     assert "def _show_initial_simulation_loading_overlay() -> None:" in source
     assert '"Loading first simulation may take longer"' in source
@@ -1054,22 +1048,6 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert "matplotlib_canvas.draw()" in startup_block
     assert "root.update_idletasks()" in startup_block
     assert "start_exact_cake_numba_warmup_in_background()" not in startup_block
-    assert "_schedule_forward_simulation_numba_warmup_once()" not in startup_block
-    assert "_schedule_qr_rod_simulation_numba_warmup_once()" not in startup_block
-    assert forward_warmup_index < startup_block.index(
-        "runtime_context = build_runtime_state_context()"
-    )
-    assert rod_warmup_index < startup_block.index(
-        "runtime_context = build_runtime_state_context()"
-    )
-    assert forward_warmup_index < startup_block.index(
-        "_bootstrap_structure_model_state_for_startup()"
-    )
-    assert rod_warmup_index < startup_block.index(
-        "_bootstrap_structure_model_state_for_startup()"
-    )
-    assert forward_warmup_index < startup_block.index("do_update()")
-    assert rod_warmup_index < startup_block.index("do_update()")
     assert "_run_simulation_generation_job(" in block
     assert 'progress_label.config(text="Computing initial simulation...")' in block
 

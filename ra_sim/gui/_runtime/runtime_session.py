@@ -25312,11 +25312,6 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
 
         try:
             _emit_startup_benchmark_event("after_idle_startup_task")
-            try:
-                start_forward_simulation_numba_warmup_in_background()
-                start_qr_rod_simulation_numba_warmup_in_background()
-            except Exception:
-                pass
             runtime_context = build_runtime_state_context()
             runtime_context = build_runtime_window_context(runtime_context)
             runtime_context = build_runtime_plot_context(runtime_context)
