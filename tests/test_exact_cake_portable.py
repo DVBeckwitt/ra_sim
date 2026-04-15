@@ -1106,6 +1106,88 @@ def test_fast_azimuthal_integrator_reuses_cake_lut(monkeypatch) -> None:
     assert lut_calls == [((4, 4), 8, 6)]
 
 
+def test_fast_azimuthal_integrator_cake_lut_cache_key_uses_full_axis_contents(monkeypatch) -> None:
+    lut_calls: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
+        del geometry, workers
+        build_idx = len(lut_calls) + 1
+        lut_calls.append(
+            (
+                np.asarray(radial_deg, dtype=np.float64).copy(),
+                np.asarray(azimuthal_deg, dtype=np.float64).copy(),
+            )
+        )
+        return exact_cake.DetectorCakeLUT(
+            image_shape=tuple(int(v) for v in image_shape[:2]),
+            n_rad=int(len(radial_deg)),
+            n_az=int(len(azimuthal_deg)),
+            matrix=np.full(
+                (int(len(radial_deg) * len(azimuthal_deg)), int(np.prod(image_shape[:2]))),
+                float(build_idx),
+                dtype=np.float32,
+            ),
+            count_flat=np.full(int(len(radial_deg) * len(azimuthal_deg)), float(build_idx), dtype=np.float64),
+        )
+
+    monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
+
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    geometry = exact_cake.DetectorCakeGeometry(
+        pixel_size_m=float(integrator.geometry.pixel_size_m),
+        distance_m=float(integrator.geometry.distance_m),
+        center_row_px=float(integrator.geometry.center_row_px),
+        center_col_px=float(integrator.geometry.center_col_px),
+    )
+    detector_shape = (4, 4)
+    radial_a = np.array([0.0, 1.0, 3.0], dtype=np.float64)
+    radial_b = np.array([0.0, 2.0, 3.0], dtype=np.float64)
+    azimuthal_a = np.array([-180.0, -20.0, 180.0], dtype=np.float64)
+    azimuthal_b = np.array([-180.0, 40.0, 180.0], dtype=np.float64)
+
+    lut_a = integrator._cached_cake_lut(
+        detector_shape,
+        radial_a,
+        azimuthal_a,
+        geometry,
+        engine="auto",
+        workers=1,
+    )
+    lut_b = integrator._cached_cake_lut(
+        detector_shape,
+        radial_b,
+        azimuthal_b,
+        geometry,
+        engine="auto",
+        workers=1,
+    )
+    lut_a_again = integrator._cached_cake_lut(
+        detector_shape,
+        radial_a.astype(np.float32, copy=True),
+        azimuthal_a.astype(np.float32, copy=True),
+        geometry,
+        engine="auto",
+        workers=1,
+    )
+
+    assert lut_a is not None
+    assert lut_b is not None
+    assert lut_a_again is not None
+    assert lut_a is not lut_b
+    assert lut_a_again is lut_a
+    assert len(lut_calls) == 2
+    assert np.array_equal(lut_calls[0][0], radial_a)
+    assert np.array_equal(lut_calls[0][1], azimuthal_a)
+    assert np.array_equal(lut_calls[1][0], radial_b)
+    assert np.array_equal(lut_calls[1][1], azimuthal_b)
+
+
 def test_fast_azimuthal_integrator_cake_lut_cache_is_shared_across_instances(monkeypatch) -> None:
     lut_calls: list[tuple[tuple[int, int], int, int]] = []
 

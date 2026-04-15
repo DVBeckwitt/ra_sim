@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+import hashlib
 import math
 from pathlib import Path
 import threading
@@ -56,7 +57,8 @@ _GEOMETRY_WARMUP_COMPLETION_LIMIT = 16
 
 
 _SharedDetectorMapKey = tuple["PortableGeometry", tuple[int, int]]
-_SharedCakeLutKey = tuple["PortableGeometry", tuple[int, int], int, float, float, int, float, float]
+_Float64ArrayCacheToken = tuple[tuple[int, ...], bytes]
+_SharedCakeLutKey = tuple["PortableGeometry", tuple[int, int], _Float64ArrayCacheToken, _Float64ArrayCacheToken]
 _GeometryWarmupKey = tuple[int, tuple[int, int], int, int]
 
 _PROCESS_DETECTOR_MAP_CACHE: OrderedDict[_SharedDetectorMapKey, tuple[np.ndarray, np.ndarray]] = OrderedDict()
@@ -105,6 +107,12 @@ def _shared_detector_map_cache_key(
     return geometry, detector_shape
 
 
+def _float64_array_cache_token(values: np.ndarray) -> _Float64ArrayCacheToken:
+    contiguous = np.ascontiguousarray(np.asarray(values, dtype=np.float64))
+    digest = hashlib.blake2b(contiguous.tobytes(order="C"), digest_size=16).digest()
+    return tuple(int(v) for v in contiguous.shape), digest
+
+
 def _shared_cake_lut_cache_key(
     geometry: PortableGeometry,
     detector_shape: tuple[int, int],
@@ -114,12 +122,8 @@ def _shared_cake_lut_cache_key(
     return (
         geometry,
         detector_shape,
-        int(radial_deg.size),
-        float(radial_deg[0]),
-        float(radial_deg[-1]),
-        int(azimuthal_deg.size),
-        float(azimuthal_deg[0]),
-        float(azimuthal_deg[-1]),
+        _float64_array_cache_token(radial_deg),
+        _float64_array_cache_token(azimuthal_deg),
     )
 
 
