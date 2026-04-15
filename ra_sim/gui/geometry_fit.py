@@ -31,6 +31,10 @@ from ra_sim.fitting.optimization import (
     _fit_space_pixel_size_provenance,
 )
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.simulation.exact_cake_portable import (
+    CakeTransformBundle,
+    detector_pixel_to_caked_bin,
+)
 from ra_sim.utils.calculations import (
     SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
     d_spacing,
@@ -5454,6 +5458,7 @@ def build_geometry_manual_fit_dataset(
     dynamic_reanchor_caked_background: np.ndarray | None = None
     dynamic_reanchor_radial_axis: np.ndarray | None = None
     dynamic_reanchor_azimuth_axis: np.ndarray | None = None
+    dynamic_reanchor_transform_bundle: CakeTransformBundle | None = None
     dynamic_reanchor_use_caked_space = False
     dynamic_reanchor_enabled = (
         isinstance(experimental_image_for_fit, np.ndarray)
@@ -5479,6 +5484,7 @@ def build_geometry_manual_fit_dataset(
         caked_background_local = None
         radial_axis_local = None
         azimuth_axis_local = None
+        dynamic_reanchor_transform_bundle = None
         if isinstance(raw_caked_view, Mapping):
             caked_background_local = raw_caked_view.get(
                 "background_image",
@@ -5486,6 +5492,7 @@ def build_geometry_manual_fit_dataset(
             )
             radial_axis_local = raw_caked_view.get("radial_axis")
             azimuth_axis_local = raw_caked_view.get("azimuth_axis")
+            dynamic_reanchor_transform_bundle = raw_caked_view.get("transform_bundle")
         elif isinstance(raw_caked_view, (list, tuple)) and len(raw_caked_view) >= 3:
             caked_background_local = raw_caked_view[0]
             radial_axis_local = raw_caked_view[1]
@@ -5612,22 +5619,48 @@ def build_geometry_manual_fit_dataset(
                     )
                 except Exception:
                     Gamma_value = 0.0
-                sim_two_theta_arr, sim_phi_arr = _detector_pixels_to_fit_space(
-                    np.array([sim_col], dtype=np.float64),
-                    np.array([sim_row], dtype=np.float64),
-                    center=center_value,
-                    detector_distance=float(detector_distance),
-                    pixel_size=float(pixel_size),
-                    gamma_deg=float(gamma_value),
-                    Gamma_deg=float(Gamma_value),
-                )
-                sim_two_theta = (
-                    float(sim_two_theta_arr[0])
-                    if sim_two_theta_arr.size > 0
-                    else float("nan")
-                )
-                sim_phi = (
-                    float(sim_phi_arr[0]) if sim_phi_arr.size > 0 else float("nan")
+
+                def _detector_point_to_caked_angles(
+                    detector_col: float,
+                    detector_row: float,
+                ) -> tuple[float, float]:
+                    if isinstance(dynamic_reanchor_transform_bundle, CakeTransformBundle):
+                        try:
+                            bundle_two_theta, bundle_phi = detector_pixel_to_caked_bin(
+                                dynamic_reanchor_transform_bundle,
+                                float(detector_col),
+                                float(detector_row),
+                            )
+                        except Exception:
+                            bundle_two_theta, bundle_phi = (None, None)
+                        if (
+                            bundle_two_theta is not None
+                            and bundle_phi is not None
+                            and np.isfinite(float(bundle_two_theta))
+                            and np.isfinite(float(bundle_phi))
+                        ):
+                            return float(bundle_two_theta), float(bundle_phi)
+                    projected_two_theta, projected_phi = _detector_pixels_to_fit_space(
+                        np.array([detector_col], dtype=np.float64),
+                        np.array([detector_row], dtype=np.float64),
+                        center=center_value,
+                        detector_distance=float(detector_distance),
+                        pixel_size=float(pixel_size),
+                        gamma_deg=float(gamma_value),
+                        Gamma_deg=float(Gamma_value),
+                    )
+                    return (
+                        float(projected_two_theta[0])
+                        if projected_two_theta.size > 0
+                        else float("nan"),
+                        float(projected_phi[0])
+                        if projected_phi.size > 0
+                        else float("nan"),
+                    )
+
+                sim_two_theta, sim_phi = _detector_point_to_caked_angles(
+                    float(sim_col),
+                    float(sim_row),
                 )
                 sim_col_local = gui_manual_geometry.caked_axis_to_image_index(
                     float(sim_two_theta),
@@ -5679,26 +5712,18 @@ def build_geometry_manual_fit_dataset(
                             measured_detector_col is not None
                             and measured_detector_row is not None
                         ):
-                            (
-                                measured_two_theta_arr,
-                                measured_phi_arr,
-                            ) = _detector_pixels_to_fit_space(
-                                np.array([measured_detector_col], dtype=np.float64),
-                                np.array([measured_detector_row], dtype=np.float64),
-                                center=center_value,
-                                detector_distance=float(detector_distance),
-                                pixel_size=float(pixel_size),
-                                gamma_deg=float(gamma_value),
-                                Gamma_deg=float(Gamma_value),
+                            measured_two_theta, measured_phi = (
+                                _detector_point_to_caked_angles(
+                                    float(measured_detector_col),
+                                    float(measured_detector_row),
+                                )
                             )
                             if (
-                                measured_two_theta_arr.size > 0
-                                and measured_phi_arr.size > 0
-                                and np.isfinite(measured_two_theta_arr[0])
-                                and np.isfinite(measured_phi_arr[0])
+                                np.isfinite(measured_two_theta)
+                                and np.isfinite(measured_phi)
                             ):
-                                raw_col = float(measured_two_theta_arr[0])
-                                raw_row = float(measured_phi_arr[0])
+                                raw_col = float(measured_two_theta)
+                                raw_row = float(measured_phi)
             if raw_col is None or raw_row is None:
                 seed_entry["sim_col"] = float(sim_col)
                 seed_entry["sim_row"] = float(sim_row)

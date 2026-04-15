@@ -83,6 +83,16 @@ def _ai_with_live_bundle(bundle):
     return ai
 
 
+def _dummy_transform_bundle(detector_shape=(6, 6)):
+    return mg.CakeTransformBundle(
+        detector_shape=tuple(int(v) for v in detector_shape),
+        radial_deg=np.array([10.0, 12.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-5.0, 5.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([5.0, -5.0], dtype=np.float64),
+        lut=object(),
+    )
+
+
 def _group_candidates(entries):
     grouped = {}
     for raw_entry in entries or ():
@@ -764,6 +774,42 @@ def test_native_detector_coords_to_caked_display_coords_uses_live_lut_projection
 
     assert result == (12.6, 169.2)
     assert projector_calls == [(bundle, 0.9, 0.1)]
+
+
+def test_native_detector_coords_to_caked_display_coords_uses_explicit_transform_bundle(
+    monkeypatch,
+) -> None:
+    bundle = _dummy_transform_bundle()
+    projector_calls = []
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            projector_calls.append((live_bundle, float(col), float(row)))
+            or (14.2, -11.5)
+        ),
+    )
+
+    result = mg.native_detector_coords_to_caked_display_coords(
+        4.0,
+        5.0,
+        ai=object(),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic fallback should not be used")
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        transform_bundle=bundle,
+        wrap_phi_range=_wrap_phi_range,
+    )
+
+    assert result == (14.2, -11.5)
+    assert projector_calls == [(bundle, 4.0, 5.0)]
 
 
 def test_native_detector_coords_to_caked_display_coords_returns_none_without_live_bundle() -> None:
@@ -2727,12 +2773,15 @@ def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_
 def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_inverse_lut(
     monkeypatch,
 ) -> None:
-    inverse_calls: list[tuple[tuple[int, int], tuple[float, ...], tuple[float, ...], float, float]] = []
+    bundle = _dummy_transform_bundle()
+    inverse_calls: list[
+        tuple[tuple[int, int], tuple[float, ...], tuple[float, ...], float, float, object]
+    ] = []
 
     monkeypatch.setattr(
         mg,
         "_caked_point_to_detector_pixel",
-        lambda _ai, detector_shape, radial_deg, azimuth_deg, two_theta, phi: (
+        lambda _ai, detector_shape, radial_deg, azimuth_deg, two_theta, phi, **kwargs: (
             inverse_calls.append(
                 (
                     tuple(int(v) for v in tuple(detector_shape)[:2]),
@@ -2740,6 +2789,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
                     tuple(float(v) for v in np.asarray(azimuth_deg, dtype=float)),
                     float(two_theta),
                     float(phi),
+                    kwargs.get("transform_bundle"),
                 )
             )
             or (102.0, 213.0)
@@ -2756,6 +2806,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
         center=lambda: (20.0, 30.0),
         detector_distance=lambda: 100.0,
         pixel_size=lambda: 0.25,
+        caked_transform_bundle=lambda: bundle,
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
@@ -2777,6 +2828,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
             (-2.0, -1.0, 0.0, 1.0, 2.0, 3.0),
             13.0,
             2.0,
+            bundle,
         )
     ]
 
@@ -2822,8 +2874,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
 def test_make_runtime_geometry_manual_projection_callbacks_projects_detector_points_in_native_coords(
     monkeypatch,
 ) -> None:
-    bundle = object()
-    ai = _ai_with_live_bundle(bundle)
+    bundle = _dummy_transform_bundle(detector_shape=(4, 4))
 
     monkeypatch.setattr(
         mg,
@@ -2842,7 +2893,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_projects_detector_poi
         last_caked_azimuth_values=lambda: np.linspace(-2.0, 3.0, 6),
         current_background_display=lambda: np.zeros((4, 4), dtype=float),
         current_background_native=lambda: np.ones((4, 4), dtype=float),
-        ai=lambda: ai,
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
@@ -2873,8 +2925,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_projects_detector_poi
 def test_make_runtime_geometry_manual_projection_callbacks_keep_detector_points_continuous(
     monkeypatch,
 ) -> None:
-    bundle = object()
-    ai = _ai_with_live_bundle(bundle)
+    bundle = _dummy_transform_bundle(detector_shape=(4, 4))
 
     monkeypatch.setattr(
         mg,
@@ -2893,7 +2944,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_keep_detector_points_
         last_caked_azimuth_values=lambda: np.array([-2.0, 2.0, 5.0], dtype=float),
         current_background_display=lambda: np.zeros((4, 4), dtype=float),
         current_background_native=lambda: np.ones((4, 4), dtype=float),
-        ai=lambda: ai,
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(

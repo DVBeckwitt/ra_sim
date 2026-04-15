@@ -529,6 +529,17 @@ def test_runtime_impl_uses_bound_caked_projection_callback_for_live_overlay_coor
     assert "ai=" not in helper_source
 
 
+def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _prepare_caked_display_payload(")
+    helper_end = source.index("def _prepare_q_space_display_payload(", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert '"raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=float)' in helper_source
+    assert '"raw_to_gui_row_permutation": np.asarray(' in helper_source
+    assert '"transform_bundle": transform_bundle' in helper_source
+
+
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

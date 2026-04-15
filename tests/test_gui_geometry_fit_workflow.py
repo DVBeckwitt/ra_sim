@@ -3994,6 +3994,25 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
             "cfg": dict(cfg),
         },
     )
+    bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(6, 7),
+        radial_deg=np.array([20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
+        lut=object(),
+    )
+    projector_calls: list[tuple[object, float, float]] = []
+    monkeypatch.setattr(
+        geometry_fit,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or {(50.0, 51.0): (24.5, -34.5)}.get(
+                (float(col), float(row)),
+                (None, None),
+            )
+        ),
+    )
 
     valid_source_row = {
         "q_group_key": ("q", 1),
@@ -4061,6 +4080,7 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
             "background": np.zeros((6, 7), dtype=np.float64),
             "radial_axis": radial_axis,
             "azimuth_axis": azimuth_axis,
+            "transform_bundle": bundle,
         },
     )
 
@@ -4085,25 +4105,16 @@ def test_geometry_fit_dynamic_reanchor_uses_caked_fit_space_seed_and_returns_fit
         local_params=local_params,
         dataset_ctx=SimpleNamespace(dataset_index=0),
     )
-    expected_two_theta, expected_phi = geometry_fit._detector_pixels_to_fit_space(
-        np.array([50.0], dtype=np.float64),
-        np.array([51.0], dtype=np.float64),
-        center=local_params["center"],
-        detector_distance=float(local_params["corto_detector"]),
-        pixel_size=float(local_params["pixel_size"]),
-        gamma_deg=float(local_params["gamma"]),
-        Gamma_deg=float(local_params["Gamma"]),
-    )
-
     assert calls["raw"] == (150.0, 160.0)
     assert calls["shape"] == (6, 7)
     assert calls["use_caked_space"] is True
     assert np.allclose(calls["radial_axis"], radial_axis)
     assert np.allclose(calls["azimuth_axis"], azimuth_axis)
-    assert calls["candidate"]["sim_col"] == pytest.approx(float(expected_two_theta[0]))
-    assert calls["candidate"]["sim_row"] == pytest.approx(float(expected_phi[0]))
+    assert calls["candidate"]["sim_col"] == pytest.approx(24.5)
+    assert calls["candidate"]["sim_row"] == pytest.approx(-34.5)
     assert np.isfinite(float(calls["candidate"]["sim_col_local"]))
     assert np.isfinite(float(calls["candidate"]["sim_row_local"]))
+    assert projector_calls == [(bundle, 50.0, 51.0)]
     assert callable(calls["matcher"])
     assert result["background_two_theta_deg"] == pytest.approx(22.5)
     assert result["background_phi_deg"] == pytest.approx(-35.5)
@@ -4153,6 +4164,28 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
             "shape": tuple(np.asarray(image).shape),
             "cfg": dict(cfg),
         },
+    )
+    bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(6, 7),
+        radial_deg=np.array([20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([0.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([0.0], dtype=np.float64),
+        lut=object(),
+    )
+    projector_calls: list[tuple[object, float, float]] = []
+    monkeypatch.setattr(
+        geometry_fit,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or {
+                (50.0, 51.0): (24.5, -34.5),
+                (30.0, 40.0): (22.25, -36.75),
+            }.get(
+                (float(col), float(row)),
+                (None, None),
+            )
+        ),
     )
 
     valid_source_row = {
@@ -4217,6 +4250,7 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
             "background": np.zeros((6, 7), dtype=np.float64),
             "radial_axis": radial_axis,
             "azimuth_axis": azimuth_axis,
+            "transform_bundle": bundle,
         },
     )
 
@@ -4241,33 +4275,18 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
         local_params=local_params,
         dataset_ctx=SimpleNamespace(dataset_index=0),
     )
-    expected_sim_two_theta, expected_sim_phi = geometry_fit._detector_pixels_to_fit_space(
-        np.array([50.0], dtype=np.float64),
-        np.array([51.0], dtype=np.float64),
-        center=local_params["center"],
-        detector_distance=float(local_params["corto_detector"]),
-        pixel_size=float(local_params["pixel_size"]),
-        gamma_deg=float(local_params["gamma"]),
-        Gamma_deg=float(local_params["Gamma"]),
-    )
-    expected_raw_two_theta, expected_raw_phi = geometry_fit._detector_pixels_to_fit_space(
-        np.array([30.0], dtype=np.float64),
-        np.array([40.0], dtype=np.float64),
-        center=local_params["center"],
-        detector_distance=float(local_params["corto_detector"]),
-        pixel_size=float(local_params["pixel_size"]),
-        gamma_deg=float(local_params["gamma"]),
-        Gamma_deg=float(local_params["Gamma"]),
-    )
-
     assert calls["shape"] == (6, 7)
     assert calls["use_caked_space"] is True
     assert np.allclose(calls["radial_axis"], radial_axis)
     assert np.allclose(calls["azimuth_axis"], azimuth_axis)
-    assert calls["candidate"]["sim_col"] == pytest.approx(float(expected_sim_two_theta[0]))
-    assert calls["candidate"]["sim_row"] == pytest.approx(float(expected_sim_phi[0]))
-    assert calls["raw"][0] == pytest.approx(float(expected_raw_two_theta[0]))
-    assert calls["raw"][1] == pytest.approx(float(expected_raw_phi[0]))
+    assert calls["candidate"]["sim_col"] == pytest.approx(24.5)
+    assert calls["candidate"]["sim_row"] == pytest.approx(-34.5)
+    assert calls["raw"][0] == pytest.approx(22.25)
+    assert calls["raw"][1] == pytest.approx(-36.75)
+    assert projector_calls == [
+        (bundle, 50.0, 51.0),
+        (bundle, 30.0, 40.0),
+    ]
     assert callable(calls["matcher"])
     assert result["background_two_theta_deg"] == pytest.approx(22.5)
     assert result["background_phi_deg"] == pytest.approx(-35.5)

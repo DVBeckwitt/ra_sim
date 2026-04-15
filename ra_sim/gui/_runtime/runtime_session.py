@@ -131,6 +131,7 @@ from ra_sim.simulation.exact_cake_portable import (
     build_cake_transform_bundle_from_result,
     caked_point_to_detector_pixel,
     detector_pixel_to_caked_bin,
+    gui_phi_to_raw_phi,
     prepare_gui_phi_display,
     raw_phi_to_gui_phi,
     start_exact_cake_geometry_warmup_in_background,
@@ -4402,8 +4403,8 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
 
 def _geometry_fit_caked_view_for_index(
     index: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Return active caked background image plus axes for one background index."""
+) -> dict[str, object] | None:
+    """Return active caked background view plus canonical transform metadata."""
 
     if int(index) != int(background_runtime_state.current_background_index):
         return None
@@ -4420,6 +4421,7 @@ def _geometry_fit_caked_view_for_index(
             simulation_runtime_state.last_caked_azimuth_values,
             dtype=np.float64,
         )
+        transform_bundle = _current_live_caked_transform_bundle()
     except Exception:
         return None
     if (
@@ -4429,11 +4431,28 @@ def _geometry_fit_caked_view_for_index(
         or azimuth_axis.size <= 0
     ):
         return None
-    return (
-        np.asarray(caked_background, dtype=np.float64).copy(),
-        np.asarray(radial_axis, dtype=np.float64).copy(),
-        np.asarray(azimuth_axis, dtype=np.float64).copy(),
+    if isinstance(transform_bundle, CakeTransformBundle):
+        raw_azimuth_axis = np.asarray(
+            transform_bundle.raw_azimuth_deg,
+            dtype=np.float64,
+        ).copy()
+    else:
+        raw_azimuth_axis = np.asarray(
+            gui_phi_to_raw_phi(azimuth_axis),
+            dtype=np.float64,
+        ).copy()
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+        dtype=np.int32,
     )
+    return {
+        "background": np.asarray(caked_background, dtype=np.float64).copy(),
+        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
+        "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64).copy(),
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+        "transform_bundle": transform_bundle,
+    }
 
 
 def _current_geometry_fit_caked_roi_enabled() -> bool:
@@ -4932,20 +4951,23 @@ def _geometry_fit_caked_roi_fit_space_to_detector_point(
         return None
     if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
         return None
-    try:
-        radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
-        azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
-    except Exception:
-        return None
-    if radial.size <= 0 or azimuth.size <= 0:
-        return None
-
     bundle = (
         transform_bundle
         if isinstance(transform_bundle, CakeTransformBundle)
         and tuple(transform_bundle.detector_shape) == tuple(normalized_shape)
         else None
     )
+    if bundle is not None:
+        radial = np.asarray(bundle.radial_deg, dtype=np.float64).reshape(-1)
+        azimuth = np.asarray(bundle.gui_azimuth_deg, dtype=np.float64).reshape(-1)
+    else:
+        try:
+            radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+            azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        if radial.size <= 0 or azimuth.size <= 0:
+            return None
     exact_ai = ai if isinstance(ai, FastAzimuthalIntegrator) else None
     if bundle is None and exact_ai is None:
         return None
@@ -5040,6 +5062,7 @@ def _initialize_runtime_controls_block_04() -> None:
             center=lambda: [float(center_x_var.get()), float(center_y_var.get())],
             detector_distance=lambda: float(corto_detector_var.get()),
             pixel_size=float(pixel_size_m),
+            caked_transform_bundle=_current_live_caked_transform_bundle,
             wrap_phi_range=lambda value: raw_phi_to_gui_phi(value),
             rotate_point_for_display=_rotate_point_for_display,
             display_rotate_k=DISPLAY_ROTATE_K,
@@ -10324,6 +10347,11 @@ def _prepare_caked_display_payload(
         detector_shape if detector_shape is not None else (),
         res2,
     )
+    raw_azimuth_axis = np.asarray(res2.azimuthal, dtype=float)
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+        dtype=np.int32,
+    )
     caked_img, radial_vals, azimuth_vals = prepare_gui_phi_display(res2)
 
     radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
@@ -10347,7 +10375,12 @@ def _prepare_caked_display_payload(
         "image": np.asarray(caked_img, dtype=float),
         "radial": np.asarray(radial_vals, dtype=float),
         "azimuth": np.asarray(azimuth_vals, dtype=float),
-        "raw_azimuth": np.asarray(res2.azimuthal, dtype=float),
+        "raw_azimuth": np.asarray(raw_azimuth_axis, dtype=float),
+        "raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=float),
+        "raw_to_gui_row_permutation": np.asarray(
+            raw_to_gui_row_permutation,
+            dtype=np.int32,
+        ),
         "transform_bundle": transform_bundle,
         "extent": [
             radial_min,
@@ -22071,7 +22104,7 @@ def _build_geometry_fit_async_job(
         required_indices = [int(primary_index)]
 
     background_images: dict[int, dict[str, np.ndarray]] = {}
-    caked_views_by_background: dict[int, dict[str, np.ndarray]] = {}
+    caked_views_by_background: dict[int, dict[str, object]] = {}
     manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
     source_snapshots: dict[int, dict[str, object]] = {}
     requested_signatures: dict[int, object] = {}
@@ -22166,21 +22199,30 @@ def _build_geometry_fit_async_job(
             else {}
         )
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
-        if isinstance(caked_view_payload, tuple) and len(caked_view_payload) >= 3:
+        if isinstance(caked_view_payload, Mapping):
             try:
                 caked_views_by_background[int(current_background_index)] = {
                     "background": np.asarray(
-                        caked_view_payload[0],
+                        caked_view_payload.get("background"),
                         dtype=np.float64,
                     ).copy(),
                     "radial_axis": np.asarray(
-                        caked_view_payload[1],
+                        caked_view_payload.get("radial_axis"),
                         dtype=np.float64,
                     ).copy(),
                     "azimuth_axis": np.asarray(
-                        caked_view_payload[2],
+                        caked_view_payload.get("azimuth_axis"),
                         dtype=np.float64,
                     ).copy(),
+                    "raw_azimuth_axis": np.asarray(
+                        caked_view_payload.get("raw_azimuth_axis"),
+                        dtype=np.float64,
+                    ).copy(),
+                    "raw_to_gui_row_permutation": np.asarray(
+                        caked_view_payload.get("raw_to_gui_row_permutation"),
+                        dtype=np.int32,
+                    ).copy(),
+                    "transform_bundle": caked_view_payload.get("transform_bundle"),
                 }
             except Exception:
                 pass
@@ -22398,7 +22440,7 @@ def _run_async_geometry_fit_worker_job(
 
     def _load_caked_view_by_index_snapshot(
         index: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    ) -> dict[str, object] | None:
         caked_payload = dict(
             dict(job_data.get("caked_views_by_background", {}) or {}).get(int(index)) or {}
         )
@@ -22417,6 +22459,14 @@ def _run_async_geometry_fit_worker_job(
                 caked_payload.get("azimuth_axis"),
                 dtype=np.float64,
             ).copy()
+            raw_azimuth_axis = np.asarray(
+                caked_payload.get("raw_azimuth_axis"),
+                dtype=np.float64,
+            ).copy()
+            raw_to_gui_row_permutation = np.asarray(
+                caked_payload.get("raw_to_gui_row_permutation"),
+                dtype=np.int32,
+            ).copy()
         except Exception:
             return None
         if (
@@ -22426,7 +22476,14 @@ def _run_async_geometry_fit_worker_job(
             or azimuth_axis.size <= 0
         ):
             return None
-        return caked_background, radial_axis, azimuth_axis
+        return {
+            "background": caked_background,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+            "transform_bundle": caked_payload.get("transform_bundle"),
+        }
 
     def _project_source_rows(raw_rows: Sequence[object] | None) -> Sequence[object]:
         project_rows = job_data.get("project_rows")
@@ -22728,6 +22785,15 @@ def _run_async_geometry_fit_worker_job(
                 "background": np.asarray(caked_payload.get("image"), dtype=np.float64).copy(),
                 "radial_axis": np.asarray(caked_payload.get("radial"), dtype=np.float64).copy(),
                 "azimuth_axis": np.asarray(caked_payload.get("azimuth"), dtype=np.float64).copy(),
+                "raw_azimuth_axis": np.asarray(
+                    caked_payload.get("raw_azimuth_axis", caked_payload.get("raw_azimuth")),
+                    dtype=np.float64,
+                ).copy(),
+                "raw_to_gui_row_permutation": np.asarray(
+                    caked_payload.get("raw_to_gui_row_permutation"),
+                    dtype=np.int32,
+                ).copy(),
+                "transform_bundle": caked_payload.get("transform_bundle"),
                 "roi_enabled": bool(roi_enabled),
                 "roi_used_restricted_cake": bool(roi_used_restricted_cake),
                 "roi_pixel_count": int(roi_pixel_count),

@@ -21,6 +21,7 @@ from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
 from ra_sim.simulation.exact_cake_portable import (
+    CakeTransformBundle,
     caked_point_to_detector_pixel as _caked_point_to_detector_pixel,
     detector_pixel_to_caked_bin as _detector_pixel_to_caked_bin,
 )
@@ -3817,6 +3818,7 @@ def make_runtime_geometry_manual_projection_callbacks(
     center: Callable[[], Sequence[float] | None] | Sequence[float] | None = None,
     detector_distance: Callable[[], object] | object = 0.0,
     pixel_size: Callable[[], object] | object = 0.0,
+    caked_transform_bundle: Callable[[], object] | object = None,
     wrap_phi_range: Callable[[object], object] = lambda value: value,
     rotate_point_for_display: Callable[[float, float, tuple[int, ...], int], tuple[float, float]] = _default_rotate_point,
     display_rotate_k: int = 0,
@@ -3899,6 +3901,7 @@ def make_runtime_geometry_manual_projection_callbacks(
             center=_detector_center(),
             detector_distance=float(_resolve_runtime_value(detector_distance) or 0.0),
             pixel_size=float(_resolve_runtime_value(pixel_size) or 0.0),
+            transform_bundle=_resolve_runtime_value(caked_transform_bundle),
             wrap_phi_range=wrap_phi_range,
             caked_radial_values=_resolve_runtime_value(last_caked_radial_values),
             caked_azimuth_values=_resolve_runtime_value(last_caked_azimuth_values),
@@ -3920,6 +3923,7 @@ def make_runtime_geometry_manual_projection_callbacks(
             center=_detector_center(),
             detector_distance=float(_resolve_runtime_value(detector_distance) or 0.0),
             pixel_size=float(_resolve_runtime_value(pixel_size) or 0.0),
+            transform_bundle=_resolve_runtime_value(caked_transform_bundle),
             backend_detector_coords_to_native_detector_coords=(
                 backend_detector_coords_to_native_detector_coords
             ),
@@ -5410,6 +5414,7 @@ def caked_angles_to_background_display_coords(
     center: Sequence[float] | None,
     detector_distance: float,
     pixel_size: float,
+    transform_bundle: CakeTransformBundle | None = None,
     backend_detector_coords_to_native_detector_coords: Callable[
         [float, float],
         tuple[float | None, float | None],
@@ -5484,6 +5489,11 @@ def caked_angles_to_background_display_coords(
             caked_azimuth_values,
             float(two_theta_deg),
             float(phi_deg),
+            transform_bundle=(
+                transform_bundle
+                if isinstance(transform_bundle, CakeTransformBundle)
+                else None
+            ),
         )
     except Exception:
         native_point = (None, None)
@@ -5517,6 +5527,7 @@ def native_detector_coords_to_caked_display_coords(
     detector_distance: float,
     pixel_size: float,
     wrap_phi_range: Callable[[object], object],
+    transform_bundle: CakeTransformBundle | None = None,
     caked_radial_values: Sequence[float] | None = None,
     caked_azimuth_values: Sequence[float] | None = None,
 ) -> tuple[float, float] | None:
@@ -5546,8 +5557,13 @@ def native_detector_coords_to_caked_display_coords(
     if not (np.isfinite(col_val) and np.isfinite(row_val)):
         return None
 
+    live_bundle = (
+        transform_bundle
+        if isinstance(transform_bundle, CakeTransformBundle)
+        else getattr(ai, "_live_caked_transform_bundle", None)
+    )
     bundle_two_theta, bundle_phi = _detector_pixel_to_caked_bin(
-        getattr(ai, "_live_caked_transform_bundle", None),
+        live_bundle,
         col_val,
         row_val,
     )
