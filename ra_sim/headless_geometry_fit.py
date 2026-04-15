@@ -2012,6 +2012,24 @@ def run_headless_geometry_fit(
                 rotation_k=background_state.backend_rotation_k,
             )
         ),
+        backend_detector_coords_to_native_detector_coords=lambda col, row, native_shape=None: (
+            gui_background.background_backend_point_to_native_coords(
+                float(col),
+                float(row),
+                native_shape=(
+                    tuple(int(v) for v in tuple(native_shape)[:2])
+                    if native_shape is not None
+                    else np.asarray(
+                        _load_background_by_index(
+                            int(background_state.current_background_index)
+                        )[0]
+                    ).shape[:2]
+                ),
+                flip_x=background_state.backend_flip_x,
+                flip_y=background_state.backend_flip_y,
+                rotation_k=background_state.backend_rotation_k,
+            )
+        ),
         geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
         geometry_manual_simulated_lookup=projection_callbacks.simulated_lookup,
         geometry_manual_source_rows_for_background=_geometry_manual_source_rows_for_background,

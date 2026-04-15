@@ -1518,16 +1518,21 @@ def _get_current_background_backend() -> np.ndarray | None:
 def _backend_background_to_native_detector_coords(
     col: float,
     row: float,
+    native_shape: Sequence[object] | None = None,
 ) -> tuple[float | None, float | None]:
     """Undo backend-only background orientation for one detector-space point."""
 
-    native_background = _get_current_background_native()
-    if native_background is None:
-        return None, None
+    if native_shape is None:
+        native_background = _get_current_background_native()
+        if native_background is None:
+            return None, None
+        resolved_native_shape = np.asarray(native_background).shape[:2]
+    else:
+        resolved_native_shape = tuple(native_shape[:2])
     return gui_background.background_backend_point_to_native_coords(
         float(col),
         float(row),
-        native_shape=np.asarray(native_background).shape[:2],
+        native_shape=resolved_native_shape,
         flip_x=background_runtime_state.backend_flip_x,
         flip_y=background_runtime_state.backend_flip_y,
         rotation_k=background_runtime_state.backend_rotation_k,
@@ -23717,6 +23722,9 @@ def _initialize_runtime_controls_block_50() -> None:
             "geometry_manual_pairs_for_index": _geometry_manual_pairs_for_index,
             "load_background_by_index": _load_background_image_by_index,
             "apply_background_backend_orientation": (_apply_background_backend_orientation),
+            "backend_detector_coords_to_native_detector_coords": (
+                _backend_background_to_native_detector_coords
+            ),
             "geometry_manual_simulated_peaks_for_params": (_geometry_manual_simulated_peaks_for_params),
             "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
             "geometry_manual_source_rows_for_background": (_geometry_manual_source_rows_for_background),
