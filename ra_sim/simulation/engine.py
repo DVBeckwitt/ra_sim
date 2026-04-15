@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from threading import Lock, Thread
+from threading import Lock, Thread, local
 from typing import Any, Callable
 
 import numpy as np
@@ -31,7 +31,16 @@ PeakRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any]]
 RodRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any, Any]]
 _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK = Lock()
 _FORWARD_SIMULATION_NUMBA_WARMED = False
+_FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+_FORWARD_SIMULATION_NUMBA_DISABLED = False
 _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD: Thread | None = None
+_FORWARD_SIMULATION_SAFE_RUN_STATE = local()
+
+
+def _set_last_forward_simulation_safe_run_used_python_runner(
+    used_python_runner: bool | None,
+) -> None:
+    _FORWARD_SIMULATION_SAFE_RUN_STATE.used_python_runner = used_python_runner
 
 
 def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
@@ -78,6 +87,63 @@ def _capture_hit_tables_for_intersection_cache(
 
     rerun_result = runner(*rerun_args, **rerun_kwargs)
     return rerun_result[1]
+
+
+def _last_forward_simulation_safe_run_used_python_runner() -> bool | None:
+    used_python_runner = getattr(
+        _FORWARD_SIMULATION_SAFE_RUN_STATE,
+        "used_python_runner",
+        None,
+    )
+    if used_python_runner is None:
+        return None
+    return bool(used_python_runner)
+
+
+def _apply_forward_simulation_numba_safe_run_result(
+    used_python_runner: bool | None,
+) -> None:
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
+
+    if used_python_runner is True:
+        _FORWARD_SIMULATION_NUMBA_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        _FORWARD_SIMULATION_NUMBA_DISABLED = True
+        return
+    if _FORWARD_SIMULATION_NUMBA_DISABLED:
+        _FORWARD_SIMULATION_NUMBA_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        _FORWARD_SIMULATION_NUMBA_DISABLED = True
+        return
+    _FORWARD_SIMULATION_NUMBA_WARMED = True
+    _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+    _FORWARD_SIMULATION_NUMBA_DISABLED = False
+
+
+def _apply_forward_simulation_numba_warmup_result(
+    used_python_runner: bool | None,
+) -> bool:
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
+
+    if used_python_runner is True:
+        _FORWARD_SIMULATION_NUMBA_WARMED = False
+        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+        _FORWARD_SIMULATION_NUMBA_DISABLED = False
+        return False
+    _FORWARD_SIMULATION_NUMBA_WARMED = True
+    _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
+    _FORWARD_SIMULATION_NUMBA_DISABLED = False
+    return True
+
+
+def _record_forward_simulation_numba_safe_run_result() -> None:
+    used_python_runner = _last_forward_simulation_safe_run_used_python_runner()
+    with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+        _apply_forward_simulation_numba_safe_run_result(used_python_runner)
 
 
 def _run_simulation_request(
@@ -143,6 +209,13 @@ def _run_simulation_request(
         peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
     if peak_runner is process_peaks_parallel_safe and projection_debug_active:
         peak_kwargs["enable_safe_cache"] = False
+    if peak_runner is process_peaks_parallel_safe and _FORWARD_SIMULATION_NUMBA_DISABLED:
+        peak_kwargs["prefer_python_runner"] = True
+    safe_run_stats_out: dict[str, Any] | None = None
+    if peak_runner is process_peaks_parallel_safe:
+        safe_run_stats_out = {}
+        peak_kwargs["_safe_stats_out"] = safe_run_stats_out
+        _set_last_forward_simulation_safe_run_used_python_runner(None)
 
     peak_args = (
         request.miller,
@@ -182,6 +255,11 @@ def _run_simulation_request(
             *peak_args,
             **peak_kwargs,
         )
+        if safe_run_stats_out is not None:
+            _set_last_forward_simulation_safe_run_used_python_runner(
+                safe_run_stats_out.get("used_python_runner")
+            )
+            peak_kwargs.pop("_safe_stats_out", None)
         cache_hit_tables = _capture_hit_tables_for_intersection_cache(
             hit_tables=hit_tables,
             collect_hit_tables_requested=bool(request.collect_hit_tables),
@@ -306,17 +384,27 @@ def warmup_forward_simulation_numba() -> bool:
     """Compile the forward-simulation hot path once with tiny dummy inputs."""
 
     global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
     with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
-        if _FORWARD_SIMULATION_NUMBA_WARMED:
+        if (
+            _FORWARD_SIMULATION_NUMBA_WARMED
+            or _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+            or _FORWARD_SIMULATION_NUMBA_DISABLED
+        ):
             return False
         try:
             _run_simulation_request(
                 _build_forward_simulation_numba_warmup_request(),
                 peak_runner=process_peaks_parallel_safe,
             )
-            _FORWARD_SIMULATION_NUMBA_WARMED = True
-            return True
+            return _apply_forward_simulation_numba_warmup_result(
+                _last_forward_simulation_safe_run_used_python_runner()
+            )
         except Exception:
+            _FORWARD_SIMULATION_NUMBA_WARMED = False
+            _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+            _FORWARD_SIMULATION_NUMBA_DISABLED = False
             return False
 
 
@@ -325,7 +413,11 @@ def start_forward_simulation_numba_warmup_in_background() -> bool:
 
     global _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD
     with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
-        if _FORWARD_SIMULATION_NUMBA_WARMED:
+        if (
+            _FORWARD_SIMULATION_NUMBA_WARMED
+            or _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+            or _FORWARD_SIMULATION_NUMBA_DISABLED
+        ):
             return False
         thread = _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD
         if thread is not None and thread.is_alive():
@@ -347,10 +439,38 @@ def simulate(
 ) -> SimulationResult:
     """Run a diffraction simulation from a typed request."""
 
-    if peak_runner is process_peaks_parallel_safe:
-        warmup_forward_simulation_numba()
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
+    global _FORWARD_SIMULATION_NUMBA_DISABLED
 
-    return _run_simulation_request(request, peak_runner=peak_runner)
+    if peak_runner is process_peaks_parallel_safe:
+        if not _FORWARD_SIMULATION_NUMBA_DISABLED:
+            warmup_forward_simulation_numba()
+        if (
+            not _FORWARD_SIMULATION_NUMBA_WARMED
+            and not _FORWARD_SIMULATION_NUMBA_DISABLED
+        ):
+            with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+                if (
+                    not _FORWARD_SIMULATION_NUMBA_WARMED
+                    and not _FORWARD_SIMULATION_NUMBA_DISABLED
+                ):
+                    try:
+                        result = _run_simulation_request(request, peak_runner=peak_runner)
+                    except Exception:
+                        _FORWARD_SIMULATION_NUMBA_WARMED = False
+                        _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
+                        _FORWARD_SIMULATION_NUMBA_DISABLED = True
+                        raise
+                    _apply_forward_simulation_numba_safe_run_result(
+                        _last_forward_simulation_safe_run_used_python_runner()
+                    )
+                    return result
+
+    result = _run_simulation_request(request, peak_runner=peak_runner)
+    if peak_runner is process_peaks_parallel_safe:
+        _record_forward_simulation_numba_safe_run_result()
+    return result
 
 
 def simulate_qr_rods(

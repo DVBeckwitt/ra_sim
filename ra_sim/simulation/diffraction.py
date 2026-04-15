@@ -5478,11 +5478,14 @@ def _finalize_clustered_process_peaks_result(result, cluster_meta):
 def process_peaks_parallel_safe(*args, **kwargs):
     """Run ``process_peaks_parallel`` with Python fallback if JIT execution fails."""
 
+    safe_stats_out = kwargs.pop("_safe_stats_out", None)
     prefer_python_runner = bool(kwargs.pop("prefer_python_runner", False))
     enable_safe_cache = kwargs.pop("enable_safe_cache", None)
     sample_qr_ring_once = bool(kwargs.pop("sample_qr_ring_once", True))
     kwargs["sample_qr_ring_once"] = sample_qr_ring_once
     _set_last_process_peaks_safe_stats()
+    if isinstance(safe_stats_out, dict):
+        safe_stats_out.clear()
     (
         av,
         cv,
@@ -5501,6 +5504,8 @@ def process_peaks_parallel_safe(*args, **kwargs):
         enable_safe_cache,
     )
     if safe_cache_result is not None:
+        if isinstance(safe_stats_out, dict):
+            safe_stats_out["used_python_runner"] = False
         _set_last_intersection_cache(
             build_intersection_cache(
                 safe_cache_result[1],
@@ -5538,9 +5543,12 @@ def process_peaks_parallel_safe(*args, **kwargs):
         for call_args, call_kwargs, call_meta in call_variants:
             try:
                 result = runner(*call_args, **call_kwargs)
+                used_python_runner = bool(callable(py_runner) and runner is py_runner)
                 _set_last_process_peaks_safe_stats(
-                    used_python_runner=bool(callable(py_runner) and runner is py_runner),
+                    used_python_runner=used_python_runner,
                 )
+                if isinstance(safe_stats_out, dict):
+                    safe_stats_out["used_python_runner"] = used_python_runner
                 _set_last_intersection_cache(
                     build_intersection_cache(
                         result[1],
@@ -6870,4 +6878,3 @@ def debug_detector_paths(
         out[i] = [dtheta, dphi, hit_sample, hit_det]
 
     return out
-

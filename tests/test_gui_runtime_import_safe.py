@@ -1,6 +1,8 @@
 import ast
 import importlib
+import json
 import py_compile
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +140,80 @@ def test_runtime_impl_wrapper_import_is_lazy() -> None:
             sys.modules[PACKAGE_RUNTIME_IMPL_MODULE_NAME] = previous_wrapper
         if previous_session is not None:
             sys.modules["ra_sim.gui._runtime.runtime_session"] = previous_session
+
+
+def test_runtime_session_defers_scipy_gui_modules_until_first_use() -> None:
+    script = """
+import importlib
+import json
+import sys
+from types import SimpleNamespace
+
+lazy_modules = [
+    "ra_sim.gui.analysis_peak_tools",
+    "ra_sim.gui.ordered_structure_fit",
+]
+for name in lazy_modules:
+    sys.modules.pop(name, None)
+sys.modules.pop("ra_sim.gui._runtime.runtime_session", None)
+
+runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+after_import = {name: (name in sys.modules) for name in lazy_modules}
+
+runtime_session.analysis_peak_selection_state = SimpleNamespace(
+    radial_fit_results=[],
+    azimuth_fit_results=[],
+)
+runtime_session._ANALYSIS_PEAK_EMPTY_RESULTS_TEXT = "Fit results will appear here."
+original_peak_getter = runtime_session._get_analysis_peak_tools_module
+runtime_session._get_analysis_peak_tools_module = (
+    lambda: (_ for _ in ()).throw(AssertionError("peak tools imported too early"))
+)
+empty_text = runtime_session._analysis_peak_fit_results_text()
+runtime_session._get_analysis_peak_tools_module = original_peak_getter
+after_empty_text = {name: (name in sys.modules) for name in lazy_modules}
+
+peak_module = runtime_session._get_analysis_peak_tools_module()
+ordered_module = runtime_session._get_ordered_structure_fit_module()
+after_getters = {name: (name in sys.modules) for name in lazy_modules}
+
+print(
+    json.dumps(
+        {
+            "after_import": after_import,
+            "empty_text": empty_text,
+            "after_empty_text": after_empty_text,
+            "peak_module": getattr(peak_module, "__name__", ""),
+            "ordered_module": getattr(ordered_module, "__name__", ""),
+            "after_getters": after_getters,
+        }
+    )
+)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        text=True,
+    )
+    payload = json.loads(result.stdout.strip())
+
+    assert payload["after_import"] == {
+        "ra_sim.gui.analysis_peak_tools": False,
+        "ra_sim.gui.ordered_structure_fit": False,
+    }
+    assert payload["empty_text"] == "Fit results will appear here."
+    assert payload["after_empty_text"] == {
+        "ra_sim.gui.analysis_peak_tools": False,
+        "ra_sim.gui.ordered_structure_fit": False,
+    }
+    assert payload["peak_module"] == "ra_sim.gui.analysis_peak_tools"
+    assert payload["ordered_module"] == "ra_sim.gui.ordered_structure_fit"
+    assert payload["after_getters"] == {
+        "ra_sim.gui.analysis_peak_tools": True,
+        "ra_sim.gui.ordered_structure_fit": True,
+    }
 
 
 def test_runtime_impl_prompts_from_root_only_before_full_runtime_bootstrap() -> None:

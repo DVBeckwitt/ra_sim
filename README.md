@@ -384,6 +384,8 @@ The GUI manual geometry-fit workflow keeps one objective throughout the solve:
 | `RA_SIM_DISABLE_PROJECTION_DEBUG` | Disable projection-debug artifacts | Useful when trimming debug noise |
 | `RA_SIM_LOG_INTERSECTION_CACHE` | Enable retained intersection-cache logging | Separate from active runtime state |
 | `RA_SIM_INTERSECTION_CACHE_LOG_DIR` | Override the retained intersection-cache log directory | Falls back to config-controlled locations otherwise |
+| `NUMBA_CACHE_DIR` | Directory for Numba on-disk compilation cache | Default is `~/.cache/ra_sim/numba` unless already set by user |
+| `NUMBA_DEBUG_CACHE` | Print Numba cache compilation/write activity for inspection | Set to `1` to trace cache hit/miss behavior |
 
 For the exact logging, debug, and cache semantics, use
 [`docs/debug-and-cache.md`](docs/debug-and-cache.md) and the canonical

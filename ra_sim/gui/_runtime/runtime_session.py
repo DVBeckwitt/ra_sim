@@ -19913,6 +19913,12 @@ def _update_analysis_peak_pick_button_label() -> None:
 
 
 def _analysis_peak_fit_results_text() -> str:
+    if (
+        not analysis_peak_selection_state.radial_fit_results
+        and not analysis_peak_selection_state.azimuth_fit_results
+    ):
+        return _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT
+
     analysis_peak_tools = _get_analysis_peak_tools_module()
     lines = [
         line
