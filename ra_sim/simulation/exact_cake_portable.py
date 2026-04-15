@@ -160,6 +160,7 @@ def _shared_cake_lut_for_request(
     portable_geometry: PortableGeometry,
     *,
     workers: int | str | None,
+    strict: bool = False,
 ) -> DetectorCakeLUT | None:
     key = _shared_cake_lut_cache_key(portable_geometry, detector_shape, radial_deg, azimuthal_deg)
     with _PROCESS_CAKE_LUT_CACHE_LOCK:
@@ -177,6 +178,12 @@ def _shared_cake_lut_for_request(
             workers=workers,
         )
     except (MemoryError, RuntimeError):
+        if strict:
+            raise
+        return None
+    if built is None:
+        if strict:
+            raise RuntimeError("Exact-cake LUT build returned no lookup table.")
         return None
 
     with _PROCESS_CAKE_LUT_CACHE_LOCK:
@@ -205,6 +212,83 @@ def _readonly_float64_vector(
     vector = np.array(np.asarray(values, dtype=np.float64).reshape(-1), copy=True)
     vector.setflags(write=False)
     return vector
+
+
+def _normalize_lut_engine(engine: str) -> str:
+    engine_name = str(engine).strip().lower()
+    if engine_name not in {"", "auto", "python", "numba"}:
+        raise ValueError("engine must be one of: auto, python, numba.")
+    return engine_name
+
+
+def _selection_exclusion_mask(
+    image_shape: tuple[int, ...],
+    rows: np.ndarray | None,
+    cols: np.ndarray | None,
+) -> np.ndarray | None:
+    if (rows is None) != (cols is None):
+        raise ValueError("rows and cols must both be provided or both be omitted.")
+    if rows is None or cols is None:
+        return None
+    detector_shape = _normalize_detector_shape(tuple(image_shape))
+    if detector_shape is None:
+        raise ValueError("image must have two positive detector dimensions.")
+    rows_array = np.asarray(rows, dtype=np.int64).reshape(-1)
+    cols_array = np.asarray(cols, dtype=np.int64).reshape(-1)
+    if rows_array.shape != cols_array.shape:
+        raise ValueError("rows and cols must have the same shape.")
+    height, width = detector_shape
+    if rows_array.size and (
+        np.any(rows_array < 0)
+        or np.any(rows_array >= height)
+        or np.any(cols_array < 0)
+        or np.any(cols_array >= width)
+    ):
+        raise ValueError("rows/cols contain indices outside the image bounds.")
+    exclusion_mask = np.ones(detector_shape, dtype=bool)
+    if rows_array.size:
+        exclusion_mask[rows_array, cols_array] = False
+    return exclusion_mask
+
+
+def _merge_selection_into_mask(
+    image_shape: tuple[int, ...],
+    mask: np.ndarray | None,
+    rows: np.ndarray | None,
+    cols: np.ndarray | None,
+) -> np.ndarray | None:
+    selection_mask = _selection_exclusion_mask(image_shape, rows, cols)
+    if selection_mask is None:
+        return mask
+    if mask is None:
+        return selection_mask
+    mask_array = np.asarray(mask)
+    detector_shape = _normalize_detector_shape(tuple(image_shape))
+    if detector_shape is None or mask_array.shape != detector_shape:
+        raise ValueError("mask must match image shape.")
+    return np.asarray(mask_array, dtype=bool) | selection_mask
+
+
+def _integrate_detector_to_cake_lut_with_selection(
+    image: np.ndarray,
+    radial_deg: np.ndarray,
+    azimuthal_deg: np.ndarray,
+    lut: DetectorCakeLUT,
+    *,
+    normalization: np.ndarray | None = None,
+    mask: np.ndarray | None = None,
+    rows: np.ndarray | None = None,
+    cols: np.ndarray | None = None,
+) -> DetectorCakeResult:
+    merged_mask = _merge_selection_into_mask(np.asarray(image).shape, mask, rows, cols)
+    return integrate_detector_to_cake_lut(
+        image,
+        radial_deg,
+        azimuthal_deg,
+        lut,
+        normalization=normalization,
+        mask=merged_mask,
+    )
 
 
 def raw_phi_to_gui_phi(
@@ -789,7 +873,7 @@ class FastAzimuthalIntegrator:
             center_col_px=float(self.geometry.center_col_px),
         )
         method_name = "lut" if method is None else str(method).strip().lower()
-        if method_name == "lut" and rows is None and cols is None:
+        if method_name == "lut":
             lut = self._cached_cake_lut(
                 image_arr.shape,
                 radial_deg,
@@ -797,16 +881,20 @@ class FastAzimuthalIntegrator:
                 exact_geometry,
                 engine=engine,
                 workers=workers,
+                strict=True,
             )
-            if lut is not None:
-                return integrate_detector_to_cake_lut(
-                    image_arr,
-                    radial_deg,
-                    azimuthal_deg,
-                    lut,
-                    normalization=norm,
-                    mask=mask,
-                )
+            if lut is None:
+                raise RuntimeError("Exact-cake LUT unavailable for requested detector/cake transform.")
+            return _integrate_detector_to_cake_lut_with_selection(
+                image_arr,
+                radial_deg,
+                azimuthal_deg,
+                lut,
+                normalization=norm,
+                mask=mask,
+                rows=rows,
+                cols=cols,
+            )
         return integrate_detector_to_cake_exact(
             image_arr,
             radial_deg,
@@ -889,10 +977,9 @@ class FastAzimuthalIntegrator:
         *,
         engine: str,
         workers: int | str | None,
+        strict: bool = False,
     ) -> DetectorCakeLUT | None:
-        engine_name = str(engine).strip().lower()
-        if engine_name not in {"", "auto", "numba"}:
-            return None
+        _normalize_lut_engine(engine)
         detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
         return _shared_cake_lut_for_request(
             detector_shape,
@@ -901,6 +988,7 @@ class FastAzimuthalIntegrator:
             geometry,
             self.geometry,
             workers=workers,
+            strict=strict,
         )
 
 
@@ -1017,21 +1105,36 @@ def convert_image_to_angle_space(
     norm = normalization
     if norm is None and correct_solid_angle:
         norm = flat_solid_angle_normalization(np.asarray(image).shape, portable_geometry)
-    return integrate_detector_to_cake_exact(
+    _normalize_lut_engine(engine)
+    detector_shape = _normalize_detector_shape(tuple(np.asarray(image).shape))
+    if detector_shape is None:
+        raise ValueError("image must have two positive detector dimensions.")
+    exact_geometry = DetectorCakeGeometry(
+        pixel_size_m=float(portable_geometry.pixel_size_m),
+        distance_m=float(portable_geometry.distance_m),
+        center_row_px=float(portable_geometry.center_row_px),
+        center_col_px=float(portable_geometry.center_col_px),
+    )
+    lut = _shared_cake_lut_for_request(
+        detector_shape,
+        radial_deg,
+        azimuthal_deg,
+        exact_geometry,
+        portable_geometry,
+        workers=workers,
+        strict=True,
+    )
+    if lut is None:
+        raise RuntimeError("Exact-cake LUT unavailable for requested detector/cake transform.")
+    return _integrate_detector_to_cake_lut_with_selection(
         image,
         radial_deg,
         azimuthal_deg,
-        DetectorCakeGeometry(
-            pixel_size_m=float(portable_geometry.pixel_size_m),
-            distance_m=float(portable_geometry.distance_m),
-            center_row_px=float(portable_geometry.center_row_px),
-            center_col_px=float(portable_geometry.center_col_px),
-        ),
+        lut,
         normalization=norm,
+        mask=None,
         rows=rows,
         cols=cols,
-        engine=engine,
-        workers=workers,
     )
 
 

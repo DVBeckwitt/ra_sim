@@ -7478,11 +7478,10 @@ def caking(
         "npt_rad": int(max(1, npt_rad)),
         "npt_azim": int(max(1, npt_azim)),
         "correctSolidAngle": True,
+        "method": "lut",
         "unit": "2th_deg",
     }
-    if rows is None or cols is None:
-        integrate_kwargs["method"] = "lut"
-    else:
+    if rows is not None or cols is not None:
         integrate_kwargs["rows"] = rows
         integrate_kwargs["cols"] = cols
     return ai.integrate2d(

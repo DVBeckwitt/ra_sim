@@ -263,6 +263,19 @@ def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_an
     assert "npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS" in source
 
 
+def test_runtime_impl_live_caking_forces_lut_even_with_roi_selection() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    start = source.index("def caking(")
+    end = source.index("def _copy_intersection_cache_tables(")
+    caking_block = source[start:end]
+
+    assert '"method": "lut"' in caking_block
+    assert 'if rows is not None or cols is not None:' in caking_block
+    assert 'integrate_kwargs["rows"] = rows' in caking_block
+    assert 'integrate_kwargs["cols"] = cols' in caking_block
+    assert 'if rows is None or cols is None:' not in caking_block
+
+
 def test_cli_routes_mosaic_fit_logs_through_debug_controls() -> None:
     source = CLI_SOURCE_PATH.read_text(encoding="utf-8")
 
