@@ -1118,16 +1118,6 @@ def _apply_structure_model_runtime_cache_state() -> None:
     else:
         debug_print("single CIF miller count:", structure_model_state.miller.shape[0])
 
-    if structure_model_state.df_summary is None or structure_model_state.df_details is None:
-        df_summary, df_details = build_intensity_dataframes(
-            structure_model_state.miller,
-            structure_model_state.intensities,
-            structure_model_state.degeneracy,
-            structure_model_state.details,
-        )
-        structure_model_state.df_summary = df_summary
-        structure_model_state.df_details = df_details
-
     _sync_structure_model_aliases()
 
 
@@ -1142,6 +1132,23 @@ def _bootstrap_structure_model_state_for_startup() -> None:
         )
         _sync_structure_model_aliases()
     _apply_structure_model_runtime_cache_state()
+
+
+def _ensure_structure_model_dataframes() -> tuple[object, object]:
+    if (
+        structure_model_state.df_summary is None
+        or structure_model_state.df_details is None
+    ):
+        df_summary, df_details = build_intensity_dataframes(
+            structure_model_state.miller,
+            structure_model_state.intensities,
+            structure_model_state.degeneracy,
+            structure_model_state.details,
+        )
+        structure_model_state.df_summary = df_summary
+        structure_model_state.df_details = df_details
+        _sync_structure_model_aliases()
+    return structure_model_state.df_summary, structure_model_state.df_details
 
 
 def _current_primary_cif_path() -> str:
@@ -1181,8 +1188,7 @@ def export_initial_excel():
 
     if not write_excel:
         return
-    if df_summary is None or df_details is None:
-        return
+    df_summary, df_details = _ensure_structure_model_dataframes()
 
     import pandas as pd
 

@@ -628,6 +628,21 @@ def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
     assert "root.after_idle(_run_initial_startup_work)" in source
 
 
+def test_runtime_impl_lazy_builds_excel_dataframes() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    apply_start = source.index("def _apply_structure_model_runtime_cache_state() -> None:")
+    bootstrap_start = source.index("def _bootstrap_structure_model_state_for_startup() -> None:")
+    apply_block = source[apply_start:bootstrap_start]
+    export_start = source.index("def export_initial_excel():")
+    export_end = source.index("app_shell_view_state = app_state.app_shell_view")
+    export_block = source[export_start:export_end]
+
+    assert "def _ensure_structure_model_dataframes() -> tuple[object, object]:" in source
+    assert "build_intensity_dataframes(" not in apply_block
+    assert "df_summary, df_details = _ensure_structure_model_dataframes()" in export_block
+
+
 def test_runtime_impl_lazy_mounts_analysis_surfaces() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
