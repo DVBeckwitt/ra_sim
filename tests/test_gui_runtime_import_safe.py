@@ -1016,6 +1016,22 @@ def test_runtime_current_geometry_fit_roi_selection_does_not_call_legacy_project
     assert bundle_calls == [(1.5, -10.0, bundle)]
 
 
+def test_runtime_geometry_fit_caked_roi_defaults_to_full_image_when_toggle_missing(
+    monkeypatch,
+) -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    assert "geometry_fit_caked_roi_enabled_var = tk.BooleanVar(value=False)" in source
+
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    monkeypatch.delattr(
+        runtime_session,
+        "geometry_fit_caked_roi_enabled_var",
+        raising=False,
+    )
+
+    assert runtime_session._current_geometry_fit_caked_roi_enabled() is False
+
+
 def test_runtime_geometry_fit_caked_roi_preview_mask_uses_live_exact_bundle_only(
     monkeypatch,
 ) -> None:

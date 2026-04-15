@@ -1902,7 +1902,7 @@ def _initialize_runtime_root_block_01() -> None:
     root = gui_views.create_root_window("RA-SIM Simulation")
     root.minsize(1200, 760)
     fit2d_error_sound_var = tk.BooleanVar(value=False)
-    geometry_fit_caked_roi_enabled_var = tk.BooleanVar(value=True)
+    geometry_fit_caked_roi_enabled_var = tk.BooleanVar(value=False)
     geometry_fit_caked_roi_preview_var = tk.BooleanVar(value=False)
 
 
@@ -4555,7 +4555,7 @@ def _current_geometry_fit_caked_roi_enabled() -> bool:
     try:
         return bool(geometry_fit_caked_roi_enabled_var.get())
     except Exception:
-        return True
+        return False
 
 
 def _current_geometry_fit_caked_roi_preview_enabled() -> bool:

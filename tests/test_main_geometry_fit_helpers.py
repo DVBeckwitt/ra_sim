@@ -130,14 +130,27 @@ def test_main_geometry_fit_caked_roi_defaults_and_runtime_override() -> None:
     )
 
     assert runtime_cfg["caked_roi"] == {
-        "enabled": True,
+        "enabled": False,
         "half_width_px": 15.0,
         "max_detector_fraction": 0.35,
     }
     assert read_geometry_fit_caked_roi_config({}) == runtime_cfg["caked_roi"]
 
+    enabled_runtime_cfg = build_geometry_fit_runtime_config(
+        {"caked_roi": {"enabled": True, "half_width_px": 4.0}},
+        {"gamma": 1.0},
+        {"gamma": {"window": 0.2, "pull": 0.0}},
+        {"gamma": (-5.0, 5.0)},
+    )
+
+    assert enabled_runtime_cfg["caked_roi"] == {
+        "enabled": True,
+        "half_width_px": 4.0,
+        "max_detector_fraction": 0.35,
+    }
+
     disabled_runtime_cfg = build_geometry_fit_runtime_config(
-        {"caked_roi": {"half_width_px": 4.0}},
+        {"caked_roi": {"enabled": True, "half_width_px": 4.0}},
         {"gamma": 1.0},
         {"gamma": {"window": 0.2, "pull": 0.0}},
         {"gamma": (-5.0, 5.0)},

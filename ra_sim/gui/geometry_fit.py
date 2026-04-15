@@ -2665,7 +2665,7 @@ def read_geometry_fit_caked_roi_config(
 
     enabled = enabled_override
     if enabled is None:
-        enabled = section_cfg.get("enabled", True)
+        enabled = section_cfg.get("enabled", False)
 
     half_width_px = _geometry_fit_cache_finite_float(section_cfg.get("half_width_px"))
     if half_width_px is None or half_width_px < 0.0:
@@ -2899,7 +2899,7 @@ def build_geometry_fit_caked_roi_selection(
         fit_config,
         enabled_override=enabled_override,
     )
-    enabled = bool(roi_cfg.get("enabled", True))
+    enabled = bool(roi_cfg.get("enabled", False))
     half_width_px = float(roi_cfg.get("half_width_px", 15.0))
     max_detector_fraction = float(roi_cfg.get("max_detector_fraction", 0.35))
 

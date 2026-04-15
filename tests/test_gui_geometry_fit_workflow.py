@@ -10916,7 +10916,7 @@ def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> 
             }
         ],
         image_shape=(128, 128),
-        fit_config={"caked_roi": {"half_width_px": 0.0}},
+        fit_config={"caked_roi": {"enabled": True, "half_width_px": 0.0}},
         fit_space_to_detector_point=_project,
     )
 
@@ -11000,7 +11000,7 @@ def test_build_geometry_fit_caked_roi_selection_does_not_reuse_stale_detector_co
             }
         ],
         image_shape=(128, 128),
-        fit_config={"caked_roi": {"half_width_px": 0.0}},
+        fit_config={"caked_roi": {"enabled": True, "half_width_px": 0.0}},
         fit_space_to_detector_point=_project,
     )
 
@@ -11107,6 +11107,7 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
         image_shape=(50, 50),
         fit_config={
             "caked_roi": {
+                "enabled": True,
                 "half_width_px": 8.0,
                 "max_detector_fraction": 0.05,
             }
