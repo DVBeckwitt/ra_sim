@@ -877,6 +877,7 @@ class SimulationRuntimeState:
     preview_active: bool = False
     preview_sample_count: int | None = None
     exact_cake_numba_warmup_scheduled: bool = False
+    forward_simulation_numba_warmup_scheduled: bool = False
     interaction_drag_active: bool = False
     interaction_settle_token: Any = None
     interaction_drag_requires_settled_update: bool = False

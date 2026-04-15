@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from threading import Lock, Thread
 from typing import Any, Callable
 
 import numpy as np
@@ -16,11 +17,21 @@ from .diffraction import (
     process_peaks_parallel_safe,
     process_qr_rods_parallel_safe,
 )
-from .types import SimulationRequest, SimulationResult
+from .types import (
+    BeamSamples,
+    DebyeWallerParams,
+    DetectorGeometry,
+    MosaicParams,
+    SimulationRequest,
+    SimulationResult,
+)
 
 
 PeakRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any]]
 RodRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any, Any]]
+_FORWARD_SIMULATION_NUMBA_WARMUP_LOCK = Lock()
+_FORWARD_SIMULATION_NUMBA_WARMED = False
+_FORWARD_SIMULATION_NUMBA_WARMUP_THREAD: Thread | None = None
 
 
 def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
@@ -69,7 +80,7 @@ def _capture_hit_tables_for_intersection_cache(
     return rerun_result[1]
 
 
-def simulate(
+def _run_simulation_request(
     request: SimulationRequest,
     *,
     peak_runner: PeakRunner = process_peaks_parallel_safe,
@@ -233,6 +244,113 @@ def simulate(
             "background": projection_debug_background,
         },
     )
+
+
+def _build_forward_simulation_numba_warmup_request() -> SimulationRequest:
+    return SimulationRequest(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        geometry=DetectorGeometry(
+            image_size=2,
+            av=1.0,
+            cv=1.0,
+            lambda_angstrom=1.0,
+            distance_m=0.1,
+            gamma_deg=0.0,
+            Gamma_deg=0.0,
+            chi_deg=0.0,
+            psi_deg=0.0,
+            psi_z_deg=0.0,
+            zs=0.0,
+            zb=0.0,
+            center=np.array([1.0, 1.0], dtype=np.float64),
+            theta_initial_deg=0.0,
+            cor_angle_deg=0.0,
+            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            pixel_size_m=1.0e-4,
+            sample_width_m=0.0,
+            sample_length_m=0.0,
+        ),
+        beam=BeamSamples(
+            beam_x_array=np.array([0.0], dtype=np.float64),
+            beam_y_array=np.array([0.0], dtype=np.float64),
+            theta_array=np.array([0.0], dtype=np.float64),
+            phi_array=np.array([0.0], dtype=np.float64),
+            wavelength_array=np.array([1.0], dtype=np.float64),
+            sample_weights=None,
+            n2_sample_array=None,
+        ),
+        mosaic=MosaicParams(
+            sigma_mosaic_deg=0.2,
+            gamma_mosaic_deg=0.1,
+            eta=0.05,
+            solve_q_steps=1000,
+            solve_q_rel_tol=5.0e-4,
+            solve_q_mode=0,
+        ),
+        debye_waller=DebyeWallerParams(x=0.0, y=0.0),
+        n2=1.0 + 0.0j,
+        image_buffer=np.zeros((2, 2), dtype=np.float64),
+        save_flag=0,
+        record_status=False,
+        thickness=0.0,
+        optics_mode=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        exit_projection_mode="internal",
+    )
+
+
+def warmup_forward_simulation_numba() -> bool:
+    """Compile the forward-simulation hot path once with tiny dummy inputs."""
+
+    global _FORWARD_SIMULATION_NUMBA_WARMED
+    with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+        if _FORWARD_SIMULATION_NUMBA_WARMED:
+            return False
+        try:
+            _run_simulation_request(
+                _build_forward_simulation_numba_warmup_request(),
+                peak_runner=process_peaks_parallel_safe,
+            )
+            _FORWARD_SIMULATION_NUMBA_WARMED = True
+            return True
+        except Exception:
+            return False
+
+
+def start_forward_simulation_numba_warmup_in_background() -> bool:
+    """Start one daemon warmup thread if available and not yet warmed."""
+
+    global _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD
+    with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
+        if _FORWARD_SIMULATION_NUMBA_WARMED:
+            return False
+        thread = _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD
+        if thread is not None and thread.is_alive():
+            return False
+        thread = Thread(
+            target=warmup_forward_simulation_numba,
+            name="forward-simulation-numba-warmup",
+            daemon=True,
+        )
+        _FORWARD_SIMULATION_NUMBA_WARMUP_THREAD = thread
+        thread.start()
+        return True
+
+
+def simulate(
+    request: SimulationRequest,
+    *,
+    peak_runner: PeakRunner = process_peaks_parallel_safe,
+) -> SimulationResult:
+    """Run a diffraction simulation from a typed request."""
+
+    if peak_runner is process_peaks_parallel_safe:
+        warmup_forward_simulation_numba()
+
+    return _run_simulation_request(request, peak_runner=peak_runner)
 
 
 def simulate_qr_rods(

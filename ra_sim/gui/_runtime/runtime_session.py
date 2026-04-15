@@ -123,6 +123,7 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.engine import (
     simulate as simulate_request,
     simulate_qr_rods as simulate_qr_rods_request,
+    start_forward_simulation_numba_warmup_in_background,
 )
 from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background
 from ra_sim.simulation.exact_cake_portable import (
@@ -8449,6 +8450,18 @@ def _schedule_exact_cake_numba_warmup_once() -> None:
         simulation_runtime_state.exact_cake_numba_warmup_scheduled = False
 
 
+def _schedule_forward_simulation_numba_warmup_once() -> None:
+    if bool(
+        getattr(simulation_runtime_state, "forward_simulation_numba_warmup_scheduled", False)
+    ):
+        return
+    simulation_runtime_state.forward_simulation_numba_warmup_scheduled = True
+    try:
+        root.after_idle(start_forward_simulation_numba_warmup_in_background)
+    except Exception:
+        simulation_runtime_state.forward_simulation_numba_warmup_scheduled = False
+
+
 def _refresh_analysis_integration_if_visible() -> None:
     if not _analysis_integration_outputs_visible():
         return
@@ -12020,6 +12033,7 @@ def do_update():
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
     if analysis_sig is not None:
         _schedule_exact_cake_numba_warmup_once()
+        _schedule_forward_simulation_numba_warmup_once()
     desired_analysis_preview = bool(
         LIVE_DRAG_PREVIEW_ENABLED
         and PREVIEW_CALCULATIONS_ENABLED
@@ -12473,6 +12487,7 @@ def do_update():
     )
     if simulation_runtime_state.stored_sim_image is not None:
         _schedule_exact_cake_numba_warmup_once()
+        _schedule_forward_simulation_numba_warmup_once()
     simulation_runtime_state.update_running = False
     if "progress_label" in globals() and progress_label is not None:
         try:
