@@ -384,6 +384,225 @@ def _bilinear_detector_pixel_weights(
     )
 
 
+def _axis_fractional_bin_coordinate(
+    axis: np.ndarray,
+    value: float,
+) -> float | None:
+    axis_values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    if axis_values.size <= 0:
+        return None
+    if not np.all(np.isfinite(axis_values)):
+        return None
+    try:
+        value_float = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(value_float):
+        return None
+    if axis_values.size == 1:
+        return 0.0
+    deltas = np.diff(axis_values)
+    if not np.all(np.isfinite(deltas)) or not np.all(deltas > 0.0):
+        return None
+    if value_float < float(axis_values[0]) or value_float > float(axis_values[-1]):
+        return None
+    if value_float <= float(axis_values[0]):
+        return 0.0
+    if value_float >= float(axis_values[-1]):
+        return float(axis_values.size - 1)
+
+    upper = int(np.searchsorted(axis_values, value_float, side="right"))
+    lower = max(0, min(upper - 1, int(axis_values.size - 2)))
+    upper = lower + 1
+    lower_value = float(axis_values[lower])
+    upper_value = float(axis_values[upper])
+    span = upper_value - lower_value
+    if not np.isfinite(span) or span <= 0.0:
+        return None
+    return float(lower) + ((value_float - lower_value) / span)
+
+
+def _periodic_axis_fractional_bin_coordinate(
+    axis: np.ndarray,
+    value: float,
+) -> float | None:
+    axis_values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    if axis_values.size <= 0:
+        return None
+    if not np.all(np.isfinite(axis_values)):
+        return None
+    try:
+        value_float = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(value_float):
+        return None
+    if axis_values.size == 1:
+        return 0.0
+
+    deltas = np.diff(axis_values)
+    if not np.all(np.isfinite(deltas)) or not np.all(deltas > 0.0):
+        return None
+
+    wrapped_value = float(((value_float + 180.0) % 360.0) - 180.0)
+    extended_axis = np.concatenate(
+        (
+            axis_values,
+            np.asarray([float(axis_values[0]) + 360.0], dtype=np.float64),
+        )
+    )
+    search_value = wrapped_value
+    if search_value < float(axis_values[0]):
+        search_value += 360.0
+    if search_value < float(axis_values[0]) or search_value > float(extended_axis[-1]):
+        return None
+    if search_value <= float(axis_values[0]):
+        return 0.0
+
+    upper = int(np.searchsorted(extended_axis, search_value, side="right"))
+    lower = max(0, min(upper - 1, int(axis_values.size - 1)))
+    upper = lower + 1
+    if upper >= int(extended_axis.size):
+        return float(axis_values.size - 1)
+
+    lower_value = float(extended_axis[lower])
+    upper_value = float(extended_axis[upper])
+    span = upper_value - lower_value
+    if not np.isfinite(span) or span <= 0.0:
+        return None
+
+    coordinate = float(lower) + ((search_value - lower_value) / span)
+    axis_size = float(axis_values.size)
+    if coordinate >= axis_size:
+        coordinate -= axis_size
+    return coordinate
+
+
+def _bilinear_cake_bin_weights(
+    radial_axis: np.ndarray,
+    raw_azimuth_axis: np.ndarray,
+    two_theta_deg: float,
+    raw_phi_deg: float,
+) -> tuple[tuple[int, float], ...]:
+    radial_values = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+    raw_azimuth_values = np.asarray(raw_azimuth_axis, dtype=np.float64).reshape(-1)
+    n_rad = int(radial_values.size)
+    n_az = int(raw_azimuth_values.size)
+    if n_rad <= 0 or n_az <= 0:
+        return ()
+
+    radial_coord = _axis_fractional_bin_coordinate(radial_values, float(two_theta_deg))
+    azimuth_coord = _periodic_axis_fractional_bin_coordinate(
+        raw_azimuth_values,
+        float(raw_phi_deg),
+    )
+    if radial_coord is None or azimuth_coord is None:
+        return ()
+
+    radial_coord = min(max(float(radial_coord), 0.0), float(n_rad - 1))
+    azimuth_coord = float(azimuth_coord) % float(n_az)
+
+    radial0 = int(math.floor(radial_coord))
+    azimuth0 = int(math.floor(azimuth_coord))
+    radial1 = min(radial0 + 1, n_rad - 1)
+    azimuth1 = (azimuth0 + 1) % n_az if n_az > 1 else azimuth0
+    radial_t = radial_coord - float(radial0)
+    azimuth_t = azimuth_coord - float(azimuth0)
+
+    weights_by_bin: dict[int, float] = {}
+    for azimuth_idx, azimuth_weight in (
+        (azimuth0, 1.0 - azimuth_t),
+        (azimuth1, azimuth_t),
+    ):
+        az_weight = float(azimuth_weight)
+        if az_weight <= 0.0:
+            continue
+        for radial_idx, radial_weight in (
+            (radial0, 1.0 - radial_t),
+            (radial1, radial_t),
+        ):
+            rad_weight = float(radial_weight)
+            if rad_weight <= 0.0:
+                continue
+            flat_idx = int(int(azimuth_idx) * n_rad + int(radial_idx))
+            weights_by_bin[flat_idx] = (
+                float(weights_by_bin.get(flat_idx, 0.0)) + (az_weight * rad_weight)
+            )
+    return tuple(
+        (int(flat_idx), float(weight))
+        for flat_idx, weight in weights_by_bin.items()
+        if np.isfinite(weight) and weight > 0.0
+    )
+
+
+def _detector_pixel_centroid_from_cake_bin_weights(
+    detector_shape: tuple[int, int],
+    matrix: object,
+    bin_weights: tuple[tuple[int, float], ...],
+) -> tuple[float | None, float | None]:
+    height, width = (int(detector_shape[0]), int(detector_shape[1]))
+    if height <= 0 or width <= 0 or len(bin_weights) <= 0:
+        return None, None
+
+    max_pixel_index = int(height * width)
+    weights_by_pixel: dict[int, float] = {}
+    for flat_idx, bin_weight in bin_weights:
+        row_payload = _matrix_row_indices_and_weights(matrix, int(flat_idx))
+        if row_payload is None:
+            continue
+        pixel_indices, weights = row_payload
+        scaled_weights = np.asarray(weights, dtype=np.float64) * float(bin_weight)
+        valid = (
+            np.isfinite(pixel_indices)
+            & np.isfinite(scaled_weights)
+            & (scaled_weights > 0.0)
+        )
+        if not np.any(valid):
+            continue
+        pixel_indices = np.asarray(pixel_indices[valid], dtype=np.int64)
+        scaled_weights = np.asarray(scaled_weights[valid], dtype=np.float64)
+        valid_pixels = (
+            (pixel_indices >= 0)
+            & (pixel_indices < max_pixel_index)
+            & np.isfinite(scaled_weights)
+            & (scaled_weights > 0.0)
+        )
+        if not np.any(valid_pixels):
+            continue
+        for pixel_index, pixel_weight in zip(
+            pixel_indices[valid_pixels],
+            scaled_weights[valid_pixels],
+        ):
+            weights_by_pixel[int(pixel_index)] = (
+                float(weights_by_pixel.get(int(pixel_index), 0.0))
+                + float(pixel_weight)
+            )
+
+    if len(weights_by_pixel) <= 0:
+        return None, None
+
+    pixel_indices = np.fromiter(
+        weights_by_pixel.keys(),
+        dtype=np.int64,
+        count=len(weights_by_pixel),
+    )
+    pixel_weights = np.fromiter(
+        weights_by_pixel.values(),
+        dtype=np.float64,
+        count=len(weights_by_pixel),
+    )
+    weight_sum = float(np.sum(pixel_weights))
+    if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+        return None, None
+
+    cols = np.asarray(pixel_indices % width, dtype=np.float64)
+    rows = np.asarray(pixel_indices // width, dtype=np.float64)
+    return (
+        float(np.sum(cols * pixel_weights) / weight_sum),
+        float(np.sum(rows * pixel_weights) / weight_sum),
+    )
+
+
 def cake_transform_bundle_lut_t(bundle: CakeTransformBundle) -> object:
     transposed = bundle.lut_t
     if transposed is not None:
@@ -740,10 +959,8 @@ def caked_point_to_detector_pixel(
     engine: str = "auto",
     workers: int | str | None = "auto",
 ) -> tuple[float | None, float | None]:
-    """Invert one displayed caked bin back to a detector pixel via the exact-cake LUT."""
+    """Continuously invert one displayed caked point via forward exact-cake LUT rows."""
 
-    if not isinstance(ai, FastAzimuthalIntegrator):
-        return None, None
     normalized_shape = _normalize_detector_shape(tuple(detector_shape))
     if normalized_shape is None:
         return None, None
@@ -753,8 +970,13 @@ def caked_point_to_detector_pixel(
 
     bundle = transform_bundle
     if not isinstance(bundle, CakeTransformBundle):
+        if not isinstance(ai, FastAzimuthalIntegrator):
+            return None, None
         live_bundle = getattr(ai, "_live_caked_transform_bundle", None)
-        if isinstance(live_bundle, CakeTransformBundle) and live_bundle.detector_shape == normalized_shape:
+        if (
+            isinstance(live_bundle, CakeTransformBundle)
+            and live_bundle.detector_shape == normalized_shape
+        ):
             bundle = live_bundle
     if not isinstance(bundle, CakeTransformBundle):
         try:
@@ -778,49 +1000,28 @@ def caked_point_to_detector_pixel(
         )
     if not isinstance(bundle, CakeTransformBundle):
         return None, None
-    radial_axis = bundle.radial_deg
-    raw_azimuth_axis = bundle.raw_azimuth_deg
-    lut = bundle.lut
-
-    try:
-        radial_idx = int(np.argmin(np.abs(radial_axis - float(two_theta_deg))))
-        raw_phi_deg = float(gui_phi_to_raw_phi(float(phi_deg)))
-        azimuth_idx = int(np.argmin(np.abs(raw_azimuth_axis - raw_phi_deg)))
-    except Exception:
+    if bundle.detector_shape != normalized_shape:
         return None, None
-    if radial_idx < 0 or azimuth_idx < 0:
-        return None, None
-
-    flat_idx = int(azimuth_idx * int(radial_axis.size) + radial_idx)
-    matrix = getattr(lut, "matrix", None)
+    matrix = getattr(bundle.lut, "matrix", None)
     if matrix is None:
         return None, None
 
-    row_payload = _matrix_row_indices_and_weights(matrix, flat_idx)
-    if row_payload is None:
+    try:
+        raw_phi_deg = float(gui_phi_to_raw_phi(float(phi_deg)))
+    except Exception:
         return None, None
-    pixel_indices, weights = row_payload
-
-    valid = (
-        np.isfinite(pixel_indices)
-        & np.isfinite(weights)
-        & (weights > 0.0)
+    bin_weights = _bilinear_cake_bin_weights(
+        bundle.radial_deg,
+        bundle.raw_azimuth_deg,
+        float(two_theta_deg),
+        raw_phi_deg,
     )
-    if not np.any(valid):
+    if len(bin_weights) <= 0:
         return None, None
-
-    pixel_indices = np.asarray(pixel_indices[valid], dtype=np.int64)
-    weights = np.asarray(weights[valid], dtype=np.float64)
-    weight_sum = float(np.sum(weights))
-    if not np.isfinite(weight_sum) or weight_sum <= 0.0:
-        return None, None
-
-    width = int(normalized_shape[1])
-    cols = np.asarray(pixel_indices % width, dtype=np.float64)
-    rows = np.asarray(pixel_indices // width, dtype=np.float64)
-    return (
-        float(np.sum(cols * weights) / weight_sum),
-        float(np.sum(rows * weights) / weight_sum),
+    return _detector_pixel_centroid_from_cake_bin_weights(
+        normalized_shape,
+        matrix,
+        bin_weights,
     )
 
 

@@ -301,7 +301,7 @@ def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(
         (3, 4),
         np.array([10.0, 20.0], dtype=float),
         np.array([-90.0, 0.0, 90.0], dtype=float),
-        9.9,
+        10.1,
         1.0,
     )
 
@@ -312,6 +312,62 @@ def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(
         captured["azimuthal_deg"],
         np.array([-180.0, -90.0, 0.0], dtype=float),
     )
+
+
+def test_caked_point_to_detector_pixel_bilinearly_blends_neighboring_cake_bins() -> None:
+    bundle = _make_transform_bundle(
+        detector_shape=(2, 2),
+        radial_deg=np.array([10.0, 20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, 0.0], dtype=np.float64),
+        matrix=np.eye(4, dtype=np.float32),
+    )
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=1.0,
+        poni1=1.0,
+        poni2=1.0,
+        pixel1=1.0,
+        pixel2=1.0,
+    )
+
+    col, row = exact_cake_portable.caked_point_to_detector_pixel(
+        integrator,
+        (2, 2),
+        None,
+        None,
+        15.0,
+        0.0,
+        transform_bundle=bundle,
+    )
+
+    assert (col, row) == pytest.approx((0.5, 0.5))
+
+
+def test_caked_point_to_detector_pixel_wraps_across_azimuth_seam() -> None:
+    bundle = _make_transform_bundle(
+        detector_shape=(1, 2),
+        radial_deg=np.array([10.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-170.0, 170.0], dtype=np.float64),
+        matrix=np.eye(2, dtype=np.float32),
+    )
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=1.0,
+        poni1=1.0,
+        poni2=1.0,
+        pixel1=1.0,
+        pixel2=1.0,
+    )
+
+    col, row = exact_cake_portable.caked_point_to_detector_pixel(
+        integrator,
+        (1, 2),
+        None,
+        None,
+        10.0,
+        90.0,
+        transform_bundle=bundle,
+    )
+
+    assert (col, row) == pytest.approx((0.5, 0.0))
 
 
 def test_caked_point_to_detector_pixel_caches_fallback_lut_build(monkeypatch) -> None:

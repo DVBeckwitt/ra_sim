@@ -800,7 +800,7 @@ def test_caked_angles_to_background_display_coords_returns_none_without_native_b
     assert result == (None, None)
 
 
-def test_caked_angles_to_background_display_coords_falls_back_when_inverse_lut_unavailable(
+def test_caked_angles_to_background_display_coords_returns_none_when_inverse_lut_unavailable(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(mg, "_caked_point_to_detector_pixel", lambda *_args, **_kwargs: (None, None))
@@ -812,17 +812,18 @@ def test_caked_angles_to_background_display_coords_falls_back_when_inverse_lut_u
         native_background=np.ones((8, 8), dtype=float),
         caked_radial_values=np.array([10.0, 12.0, 14.0], dtype=float),
         caked_azimuth_values=np.array([-30.0, 0.0, 30.0], dtype=float),
-        get_detector_angular_maps=lambda _ai: (None, None),
-        scattering_angles_to_detector_pixel=lambda two_theta, phi, *_args, **_kwargs: (
-            phi + 100.0,
-            two_theta + 200.0,
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        scattering_angles_to_detector_pixel=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic inverse fallback should not be used")
         ),
         center=[0.0, 0.0],
         detector_distance=1.0,
         pixel_size=1.0,
     )
 
-    assert result == (130.0, 212.0)
+    assert result == (None, None)
 
 
 def test_caked_angles_to_background_display_coords_applies_backend_inverse_to_lut_result(
@@ -2584,8 +2585,6 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
     native_background = np.ones((6, 6), dtype=float)
     radial_axis = np.linspace(10.0, 15.0, 6)
     azimuth_axis = np.linspace(-2.0, 3.0, 6)
-    two_theta_map = np.tile(radial_axis, (6, 1))
-    phi_map = np.tile(azimuth_axis.reshape(-1, 1), (1, 6))
     bundle = object()
     ai = _ai_with_live_bundle(bundle)
 
@@ -2601,6 +2600,11 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
             if live_bundle is bundle
             else (None, None)
         ),
+    )
+    monkeypatch.setattr(
+        mg,
+        "_caked_point_to_detector_pixel",
+        lambda *_args, **_kwargs: (3.0, 4.0),
     )
 
     def _cached_live_preview_peaks() -> list[dict[str, object]]:
@@ -2633,8 +2637,12 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
         intensities=lambda: np.array([2.0], dtype=float),
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
-        get_detector_angular_maps=lambda _ai: (two_theta_map, phi_map),
-        detector_pixel_to_scattering_angles=lambda *_args: (None, None),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
     )
 
     assert callbacks.pick_uses_caked_space() is True
@@ -2764,12 +2772,16 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
     ]
 
 
-def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_backend_inverse() -> None:
+def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_backend_inverse(
+    monkeypatch,
+) -> None:
     inverse_calls: list[tuple[float, float]] = []
-    two_theta_map = np.full((4, 3), 999.0, dtype=float)
-    phi_map = np.full((4, 3), 999.0, dtype=float)
-    two_theta_map[1, 0] = 13.0
-    phi_map[1, 0] = 2.0
+
+    monkeypatch.setattr(
+        mg,
+        "_caked_point_to_detector_pixel",
+        lambda *_args, **_kwargs: (0.0, 1.0),
+    )
 
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: True,
@@ -2780,7 +2792,9 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
         current_background_native=lambda: np.ones((3, 4), dtype=float),
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
-        get_detector_angular_maps=lambda _ai: (two_theta_map, phi_map),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
         detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
             AssertionError("forward detector->angle conversion should not be used")
         ),

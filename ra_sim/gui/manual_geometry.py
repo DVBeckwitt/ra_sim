@@ -5333,8 +5333,9 @@ def caked_angles_to_background_display_coords(
 ) -> tuple[float | None, float | None]:
     """Back-project one caked-space point to the displayed detector background.
 
-    This path is intentionally position-only for manual QR/QZ picking. If a
-    future caller inverts caked intensities or a full caked image, remember
+    Legacy angular-map and analytic args remain for call-site compatibility,
+    but live inversion now uses only the active exact-cake LUT transform. If
+    a future caller inverts caked intensities or a full caked image, remember
     that the caked data may already be solid-angle corrected. Restore the
     detector solid-angle weighting before undoing backend orientation so the
     reconstructed detector intensities remain in detector-count space.
@@ -5347,6 +5348,13 @@ def caked_angles_to_background_display_coords(
         return None, None
 
     native_shape = tuple(int(v) for v in native_background.shape[:2])
+    del (
+        get_detector_angular_maps,
+        scattering_angles_to_detector_pixel,
+        center,
+        detector_distance,
+        pixel_size,
+    )
 
     def _display_point_from_detector_coords(
         col: float,
@@ -5405,48 +5413,7 @@ def caked_angles_to_background_display_coords(
             float(native_point[1]),
             backend_space=True,
         )
-
-    try:
-        two_theta_map, phi_map = get_detector_angular_maps(ai)
-    except Exception:
-        two_theta_map, phi_map = None, None
-    if two_theta_map is None or phi_map is None:
-        if not callable(scattering_angles_to_detector_pixel):
-            return None, None
-        try:
-            native_point = scattering_angles_to_detector_pixel(
-                float(two_theta_deg),
-                float(phi_deg),
-                center,
-                float(detector_distance),
-                float(pixel_size),
-            )
-        except Exception:
-            return None, None
-        if native_point[0] is None or native_point[1] is None:
-            return None, None
-        return _display_point_from_detector_coords(
-            float(native_point[0]),
-            float(native_point[1]),
-            backend_space=False,
-        )
-
-    dphi = ((np.asarray(phi_map, dtype=float) - float(phi_deg) + 180.0) % 360.0) - 180.0
-    dtth = np.asarray(two_theta_map, dtype=float) - float(two_theta_deg)
-    metric = dtth * dtth + dphi * dphi
-    finite_metric = np.where(np.isfinite(metric), metric, np.inf)
-    best_idx = int(np.argmin(finite_metric))
-    if not np.isfinite(finite_metric.flat[best_idx]):
-        return None, None
-    row_idx, col_idx = np.unravel_index(best_idx, finite_metric.shape)
-    # QR/QZ selection only needs the detector position. If this inverse path is
-    # ever reused for intensity arrays, reapply detector-side weighting (such as
-    # the solid-angle map) before any backend->native image reorientation.
-    return _display_point_from_detector_coords(
-        float(col_idx),
-        float(row_idx),
-        backend_space=True,
-    )
+    return None, None
 
 
 def native_detector_coords_to_caked_display_coords(
