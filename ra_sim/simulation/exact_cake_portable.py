@@ -76,6 +76,16 @@ class PortableGeometry:
     center_col_px: float
 
 
+@dataclass(frozen=True)
+class CakeTransformBundle:
+    detector_shape: tuple[int, int]
+    radial_deg: np.ndarray
+    raw_azimuth_deg: np.ndarray
+    gui_azimuth_deg: np.ndarray
+    lut: DetectorCakeLUT
+    lut_t: object | None = None
+
+
 def _clear_shared_exact_cake_caches() -> None:
     """Clear process-level detector-map and LUT caches."""
 
@@ -188,6 +198,205 @@ def _normalize_detector_shape(shape: tuple[int, ...] | list[int]) -> tuple[int, 
         return None
     return detector_shape
 
+
+def _readonly_float64_vector(
+    values: np.ndarray | list[float] | tuple[float, ...],
+) -> np.ndarray:
+    vector = np.array(np.asarray(values, dtype=np.float64).reshape(-1), copy=True)
+    vector.setflags(write=False)
+    return vector
+
+
+def raw_phi_to_gui_phi(
+    phi_values: np.ndarray | list[float] | tuple[float, ...] | float,
+) -> np.ndarray:
+    return ((PHI_ZERO_OFFSET_DEGREES - np.asarray(phi_values, dtype=np.float64) + 180.0) % 360.0) - 180.0
+
+
+def gui_phi_to_raw_phi(
+    phi_values: np.ndarray | list[float] | tuple[float, ...] | float,
+) -> np.ndarray:
+    return ((PHI_ZERO_OFFSET_DEGREES - np.asarray(phi_values, dtype=np.float64) + 180.0) % 360.0) - 180.0
+
+
+def _matrix_row_indices_and_weights(
+    matrix: object,
+    row_index: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    try:
+        if (
+            hasattr(matrix, "indptr")
+            and hasattr(matrix, "indices")
+            and hasattr(matrix, "data")
+        ):
+            row_start = int(matrix.indptr[row_index])
+            row_stop = int(matrix.indptr[row_index + 1])
+            indices = np.asarray(matrix.indices[row_start:row_stop], dtype=np.int64)
+            weights = np.asarray(matrix.data[row_start:row_stop], dtype=np.float64)
+        else:
+            row_weights = np.asarray(matrix[row_index], dtype=np.float64).reshape(-1)
+            indices = np.flatnonzero(np.isfinite(row_weights) & (row_weights > 0.0))
+            weights = row_weights[indices]
+    except Exception:
+        return None
+    return indices, weights
+
+
+def _weighted_wrapped_angle_mean_deg(
+    angles_deg: np.ndarray,
+    weights: np.ndarray,
+) -> float:
+    angle_values = np.asarray(angles_deg, dtype=np.float64).reshape(-1)
+    weight_values = np.asarray(weights, dtype=np.float64).reshape(-1)
+    radians = np.deg2rad(angle_values)
+    x = float(np.sum(np.cos(radians) * weight_values))
+    y = float(np.sum(np.sin(radians) * weight_values))
+    if not np.isfinite(x) or not np.isfinite(y) or (abs(x) <= 1.0e-15 and abs(y) <= 1.0e-15):
+        return float(angle_values[int(np.argmax(weight_values))])
+    return float(np.degrees(np.arctan2(y, x)))
+
+
+def cake_transform_bundle_lut_t(bundle: CakeTransformBundle) -> object:
+    transposed = bundle.lut_t
+    if transposed is not None:
+        return transposed
+    matrix = bundle.lut.matrix
+    if hasattr(matrix, "transpose"):
+        transposed = matrix.transpose()
+        if hasattr(transposed, "tocsr"):
+            transposed = transposed.tocsr()
+    else:
+        transposed = np.asarray(matrix, dtype=np.float64).T
+    object.__setattr__(bundle, "lut_t", transposed)
+    return transposed
+
+
+def build_cake_transform_bundle(
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...] | list[int],
+    radial_deg: np.ndarray | list[float] | tuple[float, ...],
+    raw_azimuth_deg: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    engine: str = "auto",
+    workers: int | str | None = "auto",
+) -> CakeTransformBundle | None:
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    normalized_shape = _normalize_detector_shape(tuple(detector_shape))
+    if normalized_shape is None:
+        return None
+    try:
+        radial_axis = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
+        raw_axis = np.asarray(raw_azimuth_deg, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if radial_axis.size <= 0 or raw_axis.size <= 0:
+        return None
+    if not np.all(np.isfinite(radial_axis)) or not np.all(np.isfinite(raw_axis)):
+        return None
+    geometry = DetectorCakeGeometry(
+        pixel_size_m=float(ai.geometry.pixel_size_m),
+        distance_m=float(ai.geometry.distance_m),
+        center_row_px=float(ai.geometry.center_row_px),
+        center_col_px=float(ai.geometry.center_col_px),
+    )
+    try:
+        lut = ai._cached_cake_lut(
+            normalized_shape,
+            radial_axis,
+            raw_axis,
+            geometry,
+            engine=engine,
+            workers=workers,
+        )
+        if lut is None:
+            lut = _shared_cake_lut_for_request(
+                normalized_shape,
+                radial_axis,
+                raw_axis,
+                geometry,
+                ai.geometry,
+                workers=workers,
+            )
+    except Exception:
+        return None
+    if lut is None:
+        return None
+    radial_axis = _readonly_float64_vector(radial_axis)
+    raw_axis = _readonly_float64_vector(raw_axis)
+    gui_axis = _readonly_float64_vector(raw_phi_to_gui_phi(raw_axis))
+    return CakeTransformBundle(
+        detector_shape=normalized_shape,
+        radial_deg=radial_axis,
+        raw_azimuth_deg=raw_axis,
+        gui_azimuth_deg=gui_axis,
+        lut=lut,
+    )
+
+
+def build_cake_transform_bundle_from_result(
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...] | list[int],
+    result: DetectorCakeResult | None,
+    *,
+    engine: str = "auto",
+    workers: int | str | None = "auto",
+) -> CakeTransformBundle | None:
+    if not isinstance(result, DetectorCakeResult):
+        return None
+    return build_cake_transform_bundle(
+        ai,
+        detector_shape,
+        result.radial_deg,
+        result.azimuthal_deg,
+        engine=engine,
+        workers=workers,
+    )
+
+
+def detector_pixel_to_caked_bin(
+    transform_bundle: CakeTransformBundle | None,
+    col: float,
+    row: float,
+) -> tuple[float | None, float | None]:
+    if not isinstance(transform_bundle, CakeTransformBundle):
+        return None, None
+    try:
+        col_val = float(col)
+        row_val = float(row)
+    except Exception:
+        return None, None
+    if not np.isfinite(col_val) or not np.isfinite(row_val):
+        return None, None
+    height, width = transform_bundle.detector_shape
+    if height <= 0 or width <= 0:
+        return None, None
+    col_idx = min(max(int(round(col_val)), 0), width - 1)
+    row_idx = min(max(int(round(row_val)), 0), height - 1)
+    pixel_index = int(row_idx * width + col_idx)
+    matrix = cake_transform_bundle_lut_t(transform_bundle)
+    row_payload = _matrix_row_indices_and_weights(matrix, pixel_index)
+    if row_payload is None:
+        return None, None
+    bin_indices, weights = row_payload
+    valid = np.isfinite(bin_indices) & np.isfinite(weights) & (weights > 0.0)
+    if not np.any(valid):
+        return None, None
+    bin_indices = np.asarray(bin_indices[valid], dtype=np.int64)
+    weights = np.asarray(weights[valid], dtype=np.float64)
+    weight_sum = float(np.sum(weights))
+    if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+        return None, None
+    n_rad = int(transform_bundle.radial_deg.size)
+    radial_indices = np.asarray(bin_indices % n_rad, dtype=np.int64)
+    azimuth_indices = np.asarray(bin_indices // n_rad, dtype=np.int64)
+    radial_value = float(np.sum(transform_bundle.radial_deg[radial_indices] * weights) / weight_sum)
+    gui_phi_value = _weighted_wrapped_angle_mean_deg(
+        transform_bundle.gui_azimuth_deg[azimuth_indices],
+        weights,
+    )
+    return radial_value, gui_phi_value
+
 def _parse_poni_file_simple(poni_path: str | Path) -> dict[str, float]:
     values: dict[str, float] = {}
     for raw_line in Path(poni_path).expanduser().read_text(encoding="utf-8").splitlines():
@@ -261,7 +470,7 @@ def build_angle_axes(
     azimuth_min_deg: float = -180.0,
     azimuth_max_deg: float = 180.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return uniformly spaced 2theta and azimuth bin centers."""
+    """Return uniformly spaced 2theta and canonical raw-azimuth bin centers."""
 
     radial_edges = np.linspace(float(tth_min_deg), float(tth_max_deg), int(max(2, npt_rad)) + 1, dtype=np.float64)
     azimuth_edges = np.linspace(
@@ -337,11 +546,13 @@ def detector_points_to_angles(
         return two_theta, phi
 
     dx = (cols_arr[valid_mask] - center_col) * float(geometry.pixel_size_m)
-    dy = (center_row - rows_arr[valid_mask]) * float(geometry.pixel_size_m)
-    radius = np.hypot(dx, dy)
+    raw_dy = (rows_arr[valid_mask] - center_row) * float(geometry.pixel_size_m)
+    radius = np.hypot(dx, raw_dy)
     two_theta_valid = np.degrees(np.arctan2(radius, float(geometry.distance_m)))
-    phi_valid = np.degrees(np.arctan2(dx, dy))
-    phi_valid = (phi_valid + 180.0) % 360.0 - 180.0
+    phi_valid = np.asarray(
+        raw_phi_to_gui_phi(np.degrees(np.arctan2(raw_dy, dx))),
+        dtype=np.float64,
+    )
 
     two_theta[valid_mask] = two_theta_valid
     phi[valid_mask] = phi_valid
@@ -356,6 +567,7 @@ def caked_point_to_detector_pixel(
     two_theta_deg: float,
     phi_deg: float,
     *,
+    transform_bundle: CakeTransformBundle | None = None,
     engine: str = "auto",
     workers: int | str | None = "auto",
 ) -> tuple[float | None, float | None]:
@@ -370,53 +582,40 @@ def caked_point_to_detector_pixel(
     if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg)):
         return None, None
 
-    try:
-        radial_axis = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
-        gui_phi_axis = np.asarray(gui_phi_deg, dtype=np.float64).reshape(-1)
-    except Exception:
-        return None, None
-    if radial_axis.size <= 0 or gui_phi_axis.size <= 0:
-        return None, None
-    if not np.all(np.isfinite(radial_axis)) or not np.all(np.isfinite(gui_phi_axis)):
-        return None, None
-
-    raw_azimuth_axis = np.sort(
-        ((PHI_ZERO_OFFSET_DEGREES - gui_phi_axis + 180.0) % 360.0) - 180.0
-    )
-    exact_geometry = DetectorCakeGeometry(
-        pixel_size_m=float(ai.geometry.pixel_size_m),
-        distance_m=float(ai.geometry.distance_m),
-        center_row_px=float(ai.geometry.center_row_px),
-        center_col_px=float(ai.geometry.center_col_px),
-    )
-    try:
-        lut = ai._cached_cake_lut(
+    bundle = transform_bundle
+    if not isinstance(bundle, CakeTransformBundle):
+        live_bundle = getattr(ai, "_live_caked_transform_bundle", None)
+        if isinstance(live_bundle, CakeTransformBundle) and live_bundle.detector_shape == normalized_shape:
+            bundle = live_bundle
+    if not isinstance(bundle, CakeTransformBundle):
+        try:
+            radial_axis = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
+            gui_phi_axis = np.asarray(gui_phi_deg, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None, None
+        if radial_axis.size <= 0 or gui_phi_axis.size <= 0:
+            return None, None
+        if not np.all(np.isfinite(radial_axis)) or not np.all(np.isfinite(gui_phi_axis)):
+            return None, None
+        raw_azimuth_axis = np.asarray(gui_phi_to_raw_phi(gui_phi_axis), dtype=np.float64).reshape(-1)
+        raw_azimuth_axis = np.sort(raw_azimuth_axis)
+        bundle = build_cake_transform_bundle(
+            ai,
             normalized_shape,
             radial_axis,
             raw_azimuth_axis,
-            exact_geometry,
             engine=engine,
             workers=workers,
         )
-        if lut is None:
-            lut = _shared_cake_lut_for_request(
-                normalized_shape,
-                radial_axis,
-                raw_azimuth_axis,
-                exact_geometry,
-                ai.geometry,
-                workers=workers,
-            )
-    except Exception:
+    if not isinstance(bundle, CakeTransformBundle):
         return None, None
-    if lut is None:
-        return None, None
+    radial_axis = bundle.radial_deg
+    raw_azimuth_axis = bundle.raw_azimuth_deg
+    lut = bundle.lut
 
     try:
         radial_idx = int(np.argmin(np.abs(radial_axis - float(two_theta_deg))))
-        raw_phi_deg = float(
-            ((PHI_ZERO_OFFSET_DEGREES - float(phi_deg) + 180.0) % 360.0) - 180.0
-        )
+        raw_phi_deg = float(gui_phi_to_raw_phi(float(phi_deg)))
         azimuth_idx = int(np.argmin(np.abs(raw_azimuth_axis - raw_phi_deg)))
     except Exception:
         return None, None
@@ -428,24 +627,10 @@ def caked_point_to_detector_pixel(
     if matrix is None:
         return None, None
 
-    pixel_indices: np.ndarray
-    weights: np.ndarray
-    try:
-        if (
-            hasattr(matrix, "indptr")
-            and hasattr(matrix, "indices")
-            and hasattr(matrix, "data")
-        ):
-            row_start = int(matrix.indptr[flat_idx])
-            row_stop = int(matrix.indptr[flat_idx + 1])
-            pixel_indices = np.asarray(matrix.indices[row_start:row_stop], dtype=np.int64)
-            weights = np.asarray(matrix.data[row_start:row_stop], dtype=np.float64)
-        else:
-            row_weights = np.asarray(matrix[flat_idx], dtype=np.float64).reshape(-1)
-            pixel_indices = np.flatnonzero(np.isfinite(row_weights) & (row_weights > 0.0))
-            weights = row_weights[pixel_indices]
-    except Exception:
+    row_payload = _matrix_row_indices_and_weights(matrix, flat_idx)
+    if row_payload is None:
         return None, None
+    pixel_indices, weights = row_payload
 
     valid = (
         np.isfinite(pixel_indices)
@@ -858,7 +1043,7 @@ def prepare_gui_phi_display(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return ``(cake_image, radial_deg, gui_phi_deg)`` for GUI-style plotting."""
 
-    gui_phi = ((PHI_ZERO_OFFSET_DEGREES - np.asarray(result.azimuthal_deg, dtype=np.float64) + 180.0) % 360.0) - 180.0
+    gui_phi = np.asarray(raw_phi_to_gui_phi(result.azimuthal_deg), dtype=np.float64)
     order = np.argsort(gui_phi)
     gui_phi = gui_phi[order]
     cake = np.asarray(result.intensity, dtype=np.float64)[order, :]
@@ -870,15 +1055,22 @@ def prepare_gui_phi_display(
 
 
 __all__ = [
+    "CakeTransformBundle",
     "FastAzimuthalIntegrator",
     "PortableGeometry",
     "build_angle_axes",
+    "build_cake_transform_bundle",
+    "build_cake_transform_bundle_from_result",
+    "cake_transform_bundle_lut_t",
     "caked_point_to_detector_pixel",
     "build_geometry",
     "convert_image_to_angle_space",
+    "detector_pixel_to_caked_bin",
     "detector_points_to_angles",
     "detector_pixel_angular_maps",
     "detector_two_theta_max_deg",
     "flat_solid_angle_normalization",
+    "gui_phi_to_raw_phi",
     "prepare_gui_phi_display",
+    "raw_phi_to_gui_phi",
 ]

@@ -22,6 +22,7 @@ from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
 from ra_sim.simulation.exact_cake_portable import (
     caked_point_to_detector_pixel as _caked_point_to_detector_pixel,
+    detector_pixel_to_caked_bin as _detector_pixel_to_caked_bin,
 )
 from ra_sim.utils.calculations import (
     resolve_canonical_branch,
@@ -5495,6 +5496,17 @@ def native_detector_coords_to_caked_display_coords(
     if not (np.isfinite(col_val) and np.isfinite(row_val)):
         return None
 
+    bundle_two_theta, bundle_phi = _detector_pixel_to_caked_bin(
+        getattr(ai, "_live_caked_transform_bundle", None),
+        col_val,
+        row_val,
+    )
+    if bundle_two_theta is not None and bundle_phi is not None:
+        return (
+            _snap_axis_value(caked_radial_values, float(bundle_two_theta)),
+            _snap_axis_value(caked_azimuth_values, float(bundle_phi)),
+        )
+
     try:
         two_theta_map, phi_map = get_detector_angular_maps(ai)
     except Exception:
@@ -5528,10 +5540,9 @@ def native_detector_coords_to_caked_display_coords(
         return None
     if two_theta is None or phi is None:
         return None
-    wrapped_phi = float(wrap_phi_range(phi))
     return (
         _snap_axis_value(caked_radial_values, float(two_theta)),
-        _snap_axis_value(caked_azimuth_values, wrapped_phi),
+        _snap_axis_value(caked_azimuth_values, float(phi)),
     )
 
 

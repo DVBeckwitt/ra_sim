@@ -126,7 +126,12 @@ from ra_sim.simulation.engine import (
 )
 from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background
 from ra_sim.simulation.exact_cake_portable import (
+    CakeTransformBundle,
     FastAzimuthalIntegrator,
+    build_cake_transform_bundle_from_result,
+    detector_pixel_to_caked_bin,
+    prepare_gui_phi_display,
+    raw_phi_to_gui_phi,
     start_exact_cake_geometry_warmup_in_background,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
@@ -4651,9 +4656,29 @@ def _geometry_fit_caked_roi_preview_mask(
     if not np.any(valid):
         return None
 
+    bundle = _current_live_caked_transform_bundle()
+    if bundle is not None:
+        mask = np.zeros((int(azimuth.size), int(radial.size)), dtype=bool)
+        for row_idx, col_idx in zip(rows[valid], cols[valid]):
+            two_theta_value, phi_value = detector_pixel_to_caked_bin(
+                bundle,
+                float(col_idx),
+                float(row_idx),
+            )
+            if two_theta_value is None or phi_value is None:
+                continue
+            radial_idx = _nearest_sorted_axis_indices(radial, [two_theta_value])
+            azimuth_idx = _nearest_sorted_axis_indices(azimuth, [phi_value])
+            if radial_idx is None or azimuth_idx is None:
+                continue
+            mask[azimuth_idx, radial_idx] = True
+        if np.any(mask):
+            return mask
+
     two_theta_values = np.asarray(two_theta_map[rows[valid], cols[valid]], dtype=float)
-    phi_values = _wrap_phi_range(
-        np.asarray(phi_map[rows[valid], cols[valid]], dtype=float)
+    phi_values = np.asarray(
+        raw_phi_to_gui_phi(np.asarray(phi_map[rows[valid], cols[valid]], dtype=float)),
+        dtype=float,
     )
     finite = np.isfinite(two_theta_values) & np.isfinite(phi_values)
     if not np.any(finite):
@@ -4835,8 +4860,8 @@ def _detector_pixel_to_scattering_angles(
     dy = (center_row - float(row)) * float(pixel_size)
     radius = float(np.hypot(dx, dy))
     two_theta = float(np.degrees(np.arctan2(radius, float(detector_distance))))
-    phi = float(np.degrees(np.arctan2(dx, dy)))
-    return two_theta, _wrap_phi_range(phi)
+    raw_phi = float(np.degrees(np.arctan2(-dy, dx)))
+    return two_theta, float(raw_phi_to_gui_phi(raw_phi))
 
 
 def _native_detector_coords_to_live_caked_coords(
@@ -5000,7 +5025,7 @@ def _initialize_runtime_controls_block_04() -> None:
             center=lambda: [float(center_x_var.get()), float(center_y_var.get())],
             detector_distance=lambda: float(corto_detector_var.get()),
             pixel_size=float(pixel_size_m),
-            wrap_phi_range=lambda value: globals()["_wrap_phi_range"](value),
+            wrap_phi_range=lambda value: raw_phi_to_gui_phi(value),
             rotate_point_for_display=_rotate_point_for_display,
             display_rotate_k=DISPLAY_ROTATE_K,
             current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
@@ -7416,22 +7441,28 @@ def _initialize_runtime_controls_block_23() -> None:
 
 
 
-PHI_ZERO_OFFSET_DEGREES = -90.0
 DEFAULT_ANALYSIS_RADIAL_BINS = 1000
 DEFAULT_ANALYSIS_AZIMUTH_BINS = 720
 
 
-def _adjust_phi_zero(phi_values):
-    """Center azimuths at ``PHI_ZERO_OFFSET_DEGREES`` and mirror about the x-axis."""
+def _current_live_caked_transform_bundle() -> CakeTransformBundle | None:
+    ai = simulation_runtime_state.ai_cache.get("ai")
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    bundle = getattr(ai, "_live_caked_transform_bundle", None)
+    return bundle if isinstance(bundle, CakeTransformBundle) else None
 
-    return PHI_ZERO_OFFSET_DEGREES - np.asarray(phi_values)
 
-
-def _wrap_phi_range(phi_values):
-    """Wrap azimuthal values into the ``[-180, 180)`` interval."""
-
-    wrapped = ((np.asarray(phi_values) + 180.0) % 360.0) - 180.0
-    return wrapped
+def _set_live_caked_transform_bundle(bundle: CakeTransformBundle | None) -> None:
+    ai = simulation_runtime_state.ai_cache.get("ai")
+    if isinstance(bundle, CakeTransformBundle):
+        simulation_runtime_state.ai_cache["detector_shape"] = bundle.detector_shape
+    if isinstance(ai, FastAzimuthalIntegrator):
+        setattr(
+            ai,
+            "_live_caked_transform_bundle",
+            bundle if isinstance(bundle, CakeTransformBundle) else None,
+        )
 
 
 def caking(
@@ -7578,7 +7609,7 @@ def _set_image_origin(image_display, origin):
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     intensity = res2.intensity
     radial_2theta = res2.radial
-    azimuth_vals = _adjust_phi_zero(res2.azimuthal)
+    azimuth_vals = np.asarray(raw_phi_to_gui_phi(res2.azimuthal), dtype=float)
 
     tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
     phi_min = float(phi_min)
@@ -7641,7 +7672,7 @@ def _detector_angular_maps_for_shape(ai, detector_shape):
     if two_theta is None or phi_vals is None:
         return None, None
 
-    return np.asarray(two_theta, dtype=float), _adjust_phi_zero(phi_vals)
+    return np.asarray(two_theta, dtype=float), np.asarray(phi_vals, dtype=float)
 
 
 def _get_detector_angular_maps(ai):
@@ -7724,7 +7755,10 @@ def _prepare_caked_intersection_cache(
             dy = (center_row - rows[valid]) * pixel_size
             radius = np.hypot(dx, dy)
             out[valid, 14] = np.degrees(np.arctan2(radius, detector_distance))
-            out[valid, 15] = _wrap_phi_range(np.degrees(np.arctan2(dx, dy)))
+            out[valid, 15] = np.asarray(
+                raw_phi_to_gui_phi(np.degrees(np.arctan2(-dy, dx))),
+                dtype=float,
+            )
         transformed.append(out)
 
     return transformed
@@ -7749,6 +7783,7 @@ def _initialize_runtime_controls_block_24() -> None:
     simulation_runtime_state.last_caked_background_image_unscaled = None
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
+    _set_live_caked_transform_bundle(None)
     simulation_runtime_state.last_caked_intersection_cache = None
     simulation_runtime_state.last_q_space_image_unscaled = None
     simulation_runtime_state.last_q_space_extent = None
@@ -8907,6 +8942,7 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_caked_background_image_unscaled = None
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
+    _set_live_caked_transform_bundle(None)
     simulation_runtime_state.last_caked_intersection_cache = None
     simulation_runtime_state.last_q_space_image_unscaled = None
     simulation_runtime_state.last_q_space_extent = None
@@ -10260,18 +10296,21 @@ def _caked_geometry_cache_signature(
     )
 
 
-def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
+def _prepare_caked_display_payload(
+    res2,
+    *,
+    ai: FastAzimuthalIntegrator | None = None,
+    detector_shape: tuple[int, ...] | list[int] | None = None,
+) -> dict[str, object] | None:
     if res2 is None:
         return None
 
-    caked_img = np.asarray(res2.intensity, dtype=float)
-    radial_vals = np.asarray(res2.radial, dtype=float)
-    azimuth_vals = _wrap_phi_range(_adjust_phi_zero(res2.azimuthal))
-
-    if azimuth_vals.size:
-        azimuth_order = np.argsort(azimuth_vals)
-        azimuth_vals = azimuth_vals[azimuth_order]
-        caked_img = caked_img[azimuth_order, :]
+    transform_bundle = build_cake_transform_bundle_from_result(
+        ai,
+        detector_shape if detector_shape is not None else (),
+        res2,
+    )
+    caked_img, radial_vals, azimuth_vals = prepare_gui_phi_display(res2)
 
     radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
     if np.any(radial_mask):
@@ -10294,6 +10333,8 @@ def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
         "image": np.asarray(caked_img, dtype=float),
         "radial": np.asarray(radial_vals, dtype=float),
         "azimuth": np.asarray(azimuth_vals, dtype=float),
+        "raw_azimuth": np.asarray(res2.azimuthal, dtype=float),
+        "transform_bundle": transform_bundle,
         "extent": [
             radial_min,
             radial_max,
@@ -10358,8 +10399,13 @@ def _restore_caked_display_payload_from_cached_results(
 ) -> bool:
     """Rebuild caked display arrays from the current cached analysis results."""
 
-    sim_caked = _prepare_caked_display_payload(simulation_runtime_state.last_res2_sim)
+    sim_caked = _prepare_caked_display_payload(
+        simulation_runtime_state.last_res2_sim,
+        ai=simulation_runtime_state.ai_cache.get("ai"),
+        detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+    )
     if not isinstance(sim_caked, dict):
+        _set_live_caked_transform_bundle(None)
         return False
 
     simulation_runtime_state.last_caked_image_unscaled = np.asarray(
@@ -10374,6 +10420,7 @@ def _restore_caked_display_payload_from_cached_results(
         sim_caked.get("azimuth"),
         dtype=float,
     )
+    _set_live_caked_transform_bundle(sim_caked.get("transform_bundle"))
     simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
     caked_intersection_cache = _prepare_caked_intersection_cache(
         getattr(simulation_runtime_state, "stored_intersection_cache", ()),
@@ -10385,7 +10432,11 @@ def _restore_caked_display_payload_from_cached_results(
 
     bg_caked = None
     if background_visible and simulation_runtime_state.last_res2_background is not None:
-        bg_caked = _prepare_caked_display_payload(simulation_runtime_state.last_res2_background)
+        bg_caked = _prepare_caked_display_payload(
+            simulation_runtime_state.last_res2_background,
+            ai=simulation_runtime_state.ai_cache.get("ai"),
+            detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+        )
     if isinstance(bg_caked, dict):
         simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(
             bg_caked.get("image"),
@@ -10427,11 +10478,19 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
             bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
         else:
             bg_res2 = None
-    sim_caked = _prepare_caked_display_payload(sim_res2)
+    sim_caked = _prepare_caked_display_payload(
+        sim_res2,
+        ai=ai,
+        detector_shape=sim_image.shape,
+    )
     if isinstance(cached_bg_caked, dict):
         bg_caked = dict(cached_bg_caked)
     else:
-        bg_caked = _prepare_caked_display_payload(bg_res2)
+        bg_caked = _prepare_caked_display_payload(
+            bg_res2,
+            ai=ai,
+            detector_shape=bg_array.shape if bg_array is not None else sim_image.shape,
+        )
     sim_q_space = _prepare_q_space_display_payload(
         sim_caked,
         wavelength_m=job.get("wavelength_m"),
@@ -10708,6 +10767,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
             sim_caked.get("azimuth"),
             dtype=float,
         )
+        _set_live_caked_transform_bundle(sim_caked.get("transform_bundle"))
         simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
         caked_intersection_cache = _copy_intersection_cache_tables(
             result.get("sim_caked_intersection_cache", [])
@@ -10717,6 +10777,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        _set_live_caked_transform_bundle(None)
         simulation_runtime_state.last_caked_extent = None
         simulation_runtime_state.last_caked_intersection_cache = None
 
@@ -12244,6 +12305,7 @@ def do_update():
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        _set_live_caked_transform_bundle(None)
         simulation_runtime_state.last_q_space_image_unscaled = None
         simulation_runtime_state.last_q_space_extent = None
         simulation_runtime_state.last_q_space_background_image_unscaled = None
@@ -22624,7 +22686,11 @@ def _run_async_geometry_fit_worker_job(
                     "roi_half_width_px": float(roi_half_width_px),
                 }
 
-        caked_payload = _prepare_caked_display_payload(res2)
+        caked_payload = _prepare_caked_display_payload(
+            res2,
+            ai=ai,
+            detector_shape=backend_background.shape,
+        )
         if not isinstance(caked_payload, Mapping):
             return {
                 "roi_enabled": bool(roi_enabled),
