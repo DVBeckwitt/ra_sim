@@ -215,7 +215,7 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
 }
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _projection_debug_log_ray(
     projection_debug_counters,
     twotheta_t_prime,
@@ -230,7 +230,7 @@ def _projection_debug_log_ray(
         projection_debug_counters[_PROJECTION_DEBUG_COUNTER_NEAR_CRITICAL_BAND] += 1
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _projection_debug_record_reject(
     projection_debug_reject_count,
     projection_debug_reject_records,
@@ -403,7 +403,7 @@ def _retain_last_intersection_cache() -> bool:
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def attenuation(N, Qz, c):
     """
     Compute the coherent interference (Kiessig-like) from a stack of N layers,
@@ -430,7 +430,7 @@ def attenuation(N, Qz, c):
         return N**2
     return num / den
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def attenuation_array(N, Qz_array, c):
     """
     Vectorized version of attenuation(N, Qz, c) for an entire array Qz_array.
@@ -462,7 +462,7 @@ def attenuation_array(N, Qz_array, c):
 # 2) PARALLEL CUSTOM MESHGRID
 # =============================================================================
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def custom_meshgrid(qx_vals, qy_vals, qz_vals):
     """
     Parallel replacement for np.meshgrid in 3D. Builds Qx, Qy, Qz arrays of
@@ -495,7 +495,7 @@ def custom_meshgrid(qx_vals, qy_vals, qz_vals):
 # 3) PARALLEL SAMPLE_FROM_PDF
 # =============================================================================
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
     """
     Sample from a 3D probability density function (pdf_3d). This is a parallel
@@ -557,7 +557,7 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
     return (out_Qx, out_Qy, out_Qz)
 
 
-@njit
+@njit(cache=True)
 def wrap_to_pi(x):
     while x <= -pi:
         x += 2.0 * pi
@@ -566,7 +566,7 @@ def wrap_to_pi(x):
     return x
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def compute_intensity_array(Qx, Qy, Qz,
                             G_vec,
                             sigma,
@@ -640,7 +640,7 @@ def compute_intensity_array(Qx, Qy, Qz,
     return intensities
 
 
-@njit
+@njit(cache=True)
 def Generate_PDF_Grid(
     G_vec,
     sigma, gamma_pv, eta_pv,
@@ -691,7 +691,7 @@ def Generate_PDF_Grid(
 # 5) VECTORIZED INCOHERENT AVERAGING
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, k_mag, n2, bt):
     """
     For a mosaic-sampled Q_grid, compute the average finite-stack interference
@@ -767,7 +767,7 @@ def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, 
 # 3) INTERSECT_LINE_PLANE, BATCH
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
     """
     Intersect a single ray (start=P0, direction=k_vec) with a plane
@@ -807,7 +807,7 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
     return (ix, iy, iz, True)
 
 
-@njit
+@njit(cache=True)
 def intersect_infinite_line_plane(P0, k_vec, P_plane, n_plane):
     """
     Intersect an infinite line (start=P0, direction=k_vec) with a plane.
@@ -842,7 +842,7 @@ def intersect_infinite_line_plane(P0, k_vec, P_plane, n_plane):
     iz = P0[2] + t*k_vec[2]
     return (ix, iy, iz, True)
 
-@njit
+@njit(cache=True)
 def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
     """
     Batch version: intersect multiple directions with a plane.
@@ -896,7 +896,7 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
 
 
 # ---------- NEW JIT-SAFE HELPERS ----------
-@njit
+@njit(cache=True)
 def _clamp(x, lo, hi):
     if x < lo:
         return lo
@@ -905,7 +905,7 @@ def _clamp(x, lo, hi):
     return x
 
 
-@njit
+@njit(cache=True)
 def _kz_branch_decay(arg):
     """Return sqrt(arg) with the physically decaying branch (Im(kz) >= 0)."""
     kz = complex_sqrt(arg)
@@ -916,7 +916,7 @@ def _kz_branch_decay(arg):
     return kz
 
 
-@njit
+@njit(cache=True)
 def _fresnel_t_exact(kz_i, kz_j, eps_i, eps_j, s_polarization):
     """Exact Fresnel transmission amplitude in kz/epsilon form."""
     if s_polarization:
@@ -931,7 +931,7 @@ def _fresnel_t_exact(kz_i, kz_j, eps_i, eps_j, s_polarization):
     return (2.0 * eps_j * kz_i) / den
 
 
-@njit
+@njit(cache=True)
 def _fresnel_power_t_exact(t_amp, kz_i, kz_j, eps_i, eps_j, s_polarization):
     """Convert exact transmission amplitude to power transmission."""
     abs_t2 = t_amp.real * t_amp.real + t_amp.imag * t_amp.imag
@@ -958,7 +958,7 @@ def _fresnel_power_t_exact(t_amp, kz_i, kz_j, eps_i, eps_j, s_polarization):
     return out
 
 
-@njit
+@njit(cache=True)
 def _sanitize_transmission_power(power):
     """Clamp transmission-like power factors to a stable physical range."""
     if not np.isfinite(power) or power <= 0.0:
@@ -968,7 +968,7 @@ def _sanitize_transmission_power(power):
     return power
 
 
-@njit
+@njit(cache=True)
 def _thickness_to_angstrom(depth):
     """Interpret sub-mm values as meters and convert to angstrom."""
     if depth <= 0.0:
@@ -980,7 +980,7 @@ def _thickness_to_angstrom(depth):
     return depth
 
 
-@njit
+@njit(cache=True)
 def _ctr_discrete_finite_intensity(qz, v_sum, c_ang, n_layers):
     """
     Finite discrete CTR:
@@ -1007,7 +1007,7 @@ def _ctr_discrete_finite_intensity(qz, v_sum, c_ang, n_layers):
     return out
 
 
-@njit
+@njit(cache=True)
 def _ctr_discrete_infinite_intensity(qz, v_sum, c_ang):
     """
     Infinite discrete CTR:
@@ -1033,7 +1033,7 @@ def _ctr_discrete_infinite_intensity(qz, v_sum, c_ang):
     return out
 
 
-@njit
+@njit(cache=True)
 def _ctr_effective_layers_from_absorption(v_sum, c_ang):
     """
     Semi-infinite fallback depth in layer units.
@@ -1058,7 +1058,7 @@ def _ctr_effective_layers_from_absorption(v_sum, c_ang):
     return n_eff
 
 
-@njit
+@njit(cache=True)
 def _ctr_attenuation_factor(qz, v_in, v_out, c_ang, n_layers):
     """
     CTR-only absorption correction for fast mode.
@@ -1095,7 +1095,7 @@ def _ctr_attenuation_factor(qz, v_in, v_out, c_ang, n_layers):
     return out
 
 
-@njit
+@njit(cache=True)
 def transmit_angle_grazing(theta_i_plane, n2):
     """
     Grazing angle form of Snell: cos(theta_t) = cos(theta_i) / Re(n2)
@@ -1107,7 +1107,7 @@ def transmit_angle_grazing(theta_i_plane, n2):
     return np.arccos(c) * np.sign(theta_i_plane)
 
 
-@njit
+@njit(cache=True)
 def ktz_components(k0, n2, theta_t_plane):
     """
     Decompose K_tz for a complex refractive index.
@@ -1123,7 +1123,7 @@ def ktz_components(k0, n2, theta_t_plane):
     return re_kz, im_kz
 
 
-@njit
+@njit(cache=True)
 def safe_path_length(thickness_m, theta_plane):
     """
     Path length through a slab of thickness_m for a ray with grazing angle
@@ -1138,7 +1138,7 @@ def safe_path_length(thickness_m, theta_plane):
     return thickness_m / s
 
 
-@njit
+@njit(cache=True)
 def _choose_local_pixel_cache_capacity(n_samp):
     desired = n_samp * _LOCAL_PIXEL_CACHE_SCALE
     if desired < _LOCAL_PIXEL_CACHE_MIN_CAPACITY:
@@ -1154,14 +1154,14 @@ def _choose_local_pixel_cache_capacity(n_samp):
     return capacity
 
 
-@njit
+@njit(cache=True)
 def _clear_local_pixel_cache(cache_keys, cache_values):
     for i in range(cache_keys.shape[0]):
         cache_keys[i] = -1
         cache_values[i] = 0.0
 
 
-@njit
+@njit(cache=True)
 def _flush_local_pixel_cache(image, image_size, cache_keys, cache_values):
     for i in range(cache_keys.shape[0]):
         flat_idx = cache_keys[i]
@@ -1175,7 +1175,7 @@ def _flush_local_pixel_cache(image, image_size, cache_keys, cache_values):
     return 0
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _merge_thread_local_images(image, image_partials):
     for r in prange(image.shape[0]):
         for c in range(image.shape[1]):
@@ -1185,7 +1185,7 @@ def _merge_thread_local_images(image, image_partials):
             image[r, c] = total
 
 
-@njit
+@njit(cache=True)
 def _copy_scaled_hit_table(src_hits, scale, H, K, L):
     n_src_hits = src_hits.shape[0]
     pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
@@ -1199,7 +1199,7 @@ def _copy_scaled_hit_table(src_hits, scale, H, K, L):
     return pixel_hits
 
 
-@njit
+@njit(cache=True)
 def _copy_miss_table(src_miss):
     n_src_miss = src_miss.shape[0]
     missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
@@ -1209,7 +1209,7 @@ def _copy_miss_table(src_miss):
     return missed_arr
 
 
-@njit
+@njit(cache=True)
 def _copy_scaled_q_rows(q_data, dst_idx, src_idx, qn, scale):
     if qn <= 0:
         return
@@ -1217,7 +1217,7 @@ def _copy_scaled_q_rows(q_data, dst_idx, src_idx, qn, scale):
     q_data[dst_idx, :qn, 3] *= scale
 
 
-@njit
+@njit(cache=True)
 def _insert_local_pixel_cache(cache_keys, cache_values, flat_idx, value):
     capacity = cache_keys.shape[0]
     mask = capacity - 1
@@ -1235,7 +1235,7 @@ def _insert_local_pixel_cache(cache_keys, cache_values, flat_idx, value):
     return False, 0
 
 
-@njit
+@njit(cache=True)
 def _accumulate_bilinear_cached(
     image_size,
     row_f,
@@ -1300,7 +1300,7 @@ def _accumulate_bilinear_cached(
     return True, False, new_count
 
 
-@njit
+@njit(cache=True)
 def _build_fast_optics_lut_row(lut_row, k0, n2_samp, n2_real, thickness):
     lut_size = lut_row.shape[0]
     if lut_size <= 0:
@@ -1331,7 +1331,7 @@ def _build_fast_optics_lut_row(lut_row, k0, n2_samp, n2_real, thickness):
         lut_row[i, _FAST_OPTICS_COL_OUT_ANGLE] = out_angle
 
 
-@njit
+@njit(cache=True)
 def _lookup_fast_optics_lut_row(lut_row, theta):
     lut_size = lut_row.shape[0]
     if lut_size <= 1:
@@ -1384,7 +1384,7 @@ def _lookup_fast_optics_lut_row(lut_row, theta):
 # 4) solve_q
 # =============================================================================
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
     Gx = G_vec[0]
     Gy = G_vec[1]
@@ -1416,7 +1416,7 @@ def _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
     return omega / denom_base
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _circle_point(phi, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z):
     cphi = cos(phi)
     sphi = sin(phi)
@@ -1426,7 +1426,7 @@ def _circle_point(phi, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z):
     return Qx, Qy, Qz
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _circle_density(
     phi,
     Ox,
@@ -1448,7 +1448,7 @@ def _circle_density(
     return _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv)
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _interval_mass_error(phi_a, phi_b, f_a, f_m, f_b, circle_r):
     dphi = phi_b - phi_a
     mass = circle_r * dphi * (f_a + 4.0 * f_m + f_b) / 6.0
@@ -1457,7 +1457,7 @@ def _interval_mass_error(phi_a, phi_b, f_a, f_m, f_b, circle_r):
     return mass, err
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _circle_theta_offset(
     phi,
     Ox,
@@ -1480,7 +1480,7 @@ def _circle_theta_offset(
     return wrap_to_pi(theta - theta0)
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _phi_periodic_distance(phi_a, phi_b):
     delta = abs(phi_a - phi_b)
     two_pi = 2.0 * pi
@@ -1491,7 +1491,7 @@ def _phi_periodic_distance(phi_a, phi_b):
     return delta
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _store_local_arc_root(roots, root_count, phi_root, min_separation):
     if not np.isfinite(phi_root):
         return root_count
@@ -1504,7 +1504,7 @@ def _store_local_arc_root(roots, root_count, phi_root, min_separation):
     return root_count
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _refine_theta_root(
     phi_a,
     phi_b,
@@ -1552,7 +1552,7 @@ def _refine_theta_root(
     return 0.5 * (left + right), True
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _refine_theta_boundary(
     phi_inside,
     phi_outside,
@@ -1603,7 +1603,7 @@ def _refine_theta_boundary(
     return 0.5 * (left + right)
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _local_arc_theta_window(sigma, gamma_pv, eta_pv):
     sigma_eff = sigma
     if sigma_eff < 1e-12:
@@ -1626,7 +1626,7 @@ def _local_arc_theta_window(sigma, gamma_pv, eta_pv):
     return theta_window
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _append_local_arc_window(starts, ends, count, start, end):
     two_pi = 2.0 * pi
     span = end - start
@@ -1658,7 +1658,7 @@ def _append_local_arc_window(starts, ends, count, start, end):
     return count + 2, False
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _build_local_arc_windows(
     Ox,
     Oy,
@@ -1910,7 +1910,7 @@ def _build_local_arc_windows(
     return starts, ends, merged_count, False
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _solve_q_adaptive_domain(
     phi_start,
     phi_stop,
@@ -2058,7 +2058,7 @@ def _solve_q_adaptive_domain(
     return out
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _solve_q_uniform_full_circle(
     Ox,
     Oy,
@@ -2111,7 +2111,7 @@ def _solve_q_uniform_full_circle(
     return out
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _solve_q_uniform(
     Ox,
     Oy,
@@ -2216,7 +2216,7 @@ def _solve_q_uniform(
     return out
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _solve_q_adaptive(
     Ox,
     Oy,
@@ -2332,7 +2332,7 @@ def _solve_q_adaptive(
     return out
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def solve_q(
     k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H, K, L,
     N_steps=DEFAULT_SOLVE_Q_STEPS,
@@ -2780,7 +2780,7 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _circle_frame_components(k_in_crystal, k_scat, g_vec):
     """Return the Bragg-circle frame used to classify solutions around G."""
 
@@ -2897,7 +2897,7 @@ def _circle_frame_components(k_in_crystal, k_scat, g_vec):
     return True, ox, oy, oz, e1x, e1y, e1z, e2x, e2y, e2z
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _select_g_peak_solution_indices(all_q, k_in_crystal, k_scat, g_vec):
     """Keep the strongest mosaic-intensity solution(s) on either side of G."""
 
@@ -2985,7 +2985,7 @@ def _select_g_peak_solution_indices(all_q, k_in_crystal, k_scat, g_vec):
     return out, n_keep
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _build_sample_rotation(
     theta_initial_deg,
     cor_angle_deg,
@@ -3051,7 +3051,7 @@ def _build_sample_rotation(
     return R_sample, n_surf, P0_rot
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _precompute_sample_terms(
     wavelength_array,
     n2,
@@ -3295,7 +3295,7 @@ def _precompute_sample_terms(
     return R_sample, sample_terms, n2_samp_out, eps2_out, best_idx
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _solve_q_reuse_terms_match(sample_terms, idx_a, idx_b):
     cols = (
         _SAMPLE_COL_KX_SCAT,
@@ -3314,7 +3314,7 @@ def _solve_q_reuse_terms_match(sample_terms, idx_a, idx_b):
     return True
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _annotate_solve_q_sample_reuse(sample_terms):
     """Link samples whose `solve_q` inputs are numerically identical."""
 
@@ -3355,7 +3355,7 @@ def _annotate_solve_q_sample_reuse(sample_terms):
         group_tails[matched_group] = i_samp
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _accumulate_bilinear_hit(image, image_size, row_f, col_f, value):
     """Deposit ``value`` into the four neighboring pixels around a float hit."""
 
@@ -3385,7 +3385,7 @@ def _accumulate_bilinear_hit(image, image_size, row_f, col_f, value):
     return deposited
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _choose_nominal_sample_index(sample_terms, preferred_idx):
     n_samp = sample_terms.shape[0]
     if 0 <= preferred_idx < n_samp:
@@ -3397,7 +3397,7 @@ def _choose_nominal_sample_index(sample_terms, preferred_idx):
     return -1
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _nominal_reflection_visible(
     H,
     K,
@@ -3680,7 +3680,7 @@ def _nominal_reflection_visible(
     return True, nominal_idx, False
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _ring_sample_unit_interval(peak_idx, sample_idx):
     """Return a deterministic quasi-random ``u`` in ``[0, 1)`` for ring sampling."""
 
@@ -3692,7 +3692,7 @@ def _ring_sample_unit_interval(peak_idx, sample_idx):
     return u - np.floor(u)
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _sample_q_ring_solution(all_q, peak_idx, sample_idx):
     """Sample one ``solve_q`` row using the ring mass as the PDF."""
 
@@ -3721,7 +3721,7 @@ def _sample_q_ring_solution(all_q, peak_idx, sample_idx):
     return last_valid_idx, total_mass
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _calculate_phi_from_precomputed(
     H,
     K,
@@ -4433,7 +4433,7 @@ def _calculate_phi_from_precomputed(
 # 5) CALCULATE_PHI
 # =============================================================================
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def calculate_phi(
     H, K, L, av, cv,
     wavelength_array,
@@ -4571,7 +4571,7 @@ def calculate_phi(
 # 6) PROCESS_PEAKS_PARALLEL
 # =============================================================================
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def process_peaks_parallel(
     miller, intensities, image_size,
     av, cv, lambda_, image,
