@@ -3,7 +3,7 @@
 import json
 import numpy as np
 from ra_sim.debug_controls import register_run_input_paths
-from ra_sim.utils.tools import detect_blobs
+
 
 def parse_poni_file(file_path):
     # Dictionary to hold the values
@@ -21,6 +21,7 @@ def parse_poni_file(file_path):
                     parameters[key.strip()] = value  # Store as string if conversion fails
 
     return parameters
+
 
 def Open_ASC(file_path):
     register_run_input_paths(file_path)

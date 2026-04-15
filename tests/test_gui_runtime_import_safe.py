@@ -18,6 +18,9 @@ RUNTIME_IMPL_WRAPPER_SOURCE_PATH = (
 RUNTIME_SESSION_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_session.py"
 )
+FILE_PARSING_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent / "ra_sim" / "io" / "file_parsing.py"
+)
 CLI_SOURCE_PATH = Path(__file__).resolve().parent.parent / "ra_sim" / "cli.py"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUI_SOURCE_ROOT = REPO_ROOT / "ra_sim" / "gui"
@@ -658,6 +661,7 @@ def test_runtime_impl_lazy_builds_excel_dataframes() -> None:
     export_block = source[export_start:export_end]
 
     assert "def _ensure_structure_model_dataframes() -> tuple[object, object]:" in source
+    assert "def _build_intensity_dataframes(" in source
     assert "build_intensity_dataframes(" not in apply_block
     assert "df_summary, df_details = _ensure_structure_model_dataframes()" in export_block
 
@@ -676,6 +680,30 @@ def test_runtime_impl_lazy_mounts_analysis_surfaces() -> None:
     assert "plt.subplots(2, 1, figsize=(5, 8))" not in lazy_block
     assert "_mount_analysis_figure(app_shell_view_state.plot_frame_1d)" not in source
     assert "ensure_analysis_surfaces_initialized()" in source
+
+
+def test_runtime_impl_trims_tools_imports_from_startup_path() -> None:
+    runtime_source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    file_parsing_source = FILE_PARSING_SOURCE_PATH.read_text(encoding="utf-8")
+
+    import_block_start = runtime_source.index("from ra_sim.io.file_parsing import parse_poni_file, Open_ASC")
+    import_block_end = runtime_source.index("from ra_sim.io.data_loading import (", import_block_start)
+    import_block = runtime_source[import_block_start:import_block_end]
+    dataframe_helper_start = runtime_source.index("def _build_intensity_dataframes(")
+    dataframe_helper_end = runtime_source.index("def _current_primary_cif_path()", dataframe_helper_start)
+    dataframe_helper = runtime_source[dataframe_helper_start:dataframe_helper_end]
+    azimuthal_helper_start = runtime_source.index("def _show_azimuthal_radial_plot_demo() -> None:")
+    azimuthal_helper_end = runtime_source.index("app_shell_view_state = app_state.app_shell_view")
+    azimuthal_helper = runtime_source[azimuthal_helper_start:azimuthal_helper_end]
+
+    assert "from ra_sim.utils.tools import (" not in import_block
+    assert "from ra_sim.utils.diffraction_tools import (" in import_block
+    assert "build_intensity_dataframes," not in import_block
+    assert "view_azimuthal_radial," not in import_block
+    assert "detect_blobs," not in import_block
+    assert "from ra_sim.utils.diffraction_tools import build_intensity_dataframes" in dataframe_helper
+    assert "from ra_sim.utils.diffraction_tools import view_azimuthal_radial" in azimuthal_helper
+    assert "from ra_sim.utils.tools import detect_blobs" not in file_parsing_source
 
 
 def _mapping_field_name(node: ast.AST | None) -> str | None:

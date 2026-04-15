@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import math
 
-import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
-from skimage import color, exposure, feature
 
 from ra_sim.utils.diffraction_tools import (
     DEFAULT_PIXEL_SIZE_M,
@@ -17,7 +14,6 @@ from ra_sim.utils.diffraction_tools import (
     intensities_for_hkls,
     miller_generator,
     setup_azimuthal_integrator,
-    view_azimuthal_radial,
 )
 
 
@@ -33,6 +29,9 @@ def detect_blobs(
     plot=False,
 ):
     """Detect blobs from either a filename (.asc) or a numpy array."""
+
+    from PIL import Image
+    from skimage import color, exposure, feature
 
     isblob, labels = None, None
     if groups:
@@ -118,6 +117,8 @@ def detect_blobs(
         )
 
     if plot:
+        import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots()
         ax.imshow(processed_image, cmap="gray")
 
@@ -141,6 +142,14 @@ def detect_blobs(
         plt.show()
 
     return labeled_blobs
+
+
+def view_azimuthal_radial(*args, **kwargs):
+    from ra_sim.utils.diffraction_tools import (
+        view_azimuthal_radial as _view_azimuthal_radial,
+    )
+
+    return _view_azimuthal_radial(*args, **kwargs)
 
 
 __all__ = [

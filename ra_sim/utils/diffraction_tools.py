@@ -8,9 +8,7 @@ import math
 import re
 from contextlib import redirect_stdout
 
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from ra_sim.simulation.exact_cake_portable import (
     FastAzimuthalIntegrator,
@@ -297,6 +295,8 @@ def intensities_for_hkls(
 def view_azimuthal_radial(simulated_image, center, detector_params, *, rows=None, cols=None):
     """Display the azimuthal vs radial intensity map for a simulated image."""
 
+    import matplotlib.pyplot as plt
+
     _ = center
     pixel_size = detector_params["pixel_size"]
     poni1 = detector_params["poni1"]
@@ -355,6 +355,8 @@ def view_azimuthal_radial(simulated_image, center, detector_params, *, rows=None
 
 def build_intensity_dataframes(miller, intensities, degeneracy, details):
     """Return summary and details DataFrames for diffraction results."""
+
+    import pandas as pd
 
     df_summary = pd.DataFrame(miller, columns=["h", "k", "l"])
     df_summary["Intensity"] = intensities

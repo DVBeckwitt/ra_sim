@@ -60,14 +60,11 @@ from ra_sim.utils.parallel import (
     temporary_numba_thread_limit,
 )
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
-from ra_sim.utils.tools import (
-    miller_generator,
-    view_azimuthal_radial,
-    detect_blobs,
-    inject_fractional_reflections,
-    build_intensity_dataframes,
-    detector_two_theta_max,
+from ra_sim.utils.diffraction_tools import (
     DEFAULT_PIXEL_SIZE_M,
+    detector_two_theta_max,
+    inject_fractional_reflections,
+    miller_generator,
 )
 from ra_sim.io.data_loading import (
     load_geometry_placements_file,
@@ -1140,7 +1137,7 @@ def _ensure_structure_model_dataframes() -> tuple[object, object]:
         structure_model_state.df_summary is None
         or structure_model_state.df_details is None
     ):
-        df_summary, df_details = build_intensity_dataframes(
+        df_summary, df_details = _build_intensity_dataframes(
             structure_model_state.miller,
             structure_model_state.intensities,
             structure_model_state.degeneracy,
@@ -1150,6 +1147,19 @@ def _ensure_structure_model_dataframes() -> tuple[object, object]:
         structure_model_state.df_details = df_details
         _sync_structure_model_aliases()
     return structure_model_state.df_summary, structure_model_state.df_details
+
+
+def _build_intensity_dataframes(
+    miller, intensities, degeneracy, details
+) -> tuple[object, object]:
+    from ra_sim.utils.diffraction_tools import build_intensity_dataframes
+
+    return build_intensity_dataframes(
+        miller,
+        intensities,
+        degeneracy,
+        details,
+    )
 
 
 def _current_primary_cif_path() -> str:
@@ -1251,6 +1261,63 @@ def export_initial_excel():
                 details_sheet.set_row(row, cell_format=zebra_format)
 
     print(f"Excel file saved at {excel_path}")
+
+
+def _show_azimuthal_radial_plot_demo() -> None:
+    from ra_sim.utils.diffraction_tools import view_azimuthal_radial
+
+    view_azimuthal_radial(
+        simulate_diffraction(
+            theta_initial=_current_effective_theta_initial(strict_count=False),
+            cor_angle=cor_angle_var.get(),
+            gamma=gamma_var.get(),
+            Gamma=Gamma_var.get(),
+            chi=chi_var.get(),
+            psi_z=psi_z_var.get(),
+            zs=zs_var.get(),
+            zb=zb_var.get(),
+            debye_x_value=debye_x_var.get(),
+            debye_y_value=debye_y_var.get(),
+            corto_detector_value=corto_detector_var.get(),
+            miller=miller,
+            intensities=intensities,
+            image_size=image_size,
+            av=a_var.get(),
+            cv=c_var.get(),
+            lambda_=lambda_,
+            psi=psi,
+            n2=n2,
+            center=[center_x_var.get(), center_y_var.get()],
+            num_samples=simulation_runtime_state.num_samples,
+            divergence_sigma=divergence_sigma,
+            bw_sigma=bw_sigma,
+            sigma_mosaic_var=sigma_mosaic_var,
+            gamma_mosaic_var=gamma_mosaic_var,
+            eta_var=eta_var,
+            bandwidth=_current_bandwidth_fraction(),
+            optics_mode=_current_optics_mode_flag(),
+            solve_q_steps=current_solve_q_values().steps,
+            solve_q_rel_tol=current_solve_q_values().rel_tol,
+            solve_q_mode=current_solve_q_values().mode_flag,
+            profile_samples=simulation_runtime_state.profile_cache,
+            pixel_size_m=float(pixel_size_m),
+            sample_width_m=float(sample_width_var.get()),
+            sample_length_m=float(sample_length_var.get()),
+            thickness=float(sample_depth_var.get()),
+            n2_sample_array=simulation_runtime_state.profile_cache.get("n2_sample_array"),
+        ),
+        [center_x_var.get(), center_y_var.get()],
+        {
+            "pixel_size": pixel_size_m,
+            "poni1": (center_x_var.get()) * pixel_size_m,
+            "poni2": (center_y_var.get()) * pixel_size_m,
+            "dist": corto_detector_var.get(),
+            "rot1": 0.0,
+            "rot2": 0.0,
+            "rot3": 0.0,
+            "wavelength": wave_m,
+        },
+    )
 
 
 app_shell_view_state = app_state.app_shell_view
@@ -12661,58 +12728,7 @@ gui_views.populate_stacked_button_group(
     [
         (
             "Azim vs Radial Plot Demo",
-            lambda: view_azimuthal_radial(
-                simulate_diffraction(
-                    theta_initial=_current_effective_theta_initial(strict_count=False),
-                    cor_angle=cor_angle_var.get(),
-                    gamma=gamma_var.get(),
-                    Gamma=Gamma_var.get(),
-                    chi=chi_var.get(),
-                    psi_z=psi_z_var.get(),
-                    zs=zs_var.get(),
-                    zb=zb_var.get(),
-                    debye_x_value=debye_x_var.get(),
-                    debye_y_value=debye_y_var.get(),
-                    corto_detector_value=corto_detector_var.get(),
-                    miller=miller,
-                    intensities=intensities,
-                    image_size=image_size,
-                    av=a_var.get(),
-                    cv=c_var.get(),
-                    lambda_=lambda_,
-                    psi=psi,
-                    n2=n2,
-                    center=[center_x_var.get(), center_y_var.get()],
-                    num_samples=simulation_runtime_state.num_samples,
-                    divergence_sigma=divergence_sigma,
-                    bw_sigma=bw_sigma,
-                    sigma_mosaic_var=sigma_mosaic_var,
-                    gamma_mosaic_var=gamma_mosaic_var,
-                    eta_var=eta_var,
-                    bandwidth=_current_bandwidth_fraction(),
-                    optics_mode=_current_optics_mode_flag(),
-                    solve_q_steps=current_solve_q_values().steps,
-                    solve_q_rel_tol=current_solve_q_values().rel_tol,
-                    solve_q_mode=current_solve_q_values().mode_flag,
-                    profile_samples=simulation_runtime_state.profile_cache,
-                    pixel_size_m=float(pixel_size_m),
-                    sample_width_m=float(sample_width_var.get()),
-                    sample_length_m=float(sample_length_var.get()),
-                    thickness=float(sample_depth_var.get()),
-                    n2_sample_array=simulation_runtime_state.profile_cache.get("n2_sample_array"),
-                ),
-                [center_x_var.get(), center_y_var.get()],
-                {
-                    "pixel_size": pixel_size_m,
-                    "poni1": (center_x_var.get()) * pixel_size_m,
-                    "poni2": (center_y_var.get()) * pixel_size_m,
-                    "dist": corto_detector_var.get(),
-                    "rot1": 0.0,
-                    "rot2": 0.0,
-                    "rot3": 0.0,
-                    "wavelength": wave_m,
-                },
-            ),
+            _show_azimuthal_radial_plot_demo,
         ),
     ],
 )
@@ -18901,7 +18917,7 @@ def on_fit_ordered_structure_click():
             atom_site_override_state=local_atom_site_override_state,
             simulation_runtime_state=local_simulation_state,
             combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
-            build_intensity_dataframes=build_intensity_dataframes,
+            build_intensity_dataframes=_build_intensity_dataframes,
             apply_bragg_qr_filters=(
                 lambda **_kwargs: gui_controllers.apply_bragg_qr_filters(
                     local_simulation_state,
@@ -23536,7 +23552,7 @@ def _rebuild_diffraction_inputs(
         atom_site_override_state=atom_site_override_state,
         simulation_runtime_state=simulation_runtime_state,
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
-        build_intensity_dataframes=build_intensity_dataframes,
+        build_intensity_dataframes=_build_intensity_dataframes,
         apply_bragg_qr_filters=apply_bragg_qr_filters,
         schedule_update=_invalidate_and_schedule_update,
         weight1=weight1_var.get(),
