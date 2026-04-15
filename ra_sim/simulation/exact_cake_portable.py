@@ -348,6 +348,128 @@ def detector_points_to_angles(
     return two_theta, phi
 
 
+def caked_point_to_detector_pixel(
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...] | list[int],
+    radial_deg: np.ndarray | list[float] | tuple[float, ...] | None,
+    gui_phi_deg: np.ndarray | list[float] | tuple[float, ...] | None,
+    two_theta_deg: float,
+    phi_deg: float,
+    *,
+    engine: str = "auto",
+    workers: int | str | None = "auto",
+) -> tuple[float | None, float | None]:
+    """Invert one displayed caked bin back to a detector pixel via the exact-cake LUT."""
+
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None, None
+    normalized_shape = _normalize_detector_shape(tuple(detector_shape))
+    if normalized_shape is None:
+        return None, None
+
+    if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg)):
+        return None, None
+
+    try:
+        radial_axis = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
+        gui_phi_axis = np.asarray(gui_phi_deg, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None, None
+    if radial_axis.size <= 0 or gui_phi_axis.size <= 0:
+        return None, None
+    if not np.all(np.isfinite(radial_axis)) or not np.all(np.isfinite(gui_phi_axis)):
+        return None, None
+
+    raw_azimuth_axis = np.sort(
+        ((PHI_ZERO_OFFSET_DEGREES - gui_phi_axis + 180.0) % 360.0) - 180.0
+    )
+    exact_geometry = DetectorCakeGeometry(
+        pixel_size_m=float(ai.geometry.pixel_size_m),
+        distance_m=float(ai.geometry.distance_m),
+        center_row_px=float(ai.geometry.center_row_px),
+        center_col_px=float(ai.geometry.center_col_px),
+    )
+    try:
+        lut = ai._cached_cake_lut(
+            normalized_shape,
+            radial_axis,
+            raw_azimuth_axis,
+            exact_geometry,
+            engine=engine,
+            workers=workers,
+        )
+        if lut is None:
+            lut = _shared_cake_lut_for_request(
+                normalized_shape,
+                radial_axis,
+                raw_azimuth_axis,
+                exact_geometry,
+                ai.geometry,
+                workers=workers,
+            )
+    except Exception:
+        return None, None
+    if lut is None:
+        return None, None
+
+    try:
+        radial_idx = int(np.argmin(np.abs(radial_axis - float(two_theta_deg))))
+        raw_phi_deg = float(
+            ((PHI_ZERO_OFFSET_DEGREES - float(phi_deg) + 180.0) % 360.0) - 180.0
+        )
+        azimuth_idx = int(np.argmin(np.abs(raw_azimuth_axis - raw_phi_deg)))
+    except Exception:
+        return None, None
+    if radial_idx < 0 or azimuth_idx < 0:
+        return None, None
+
+    flat_idx = int(azimuth_idx * int(radial_axis.size) + radial_idx)
+    matrix = getattr(lut, "matrix", None)
+    if matrix is None:
+        return None, None
+
+    pixel_indices: np.ndarray
+    weights: np.ndarray
+    try:
+        if (
+            hasattr(matrix, "indptr")
+            and hasattr(matrix, "indices")
+            and hasattr(matrix, "data")
+        ):
+            row_start = int(matrix.indptr[flat_idx])
+            row_stop = int(matrix.indptr[flat_idx + 1])
+            pixel_indices = np.asarray(matrix.indices[row_start:row_stop], dtype=np.int64)
+            weights = np.asarray(matrix.data[row_start:row_stop], dtype=np.float64)
+        else:
+            row_weights = np.asarray(matrix[flat_idx], dtype=np.float64).reshape(-1)
+            pixel_indices = np.flatnonzero(np.isfinite(row_weights) & (row_weights > 0.0))
+            weights = row_weights[pixel_indices]
+    except Exception:
+        return None, None
+
+    valid = (
+        np.isfinite(pixel_indices)
+        & np.isfinite(weights)
+        & (weights > 0.0)
+    )
+    if not np.any(valid):
+        return None, None
+
+    pixel_indices = np.asarray(pixel_indices[valid], dtype=np.int64)
+    weights = np.asarray(weights[valid], dtype=np.float64)
+    weight_sum = float(np.sum(weights))
+    if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+        return None, None
+
+    width = int(normalized_shape[1])
+    cols = np.asarray(pixel_indices % width, dtype=np.float64)
+    rows = np.asarray(pixel_indices // width, dtype=np.float64)
+    return (
+        float(np.sum(cols * weights) / weight_sum),
+        float(np.sum(rows * weights) / weight_sum),
+    )
+
+
 def detector_two_theta_max_deg(
     image_shape: tuple[int, int],
     geometry: PortableGeometry,
@@ -751,6 +873,7 @@ __all__ = [
     "FastAzimuthalIntegrator",
     "PortableGeometry",
     "build_angle_axes",
+    "caked_point_to_detector_pixel",
     "build_geometry",
     "convert_image_to_angle_space",
     "detector_points_to_angles",

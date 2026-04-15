@@ -289,6 +289,92 @@ def rod_gz_max_from_two_theta(
     return float((4.0 * np.pi / lambda_value) * np.sin(half_angle_rad))
 
 
+def caked_image_to_q_space_payload(
+    image: object,
+    radial_deg: object,
+    azimuth_deg: object,
+    *,
+    wavelength_m: object,
+) -> dict[str, object] | None:
+    """Re-bin one caked ``(2theta, phi)`` image into a ``(Qr, Qz)`` raster."""
+
+    try:
+        image_arr = np.asarray(image, dtype=np.float64)
+        radial_arr = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
+        azimuth_arr = np.asarray(azimuth_deg, dtype=np.float64).reshape(-1)
+        wavelength_angstrom = float(wavelength_m) * 1.0e10
+    except Exception:
+        return None
+
+    if (
+        image_arr.ndim != 2
+        or image_arr.size <= 0
+        or radial_arr.size <= 0
+        or azimuth_arr.size <= 0
+        or image_arr.shape != (azimuth_arr.size, radial_arr.size)
+        or not np.isfinite(wavelength_angstrom)
+        or wavelength_angstrom <= 0.0
+    ):
+        return None
+
+    q_mag = (4.0 * np.pi / wavelength_angstrom) * np.sin(
+        np.radians(np.clip(radial_arr, 0.0, None) / 2.0)
+    )
+    phi_rad = np.radians(azimuth_arr)
+    qr_map = np.abs(np.sin(phi_rad))[:, None] * q_mag[None, :]
+    qz_map = np.cos(phi_rad)[:, None] * q_mag[None, :]
+
+    valid = (
+        np.isfinite(image_arr)
+        & np.isfinite(qr_map)
+        & np.isfinite(qz_map)
+    )
+    if not np.any(valid):
+        return None
+
+    qr_valid = qr_map[valid]
+    qz_valid = qz_map[valid]
+    intensity_valid = image_arr[valid]
+
+    qr_min = 0.0
+    qr_max = float(np.max(qr_valid))
+    qz_min = float(np.min(qz_valid))
+    qz_max = float(np.max(qz_valid))
+    if (
+        not np.isfinite(qr_max)
+        or qr_max <= qr_min
+        or not np.isfinite(qz_min)
+        or not np.isfinite(qz_max)
+        or qz_max <= qz_min
+    ):
+        return None
+
+    qr_edges = np.linspace(qr_min, qr_max, radial_arr.size + 1, dtype=np.float64)
+    qz_edges = np.linspace(qz_min, qz_max, azimuth_arr.size + 1, dtype=np.float64)
+    sum_image, _qz_edges, _qr_edges = np.histogram2d(
+        qz_valid,
+        qr_valid,
+        bins=(qz_edges, qr_edges),
+        weights=intensity_valid,
+    )
+    hit_count, _qz_edges, _qr_edges = np.histogram2d(
+        qz_valid,
+        qr_valid,
+        bins=(qz_edges, qr_edges),
+    )
+
+    q_space_image = np.full(sum_image.shape, np.nan, dtype=np.float64)
+    np.divide(sum_image, hit_count, out=q_space_image, where=hit_count > 0.0)
+    qr_axis = 0.5 * (qr_edges[:-1] + qr_edges[1:])
+    qz_axis = 0.5 * (qz_edges[:-1] + qz_edges[1:])
+    return {
+        "image": q_space_image,
+        "qr": qr_axis,
+        "qz": qz_axis,
+        "extent": [float(qr_edges[0]), float(qr_edges[-1]), float(qz_edges[0]), float(qz_edges[-1])],
+    }
+
+
 def longest_rod_point_count(
     points_per_gz: object,
     *,

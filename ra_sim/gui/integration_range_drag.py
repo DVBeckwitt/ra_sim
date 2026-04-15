@@ -82,6 +82,7 @@ class IntegrationRangeUpdateBindings:
     integration_range_drag_callbacks: Any = None
     refresh_integration_from_cached_results: Callable[[], bool] | None = None
     refresh_display_from_controls: Callable[[], None] | None = None
+    toggle_caked_2d: Callable[[], None] | None = None
     schedule_update: Callable[[], None] | None = None
     range_update_debounce_ms: int = 120
 
@@ -1438,6 +1439,7 @@ def make_runtime_integration_range_update_bindings_factory(
     integration_range_drag_callbacks_factory: object = None,
     refresh_integration_from_cached_results_factory: object = None,
     refresh_display_from_controls_factory: object = None,
+    toggle_caked_2d_factory: object = None,
     schedule_update_factory: object = None,
     range_update_debounce_ms_factory: object = 120,
 ) -> Callable[[], IntegrationRangeUpdateBindings]:
@@ -1465,6 +1467,7 @@ def make_runtime_integration_range_update_bindings_factory(
             refresh_display_from_controls=_resolve_runtime_value(
                 refresh_display_from_controls_factory
             ),
+            toggle_caked_2d=_resolve_runtime_value(toggle_caked_2d_factory),
             schedule_update=_resolve_runtime_value(schedule_update_factory),
             range_update_debounce_ms=normalized_debounce_ms,
         )
@@ -1728,6 +1731,10 @@ def _toggle_runtime_caked_2d(
     reset_drag = getattr(drag_callbacks, "reset", None)
     if callable(reset_drag):
         reset_drag()
+
+    if callable(bindings.toggle_caked_2d):
+        bindings.toggle_caked_2d()
+        return
 
     if callable(bindings.schedule_update):
         bindings.schedule_update()

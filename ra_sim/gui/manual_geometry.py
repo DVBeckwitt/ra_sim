@@ -1,7 +1,6 @@
 """Helpers for manual geometry selection, caching, and serialization."""
 
 from __future__ import annotations
-
 import os
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -21,6 +20,9 @@ from ra_sim.fitting.background_peak_matching import (
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
+from ra_sim.simulation.exact_cake_portable import (
+    caked_point_to_detector_pixel as _caked_point_to_detector_pixel,
+)
 from ra_sim.utils.calculations import (
     resolve_canonical_branch,
     source_branch_index_from_phi_deg,
@@ -434,7 +436,6 @@ def refresh_geometry_manual_pair_entry(
                         float(mapped_detector_point[0]),
                         float(mapped_detector_point[1]),
                     )
-
     if detector_point is None:
         detector_point = _finite_pair("detector_x", "detector_y")
     if detector_point is None:
@@ -1169,8 +1170,6 @@ def peak_maximum_near_in_image(
             size=height,
         ),
     )
-
-
 def geometry_manual_apply_refined_simulated_override(
     entry: dict[str, object] | None,
     resolved_source_entry: dict[str, object] | None,
@@ -2948,6 +2947,131 @@ def geometry_manual_refine_preview_point(
     return float(refined_col), float(refined_row)
 
 
+def refine_detector_pick_via_caked_background(
+    candidate: dict[str, object] | None,
+    raw_col: float,
+    raw_row: float,
+    *,
+    detector_display_to_caked_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ],
+    caked_angles_to_detector_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ],
+    caked_background: np.ndarray | None,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    cache_data: dict[str, object] | None = None,
+    match_simulated_peaks_to_peak_context: Callable[
+        [Sequence[dict[str, object]], dict[str, object], dict[str, object]],
+        tuple[Sequence[dict[str, object]], object],
+    ]
+    | None = None,
+    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[[float, Sequence[float] | None], float] = caked_image_index_to_axis,
+    refine_caked_peak_center_fn: Callable[
+        [np.ndarray | None, Sequence[float] | None, Sequence[float] | None, float, float],
+        tuple[float, float],
+    ] = refine_caked_peak_center,
+) -> dict[str, float] | None:
+    """Refine one detector-view click against the cached caked background."""
+
+    if not callable(detector_display_to_caked_coords) or not callable(
+        caked_angles_to_detector_display_coords
+    ):
+        return None
+
+    try:
+        caked_background_arr = np.asarray(caked_background, dtype=float)
+        radial_axis_arr = np.asarray(radial_axis, dtype=float)
+        azimuth_axis_arr = np.asarray(azimuth_axis, dtype=float)
+    except Exception:
+        return None
+    if (
+        caked_background_arr.ndim != 2
+        or caked_background_arr.size == 0
+        or radial_axis_arr.size == 0
+        or azimuth_axis_arr.size == 0
+    ):
+        return None
+
+    raw_caked = detector_display_to_caked_coords(float(raw_col), float(raw_row))
+    if not (
+        isinstance(raw_caked, tuple)
+        and len(raw_caked) >= 2
+        and np.isfinite(float(raw_caked[0]))
+        and np.isfinite(float(raw_caked[1]))
+    ):
+        return None
+
+    caked_candidate = None
+    if isinstance(candidate, dict):
+        try:
+            sim_caked_col = float(
+                candidate.get("caked_x", candidate.get("two_theta_deg", np.nan))
+            )
+            sim_caked_row = float(
+                candidate.get("caked_y", candidate.get("phi_deg", np.nan))
+            )
+        except Exception:
+            sim_caked_col = float("nan")
+            sim_caked_row = float("nan")
+        if np.isfinite(sim_caked_col) and np.isfinite(sim_caked_row):
+            caked_candidate = dict(candidate)
+            caked_candidate["sim_col"] = float(sim_caked_col)
+            caked_candidate["sim_row"] = float(sim_caked_row)
+            caked_candidate["sim_col_global"] = float(sim_caked_col)
+            caked_candidate["sim_row_global"] = float(sim_caked_row)
+            caked_candidate["sim_col_local"] = float(
+                caked_axis_to_image_index_fn(float(sim_caked_col), radial_axis_arr)
+            )
+            caked_candidate["sim_row_local"] = float(
+                caked_axis_to_image_index_fn(float(sim_caked_row), azimuth_axis_arr)
+            )
+
+    refined_caked_col, refined_caked_row = geometry_manual_refine_preview_point(
+        caked_candidate,
+        float(raw_caked[0]),
+        float(raw_caked[1]),
+        display_background=caked_background_arr,
+        cache_data=cache_data,
+        use_caked_space=True,
+        radial_axis=radial_axis_arr,
+        azimuth_axis=azimuth_axis_arr,
+        match_simulated_peaks_to_peak_context=match_simulated_peaks_to_peak_context,
+        caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+        caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
+        refine_caked_peak_center_fn=refine_caked_peak_center_fn,
+    )
+    if not (np.isfinite(refined_caked_col) and np.isfinite(refined_caked_row)):
+        return None
+
+    refined_display = caked_angles_to_detector_display_coords(
+        float(refined_caked_col),
+        float(refined_caked_row),
+    )
+    if not (
+        isinstance(refined_display, tuple)
+        and len(refined_display) >= 2
+        and refined_display[0] is not None
+        and refined_display[1] is not None
+        and np.isfinite(float(refined_display[0]))
+        and np.isfinite(float(refined_display[1]))
+    ):
+        return None
+
+    return {
+        "raw_caked_col": float(raw_caked[0]),
+        "raw_caked_row": float(raw_caked[1]),
+        "refined_caked_col": float(refined_caked_col),
+        "refined_caked_row": float(refined_caked_row),
+        "refined_display_col": float(refined_display[0]),
+        "refined_display_row": float(refined_display[1]),
+    }
+
+
 def restore_geometry_manual_pick_view(
     pick_session: dict[str, object] | None,
     *,
@@ -3703,6 +3827,8 @@ def make_runtime_geometry_manual_projection_callbacks(
             phi_deg,
             ai=_resolve_runtime_value(ai),
             native_background=_resolve_runtime_value(current_background_native),
+            caked_radial_values=_resolve_runtime_value(last_caked_radial_values),
+            caked_azimuth_values=_resolve_runtime_value(last_caked_azimuth_values),
             get_detector_angular_maps=get_detector_angular_maps,
             scattering_angles_to_detector_pixel=scattering_angles_to_detector_pixel,
             center=_detector_center(),
@@ -5183,6 +5309,8 @@ def caked_angles_to_background_display_coords(
     *,
     ai: object = None,
     native_background: np.ndarray | None = None,
+    caked_radial_values: Sequence[float] | None = None,
+    caked_azimuth_values: Sequence[float] | None = None,
     get_detector_angular_maps: Callable[[object], tuple[object, object]],
     scattering_angles_to_detector_pixel: Callable[
         [float, float, Sequence[float] | None, float, float],
@@ -5209,18 +5337,77 @@ def caked_angles_to_background_display_coords(
     reconstructed detector intensities remain in detector-count space.
     """
 
+    if (
+        native_background is None
+        or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
+    ):
+        return None, None
+
+    native_shape = tuple(int(v) for v in native_background.shape[:2])
+
+    def _display_point_from_detector_coords(
+        col: float,
+        row: float,
+        *,
+        backend_space: bool,
+    ) -> tuple[float | None, float | None]:
+        native_col = float(col)
+        native_row = float(row)
+        if callable(backend_detector_coords_to_native_detector_coords) and backend_space:
+            try:
+                native_point = backend_detector_coords_to_native_detector_coords(
+                    float(col),
+                    float(row),
+                )
+            except Exception:
+                native_point = None
+            if (
+                isinstance(native_point, tuple)
+                and len(native_point) >= 2
+                and native_point[0] is not None
+                and native_point[1] is not None
+                and np.isfinite(float(native_point[0]))
+                and np.isfinite(float(native_point[1]))
+            ):
+                native_col = float(native_point[0])
+                native_row = float(native_point[1])
+        return rotate_point_for_display(
+            float(native_col),
+            float(native_row),
+            native_shape,
+            display_rotate_k,
+        )
+
+    try:
+        native_point = _caked_point_to_detector_pixel(
+            ai if ai is not None else None,
+            native_shape,
+            caked_radial_values,
+            caked_azimuth_values,
+            float(two_theta_deg),
+            float(phi_deg),
+        )
+    except Exception:
+        native_point = (None, None)
+    if (
+        isinstance(native_point, tuple)
+        and len(native_point) >= 2
+        and native_point[0] is not None
+        and native_point[1] is not None
+        and np.isfinite(float(native_point[0]))
+        and np.isfinite(float(native_point[1]))
+    ):
+        return _display_point_from_detector_coords(
+            float(native_point[0]),
+            float(native_point[1]),
+            backend_space=True,
+        )
+
     try:
         two_theta_map, phi_map = get_detector_angular_maps(ai)
     except Exception:
         two_theta_map, phi_map = None, None
-    if (
-        two_theta_map is None
-        or phi_map is None
-        or native_background is None
-        or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
-    ):
-        if native_background is None:
-            return None, None
+    if two_theta_map is None or phi_map is None:
         if not callable(scattering_angles_to_detector_pixel):
             return None, None
         try:
@@ -5235,11 +5422,10 @@ def caked_angles_to_background_display_coords(
             return None, None
         if native_point[0] is None or native_point[1] is None:
             return None, None
-        return rotate_point_for_display(
+        return _display_point_from_detector_coords(
             float(native_point[0]),
             float(native_point[1]),
-            tuple(int(v) for v in native_background.shape[:2]),
-            display_rotate_k,
+            backend_space=False,
         )
 
     dphi = ((np.asarray(phi_map, dtype=float) - float(phi_deg) + 180.0) % 360.0) - 180.0
@@ -5250,34 +5436,13 @@ def caked_angles_to_background_display_coords(
     if not np.isfinite(finite_metric.flat[best_idx]):
         return None, None
     row_idx, col_idx = np.unravel_index(best_idx, finite_metric.shape)
-    native_col = float(col_idx)
-    native_row = float(row_idx)
     # QR/QZ selection only needs the detector position. If this inverse path is
     # ever reused for intensity arrays, reapply detector-side weighting (such as
     # the solid-angle map) before any backend->native image reorientation.
-    if callable(backend_detector_coords_to_native_detector_coords):
-        try:
-            native_point = backend_detector_coords_to_native_detector_coords(
-                float(col_idx),
-                float(row_idx),
-            )
-        except Exception:
-            native_point = None
-        if (
-            isinstance(native_point, tuple)
-            and len(native_point) >= 2
-            and native_point[0] is not None
-            and native_point[1] is not None
-            and np.isfinite(float(native_point[0]))
-            and np.isfinite(float(native_point[1]))
-        ):
-            native_col = float(native_point[0])
-            native_row = float(native_point[1])
-    return rotate_point_for_display(
-        float(native_col),
-        float(native_row),
-        tuple(int(v) for v in native_background.shape[:2]),
-        display_rotate_k,
+    return _display_point_from_detector_coords(
+        float(col_idx),
+        float(row_idx),
+        backend_space=True,
     )
 
 

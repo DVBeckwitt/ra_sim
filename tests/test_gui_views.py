@@ -1340,7 +1340,7 @@ def test_app_shell_context_helpers_update_status_labels(monkeypatch) -> None:
         primary="Chi-Squared: 1.23",
         secondary="Peaks 10/12 | Gate 10/8",
     )
-    views.set_app_shell_view_mode(view_state, "caked")
+    views.set_app_shell_view_mode(view_state, "q_space")
 
     assert view_state.workflow_checklist_status_vars["backgrounds"].get() == "Ready"
     assert view_state.workflow_checklist_status_vars["geometry_fit"].get() == "Not run"
@@ -1351,7 +1351,7 @@ def test_app_shell_context_helpers_update_status_labels(monkeypatch) -> None:
     assert view_state.fit_health_status_label.text == "Stale"
     assert view_state.fit_health_primary_label.text == "Chi-Squared: 1.23"
     assert view_state.fit_health_secondary_label.text == "Peaks 10/12 | Gate 10/8"
-    assert view_state.view_mode_var.get() == "caked"
+    assert view_state.view_mode_var.get() == "q_space"
 
 
 def test_bind_app_shell_view_mode_sync_tracks_analysis_view_changes() -> None:
@@ -3399,9 +3399,10 @@ def test_populate_app_shell_view_switcher_creates_radios(monkeypatch) -> None:
     assert [radio.value for radio in _FakeRadiobutton.created] == [
         "detector",
         "caked",
+        "q_space",
     ]
-    _FakeRadiobutton.created[1].command()
-    assert events == ["caked"]
+    _FakeRadiobutton.created[2].command()
+    assert events == ["q_space"]
 
 
 def test_populate_app_shell_quick_controls_builds_linked_inputs(monkeypatch) -> None:

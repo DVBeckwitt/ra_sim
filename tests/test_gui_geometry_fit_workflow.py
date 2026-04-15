@@ -7970,10 +7970,9 @@ def test_make_runtime_geometry_tool_action_callbacks_sets_manual_pick_mode() -> 
     callbacks.set_manual_pick_mode(False, "disarmed")
 
     assert armed["value"] is False
-    assert show_caked_2d_var.get() is True
+    assert show_caked_2d_var.get() is False
     assert widget.cursor == ""
     assert events == [
-        "toggle-caked",
         ("hkl-pick", False, None),
         ("preview-exclude", False, None),
         ("label", "Manual Pick Armed"),
@@ -7984,7 +7983,7 @@ def test_make_runtime_geometry_tool_action_callbacks_sets_manual_pick_mode() -> 
     ]
 
 
-def test_make_runtime_geometry_tool_action_callbacks_ensures_caked_view_when_arming() -> None:
+def test_make_runtime_geometry_tool_action_callbacks_does_not_force_caked_view_when_arming() -> None:
     events: list[object] = []
     armed = {"value": False}
 
@@ -8013,7 +8012,6 @@ def test_make_runtime_geometry_tool_action_callbacks_ensures_caked_view_when_arm
 
     assert armed["value"] is True
     assert events == [
-        "ensure-caked",
         ("hkl-pick", False, None),
         ("preview-exclude", False, None),
     ]

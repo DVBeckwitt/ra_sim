@@ -1977,10 +1977,39 @@ def _resolve_primary_caked_extent() -> list[float]:
     return [0.0, 90.0, -180.0, 180.0]
 
 
-def _sync_primary_raster_geometry(*, show_caked_image: bool) -> None:
+def _resolve_primary_q_space_extent() -> list[float]:
+    raw_extent = getattr(simulation_runtime_state, "last_q_space_extent", None)
+    if isinstance(raw_extent, Sequence) and len(raw_extent) >= 4:
+        try:
+            extent = [float(raw_extent[index]) for index in range(4)]
+        except Exception:
+            extent = []
+        if (
+            len(extent) == 4
+            and all(math.isfinite(value) for value in extent)
+            and abs(extent[1] - extent[0]) > 1.0e-12
+            and abs(extent[3] - extent[2]) > 1.0e-12
+        ):
+            return extent
+    return [0.0, 1.0, -1.0, 1.0]
+
+
+def _sync_primary_raster_geometry(
+    *,
+    show_caked_image: bool | None = None,
+    view_mode: str | None = None,
+) -> None:
     detector_extent = [0.0, float(image_size), float(image_size), 0.0]
     caked_extent = _resolve_primary_caked_extent()
-    if bool(show_caked_image):
+    q_space_extent = _resolve_primary_q_space_extent()
+    normalized_mode = str(view_mode or "").strip().lower()
+    if normalized_mode not in {"detector", "caked", "q_space"}:
+        normalized_mode = "caked" if bool(show_caked_image) else "detector"
+    if normalized_mode == "q_space":
+        image_geometry = ("lower", q_space_extent)
+        background_geometry = ("lower", q_space_extent)
+        overlay_geometry = ("lower", q_space_extent)
+    elif normalized_mode == "caked":
         image_geometry = ("lower", caked_extent)
         background_geometry = ("lower", caked_extent)
         overlay_geometry = ("lower", caked_extent)
@@ -3877,6 +3906,110 @@ def _geometry_manual_refine_preview_point(
         if display_background is None
         else display_background
     )
+    use_caked_space = _geometry_manual_pick_uses_caked_space()
+    if not use_caked_space:
+        try:
+            caked_background = np.asarray(
+                simulation_runtime_state.last_caked_background_image_unscaled,
+                dtype=float,
+            )
+            radial_axis = np.asarray(
+                simulation_runtime_state.last_caked_radial_values,
+                dtype=float,
+            )
+            azimuth_axis = np.asarray(
+                simulation_runtime_state.last_caked_azimuth_values,
+                dtype=float,
+            )
+        except Exception:
+            caked_background = None
+            radial_axis = np.array([], dtype=float)
+            azimuth_axis = np.array([], dtype=float)
+        if (
+            isinstance(caked_background, np.ndarray)
+            and caked_background.ndim == 2
+            and caked_background.size > 0
+            and radial_axis.size > 0
+            and azimuth_axis.size > 0
+        ):
+            detector_to_caked = None
+            try:
+                native_point = _background_display_to_native_detector_coords(
+                    float(raw_col),
+                    float(raw_row),
+                )
+                if (
+                    isinstance(native_point, tuple)
+                    and len(native_point) >= 2
+                    and np.isfinite(float(native_point[0]))
+                    and np.isfinite(float(native_point[1]))
+                ):
+                    detector_to_caked = lambda col, row: (
+                        _native_detector_coords_to_caked_display_coords(
+                            *(
+                                _background_display_to_native_detector_coords(
+                                    float(col),
+                                    float(row),
+                                )
+                                or (float("nan"), float("nan"))
+                            )
+                        )
+                    )
+            except Exception:
+                detector_to_caked = None
+            if callable(detector_to_caked):
+                match_cfg = (
+                    dict(cache_data.get("match_config", {}))
+                    if isinstance(cache_data, dict)
+                    else {}
+                )
+                try:
+                    resolved_match_cfg, caked_background_context = (
+                        _auto_match_background_context(
+                            caked_background,
+                            match_cfg,
+                        )
+                    )
+                except Exception:
+                    resolved_match_cfg = dict(match_cfg)
+                    caked_background_context = None
+                refined_detector_pick = (
+                    gui_manual_geometry.refine_detector_pick_via_caked_background(
+                        candidate,
+                        float(raw_col),
+                        float(raw_row),
+                        detector_display_to_caked_coords=detector_to_caked,
+                        caked_angles_to_detector_display_coords=(
+                            _caked_angles_to_background_display_coords
+                        ),
+                        caked_background=caked_background,
+                        radial_axis=radial_axis,
+                        azimuth_axis=azimuth_axis,
+                        cache_data={
+                            "match_config": dict(resolved_match_cfg),
+                            "background_context": caked_background_context,
+                        },
+                        match_simulated_peaks_to_peak_context=(
+                            match_simulated_peaks_to_peak_context
+                        ),
+                        caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+                        caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+                        refine_caked_peak_center_fn=_refine_caked_peak_center,
+                    )
+                )
+                if isinstance(refined_detector_pick, Mapping):
+                    try:
+                        refined_col = float(
+                            refined_detector_pick["refined_display_col"]
+                        )
+                        refined_row = float(
+                            refined_detector_pick["refined_display_row"]
+                        )
+                    except Exception:
+                        refined_col = float("nan")
+                        refined_row = float("nan")
+                    if np.isfinite(refined_col) and np.isfinite(refined_row):
+                        return float(refined_col), float(refined_row)
     return gui_manual_geometry.geometry_manual_refine_preview_point(
         candidate,
         raw_col,
@@ -3888,7 +4021,7 @@ def _geometry_manual_refine_preview_point(
             prefer_cache=True,
             background_image=background_local,
         ),
-        use_caked_space=_geometry_manual_pick_uses_caked_space(),
+        use_caked_space=use_caked_space,
         radial_axis=np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float),
         azimuth_axis=np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float),
         match_simulated_peaks_to_peak_context=match_simulated_peaks_to_peak_context,
@@ -4517,8 +4650,6 @@ def _scattering_angles_to_detector_pixel(
     col = center_col + dx / float(pixel_size)
     row = center_row - dy / float(pixel_size)
     return float(col), float(row)
-
-
 def _caked_axis_to_image_index(
     value: float,
     axis_values: Sequence[float] | None,
@@ -5068,11 +5199,7 @@ peak_selection_workflow = gui_runtime_geometry_interaction.build_runtime_peak_se
     hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
     selected_peak_marker_factory=lambda: selected_peak_marker,
     current_primary_a_factory=lambda: float(av),
-    caked_view_enabled_factory=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
+    caked_view_enabled_factory=lambda: _active_caked_primary_view(),
     primary_a_factory=lambda: float(av),
     primary_c_factory=lambda: float(cv),
     max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
@@ -5419,6 +5546,13 @@ integration_range_workflow = gui_runtime_fit_analysis.build_runtime_integration_
                 else None
             )
         ),
+        "toggle_caked_2d_factory": (
+            lambda: (
+                globals().get("toggle_caked_2d")
+                if callable(globals().get("toggle_caked_2d"))
+                else None
+            )
+        ),
         "schedule_update_factory": (
             lambda: (
                 globals().get("schedule_update")
@@ -5465,9 +5599,87 @@ def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
         return
 
 
+def _restore_combined_detector_intersection_cache() -> None:
+    try:
+        primary_weight = float(weight1_var.get())
+    except Exception:
+        primary_weight = 0.0
+    try:
+        secondary_weight = float(weight2_var.get())
+    except Exception:
+        secondary_weight = 0.0
+
+    restored_tables = []
+    if (
+        simulation_runtime_state.stored_primary_sim_image is not None
+        and abs(primary_weight) > 1.0e-12
+        and simulation_runtime_state.stored_primary_intersection_cache is not None
+    ):
+        restored_tables.extend(
+            _copy_intersection_cache_tables(
+                simulation_runtime_state.stored_primary_intersection_cache
+            )
+        )
+    if (
+        simulation_runtime_state.stored_secondary_sim_image is not None
+        and abs(secondary_weight) > 1.0e-12
+        and simulation_runtime_state.stored_secondary_intersection_cache is not None
+    ):
+        restored_tables.extend(
+            _copy_intersection_cache_tables(
+                simulation_runtime_state.stored_secondary_intersection_cache
+            )
+        )
+    simulation_runtime_state.stored_intersection_cache = restored_tables
+
+
+def _apply_main_caked_view_toggle() -> None:
+    show_caked_now = bool(
+        getattr(
+            analysis_view_controls_view_state.show_caked_2d_var,
+            "get",
+            lambda: False,
+        )()
+    )
+    if show_caked_now or simulation_runtime_state.unscaled_image is None:
+        schedule_update_fn = globals().get("schedule_update")
+        if callable(schedule_update_fn):
+            schedule_update_fn()
+        return
+
+    _restore_combined_detector_intersection_cache()
+    previous_primary_view_mode = _current_primary_figure_mode()
+    preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)
+    apply_scale_factor_to_existing_results(
+        update_limits=False,
+        update_1d=False,
+        update_canvas=False,
+    )
+    gui_canvas_interactions.restore_axis_view(
+        ax,
+        preserved_limits=preserved_primary_limits,
+        default_xlim=(0.0, float(image_size)),
+        default_ylim=(float(image_size), 0.0),
+        preserve=(previous_primary_view_mode == "detector"),
+    )
+    ax.set_aspect("auto")
+    gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
+    ax.set_xlabel("X (pixels)")
+    ax.set_ylabel("Y (pixels)")
+    ax.set_title("")
+    _sync_primary_raster_geometry(show_caked_image=False)
+    gui_main_figure_chrome.apply_main_figure_axes_chrome(
+        ax,
+        axes_visible=False,
+    )
+    _request_main_canvas_redraw(force_matplotlib=False)
+    _refresh_settled_overlays()
+    _refresh_run_status_bar()
+
+
 def toggle_caked_2d() -> None:
     _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
-    _toggle_caked_2d_impl()
+    _apply_main_caked_view_toggle()
     _sync_center_marker(redraw=False)
     if bool(analysis_peak_selection_state.pick_armed):
         show_caked_now = bool(
@@ -5496,12 +5708,14 @@ toggle_log_display = integration_range_workflow.toggle_log_display
 
 def _set_persistent_view_mode(mode: str) -> None:
     normalized = str(mode or "detector").strip().lower()
-    if normalized not in {"detector", "caked"}:
+    if normalized not in {"detector", "caked", "q_space"}:
         normalized = "detector"
 
     show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
     if show_caked_2d_var is None:
         return
+
+    gui_views.set_app_shell_view_mode(app_shell_view_state, normalized)
 
     show_caked_now = bool(show_caked_2d_var.get())
     if normalized == "detector":
@@ -5512,6 +5726,15 @@ def _set_persistent_view_mode(mode: str) -> None:
         if not show_caked_now:
             show_caked_2d_var.set(True)
             toggle_caked_2d()
+        else:
+            if normalized != "caked" and bool(analysis_peak_selection_state.pick_armed):
+                _set_analysis_peak_pick_mode(
+                    False,
+                    message="Analysis peak picking requires the caked view.",
+                )
+            schedule_update_fn = globals().get("schedule_update")
+            if callable(schedule_update_fn):
+                schedule_update_fn()
     _refresh_run_status_bar()
 
 
@@ -5529,11 +5752,7 @@ integration_range_drag_runtime = gui_bootstrap.build_runtime_integration_range_w
         if analysis_view_controls_view_state.show_1d_var is not None
         else False
     ),
-    caked_view_enabled_factory=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
+    caked_view_enabled_factory=lambda: _active_caked_primary_view(),
     unscaled_image_present_factory=lambda: simulation_runtime_state.unscaled_image is not None,
     ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
     show_1d_var_factory=lambda: analysis_view_controls_view_state.show_1d_var,
@@ -5584,11 +5803,7 @@ canvas_interaction_workflow = (
         clear_geometry_manual_preview_artists=_clear_geometry_manual_preview_artists,
         restore_geometry_manual_pick_view=_restore_geometry_manual_pick_view,
         render_current_geometry_manual_pairs=_render_current_geometry_manual_pairs,
-        caked_view_enabled_factory=lambda: (
-            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-            if analysis_view_controls_view_state.show_caked_2d_var is not None
-            else False
-        ),
+        caked_view_enabled_factory=lambda: _active_caked_primary_view(),
         set_geometry_status_text_factory=lambda: (
             (lambda text: progress_label_geometry.config(text=text))
             if "progress_label_geometry" in globals()
@@ -6488,18 +6703,10 @@ def apply_scale_factor_to_existing_results(
             "last_text": "Chi-Squared: N/A",
         },
     )
-    show_caked_requested = bool(
-        getattr(
-            analysis_view_controls_view_state.show_caked_2d_var,
-            "get",
-            lambda: False,
-        )()
-    )
-    caked_payload_available = (
-        simulation_runtime_state.last_caked_image_unscaled is not None
-        and simulation_runtime_state.last_caked_extent is not None
-    )
-    show_caked_image = bool(show_caked_requested and caked_payload_available)
+    active_view_mode = _resolved_primary_analysis_display_mode()
+    show_caked_image = active_view_mode == "caked"
+    show_q_space_image = active_view_mode == "q_space"
+    show_analysis_image = show_caked_image or show_q_space_image
     if simulation_runtime_state.unscaled_image is None:
         background_min_var = display_controls_view_state.background_min_var
         background_max_var = display_controls_view_state.background_max_var
@@ -6514,8 +6721,8 @@ def apply_scale_factor_to_existing_results(
         if chi_state.get("buffer_sig") != chi_square_sig:
             chi_state["buffer_sig"] = chi_square_sig
             _mark_chi_square_dirty()
-        if not show_caked_image:
-            _sync_primary_raster_geometry(show_caked_image=False)
+        if not show_analysis_image:
+            _sync_primary_raster_geometry(view_mode="detector")
             if (
                 background_runtime_state.visible
                 and background_runtime_state.current_background_display is not None
@@ -6572,8 +6779,12 @@ def apply_scale_factor_to_existing_results(
         _mark_chi_square_dirty()
 
     scaled_caked = None
+    scaled_q_space = None
     display_image_for_limits = scaled_image
-    if show_caked_image:
+    if show_q_space_image:
+        scaled_q_space = simulation_runtime_state.last_q_space_image_unscaled * scale
+        display_image_for_limits = scaled_q_space
+    elif show_caked_image:
         scaled_caked = simulation_runtime_state.last_caked_image_unscaled * scale
         display_image_for_limits = scaled_caked
     _update_simulation_sliders_from_image(
@@ -6582,7 +6793,15 @@ def apply_scale_factor_to_existing_results(
     )
 
     preview_background_source = None
-    if show_caked_image:
+    if show_q_space_image:
+        if (
+            background_runtime_state.visible
+            and simulation_runtime_state.last_q_space_background_image_unscaled is not None
+        ):
+            preview_background_source = (
+                simulation_runtime_state.last_q_space_background_image_unscaled * scale
+            )
+    elif show_caked_image:
         if (
             background_runtime_state.visible
             and simulation_runtime_state.last_caked_background_image_unscaled is not None
@@ -6596,18 +6815,25 @@ def apply_scale_factor_to_existing_results(
     ):
         preview_background_source = background_runtime_state.current_background_display
 
-    simulation_source = scaled_caked if show_caked_image else global_image_buffer
-    simulation_preview_source, background_preview_source = (
-        _geometry_fit_caked_roi_preview_display_sources(
-            show_caked_image=bool(show_caked_image),
-            simulation_image=simulation_source,
-            background_image=preview_background_source,
-        )
+    simulation_source = (
+        scaled_q_space
+        if show_q_space_image
+        else (scaled_caked if show_caked_image else global_image_buffer)
     )
-    if not isinstance(simulation_preview_source, np.ndarray):
+    if show_q_space_image:
         simulation_preview_source = simulation_source
+    else:
+        simulation_preview_source, background_preview_source = (
+            _geometry_fit_caked_roi_preview_display_sources(
+                show_caked_image=bool(show_caked_image),
+                simulation_image=simulation_source,
+                background_image=preview_background_source,
+            )
+        )
+        if not isinstance(simulation_preview_source, np.ndarray):
+            simulation_preview_source = simulation_source
 
-    if not show_caked_image:
+    if not show_analysis_image:
         _store_primary_raster_source(image_display, simulation_preview_source)
         _apply_intensity_display_range(
             image_display,
@@ -6617,9 +6843,9 @@ def apply_scale_factor_to_existing_results(
         )
     else:
         _store_primary_raster_source(image_display, simulation_preview_source)
-    _sync_primary_raster_geometry(show_caked_image=bool(show_caked_image))
+    _sync_primary_raster_geometry(view_mode=active_view_mode)
 
-    if show_caked_image:
+    if show_analysis_image:
         caked_min = float(display_controls_view_state.simulation_min_var.get())
         caked_max = float(display_controls_view_state.simulation_max_var.get())
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
@@ -6633,7 +6859,7 @@ def apply_scale_factor_to_existing_results(
             vmin_caked_var.set(caked_min)
             vmax_caked_var.set(caked_max)
 
-    if not show_caked_image:
+    if not show_analysis_image:
         if isinstance(background_preview_source, np.ndarray):
             _store_primary_raster_source(
                 background_display,
@@ -7119,10 +7345,16 @@ simulation_runtime_state.last_caked_background_image_unscaled = None
 simulation_runtime_state.last_caked_radial_values = None
 simulation_runtime_state.last_caked_azimuth_values = None
 simulation_runtime_state.last_caked_intersection_cache = None
+simulation_runtime_state.last_q_space_image_unscaled = None
+simulation_runtime_state.last_q_space_extent = None
+simulation_runtime_state.last_q_space_background_image_unscaled = None
+simulation_runtime_state.last_q_space_qr_values = None
+simulation_runtime_state.last_q_space_qz_values = None
 
 simulation_runtime_state.last_res2_background = None
 simulation_runtime_state.last_res2_sim = None
 simulation_runtime_state.ai_cache = {}
+simulation_runtime_state.geometry_fit_caking_ai_cache = {}
 
 
 def _clear_1d_plot_cache_and_lines():
@@ -7651,10 +7883,38 @@ def _extract_fit_quality_text() -> str:
 
 
 def _current_app_shell_view_mode() -> str:
+    selected_mode = str(
+        getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")() or "detector"
+    ).strip().lower()
+    if selected_mode not in {"detector", "caked", "q_space"}:
+        selected_mode = "detector"
     show_caked = bool(
         getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
     )
+    if selected_mode == "q_space":
+        return "q_space" if show_caked else "detector"
     if show_caked:
+        return "caked"
+    return "detector"
+
+
+def _active_caked_primary_view() -> bool:
+    return _current_app_shell_view_mode() == "caked"
+
+
+def _resolved_primary_analysis_display_mode() -> str:
+    requested_mode = _current_app_shell_view_mode()
+    q_space_available = bool(
+        simulation_runtime_state.last_q_space_image_unscaled is not None
+        and simulation_runtime_state.last_q_space_extent is not None
+    )
+    caked_available = bool(
+        simulation_runtime_state.last_caked_image_unscaled is not None
+        and simulation_runtime_state.last_caked_extent is not None
+    )
+    if requested_mode == "q_space" and q_space_available:
+        return "q_space"
+    if requested_mode in {"q_space", "caked"} and caked_available:
         return "caked"
     return "detector"
 
@@ -7683,7 +7943,13 @@ def _refresh_analysis_integration_if_visible() -> None:
 
 
 def _current_app_shell_view_text() -> str:
-    base = "Caked" if _current_app_shell_view_mode() == "caked" else "Detector"
+    view_mode = _resolved_primary_analysis_display_mode()
+    if view_mode == "q_space":
+        base = "Q Space"
+    elif view_mode == "caked":
+        base = "Caked"
+    else:
+        base = "Detector"
     show_1d = bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)())
     if show_1d:
         return f"{base} + 1D"
@@ -7693,6 +7959,8 @@ def _current_app_shell_view_text() -> str:
 def _current_primary_figure_mode() -> str:
     current_x_label = " ".join(str(ax.get_xlabel() or "").split()).lower()
     current_y_label = " ".join(str(ax.get_ylabel() or "").split()).lower()
+    if current_x_label == "qr (a^-1)" and current_y_label == "qz (a^-1)":
+        return "q_space"
     if current_x_label == "2θ (degrees)".lower() and current_y_label == "φ (degrees)".lower():
         return "caked"
     return "detector"
@@ -7701,8 +7969,28 @@ def _current_primary_figure_mode() -> str:
 def _default_primary_view_limits(
     view_mode: str | None = None,
 ) -> tuple[float, float, float, float]:
-    showing_caked_view = str(view_mode or _current_primary_figure_mode()) == "caked"
-    if showing_caked_view:
+    normalized_mode = str(view_mode or _current_primary_figure_mode()).strip().lower()
+    if normalized_mode == "q_space":
+        qr_min, qr_max, qz_min, qz_max = (
+            list(simulation_runtime_state.last_q_space_extent)
+            if simulation_runtime_state.last_q_space_extent is not None
+            else [0.0, 1.0, -1.0, 1.0]
+        )
+        if not (
+            math.isfinite(qr_min) and math.isfinite(qr_max) and qr_max > qr_min
+        ):
+            qr_min, qr_max = 0.0, 1.0
+        if not (
+            math.isfinite(qz_min) and math.isfinite(qz_max) and qz_max > qz_min
+        ):
+            qz_min, qz_max = -1.0, 1.0
+        return (
+            float(qr_min),
+            float(qr_max),
+            float(qz_min),
+            float(qz_max),
+        )
+    if normalized_mode == "caked":
         radial_min, radial_max, azimuth_min, azimuth_max = (
             list(simulation_runtime_state.last_caked_extent)
             if simulation_runtime_state.last_caked_extent is not None
@@ -8200,6 +8488,11 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
     simulation_runtime_state.last_caked_intersection_cache = None
+    simulation_runtime_state.last_q_space_image_unscaled = None
+    simulation_runtime_state.last_q_space_extent = None
+    simulation_runtime_state.last_q_space_background_image_unscaled = None
+    simulation_runtime_state.last_q_space_qr_values = None
+    simulation_runtime_state.last_q_space_qz_values = None
     simulation_runtime_state.last_1d_integration_data.update(
         {
             "radials_sim": None,
@@ -8687,6 +8980,16 @@ def _defer_nonessential_redraw() -> bool:
 
 
 def _refresh_settled_overlays() -> None:
+    if _resolved_primary_analysis_display_mode() == "q_space":
+        try:
+            integration_region_overlay.set_visible(False)
+        except Exception:
+            pass
+        _clear_deferred_overlays(clear_qr_overlay=True)
+        _clear_all_geometry_overlay_artists(redraw=False)
+        _clear_analysis_peak_overlay_artists(redraw=False)
+        _request_overlay_canvas_redraw(force=True)
+        return
     if _current_geometry_fit_caked_roi_preview_enabled():
         _hide_geometry_fit_caked_roi_preview_aux_artists()
         _request_main_canvas_redraw(force_matplotlib=False)
@@ -9503,6 +9806,38 @@ def _build_analysis_integrator(job: dict[str, object]):
     )
 
 
+def _caked_geometry_cache_signature(
+    distance_value: object,
+    center_x_value: object,
+    center_y_value: object,
+    wavelength_value: object,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    """Return the cache key for detector<->caked LUT state."""
+
+    try:
+        distance_float = float(distance_value)
+    except Exception:
+        distance_float = float("nan")
+    try:
+        center_x_float = float(center_x_value)
+    except Exception:
+        center_x_float = float("nan")
+    try:
+        center_y_float = float(center_y_value)
+    except Exception:
+        center_y_float = float("nan")
+    try:
+        wavelength_float = float(wavelength_value)
+    except Exception:
+        wavelength_float = float("nan")
+    return (
+        round(distance_float, 9) if np.isfinite(distance_float) else None,
+        round(center_x_float, 6) if np.isfinite(center_x_float) else None,
+        round(center_y_float, 6) if np.isfinite(center_y_float) else None,
+        round(wavelength_float, 12) if np.isfinite(wavelength_float) else None,
+    )
+
+
 def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
     if res2 is None:
         return None
@@ -9546,6 +9881,55 @@ def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
     }
 
 
+def _prepare_q_space_display_payload(
+    caked_payload: Mapping[str, object] | None,
+    *,
+    wavelength_m: object,
+) -> dict[str, object] | None:
+    if not isinstance(caked_payload, Mapping):
+        return None
+    return gui_controllers.caked_image_to_q_space_payload(
+        caked_payload.get("image"),
+        caked_payload.get("radial"),
+        caked_payload.get("azimuth"),
+        wavelength_m=wavelength_m,
+    )
+
+
+def _store_q_space_display_payload(
+    *,
+    sim_payload: Mapping[str, object] | None,
+    bg_payload: Mapping[str, object] | None,
+) -> None:
+    if isinstance(sim_payload, Mapping):
+        simulation_runtime_state.last_q_space_image_unscaled = np.asarray(
+            sim_payload.get("image"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_q_space_qr_values = np.asarray(
+            sim_payload.get("qr"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_q_space_qz_values = np.asarray(
+            sim_payload.get("qz"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_q_space_extent = list(sim_payload.get("extent", []))
+    else:
+        simulation_runtime_state.last_q_space_image_unscaled = None
+        simulation_runtime_state.last_q_space_qr_values = None
+        simulation_runtime_state.last_q_space_qz_values = None
+        simulation_runtime_state.last_q_space_extent = None
+
+    if isinstance(bg_payload, Mapping):
+        simulation_runtime_state.last_q_space_background_image_unscaled = np.asarray(
+            bg_payload.get("image"),
+            dtype=float,
+        )
+    else:
+        simulation_runtime_state.last_q_space_background_image_unscaled = None
+
+
 def _restore_caked_display_payload_from_cached_results(
     *,
     background_visible: bool,
@@ -9575,7 +9959,6 @@ def _restore_caked_display_payload_from_cached_results(
         detector_distance=float(corto_detector_var.get()),
         pixel_size=float(pixel_size_m),
     )
-    simulation_runtime_state.stored_intersection_cache = caked_intersection_cache
     simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
 
     bg_caked = None
@@ -9588,6 +9971,16 @@ def _restore_caked_display_payload_from_cached_results(
         )
     else:
         simulation_runtime_state.last_caked_background_image_unscaled = None
+    _store_q_space_display_payload(
+        sim_payload=_prepare_q_space_display_payload(
+            sim_caked,
+            wavelength_m=lambda_ * 1.0e-10,
+        ),
+        bg_payload=_prepare_q_space_display_payload(
+            bg_caked,
+            wavelength_m=lambda_ * 1.0e-10,
+        ),
+    )
     return True
 
 
@@ -9617,6 +10010,14 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         bg_caked = dict(cached_bg_caked)
     else:
         bg_caked = _prepare_caked_display_payload(bg_res2)
+    sim_q_space = _prepare_q_space_display_payload(
+        sim_caked,
+        wavelength_m=job.get("wavelength_m"),
+    )
+    bg_q_space = _prepare_q_space_display_payload(
+        bg_caked,
+        wavelength_m=job.get("wavelength_m"),
+    )
     sim_caked_intersection_cache = _prepare_caked_intersection_cache(
         intersection_cache,
         center=job.get("center"),
@@ -9639,6 +10040,8 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         "sim_caked": sim_caked,
         "sim_caked_intersection_cache": sim_caked_intersection_cache,
         "bg_caked": bg_caked,
+        "sim_q_space": sim_q_space,
+        "bg_q_space": bg_q_space,
         "analysis_elapsed_ms": (perf_counter() - analysis_start_time) * 1e3,
     }
 
@@ -9887,7 +10290,6 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         caked_intersection_cache = _copy_intersection_cache_tables(
             result.get("sim_caked_intersection_cache", [])
         )
-        simulation_runtime_state.stored_intersection_cache = caked_intersection_cache
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
@@ -9904,6 +10306,10 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         )
     else:
         simulation_runtime_state.last_caked_background_image_unscaled = None
+    _store_q_space_display_payload(
+        sim_payload=result.get("sim_q_space"),
+        bg_payload=result.get("bg_q_space"),
+    )
 
     _store_cached_caking_entry(
         "sim",
@@ -11001,16 +11407,16 @@ def do_update():
             )
     # ---------------------------------------------------------------
     # The exact-cake analysis integrator setup is relatively expensive. Cache
-    # the runtime integrator instance and only recreate it when geometry
-    # consumed by the flat backend actually changes. Tilt and wavelength are
-    # intentionally ignored here because FastAzimuthalIntegrator discards them,
-    # and including them would flush the detector-map and LUT caches for no
-    # numerical benefit.
+    # the runtime integrator instance and only recreate it when the detector
+    # distance, detector center, or the fundamental wavelength changes. Tilt
+    # updates intentionally do not flush the detector-map or LUT caches so the
+    # live detector<->angle transform stays stable during geometry work.
     # ---------------------------------------------------------------
-    sig = (
+    sig = _caked_geometry_cache_signature(
         corto_det_up,
         center_x_up,
         center_y_up,
+        wave_m,
     )
     ai_cache_action = "reuse"
     if simulation_runtime_state.ai_cache.get("sig") != sig:
@@ -11123,6 +11529,13 @@ def do_update():
         and (
             simulation_runtime_state.last_caked_image_unscaled is None
             or simulation_runtime_state.last_caked_extent is None
+            or (
+                _current_app_shell_view_mode() == "q_space"
+                and (
+                    simulation_runtime_state.last_q_space_image_unscaled is None
+                    or simulation_runtime_state.last_q_space_extent is None
+                )
+            )
         )
     )
     if missing_caked_payload:
@@ -11158,6 +11571,13 @@ def do_update():
             or (
                 simulation_runtime_state.last_caked_image_unscaled is not None
                 and simulation_runtime_state.last_caked_extent is not None
+            )
+        )
+        and (
+            _current_app_shell_view_mode() != "q_space"
+            or (
+                simulation_runtime_state.last_q_space_image_unscaled is not None
+                and simulation_runtime_state.last_q_space_extent is not None
             )
         )
     )
@@ -11240,47 +11660,67 @@ def do_update():
     previous_primary_view_mode = _current_primary_figure_mode()
     preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)
     defer_overlay_refresh = _defer_nonessential_redraw()
-    caked_display_available = bool(
-        show_caked_2d
-        and simulation_runtime_state.last_caked_image_unscaled is not None
-        and simulation_runtime_state.last_caked_extent is not None
-    )
-    showing_stale_caked_result = bool(caked_display_available and not analysis_result_current)
+    analysis_space_display_mode = _resolved_primary_analysis_display_mode()
+    analysis_space_display_available = analysis_space_display_mode in {"caked", "q_space"}
 
-    if caked_display_available:
-        caked_img = np.asarray(
-            simulation_runtime_state.last_caked_image_unscaled,
-            dtype=float,
-        )
-        radial_vals = np.asarray(
-            simulation_runtime_state.last_caked_radial_values,
-            dtype=float,
-        )
-        azimuth_vals = np.asarray(
-            simulation_runtime_state.last_caked_azimuth_values,
-            dtype=float,
-        )
-
+    if analysis_space_display_available:
         current_scale = _get_scale_factor_value(default=1.0)
-        scaled_caked_for_limits = caked_img * current_scale
-        caked_background_source = None
-        if (
-            background_runtime_state.visible
-            and simulation_runtime_state.last_caked_background_image_unscaled is not None
-        ):
-            caked_background_source = np.asarray(
-                simulation_runtime_state.last_caked_background_image_unscaled,
+        if analysis_space_display_mode == "q_space":
+            analysis_image = np.asarray(
+                simulation_runtime_state.last_q_space_image_unscaled,
                 dtype=float,
             )
-        display_primary_source, display_secondary_source = (
-            _geometry_fit_caked_roi_preview_display_sources(
-                show_caked_image=True,
-                simulation_image=scaled_caked_for_limits,
-                background_image=caked_background_source,
+            analysis_background_source = None
+            if (
+                background_runtime_state.visible
+                and simulation_runtime_state.last_q_space_background_image_unscaled is not None
+            ):
+                analysis_background_source = np.asarray(
+                    simulation_runtime_state.last_q_space_background_image_unscaled,
+                    dtype=float,
+                )
+            scaled_analysis_for_limits = analysis_image * current_scale
+            display_primary_source = scaled_analysis_for_limits
+            display_secondary_source = analysis_background_source
+            axis_extent = (
+                list(simulation_runtime_state.last_q_space_extent)
+                if simulation_runtime_state.last_q_space_extent is not None
+                else [0.0, 1.0, -1.0, 1.0]
             )
-        )
-        if not isinstance(display_primary_source, np.ndarray):
-            display_primary_source = scaled_caked_for_limits
+            x_label = "Qr (A^-1)"
+            y_label = "Qz (A^-1)"
+        else:
+            analysis_image = np.asarray(
+                simulation_runtime_state.last_caked_image_unscaled,
+                dtype=float,
+            )
+            analysis_background_source = None
+            if (
+                background_runtime_state.visible
+                and simulation_runtime_state.last_caked_background_image_unscaled is not None
+            ):
+                analysis_background_source = np.asarray(
+                    simulation_runtime_state.last_caked_background_image_unscaled,
+                    dtype=float,
+                )
+            scaled_analysis_for_limits = analysis_image * current_scale
+            display_primary_source, display_secondary_source = (
+                _geometry_fit_caked_roi_preview_display_sources(
+                    show_caked_image=True,
+                    simulation_image=scaled_analysis_for_limits,
+                    background_image=analysis_background_source,
+                )
+            )
+            if not isinstance(display_primary_source, np.ndarray):
+                display_primary_source = scaled_analysis_for_limits
+            axis_extent = (
+                list(simulation_runtime_state.last_caked_extent)
+                if simulation_runtime_state.last_caked_extent is not None
+                else [0.0, 90.0, -180.0, 180.0]
+            )
+            x_label = "2θ (degrees)"
+            y_label = "φ (degrees)"
+
         _store_primary_raster_source(image_display, display_primary_source)
         auto_vmin, auto_vmax = _auto_caked_limits(display_primary_source)
 
@@ -11319,7 +11759,7 @@ def do_update():
             display_vmax,
         )
 
-        background_caked_available = False
+        background_analysis_available = False
         if isinstance(display_secondary_source, np.ndarray):
             _store_primary_raster_source(background_display, display_secondary_source)
             bg_display_vmax = vmax_val
@@ -11338,45 +11778,48 @@ def do_update():
                 bg_display_vmax = fallback_vmax
             background_display.set_clim(vmin_val, bg_display_vmax)
             background_display.set_visible(True)
-            background_caked_available = True
+            background_analysis_available = True
         else:
             background_display.set_visible(False)
 
-        radial_min, radial_max, azimuth_min, azimuth_max = (
-            list(simulation_runtime_state.last_caked_extent)
-            if simulation_runtime_state.last_caked_extent is not None
-            else [0.0, 90.0, -180.0, 180.0]
-        )
-        if not background_caked_available:
+        axis_min_x, axis_max_x, axis_min_y, axis_max_y = axis_extent
+        if not background_analysis_available:
             background_display.set_visible(False)
         if not (
-            math.isfinite(radial_min) and math.isfinite(radial_max) and radial_max > radial_min
+            math.isfinite(axis_min_x) and math.isfinite(axis_max_x) and axis_max_x > axis_min_x
         ):
-            radial_min, radial_max = 0.0, 90.0
+            axis_min_x, axis_max_x = (0.0, 1.0) if analysis_space_display_mode == "q_space" else (0.0, 90.0)
         if not (
-            math.isfinite(azimuth_min) and math.isfinite(azimuth_max) and azimuth_max > azimuth_min
+            math.isfinite(axis_min_y) and math.isfinite(axis_max_y) and axis_max_y > axis_min_y
         ):
-            azimuth_min, azimuth_max = -180.0, 180.0
+            axis_min_y, axis_max_y = (
+                (-1.0, 1.0) if analysis_space_display_mode == "q_space" else (-180.0, 180.0)
+            )
 
         gui_canvas_interactions.restore_axis_view(
             ax,
             preserved_limits=preserved_primary_limits,
-            default_xlim=(radial_min, radial_max),
-            default_ylim=(azimuth_min, azimuth_max),
-            preserve=(previous_primary_view_mode == "caked"),
+            default_xlim=(axis_min_x, axis_max_x),
+            default_ylim=(axis_min_y, axis_max_y),
+            preserve=(previous_primary_view_mode == analysis_space_display_mode),
         )
         ax.set_aspect("auto")
         gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)
-        ax.set_xlabel("2θ (degrees)")
-        ax.set_ylabel("φ (degrees)")
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
         ax.set_title("")
-        _sync_primary_raster_geometry(show_caked_image=True)
+        _sync_primary_raster_geometry(view_mode=analysis_space_display_mode)
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_extent = None
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        simulation_runtime_state.last_q_space_image_unscaled = None
+        simulation_runtime_state.last_q_space_extent = None
+        simulation_runtime_state.last_q_space_background_image_unscaled = None
+        simulation_runtime_state.last_q_space_qr_values = None
+        simulation_runtime_state.last_q_space_qz_values = None
         detector_background_source = (
             background_runtime_state.current_background_display
             if (
@@ -11419,11 +11862,11 @@ def do_update():
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
-        _sync_primary_raster_geometry(show_caked_image=False)
+        _sync_primary_raster_geometry(view_mode="detector")
 
     gui_main_figure_chrome.apply_main_figure_axes_chrome(
         ax,
-        axes_visible=bool(caked_display_available),
+        axes_visible=bool(analysis_space_display_available),
     )
 
     # 1D integration
@@ -11701,11 +12144,7 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     render_current_geometry_manual_pairs=(
         lambda: _render_current_geometry_manual_pairs(update_status=False)
     ),
-    caked_view_active=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
+    caked_view_active=_active_caked_primary_view,
     mark_chi_square_dirty=_mark_chi_square_dirty,
     refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
     schedule_update_factory=lambda: schedule_update,
@@ -12694,7 +13133,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     toggle_caked_2d()
     toggle_log_display()
     _sync_primary_raster_geometry(
-        show_caked_image=bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        view_mode=_resolved_primary_analysis_display_mode()
     )
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
@@ -14429,11 +14868,7 @@ geometry_q_group_workflow = gui_runtime_geometry_preview.build_runtime_geometry_
     filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
     collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
     excluded_q_group_count=_geometry_q_group_excluded_count,
-    caked_view_enabled=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
+    caked_view_enabled=_active_caked_primary_view,
     background_visible_factory=lambda: bool(background_runtime_state.visible),
     current_background_display_factory=_get_current_background_display,
     axis=ax,
@@ -19145,14 +19580,21 @@ def _analysis_cache_overlay_coords(
 def _render_analysis_peak_overlays(*, redraw: bool) -> None:
     _clear_analysis_peak_overlay_artists(redraw=False)
 
+    if _resolved_primary_analysis_display_mode() != "caked":
+        if redraw:
+            try:
+                canvas_1d.draw_idle()
+            except Exception:
+                pass
+            if callable(globals().get("_request_overlay_canvas_redraw")):
+                _request_overlay_canvas_redraw(force=True)
+        else:
+            if callable(globals().get("_request_overlay_canvas_redraw")):
+                _request_overlay_canvas_redraw()
+        return
+
     selected_peaks = list(analysis_peak_selection_state.selected_peaks)
-    show_caked = bool(
-        getattr(
-            analysis_view_controls_view_state.show_caked_2d_var,
-            "get",
-            lambda: False,
-        )()
-    )
+    show_caked = True
     cache_tables = _analysis_cache_overlay_tables(show_caked)
     if not selected_peaks and not cache_tables:
         if redraw:
@@ -19497,6 +19939,19 @@ def _set_analysis_peak_pick_mode(
         if show_caked_var is not None and not bool(show_caked_var.get()):
             show_caked_var.set(True)
             toggle_caked_2d()
+        if not _active_caked_primary_view():
+            enabled_flag = False
+            status_text = "Analysis peak picking requires the caked view."
+            analysis_peak_selection_state.pick_armed = False
+            _update_analysis_peak_pick_button_label()
+            _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
+            _set_analysis_peak_fit_results_text(_analysis_peak_fit_results_text())
+            try:
+                progress_label_positions.config(text=status_text)
+            except Exception:
+                pass
+            _render_analysis_peak_overlays(redraw=True)
+            return
 
         if analysis_peak_selection_state.saved_axis_limits is None:
             analysis_peak_selection_state.saved_axis_limits = (
@@ -21369,6 +21824,9 @@ def _run_async_geometry_fit_worker_job(
         gui_geometry_fit.GeometryFitBackgroundCacheBundle,
     ] = {}
     worker_geometry_fit_caking_ai: FastAzimuthalIntegrator | None = None
+    worker_geometry_fit_caking_sig: (
+        tuple[float | None, float | None, float | None, float | None] | None
+    ) = None
 
     def _set_worker_source_snapshot_diagnostics(**kwargs) -> None:
         worker_source_snapshot_diagnostics.clear()
@@ -21544,14 +22002,36 @@ def _run_async_geometry_fit_worker_job(
         )
 
     def _worker_geometry_fit_caking_integrator() -> FastAzimuthalIntegrator | None:
-        nonlocal worker_geometry_fit_caking_ai
-        if worker_geometry_fit_caking_ai is not None:
-            return worker_geometry_fit_caking_ai
+        nonlocal worker_geometry_fit_caking_ai, worker_geometry_fit_caking_sig
         params_local = dict(job_data.get("params", {}) or {})
         center_value = np.asarray(
             params_local.get("center", [np.nan, np.nan]),
             dtype=np.float64,
         ).reshape(-1)
+        requested_sig = _caked_geometry_cache_signature(
+            params_local.get("corto_detector", np.nan),
+            center_value[0] if center_value.size > 0 else np.nan,
+            center_value[1] if center_value.size > 1 else np.nan,
+            params_local.get("lambda", np.nan),
+        )
+        persistent_cache = getattr(
+            simulation_runtime_state,
+            "geometry_fit_caking_ai_cache",
+            {},
+        )
+        if (
+            worker_geometry_fit_caking_ai is not None
+            and worker_geometry_fit_caking_sig == requested_sig
+        ):
+            return worker_geometry_fit_caking_ai
+        if (
+            isinstance(persistent_cache, Mapping)
+            and persistent_cache.get("ai") is not None
+            and persistent_cache.get("sig") == requested_sig
+        ):
+            worker_geometry_fit_caking_ai = persistent_cache.get("ai")
+            worker_geometry_fit_caking_sig = requested_sig
+            return worker_geometry_fit_caking_ai
         pixel_size_value = params_local.get(
             "pixel_size_m",
             params_local.get("pixel_size"),
@@ -21565,8 +22045,14 @@ def _run_async_geometry_fit_worker_job(
                     "wavelength_m": float(params_local.get("lambda", np.nan)),
                 }
             )
+            worker_geometry_fit_caking_sig = requested_sig
+            simulation_runtime_state.geometry_fit_caking_ai_cache = {
+                "sig": requested_sig,
+                "ai": worker_geometry_fit_caking_ai,
+            }
         except Exception:
             worker_geometry_fit_caking_ai = None
+            worker_geometry_fit_caking_sig = None
         return worker_geometry_fit_caking_ai
 
     def _store_worker_caked_view_for_background(

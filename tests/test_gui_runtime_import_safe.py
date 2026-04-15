@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 
@@ -157,25 +158,26 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "start_exact_cake_numba_warmup_in_background()" in source
 
 
-def test_runtime_impl_exact_cake_cache_signature_ignores_tilt_and_wavelength() -> None:
+def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_and_wavelength() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     signature_comment = (
-        "Tilt and wavelength are\n"
-        "    # intentionally ignored here because FastAzimuthalIntegrator discards them,"
+        "distance, detector center, or the fundamental wavelength changes. Tilt\n"
+        "    # updates intentionally do not flush the detector-map or LUT caches"
     )
-    signature_block = (
-        "sig = (\n"
-        "        corto_det_up,\n"
-        "        center_x_up,\n"
-        "        center_y_up,\n"
-        "    )"
-    )
+    signature_block = """sig = _caked_geometry_cache_signature(
+        corto_det_up,
+        center_x_up,
+        center_y_up,
+        wave_m,
+    )"""
 
     assert signature_comment in source
     assert signature_block in source
     assert "Gamma_updated" not in signature_block
     assert "gamma_updated" not in signature_block
-    assert "wave_m" not in signature_block
+    assert "center_x_up" in signature_block
+    assert "center_y_up" in signature_block
+    assert "wave_m" in signature_block
     assert "wavelength=wave_m," in source
 
 
@@ -183,6 +185,23 @@ def test_runtime_impl_warms_live_exact_cake_geometry_cache() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "start_exact_cake_geometry_warmup_in_background(" in source
+
+
+def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_and_wavelength() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "simulation_runtime_state.geometry_fit_caking_ai_cache = {}" in source
+    assert "worker_geometry_fit_caking_sig" in source
+    assert "requested_sig = _caked_geometry_cache_signature(" in source
+    assert 'params_local.get("corto_detector", np.nan),' in source
+    assert 'center_value[0] if center_value.size > 0 else np.nan,' in source
+    assert 'center_value[1] if center_value.size > 1 else np.nan,' in source
+    assert 'params_local.get("lambda", np.nan),' in source
+    assert 'persistent_cache = getattr(' in source
+    assert '"geometry_fit_caking_ai_cache",' in source
+    assert 'persistent_cache.get("sig") == requested_sig' in source
+    assert 'simulation_runtime_state.geometry_fit_caking_ai_cache = {' in source
+    assert "and worker_geometry_fit_caking_sig == requested_sig" in source
     assert "np.asarray(simulation_runtime_state.unscaled_image).shape" in source
     assert "npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS" in source
     assert "npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS" in source
@@ -262,7 +281,7 @@ def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
     assert "gui_main_figure_chrome.configure_matplotlib_canvas_widget(" in source
     assert "gui_main_figure_chrome.configure_main_figure_layout(" in source
     assert "gui_main_figure_chrome.apply_main_figure_axes_chrome(" in source
-    assert "axes_visible=bool(caked_display_available)" in source
+    assert "axes_visible=bool(analysis_space_display_available)" in source
     assert "axes_visible=bool(show_caked_image)" not in source
     assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)" in source
     assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)" in source
@@ -272,16 +291,11 @@ def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
 def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    show_caked_image_assignment = (
-        "show_caked_image = bool(show_caked_requested and caked_payload_available)"
-    )
-
-    assert "show_caked_requested = bool(" in source
-    assert "caked_payload_available = (" in source
-    assert show_caked_image_assignment in source
-    assert "if not show_caked_image:" in source
+    assert "active_view_mode = _resolved_primary_analysis_display_mode()" in source
+    assert "show_analysis_image = show_caked_image or show_q_space_image" in source
+    assert "if not show_analysis_image:" in source
     assert "_store_primary_raster_source(image_display, global_image_buffer)" in source
-    assert "_sync_primary_raster_geometry(show_caked_image=False)" in source
+    assert '_sync_primary_raster_geometry(view_mode="detector")' in source
 
 
 def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> None:
@@ -300,7 +314,7 @@ def test_runtime_impl_preserves_primary_axis_limits_across_same_mode_redraws() -
     assert "previous_primary_view_mode = _current_primary_figure_mode()" in source
     assert "preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)" in source
     assert "gui_canvas_interactions.restore_axis_view(" in source
-    assert 'preserve=(previous_primary_view_mode == "caked")' in source
+    assert "preserve=(previous_primary_view_mode == analysis_space_display_mode)" in source
     assert 'preserve=(previous_primary_view_mode == "detector")' in source
 
 
@@ -396,7 +410,7 @@ def test_runtime_impl_uses_roi_preview_display_sources_for_main_redraw() -> None
 
     assert "display_primary_source, display_secondary_source = (" in source
     assert "_geometry_fit_caked_roi_preview_display_sources(" in source
-    assert "simulation_image=scaled_caked_for_limits," in source
+    assert "simulation_image=scaled_analysis_for_limits," in source
     assert "simulation_image=global_image_buffer," in source
 
 
@@ -416,7 +430,24 @@ def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
     assert "gui_qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(" in source
     assert "def toggle_caked_2d() -> None:" in source
     assert "_invalidate_qr_cylinder_overlay_view_state(clear_artists=True)" in source
-    assert "_toggle_caked_2d_impl()" in source
+    assert "def _apply_main_caked_view_toggle() -> None:" in source
+    assert "_apply_main_caked_view_toggle()" in source
+
+
+def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    restore_start = source.index("def _restore_caked_display_payload_from_cached_results(")
+    restore_end = source.index("def _run_analysis_job(", restore_start)
+    restore_source = source[restore_start:restore_end]
+    apply_start = source.index("def _apply_ready_analysis_result(result: dict[str, object]) -> None:")
+    apply_end = source.index("def schedule_update():", apply_start)
+    apply_source = source[apply_start:apply_end]
+
+    assert "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache" in restore_source
+    assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in restore_source
+    assert "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache" in apply_source
+    assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in apply_source
 
 
 def test_runtime_impl_uses_bound_caked_projection_callback_for_live_overlay_coords() -> None:

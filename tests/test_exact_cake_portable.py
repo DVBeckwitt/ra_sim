@@ -174,6 +174,126 @@ def test_fast_azimuthal_integrator_warm_geometry_cache_prebuilds_common_caches(
     assert lut_calls == [((4, 4), 8, 6)]
 
 
+def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(
+    monkeypatch,
+) -> None:
+    captured: dict[str, np.ndarray | tuple[int, int]] = {}
+    matrix = np.zeros((6, 12), dtype=np.float32)
+    matrix[2, 1] = 1.0
+    matrix[2, 5] = 3.0
+
+    def _fake_cached_lut(
+        self,
+        image_shape,
+        radial_deg,
+        azimuthal_deg,
+        geometry,
+        *,
+        engine,
+        workers,
+    ):
+        del self, geometry, engine, workers
+        captured["shape"] = tuple(int(v) for v in tuple(image_shape)[:2])
+        captured["radial_deg"] = np.asarray(radial_deg, dtype=np.float64)
+        captured["azimuthal_deg"] = np.asarray(azimuthal_deg, dtype=np.float64)
+        return exact_cake.DetectorCakeLUT(
+            image_shape=(3, 4),
+            n_rad=2,
+            n_az=3,
+            matrix=matrix,
+            count_flat=np.ones(6, dtype=np.float64),
+        )
+
+    monkeypatch.setattr(
+        exact_cake_portable.FastAzimuthalIntegrator,
+        "_cached_cake_lut",
+        _fake_cached_lut,
+    )
+
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=1.0,
+        poni1=1.0,
+        poni2=1.0,
+        pixel1=1.0,
+        pixel2=1.0,
+    )
+
+    col, row = exact_cake_portable.caked_point_to_detector_pixel(
+        integrator,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=float),
+        np.array([-90.0, 0.0, 90.0], dtype=float),
+        9.9,
+        1.0,
+    )
+
+    assert (col, row) == pytest.approx((1.0, 0.75))
+    assert captured["shape"] == (3, 4)
+    assert np.allclose(captured["radial_deg"], np.array([10.0, 20.0], dtype=float))
+    assert np.allclose(
+        captured["azimuthal_deg"],
+        np.array([-180.0, -90.0, 0.0], dtype=float),
+    )
+
+
+def test_caked_point_to_detector_pixel_caches_fallback_lut_build(monkeypatch) -> None:
+    build_calls: list[tuple[tuple[int, int], tuple[float, ...], tuple[float, ...]]] = []
+
+    def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
+        del geometry, workers
+        detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
+        build_calls.append(
+            (
+                detector_shape,
+                tuple(float(v) for v in np.asarray(radial_deg, dtype=np.float64)),
+                tuple(float(v) for v in np.asarray(azimuthal_deg, dtype=np.float64)),
+            )
+        )
+        matrix = np.zeros((int(len(radial_deg) * len(azimuthal_deg)), int(np.prod(detector_shape))), dtype=np.float32)
+        matrix[0, 0] = 1.0
+        return exact_cake.DetectorCakeLUT(
+            image_shape=detector_shape,
+            n_rad=int(len(radial_deg)),
+            n_az=int(len(azimuthal_deg)),
+            matrix=matrix,
+            count_flat=np.ones(int(len(radial_deg) * len(azimuthal_deg)), dtype=np.float64),
+        )
+
+    monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
+
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=1.0,
+        poni1=1.0,
+        poni2=1.0,
+        pixel1=1.0,
+        pixel2=1.0,
+    )
+
+    first = exact_cake_portable.caked_point_to_detector_pixel(
+        integrator,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=float),
+        np.array([90.0, 0.0, -90.0], dtype=float),
+        10.0,
+        90.0,
+        engine="python",
+    )
+    second = exact_cake_portable.caked_point_to_detector_pixel(
+        integrator,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=float),
+        np.array([90.0, 0.0, -90.0], dtype=float),
+        10.0,
+        90.0,
+        engine="python",
+    )
+
+    assert first == pytest.approx((0.0, 0.0))
+    assert second == pytest.approx((0.0, 0.0))
+    assert len(build_calls) == 1
+    assert len(exact_cake_portable._PROCESS_CAKE_LUT_CACHE) == 1
+
+
 def test_start_exact_cake_geometry_warmup_in_background_dedupes_requests(
     monkeypatch,
 ) -> None:
@@ -547,6 +667,91 @@ def test_exact_cake_lut_matches_direct_integration() -> None:
     assert np.allclose(cached.sum_signal, direct.sum_signal, atol=1.0e-5)
     assert np.allclose(cached.sum_normalization, direct.sum_normalization, atol=1.0e-5)
     assert np.allclose(cached.count, direct.count, atol=1.0e-5)
+
+
+def test_default_exact_cake_lut_and_inverse_lut_agree_on_detector_pixels() -> None:
+    image = np.arange(1, 26, dtype=np.float32).reshape(5, 5)
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.075,
+        poni1=2.5e-4,
+        poni2=2.5e-4,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+
+    result = integrator.integrate2d(
+        image,
+        npt_rad=64,
+        npt_azim=180,
+        unit="2th_deg",
+        workers=1,
+    )
+    radial_axis = np.asarray(result.radial, dtype=np.float64)
+    raw_azimuth_axis = np.asarray(result.azimuthal, dtype=np.float64)
+    gui_phi_axis = (
+        (
+            exact_cake_portable.PHI_ZERO_OFFSET_DEGREES
+            - raw_azimuth_axis
+            + 180.0
+        )
+        % 360.0
+    ) - 180.0
+    lut = integrator._cached_cake_lut(
+        image.shape,
+        radial_axis,
+        raw_azimuth_axis,
+        exact_cake.DetectorCakeGeometry(
+            pixel_size_m=float(integrator.geometry.pixel_size_m),
+            distance_m=float(integrator.geometry.distance_m),
+            center_row_px=float(integrator.geometry.center_row_px),
+            center_col_px=float(integrator.geometry.center_col_px),
+        ),
+        engine="auto",
+        workers=1,
+    )
+
+    assert lut is not None
+
+    validated_bins = 0
+    for flat_idx in range(int(lut.n_rad) * int(lut.n_az)):
+        if hasattr(lut.matrix, "indptr") and hasattr(lut.matrix, "indices"):
+            row_start = int(lut.matrix.indptr[flat_idx])
+            row_stop = int(lut.matrix.indptr[flat_idx + 1])
+            pixel_indices = np.asarray(lut.matrix.indices[row_start:row_stop], dtype=np.int64)
+            weights = np.asarray(lut.matrix.data[row_start:row_stop], dtype=np.float64)
+        else:
+            row_weights = np.asarray(lut.matrix[flat_idx], dtype=np.float64).reshape(-1)
+            pixel_indices = np.flatnonzero(np.isfinite(row_weights) & (row_weights > 0.0))
+            weights = row_weights[pixel_indices]
+
+        valid = np.isfinite(weights) & (weights > 0.0)
+        pixel_indices = pixel_indices[valid]
+        if pixel_indices.size != 1:
+            continue
+
+        pixel_index = int(pixel_indices[0])
+        expected_col = float(pixel_index % image.shape[1])
+        expected_row = float(pixel_index // image.shape[1])
+        azimuth_idx = int(flat_idx // int(lut.n_rad))
+        radial_idx = int(flat_idx % int(lut.n_rad))
+
+        recovered_col, recovered_row = exact_cake_portable.caked_point_to_detector_pixel(
+            integrator,
+            image.shape,
+            radial_axis,
+            gui_phi_axis,
+            float(radial_axis[radial_idx]),
+            float(gui_phi_axis[azimuth_idx]),
+            workers=1,
+        )
+
+        assert recovered_col == pytest.approx(expected_col, abs=1.0e-6)
+        assert recovered_row == pytest.approx(expected_row, abs=1.0e-6)
+        validated_bins += 1
+        if validated_bins >= 3:
+            break
+
+    assert validated_bins >= 1
 
 
 def test_exact_cake_pixel_selection_matches_equivalent_mask() -> None:

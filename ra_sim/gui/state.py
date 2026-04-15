@@ -906,6 +906,11 @@ class SimulationRuntimeState:
     last_caked_background_image_unscaled: np.ndarray | None = None
     last_caked_radial_values: np.ndarray | None = None
     last_caked_azimuth_values: np.ndarray | None = None
+    last_q_space_image_unscaled: np.ndarray | None = None
+    last_q_space_extent: Any = None
+    last_q_space_background_image_unscaled: np.ndarray | None = None
+    last_q_space_qr_values: np.ndarray | None = None
+    last_q_space_qz_values: np.ndarray | None = None
     last_res2_background: Any = None
     last_res2_sim: Any = None
     ai_cache: dict[str, object] = field(default_factory=dict)

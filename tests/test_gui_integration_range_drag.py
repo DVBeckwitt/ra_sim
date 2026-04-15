@@ -516,6 +516,52 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
     assert schedule_update_calls == [True, True, True]
 
 
+def test_integration_range_update_callbacks_use_direct_toggle_callback_when_bound() -> None:
+    direct_toggle_calls = []
+    schedule_update_calls = []
+    drag_reset_calls = []
+    hkl_pick_calls = []
+    sim_state = SimpleNamespace(
+        integration_update_pending=None,
+        update_running=False,
+        caked_limits_user_override=True,
+    )
+    analysis_view_state = SimpleNamespace(
+        show_1d_var=_FakeVar(False),
+        show_caked_2d_var=_FakeVar(False),
+    )
+    display_controls_state = SimpleNamespace(simulation_limits_user_override=True)
+    bindings = integration_range_drag.IntegrationRangeUpdateBindings(
+        root=_FakeRoot(),
+        simulation_runtime_state=sim_state,
+        analysis_view_state=analysis_view_state,
+        range_view_state=state.IntegrationRangeControlsViewState(),
+        display_controls_state=display_controls_state,
+        hkl_lookup_controls=SimpleNamespace(
+            set_hkl_pick_mode=lambda enabled: hkl_pick_calls.append(enabled)
+        ),
+        integration_range_drag_callbacks=SimpleNamespace(
+            reset=lambda: drag_reset_calls.append(True)
+        ),
+        toggle_caked_2d=lambda: direct_toggle_calls.append(True),
+        schedule_update=lambda: schedule_update_calls.append(True),
+        range_update_debounce_ms=120,
+    )
+    callbacks = integration_range_drag.make_runtime_integration_range_update_callbacks(
+        lambda: bindings
+    )
+
+    analysis_view_state.show_caked_2d_var.set(True)
+    callbacks.toggle_caked_2d()
+
+    assert analysis_view_state.show_1d_var.get() is False
+    assert display_controls_state.simulation_limits_user_override is False
+    assert hkl_pick_calls == [False]
+    assert drag_reset_calls == [True]
+    assert direct_toggle_calls == [True]
+    assert schedule_update_calls == []
+
+
 def test_update_runtime_integration_region_visuals_hides_when_range_hidden() -> None:
     overlay = _FakeOverlay()
     overlay.visible = True

@@ -797,6 +797,67 @@ def test_caked_angles_to_background_display_coords_returns_none_without_native_b
     assert result == (None, None)
 
 
+def test_caked_angles_to_background_display_coords_falls_back_when_inverse_lut_unavailable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(mg, "_caked_point_to_detector_pixel", lambda *_args, **_kwargs: (None, None))
+
+    result = mg.caked_angles_to_background_display_coords(
+        12.0,
+        30.0,
+        ai=object(),
+        native_background=np.ones((8, 8), dtype=float),
+        caked_radial_values=np.array([10.0, 12.0, 14.0], dtype=float),
+        caked_azimuth_values=np.array([-30.0, 0.0, 30.0], dtype=float),
+        get_detector_angular_maps=lambda _ai: (None, None),
+        scattering_angles_to_detector_pixel=lambda two_theta, phi, *_args, **_kwargs: (
+            phi + 100.0,
+            two_theta + 200.0,
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+    )
+
+    assert result == (130.0, 212.0)
+
+
+def test_caked_angles_to_background_display_coords_applies_backend_inverse_to_lut_result(
+    monkeypatch,
+) -> None:
+    inverse_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(
+        mg,
+        "_caked_point_to_detector_pixel",
+        lambda *_args, **_kwargs: (0.0, 1.0),
+    )
+
+    result = mg.caked_angles_to_background_display_coords(
+        12.0,
+        30.0,
+        ai=object(),
+        native_background=np.ones((8, 8), dtype=float),
+        caked_radial_values=np.array([10.0, 12.0, 14.0], dtype=float),
+        caked_azimuth_values=np.array([-30.0, 0.0, 30.0], dtype=float),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        scattering_angles_to_detector_pixel=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic inverse fallback should not be used")
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        backend_detector_coords_to_native_detector_coords=lambda col, row: (
+            inverse_calls.append((float(col), float(row))) or (101.0, 202.0)
+        ),
+    )
+
+    assert result == (101.0, 202.0)
+    assert inverse_calls == [(0.0, 1.0)]
+
+
 def test_geometry_manual_preview_due_throttles_small_motion() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 0),
@@ -1235,6 +1296,88 @@ def test_geometry_manual_refine_preview_point_uses_candidate_sim_seed_for_peak_c
     assert refined == (11.0, 12.0)
     assert seen["candidate"]["sim_col"] == 30.0
     assert seen["candidate"]["sim_row"] == 31.0
+    assert seen["background_context"] == {"img_valid": True}
+    assert seen["match_cfg"] == {"search_radius_px": 6.0}
+
+
+def test_refine_detector_pick_via_caked_background_projects_back_to_detector() -> None:
+    refined = mg.refine_detector_pick_via_caked_background(
+        None,
+        3.0,
+        4.0,
+        detector_display_to_caked_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) - 5.0,
+        ),
+        caked_angles_to_detector_display_coords=lambda two_theta, phi: (
+            float(two_theta) - 10.0,
+            float(phi) + 5.0,
+        ),
+        caked_background=np.zeros((6, 6), dtype=float),
+        radial_axis=np.linspace(10.0, 15.0, 6),
+        azimuth_axis=np.linspace(-5.0, 0.0, 6),
+        cache_data={"match_config": {}, "background_context": None},
+        refine_caked_peak_center_fn=lambda *_args: (13.2, -1.5),
+    )
+
+    assert refined is not None
+    assert refined["raw_caked_col"] == 13.0
+    assert refined["raw_caked_row"] == -1.0
+    assert refined["refined_caked_col"] == 13.2
+    assert refined["refined_caked_row"] == -1.5
+    assert np.isclose(refined["refined_display_col"], 3.2)
+    assert refined["refined_display_row"] == 3.5
+
+
+def test_refine_detector_pick_via_caked_background_uses_caked_candidate_seed() -> None:
+    seen: dict[str, object] = {}
+    radial_axis = np.array([10.0, 11.0, 12.0], dtype=float)
+    azimuth_axis = np.array([-3.0, -2.0, -1.0], dtype=float)
+
+    def _fake_match(candidates, background_context, match_cfg):
+        seen["candidate"] = dict(candidates[0])
+        seen["background_context"] = dict(background_context)
+        seen["match_cfg"] = dict(match_cfg)
+        return ([{"x": 1.0, "y": 2.0}], {"status": "ok"})
+
+    refined = mg.refine_detector_pick_via_caked_background(
+        {
+            "sim_col": 300.0,
+            "sim_row": 400.0,
+            "caked_x": 12.0,
+            "caked_y": -2.0,
+        },
+        3.0,
+        4.0,
+        detector_display_to_caked_coords=lambda col, row: (
+            float(col) + 8.0,
+            float(row) - 7.0,
+        ),
+        caked_angles_to_detector_display_coords=lambda two_theta, phi: (
+            float(two_theta) - 8.0,
+            float(phi) + 7.0,
+        ),
+        caked_background=np.zeros((6, 6), dtype=float),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        cache_data={
+            "match_config": {"search_radius_px": 6.0},
+            "background_context": {"img_valid": True},
+        },
+        match_simulated_peaks_to_peak_context=_fake_match,
+    )
+
+    assert refined is not None
+    assert refined["raw_caked_col"] == 11.0
+    assert refined["raw_caked_row"] == -3.0
+    assert refined["refined_caked_col"] == 11.0
+    assert refined["refined_caked_row"] == -1.0
+    assert refined["refined_display_col"] == 3.0
+    assert refined["refined_display_row"] == 6.0
+    assert seen["candidate"]["sim_col"] == 12.0
+    assert seen["candidate"]["sim_row"] == -2.0
+    assert seen["candidate"]["sim_col_local"] == 2.0
+    assert seen["candidate"]["sim_row_local"] == 1.0
     assert seen["background_context"] == {"img_valid": True}
     assert seen["match_cfg"] == {"search_radius_px": 6.0}
 
@@ -2523,7 +2666,28 @@ def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_
     assert grouped[("q_group", "primary", 1, 0)][0]["sim_row"] == 4.0
 
 
-def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_with_inverse_fallback() -> None:
+def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_inverse_lut(
+    monkeypatch,
+) -> None:
+    inverse_calls: list[tuple[tuple[int, int], tuple[float, ...], tuple[float, ...], float, float]] = []
+
+    monkeypatch.setattr(
+        mg,
+        "_caked_point_to_detector_pixel",
+        lambda _ai, detector_shape, radial_deg, azimuth_deg, two_theta, phi: (
+            inverse_calls.append(
+                (
+                    tuple(int(v) for v in tuple(detector_shape)[:2]),
+                    tuple(float(v) for v in np.asarray(radial_deg, dtype=float)),
+                    tuple(float(v) for v in np.asarray(azimuth_deg, dtype=float)),
+                    float(two_theta),
+                    float(phi),
+                )
+            )
+            or (102.0, 213.0)
+        ),
+    )
+
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: True,
         last_caked_background_image_unscaled=lambda: np.zeros((6, 6), dtype=float),
@@ -2536,17 +2700,27 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_w
         pixel_size=lambda: 0.25,
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
-        get_detector_angular_maps=lambda _ai: (None, None),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
         detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
             AssertionError("forward detector->angle conversion should not be used")
         ),
-        scattering_angles_to_detector_pixel=lambda two_theta, phi, *_args: (
-            phi + 100.0,
-            two_theta + 200.0,
+        scattering_angles_to_detector_pixel=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic inverse fallback should not be used")
         ),
     )
 
     assert callbacks.caked_angles_to_background_display_coords(13.0, 2.0) == (102.0, 213.0)
+    assert inverse_calls == [
+        (
+            (6, 6),
+            (10.0, 11.0, 12.0, 13.0, 14.0, 15.0),
+            (-2.0, -1.0, 0.0, 1.0, 2.0, 3.0),
+            13.0,
+            2.0,
+        )
+    ]
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_backend_inverse() -> None:

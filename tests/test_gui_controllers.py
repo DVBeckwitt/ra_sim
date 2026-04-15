@@ -386,6 +386,38 @@ def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> 
     ) == "Longest rod: 408 points (Gz max 4.080)"
 
 
+def test_caked_image_to_q_space_payload_collapses_signed_phi_into_positive_qr() -> None:
+    payload = controllers.caked_image_to_q_space_payload(
+        np.array(
+            [
+                [2.0, 4.0],
+                [10.0, 20.0],
+                [6.0, 8.0],
+            ],
+            dtype=float,
+        ),
+        np.array([10.0, 20.0], dtype=float),
+        np.array([-90.0, 0.0, 90.0], dtype=float),
+        wavelength_m=1.0e-10,
+    )
+
+    assert isinstance(payload, dict)
+    image = np.asarray(payload["image"], dtype=float)
+    qr_axis = np.asarray(payload["qr"], dtype=float)
+    qz_axis = np.asarray(payload["qz"], dtype=float)
+
+    assert image.shape == (3, 2)
+    assert qr_axis.shape == (2,)
+    assert qz_axis.shape == (3,)
+    assert np.all(qr_axis >= 0.0)
+    assert np.all(np.diff(qr_axis) > 0.0)
+    assert np.all(np.diff(qz_axis) > 0.0)
+    assert np.isclose(payload["extent"][0], 0.0)
+    assert payload["extent"][1] > 0.0
+    assert payload["extent"][3] >= payload["extent"][2]
+    assert np.isfinite(image).any()
+
+
 def test_finite_stack_controller_helpers_normalize_and_format() -> None:
     assert controllers.normalize_finite_stack_layer_count("72", 10) == 72
     assert controllers.normalize_finite_stack_layer_count("bad", 10) == 10

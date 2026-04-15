@@ -3775,26 +3775,6 @@ def make_runtime_geometry_tool_action_callbacks(
         set_manual_pick_armed(armed)
 
         if armed:
-            if callable(ensure_geometry_fit_caked_view):
-                ensure_geometry_fit_caked_view()
-            else:
-                show_caked_2d_var_local = _resolve_runtime_value(show_caked_2d_var)
-                show_caked_2d = False
-                getter = getattr(show_caked_2d_var_local, "get", None)
-                if callable(getter):
-                    try:
-                        show_caked_2d = bool(getter())
-                    except Exception:
-                        show_caked_2d = False
-                if not show_caked_2d:
-                    setter = getattr(show_caked_2d_var_local, "set", None)
-                    if callable(setter):
-                        try:
-                            setter(True)
-                        except Exception:
-                            pass
-                    if callable(toggle_caked_2d):
-                        toggle_caked_2d()
             if callable(set_hkl_pick_mode):
                 set_hkl_pick_mode(False)
             if callable(set_geometry_preview_exclude_mode):

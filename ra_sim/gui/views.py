@@ -79,6 +79,7 @@ _DATASET_CONTEXT_FIELDS = (
 _VIEW_MODE_CHOICES = (
     ("detector", "Detector"),
     ("caked", "Caked"),
+    ("q_space", "Q Space"),
 )
 
 
@@ -1709,7 +1710,7 @@ def set_app_shell_view_mode(
     """Sync the persistent view-switcher selection to one logical mode."""
 
     normalized = str(mode or "detector").strip().lower()
-    if normalized not in {"detector", "caked"}:
+    if normalized not in {"detector", "caked", "q_space"}:
         normalized = "detector"
     _set_var_if_possible(view_state.view_mode_var, normalized)
 
