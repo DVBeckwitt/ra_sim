@@ -1939,7 +1939,16 @@ def _manual_pick_cache_groups_reusable(
 
     if not isinstance(existing_signature, tuple) or not isinstance(current_signature, tuple):
         return False
-    return existing_signature == current_signature
+    if existing_signature == current_signature:
+        return True
+    if len(existing_signature) != len(current_signature):
+        return False
+    if len(existing_signature) < 6:
+        return False
+    return (
+        existing_signature[:3] == current_signature[:3]
+        and existing_signature[4:] == current_signature[4:]
+    )
 
 
 def _manual_pick_cache_normalized_hkl(
@@ -2352,42 +2361,6 @@ def build_geometry_manual_pick_cache(
             pass
         elif stale_reason is None:
             stale_reason = "live peak records were empty."
-    if prefer_cache and not grouped_candidates and bg_index == current_bg_index:
-        rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
-            simulated_peaks_for_params,
-            param_set=param_set,
-            prefer_cache=False,
-        )
-        if _apply_candidate_source(
-            rebuilt_simulated_peaks,
-            action="rebuilt",
-            source="geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-            provenance=[
-                "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-                "build_grouped_candidates",
-                "build_simulated_lookup",
-            ],
-            stale_reason_override=stale_reason,
-        ):
-            pass
-    if not prefer_cache and not grouped_candidates and bg_index == current_bg_index:
-        rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
-            simulated_peaks_for_params,
-            param_set=param_set,
-            prefer_cache=False,
-        )
-        if _apply_candidate_source(
-            rebuilt_simulated_peaks,
-            action="rebuilt",
-            source="geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-            provenance=[
-                "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
-                "build_grouped_candidates",
-                "build_simulated_lookup",
-            ],
-            stale_reason_override=stale_reason,
-        ):
-            pass
     if (
         prefer_cache
         and not grouped_candidates
@@ -2429,10 +2402,50 @@ def build_geometry_manual_pick_cache(
                 ),
             ]
             stale_reason = (
-                "matching source snapshot signature; reused grouped candidates."
+                (
+                    "matching source snapshot signature; reused grouped candidates."
+                    if resolved_existing_signature == cache_sig
+                    else "background-only cache signature change; reused grouped candidates."
+                )
             )
         elif stale_reason is None:
             stale_reason = "existing grouped candidates were empty."
+    if prefer_cache and not grouped_candidates and bg_index == current_bg_index:
+        rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
+            simulated_peaks_for_params,
+            param_set=param_set,
+            prefer_cache=False,
+        )
+        if _apply_candidate_source(
+            rebuilt_simulated_peaks,
+            action="rebuilt",
+            source="geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+            provenance=[
+                "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            stale_reason_override=stale_reason,
+        ):
+            pass
+    if not prefer_cache and not grouped_candidates and bg_index == current_bg_index:
+        rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
+            simulated_peaks_for_params,
+            param_set=param_set,
+            prefer_cache=False,
+        )
+        if _apply_candidate_source(
+            rebuilt_simulated_peaks,
+            action="rebuilt",
+            source="geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+            provenance=[
+                "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            stale_reason_override=stale_reason,
+        ):
+            pass
     if not grouped_candidates and stale_reason is None:
         stale_reason = (
             "source snapshot rows were unavailable; no reusable cached "

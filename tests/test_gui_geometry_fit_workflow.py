@@ -10601,96 +10601,10 @@ def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> 
             "source_row_index": 0,
             "source_branch_index": 0,
             "source_peak_index": 0,
-            "detector_x": 20.0,
-            "detector_y": 20.0,
-        },
-        {
-            "hkl": (1, 0, 0),
-            "q_group_key": ("selected", 1),
-            "source_table_index": 0,
-            "source_reflection_index": 7,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "source_row_index": 1,
-            "source_branch_index": 0,
-            "source_peak_index": 0,
-            "detector_x": 24.0,
-            "detector_y": 20.0,
-        },
-            {
-                "hkl": (1, 0, 0),
-                "q_group_key": ("selected", 1),
-                "source_table_index": 0,
-                "source_reflection_index": 7,
-                "source_reflection_namespace": "full_reflection",
-                "source_reflection_is_full": True,
-                "source_row_index": 2,
-                "source_branch_index": 1,
-                "source_peak_index": 1,
-                "detector_x": 80.0,
-                "detector_y": 80.0,
-            },
-        {
-            "hkl": (2, 0, 0),
-            "q_group_key": ("other", 2),
-            "source_table_index": 1,
-            "source_reflection_index": 9,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "source_row_index": 0,
-            "source_branch_index": 0,
-            "source_peak_index": 0,
-            "detector_x": 60.0,
-            "detector_y": 60.0,
-        },
-    ]
-
-    selection = geometry_fit.build_geometry_fit_caked_roi_selection(
-        source_rows,
-        required_pairs=[
-            {
-                "pair_id": "bg0:pair0",
-                "overlay_match_index": 0,
-                "hkl": (1, 0, 0),
-                "q_group_key": ("selected", 1),
-                "source_reflection_index": 7,
-                "source_reflection_namespace": "full_reflection",
-                "source_reflection_is_full": True,
-                "source_row_index": 0,
-                "source_branch_index": 0,
-                "source_peak_index": 0,
-            }
-        ],
-        image_shape=(128, 128),
-        fit_config={"caked_roi": {"half_width_px": 0.0}},
-    )
-
-    assert selection["valid"] is True
-    assert selection["resolved_pair_count"] == 1
-    assert selection["selected_branch_count"] == 1
-    pixels = set(zip(selection["rows"].tolist(), selection["cols"].tolist()))
-    assert (20, 20) in pixels
-    assert (20, 22) in pixels
-    assert (80, 80) not in pixels
-    assert (60, 60) not in pixels
-
-
-def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -> None:
-    source_rows = [
-        {
-            "hkl": (1, 0, 0),
-            "q_group_key": ("selected", 1),
-            "source_table_index": 0,
-            "source_reflection_index": 7,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "source_row_index": 0,
-            "source_branch_index": 0,
-            "source_peak_index": 0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": -10.0,
             "detector_x": 80.0,
             "detector_y": 80.0,
-            "two_theta_deg": 1.0,
-            "phi_deg": -10.0,
         },
         {
             "hkl": (1, 0, 0),
@@ -10702,10 +10616,10 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
             "source_row_index": 1,
             "source_branch_index": 0,
             "source_peak_index": 0,
+            "background_two_theta_deg": 2.0,
+            "background_phi_deg": -10.0,
             "detector_x": 84.0,
             "detector_y": 80.0,
-            "two_theta_deg": 2.0,
-            "phi_deg": -10.0,
         },
         {
             "hkl": (1, 0, 0),
@@ -10717,10 +10631,25 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
             "source_row_index": 2,
             "source_branch_index": 1,
             "source_peak_index": 1,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": 10.0,
             "detector_x": 40.0,
             "detector_y": 40.0,
-            "two_theta_deg": 1.0,
-            "phi_deg": 10.0,
+        },
+        {
+            "hkl": (2, 0, 0),
+            "q_group_key": ("other", 2),
+            "source_table_index": 1,
+            "source_reflection_index": 9,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "background_two_theta_deg": 3.0,
+            "background_phi_deg": -20.0,
+            "detector_x": 60.0,
+            "detector_y": 60.0,
         },
     ]
 
@@ -10728,6 +10657,7 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
         (1.0, -10.0): (20.0, 20.0),
         (2.0, -10.0): (24.0, 20.0),
         (1.0, 10.0): (40.0, 40.0),
+        (3.0, -20.0): (60.0, 60.0),
     }
 
     def _project(two_theta_deg: float, phi_deg: float):
@@ -10755,11 +10685,95 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
     )
 
     assert selection["valid"] is True
+    assert selection["resolved_pair_count"] == 1
+    assert selection["selected_branch_count"] == 1
     pixels = set(zip(selection["rows"].tolist(), selection["cols"].tolist()))
     assert (20, 20) in pixels
     assert (20, 22) in pixels
     assert (80, 80) not in pixels
-    assert (40, 40) not in pixels
+    assert (60, 60) not in pixels
+
+
+def test_build_geometry_fit_caked_roi_selection_does_not_reuse_stale_detector_coords_when_projection_fails() -> None:
+    source_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 80.0,
+            "detector_y": 80.0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": -10.0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "detector_x": 84.0,
+            "detector_y": 80.0,
+            "background_two_theta_deg": 2.0,
+            "background_phi_deg": -10.0,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("selected", 1),
+            "source_table_index": 0,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 2,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "detector_x": 40.0,
+            "detector_y": 40.0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": 10.0,
+        },
+    ]
+
+    def _project(two_theta_deg: float, phi_deg: float):
+        del two_theta_deg, phi_deg
+        return None
+
+    selection = geometry_fit.build_geometry_fit_caked_roi_selection(
+        source_rows,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("selected", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+        image_shape=(128, 128),
+        fit_config={"caked_roi": {"half_width_px": 0.0}},
+        fit_space_to_detector_point=_project,
+    )
+
+    assert selection["valid"] is False
+    assert selection["fallback_reason"] == "no_native_detector_points"
+    assert selection["pixel_count"] == 0
+    assert selection["selected_branch_count"] == 0
+    assert selection["rows"].size == 0
+    assert selection["cols"].size == 0
 
 
 def test_geometry_fit_caked_roi_angle_point_uses_canonical_angles_only() -> None:
@@ -10808,8 +10822,10 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
             "source_row_index": 0,
             "source_branch_index": 0,
             "source_peak_index": 0,
-            "detector_x": 5.0,
-            "detector_y": 25.0,
+            "background_two_theta_deg": 1.0,
+            "background_phi_deg": -10.0,
+            "detector_x": 80.0,
+            "detector_y": 80.0,
         },
         {
             "hkl": (1, 0, 0),
@@ -10821,10 +10837,20 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
             "source_row_index": 1,
             "source_branch_index": 0,
             "source_peak_index": 0,
-            "detector_x": 45.0,
-            "detector_y": 25.0,
+            "background_two_theta_deg": 2.0,
+            "background_phi_deg": -10.0,
+            "detector_x": 84.0,
+            "detector_y": 80.0,
         },
     ]
+
+    projection_map = {
+        (1.0, -10.0): (5.0, 25.0),
+        (2.0, -10.0): (45.0, 25.0),
+    }
+
+    def _project(two_theta_deg: float, phi_deg: float):
+        return projection_map.get((float(two_theta_deg), float(phi_deg)))
 
     selection = geometry_fit.build_geometry_fit_caked_roi_selection(
         source_rows,
@@ -10849,6 +10875,7 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
                 "max_detector_fraction": 0.05,
             }
         },
+        fit_space_to_detector_point=_project,
     )
 
     assert selection["valid"] is False

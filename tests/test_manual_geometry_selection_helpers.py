@@ -2,6 +2,7 @@ import numpy as np
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
 from ra_sim.gui import manual_geometry as mg
+from ra_sim.simulation import exact_cake_portable
 
 
 class _DummyVar:
@@ -91,6 +92,41 @@ def _dummy_transform_bundle(detector_shape=(6, 6)):
         gui_azimuth_deg=np.array([5.0, -5.0], dtype=np.float64),
         lut=object(),
     )
+
+
+def _real_transform_bundle(detector_shape=(5, 5)):
+    image_shape = tuple(int(v) for v in detector_shape)
+    image = np.arange(1, int(np.prod(image_shape)) + 1, dtype=np.float32).reshape(image_shape)
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.075,
+        poni1=2.5e-4,
+        poni2=2.5e-4,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    result = integrator.integrate2d(
+        image,
+        npt_rad=64,
+        npt_azim=180,
+        method="lut",
+        unit="2th_deg",
+        workers=1,
+    )
+    bundle = exact_cake_portable.build_cake_transform_bundle_from_result(
+        integrator,
+        image.shape,
+        result,
+        workers=1,
+    )
+    assert isinstance(bundle, mg.CakeTransformBundle)
+    return image, bundle
+
+
+def _fail_projection_legacy_path(message: str):
+    def _fail(*_args, **_kwargs):
+        raise AssertionError(message)
+
+    return _fail
 
 
 def _group_candidates(entries):
@@ -390,17 +426,39 @@ def test_geometry_manual_group_target_count_uses_single_bg_peak_for_00l() -> Non
     ) == 2
 
 
-def test_geometry_manual_central_candidate_picks_group_representative() -> None:
-    candidate = mg.geometry_manual_central_candidate(
+def test_geometry_manual_prioritize_candidate_entries_moves_preferred_entry_first() -> None:
+    prioritized = mg.geometry_manual_prioritize_candidate_entries(
         [
-            {"label": "left", "sim_col": 10.0, "sim_row": 10.0, "weight": 1.0},
-            {"label": "center", "sim_col": 20.0, "sim_row": 20.0, "weight": 2.0},
-            {"label": "right", "sim_col": 35.0, "sim_row": 35.0, "weight": 1.0},
-        ]
+            {
+                "label": "left",
+                "source_table_index": 1,
+                "source_row_index": 10,
+                "sim_col": 10.0,
+                "sim_row": 10.0,
+            },
+            {
+                "label": "center",
+                "source_table_index": 1,
+                "source_row_index": 20,
+                "sim_col": 20.0,
+                "sim_row": 20.0,
+            },
+            {
+                "label": "right",
+                "source_table_index": 1,
+                "source_row_index": 35,
+                "sim_col": 35.0,
+                "sim_row": 35.0,
+            },
+        ],
+        {
+            "label": "center-tag",
+            "source_table_index": 1,
+            "source_row_index": 20,
+        },
     )
 
-    assert candidate is not None
-    assert candidate["label"] == "center"
+    assert [entry["label"] for entry in prioritized] == ["center", "left", "right"]
 
 
 def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_peak() -> None:
@@ -450,7 +508,8 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
     assert entry["caked_y"] == -7.4
     assert entry["raw_caked_x"] == 13.0
     assert entry["raw_caked_y"] == -7.0
-    assert entry["source_peak_index"] == 2
+    assert entry["source_branch_index"] == 0
+    assert entry["source_peak_index"] == 0
     assert entry["qr"] == 1.234567890123
     assert entry["qz"] == -2.345678901234
 
@@ -838,8 +897,12 @@ def test_caked_angles_to_background_display_coords_returns_none_without_native_b
         30.0,
         ai=object(),
         native_background=None,
-        get_detector_angular_maps=lambda _ai: (None, None),
-        scattering_angles_to_detector_pixel=lambda *_args, **_kwargs: (10.0, 20.0),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        scattering_angles_to_detector_pixel=_fail_projection_legacy_path(
+            "analytic inverse fallback should not be used"
+        ),
         center=[0.0, 0.0],
         detector_distance=1.0,
         pixel_size=1.0,
@@ -908,6 +971,162 @@ def test_caked_angles_to_background_display_coords_applies_backend_inverse_to_lu
 
     assert result == (101.0, 202.0)
     assert inverse_calls == [(0.0, 1.0)]
+
+
+def test_detector_to_caked_to_detector_round_trips_through_same_transform_bundle(
+    monkeypatch,
+) -> None:
+    image, bundle = _real_transform_bundle()
+    conflicting_ai = _ai_with_live_bundle(_dummy_transform_bundle(detector_shape=bundle.detector_shape))
+    forward_calls: list[object] = []
+    inverse_calls: list[object] = []
+    real_forward = mg._detector_pixel_to_caked_bin
+    real_inverse = mg._caked_point_to_detector_pixel
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            forward_calls.append(live_bundle) or real_forward(live_bundle, col, row)
+        ),
+    )
+
+    def _record_inverse(ai, detector_shape, radial_deg, azimuth_deg, two_theta, phi, **kwargs):
+        inverse_calls.append(kwargs.get("transform_bundle"))
+        return real_inverse(
+            ai,
+            detector_shape,
+            radial_deg,
+            azimuth_deg,
+            two_theta,
+            phi,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(mg, "_caked_point_to_detector_pixel", _record_inverse)
+
+    caked_point = mg.native_detector_coords_to_caked_display_coords(
+        1.0,
+        1.0,
+        ai=conflicting_ai,
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic fallback should not be used"
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        wrap_phi_range=_wrap_phi_range,
+        transform_bundle=bundle,
+        caked_radial_values=bundle.radial_deg,
+        caked_azimuth_values=bundle.gui_azimuth_deg,
+    )
+    assert caked_point is not None
+
+    detector_point = mg.caked_angles_to_background_display_coords(
+        float(caked_point[0]),
+        float(caked_point[1]),
+        ai=conflicting_ai,
+        native_background=image,
+        caked_radial_values=bundle.radial_deg,
+        caked_azimuth_values=bundle.gui_azimuth_deg,
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        scattering_angles_to_detector_pixel=_fail_projection_legacy_path(
+            "analytic inverse fallback should not be used"
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        transform_bundle=bundle,
+    )
+
+    np.testing.assert_allclose(detector_point, (1.0, 1.0), atol=1.0e-6, rtol=0.0)
+    assert forward_calls == [bundle]
+    assert inverse_calls == [bundle]
+
+
+def test_caked_to_detector_to_caked_round_trips_through_same_transform_bundle(
+    monkeypatch,
+) -> None:
+    image, bundle = _real_transform_bundle()
+    conflicting_ai = _ai_with_live_bundle(_dummy_transform_bundle(detector_shape=bundle.detector_shape))
+    forward_calls: list[object] = []
+    inverse_calls: list[object] = []
+    real_forward = mg._detector_pixel_to_caked_bin
+    real_inverse = mg._caked_point_to_detector_pixel
+    seed_caked_point = real_forward(bundle, 3.0, 1.0)
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            forward_calls.append(live_bundle) or real_forward(live_bundle, col, row)
+        ),
+    )
+
+    def _record_inverse(ai, detector_shape, radial_deg, azimuth_deg, two_theta, phi, **kwargs):
+        inverse_calls.append(kwargs.get("transform_bundle"))
+        return real_inverse(
+            ai,
+            detector_shape,
+            radial_deg,
+            azimuth_deg,
+            two_theta,
+            phi,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(mg, "_caked_point_to_detector_pixel", _record_inverse)
+
+    detector_point = mg.caked_angles_to_background_display_coords(
+        float(seed_caked_point[0]),
+        float(seed_caked_point[1]),
+        ai=conflicting_ai,
+        native_background=image,
+        caked_radial_values=bundle.radial_deg,
+        caked_azimuth_values=bundle.gui_azimuth_deg,
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        scattering_angles_to_detector_pixel=_fail_projection_legacy_path(
+            "analytic inverse fallback should not be used"
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        transform_bundle=bundle,
+    )
+    caked_point = mg.native_detector_coords_to_caked_display_coords(
+        float(detector_point[0]),
+        float(detector_point[1]),
+        ai=conflicting_ai,
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic fallback should not be used"
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        wrap_phi_range=_wrap_phi_range,
+        transform_bundle=bundle,
+        caked_radial_values=bundle.radial_deg,
+        caked_azimuth_values=bundle.gui_azimuth_deg,
+    )
+
+    np.testing.assert_allclose(
+        caked_point,
+        seed_caked_point,
+        atol=1.0e-6,
+        rtol=0.0,
+    )
+    assert inverse_calls == [bundle]
+    assert forward_calls == [bundle]
 
 
 def test_geometry_manual_preview_due_throttles_small_motion() -> None:
@@ -1949,25 +2168,21 @@ def test_match_geometry_manual_group_to_background_builds_source_lookup() -> Non
 
 def test_geometry_manual_pick_cache_signature_tracks_background_state() -> None:
     signature = mg.geometry_manual_pick_cache_signature(
-        last_simulation_signature=("sim", 7),
+        source_snapshot_signature=("sim", 7),
         background_index=2,
-        background_image=np.zeros((6, 5), dtype=float),
+        background_image=np.zeros((6, 5), dtype=np.float32),
         use_caked_space=True,
         geometry_preview_excluded_q_groups=[("q_group", "primary", 1, 0)],
         geometry_q_group_cached_entries=[{"key": ("q_group", "primary", 1, 0)}],
-        stored_max_positions_local=[{"x": 1.0}],
-        stored_peak_table_lattice=[{"hkl": (1, 0, 0)}, {"hkl": (0, 0, 2)}],
-        peak_records=[{"display_col": 1.0}],
     )
 
     assert signature[0] == ("sim", 7)
     assert signature[1] == 2
     assert signature[2] is True
+    assert signature[3][1] == (6, 5)
+    assert signature[3][3] == "float32"
     assert signature[4] == 1
-    assert signature[5] == 2
-    assert signature[6] == 1
-    assert signature[7] == 1
-    assert signature[8] == ("('q_group', 'primary', 1, 0)",)
+    assert signature[5] == ("('q_group', 'primary', 1, 0)",)
 
 
 def test_build_geometry_manual_pick_cache_reuses_existing_current_background_state() -> None:
@@ -2216,9 +2431,6 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
             True,
             ("old-bg",),
             1,
-            1,
-            1,
-            1,
             ("('q_group', 'primary', 1, 0)",),
         ),
         existing_cache_data={
@@ -2227,9 +2439,6 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
                 0,
                 True,
                 ("old-bg",),
-                1,
-                1,
-                1,
                 1,
                 ("('q_group', 'primary', 1, 0)",),
             ),
@@ -2244,9 +2453,6 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
             0,
             True,
             ("new-bg",),
-            1,
-            1,
-            1,
             1,
             ("('q_group', 'primary', 1, 0)",),
         ),
@@ -2966,8 +3172,6 @@ def test_make_runtime_geometry_manual_projection_callbacks_keep_detector_points_
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_live_preview_peaks() -> None:
-    simulation_calls: list[dict[str, object]] = []
-
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: None,
@@ -2976,9 +3180,6 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
         current_background_display=lambda: np.zeros((6, 6), dtype=float),
         current_background_native=lambda: np.zeros((6, 6), dtype=float),
         current_geometry_fit_params=lambda: {"gamma": 1.5},
-        simulate_preview_style_peaks_for_fit=lambda *_args, **_kwargs: (
-            simulation_calls.append({"called": True}) or []
-        ),
         build_live_preview_simulated_peaks_from_cache=lambda: [
             {
                 "label": "1,0,0",
@@ -2989,16 +3190,24 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
                 "sim_row": 4.0,
             }
         ],
+        ensure_peak_overlay_data=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("live preview cache hit should not bootstrap overlay data")
+        ),
         miller=lambda: np.array([[1.0, 0.0, 0.0]], dtype=float),
         intensities=lambda: np.array([2.0], dtype=float),
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
-        detector_pixel_to_scattering_angles=lambda *_args: (None, None),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
     )
 
     projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    diagnostics = callbacks.last_simulation_diagnostics()
 
-    assert simulation_calls == []
     assert projected == [
         {
             "label": "1,0,0",
@@ -3011,10 +3220,11 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
             "sim_row_raw": 4.0,
         }
     ]
+    assert diagnostics["source"] == "cache"
+    assert diagnostics["status"] == "cache_hit"
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstraps_peak_overlay_cache() -> None:
-    simulation_calls: list[dict[str, object]] = []
     ensured: list[bool] = []
     cached_peaks: list[dict[str, object]] = []
 
@@ -3040,22 +3250,24 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstra
         current_background_display=lambda: np.zeros((6, 6), dtype=float),
         current_background_native=lambda: np.zeros((6, 6), dtype=float),
         current_geometry_fit_params=lambda: {"gamma": 1.5},
-        simulate_preview_style_peaks_for_fit=lambda *_args, **_kwargs: (
-            simulation_calls.append({"called": True}) or []
-        ),
         build_live_preview_simulated_peaks_from_cache=lambda: list(cached_peaks),
         ensure_peak_overlay_data=_ensure_peak_overlay_data,
         miller=lambda: np.array([[1.0, 0.0, 0.0]], dtype=float),
         intensities=lambda: np.array([2.0], dtype=float),
         image_size=lambda: 6,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
-        detector_pixel_to_scattering_angles=lambda *_args: (None, None),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
     )
 
     projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    diagnostics = callbacks.last_simulation_diagnostics()
 
     assert ensured == [False]
-    assert simulation_calls == []
     assert projected == [
         {
             "label": "1,0,0",
@@ -3068,6 +3280,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstra
             "sim_row_raw": 4.0,
         }
     ]
+    assert diagnostics["source"] == "cache"
+    assert diagnostics["status"] == "cache_hit"
 
 
 def test_render_current_geometry_manual_pairs_updates_active_session_status() -> None:
@@ -3986,7 +4200,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
     ]
 
 
-def test_runtime_projection_callbacks_capture_fresh_simulation_failure_diagnostics() -> None:
+def test_runtime_projection_callbacks_report_rebuild_disabled_diagnostics() -> None:
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: None,
@@ -4019,18 +4233,6 @@ def test_runtime_projection_callbacks_capture_fresh_simulation_failure_diagnosti
                 "wavelength_array": np.array([1.5406]),
             },
         },
-        simulate_preview_style_peaks_for_fit=lambda *_args, **_kwargs: (
-            (_ for _ in ()).throw(RuntimeError("boom"))
-        ),
-        last_preview_style_simulation_diagnostics=lambda: {
-            "stage": "simulate_preview_style_peaks",
-            "status": "process_peaks_parallel_exception",
-            "hit_table_count": 0,
-            "nonempty_hit_table_count": 0,
-            "finite_hit_row_total": 0,
-            "exception_type": "RuntimeError",
-            "exception_message": "boom",
-        },
         miller=lambda: np.array([[0.0, 0.0, 3.0]], dtype=float),
         intensities=lambda: np.array([1.0], dtype=float),
         image_size=2048,
@@ -4041,9 +4243,5 @@ def test_runtime_projection_callbacks_capture_fresh_simulation_failure_diagnosti
     diagnostics = callbacks.last_simulation_diagnostics()
 
     assert diagnostics["source"] == "fresh"
-    assert diagnostics["status"] == "simulation_exception"
-    assert diagnostics["miller_shape"] == [1, 3]
-    assert diagnostics["intensity_shape"] == [1]
-    assert diagnostics["missing_param_keys"] == []
-    assert diagnostics["runtime_simulation"]["status"] == "process_peaks_parallel_exception"
-    assert diagnostics["runtime_simulation"]["exception_message"] == "boom"
+    assert diagnostics["requested_prefer_cache"] is False
+    assert diagnostics["status"] == "simulated_peak_rebuild_disabled"
