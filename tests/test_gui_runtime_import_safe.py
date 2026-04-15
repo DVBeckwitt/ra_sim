@@ -752,6 +752,23 @@ def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
     assert "root.after_idle(_run_initial_startup_work)" in source
 
 
+def test_runtime_impl_builds_shell_before_deferred_runtime_state_load() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
+    startup_start = source.index("def _run_initial_startup_work():", main_start)
+    startup_end = source.index("root.after_idle(_run_initial_startup_work)", startup_start)
+    pre_startup_block = source[main_start:startup_start]
+    startup_block = source[startup_start:startup_end]
+
+    assert "runtime_context = RuntimeContext(" in pre_startup_block
+    assert "runtime_context = build_runtime_window_context(runtime_context)" in pre_startup_block
+    assert "build_runtime_state_context()" not in pre_startup_block
+    assert "root.deiconify()" in pre_startup_block
+    assert "runtime_context = build_runtime_state_context()" in startup_block
+    assert "runtime_context = build_runtime_plot_context(runtime_context)" in startup_block
+    assert "runtime_context = build_runtime_controls_context(runtime_context)" in startup_block
+
+
 def test_runtime_impl_lazy_builds_excel_dataframes() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 

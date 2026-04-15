@@ -1921,6 +1921,9 @@ def _initialize_runtime_root_block_02() -> None:
     root.report_callback_exception = _runtime_report_callback_exception
 
 def _initialize_runtime_shell_block_01() -> None:
+    global progress_label_positions, progress_label_geometry, ordered_structure_progressbar, progress_label_ordered_structure, mosaic_progressbar, progress_label_mosaic, progress_label
+    global update_timing_label, chi_square_label
+
     _ensure_runtime_update_trace_hooks()
     gui_views.create_app_shell(
         root=root,
@@ -1961,6 +1964,33 @@ def _initialize_runtime_shell_block_01() -> None:
         or workspace_panels_view_state.workspace_debug_frame is None
     ):
         raise RuntimeError("Workspace panels were not created.")
+
+    gui_views.create_status_panel(
+        parent=app_shell_view_state.status_frame,
+        view_state=status_panel_view_state,
+    )
+    progress_label_positions = status_panel_view_state.progress_label_positions
+    progress_label_geometry = status_panel_view_state.progress_label_geometry
+    ordered_structure_progressbar = status_panel_view_state.ordered_structure_progressbar
+    progress_label_ordered_structure = status_panel_view_state.progress_label_ordered_structure
+    mosaic_progressbar = status_panel_view_state.mosaic_progressbar
+    progress_label_mosaic = status_panel_view_state.progress_label_mosaic
+    progress_label = status_panel_view_state.progress_label
+    update_timing_label = status_panel_view_state.update_timing_label
+    chi_square_label = status_panel_view_state.chi_square_label
+    if (
+        progress_label_positions is None
+        or progress_label_geometry is None
+        or ordered_structure_progressbar is None
+        or progress_label_ordered_structure is None
+        or mosaic_progressbar is None
+        or progress_label_mosaic is None
+        or progress_label is None
+        or update_timing_label is None
+        or chi_square_label is None
+    ):
+        raise RuntimeError("Status panel was not created.")
+    progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
 
 
 
@@ -13009,8 +13039,7 @@ def _attach_geometry_fit_background_selection_trace() -> None:
 
 
 def _initialize_runtime_controls_block_35() -> None:
-    global geometry_fit_background_selection_var, progress_label_positions, progress_label_geometry, ordered_structure_progressbar, progress_label_ordered_structure, mosaic_progressbar, progress_label_mosaic, progress_label
-    global update_timing_label, chi_square_label
+    global geometry_fit_background_selection_var
 
     gui_views.create_geometry_fit_background_controls(
         parent=app_shell_view_state.match_backgrounds_frame,
@@ -13055,33 +13084,6 @@ def _initialize_runtime_controls_block_35() -> None:
             ),
         ],
     )
-
-    gui_views.create_status_panel(
-        parent=app_shell_view_state.status_frame,
-        view_state=status_panel_view_state,
-    )
-    progress_label_positions = status_panel_view_state.progress_label_positions
-    progress_label_geometry = status_panel_view_state.progress_label_geometry
-    ordered_structure_progressbar = status_panel_view_state.ordered_structure_progressbar
-    progress_label_ordered_structure = status_panel_view_state.progress_label_ordered_structure
-    mosaic_progressbar = status_panel_view_state.mosaic_progressbar
-    progress_label_mosaic = status_panel_view_state.progress_label_mosaic
-    progress_label = status_panel_view_state.progress_label
-    update_timing_label = status_panel_view_state.update_timing_label
-    chi_square_label = status_panel_view_state.chi_square_label
-    if (
-        progress_label_positions is None
-        or progress_label_geometry is None
-        or ordered_structure_progressbar is None
-        or progress_label_ordered_structure is None
-        or mosaic_progressbar is None
-        or progress_label_mosaic is None
-        or progress_label is None
-        or update_timing_label is None
-        or chi_square_label is None
-    ):
-        raise RuntimeError("Status panel was not created.")
-    progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
 
     hbn_geometry_debug_view_state.report_text = (
         "No hBN geometry debug report yet.\nImport an hBN bundle to generate one."
@@ -24932,140 +24934,156 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         package_launcher.launch_mosaic_visualizer()
         return
 
-    runtime_context = build_runtime_state_context()
+    runtime_context = RuntimeContext(
+        state=app_state,
+        simulation_runtime_state=simulation_runtime_state,
+        background_runtime_state=background_runtime_state,
+    )
     runtime_context = build_runtime_window_context(runtime_context)
-    runtime_context = build_runtime_plot_context(runtime_context)
-    runtime_context = build_runtime_controls_context(runtime_context)
     _ = runtime_context
 
     gui_views.apply_launch_window_context(root)
+    _set_structure_bootstrap_controls_enabled(False)
+    progress_label.config(text="Loading startup data...")
     try:
         root.deiconify()
     except tk.TclError:
         pass
     _emit_startup_benchmark_event("window_deiconified")
-    _set_structure_bootstrap_controls_enabled(
-        bool(getattr(structure_model_state, "bootstrap_complete", False))
-    )
-
-    params_file_path = get_path("parameters_file")
-    profile_loaded = False
-    if os.path.exists(params_file_path):
-        simulation_runtime_state.startup_updates_suspended = True
-        simulation_runtime_state.pending_startup_refresh = False
-        try:
-            load_parameters(
-                params_file_path,
-                theta_initial_var,
-                cor_angle_var,
-                gamma_var,
-                Gamma_var,
-                chi_var,
-                zs_var,
-                zb_var,
-                sample_width_var,
-                sample_length_var,
-                sample_depth_var,
-                debye_x_var,
-                debye_y_var,
-                corto_detector_var,
-                sigma_mosaic_var,
-                gamma_mosaic_var,
-                eta_var,
-                a_var,
-                c_var,
-                center_x_var,
-                center_y_var,
-                resolution_var,
-                custom_samples_var,
-                rod_points_per_gz_var,
-                bandwidth_percent_var=bandwidth_percent_var,
-                optics_mode_var=optics_mode_var,
-                phase_delta_expr_var=phase_delta_expr_var,
-                phi_l_divisor_var=phi_l_divisor_var,
-                sf_prune_bias_var=sf_prune_bias_var,
-                solve_q_steps_var=solve_q_steps_var,
-                solve_q_rel_tol_var=solve_q_rel_tol_var,
-                solve_q_mode_var=solve_q_mode_var,
-            )
-        finally:
-            simulation_runtime_state.startup_updates_suspended = False
-        if finite_stack_controls_view_state.phase_delta_entry_var is not None:
-            gui_views.set_finite_stack_phase_delta_entry_text(
-                finite_stack_controls_view_state,
-                _current_phase_delta_expression(),
-            )
-        if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
-            gui_views.set_finite_stack_phi_l_divisor_entry_text(
-                finite_stack_controls_view_state,
-                gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
-            )
-        _apply_rod_points_per_gz(trigger_update=False)
-        ensure_valid_resolution_choice()
-        profile_loaded = True
-    else:
-        ensure_valid_resolution_choice()
-
-    sample_count = int(max(1, simulation_runtime_state.num_samples))
-    cif_summary = Path(_current_primary_cif_path()).name
-    if structure_model_state.cif_file2:
-        cif_summary = f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
-    print(
-        "Startup ready: "
-        f"profile={'loaded' if profile_loaded else 'defaults'}; "
-        f"sampling={sample_count} samples; "
-        f"sf_prune={current_sf_prune_bias():+.2f}; "
-        f"q_mode={gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(solve_q_mode_var.get())}; "
-        f"q_steps={current_solve_q_values().steps}; "
-        f"q_tol={current_solve_q_values().rel_tol:.2e}; "
-        f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
-        f"cif={cif_summary}"
-    )
-
-    gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
-    simulation_runtime_state.update_pending = None
-    gui_controllers.clear_tk_after_token(
-        root,
-        simulation_runtime_state.integration_update_pending,
-    )
-    simulation_runtime_state.integration_update_pending = None
-
-    post_startup_tasks: list[gui_runtime_startup.StartupTask] = []
-    if not structure_model_controls_built:
-        post_startup_tasks.append(
-            gui_runtime_startup.StartupTask(
-                "structure controls",
-                _rebuild_structure_model_controls,
-            )
-        )
-    if write_excel:
-        post_startup_tasks.append(
-            gui_runtime_startup.StartupTask(
-                "initial Excel export",
-                export_initial_excel,
-            )
-        )
-
-    def _handle_post_startup_error(task_name: str, exc: Exception) -> None:
-        progress_label.config(text=f"Startup post-processing failed during {task_name}: {exc}")
-        try:
-            import traceback
-
-            traceback.print_exc()
-        except Exception:
-            pass
-
-    post_startup_task_runner = gui_runtime_startup.build_runtime_startup_task_runner(
-        root=root,
-        tasks=post_startup_tasks,
-        on_error=_handle_post_startup_error,
-        initial_delay_ms=200,
-        inter_task_delay_ms=75,
-    )
 
     def _run_initial_startup_work():
+        nonlocal runtime_context
+
         try:
             _emit_startup_benchmark_event("after_idle_startup_task")
+            runtime_context = build_runtime_state_context()
+            runtime_context = build_runtime_window_context(runtime_context)
+            runtime_context = build_runtime_plot_context(runtime_context)
+            runtime_context = build_runtime_controls_context(runtime_context)
+            _ = runtime_context
+            _set_structure_bootstrap_controls_enabled(
+                bool(getattr(structure_model_state, "bootstrap_complete", False))
+            )
+            params_file_path = get_path("parameters_file")
+            profile_loaded = False
+            if os.path.exists(params_file_path):
+                simulation_runtime_state.startup_updates_suspended = True
+                simulation_runtime_state.pending_startup_refresh = False
+                try:
+                    load_parameters(
+                        params_file_path,
+                        theta_initial_var,
+                        cor_angle_var,
+                        gamma_var,
+                        Gamma_var,
+                        chi_var,
+                        zs_var,
+                        zb_var,
+                        sample_width_var,
+                        sample_length_var,
+                        sample_depth_var,
+                        debye_x_var,
+                        debye_y_var,
+                        corto_detector_var,
+                        sigma_mosaic_var,
+                        gamma_mosaic_var,
+                        eta_var,
+                        a_var,
+                        c_var,
+                        center_x_var,
+                        center_y_var,
+                        resolution_var,
+                        custom_samples_var,
+                        rod_points_per_gz_var,
+                        bandwidth_percent_var=bandwidth_percent_var,
+                        optics_mode_var=optics_mode_var,
+                        phase_delta_expr_var=phase_delta_expr_var,
+                        phi_l_divisor_var=phi_l_divisor_var,
+                        sf_prune_bias_var=sf_prune_bias_var,
+                        solve_q_steps_var=solve_q_steps_var,
+                        solve_q_rel_tol_var=solve_q_rel_tol_var,
+                        solve_q_mode_var=solve_q_mode_var,
+                    )
+                finally:
+                    simulation_runtime_state.startup_updates_suspended = False
+                if finite_stack_controls_view_state.phase_delta_entry_var is not None:
+                    gui_views.set_finite_stack_phase_delta_entry_text(
+                        finite_stack_controls_view_state,
+                        _current_phase_delta_expression(),
+                    )
+                if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
+                    gui_views.set_finite_stack_phi_l_divisor_entry_text(
+                        finite_stack_controls_view_state,
+                        gui_controllers.format_finite_stack_phi_l_divisor(
+                            _current_phi_l_divisor()
+                        ),
+                    )
+                _apply_rod_points_per_gz(trigger_update=False)
+                ensure_valid_resolution_choice()
+                profile_loaded = True
+            else:
+                ensure_valid_resolution_choice()
+
+            sample_count = int(max(1, simulation_runtime_state.num_samples))
+            cif_summary = Path(_current_primary_cif_path()).name
+            if structure_model_state.cif_file2:
+                cif_summary = (
+                    f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
+                )
+            print(
+                "Startup ready: "
+                f"profile={'loaded' if profile_loaded else 'defaults'}; "
+                f"sampling={sample_count} samples; "
+                f"sf_prune={current_sf_prune_bias():+.2f}; "
+                f"q_mode={gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(solve_q_mode_var.get())}; "
+                f"q_steps={current_solve_q_values().steps}; "
+                f"q_tol={current_solve_q_values().rel_tol:.2e}; "
+                f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
+                f"cif={cif_summary}"
+            )
+
+            gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
+            simulation_runtime_state.update_pending = None
+            gui_controllers.clear_tk_after_token(
+                root,
+                simulation_runtime_state.integration_update_pending,
+            )
+            simulation_runtime_state.integration_update_pending = None
+
+            post_startup_tasks: list[gui_runtime_startup.StartupTask] = []
+            if not structure_model_controls_built:
+                post_startup_tasks.append(
+                    gui_runtime_startup.StartupTask(
+                        "structure controls",
+                        _rebuild_structure_model_controls,
+                    )
+                )
+            if write_excel:
+                post_startup_tasks.append(
+                    gui_runtime_startup.StartupTask(
+                        "initial Excel export",
+                        export_initial_excel,
+                    )
+                )
+
+            def _handle_post_startup_error(task_name: str, exc: Exception) -> None:
+                progress_label.config(
+                    text=f"Startup post-processing failed during {task_name}: {exc}"
+                )
+                try:
+                    import traceback
+
+                    traceback.print_exc()
+                except Exception:
+                    pass
+
+            post_startup_task_runner = gui_runtime_startup.build_runtime_startup_task_runner(
+                root=root,
+                tasks=post_startup_tasks,
+                on_error=_handle_post_startup_error,
+                initial_delay_ms=200,
+                inter_task_delay_ms=75,
+            )
             progress_label.config(text="Initializing structure model...")
             _bootstrap_structure_model_state_for_startup()
             _set_structure_bootstrap_controls_enabled(True)
