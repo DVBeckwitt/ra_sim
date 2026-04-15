@@ -664,10 +664,16 @@ def test_runtime_impl_lazy_builds_excel_dataframes() -> None:
 
 def test_runtime_impl_lazy_mounts_analysis_surfaces() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    lazy_block_start = source.index("analysis_surfaces_initialized = False")
+    lazy_helper_start = source.index("def _ensure_analysis_figure() -> None:")
+    lazy_block = source[lazy_block_start:lazy_helper_start]
 
     assert "analysis_surfaces_initialized = False" in source
+    assert "fig_1d = None" in source
+    assert "def _ensure_analysis_figure() -> None:" in source
     assert "def ensure_analysis_surfaces_initialized() -> None:" in source
     assert "_show_analysis_tab_lazy_placeholders()" in source
+    assert "plt.subplots(2, 1, figsize=(5, 8))" not in lazy_block
     assert "_mount_analysis_figure(app_shell_view_state.plot_frame_1d)" not in source
     assert "ensure_analysis_surfaces_initialized()" in source
 

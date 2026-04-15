@@ -7013,8 +7013,8 @@ def apply_scale_factor_to_existing_results(
     if update_1d and (
         analysis_view_controls_view_state.show_1d_var.get()
         and _analysis_integration_outputs_visible()
-        and "line_1d_rad" in globals()
-        and "line_1d_az" in globals()
+        and line_1d_rad is not None
+        and line_1d_az is not None
     ):
         if (
             simulation_runtime_state.last_1d_integration_data["radials_sim"] is not None
@@ -7035,15 +7035,15 @@ def apply_scale_factor_to_existing_results(
                 simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"]
                 * scale,
             )
-        if "ax_1d_radial" in globals():
+        if ax_1d_radial is not None:
             ax_1d_radial.relim()
             ax_1d_radial.autoscale_view(scalex=False, scaley=True)
-        if "ax_1d_azim" in globals():
+        if ax_1d_azim is not None:
             ax_1d_azim.relim()
             ax_1d_azim.autoscale_view(scalex=False, scaley=True)
         _clear_analysis_peak_fit_results(redraw=False, update_text=True)
         _render_analysis_peak_overlays(redraw=False)
-        if "canvas_1d" in globals():
+        if canvas_1d is not None:
             canvas_1d.draw_idle()
 
     if update_canvas:
@@ -7083,8 +7083,13 @@ def _reset_analysis_figure_view() -> None:
 
 
 def _mount_analysis_figure(parent) -> None:
+    global fig_1d
+    global ax_1d_radial, ax_1d_azim
+    global line_1d_rad, line_1d_rad_bg, line_1d_az, line_1d_az_bg
     global canvas_1d
     global analysis_1d_interaction_bindings
+
+    _ensure_analysis_figure()
 
     if canvas_1d is not None:
         try:
@@ -7107,22 +7112,39 @@ def _mount_analysis_figure(parent) -> None:
     )
 
 
-fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
+fig_1d = None
+ax_1d_radial = None
+ax_1d_azim = None
 canvas_1d = None
+line_1d_rad = None
+line_1d_rad_bg = None
+line_1d_az = None
+line_1d_az_bg = None
 
-(line_1d_rad,) = ax_1d_radial.plot([], [], "b-", label="Simulated (2θ)")
-(line_1d_rad_bg,) = ax_1d_radial.plot([], [], "r--", label="Background (2θ)")
-ax_1d_radial.legend()
-ax_1d_radial.set_xlabel("2θ (degrees)")
-ax_1d_radial.set_ylabel("Intensity")
-ax_1d_radial.set_title("Radial Integration (2θ)")
 
-(line_1d_az,) = ax_1d_azim.plot([], [], "b-", label="Simulated (φ)")
-(line_1d_az_bg,) = ax_1d_azim.plot([], [], "r--", label="Background (φ)")
-ax_1d_azim.legend()
-ax_1d_azim.set_xlabel("Azimuth (degrees)")
-ax_1d_azim.set_ylabel("Intensity")
-ax_1d_azim.set_title("Azimuthal Integration (φ)")
+def _ensure_analysis_figure() -> None:
+    global fig_1d
+    global ax_1d_radial, ax_1d_azim
+    global line_1d_rad, line_1d_rad_bg, line_1d_az, line_1d_az_bg
+
+    if fig_1d is not None and ax_1d_radial is not None and ax_1d_azim is not None:
+        return
+
+    fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
+
+    (line_1d_rad,) = ax_1d_radial.plot([], [], "b-", label="Simulated (2θ)")
+    (line_1d_rad_bg,) = ax_1d_radial.plot([], [], "r--", label="Background (2θ)")
+    ax_1d_radial.legend()
+    ax_1d_radial.set_xlabel("2θ (degrees)")
+    ax_1d_radial.set_ylabel("Intensity")
+    ax_1d_radial.set_title("Radial Integration (2θ)")
+
+    (line_1d_az,) = ax_1d_azim.plot([], [], "b-", label="Simulated (φ)")
+    (line_1d_az_bg,) = ax_1d_azim.plot([], [], "r--", label="Background (φ)")
+    ax_1d_azim.legend()
+    ax_1d_azim.set_xlabel("Azimuth (degrees)")
+    ax_1d_azim.set_ylabel("Intensity")
+    ax_1d_azim.set_title("Azimuthal Integration (φ)")
 
 tth_min_var = None
 tth_max_var = None
@@ -7479,10 +7501,14 @@ simulation_runtime_state.geometry_fit_caking_ai_cache = {}
 
 
 def _clear_1d_plot_cache_and_lines():
-    line_1d_rad.set_data([], [])
-    line_1d_az.set_data([], [])
-    line_1d_rad_bg.set_data([], [])
-    line_1d_az_bg.set_data([], [])
+    if line_1d_rad is not None:
+        line_1d_rad.set_data([], [])
+    if line_1d_az is not None:
+        line_1d_az.set_data([], [])
+    if line_1d_rad_bg is not None:
+        line_1d_rad_bg.set_data([], [])
+    if line_1d_az_bg is not None:
+        line_1d_az_bg.set_data([], [])
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
     _render_analysis_peak_overlays(redraw=False)
     if canvas_1d is not None:
@@ -7498,6 +7524,7 @@ def _clear_1d_plot_cache_and_lines():
 
 
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
+    _ensure_analysis_figure()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
     i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
         sim_res2,
