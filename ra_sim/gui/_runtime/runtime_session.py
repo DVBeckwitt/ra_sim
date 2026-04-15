@@ -128,8 +128,11 @@ from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_backgr
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
+    build_angle_axes,
+    build_cake_transform_bundle,
     build_cake_transform_bundle_from_result,
     caked_point_to_detector_pixel,
+    detector_two_theta_max_deg,
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
     prepare_gui_phi_display,
@@ -4994,6 +4997,75 @@ def _geometry_fit_caked_roi_fit_space_to_detector_point(
     return _project
 
 
+def _geometry_fit_worker_caked_projection_view(
+    *,
+    detector_shape: Sequence[object] | None,
+    ai: FastAzimuthalIntegrator | None,
+    npt_rad: int | None = None,
+    npt_azim: int | None = None,
+) -> dict[str, object] | None:
+    """Build exact-cake axis metadata for worker ROI filtering before first cake."""
+
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    try:
+        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
+    except Exception:
+        return None
+    if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
+        return None
+
+    radial_bins = (
+        int(max(1, npt_rad))
+        if npt_rad is not None
+        else int(max(1, DEFAULT_ANALYSIS_RADIAL_BINS))
+    )
+    azimuth_bins = (
+        int(max(1, npt_azim))
+        if npt_azim is not None
+        else int(max(1, DEFAULT_ANALYSIS_AZIMUTH_BINS))
+    )
+    try:
+        radial_axis, raw_azimuth_axis = build_angle_axes(
+            npt_rad=radial_bins,
+            npt_azim=azimuth_bins,
+            tth_min_deg=0.0,
+            tth_max_deg=detector_two_theta_max_deg(
+                normalized_shape,
+                ai.geometry,
+            ),
+            azimuth_min_deg=-180.0,
+            azimuth_max_deg=180.0,
+        )
+        transform_bundle = build_cake_transform_bundle(
+            ai,
+            normalized_shape,
+            radial_axis,
+            raw_azimuth_axis,
+        )
+    except Exception:
+        return None
+    if not isinstance(transform_bundle, CakeTransformBundle):
+        return None
+
+    gui_azimuth_axis = np.asarray(
+        raw_phi_to_gui_phi(raw_azimuth_axis),
+        dtype=np.float64,
+    )
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(gui_azimuth_axis, kind="stable"),
+        dtype=np.int32,
+    )
+    gui_azimuth_axis = gui_azimuth_axis[raw_to_gui_row_permutation]
+    return {
+        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
+        "azimuth_axis": np.asarray(gui_azimuth_axis, dtype=np.float64).copy(),
+        "raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=np.float64).copy(),
+        "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+        "transform_bundle": transform_bundle,
+    }
+
+
 def _caked_axis_to_image_index(
     value: float,
     axis_values: Sequence[float] | None,
@@ -5176,6 +5248,7 @@ def _initialize_runtime_controls_block_04() -> None:
             ),
             build_grouped_candidates=_geometry_manual_pick_candidates,
             build_simulated_lookup=_geometry_manual_simulated_lookup,
+            project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
             entry_display_coords=_geometry_manual_entry_display_coords,
             auto_match_background_context=(
                 lambda *args, **kwargs: globals()["_auto_match_background_context"](
@@ -22232,6 +22305,44 @@ def _build_geometry_fit_async_job(
             except Exception:
                 pass
 
+    analysis_bins: tuple[int, int]
+    current_caked_view = caked_views_by_background.get(int(current_background_index))
+    try:
+        current_radial_axis = np.asarray(
+            dict(current_caked_view or {}).get("radial_axis"),
+            dtype=np.float64,
+        )
+        current_azimuth_axis = np.asarray(
+            dict(current_caked_view or {}).get("azimuth_axis"),
+            dtype=np.float64,
+        )
+    except Exception:
+        current_radial_axis = None
+        current_azimuth_axis = None
+    if (
+        isinstance(current_radial_axis, np.ndarray)
+        and current_radial_axis.size > 0
+        and isinstance(current_azimuth_axis, np.ndarray)
+        and current_azimuth_axis.size > 0
+    ):
+        analysis_bins = (
+            int(current_radial_axis.size),
+            int(current_azimuth_axis.size),
+        )
+    else:
+        preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
+        if (
+            isinstance(preview_bins, tuple)
+            and len(preview_bins) == 2
+            and all(int(value) > 0 for value in preview_bins)
+        ):
+            analysis_bins = (int(preview_bins[0]), int(preview_bins[1]))
+        else:
+            analysis_bins = (
+                int(DEFAULT_ANALYSIS_RADIAL_BINS),
+                int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
+            )
+
     simulation_runtime_state.geometry_fit_job_counter = (
         int(simulation_runtime_state.geometry_fit_job_counter) + 1
     )
@@ -22266,6 +22377,9 @@ def _build_geometry_fit_async_job(
         "osc_files": [str(path) for path in (manual_dataset_bindings.osc_files or ())],
         "image_size": int(manual_dataset_bindings.image_size),
         "display_rotate_k": int(manual_dataset_bindings.display_rotate_k),
+        "analysis_bins": analysis_bins,
+        "npt_rad": int(analysis_bins[0]),
+        "npt_azim": int(analysis_bins[1]),
         "background_images": background_images,
         "caked_views_by_background": caked_views_by_background,
         "manual_pairs_by_background": manual_pairs_by_background,
@@ -22693,10 +22807,50 @@ def _run_async_geometry_fit_worker_job(
             if oriented_background is not None:
                 backend_background = np.asarray(oriented_background, dtype=np.float64)
 
+        worker_ai = _worker_geometry_fit_caking_integrator()
         background_caked_view = dict(
             caked_views_by_background.get(int(bundle.background_index)) or {}
         )
-        worker_ai = _worker_geometry_fit_caking_integrator()
+        if not isinstance(background_caked_view.get("transform_bundle"), CakeTransformBundle):
+            # Non-current worker backgrounds need same-axes exact-cake metadata
+            # before the first caked payload exists, otherwise ROI projection drops
+            # every angle-backed source row on the first pass.
+            analysis_bins = job_data.get("analysis_bins")
+            if not (
+                isinstance(analysis_bins, (tuple, list))
+                and len(analysis_bins) >= 2
+            ):
+                analysis_bins = getattr(
+                    simulation_runtime_state,
+                    "analysis_preview_bins",
+                    None,
+                )
+            try:
+                precompute_npt_rad = (
+                    int(max(1, analysis_bins[0]))
+                    if isinstance(analysis_bins, (tuple, list))
+                    and len(analysis_bins) >= 2
+                    else int(max(1, job_data.get("npt_rad")))
+                )
+            except Exception:
+                precompute_npt_rad = None
+            try:
+                precompute_npt_azim = (
+                    int(max(1, analysis_bins[1]))
+                    if isinstance(analysis_bins, (tuple, list))
+                    and len(analysis_bins) >= 2
+                    else int(max(1, job_data.get("npt_azim")))
+                )
+            except Exception:
+                precompute_npt_azim = None
+            precomputed_caked_view = _geometry_fit_worker_caked_projection_view(
+                detector_shape=backend_background.shape[:2],
+                ai=worker_ai,
+                npt_rad=precompute_npt_rad,
+                npt_azim=precompute_npt_azim,
+            )
+            if isinstance(precomputed_caked_view, dict):
+                background_caked_view.update(precomputed_caked_view)
         roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection(
             bundle.stored_rows,
             required_pairs=list(

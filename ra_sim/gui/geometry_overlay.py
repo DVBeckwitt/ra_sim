@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -99,22 +99,22 @@ def iter_orientation_transform_candidates():
                         }
 
 
-def inverse_orientation_transform(
-    shape: tuple[int, int],
-    orientation_choice: dict[str, object] | None,
+def _identity_orientation_choice() -> dict[str, object]:
+    return {
+        "indexing_mode": "xy",
+        "k": 0,
+        "flip_x": False,
+        "flip_y": False,
+        "flip_order": "yx",
+    }
+
+
+def _normalize_orientation_choice(
+    orientation_choice: Mapping[str, object] | None,
 ) -> dict[str, object]:
-    """Return the inverse of one discrete orientation-choice transform."""
-
-    if not isinstance(orientation_choice, dict):
-        return {
-            "indexing_mode": "xy",
-            "k": 0,
-            "flip_x": False,
-            "flip_y": False,
-            "flip_order": "yx",
-        }
-
-    forward = {
+    if not isinstance(orientation_choice, Mapping):
+        return _identity_orientation_choice()
+    return {
         "indexing_mode": str(orientation_choice.get("indexing_mode", "xy")),
         "k": int(orientation_choice.get("k", 0)),
         "flip_x": bool(orientation_choice.get("flip_x", False)),
@@ -122,20 +122,98 @@ def inverse_orientation_transform(
         "flip_order": str(orientation_choice.get("flip_order", "yx")),
     }
 
+
+def _orientation_frame_shape(
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str = "xy",
+) -> tuple[int, int]:
+    base_height, base_width = int(shape[0]), int(shape[1])
+    if (indexing_mode or "xy").lower() == "yx":
+        return base_width, base_height
+    return base_height, base_width
+
+
+def orientation_output_shape(
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str = "xy",
+    k: int = 0,
+) -> tuple[int, int]:
+    """Return the detector-frame shape after one orientation transform."""
+
+    height, width = _orientation_frame_shape(shape, indexing_mode=indexing_mode)
+    if int(k) % 2:
+        return width, height
+    return height, width
+
+
+def _orientation_reference_points(shape: tuple[int, int]) -> list[tuple[float, float]]:
     height, width = int(shape[0]), int(shape[1])
-    refs = [
+    return [
         (0.0, 0.0),
         (float(width - 1), 0.0),
         (0.0, float(height - 1)),
         (float(width - 1), float(height - 1)),
         (0.5 * float(width - 1), 0.5 * float(height - 1)),
     ]
+
+
+def inverse_transform_points_orientation(
+    points: Sequence[tuple[float, float]],
+    shape: tuple[int, int],
+    orientation_choice: Mapping[str, object] | None,
+) -> list[tuple[float, float]]:
+    """Undo one discrete orientation transform on point coordinates exactly."""
+
+    forward = _normalize_orientation_choice(orientation_choice)
+    mode = str(forward["indexing_mode"])
+    pre_rotation_shape = _orientation_frame_shape(shape, indexing_mode=mode)
+    output_shape = orientation_output_shape(
+        shape,
+        indexing_mode=mode,
+        k=int(forward["k"]),
+    )
+    height, width = pre_rotation_shape
+
+    inverse_points: list[tuple[float, float]] = []
+    for col, row in points:
+        col_t, row_t = rotate_point_for_display(
+            float(col),
+            float(row),
+            output_shape,
+            -int(forward["k"]),
+        )
+        if bool(forward["flip_x"]):
+            col_t = width - 1.0 - col_t
+        if bool(forward["flip_y"]):
+            row_t = height - 1.0 - row_t
+        if mode == "yx":
+            col_t, row_t = row_t, col_t
+        inverse_points.append((float(col_t), float(row_t)))
+
+    return inverse_points
+
+
+def inverse_orientation_transform(
+    shape: tuple[int, int],
+    orientation_choice: dict[str, object] | None,
+) -> dict[str, object]:
+    """Return the inverse transform for the oriented output frame of ``shape``."""
+
+    forward = _normalize_orientation_choice(orientation_choice)
+    refs = _orientation_reference_points(shape)
     mapped = transform_points_orientation(refs, shape, **forward)
+    output_shape = orientation_output_shape(
+        shape,
+        indexing_mode=str(forward["indexing_mode"]),
+        k=int(forward["k"]),
+    )
 
     best = None
     best_err = float("inf")
     for candidate in iter_orientation_transform_candidates():
-        unmapped = transform_points_orientation(mapped, shape, **candidate)
+        unmapped = transform_points_orientation(mapped, output_shape, **candidate)
         err = 0.0
         for (x_ref, y_ref), (x_back, y_back) in zip(refs, unmapped):
             err = max(err, float(math.hypot(x_back - x_ref, y_back - y_ref)))
@@ -146,13 +224,7 @@ def inverse_orientation_transform(
             break
 
     if best is None:
-        return {
-            "indexing_mode": "xy",
-            "k": 0,
-            "flip_x": False,
-            "flip_y": False,
-            "flip_order": "yx",
-        }
+        return _identity_orientation_choice()
     return best
 
 
@@ -163,36 +235,20 @@ def compose_orientation_transforms(
 ) -> dict[str, object]:
     """Return one discrete transform equivalent to applying ``first`` then ``second``."""
 
-    def _normalize(choice: dict[str, object] | None) -> dict[str, object]:
-        if not isinstance(choice, dict):
-            return {
-                "indexing_mode": "xy",
-                "k": 0,
-                "flip_x": False,
-                "flip_y": False,
-                "flip_order": "yx",
-            }
-        return {
-            "indexing_mode": str(choice.get("indexing_mode", "xy")),
-            "k": int(choice.get("k", 0)),
-            "flip_x": bool(choice.get("flip_x", False)),
-            "flip_y": bool(choice.get("flip_y", False)),
-            "flip_order": str(choice.get("flip_order", "yx")),
-        }
+    first_norm = _normalize_orientation_choice(first)
+    second_norm = _normalize_orientation_choice(second)
 
-    first_norm = _normalize(first)
-    second_norm = _normalize(second)
-
-    height, width = int(shape[0]), int(shape[1])
-    refs = [
-        (0.0, 0.0),
-        (float(width - 1), 0.0),
-        (0.0, float(height - 1)),
-        (float(width - 1), float(height - 1)),
-        (0.5 * float(width - 1), 0.5 * float(height - 1)),
-    ]
+    refs = _orientation_reference_points(shape)
     mapped_once = transform_points_orientation(refs, shape, **first_norm)
-    mapped_twice = transform_points_orientation(mapped_once, shape, **second_norm)
+    mapped_twice = transform_points_orientation(
+        mapped_once,
+        orientation_output_shape(
+            shape,
+            indexing_mode=str(first_norm["indexing_mode"]),
+            k=int(first_norm["k"]),
+        ),
+        **second_norm,
+    )
 
     best = None
     best_err = float("inf")
@@ -208,13 +264,7 @@ def compose_orientation_transforms(
             break
 
     if best is None:
-        return {
-            "indexing_mode": "xy",
-            "k": 0,
-            "flip_x": False,
-            "flip_y": False,
-            "flip_order": "yx",
-        }
+        return _identity_orientation_choice()
     return best
 
 
@@ -921,10 +971,6 @@ def build_geometry_fit_overlay_records(
             return None
         return float(col), float(row)
 
-    inverse_orientation = inverse_orientation_transform(
-        native_frame_shape,
-        orientation_choice,
-    )
     initial_by_index = {
         int(entry["overlay_match_index"]): entry
         for entry in normalize_initial_geometry_pairs_display(initial_pairs_display)
@@ -1052,14 +1098,10 @@ def build_geometry_fit_overlay_records(
             ):
                 continue
 
-            measured_native = transform_points_orientation(
+            measured_native = inverse_transform_points_orientation(
                 [measured_fit_oriented],
                 native_frame_shape,
-                indexing_mode=str(inverse_orientation.get("indexing_mode", "xy")),
-                k=int(inverse_orientation.get("k", 0)),
-                flip_x=bool(inverse_orientation.get("flip_x", False)),
-                flip_y=bool(inverse_orientation.get("flip_y", False)),
-                flip_order=str(inverse_orientation.get("flip_order", "yx")),
+                orientation_choice,
             )[0]
 
             final_sim_display = rotate_point_for_display(

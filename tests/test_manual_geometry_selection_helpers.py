@@ -1323,6 +1323,72 @@ def test_geometry_manual_pair_from_jsonable_accepts_legacy_stale_caked_field() -
     assert restored["stale_caked_fields"] is True
 
 
+def test_geometry_manual_pair_from_jsonable_migrates_legacy_source_peak_alias_only_on_load() -> None:
+    raw_entry = {
+        "label": "1,0,2",
+        "hkl": [1, 0, 2],
+        "x": 10.5,
+        "y": 12.25,
+        "source_peak_index": 1,
+    }
+
+    normalized = mg.normalize_geometry_manual_pair_entry(dict(raw_entry))
+    restored = mg.geometry_manual_pair_entry_from_jsonable(raw_entry)
+
+    assert normalized is not None
+    assert "source_branch_index" not in normalized
+    assert normalized["source_peak_index"] == 1
+    assert restored is not None
+    assert restored["source_branch_index"] == 1
+    assert restored["source_peak_index"] == 1
+
+
+def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_phi_is_deadbanded() -> None:
+    raw_entry = {
+        "label": "1,0,2",
+        "hkl": [1, 0, 2],
+        "x": 10.5,
+        "y": 12.25,
+        "background_two_theta_deg": 23.0,
+        "background_phi_deg": 0.0,
+        "source_peak_index": 1,
+    }
+
+    normalized = mg.normalize_geometry_manual_pair_entry(dict(raw_entry))
+    restored = mg.geometry_manual_pair_entry_from_jsonable(raw_entry)
+
+    assert normalized is not None
+    assert "source_branch_index" not in normalized
+    assert normalized["source_peak_index"] == 1
+    assert restored is not None
+    assert restored["source_branch_index"] == 1
+    assert restored["source_peak_index"] == 1
+
+
+def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_caked_phi_is_deadbanded() -> None:
+    raw_entry = {
+        "label": "1,0,2",
+        "hkl": [1, 0, 2],
+        "x": 10.5,
+        "y": 12.25,
+        "caked_x": 23.0,
+        "caked_y": 0.0,
+        "source_peak_index": 1,
+    }
+
+    normalized = mg.normalize_geometry_manual_pair_entry(dict(raw_entry))
+    restored = mg.geometry_manual_pair_entry_from_jsonable(raw_entry)
+
+    assert normalized is not None
+    assert "source_branch_index" not in normalized
+    assert normalized["source_peak_index"] == 1
+    assert restored is not None
+    assert restored["background_two_theta_deg"] == 23.0
+    assert restored["background_phi_deg"] == 0.0
+    assert restored["source_branch_index"] == 1
+    assert restored["source_peak_index"] == 1
+
+
 def test_geometry_manual_pairs_export_rows_include_background_metadata() -> None:
     rows = mg.geometry_manual_pairs_export_rows(
         pairs_by_background={1: [{"label": "1,0,0", "x": 2.0, "y": 3.0}]},
@@ -2409,7 +2475,7 @@ def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_
     ] == [2]
 
 
-def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_background_state_changes() -> None:
+def test_build_geometry_manual_pick_cache_reprojects_existing_rows_when_only_background_state_changes() -> None:
     forwarded_prefer_cache: list[bool] = []
     cached_entry = {
         "q_group_key": ("q_group", "primary", 1, 0),
@@ -2417,6 +2483,8 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
         "source_row_index": 2,
         "sim_col": 13.0,
         "sim_row": 2.0,
+        "sim_col_raw": 3.0,
+        "sim_row_raw": 4.0,
     }
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
@@ -2459,7 +2527,334 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
         simulated_peaks_for_params=lambda _params, *, prefer_cache: (
             forwarded_prefer_cache.append(bool(prefer_cache)) or []
         ),
-        build_grouped_candidates=lambda _entries: {},
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        project_peaks_to_current_view=lambda entries: [
+            {
+                **dict(entry),
+                "sim_col": 30.0,
+                "sim_row": 40.0,
+                "caked_x": 30.0,
+                "caked_y": 40.0,
+            }
+            for entry in entries or ()
+            if isinstance(entry, dict)
+        ],
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [True, False]
+    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 30.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_row"] == 40.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col_raw"] == 3.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_row_raw"] == 4.0
+    assert next_sig[3] == ("new-bg",)
+    assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0]["sim_row"] == 40.0
+    assert cache_data["cache_metadata"]["cache_action"] == "reused"
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "existing_cache_data.simulated_peaks(reprojected)"
+    )
+    assert cache_data["cache_metadata"]["cache_provenance"] == [
+        "existing_cache_data.simulated_peaks",
+        "project_peaks_to_current_view",
+        "build_grouped_candidates",
+        "build_simulated_lookup",
+    ]
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "background-only cache signature change; reprojected cached simulated peaks."
+    )
+    assert cache_data["cache_metadata"]["table_summaries"][0][
+        "representative_row_indices_kept"
+    ] == [2]
+
+
+def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_raw_coords(
+    monkeypatch,
+) -> None:
+    forwarded_prefer_cache: list[bool] = []
+    project_calls: list[int] = []
+    cached_entry = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 13.0,
+        "sim_row": 2.0,
+    }
+    bundle = _dummy_transform_bundle(detector_shape=(8, 8))
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        _fail_projection_legacy_path(
+            "projection callback should not run when raw coords are missing"
+        ),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (
+            float(col),
+            float(row),
+        ),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    def _recording_project_peaks_to_current_view(entries):
+        cached_rows = [dict(entry) for entry in entries or () if isinstance(entry, dict)]
+        project_calls.append(len(cached_rows))
+        return callbacks.project_peaks_to_current_view(entries)
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            False,
+            ("old-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                False,
+                ("old-bg",),
+                1,
+                ("('q_group', 'primary', 1, 0)",),
+            ),
+            "simulated_peaks": [dict(cached_entry)],
+            "simulated_lookup": {(1, 2): dict(cached_entry)},
+            "grouped_candidates": {
+                ("q_group", "primary", 1, 0): [dict(cached_entry)]
+            },
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            False,
+            ("new-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache)) or []
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        project_peaks_to_current_view=_recording_project_peaks_to_current_view,
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [True, False]
+    assert project_calls == []
+    assert cache_data["grouped_candidates"] == {}
+    assert cache_data["simulated_lookup"] == {}
+    assert next_sig[3] == ("new-bg",)
+    assert next_state["grouped_candidates"] == {}
+    assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "source_snapshot_unavailable"
+    )
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "background-only cache signature change; cached simulated peaks could not be reprojected."
+    )
+
+
+def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_valid_caked_projection() -> None:
+    forwarded_prefer_cache: list[bool] = []
+    cached_entry = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 13.0,
+        "sim_row": 2.0,
+        "sim_col_raw": 3.0,
+        "sim_row_raw": 4.0,
+    }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            True,
+            ("old-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                True,
+                ("old-bg",),
+                1,
+                ("('q_group', 'primary', 1, 0)",),
+            ),
+            "simulated_peaks": [dict(cached_entry)],
+            "simulated_lookup": {(1, 2): dict(cached_entry)},
+            "grouped_candidates": {
+                ("q_group", "primary", 1, 0): [dict(cached_entry)]
+            },
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            True,
+            ("new-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache)) or []
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        project_peaks_to_current_view=lambda entries: [
+            {
+                **dict(entry),
+                "sim_col": 30.0,
+                "sim_row": 40.0,
+            }
+            for entry in entries or ()
+            if isinstance(entry, dict)
+        ],
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [True, False]
+    assert cache_data["grouped_candidates"] == {}
+    assert cache_data["simulated_lookup"] == {}
+    assert next_sig[3] == ("new-bg",)
+    assert next_state["grouped_candidates"] == {}
+    assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "source_snapshot_unavailable"
+    )
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "background-only cache signature change; cached simulated peaks could not be reprojected."
+    )
+
+
+def test_build_geometry_manual_pick_cache_rebuilds_before_reusing_existing_groups_on_background_churn() -> None:
+    forwarded_prefer_cache: list[bool] = []
+    stale_entry = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 13.0,
+        "sim_row": 2.0,
+        "candidate_source": "peak_records",
+    }
+    rebuilt_entry = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+        "candidate_source": "fresh_rebuild",
+    }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            True,
+            ("old-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                True,
+                ("old-bg",),
+                1,
+                ("('q_group', 'primary', 1, 0)",),
+            ),
+            "simulated_peaks": [dict(stale_entry)],
+            "simulated_lookup": {(1, 2): dict(stale_entry)},
+            "grouped_candidates": {
+                ("q_group", "primary", 1, 0): [dict(stale_entry)]
+            },
+            "cache_metadata": {"cache_source": "peak_records"},
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            True,
+            ("new-bg",),
+            1,
+            ("('q_group', 'primary', 1, 0)",),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache))
+            or ([] if prefer_cache else [dict(rebuilt_entry)])
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
         build_simulated_lookup=lambda entries: {
             (
                 int(entry.get("source_table_index")),
@@ -2470,21 +2865,24 @@ def test_build_geometry_manual_pick_cache_reuses_existing_groups_when_only_backg
         current_match_config=lambda: {"search_radius_px": 24.0},
     )
 
-    assert forwarded_prefer_cache == [True]
+    assert forwarded_prefer_cache == [True, False]
     assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
-    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 13.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 30.0
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_row"] == 40.0
+    assert cache_data["simulated_lookup"][(1, 2)]["candidate_source"] == (
+        "fresh_rebuild"
+    )
+    assert cache_data["grouped_candidates"][("q_group", "primary", 1, 0)][0][
+        "candidate_source"
+    ] == "fresh_rebuild"
     assert next_sig[3] == ("new-bg",)
-    assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0]["sim_row"] == 2.0
-    assert cache_data["cache_metadata"]["cache_action"] == "reused"
+    assert next_state["simulated_lookup"][(1, 2)]["candidate_source"] == (
+        "fresh_rebuild"
+    )
+    assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
     assert cache_data["cache_metadata"]["cache_source"] == (
-        "existing_cache_data.grouped_candidates"
+        "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
     )
-    assert cache_data["cache_metadata"]["stale_reason"] == (
-        "background-only cache signature change; reused grouped candidates."
-    )
-    assert cache_data["cache_metadata"]["table_summaries"][0][
-        "representative_row_indices_kept"
-    ] == [2]
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None:
@@ -2934,6 +3332,154 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
 
     lookup = callbacks.simulated_lookup(projected)
     assert lookup[(1, 2)]["sim_row"] == 2.0
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_caked_rows_from_raw_coords(
+    monkeypatch,
+) -> None:
+    bundle = _dummy_transform_bundle(detector_shape=(8, 8))
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (13.0, 2.0)
+            if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+            else (91.0, 82.0)
+            if live_bundle is bundle and (float(col), float(row)) == (99.0, 88.0)
+            else (None, None)
+        ),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 99.0,
+                "sim_row": 88.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "caked_x": 91.0,
+                "caked_y": 82.0,
+                "raw_caked_x": 90.0,
+                "raw_caked_y": 81.0,
+            }
+        ]
+    )
+
+    assert projected == [
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col": 13.0,
+            "sim_row": 2.0,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+            "caked_x": 13.0,
+            "caked_y": 2.0,
+            "raw_caked_x": 13.0,
+            "raw_caked_y": 2.0,
+            "sim_col_global": 13.0,
+            "sim_row_global": 2.0,
+            "sim_col_local": 3.0,
+            "sim_row_local": 6.0,
+        }
+    ]
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_clears_stale_caked_fields_when_reprojection_fails(
+    monkeypatch,
+) -> None:
+    bundle = _dummy_transform_bundle(detector_shape=(8, 8))
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda *_args, **_kwargs: (None, None),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 99.0,
+                "sim_row": 88.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "caked_x": 91.0,
+                "caked_y": 82.0,
+                "raw_caked_x": 90.0,
+                "raw_caked_y": 81.0,
+                "sim_col_global": 91.0,
+                "sim_row_global": 82.0,
+                "sim_col_local": 7.0,
+                "sim_row_local": 1.0,
+            }
+        ]
+    )
+
+    assert projected == [
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+        }
+    ]
+    assert "caked_x" not in projected[0]
+    assert "caked_y" not in projected[0]
+    assert "raw_caked_x" not in projected[0]
+    assert "raw_caked_y" not in projected[0]
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_back_when_filter_removes_every_group() -> None:

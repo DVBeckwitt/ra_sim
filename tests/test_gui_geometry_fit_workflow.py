@@ -4301,11 +4301,11 @@ def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
     azimuth_axis = np.linspace(-40.0, -35.0, 6, dtype=np.float64)
     orientation_choice = {
         "indexing_mode": "xy",
-        "k": 0,
+        "k": 1,
         "flip_x": False,
-        "flip_y": True,
+        "flip_y": False,
         "flip_order": "yx",
-        "label": "flip-y",
+        "label": "rot90-ccw",
     }
     orientation_transform = {
         key: orientation_choice[key]

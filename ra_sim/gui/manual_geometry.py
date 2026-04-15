@@ -161,6 +161,7 @@ def _canonicalize_manual_entry_branch_fields(
     *,
     allow_legacy_peak_fallback: bool,
     preserve_legacy_peak_when_unresolved: bool = False,
+    retry_legacy_peak_on_deadband: bool = False,
 ) -> None:
     """Stamp canonical branch identity onto one saved/manual geometry entry."""
 
@@ -169,13 +170,21 @@ def _canonicalize_manual_entry_branch_fields(
     except Exception:
         legacy_peak_idx = None
 
-    branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+    branch_idx, _branch_source, branch_reason = resolve_canonical_branch(
         entry,
         allow_legacy_peak_fallback=allow_legacy_peak_fallback,
     )
     if branch_idx in {0, 1}:
         entry["source_branch_index"] = int(branch_idx)
         entry["source_peak_index"] = int(branch_idx)
+        return
+    if (
+        retry_legacy_peak_on_deadband
+        and branch_reason == "ambiguous_branch_deadband"
+        and legacy_peak_idx in {0, 1}
+    ):
+        entry["source_branch_index"] = int(legacy_peak_idx)
+        entry["source_peak_index"] = int(legacy_peak_idx)
         return
 
     entry.pop("source_branch_index", None)
@@ -389,6 +398,20 @@ def refresh_geometry_manual_pair_entry(
             return None
         return float(col), float(row)
 
+    def _finite_tuple_pair(
+        value: object,
+    ) -> tuple[float, float] | None:
+        if not isinstance(value, tuple) or len(value) < 2:
+            return None
+        try:
+            col = float(value[0])
+            row = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
     try:
         shape = tuple(int(v) for v in (background_display_shape or ())[:2])
     except Exception:
@@ -399,9 +422,19 @@ def refresh_geometry_manual_pair_entry(
         "background_phi_deg",
     )
     caked_point = authoritative_caked_point
+    if caked_point is None:
+        caked_point = _finite_pair("caked_x", "caked_y")
+    if caked_point is None:
+        caked_point = _finite_pair("raw_caked_x", "raw_caked_y")
     if caked_point is not None:
-        normalized["background_two_theta_deg"] = float(caked_point[0])
-        normalized["background_phi_deg"] = float(caked_point[1])
+        if authoritative_caked_point is not None:
+            normalized["background_two_theta_deg"] = float(
+                authoritative_caked_point[0]
+            )
+            normalized["background_phi_deg"] = float(authoritative_caked_point[1])
+        else:
+            normalized["background_two_theta_deg"] = float(caked_point[0])
+            normalized["background_phi_deg"] = float(caked_point[1])
         normalized["caked_x"] = float(caked_point[0])
         normalized["caked_y"] = float(caked_point[1])
         if _finite_pair("raw_caked_x", "raw_caked_y") is None:
@@ -417,30 +450,20 @@ def refresh_geometry_manual_pair_entry(
             callable(caked_angles_to_background_display_coords)
             and callable(background_display_to_native_detector_coords)
         ):
-            mapped_display_point = caked_angles_to_background_display_coords(
-                float(authoritative_caked_point[0]),
-                float(authoritative_caked_point[1]),
-            )
-            if (
-                isinstance(mapped_display_point, tuple)
-                and len(mapped_display_point) >= 2
-                and np.isfinite(float(mapped_display_point[0]))
-                and np.isfinite(float(mapped_display_point[1]))
-            ):
-                mapped_detector_point = background_display_to_native_detector_coords(
-                    float(mapped_display_point[0]),
-                    float(mapped_display_point[1]),
+            mapped_display_point = _finite_tuple_pair(
+                caked_angles_to_background_display_coords(
+                    float(authoritative_caked_point[0]),
+                    float(authoritative_caked_point[1]),
                 )
-        if (
-            isinstance(mapped_display_point, tuple)
-            and len(mapped_display_point) >= 2
-            and np.isfinite(float(mapped_display_point[0]))
-            and np.isfinite(float(mapped_display_point[1]))
-            and isinstance(mapped_detector_point, tuple)
-            and len(mapped_detector_point) >= 2
-            and np.isfinite(float(mapped_detector_point[0]))
-            and np.isfinite(float(mapped_detector_point[1]))
-        ):
+            )
+            if mapped_display_point is not None:
+                mapped_detector_point = _finite_tuple_pair(
+                    background_display_to_native_detector_coords(
+                        float(mapped_display_point[0]),
+                        float(mapped_display_point[1]),
+                    )
+                )
+        if mapped_display_point is not None and mapped_detector_point is not None:
             display_point = (
                 float(mapped_display_point[0]),
                 float(mapped_display_point[1]),
@@ -464,16 +487,13 @@ def refresh_geometry_manual_pair_entry(
             normalized["stale_caked_fields"] = True
             return normalized
     elif caked_point is not None and callable(caked_angles_to_background_display_coords):
-        mapped_display_point = caked_angles_to_background_display_coords(
-            float(caked_point[0]),
-            float(caked_point[1]),
+        mapped_display_point = _finite_tuple_pair(
+            caked_angles_to_background_display_coords(
+                float(caked_point[0]),
+                float(caked_point[1]),
+            )
         )
-        if (
-            isinstance(mapped_display_point, tuple)
-            and len(mapped_display_point) >= 2
-            and np.isfinite(float(mapped_display_point[0]))
-            and np.isfinite(float(mapped_display_point[1]))
-        ):
+        if mapped_display_point is not None:
             display_point = (
                 float(mapped_display_point[0]),
                 float(mapped_display_point[1]),
@@ -481,16 +501,13 @@ def refresh_geometry_manual_pair_entry(
             normalized["x"] = float(display_point[0])
             normalized["y"] = float(display_point[1])
             if callable(background_display_to_native_detector_coords):
-                mapped_detector_point = background_display_to_native_detector_coords(
-                    float(display_point[0]),
-                    float(display_point[1]),
+                mapped_detector_point = _finite_tuple_pair(
+                    background_display_to_native_detector_coords(
+                        float(display_point[0]),
+                        float(display_point[1]),
+                    )
                 )
-                if (
-                    isinstance(mapped_detector_point, tuple)
-                    and len(mapped_detector_point) >= 2
-                    and np.isfinite(float(mapped_detector_point[0]))
-                    and np.isfinite(float(mapped_detector_point[1]))
-                ):
+                if mapped_detector_point is not None:
                     detector_point = (
                         float(mapped_detector_point[0]),
                         float(mapped_detector_point[1]),
@@ -2224,6 +2241,11 @@ def build_geometry_manual_pick_cache(
         [Sequence[dict[str, object]] | None],
         dict[tuple[object, ...], dict[str, object]],
     ],
+    project_peaks_to_current_view: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     current_match_config: Callable[[], dict[str, object]],
     auto_match_background_context: Callable[
         [object, dict[str, object]],
@@ -2268,6 +2290,10 @@ def build_geometry_manual_pick_cache(
     simulated_peaks: list[dict[str, object]] = []
     grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
     simulated_lookup: dict[tuple[object, ...], dict[str, object]] = {}
+    reuse_requires_caked_projection = bool(
+        isinstance(cache_sig, tuple) and len(cache_sig) >= 3 and bool(cache_sig[2])
+    )
+
     def _apply_candidate_source(
         candidate_rows: Sequence[dict[str, object]] | None,
         *,
@@ -2294,6 +2320,62 @@ def build_geometry_manual_pick_cache(
         cache_provenance = [str(step) for step in provenance]
         stale_reason = stale_reason_override
         return True
+
+    def _filter_reprojected_cache_rows(
+        candidate_rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        filtered_rows: list[dict[str, object]] = []
+        for raw_entry in candidate_rows or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            try:
+                raw_col = float(entry.get("sim_col_raw", np.nan))
+                raw_row = float(entry.get("sim_row_raw", np.nan))
+                sim_col = float(entry.get("sim_col", np.nan))
+                sim_row = float(entry.get("sim_row", np.nan))
+            except Exception:
+                continue
+            if not (
+                np.isfinite(raw_col)
+                and np.isfinite(raw_row)
+                and np.isfinite(sim_col)
+                and np.isfinite(sim_row)
+            ):
+                continue
+            if reuse_requires_caked_projection:
+                try:
+                    caked_col = float(entry.get("caked_x", np.nan))
+                    caked_row = float(entry.get("caked_y", np.nan))
+                except Exception:
+                    continue
+                if not (np.isfinite(caked_col) and np.isfinite(caked_row)):
+                    continue
+                if (
+                    abs(float(sim_col) - float(caked_col)) > 1.0e-9
+                    or abs(float(sim_row) - float(caked_row)) > 1.0e-9
+                ):
+                    continue
+            filtered_rows.append(entry)
+        return filtered_rows
+
+    def _filter_cached_source_rows_for_reprojection(
+        candidate_rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        filtered_rows: list[dict[str, object]] = []
+        for raw_entry in candidate_rows or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            try:
+                raw_col = float(entry.get("sim_col_raw", np.nan))
+                raw_row = float(entry.get("sim_row_raw", np.nan))
+            except Exception:
+                continue
+            if not (np.isfinite(raw_col) and np.isfinite(raw_row)):
+                continue
+            filtered_rows.append(entry)
+        return filtered_rows
 
     if prefer_cache and bg_index == current_bg_index:
         cached_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
@@ -2361,55 +2443,6 @@ def build_geometry_manual_pick_cache(
             pass
         elif stale_reason is None:
             stale_reason = "live peak records were empty."
-    if (
-        prefer_cache
-        and not grouped_candidates
-        and isinstance(existing_cache_data, dict)
-        and _manual_pick_cache_groups_reusable(
-            resolved_existing_signature,
-            cache_sig,
-        )
-    ):
-        cached_grouped_candidates = dict(
-            existing_cache_data.get("grouped_candidates", {})
-        )
-        if cached_grouped_candidates:
-            simulated_peaks = [
-                dict(entry)
-                for entry in (existing_cache_data.get("simulated_peaks", ()) or ())
-                if isinstance(entry, dict)
-            ]
-            grouped_candidates = {
-                key: [
-                    dict(entry)
-                    for entry in (entries or ())
-                    if isinstance(entry, dict)
-                ]
-                for key, entries in cached_grouped_candidates.items()
-            }
-            simulated_lookup = dict(existing_cache_data.get("simulated_lookup", {}))
-            if not simulated_lookup and simulated_peaks:
-                simulated_lookup = build_simulated_lookup(simulated_peaks)
-            cache_action = "reused"
-            cache_source = "existing_cache_data.grouped_candidates"
-            cache_provenance = [
-                "existing_cache_data.grouped_candidates",
-                "existing_cache_data.simulated_peaks",
-                (
-                    "existing_cache_data.simulated_lookup"
-                    if simulated_lookup
-                    else "build_simulated_lookup"
-                ),
-            ]
-            stale_reason = (
-                (
-                    "matching source snapshot signature; reused grouped candidates."
-                    if resolved_existing_signature == cache_sig
-                    else "background-only cache signature change; reused grouped candidates."
-                )
-            )
-        elif stale_reason is None:
-            stale_reason = "existing grouped candidates were empty."
     if prefer_cache and not grouped_candidates and bg_index == current_bg_index:
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
@@ -2428,6 +2461,55 @@ def build_geometry_manual_pick_cache(
             stale_reason_override=stale_reason,
         ):
             pass
+    if (
+        prefer_cache
+        and not grouped_candidates
+        and isinstance(existing_cache_data, dict)
+        and _manual_pick_cache_groups_reusable(
+            resolved_existing_signature,
+            cache_sig,
+        )
+    ):
+        cached_simulated_peaks = [
+            dict(entry)
+            for entry in (existing_cache_data.get("simulated_peaks", ()) or ())
+            if isinstance(entry, dict)
+        ]
+        cached_source_rows = _filter_cached_source_rows_for_reprojection(
+            cached_simulated_peaks
+        )
+        if cached_source_rows and callable(project_peaks_to_current_view):
+            reprojected_cached_peaks = _filter_reprojected_cache_rows(
+                project_peaks_to_current_view(
+                    cached_source_rows
+                )
+            )
+            if _apply_candidate_source(
+                reprojected_cached_peaks,
+                action="reused",
+                source="existing_cache_data.simulated_peaks(reprojected)",
+                provenance=[
+                    "existing_cache_data.simulated_peaks",
+                    "project_peaks_to_current_view",
+                    "build_grouped_candidates",
+                    "build_simulated_lookup",
+                ],
+                stale_reason_override=(
+                    "background-only cache signature change; "
+                    "reprojected cached simulated peaks."
+                ),
+            ):
+                pass
+            else:
+                stale_reason = (
+                    "background-only cache signature change; "
+                    "cached simulated peaks could not be reprojected."
+                )
+        else:
+            stale_reason = (
+                "background-only cache signature change; "
+                "cached simulated peaks could not be reprojected."
+            )
     if not prefer_cache and not grouped_candidates and bg_index == current_bg_index:
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
@@ -3682,6 +3764,11 @@ def make_runtime_geometry_manual_cache_callbacks(
         [Sequence[dict[str, object]] | None],
         dict[tuple[object, ...], dict[str, object]],
     ],
+    project_peaks_to_current_view: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     entry_display_coords: Callable[
         [dict[str, object] | None],
         tuple[float, float] | None,
@@ -3781,6 +3868,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             peak_records=_resolve_runtime_value(peak_records),
             build_grouped_candidates=build_grouped_candidates,
             build_simulated_lookup=build_simulated_lookup,
+            project_peaks_to_current_view=project_peaks_to_current_view,
             current_match_config=_current_match_config,
             auto_match_background_context=auto_match_background_context,
         )
@@ -4074,11 +4162,31 @@ def make_runtime_geometry_manual_projection_callbacks(
                 continue
             entry = dict(raw_entry)
             try:
-                raw_col = float(entry.get("sim_col", np.nan))
-                raw_row = float(entry.get("sim_row", np.nan))
+                raw_col = float(entry.get("sim_col_raw", np.nan))
+                raw_row = float(entry.get("sim_row_raw", np.nan))
             except Exception:
                 raw_col = float("nan")
                 raw_row = float("nan")
+            if not (np.isfinite(raw_col) and np.isfinite(raw_row)):
+                try:
+                    raw_col = float(entry.get("sim_col", np.nan))
+                    raw_row = float(entry.get("sim_row", np.nan))
+                except Exception:
+                    raw_col = float("nan")
+                    raw_row = float("nan")
+            for stale_key in (
+                "caked_x",
+                "caked_y",
+                "raw_caked_x",
+                "raw_caked_y",
+                "sim_col_local",
+                "sim_row_local",
+                "sim_col_global",
+                "sim_row_global",
+            ):
+                entry.pop(stale_key, None)
+            entry["sim_col"] = float(raw_col)
+            entry["sim_row"] = float(raw_row)
             entry["sim_col_raw"] = float(raw_col)
             entry["sim_row_raw"] = float(raw_row)
 
@@ -4106,6 +4214,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                     if caked_coords is not None:
                         entry["caked_x"] = float(caked_coords[0])
                         entry["caked_y"] = float(caked_coords[1])
+                        entry["raw_caked_x"] = float(caked_coords[0])
+                        entry["raw_caked_y"] = float(caked_coords[1])
 
             if use_caked:
                 try:
@@ -5810,11 +5920,21 @@ def geometry_manual_pair_entry_from_jsonable(
     if restored_group_key is not None:
         entry["q_group_key"] = restored_group_key
 
-    return normalize_geometry_manual_pair_entry(
+    normalized = normalize_geometry_manual_pair_entry(
         entry,
         normalize_hkl_key=normalize_hkl_key,
         sigma_floor_px=sigma_floor_px,
     )
+    if normalized is None:
+        return None
+
+    _canonicalize_manual_entry_branch_fields(
+        normalized,
+        allow_legacy_peak_fallback=True,
+        preserve_legacy_peak_when_unresolved=True,
+        retry_legacy_peak_on_deadband=True,
+    )
+    return normalized
 
 
 def normalized_background_path_for_compare(raw_path: object) -> str | None:

@@ -5590,14 +5590,6 @@ def build_geometry_manual_fit_dataset(
             )
         except Exception:
             dynamic_reanchor_backend_shape = ()
-        dynamic_reanchor_inverse_orientation = (
-            gui_geometry_overlay.inverse_orientation_transform(
-                dynamic_reanchor_backend_shape,
-                orientation_choice,
-            )
-            if len(dynamic_reanchor_backend_shape) >= 2
-            else None
-        )
 
         def _fit_detector_coords_to_native_detector_coords(
             detector_col: float,
@@ -5605,39 +5597,14 @@ def build_geometry_manual_fit_dataset(
         ) -> tuple[float | None, float | None]:
             backend_col = float(detector_col)
             backend_row = float(detector_row)
-            if (
-                isinstance(dynamic_reanchor_inverse_orientation, Mapping)
-                and len(dynamic_reanchor_backend_shape) >= 2
-            ):
+            if len(dynamic_reanchor_backend_shape) >= 2:
                 try:
-                    backend_points = gui_geometry_overlay.transform_points_orientation(
+                    backend_points = (
+                        gui_geometry_overlay.inverse_transform_points_orientation(
                         [(float(detector_col), float(detector_row))],
                         tuple(dynamic_reanchor_backend_shape),
-                        indexing_mode=str(
-                            dynamic_reanchor_inverse_orientation.get(
-                                "indexing_mode",
-                                "xy",
-                            )
-                        ),
-                        k=int(dynamic_reanchor_inverse_orientation.get("k", 0)),
-                        flip_x=bool(
-                            dynamic_reanchor_inverse_orientation.get(
-                                "flip_x",
-                                False,
-                            )
-                        ),
-                        flip_y=bool(
-                            dynamic_reanchor_inverse_orientation.get(
-                                "flip_y",
-                                False,
-                            )
-                        ),
-                        flip_order=str(
-                            dynamic_reanchor_inverse_orientation.get(
-                                "flip_order",
-                                "yx",
-                            )
-                        ),
+                        orientation_choice,
+                    )
                     )
                 except Exception:
                     return None, None
