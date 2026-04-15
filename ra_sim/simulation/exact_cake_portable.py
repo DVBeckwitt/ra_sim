@@ -32,7 +32,7 @@ azimuth_deg = result.azimuthal_deg
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from pathlib import Path
 import threading
@@ -61,6 +61,7 @@ _GeometryWarmupKey = tuple[int, tuple[int, int], int, int]
 
 _PROCESS_DETECTOR_MAP_CACHE: OrderedDict[_SharedDetectorMapKey, tuple[np.ndarray, np.ndarray]] = OrderedDict()
 _PROCESS_CAKE_LUT_CACHE: OrderedDict[_SharedCakeLutKey, DetectorCakeLUT] = OrderedDict()
+_PROCESS_CAKE_LUT_IN_FLIGHT: dict[_SharedCakeLutKey, "_SharedCakeLutInFlightState"] = {}
 _PROCESS_DETECTOR_MAP_CACHE_LOCK = threading.RLock()
 _PROCESS_CAKE_LUT_CACHE_LOCK = threading.RLock()
 _EXACT_CAKE_GEOMETRY_WARMUP_THREADS: dict[_GeometryWarmupKey, threading.Thread] = {}
@@ -86,6 +87,13 @@ class CakeTransformBundle:
     lut_t: object | None = None
 
 
+@dataclass
+class _SharedCakeLutInFlightState:
+    event: threading.Event = field(default_factory=threading.Event)
+    result: DetectorCakeLUT | None = None
+    error: Exception | None = None
+
+
 def _clear_shared_exact_cake_caches() -> None:
     """Clear process-level detector-map and LUT caches."""
 
@@ -93,6 +101,7 @@ def _clear_shared_exact_cake_caches() -> None:
         _PROCESS_DETECTOR_MAP_CACHE.clear()
     with _PROCESS_CAKE_LUT_CACHE_LOCK:
         _PROCESS_CAKE_LUT_CACHE.clear()
+        _PROCESS_CAKE_LUT_IN_FLIGHT.clear()
     with _EXACT_CAKE_GEOMETRY_WARMUP_LOCK:
         _EXACT_CAKE_GEOMETRY_WARMUP_THREADS.clear()
         _EXACT_CAKE_GEOMETRY_WARMUP_COMPLETED.clear()
@@ -163,11 +172,30 @@ def _shared_cake_lut_for_request(
     strict: bool = False,
 ) -> DetectorCakeLUT | None:
     key = _shared_cake_lut_cache_key(portable_geometry, detector_shape, radial_deg, azimuthal_deg)
+    state: _SharedCakeLutInFlightState | None = None
+    is_builder = False
     with _PROCESS_CAKE_LUT_CACHE_LOCK:
         cached = _PROCESS_CAKE_LUT_CACHE.get(key)
         if cached is not None:
             _PROCESS_CAKE_LUT_CACHE.move_to_end(key)
             return cached
+        state = _PROCESS_CAKE_LUT_IN_FLIGHT.get(key)
+        if state is None:
+            state = _SharedCakeLutInFlightState()
+            _PROCESS_CAKE_LUT_IN_FLIGHT[key] = state
+            is_builder = True
+
+    assert state is not None
+    if not is_builder:
+        state.event.wait()
+        if state.result is not None:
+            return state.result
+        error = state.error
+        if error is None:
+            error = RuntimeError("Exact-cake LUT build finished without a result or error.")
+        if strict:
+            raise error
+        return None
 
     try:
         built = build_detector_to_cake_lut(
@@ -177,24 +205,31 @@ def _shared_cake_lut_for_request(
             geometry,
             workers=workers,
         )
-    except (MemoryError, RuntimeError):
+        if built is None:
+            raise RuntimeError("Exact-cake LUT build returned no lookup table.")
+    except Exception as exc:
+        with _PROCESS_CAKE_LUT_CACHE_LOCK:
+            _PROCESS_CAKE_LUT_IN_FLIGHT.pop(key, None)
+            state.error = exc
+            state.event.set()
         if strict:
             raise
-        return None
-    if built is None:
-        if strict:
-            raise RuntimeError("Exact-cake LUT build returned no lookup table.")
         return None
 
     with _PROCESS_CAKE_LUT_CACHE_LOCK:
         cached = _PROCESS_CAKE_LUT_CACHE.get(key)
         if cached is not None:
             _PROCESS_CAKE_LUT_CACHE.move_to_end(key)
-            return cached
-        _PROCESS_CAKE_LUT_CACHE[key] = built
-        while len(_PROCESS_CAKE_LUT_CACHE) > _PROCESS_CAKE_LUT_CACHE_LIMIT:
-            _PROCESS_CAKE_LUT_CACHE.popitem(last=False)
-    return built
+            result = cached
+        else:
+            _PROCESS_CAKE_LUT_CACHE[key] = built
+            while len(_PROCESS_CAKE_LUT_CACHE) > _PROCESS_CAKE_LUT_CACHE_LIMIT:
+                _PROCESS_CAKE_LUT_CACHE.popitem(last=False)
+            result = built
+        _PROCESS_CAKE_LUT_IN_FLIGHT.pop(key, None)
+        state.result = result
+        state.event.set()
+    return result
 
 
 def _normalize_detector_shape(shape: tuple[int, ...] | list[int]) -> tuple[int, int] | None:

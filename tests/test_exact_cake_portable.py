@@ -41,6 +41,21 @@ def _make_transform_bundle(
     )
 
 
+def _make_identity_lut(
+    image_shape: tuple[int, ...],
+    radial_deg: np.ndarray,
+    azimuthal_deg: np.ndarray,
+) -> exact_cake.DetectorCakeLUT:
+    detector_shape = tuple(int(v) for v in tuple(image_shape)[:2])
+    return exact_cake.DetectorCakeLUT(
+        image_shape=detector_shape,
+        n_rad=int(len(radial_deg)),
+        n_az=int(len(azimuthal_deg)),
+        matrix=np.eye(int(len(radial_deg) * len(azimuthal_deg)), int(np.prod(detector_shape)), dtype=np.float32),
+        count_flat=np.ones(int(len(radial_deg) * len(azimuthal_deg)), dtype=np.float64),
+    )
+
+
 def test_fast_azimuthal_integrator_detector_maps_match_flat_geometry() -> None:
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
         dist=5.0,
@@ -479,6 +494,179 @@ def test_start_exact_cake_geometry_warmup_in_background_dedupes_requests(
         npt_rad=8,
         npt_azim=6,
     )
+
+
+def test_shared_cake_lut_single_flight_dedupes_warmup_and_analysis(monkeypatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    analysis_started = threading.Event()
+    analysis_done = threading.Event()
+    analysis_results: list[exact_cake.DetectorCakeResult] = []
+    analysis_errors: list[Exception] = []
+    build_calls = 0
+
+    def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
+        del geometry, workers
+        nonlocal build_calls
+        build_calls += 1
+        entered.set()
+        if not release.wait(timeout=1.0):
+            raise AssertionError("timed out waiting to release fake LUT build")
+        return _make_identity_lut(image_shape, radial_deg, azimuthal_deg)
+
+    def _fake_integrate_lut(image, radial_deg, azimuthal_deg, lut, *, normalization=None, mask=None):
+        del image, normalization, mask
+        return exact_cake.DetectorCakeResult(
+            radial_deg=np.asarray(radial_deg, dtype=np.float64),
+            azimuthal_deg=np.asarray(azimuthal_deg, dtype=np.float64),
+            intensity=np.zeros((lut.n_az, lut.n_rad), dtype=np.float32),
+            sum_signal=np.zeros((lut.n_az, lut.n_rad), dtype=np.float64),
+            sum_normalization=np.ones((lut.n_az, lut.n_rad), dtype=np.float64),
+            count=np.ones((lut.n_az, lut.n_rad), dtype=np.float64),
+        )
+
+    monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
+    monkeypatch.setattr(exact_cake_portable, "integrate_detector_to_cake_lut", _fake_integrate_lut)
+
+    integrator_a = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    integrator_b = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    image = np.arange(16, dtype=np.float32).reshape(4, 4)
+
+    assert exact_cake_portable.start_exact_cake_geometry_warmup_in_background(
+        integrator_a,
+        image.shape,
+        npt_rad=8,
+        npt_azim=6,
+    )
+    assert entered.wait(timeout=1.0)
+
+    def _run_analysis() -> None:
+        try:
+            analysis_started.set()
+            analysis_results.append(
+                integrator_b.integrate2d(image, npt_rad=8, npt_azim=6, method="lut", unit="2th_deg")
+            )
+        except Exception as exc:
+            analysis_errors.append(exc)
+        finally:
+            analysis_done.set()
+
+    analysis_thread = threading.Thread(target=_run_analysis, name="test-exact-cake-analysis")
+    analysis_thread.start()
+    assert analysis_started.wait(timeout=1.0)
+    assert not analysis_done.wait(timeout=0.05)
+
+    release.set()
+    analysis_thread.join(timeout=1.0)
+    assert not analysis_thread.is_alive()
+
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if not exact_cake_portable._EXACT_CAKE_GEOMETRY_WARMUP_THREADS:
+            break
+        time.sleep(0.01)
+
+    assert build_calls == 1
+    assert not exact_cake_portable._EXACT_CAKE_GEOMETRY_WARMUP_THREADS
+    assert analysis_done.is_set()
+    assert not analysis_errors
+    assert len(analysis_results) == 1
+    assert len(exact_cake_portable._PROCESS_CAKE_LUT_CACHE) == 1
+    assert not exact_cake_portable._PROCESS_CAKE_LUT_IN_FLIGHT
+
+
+def test_shared_cake_lut_single_flight_releases_waiters_on_build_error(monkeypatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    analysis_started = threading.Event()
+    analysis_done = threading.Event()
+    analysis_errors: list[Exception] = []
+    build_calls = 0
+
+    def _fake_build_lut(image_shape, radial_deg, azimuthal_deg, geometry, *, workers="auto"):
+        del image_shape, radial_deg, azimuthal_deg, geometry, workers
+        nonlocal build_calls
+        build_calls += 1
+        entered.set()
+        if not release.wait(timeout=1.0):
+            raise AssertionError("timed out waiting to release fake LUT build")
+        raise RuntimeError("no lut in test")
+
+    monkeypatch.setattr(exact_cake_portable, "build_detector_to_cake_lut", _fake_build_lut)
+    monkeypatch.setattr(
+        exact_cake_portable,
+        "integrate_detector_to_cake_lut",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LUT integration should not run on build failure")),
+    )
+
+    integrator_a = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    integrator_b = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.3,
+        poni1=0.01,
+        poni2=0.02,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    image = np.arange(16, dtype=np.float32).reshape(4, 4)
+
+    assert exact_cake_portable.start_exact_cake_geometry_warmup_in_background(
+        integrator_a,
+        image.shape,
+        npt_rad=8,
+        npt_azim=6,
+    )
+    assert entered.wait(timeout=1.0)
+
+    def _run_analysis() -> None:
+        try:
+            analysis_started.set()
+            integrator_b.integrate2d(image, npt_rad=8, npt_azim=6, method="lut", unit="2th_deg")
+        except Exception as exc:
+            analysis_errors.append(exc)
+        finally:
+            analysis_done.set()
+
+    analysis_thread = threading.Thread(target=_run_analysis, name="test-exact-cake-analysis-error")
+    analysis_thread.start()
+    assert analysis_started.wait(timeout=1.0)
+    assert not analysis_done.wait(timeout=0.05)
+
+    release.set()
+    analysis_thread.join(timeout=1.0)
+    assert not analysis_thread.is_alive()
+
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if not exact_cake_portable._EXACT_CAKE_GEOMETRY_WARMUP_THREADS:
+            break
+        time.sleep(0.01)
+
+    assert build_calls == 1
+    assert not exact_cake_portable._EXACT_CAKE_GEOMETRY_WARMUP_THREADS
+    assert analysis_done.is_set()
+    assert len(analysis_errors) == 1
+    assert isinstance(analysis_errors[0], RuntimeError)
+    assert str(analysis_errors[0]) == "no lut in test"
+    assert not exact_cake_portable._PROCESS_CAKE_LUT_CACHE
+    assert not exact_cake_portable._PROCESS_CAKE_LUT_IN_FLIGHT
 
 
 def test_exact_cake_auto_workers_default_to_8(monkeypatch) -> None:
