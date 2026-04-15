@@ -477,6 +477,44 @@ def _event_axis_pixel_position(axis: Any, event: Any) -> tuple[float, float] | N
     return clamped_x, clamped_y
 
 
+def _event_axis_anchor_fractions(axis: Any, event: Any) -> tuple[float, float]:
+    if getattr(event, "inaxes", None) is not axis:
+        return 0.5, 0.5
+    pixel_position = _event_axis_pixel_position(axis, event)
+    bbox = getattr(axis, "bbox", None)
+    if pixel_position is None or bbox is None:
+        return 0.5, 0.5
+    try:
+        bbox_x0 = float(bbox.x0)
+        bbox_y0 = float(bbox.y0)
+        bbox_width = float(bbox.width)
+        bbox_height = float(bbox.height)
+    except Exception:
+        return 0.5, 0.5
+    if (
+        not np.isfinite(bbox_width)
+        or not np.isfinite(bbox_height)
+        or bbox_width <= 0.0
+        or bbox_height <= 0.0
+    ):
+        return 0.5, 0.5
+    anchor_fraction_x = float(
+        np.clip(
+            (float(pixel_position[0]) - bbox_x0) / bbox_width,
+            0.0,
+            1.0,
+        )
+    )
+    anchor_fraction_y = float(
+        np.clip(
+            (float(pixel_position[1]) - bbox_y0) / bbox_height,
+            0.0,
+            1.0,
+        )
+    )
+    return anchor_fraction_x, anchor_fraction_y
+
+
 def _update_pan_session(
     bindings: CanvasInteractionBindings,
     event: Any,
@@ -582,43 +620,6 @@ def _zoom_limits_about_anchor(
         anchor_value + ((lo - anchor_value) * scale_value),
         anchor_value + ((hi - anchor_value) * scale_value),
     )
-
-
-def manual_pick_zoom_anchor_fractions(
-    axis: Any,
-    event: Any,
-) -> tuple[float, float]:
-    """Return the normalized cursor anchor inside the current axes bbox."""
-
-    anchor_fraction_x = 0.5
-    anchor_fraction_y = 0.5
-    try:
-        bbox = getattr(axis, "bbox", None)
-        if (
-            bbox is not None
-            and np.isfinite(float(bbox.width))
-            and np.isfinite(float(bbox.height))
-            and float(bbox.width) > 0.0
-            and float(bbox.height) > 0.0
-        ):
-            anchor_fraction_x = float(
-                np.clip(
-                    (float(event.x) - float(bbox.x0)) / float(bbox.width),
-                    0.0,
-                    1.0,
-                )
-            )
-            anchor_fraction_y = float(
-                np.clip(
-                    (float(event.y) - float(bbox.y0)) / float(bbox.height),
-                    0.0,
-                    1.0,
-                )
-            )
-    except Exception:
-        anchor_fraction_x = 0.5
-        anchor_fraction_y = 0.5
-    return anchor_fraction_x, anchor_fraction_y
 
 
 def handle_runtime_canvas_click(
@@ -770,7 +771,7 @@ def handle_runtime_canvas_press(
         manual_pick_coords = _manual_pick_click_coords(bindings, event)
         if manual_pick_coords is None:
             return False
-        anchor_fraction_x, anchor_fraction_y = manual_pick_zoom_anchor_fractions(
+        anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
             bindings.axis,
             event,
         )
@@ -941,16 +942,16 @@ def handle_runtime_canvas_scroll(
         return False
 
     xlim, ylim = limits
-    anchor_x = getattr(event, "xdata", None)
-    anchor_y = getattr(event, "ydata", None)
-    if anchor_x is None or not np.isfinite(float(anchor_x)):
-        anchor_x = float(xlim[0] + xlim[1]) / 2.0
-    else:
-        anchor_x = float(anchor_x)
-    if anchor_y is None or not np.isfinite(float(anchor_y)):
-        anchor_y = float(ylim[0] + ylim[1]) / 2.0
-    else:
-        anchor_y = float(anchor_y)
+    anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
+        bindings.axis,
+        event,
+    )
+    anchor_x = float(xlim[0]) + (
+        (float(xlim[1]) - float(xlim[0])) * float(anchor_fraction_x)
+    )
+    anchor_y = float(ylim[0]) + (
+        (float(ylim[1]) - float(ylim[0])) * float(anchor_fraction_y)
+    )
 
     zoom_base = 1.2
     if step > 0.0:
