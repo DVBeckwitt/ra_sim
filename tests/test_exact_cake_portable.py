@@ -314,6 +314,143 @@ def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(
     )
 
 
+def test_resolve_cake_transform_bundle_reuses_matching_bundle() -> None:
+    bundle = _make_transform_bundle(
+        detector_shape=(3, 4),
+        radial_deg=np.array([10.0, 20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+        matrix=np.eye(6, 12, dtype=np.float32),
+    )
+    conflicting_live_bundle = _make_transform_bundle(
+        detector_shape=(3, 4),
+        radial_deg=np.array([1.0, 2.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-30.0, 30.0], dtype=np.float64),
+        matrix=np.eye(4, 12, dtype=np.float32),
+    )
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=1.0,
+        poni1=1.0,
+        poni2=1.0,
+        pixel1=1.0,
+        pixel2=1.0,
+    )
+    integrator._live_caked_transform_bundle = conflicting_live_bundle
+
+    resolved = exact_cake_portable.resolve_cake_transform_bundle(
+        integrator,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+        transform_bundle=bundle,
+    )
+
+    assert resolved is bundle
+
+
+def test_resolve_cake_transform_bundle_rebuilds_mismatched_bundle_from_exact_axes(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_cached_lut(
+        self,
+        image_shape,
+        radial_deg,
+        azimuthal_deg,
+        geometry,
+        *,
+        engine,
+        workers,
+    ):
+        del self, geometry, engine, workers
+        captured["shape"] = tuple(int(v) for v in tuple(image_shape)[:2])
+        captured["radial_deg"] = np.asarray(radial_deg, dtype=np.float64)
+        captured["azimuthal_deg"] = np.asarray(azimuthal_deg, dtype=np.float64)
+        return exact_cake.DetectorCakeLUT(
+            image_shape=(3, 4),
+            n_rad=2,
+            n_az=3,
+            matrix=np.eye(6, 12, dtype=np.float32),
+            count_flat=np.ones(6, dtype=np.float64),
+        )
+
+    monkeypatch.setattr(
+        exact_cake_portable.FastAzimuthalIntegrator,
+        "_cached_cake_lut",
+        _fake_cached_lut,
+    )
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=1.0,
+        poni1=1.0,
+        poni2=1.0,
+        pixel1=1.0,
+        pixel2=1.0,
+    )
+    stale_bundle = _make_transform_bundle(
+        detector_shape=(3, 4),
+        radial_deg=np.array([1.0, 2.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-30.0, 30.0], dtype=np.float64),
+        matrix=np.eye(4, 12, dtype=np.float32),
+    )
+
+    rebuilt = exact_cake_portable.resolve_cake_transform_bundle(
+        integrator,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+        transform_bundle=stale_bundle,
+    )
+
+    assert isinstance(rebuilt, exact_cake_portable.CakeTransformBundle)
+    assert rebuilt is not stale_bundle
+    assert captured["shape"] == (3, 4)
+    assert np.allclose(captured["radial_deg"], np.array([10.0, 20.0], dtype=np.float64))
+    assert np.allclose(
+        captured["azimuthal_deg"],
+        np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+    )
+
+
+def test_resolve_cake_transform_bundle_returns_none_when_exact_rebuild_is_unavailable() -> None:
+    stale_bundle = _make_transform_bundle(
+        detector_shape=(3, 4),
+        radial_deg=np.array([1.0, 2.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-30.0, 30.0], dtype=np.float64),
+        matrix=np.eye(4, 12, dtype=np.float32),
+    )
+
+    resolved = exact_cake_portable.resolve_cake_transform_bundle(
+        None,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+        transform_bundle=stale_bundle,
+    )
+
+    assert resolved is None
+
+
+def test_resolve_cake_transform_bundle_requires_exact_gui_display_axis_when_requested() -> None:
+    bundle = _make_transform_bundle(
+        detector_shape=(3, 4),
+        radial_deg=np.array([10.0, 20.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+        matrix=np.eye(6, 12, dtype=np.float32),
+    )
+
+    resolved = exact_cake_portable.resolve_cake_transform_bundle(
+        None,
+        (3, 4),
+        np.array([10.0, 20.0], dtype=np.float64),
+        gui_azimuth_deg=np.array([90.0, 0.0, -90.0], dtype=np.float64),
+        raw_azimuth_deg=np.array([-180.0, -90.0, 0.0], dtype=np.float64),
+        transform_bundle=bundle,
+        require_gui_display_match=True,
+    )
+
+    assert resolved is None
+
+
 def test_caked_point_to_detector_pixel_bilinearly_blends_neighboring_cake_bins() -> None:
     bundle = _make_transform_bundle(
         detector_shape=(2, 2),

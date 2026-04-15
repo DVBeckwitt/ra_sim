@@ -4393,8 +4393,8 @@ def test_geometry_fit_dynamic_reanchor_missing_or_invalid_bundle_falls_back_to_d
     )
     monkeypatch.setattr(
         geometry_fit,
-        "build_cake_transform_bundle",
-        lambda ai, detector_shape, radial_deg, raw_azimuth_deg: (
+        "resolve_cake_transform_bundle",
+        lambda ai, detector_shape, radial_deg, *, raw_azimuth_deg=None, **_kwargs: (
             rebuild_calls.append(
                 (
                     tuple(int(v) for v in tuple(detector_shape)[:2]),
@@ -4403,7 +4403,9 @@ def test_geometry_fit_dynamic_reanchor_missing_or_invalid_bundle_falls_back_to_d
                 )
             )
             or None
-        ),
+        )
+        if ai is not None
+        else None,
     )
     monkeypatch.setattr(
         geometry_fit,

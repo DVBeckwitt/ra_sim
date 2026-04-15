@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from ra_sim.debug_controls import retain_optional_cache
+from ra_sim.simulation.exact_cake_portable import (
+    CakeTransformBundle,
+    detector_pixel_to_caked_bin,
+    resolve_cake_transform_bundle,
+)
 from . import overlays as gui_overlays
 from ra_sim.simulation.intersection_analysis import (
     IntersectionGeometry,
@@ -57,6 +63,7 @@ class QrCylinderOverlayRuntimeBindings:
         [float, float, tuple[int, int]],
         tuple[float, float],
     ]
+    get_caked_projection_context: Callable[[], Mapping[str, object] | None] | None = None
     draw_idle: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
 
@@ -209,6 +216,7 @@ def build_qr_cylinder_overlay_signature(
     entries: Sequence[dict[str, object]],
     *,
     config: QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None = None,
 ) -> tuple[object, ...]:
     """Return a cache signature for analytic detector-trace overlay inputs."""
 
@@ -216,6 +224,9 @@ def build_qr_cylinder_overlay_signature(
         (str(entry["source"]), int(entry["m"]), round(float(entry["qr"]), 10))
         for entry in entries
     )
+    projection_signature: object = None
+    if bool(config.render_in_caked_space):
+        projection_signature = _projection_context_signature(projection_context)
     return (
         tuple(qr_keys),
         bool(config.render_in_caked_space),
@@ -237,6 +248,7 @@ def build_qr_cylinder_overlay_signature(
         float(config.wavelength),
         round(float(np.real(config.n2)), 12),
         round(float(np.imag(config.n2)), 12),
+        projection_signature,
     )
 
 
@@ -263,12 +275,108 @@ def _trace_geometry(
     )
 
 
+def _float64_axis_digest(values: object) -> tuple[tuple[int, ...], str] | None:
+    try:
+        axis = np.asarray(values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if axis.size <= 0 or not np.all(np.isfinite(axis)):
+        return None
+    return tuple(int(v) for v in axis.shape), hashlib.blake2b(
+        axis.tobytes(order="C"),
+        digest_size=16,
+    ).hexdigest()
+
+
+def _resolve_caked_projection_context(
+    projection_context: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    if not isinstance(projection_context, Mapping):
+        return None
+    bundle = projection_context.get("transform_bundle")
+    if not isinstance(bundle, CakeTransformBundle):
+        return None
+    try:
+        azimuth_axis = np.asarray(
+            projection_context.get("azimuth_axis"),
+            dtype=np.float64,
+        ).reshape(-1)
+    except Exception:
+        return None
+    if (
+        azimuth_axis.size != int(np.asarray(bundle.raw_azimuth_deg).size)
+        or not np.all(np.isfinite(azimuth_axis))
+    ):
+        return None
+    try:
+        radial_axis = np.asarray(
+            projection_context.get("radial_axis", bundle.radial_deg),
+            dtype=np.float64,
+        ).reshape(-1)
+    except Exception:
+        return None
+    if (
+        radial_axis.size != int(np.asarray(bundle.radial_deg).size)
+        or not np.all(np.isfinite(radial_axis))
+    ):
+        return None
+    raw_azimuth_axis = projection_context.get("raw_azimuth_axis")
+    radial_digest = _float64_axis_digest(
+        radial_axis
+    )
+    azimuth_digest = _float64_axis_digest(azimuth_axis)
+    if radial_digest is None or azimuth_digest is None:
+        return None
+    try:
+        detector_shape = tuple(
+            int(v)
+            for v in tuple(
+                projection_context.get("detector_shape", bundle.detector_shape)
+            )[:2]
+        )
+    except Exception:
+        return None
+    if (
+        len(detector_shape) < 2
+    ):
+        return None
+    resolved_bundle = resolve_cake_transform_bundle(
+        None,
+        detector_shape,
+        radial_axis,
+        gui_azimuth_deg=azimuth_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        transform_bundle=bundle,
+        require_gui_display_match=True,
+    )
+    if not isinstance(resolved_bundle, CakeTransformBundle):
+        return None
+    return {
+        "transform_bundle": resolved_bundle,
+        "detector_shape": detector_shape,
+        "radial_signature": radial_digest,
+        "azimuth_signature": azimuth_digest,
+    }
+
+
+def _projection_context_signature(
+    projection_context: Mapping[str, object] | None,
+) -> object:
+    resolved_projection = _resolve_caked_projection_context(projection_context)
+    if resolved_projection is None:
+        return None
+    return (
+        tuple(int(v) for v in resolved_projection["detector_shape"]),
+        resolved_projection["radial_signature"],
+        resolved_projection["azimuth_signature"],
+    )
+
+
 def _display_trace_from_detector_trace(
     trace: Any,
     *,
     config: QrCylinderOverlayRenderConfig,
-    two_theta_map: np.ndarray | None,
-    phi_map_deg: np.ndarray | None,
+    projection_context: Mapping[str, object] | None,
     native_sim_to_display_coords: Callable[
         [float, float, tuple[int, int]],
         tuple[float, float],
@@ -279,15 +387,11 @@ def _display_trace_from_detector_trace(
     valid_mask = np.asarray(trace.valid_mask, dtype=bool)
 
     if config.render_in_caked_space:
-        if two_theta_map is None or phi_map_deg is None:
-            nan_vals = np.full(detector_cols.shape, np.nan, dtype=np.float64)
-            return nan_vals.copy(), nan_vals
         return interpolate_trace_to_caked_coords(
             detector_cols=detector_cols,
             detector_rows=detector_rows,
             valid_mask=valid_mask,
-            two_theta_map=two_theta_map,
-            phi_map_deg=phi_map_deg,
+            projection_context=projection_context,
             two_theta_limits=config.two_theta_limits,
         )
 
@@ -312,8 +416,7 @@ def build_qr_cylinder_overlay_paths(
     entries: Sequence[dict[str, object]],
     *,
     config: QrCylinderOverlayRenderConfig,
-    two_theta_map: np.ndarray | None,
-    phi_map_deg: np.ndarray | None,
+    projection_context: Mapping[str, object] | None,
     native_sim_to_display_coords: Callable[
         [float, float, tuple[int, int]],
         tuple[float, float],
@@ -340,8 +443,7 @@ def build_qr_cylinder_overlay_paths(
             display_cols, display_rows = _display_trace_from_detector_trace(
                 trace,
                 config=config,
-                two_theta_map=two_theta_map,
-                phi_map_deg=phi_map_deg,
+                projection_context=projection_context,
                 native_sim_to_display_coords=native_sim_to_display_coords,
             )
             visible = np.isfinite(display_cols) & np.isfinite(display_rows)
@@ -415,24 +517,27 @@ def refresh_runtime_qr_cylinder_overlay(
         clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=redraw)
         return
 
+    projection_context = None
+    if bool(render_config.render_in_caked_space) and callable(
+        bindings.get_caked_projection_context
+    ):
+        try:
+            projection_context = bindings.get_caked_projection_context()
+        except Exception:
+            projection_context = None
+
     signature = build_qr_cylinder_overlay_signature(
         entries,
         config=render_config,
+        projection_context=projection_context,
     )
     retain_cache = _retain_qr_cylinder_overlay_cache(bindings)
     cached_signature = bindings.overlay_cache.get("signature") if retain_cache else None
     if cached_signature != signature:
-        two_theta_map = None
-        phi_map_deg = None
-        if bool(render_config.render_in_caked_space):
-            two_theta_map, phi_map_deg = bindings.get_detector_angular_maps(
-                _runtime_ai(bindings)
-            )
         paths = build_qr_cylinder_overlay_paths(
             entries,
             config=render_config,
-            two_theta_map=two_theta_map,
-            phi_map_deg=phi_map_deg,
+            projection_context=projection_context,
             native_sim_to_display_coords=bindings.native_sim_to_display_coords,
         )
         if retain_cache:
@@ -583,8 +688,7 @@ def interpolate_trace_to_caked_coords(
     detector_cols: np.ndarray,
     detector_rows: np.ndarray,
     valid_mask: np.ndarray | None,
-    two_theta_map: np.ndarray,
-    phi_map_deg: np.ndarray,
+    projection_context: Mapping[str, object] | None,
     two_theta_limits: tuple[float, float] = (0.0, 90.0),
     discontinuity_threshold_deg: float = 180.0,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -607,8 +711,27 @@ def interpolate_trace_to_caked_coords(
     if not np.any(base_valid):
         return tth, phi
 
-    tth_sample = _bilinear_sample(two_theta_map, cols, rows)
-    phi_sample = _sample_wrapped_phi_degrees(phi_map_deg, cols, rows)
+    resolved_projection = _resolve_caked_projection_context(projection_context)
+    if resolved_projection is None:
+        return tth, phi
+    tth_sample = np.full(cols.shape, np.nan, dtype=np.float64)
+    phi_sample = np.full(cols.shape, np.nan, dtype=np.float64)
+    bundle = resolved_projection["transform_bundle"]
+    for idx in np.flatnonzero(base_valid):
+        two_theta_value, phi_value = detector_pixel_to_caked_bin(
+            bundle,
+            float(cols[idx]),
+            float(rows[idx]),
+        )
+        if (
+            two_theta_value is None
+            or phi_value is None
+            or not np.isfinite(float(two_theta_value))
+            or not np.isfinite(float(phi_value))
+        ):
+            continue
+        tth_sample[idx] = float(two_theta_value)
+        phi_sample[idx] = float(phi_value)
 
     visible = base_valid & np.isfinite(tth_sample) & np.isfinite(phi_sample)
     tth_min, tth_max = sorted((float(two_theta_limits[0]), float(two_theta_limits[1])))
@@ -650,6 +773,7 @@ def make_runtime_qr_cylinder_overlay_bindings_factory(
         [float, float, tuple[int, int]],
         tuple[float, float],
     ],
+    get_caked_projection_context: Callable[[], Mapping[str, object] | None] | None = None,
     draw_idle_factory: object = None,
     set_status_text_factory: object = None,
 ) -> Callable[[], QrCylinderOverlayRuntimeBindings]:
@@ -666,6 +790,7 @@ def make_runtime_qr_cylinder_overlay_bindings_factory(
             ai_factory=ai_factory,
             get_detector_angular_maps=get_detector_angular_maps,
             native_sim_to_display_coords=native_sim_to_display_coords,
+            get_caked_projection_context=get_caked_projection_context,
             draw_idle=_resolve_runtime_value(draw_idle_factory),
             set_status_text=_resolve_runtime_value(set_status_text_factory),
         )

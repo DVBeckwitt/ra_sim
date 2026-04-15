@@ -3411,6 +3411,84 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
     ]
 
 
+def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection(
+    monkeypatch,
+) -> None:
+    bundle = _dummy_transform_bundle(detector_shape=(8, 8))
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (17.0, -9.0)
+            if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+            else (None, None)
+        ),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-9.0, -2.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (
+            float(col),
+            float(row),
+        ),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 90.0,
+                "sim_row": 80.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "caked_x": 66.0,
+                "caked_y": 55.0,
+                "raw_caked_x": 65.0,
+                "raw_caked_y": 54.0,
+            }
+        ]
+    )
+
+    assert projected == [
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col": 17.0,
+            "sim_row": -9.0,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+            "caked_x": 17.0,
+            "caked_y": -9.0,
+            "raw_caked_x": 17.0,
+            "raw_caked_y": -9.0,
+            "sim_col_global": 17.0,
+            "sim_row_global": -9.0,
+            "sim_col_local": 7.0,
+            "sim_row_local": 0.0,
+        }
+    ]
+
+
 def test_make_runtime_geometry_manual_projection_callbacks_clears_stale_caked_fields_when_reprojection_fails(
     monkeypatch,
 ) -> None:

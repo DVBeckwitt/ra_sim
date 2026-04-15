@@ -616,7 +616,6 @@ def _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session) -> 
         raise AssertionError("preview mask should not call legacy analytic helpers")
 
     monkeypatch.setattr(runtime_session, "_detector_angular_maps_for_shape", _fail)
-    monkeypatch.setattr(runtime_session, "raw_phi_to_gui_phi", _fail)
     monkeypatch.setattr(runtime_session, "_get_detector_angular_maps", _fail)
     monkeypatch.setattr(
         runtime_session,
@@ -665,7 +664,7 @@ def test_runtime_geometry_fit_roi_projector_does_not_call_legacy_projection_path
     bundle = runtime_session.CakeTransformBundle(
         detector_shape=(6, 6),
         radial_deg=np.array([1.0, 2.0], dtype=float),
-        raw_azimuth_deg=np.array([-10.0, 10.0], dtype=float),
+        raw_azimuth_deg=np.array([-100.0, -80.0], dtype=float),
         gui_azimuth_deg=np.array([-10.0, 10.0], dtype=float),
         lut=SimpleNamespace(),
     )
@@ -729,6 +728,168 @@ def test_runtime_geometry_fit_roi_projector_does_not_call_legacy_projection_path
     assert bundle_calls == [bundle]
 
 
+def test_runtime_current_geometry_fit_roi_selection_does_not_call_legacy_projection_paths(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    bundle = runtime_session.CakeTransformBundle(
+        detector_shape=(6, 6),
+        radial_deg=np.array([1.0, 2.0], dtype=float),
+        raw_azimuth_deg=np.array([-100.0, -80.0], dtype=float),
+        gui_azimuth_deg=np.array([-10.0, 10.0], dtype=float),
+        lut=SimpleNamespace(),
+    )
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("ROI selection should not call legacy projection paths")
+
+    bundle_calls: list[tuple[float, float, object]] = []
+
+    def _record_caked_point_to_detector_pixel(
+        ai,
+        detector_shape,
+        radial_deg,
+        azimuth_deg,
+        two_theta_deg,
+        phi_deg,
+        *,
+        transform_bundle=None,
+    ):
+        del ai, detector_shape, radial_deg, azimuth_deg
+        bundle_calls.append(
+            (
+                float(two_theta_deg),
+                float(phi_deg),
+                transform_bundle,
+            )
+        )
+        return (12.0, 34.0)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "caked_point_to_detector_pixel",
+        _record_caked_point_to_detector_pixel,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_scattering_angles_to_detector_pixel",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_pixel_to_scattering_angles",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_detector_angular_maps",
+        _fail,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_angular_maps",
+        _fail,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            source_row_snapshots={
+                0: {
+                    "rows": [
+                        {
+                            "label": "1,0,0",
+                            "q_group_key": ("q_group", "primary", 1, 0),
+                            "source_table_index": 1,
+                            "source_row_index": 2,
+                            "sim_col": 3.0,
+                            "sim_row": 4.0,
+                        }
+                    ]
+                }
+            },
+            last_caked_radial_values=np.array([1.0, 2.0], dtype=float),
+            last_caked_azimuth_values=np.array([-10.0, 10.0], dtype=float),
+            ai_cache={"ai": None},
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pairs_for_index",
+        lambda index: (
+            [
+                {
+                    "label": "1,0,0",
+                    "background_two_theta_deg": 1.5,
+                    "background_phi_deg": -10.0,
+                }
+            ]
+            if int(index) == 0
+            else []
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_current_background_native",
+        lambda: np.ones((6, 6), dtype=float),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_live_preview_simulated_peaks_from_cache",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_live_caked_transform_bundle",
+        lambda: bundle,
+    )
+    monkeypatch.setattr(runtime_session, "fit_config", {"geometry": {"roi": True}})
+
+    def _fake_build_geometry_fit_caked_roi_selection(
+        source_rows,
+        *,
+        required_pairs,
+        image_shape,
+        fit_config,
+        enabled_override,
+        fit_space_to_detector_point,
+    ):
+        del fit_config
+        return {
+            "enabled": bool(enabled_override),
+            "image_shape": tuple(int(v) for v in image_shape),
+            "source_row_count": len(source_rows),
+            "required_pair_count": len(required_pairs),
+            "projected_point": fit_space_to_detector_point(1.5, -10.0),
+        }
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        _fake_build_geometry_fit_caked_roi_selection,
+    )
+
+    selection = runtime_session._current_geometry_fit_caked_roi_selection(
+        force_enabled=True
+    )
+
+    assert selection == {
+        "enabled": True,
+        "image_shape": (6, 6),
+        "source_row_count": 1,
+        "required_pair_count": 1,
+        "projected_point": (12.0, 34.0),
+    }
+    assert bundle_calls == [(1.5, -10.0, bundle)]
+
+
 def test_runtime_geometry_fit_caked_roi_preview_mask_uses_live_exact_bundle_only(
     monkeypatch,
 ) -> None:
@@ -738,7 +899,7 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_uses_live_exact_bundle_only
     live_bundle = runtime_session.CakeTransformBundle(
         detector_shape=inputs["native_shape"],
         radial_deg=np.array([10.0, 20.0], dtype=float),
-        raw_azimuth_deg=np.array([85.0, 95.0], dtype=float),
+        raw_azimuth_deg=np.array([-95.0, -85.0], dtype=float),
         gui_azimuth_deg=np.array([-5.0, 5.0], dtype=float),
         lut=SimpleNamespace(),
     )
@@ -755,9 +916,6 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_uses_live_exact_bundle_only
     def _fail_integrator():
         raise AssertionError("preview mask should reuse matching live bundle")
 
-    def _fail_build_bundle(*_args, **_kwargs):
-        raise AssertionError("preview mask should not rebuild matching live bundle")
-
     monkeypatch.setattr(
         runtime_session,
         "_current_live_caked_transform_bundle",
@@ -767,11 +925,6 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_uses_live_exact_bundle_only
         runtime_session,
         "_current_geometry_fit_preview_integrator",
         _fail_integrator,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "build_cake_transform_bundle",
-        _fail_build_bundle,
     )
     monkeypatch.setattr(
         runtime_session,
@@ -811,20 +964,48 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_exact_bundle_witho
         dtype=float,
     )
     expected_raw_azimuth = np.sort(expected_raw_azimuth, kind="stable")
-    original_build_bundle = runtime_session.build_cake_transform_bundle
-    build_calls: list[tuple[object, tuple[int, int], tuple[float, ...], tuple[float, ...]]] = []
+    original_resolve_bundle = runtime_session.resolve_cake_transform_bundle
+    resolve_calls: list[
+        tuple[object, tuple[int, int], tuple[float, ...], tuple[float, ...] | None, bool]
+    ] = []
     projection_calls: list[tuple[object, float, float]] = []
 
-    def _fake_build_bundle(ai_arg, detector_shape, radial_deg, raw_azimuth_deg):
-        build_calls.append(
+    def _record_resolve_bundle(
+        ai_arg,
+        detector_shape,
+        radial_deg,
+        *,
+        gui_azimuth_deg=None,
+        raw_azimuth_deg=None,
+        transform_bundle=None,
+        require_gui_display_match=False,
+        engine="auto",
+        workers="auto",
+    ):
+        del transform_bundle
+        resolve_calls.append(
             (
                 ai_arg,
                 tuple(detector_shape),
                 tuple(np.asarray(radial_deg, dtype=float)),
-                tuple(np.asarray(raw_azimuth_deg, dtype=float)),
+                (
+                    tuple(np.asarray(raw_azimuth_deg, dtype=float))
+                    if raw_azimuth_deg is not None
+                    else None
+                ),
+                bool(require_gui_display_match),
             )
         )
-        return original_build_bundle(ai_arg, detector_shape, radial_deg, raw_azimuth_deg)
+        return original_resolve_bundle(
+            ai_arg,
+            detector_shape,
+            radial_deg,
+            gui_azimuth_deg=gui_azimuth_deg,
+            raw_azimuth_deg=raw_azimuth_deg,
+            require_gui_display_match=require_gui_display_match,
+            engine=engine,
+            workers=workers,
+        )
 
     def _record_detector_pixel_to_caked_bin(bundle, col, row):
         projection_calls.append((bundle, float(col), float(row)))
@@ -846,8 +1027,8 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_exact_bundle_witho
     )
     monkeypatch.setattr(
         runtime_session,
-        "build_cake_transform_bundle",
-        _fake_build_bundle,
+        "resolve_cake_transform_bundle",
+        _record_resolve_bundle,
     )
     monkeypatch.setattr(
         runtime_session,
@@ -863,14 +1044,98 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_exact_bundle_witho
     )
 
     np.testing.assert_array_equal(mask, inputs["expected_mask"])
-    assert len(build_calls) == 1
-    assert build_calls[0][0] is ai
-    assert build_calls[0][1] == inputs["native_shape"]
-    assert build_calls[0][2] == (10.0, 20.0)
-    assert build_calls[0][3] == tuple(expected_raw_azimuth)
-    assert np.all(np.diff(np.asarray(build_calls[0][3], dtype=float)) > 0.0)
+    assert resolve_calls[0] == (
+        None,
+        inputs["native_shape"],
+        (10.0, 20.0),
+        tuple(expected_raw_azimuth),
+        True,
+    )
+    assert resolve_calls[1] == (
+        ai,
+        inputs["native_shape"],
+        (10.0, 20.0),
+        tuple(expected_raw_azimuth),
+        True,
+    )
     rebuilt_bundle = projection_calls[0][0]
     assert isinstance(rebuilt_bundle, runtime_session.CakeTransformBundle)
+    assert projection_calls == [
+        (rebuilt_bundle, 1.0, 0.0),
+        (rebuilt_bundle, 1.0, 2.0),
+    ]
+
+
+def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_when_live_bundle_raw_axis_is_stale(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session)
+    inputs = _preview_mask_regression_inputs()
+    ai = runtime_session.FastAzimuthalIntegrator(
+        dist=0.25,
+        poni1=0.0015,
+        poni2=0.0020,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    stale_bundle = runtime_session.CakeTransformBundle(
+        detector_shape=inputs["native_shape"],
+        radial_deg=np.array([10.0, 20.0], dtype=float),
+        raw_azimuth_deg=np.array([70.0, 110.0], dtype=float),
+        gui_azimuth_deg=np.array([-20.0, 20.0], dtype=float),
+        lut=SimpleNamespace(),
+    )
+    expected_raw_azimuth = np.asarray(
+        runtime_session.gui_phi_to_raw_phi(inputs["azimuth_axis"]),
+        dtype=float,
+    )
+    expected_raw_azimuth = np.sort(expected_raw_azimuth, kind="stable")
+    projection_calls: list[tuple[object, float, float]] = []
+
+    def _record_detector_pixel_to_caked_bin(bundle, col, row):
+        projection_calls.append((bundle, float(col), float(row)))
+        np.testing.assert_array_equal(
+            np.asarray(bundle.raw_azimuth_deg, dtype=float),
+            expected_raw_azimuth,
+        )
+        if (float(col), float(row)) == (1.0, 0.0):
+            return (10.2, -4.0)
+        if (float(col), float(row)) == (1.0, 2.0):
+            return (19.6, 4.0)
+        return (None, None)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_live_caked_transform_bundle",
+        lambda: stale_bundle,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_preview_integrator",
+        lambda: ai,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        _record_detector_pixel_to_caked_bin,
+    )
+
+    mask = runtime_session._geometry_fit_caked_roi_preview_mask(
+        selection=inputs["selection"],
+        native_shape=inputs["native_shape"],
+        radial_axis=inputs["radial_axis"],
+        azimuth_axis=inputs["azimuth_axis"],
+    )
+
+    np.testing.assert_array_equal(mask, inputs["expected_mask"])
+    rebuilt_bundle = projection_calls[0][0]
+    assert isinstance(rebuilt_bundle, runtime_session.CakeTransformBundle)
+    assert rebuilt_bundle is not stale_bundle
+    np.testing.assert_array_equal(
+        np.asarray(rebuilt_bundle.raw_azimuth_deg, dtype=float),
+        expected_raw_azimuth,
+    )
     assert projection_calls == [
         (rebuilt_bundle, 1.0, 0.0),
         (rebuilt_bundle, 1.0, 2.0),
@@ -906,7 +1171,7 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_returns_none_without_valid_
     )
     monkeypatch.setattr(
         runtime_session,
-        "build_cake_transform_bundle",
+        "resolve_cake_transform_bundle",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -1037,6 +1302,7 @@ def test_runtime_worker_caked_projection_view_builds_same_axes_metadata(monkeypa
         expected_gui[expected_order],
     )
     assert projection_view["transform_bundle"] is bundle
+    assert projection_view["detector_shape"] == (6, 8)
     assert calls[0][:2] == ("two_theta_max", (6, 8))
     assert calls[1] == (
         "axes",
@@ -1073,9 +1339,10 @@ def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata()
     helper_end = source.index("def _prepare_q_space_display_payload(", helper_start)
     helper_source = source[helper_start:helper_end]
 
-    assert '"raw_azimuth_axis": np.asarray(raw_azimuth_axis, dtype=float)' in helper_source
-    assert '"raw_to_gui_row_permutation": np.asarray(' in helper_source
-    assert '"transform_bundle": transform_bundle' in helper_source
+    assert "_normalize_geometry_fit_caked_view_payload(" in helper_source
+    assert '"raw_azimuth_axis": np.asarray(' in helper_source
+    assert '"transform_bundle": normalized_payload.get("transform_bundle")' in helper_source
+    assert '"detector_shape": tuple(normalized_payload.get("detector_shape", ()))' in helper_source
 
 
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:

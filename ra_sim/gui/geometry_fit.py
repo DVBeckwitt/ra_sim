@@ -35,10 +35,10 @@ from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
-    build_cake_transform_bundle,
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
     raw_phi_to_gui_phi,
+    resolve_cake_transform_bundle,
 )
 from ra_sim.utils.calculations import (
     SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
@@ -107,14 +107,7 @@ def _geometry_fit_axes_match(
     rhs_vec = _geometry_fit_float64_vector(rhs)
     if lhs_vec is None or rhs_vec is None or lhs_vec.shape != rhs_vec.shape:
         return False
-    return bool(
-        np.allclose(
-            lhs_vec,
-            rhs_vec,
-            atol=float(GEOMETRY_FIT_EXACT_CAKE_AXIS_TOLERANCE),
-            rtol=0.0,
-        )
-    )
+    return bool(np.array_equal(lhs_vec, rhs_vec))
 
 
 def _geometry_fit_raw_azimuth_axis_from_display_axis(
@@ -187,21 +180,29 @@ def _geometry_fit_caked_bundle_matches_display(
     raw_azimuth_axis: object,
 ) -> bool:
     normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    radial_vec = _geometry_fit_float64_vector(radial_axis)
+    gui_azimuth_vec = _geometry_fit_float64_vector(azimuth_axis)
+    raw_azimuth_vec = _geometry_fit_float64_vector(raw_azimuth_axis)
     if (
         normalized_shape is None
-        or not isinstance(bundle, CakeTransformBundle)
-        or tuple(bundle.detector_shape) != tuple(normalized_shape)
+        or radial_vec is None
+        or gui_azimuth_vec is None
+        or raw_azimuth_vec is None
     ):
         return False
-    bundle_display_azimuth_axis = _geometry_fit_display_azimuth_axis_from_raw_axis(
-        bundle.raw_azimuth_deg
-    )
-    if bundle_display_azimuth_axis is None:
-        return False
-    return bool(
-        _geometry_fit_axes_match(bundle.radial_deg, radial_axis)
-        and _geometry_fit_axes_match(bundle_display_azimuth_axis, azimuth_axis)
-        and _geometry_fit_axes_match(bundle.raw_azimuth_deg, raw_azimuth_axis)
+    return isinstance(
+        resolve_cake_transform_bundle(
+            None,
+            normalized_shape,
+            radial_vec,
+            gui_azimuth_deg=gui_azimuth_vec,
+            raw_azimuth_deg=raw_azimuth_vec,
+            transform_bundle=(
+                bundle if isinstance(bundle, CakeTransformBundle) else None
+            ),
+            require_gui_display_match=True,
+        ),
+        CakeTransformBundle
     )
 
 
@@ -258,23 +259,17 @@ def _geometry_fit_rebuild_dynamic_reanchor_caked_bundle(
             pixel1=float(pixel_size),
             pixel2=float(pixel_size),
         )
-        rebuilt = build_cake_transform_bundle(
+        rebuilt = resolve_cake_transform_bundle(
             ai,
             normalized_shape,
             radial_vec,
-            raw_azimuth_vec,
+            gui_azimuth_deg=gui_azimuth_vec,
+            raw_azimuth_deg=raw_azimuth_vec,
+            require_gui_display_match=True,
         )
     except Exception:
         rebuilt = None
-    if not _geometry_fit_caked_bundle_matches_display(
-        rebuilt,
-        detector_shape=normalized_shape,
-        radial_axis=radial_vec,
-        azimuth_axis=gui_azimuth_vec,
-        raw_azimuth_axis=raw_azimuth_vec,
-    ):
-        return None
-    return rebuilt
+    return rebuilt if isinstance(rebuilt, CakeTransformBundle) else None
 
 
 def _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
@@ -286,25 +281,38 @@ def _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
     transform_bundle: object,
     params: Mapping[str, object] | None,
 ) -> CakeTransformBundle | None:
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    radial_vec = _geometry_fit_float64_vector(radial_axis)
+    gui_azimuth_vec = _geometry_fit_float64_vector(azimuth_axis)
     raw_azimuth_vec = _geometry_fit_float64_vector(raw_azimuth_axis)
     if raw_azimuth_vec is None:
         raw_azimuth_vec = _geometry_fit_raw_azimuth_axis_from_display_axis(
             azimuth_axis
         )
-    if raw_azimuth_vec is None:
-        return None
-    if _geometry_fit_caked_bundle_matches_display(
-        transform_bundle,
-        detector_shape=detector_shape,
-        radial_axis=radial_axis,
-        azimuth_axis=azimuth_axis,
-        raw_azimuth_axis=raw_azimuth_vec,
+    if (
+        normalized_shape is None
+        or radial_vec is None
+        or gui_azimuth_vec is None
+        or raw_azimuth_vec is None
     ):
-        return transform_bundle
+        return None
+    resolved_bundle = resolve_cake_transform_bundle(
+        None,
+        normalized_shape,
+        radial_vec,
+        gui_azimuth_deg=gui_azimuth_vec,
+        raw_azimuth_deg=raw_azimuth_vec,
+        transform_bundle=(
+            transform_bundle if isinstance(transform_bundle, CakeTransformBundle) else None
+        ),
+        require_gui_display_match=True,
+    )
+    if isinstance(resolved_bundle, CakeTransformBundle):
+        return resolved_bundle
     return _geometry_fit_rebuild_dynamic_reanchor_caked_bundle(
-        detector_shape=detector_shape,
-        radial_axis=radial_axis,
-        azimuth_axis=azimuth_axis,
+        detector_shape=normalized_shape,
+        radial_axis=radial_vec,
+        azimuth_axis=gui_azimuth_vec,
         raw_azimuth_axis=raw_azimuth_vec,
         params=params,
     )
