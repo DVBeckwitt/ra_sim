@@ -353,7 +353,7 @@ def refresh_geometry_manual_pair_entry(
     ] = _default_normalize_hkl_key,
     sigma_floor_px: float = DEFAULT_POSITION_SIGMA_FLOOR_PX,
     stale_caked_tolerance_px: float = 0.5,
-    allow_legacy_peak_fallback: bool = True,
+    allow_legacy_peak_fallback: bool = False,
 ) -> dict[str, object] | None:
     """Refresh cached display/detector fields from angle-first manual geometry."""
 
@@ -393,10 +393,14 @@ def refresh_geometry_manual_pair_entry(
     except Exception:
         shape = ()
 
-    caked_point = _finite_pair("caked_x", "caked_y")
-    if caked_point is None:
-        caked_point = _finite_pair("raw_caked_x", "raw_caked_y")
+    authoritative_caked_point = _finite_pair(
+        "background_two_theta_deg",
+        "background_phi_deg",
+    )
+    caked_point = authoritative_caked_point
     if caked_point is not None:
+        normalized["background_two_theta_deg"] = float(caked_point[0])
+        normalized["background_phi_deg"] = float(caked_point[1])
         normalized["caked_x"] = float(caked_point[0])
         normalized["caked_y"] = float(caked_point[1])
         if _finite_pair("raw_caked_x", "raw_caked_y") is None:
@@ -405,7 +409,60 @@ def refresh_geometry_manual_pair_entry(
 
     display_point = None
     detector_point = None
-    if caked_point is not None and callable(caked_angles_to_background_display_coords):
+    if authoritative_caked_point is not None:
+        mapped_display_point = None
+        mapped_detector_point = None
+        if (
+            callable(caked_angles_to_background_display_coords)
+            and callable(background_display_to_native_detector_coords)
+        ):
+            mapped_display_point = caked_angles_to_background_display_coords(
+                float(authoritative_caked_point[0]),
+                float(authoritative_caked_point[1]),
+            )
+            if (
+                isinstance(mapped_display_point, tuple)
+                and len(mapped_display_point) >= 2
+                and np.isfinite(float(mapped_display_point[0]))
+                and np.isfinite(float(mapped_display_point[1]))
+            ):
+                mapped_detector_point = background_display_to_native_detector_coords(
+                    float(mapped_display_point[0]),
+                    float(mapped_display_point[1]),
+                )
+        if (
+            isinstance(mapped_display_point, tuple)
+            and len(mapped_display_point) >= 2
+            and np.isfinite(float(mapped_display_point[0]))
+            and np.isfinite(float(mapped_display_point[1]))
+            and isinstance(mapped_detector_point, tuple)
+            and len(mapped_detector_point) >= 2
+            and np.isfinite(float(mapped_detector_point[0]))
+            and np.isfinite(float(mapped_detector_point[1]))
+        ):
+            display_point = (
+                float(mapped_display_point[0]),
+                float(mapped_display_point[1]),
+            )
+            detector_point = (
+                float(mapped_detector_point[0]),
+                float(mapped_detector_point[1]),
+            )
+            normalized["x"] = float(display_point[0])
+            normalized["y"] = float(display_point[1])
+        else:
+            for stale_key in (
+                "x",
+                "y",
+                "detector_x",
+                "detector_y",
+                "background_detector_x",
+                "background_detector_y",
+            ):
+                normalized.pop(stale_key, None)
+            normalized["stale_caked_fields"] = True
+            return normalized
+    elif caked_point is not None and callable(caked_angles_to_background_display_coords):
         mapped_display_point = caked_angles_to_background_display_coords(
             float(caked_point[0]),
             float(caked_point[1]),
@@ -509,6 +566,8 @@ def refresh_geometry_manual_pair_entry(
             and np.isfinite(float(recomputed_caked[0]))
             and np.isfinite(float(recomputed_caked[1]))
         ):
+            normalized["background_two_theta_deg"] = float(recomputed_caked[0])
+            normalized["background_phi_deg"] = float(recomputed_caked[1])
             normalized["caked_x"] = float(recomputed_caked[0])
             normalized["caked_y"] = float(recomputed_caked[1])
             normalized["raw_caked_x"] = float(recomputed_caked[0])
@@ -829,6 +888,30 @@ def normalize_geometry_manual_pair_entry(
     }
     if normalized_hkl is not None:
         normalized["hkl"] = normalized_hkl
+
+    for x_key, y_key in (
+        ("background_two_theta_deg", "background_phi_deg"),
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+    ):
+        raw_x_local = entry.get(x_key)
+        raw_y_local = entry.get(y_key)
+        try:
+            caked_x_val = (
+                float(raw_x_local) if raw_x_local is not None else float("nan")
+            )
+        except Exception:
+            caked_x_val = float("nan")
+        try:
+            caked_y_val = (
+                float(raw_y_local) if raw_y_local is not None else float("nan")
+            )
+        except Exception:
+            caked_y_val = float("nan")
+        if np.isfinite(caked_x_val) and np.isfinite(caked_y_val):
+            normalized["background_two_theta_deg"] = float(caked_x_val)
+            normalized["background_phi_deg"] = float(caked_y_val)
+            break
 
     raw_group_key = entry.get("q_group_key")
     if isinstance(raw_group_key, tuple):
@@ -1575,23 +1658,23 @@ def geometry_manual_candidate_source_key(
 
     if not isinstance(entry, dict):
         return None
-    source_branch_index = entry.get("source_branch_index")
-    if source_branch_index is None:
-        try:
-            legacy_branch = int(entry.get("source_peak_index"))
-        except Exception:
-            legacy_branch = -1
-        if legacy_branch in {0, 1}:
-            source_branch_index = int(legacy_branch)
     try:
-        reflection_idx = entry.get("source_reflection_index", entry.get("source_table_index"))
-        return (
-            "source_branch",
-            int(reflection_idx),
-            int(source_branch_index),
-        )
+        source_branch_index = int(entry.get("source_branch_index"))
     except Exception:
-        pass
+        source_branch_index = -1
+    if source_branch_index in {0, 1}:
+        try:
+            reflection_idx = entry.get(
+                "source_reflection_index",
+                entry.get("source_table_index"),
+            )
+            return (
+                "source_branch",
+                int(reflection_idx),
+                int(source_branch_index),
+            )
+        except Exception:
+            pass
     try:
         return (
             "source",
@@ -2720,11 +2803,15 @@ def geometry_manual_pair_entry_from_candidate(
         entry["raw_x"] = float(raw_col)
         entry["raw_y"] = float(raw_row)
     if caked_col is not None and caked_row is not None:
+        entry["background_two_theta_deg"] = float(caked_col)
+        entry["background_phi_deg"] = float(caked_row)
         entry["caked_x"] = float(caked_col)
         entry["caked_y"] = float(caked_row)
     if raw_caked_col is not None and raw_caked_row is not None:
         entry["raw_caked_x"] = float(raw_caked_col)
         entry["raw_caked_y"] = float(raw_caked_row)
+        entry.setdefault("background_two_theta_deg", float(raw_caked_col))
+        entry.setdefault("background_phi_deg", float(raw_caked_row))
     if placement_error_px is not None and np.isfinite(float(placement_error_px)):
         entry["placement_error_px"] = max(0.0, float(placement_error_px))
     if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
@@ -3897,7 +3984,7 @@ def make_runtime_geometry_manual_projection_callbacks(
             ),
             rotate_point_for_display=rotate_point_for_display,
             display_rotate_k=int(display_rotate_k),
-            allow_legacy_peak_fallback=True,
+            allow_legacy_peak_fallback=False,
         )
 
     def _entry_display_coords(
@@ -5603,6 +5690,8 @@ def geometry_manual_pair_entry_to_jsonable(
         "detector_y",
         "background_detector_x",
         "background_detector_y",
+        "background_two_theta_deg",
+        "background_phi_deg",
         "caked_x",
         "caked_y",
         "raw_caked_x",

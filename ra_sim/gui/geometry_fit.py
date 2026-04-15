@@ -768,9 +768,6 @@ def _geometry_fit_is_canonical_live_source_entry(
     branch_idx = _geometry_fit_source_branch_index(entry)
     if branch_idx not in {0, 1}:
         return False, _geometry_fit_source_branch_reason(entry) or "missing_branch"
-    peak_idx = _geometry_fit_coerce_nonnegative_index(entry.get("source_peak_index"))
-    if peak_idx not in {0, 1} or int(peak_idx) != int(branch_idx):
-        return False, "peak_not_branch"
     if not _geometry_fit_trusted_full_reflection_identity(entry):
         return False, "untrusted_full_identity"
     return True, None
@@ -2527,10 +2524,9 @@ def _geometry_fit_caked_roi_angle_point(
     if not isinstance(entry, Mapping):
         return None
     candidate_keys = (
-        ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("background_two_theta_deg", "background_phi_deg"),
         ("simulated_two_theta_deg", "simulated_phi_deg"),
         ("two_theta_deg", "phi_deg"),
-        ("caked_x", "caked_y"),
     )
     for two_theta_key, phi_key in candidate_keys:
         two_theta_val = _geometry_fit_cache_finite_float(entry.get(two_theta_key))
@@ -2554,25 +2550,27 @@ def _geometry_fit_caked_roi_native_point(
 
     if not isinstance(entry, Mapping):
         return None
-    if callable(fit_space_to_detector_point):
-        fit_space_point = _geometry_fit_caked_roi_angle_point(entry)
-        if fit_space_point is not None:
-            try:
-                projected_point = fit_space_to_detector_point(
-                    float(fit_space_point[0]),
-                    float(fit_space_point[1]),
-                )
-            except Exception:
-                projected_point = None
-            if (
-                isinstance(projected_point, tuple)
-                and len(projected_point) >= 2
-                and projected_point[0] is not None
-                and projected_point[1] is not None
-                and np.isfinite(float(projected_point[0]))
-                and np.isfinite(float(projected_point[1]))
-            ):
-                return float(projected_point[0]), float(projected_point[1])
+    fit_space_point = _geometry_fit_caked_roi_angle_point(entry)
+    if fit_space_point is not None:
+        if not callable(fit_space_to_detector_point):
+            return None
+        try:
+            projected_point = fit_space_to_detector_point(
+                float(fit_space_point[0]),
+                float(fit_space_point[1]),
+            )
+        except Exception:
+            projected_point = None
+        if (
+            isinstance(projected_point, tuple)
+            and len(projected_point) >= 2
+            and projected_point[0] is not None
+            and projected_point[1] is not None
+            and np.isfinite(float(projected_point[0]))
+            and np.isfinite(float(projected_point[1]))
+        ):
+            return float(projected_point[0]), float(projected_point[1])
+        return None
     candidate_keys = (
         ("detector_x", "detector_y"),
         ("refined_sim_native_x", "refined_sim_native_y"),

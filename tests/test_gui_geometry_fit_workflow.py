@@ -3600,15 +3600,15 @@ def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_cak
         orientation_cfg={},
     )
 
-    assert dataset["initial_pairs_display"][0]["bg_display"] == (140.0, 140.0)
-    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 150.0
-    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == 160.0
-    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 150.0
-    assert dataset["measured_for_fit"][0]["background_phi_deg"] == 160.0
-    assert dataset["measured_for_fit"][0]["background_detector_x"] == 140.0
-    assert dataset["measured_for_fit"][0]["background_detector_y"] == 140.0
-    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 150.0
-    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == 160.0
+    assert dataset["initial_pairs_display"][0]["bg_display"] == (13.0, -56.0)
+    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == -36.0
+    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["measured_for_fit"][0]["background_phi_deg"] == -36.0
+    assert dataset["measured_for_fit"][0]["background_detector_x"] == 13.0
+    assert dataset["measured_for_fit"][0]["background_detector_y"] == -56.0
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == -36.0
 
 
 def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
@@ -10520,6 +10520,40 @@ def test_build_geometry_fit_caked_roi_selection_prefers_fit_space_projection() -
     assert (20, 22) in pixels
     assert (80, 80) not in pixels
     assert (40, 40) not in pixels
+
+
+def test_geometry_fit_caked_roi_angle_point_uses_canonical_angles_only() -> None:
+    assert geometry_fit._geometry_fit_caked_roi_angle_point(
+        {
+            "background_two_theta_deg": 23.0,
+            "background_phi_deg": -36.0,
+            "caked_x": 150.0,
+            "caked_y": 160.0,
+        }
+    ) == pytest.approx((23.0, -36.0))
+    assert geometry_fit._geometry_fit_caked_roi_angle_point(
+        {
+            "caked_x": 150.0,
+            "caked_y": 160.0,
+        }
+    ) is None
+
+
+def test_geometry_fit_canonical_live_source_entry_ignores_source_peak_mirror() -> None:
+    is_canonical, reason = geometry_fit._geometry_fit_is_canonical_live_source_entry(
+        {
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 1,
+        }
+    )
+
+    assert is_canonical is True
+    assert reason is None
 
 
 def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large() -> None:

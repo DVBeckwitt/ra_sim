@@ -129,6 +129,7 @@ from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
     build_cake_transform_bundle_from_result,
+    caked_point_to_detector_pixel,
     detector_pixel_to_caked_bin,
     prepare_gui_phi_display,
     raw_phi_to_gui_phi,
@@ -4499,7 +4500,11 @@ def _current_geometry_fit_caked_roi_selection(
             True if force_enabled else _current_geometry_fit_caked_roi_enabled()
         ),
         fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
-            _current_geometry_fit_params()
+            detector_shape=native_shape,
+            radial_axis=simulation_runtime_state.last_caked_radial_values,
+            azimuth_axis=simulation_runtime_state.last_caked_azimuth_values,
+            ai=simulation_runtime_state.ai_cache.get("ai"),
+            transform_bundle=_current_live_caked_transform_bundle(),
         ),
     )
     return selection if isinstance(selection, Mapping) else None
@@ -4912,41 +4917,51 @@ def _scattering_angles_to_detector_pixel(
 
 
 def _geometry_fit_caked_roi_fit_space_to_detector_point(
-    params_local: Mapping[str, object] | None,
+    *,
+    detector_shape: Sequence[object] | None,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    ai: FastAzimuthalIntegrator | None = None,
+    transform_bundle: CakeTransformBundle | None = None,
 ) -> Callable[[float, float], tuple[float | None, float | None] | None] | None:
     """Build one fit-space `(2theta, phi)` to detector-point projector for ROI use."""
 
-    if not isinstance(params_local, Mapping):
+    try:
+        normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
+    except Exception:
         return None
-    center_value = params_local.get("center")
+    if len(normalized_shape) < 2 or normalized_shape[0] <= 0 or normalized_shape[1] <= 0:
+        return None
     try:
-        detector_distance = float(params_local.get("corto_detector", np.nan))
+        radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+        azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
     except Exception:
-        detector_distance = float("nan")
-    try:
-        pixel_size = float(
-            params_local.get(
-                "pixel_size_m",
-                params_local.get("pixel_size", np.nan),
-            )
-        )
-    except Exception:
-        pixel_size = float("nan")
-    if center_value is None or not np.isfinite(detector_distance) or not np.isfinite(
-        pixel_size
-    ):
+        return None
+    if radial.size <= 0 or azimuth.size <= 0:
+        return None
+
+    bundle = (
+        transform_bundle
+        if isinstance(transform_bundle, CakeTransformBundle)
+        and tuple(transform_bundle.detector_shape) == tuple(normalized_shape)
+        else None
+    )
+    exact_ai = ai if isinstance(ai, FastAzimuthalIntegrator) else None
+    if bundle is None and exact_ai is None:
         return None
 
     def _project(
         two_theta_deg: float,
         phi_deg: float,
     ) -> tuple[float | None, float | None] | None:
-        return _scattering_angles_to_detector_pixel(
+        return caked_point_to_detector_pixel(
+            exact_ai,
+            normalized_shape,
+            radial,
+            azimuth,
             float(two_theta_deg),
             float(phi_deg),
-            center=center_value,
-            detector_distance=float(detector_distance),
-            pixel_size=float(pixel_size),
+            transform_bundle=bundle,
         )
 
     return _project
@@ -22616,6 +22631,10 @@ def _run_async_geometry_fit_worker_job(
             if oriented_background is not None:
                 backend_background = np.asarray(oriented_background, dtype=np.float64)
 
+        background_caked_view = dict(
+            caked_views_by_background.get(int(bundle.background_index)) or {}
+        )
+        worker_ai = _worker_geometry_fit_caking_integrator()
         roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection(
             bundle.stored_rows,
             required_pairs=list(
@@ -22628,7 +22647,11 @@ def _run_async_geometry_fit_worker_job(
             image_shape=backend_background.shape[:2],
             fit_config=dict(job_data.get("geometry_runtime_cfg", {}) or {}),
             fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
-                job_data.get("params", {})
+                detector_shape=backend_background.shape[:2],
+                radial_axis=background_caked_view.get("radial_axis"),
+                azimuth_axis=background_caked_view.get("azimuth_axis"),
+                ai=worker_ai,
+                transform_bundle=background_caked_view.get("transform_bundle"),
             ),
         )
         roi_enabled = bool(roi_selection.get("enabled", False))
@@ -22648,7 +22671,7 @@ def _run_async_geometry_fit_worker_job(
                 roi_used_restricted_cake = False
                 roi_fallback_reason = "invalid_roi_pixels"
 
-        ai = _worker_geometry_fit_caking_integrator()
+        ai = worker_ai
         if ai is None:
             return {
                 "roi_enabled": bool(roi_enabled),

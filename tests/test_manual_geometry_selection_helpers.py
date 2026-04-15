@@ -251,11 +251,13 @@ def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
     assert mg.geometry_manual_candidate_source_key(
         {
             "source_table_index": "3",
-            "source_row_index": 9,
+            "source_branch_index": 1,
             "source_peak_index": 5,
         }
-    ) == ("source_peak", 3, 5)
-    assert mg.geometry_manual_candidate_source_key({"source_table_index": "3", "source_row_index": 9}) == (
+    ) == ("source_branch", 3, 1)
+    assert mg.geometry_manual_candidate_source_key(
+        {"source_table_index": "3", "source_row_index": 9, "source_peak_index": 5}
+    ) == (
         "source",
         3,
         9,
@@ -986,6 +988,8 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
             "source_peak_index": 3,
             "raw_x": 9.0,
             "raw_y": 11.0,
+            "background_two_theta_deg": 23.0,
+            "background_phi_deg": -17.5,
             "caked_x": 23.0,
             "caked_y": -17.5,
             "raw_caked_x": 22.75,
@@ -999,6 +1003,8 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
 
     assert serialized["hkl"] == [1, 0, 2]
     assert serialized["q_group_key"] == ["q_group", "primary", 1.0, 2]
+    assert serialized["background_two_theta_deg"] == 23.0
+    assert serialized["background_phi_deg"] == -17.5
     assert serialized["caked_x"] == 23.0
     assert serialized["caked_y"] == -17.5
     assert serialized["raw_caked_x"] == 22.75
@@ -1017,7 +1023,10 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
     assert restored["background_detector_y"] == 11.5
     assert restored["source_table_index"] == 4
     assert restored["source_row_index"] == 7
-    assert restored["source_peak_index"] == 3
+    assert restored["source_branch_index"] == 0
+    assert restored["source_peak_index"] == 0
+    assert restored["background_two_theta_deg"] == 23.0
+    assert restored["background_phi_deg"] == -17.5
     assert restored["raw_x"] == 9.0
     assert restored["raw_y"] == 11.0
     assert restored["caked_x"] == 23.0
