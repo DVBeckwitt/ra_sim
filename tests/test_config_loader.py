@@ -96,6 +96,33 @@ def test_loader_supports_windows_paths_in_double_quoted_yaml(
     assert loader.get_path("osc_file") == "C:\\Users\\Kenpo\\data\\sample.osc"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        r"C:\Users\Kenpo\data\sample.osc",
+        "C:/Users/Kenpo/data/sample.osc",
+        r"\\server\share\data\sample.osc",
+        r"\\?\C:\Users\Kenpo\data\sample.osc",
+        r"\\.\COM1",
+    ],
+)
+def test_loader_keeps_windows_absolute_paths_absolute(
+    value: str,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path)
+
+    assert loader._resolve_path_value(value, config_dir=cfg) == value
+
+
+def test_loader_keeps_windows_drive_relative_paths_relative(tmp_path: Path) -> None:
+    cfg = _make_config_dir(tmp_path)
+    value = r"C:folder\file.txt"
+    expected = str((loader._path_base_dir(cfg) / Path(value)).resolve())
+
+    assert loader._resolve_path_value(value, config_dir=cfg) == expected
+
+
 def test_loader_falls_back_to_example_file_paths_when_primary_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

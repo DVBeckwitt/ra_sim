@@ -7,7 +7,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -21,6 +21,8 @@ ENV_CONFIG_DIR = "RA_SIM_CONFIG_DIR"
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 FILE_PATHS_FILENAME = "file_paths.yaml"
 FILE_PATHS_EXAMPLE_FILENAME = "file_paths.example.yaml"
+
+
 def default_dirs() -> dict[str, str]:
     """Return the default directory mapping for the active user."""
 
@@ -59,12 +61,20 @@ def _path_base_dir(config_dir: Path) -> Path:
     return resolved_dir
 
 
+def _is_windows_absolute_path(value: str) -> bool:
+    """Return whether *value* is absolute under Windows path rules."""
+
+    return PureWindowsPath(value).is_absolute()
+
+
 def _resolve_path_value(value: Any, *, config_dir: Path) -> Any:
     """Resolve relative file-path config values against stable config context."""
 
     if isinstance(value, str):
         expanded = os.path.expanduser(value)
         if not expanded:
+            return expanded
+        if _is_windows_absolute_path(expanded):
             return expanded
         if expanded.startswith(("/", "\\")):
             return expanded
