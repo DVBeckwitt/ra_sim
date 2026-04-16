@@ -487,6 +487,79 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     assert preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
 
 
+def test_simulate_geometry_fit_preview_style_peaks_respects_lattice_and_provenance() -> None:
+    def _build_mosaic(_params):
+        return {
+            "beam_x_array": np.asarray([1.0], dtype=float),
+            "beam_y_array": np.asarray([2.0], dtype=float),
+            "theta_array": np.asarray([3.0], dtype=float),
+            "phi_array": np.asarray([4.0], dtype=float),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*_args, **_kwargs):
+        return (
+            np.zeros((32, 32), dtype=float),
+            [
+                np.asarray(
+                    [
+                        [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
+                    ],
+                    dtype=float,
+                )
+            ],
+        )
+
+    preview_peaks = geometry_q_group_manager.simulate_geometry_fit_preview_style_peaks(
+        np.asarray([[1.0, 0.0, 0.0]], dtype=float),
+        np.asarray([5.0], dtype=float),
+        32,
+        {
+            "a": 3.0,
+            "c": 5.0,
+            "lambda": 1.54,
+            "corto_detector": 100.0,
+            "gamma": 1.0,
+            "Gamma": 2.0,
+            "chi": 3.0,
+            "psi": 4.0,
+            "psi_z": 5.0,
+            "zs": 6.0,
+            "zb": 7.0,
+            "n2": "n2",
+            "debye_x": 0.1,
+            "debye_y": 0.2,
+            "center": (11.0, 12.0),
+            "theta_initial": 8.0,
+            "cor_angle": 9.0,
+            "optics_mode": 2,
+        },
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        native_sim_to_display_coords=lambda col, row, shape: (
+            col + float(shape[1]),
+            row + float(shape[0]),
+        ),
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        primary_a=7.0,
+        primary_c=9.0,
+        default_source_label=None,
+        round_pixel_centers=False,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    assert len(preview_peaks) == 1
+    assert preview_peaks[0]["source_label"] == "primary"
+    assert preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+    assert preview_peaks[0]["source_reflection_index"] == 0
+    assert preview_peaks[0]["source_reflection_namespace"] == "full_reflection"
+    assert preview_peaks[0]["source_reflection_is_full"] is True
+
+
 def test_geometry_q_group_manager_runtime_simulation_callback_bundle_uses_live_values(
     monkeypatch,
 ) -> None:
@@ -1206,6 +1279,18 @@ def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
         "distance_px": 2.0,
         "confidence": 0.8,
     }
+    row_and_peak_entry = {
+        "hkl": (2, 0, 1),
+        "source_label": "secondary",
+        "source_table_index": 4,
+        "source_row_index": 6,
+        "source_peak_index": 99,
+    }
+    branch_and_peak_entry = {
+        "hkl": (3, 0, 2),
+        "phi": 15.0,
+        "source_peak_index": 99,
+    }
     coord_entry = {
         "hkl": (3, 0, 2),
         "sim_x": 11.24,
@@ -1220,12 +1305,40 @@ def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
     preview_state.overlay.pairs = [dict(excluded_entry)]
 
     assert excluded_key == ("peak", "primary", 2, 3, 1, 0, 0)
+    assert geometry_q_group_manager.live_geometry_preview_match_key(row_and_peak_entry) == (
+        "peak",
+        "secondary",
+        4,
+        6,
+        2,
+        0,
+        1,
+    )
     assert geometry_q_group_manager.live_geometry_preview_match_key(indexed_entry) == (
         "peak_index",
         5,
         2,
         0,
         1,
+    )
+    assert geometry_q_group_manager.live_geometry_preview_match_key(branch_and_peak_entry) == (
+        "peak_index",
+        1,
+        3,
+        0,
+        2,
+    )
+    assert geometry_q_group_manager._live_geometry_preview_compatible_match_keys(
+        row_and_peak_entry
+    ) == (
+        ("peak", "secondary", 4, 6, 2, 0, 1),
+        ("peak_index", 99, 2, 0, 1),
+    )
+    assert geometry_q_group_manager._live_geometry_preview_compatible_match_keys(
+        branch_and_peak_entry
+    ) == (
+        ("peak_index", 1, 3, 0, 2),
+        ("peak_index", 99, 3, 0, 2),
     )
     assert geometry_q_group_manager.live_geometry_preview_match_key(coord_entry) == (
         "hkl_coord",
@@ -1272,6 +1385,55 @@ def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
     assert np.isclose(stats["mean_match_distance_px"], 3.0)
     assert np.isclose(stats["p90_match_distance_px"], 3.8)
     assert np.isclose(stats["median_match_confidence"], 0.6)
+
+
+def test_geometry_q_group_manager_live_preview_exclusions_keep_legacy_aliases() -> None:
+    legacy_entry = {
+        "hkl": (4, 0, 1),
+        "sim_x": 7.24,
+        "sim_y": 9.66,
+    }
+    richer_entry = {
+        **legacy_entry,
+        "source_label": "secondary",
+        "source_table_index": 4,
+        "source_row_index": 6,
+        "source_peak_index": 99,
+    }
+    preview_state = state.GeometryPreviewState(
+        excluded_keys={geometry_q_group_manager.live_geometry_preview_match_key(legacy_entry)}
+    )
+
+    assert geometry_q_group_manager.live_geometry_preview_match_key(legacy_entry) == (
+        "hkl_coord",
+        4,
+        0,
+        1,
+        7.2,
+        9.7,
+    )
+    assert geometry_q_group_manager.live_geometry_preview_match_key(richer_entry) == (
+        "peak",
+        "secondary",
+        4,
+        6,
+        4,
+        0,
+        1,
+    )
+    assert (
+        geometry_q_group_manager.live_geometry_preview_match_is_excluded(
+            preview_state,
+            richer_entry,
+        )
+        is True
+    )
+    filtered, excluded_count = geometry_q_group_manager.filter_live_geometry_preview_matches(
+        preview_state,
+        [richer_entry],
+    )
+    assert filtered == []
+    assert excluded_count == 1
 
 
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
@@ -2365,6 +2527,334 @@ def test_geometry_q_group_manager_preview_exclusion_toggle_and_clear_helpers() -
         "refresh",
         "Reset all Qr/Qz geometry-fit selections.",
     ]
+
+    callback_only_entry = {
+        "id": 1,
+        "sim_x": 10.0,
+        "sim_y": 10.0,
+        "x": 20.0,
+        "y": 10.0,
+    }
+    callback_only_key = lambda entry: ("pair", int(entry["id"]))
+    preview_state = state.GeometryPreviewState()
+    preview_state.overlay.pairs = [dict(callback_only_entry)]
+
+    changed = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=callback_only_key,
+        live_preview_match_hkl=lambda _entry: (1, 0, 0),
+        render_live_geometry_preview_state=lambda: None,
+        max_distance_px=5.0,
+        set_status_text=lambda _text: None,
+    )
+    callback_only_filtered, callback_only_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(callback_only_entry)],
+            live_preview_match_key=callback_only_key,
+        )
+    )
+    callback_only_excluded_keys = set(preview_state.excluded_keys)
+    callback_only_is_excluded = geometry_q_group_manager.live_geometry_preview_match_is_excluded(
+        preview_state,
+        callback_only_entry,
+        live_preview_match_key=callback_only_key,
+    )
+    changed_again = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=callback_only_key,
+        live_preview_match_hkl=lambda _entry: (1, 0, 0),
+        render_live_geometry_preview_state=lambda: None,
+        max_distance_px=5.0,
+        set_status_text=lambda _text: None,
+    )
+
+    assert changed is True
+    assert callback_only_excluded_keys == {("pair", 1)}
+    assert callback_only_is_excluded is True
+    assert callback_only_filtered == []
+    assert callback_only_excluded == 1
+    assert changed_again is True
+    assert preview_state.excluded_keys == set()
+
+    callback_hkl_entry_1 = {
+        "id": 1,
+        "hkl": (4, 0, 1),
+    }
+    callback_hkl_entry_2 = {
+        "id": 2,
+        "hkl": (4, 0, 1),
+    }
+    preview_state = state.GeometryPreviewState(excluded_keys={("pair", 1)})
+    preview_state._live_geometry_preview_exclusion_groups = [
+        geometry_q_group_manager._live_geometry_preview_exclusion_descriptor(
+            callback_hkl_entry_1,
+            callback_key=callback_only_key(callback_hkl_entry_1),
+        )
+    ]
+
+    assert (
+        geometry_q_group_manager.live_geometry_preview_match_is_excluded(
+            preview_state,
+            callback_hkl_entry_1,
+            live_preview_match_key=callback_only_key,
+        )
+        is True
+    )
+    assert (
+        geometry_q_group_manager.live_geometry_preview_match_is_excluded(
+            preview_state,
+            callback_hkl_entry_2,
+            live_preview_match_key=callback_only_key,
+        )
+        is False
+    )
+    callback_hkl_filtered, callback_hkl_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(callback_hkl_entry_1), dict(callback_hkl_entry_2)],
+            existing_pairs=[dict(callback_hkl_entry_1)],
+            live_preview_match_key=callback_only_key,
+        )
+    )
+
+    assert callback_hkl_filtered == [callback_hkl_entry_2]
+    assert callback_hkl_excluded == 1
+
+    alias_entry = {
+        "hkl": (4, 0, 1),
+        "sim_x": 10.0,
+        "sim_y": 10.0,
+        "x": 20.0,
+        "y": 10.0,
+        "source_label": "secondary",
+        "source_table_index": 4,
+        "source_row_index": 6,
+        "source_peak_index": 99,
+    }
+    legacy_alias_key = geometry_q_group_manager.live_geometry_preview_match_key(
+        {
+            "hkl": alias_entry["hkl"],
+            "sim_x": alias_entry["sim_x"],
+            "sim_y": alias_entry["sim_y"],
+        }
+    )
+    preview_state = state.GeometryPreviewState(excluded_keys={legacy_alias_key})
+    preview_state.overlay.pairs = [dict(alias_entry)]
+    alias_events = []
+    alias_canonical_key = ("peak", "secondary", 4, 6, 4, 0, 1)
+
+    changed = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=geometry_q_group_manager.live_geometry_preview_match_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: alias_events.append("render"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: alias_events.append(text),
+    )
+    changed_again = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=geometry_q_group_manager.live_geometry_preview_match_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: alias_events.append("render"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: alias_events.append(text),
+    )
+
+    assert changed is True
+    assert changed_again is True
+    assert preview_state.excluded_keys == {alias_canonical_key}
+    assert alias_events == [
+        "render",
+        "Included live preview peak HKL=(4, 0, 1) from geometry fit.",
+        "render",
+        "Excluded live preview peak HKL=(4, 0, 1) from geometry fit.",
+    ]
+
+    custom_key = ("pair", 42)
+    internal_key = ("peak", "secondary", 4, 6, 4, 0, 1)
+    preview_state = state.GeometryPreviewState()
+    preview_state.overlay.pairs = [dict(alias_entry)]
+    custom_events = []
+    poorer_entry = {
+        "hkl": alias_entry["hkl"],
+        "sim_x": alias_entry["sim_x"],
+        "sim_y": alias_entry["sim_y"],
+        "x": alias_entry["x"],
+        "y": alias_entry["y"],
+    }
+
+    changed = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=lambda _entry: custom_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: custom_events.append("render"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: custom_events.append(text),
+    )
+    filtered_custom, excluded_custom = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(alias_entry)],
+        )
+    )
+    poorer_filtered, poorer_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(poorer_entry)],
+        )
+    )
+
+    assert changed is True
+    assert preview_state.excluded_keys == {custom_key, internal_key}
+    assert geometry_q_group_manager.live_geometry_preview_match_is_excluded(
+        preview_state,
+        alias_entry,
+    )
+    assert filtered_custom == []
+    assert excluded_custom == 1
+    assert poorer_filtered == []
+    assert poorer_excluded == 1
+    preview_state.overlay.pairs = [dict(poorer_entry)]
+    changed_again = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=lambda _entry: custom_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: custom_events.append("render"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: custom_events.append(text),
+    )
+    assert changed_again is True
+    assert preview_state.excluded_keys == set()
+    rich_filtered, rich_excluded = geometry_q_group_manager.filter_live_geometry_preview_matches(
+        preview_state,
+        [dict(alias_entry)],
+    )
+    assert rich_filtered == [alias_entry]
+    assert rich_excluded == 0
+    assert custom_events == [
+        "render",
+        "Excluded live preview peak HKL=(4, 0, 1) from geometry fit.",
+        "render",
+        "Included live preview peak HKL=(4, 0, 1) from geometry fit.",
+    ]
+
+    primary_entry = {
+        "hkl": (4, 0, 1),
+        "sim_x": 10.0,
+        "sim_y": 10.0,
+        "x": 20.0,
+        "y": 10.0,
+        "source_label": "primary",
+        "source_table_index": 1,
+        "source_row_index": 6,
+    }
+    secondary_entry = {
+        "hkl": (4, 0, 1),
+        "sim_x": 10.0,
+        "sim_y": 10.0,
+        "x": 20.0,
+        "y": 10.0,
+        "source_label": "secondary",
+        "source_table_index": 2,
+        "source_row_index": 6,
+    }
+    preview_state = state.GeometryPreviewState()
+    preview_state.overlay.pairs = [dict(primary_entry)]
+
+    changed = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=geometry_q_group_manager.live_geometry_preview_match_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: None,
+        max_distance_px=5.0,
+        set_status_text=lambda _text: None,
+    )
+    assert changed is True
+    assert preview_state.excluded_keys == {
+        geometry_q_group_manager.live_geometry_preview_match_key(primary_entry)
+    }
+
+    preview_state.overlay.pairs = [dict(secondary_entry)]
+    changed_again = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=geometry_q_group_manager.live_geometry_preview_match_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: None,
+        max_distance_px=5.0,
+        set_status_text=lambda _text: None,
+    )
+    primary_filtered, primary_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(primary_entry)],
+        )
+    )
+    secondary_filtered, secondary_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(secondary_entry)],
+        )
+    )
+
+    assert changed_again is True
+    assert preview_state.excluded_keys == {
+        geometry_q_group_manager.live_geometry_preview_match_key(primary_entry),
+        geometry_q_group_manager.live_geometry_preview_match_key(secondary_entry),
+    }
+    assert primary_filtered == []
+    assert primary_excluded == 1
+    assert secondary_filtered == []
+    assert secondary_excluded == 1
+
+    preview_state.overlay.pairs = [dict(primary_entry)]
+    changed_third = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=geometry_q_group_manager.live_geometry_preview_match_key,
+        live_preview_match_hkl=geometry_q_group_manager.live_geometry_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: None,
+        max_distance_px=5.0,
+        set_status_text=lambda _text: None,
+    )
+    primary_filtered, primary_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(primary_entry)],
+        )
+    )
+    secondary_filtered, secondary_excluded = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [dict(secondary_entry)],
+        )
+    )
+
+    assert changed_third is True
+    assert preview_state.excluded_keys == {
+        geometry_q_group_manager.live_geometry_preview_match_key(secondary_entry)
+    }
+    assert primary_filtered == [primary_entry]
+    assert primary_excluded == 0
+    assert secondary_filtered == []
+    assert secondary_excluded == 1
 
 
 def test_geometry_q_group_manager_runtime_preview_exclude_mode_helper_updates_hkl_and_status(

@@ -18,7 +18,10 @@ from ra_sim.simulation.diffraction import (
 from ra_sim.simulation.diffraction import (
     process_peaks_parallel_safe as diffraction_process_peaks_parallel_safe,
 )
-from ra_sim.utils.calculations import resolve_canonical_branch, source_branch_index_from_phi_deg
+from ra_sim.utils.calculations import (
+    resolve_canonical_branch,
+    source_branch_index_from_phi_deg,
+)
 
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
@@ -1467,18 +1470,21 @@ def simulate_geometry_fit_preview_style_peaks(
             default_solve_q_rel_tol=default_solve_q_rel_tol,
             default_solve_q_mode=default_solve_q_mode,
         )
-        peak_records, _peak_table_lattice, _source_reflection_indices = (
-            build_geometry_fit_full_order_source_rows(
-                hit_tables,
-                image_shape=(int(image_size), int(image_size)),
-                native_sim_to_display_coords=native_sim_to_display_coords,
-                primary_a=primary_a,
-                primary_c=primary_c,
-                default_source_label=default_source_label,
-                round_pixel_centers=round_pixel_centers,
-                allow_nominal_hkl_indices=allow_nominal_hkl_indices,
-                owner="simulate_geometry_fit_preview_style_peaks",
-            )
+        source_reflection_indices = audited_full_order_source_reflection_indices(
+            hit_tables,
+            owner="simulate_geometry_fit_preview_style_peaks",
+        )
+        peak_records = build_geometry_fit_simulated_peaks(
+            hit_tables,
+            image_shape=(int(image_size), int(image_size)),
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            peak_table_lattice=peak_table_lattice,
+            source_reflection_indices=source_reflection_indices,
+            primary_a=primary_a,
+            primary_c=primary_c,
+            default_source_label=default_source_label,
+            round_pixel_centers=round_pixel_centers,
+            allow_nominal_hkl_indices=allow_nominal_hkl_indices,
         )
         diagnostics = _function_last_diagnostics(simulate_geometry_fit_hit_tables)
         diagnostics.update(
@@ -1969,12 +1975,20 @@ def make_runtime_geometry_q_group_value_callbacks(
         return live_geometry_preview_match_hkl(entry)
 
     def _live_preview_match_is_excluded(entry: dict[str, object] | None) -> bool:
-        return live_geometry_preview_match_is_excluded(preview_state, entry)
+        return live_geometry_preview_match_is_excluded(
+            preview_state,
+            entry,
+            live_preview_match_key=_live_preview_match_key,
+        )
 
     def _filter_live_preview_matches(
         matched_pairs: Sequence[dict[str, object]] | None,
     ) -> tuple[list[dict[str, object]], int]:
-        return filter_live_geometry_preview_matches(preview_state, matched_pairs)
+        return filter_live_geometry_preview_matches(
+            preview_state,
+            matched_pairs,
+            live_preview_match_key=_live_preview_match_key,
+        )
 
     def _apply_live_preview_match_exclusions(
         matched_pairs: Sequence[dict[str, object]] | None,
@@ -1984,6 +1998,7 @@ def make_runtime_geometry_q_group_value_callbacks(
             preview_state,
             matched_pairs,
             match_stats,
+            live_preview_match_key=_live_preview_match_key,
         )
 
     return GeometryQGroupRuntimeValueCallbacks(
@@ -2699,14 +2714,20 @@ def apply_loaded_geometry_q_group_saved_state(
     }, None
 
 
-def live_geometry_preview_match_key(
+def _live_geometry_preview_row_match_key(
     entry: dict[str, object] | None,
+    hkl_key: tuple[int, int, int] | None = None,
 ) -> tuple[object, ...] | None:
-    """Build a stable exclusion key for one live preview match entry."""
+    """Return the row-backed exclusion key for one entry when available."""
 
     if not isinstance(entry, dict):
         return None
-    hkl_key = gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
+    hkl_local = hkl_key or gui_geometry_overlay.normalize_hkl_key(
+        entry.get("hkl", entry.get("label"))
+    )
+    if hkl_local is None:
+        return None
+
     source_label = entry.get("source_label")
     source_table_index = entry.get(
         "source_reflection_index",
@@ -2714,53 +2735,144 @@ def live_geometry_preview_match_key(
     )
     source_row_index = entry.get("source_row_index")
     if (
-        hkl_key is not None
-        and source_label is not None
-        and source_table_index is not None
-        and source_row_index is not None
+        source_label is None
+        or source_table_index is None
+        or source_row_index is None
     ):
-        try:
-            return (
-                "peak",
-                str(source_label),
-                int(source_table_index),
-                int(source_row_index),
-                int(hkl_key[0]),
-                int(hkl_key[1]),
-                int(hkl_key[2]),
-            )
-        except Exception:
-            pass
+        return None
+    try:
+        return (
+            "peak",
+            str(source_label),
+            int(source_table_index),
+            int(source_row_index),
+            int(hkl_local[0]),
+            int(hkl_local[1]),
+            int(hkl_local[2]),
+        )
+    except Exception:
+        return None
+
+
+def _live_geometry_preview_branch_match_key(
+    entry: dict[str, object] | None,
+    hkl_key: tuple[int, int, int] | None = None,
+) -> tuple[object, ...] | None:
+    """Return the explicit branch exclusion key for one entry when available."""
+
+    if not isinstance(entry, dict):
+        return None
+    hkl_local = hkl_key or gui_geometry_overlay.normalize_hkl_key(
+        entry.get("hkl", entry.get("label"))
+    )
+    if hkl_local is None:
+        return None
 
     branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
         entry,
         allow_legacy_peak_fallback=False,
     )
-    if hkl_key is not None and branch_idx in {0, 1}:
-        return (
-            "peak_index",
-            int(branch_idx),
-            int(hkl_key[0]),
-            int(hkl_key[1]),
-            int(hkl_key[2]),
-        )
-
-    if hkl_key is None:
+    if branch_idx not in {0, 1}:
         return None
+    return (
+        "peak_index",
+        int(branch_idx),
+        int(hkl_local[0]),
+        int(hkl_local[1]),
+        int(hkl_local[2]),
+    )
+
+
+def _live_geometry_preview_coord_match_key(
+    entry: dict[str, object] | None,
+    hkl_key: tuple[int, int, int] | None = None,
+) -> tuple[object, ...] | None:
+    """Return the coord-backed exclusion key for one entry when available."""
+
+    if not isinstance(entry, dict):
+        return None
+    hkl_local = hkl_key or gui_geometry_overlay.normalize_hkl_key(
+        entry.get("hkl", entry.get("label"))
+    )
+    if hkl_local is None:
+        return None
+
     try:
         sim_col = float(entry.get("sim_x", np.nan))
         sim_row = float(entry.get("sim_y", np.nan))
     except Exception:
         sim_col = float("nan")
         sim_row = float("nan")
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None
     return (
         "hkl_coord",
-        int(hkl_key[0]),
-        int(hkl_key[1]),
-        int(hkl_key[2]),
+        int(hkl_local[0]),
+        int(hkl_local[1]),
+        int(hkl_local[2]),
         round(sim_col, 1),
         round(sim_row, 1),
     )
+
+
+def _live_geometry_preview_legacy_peak_match_key(
+    entry: dict[str, object] | None,
+    hkl_key: tuple[int, int, int] | None = None,
+) -> tuple[object, ...] | None:
+    """Return the raw legacy peak-index exclusion key for one entry when available."""
+
+    if not isinstance(entry, dict):
+        return None
+    hkl_local = hkl_key or gui_geometry_overlay.normalize_hkl_key(
+        entry.get("hkl", entry.get("label"))
+    )
+    if hkl_local is None:
+        return None
+
+    source_peak_index = gui_manual_geometry._resolve_legacy_source_peak_index(entry)
+    if source_peak_index is None:
+        return None
+    return (
+        "peak_index",
+        int(source_peak_index),
+        int(hkl_local[0]),
+        int(hkl_local[1]),
+        int(hkl_local[2]),
+    )
+
+
+def _live_geometry_preview_compatible_match_keys(
+    entry: dict[str, object] | None,
+) -> tuple[tuple[object, ...], ...]:
+    """Return ordered exclusion-key aliases for one live preview match entry."""
+
+    if not isinstance(entry, dict):
+        return ()
+    hkl_key = gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
+    if hkl_key is None:
+        return ()
+
+    compatible_keys: list[tuple[object, ...]] = []
+
+    def _append_match_key(key: tuple[object, ...] | None) -> None:
+        if key is None or key in compatible_keys:
+            return
+        compatible_keys.append(tuple(key))
+
+    _append_match_key(_live_geometry_preview_row_match_key(entry, hkl_key))
+    _append_match_key(_live_geometry_preview_branch_match_key(entry, hkl_key))
+    _append_match_key(_live_geometry_preview_coord_match_key(entry, hkl_key))
+    _append_match_key(_live_geometry_preview_legacy_peak_match_key(entry, hkl_key))
+    return tuple(compatible_keys)
+
+
+def live_geometry_preview_match_key(
+    entry: dict[str, object] | None,
+) -> tuple[object, ...] | None:
+    """Build a stable primary exclusion key for one live preview match entry."""
+
+    compatible_keys = _live_geometry_preview_compatible_match_keys(entry)
+    return compatible_keys[0] if compatible_keys else None
 
 
 def live_geometry_preview_match_hkl(
@@ -2773,15 +2885,210 @@ def live_geometry_preview_match_hkl(
     return gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
 
 
+def _live_geometry_preview_exclusion_descriptor(
+    entry: dict[str, object] | None,
+    *,
+    callback_key: tuple[object, ...] | None = None,
+) -> dict[str, object]:
+    """Return one normalized exclusion descriptor for matching and storage."""
+
+    compatible_keys = _live_geometry_preview_compatible_match_keys(entry)
+    internal_key = compatible_keys[0] if compatible_keys else None
+    lookup_aliases = list(compatible_keys)
+    if callback_key is not None:
+        lookup_aliases = [
+            tuple(callback_key),
+            *[key for key in lookup_aliases if key != callback_key],
+        ]
+
+    stored_keys = list(
+        dict.fromkeys(
+            key
+            for key in (
+                tuple(callback_key) if callback_key is not None else None,
+                internal_key,
+            )
+            if key is not None
+        )
+    )
+    hkl_key = live_geometry_preview_match_hkl(entry)
+    return {
+        "stored_keys": tuple(stored_keys),
+        "lookup_aliases": tuple(lookup_aliases),
+        "row_key": _live_geometry_preview_row_match_key(entry, hkl_key),
+        "branch_key": _live_geometry_preview_branch_match_key(entry, hkl_key),
+        "legacy_peak_key": _live_geometry_preview_legacy_peak_match_key(entry, hkl_key),
+    }
+
+
+def _live_geometry_preview_exclusion_groups(preview_state) -> list[dict[str, object]]:
+    """Return the registered live-preview exclusion groups."""
+
+    groups = getattr(preview_state, "_live_geometry_preview_exclusion_groups", None)
+    return list(groups) if isinstance(groups, list) else []
+
+
+def _replace_live_geometry_preview_exclusion_groups(
+    preview_state,
+    groups: Sequence[Mapping[str, object]] | None,
+) -> None:
+    """Replace the registered live-preview exclusion groups."""
+
+    preview_state._live_geometry_preview_exclusion_groups = [
+        dict(group)
+        for group in (groups or ())
+        if isinstance(group, Mapping)
+    ]
+
+
+def _live_geometry_preview_group_matches_descriptor(
+    group: Mapping[str, object] | None,
+    descriptor: Mapping[str, object] | None,
+) -> bool:
+    """Return whether one exclusion group matches one current entry descriptor."""
+
+    if not isinstance(group, Mapping) or not isinstance(descriptor, Mapping):
+        return False
+
+    group_aliases = {
+        tuple(key)
+        for key in group.get("lookup_aliases", ())
+        if isinstance(key, tuple)
+    }
+    descriptor_aliases = {
+        tuple(key)
+        for key in descriptor.get("lookup_aliases", ())
+        if isinstance(key, tuple)
+    }
+    if not group_aliases or not descriptor_aliases:
+        return False
+    if not group_aliases.intersection(descriptor_aliases):
+        return False
+
+    for identity_name in ("row_key", "branch_key", "legacy_peak_key"):
+        group_key = group.get(identity_name)
+        descriptor_key = descriptor.get(identity_name)
+        if (
+            isinstance(group_key, tuple)
+            and isinstance(descriptor_key, tuple)
+            and group_key != descriptor_key
+        ):
+            return False
+    return True
+
+
+def _live_geometry_preview_group_signature(
+    group: Mapping[str, object] | None,
+) -> tuple[object, ...]:
+    """Return one stable signature for registry-group identity."""
+
+    if not isinstance(group, Mapping):
+        return ()
+    return (
+        tuple(
+            tuple(key)
+            for key in group.get("stored_keys", ())
+            if isinstance(key, tuple)
+        ),
+        group.get("row_key"),
+        group.get("branch_key"),
+        group.get("legacy_peak_key"),
+    )
+
+
+def _live_geometry_preview_matching_exclusion_state(
+    preview_state,
+    entry: dict[str, object] | None,
+    *,
+    callback_key: tuple[object, ...] | None = None,
+) -> tuple[dict[str, object], list[dict[str, object]], tuple[tuple[object, ...], ...]]:
+    """Return descriptor, matching groups, and direct legacy keys for one entry."""
+
+    descriptor = _live_geometry_preview_exclusion_descriptor(
+        entry,
+        callback_key=callback_key,
+    )
+    matching_groups = [
+        dict(group)
+        for group in _live_geometry_preview_exclusion_groups(preview_state)
+        if _live_geometry_preview_group_matches_descriptor(group, descriptor)
+    ]
+    excluded_keys = getattr(preview_state, "excluded_keys", set())
+    direct_keys = tuple(
+        key
+        for key in descriptor.get("lookup_aliases", ())
+        if key in excluded_keys
+    )
+    return descriptor, matching_groups, direct_keys
+
+
+def _live_geometry_preview_clear_matching_exclusion_state(
+    preview_state,
+    matching_groups: Sequence[Mapping[str, object]] | None,
+    direct_keys: Sequence[tuple[object, ...]] | None = None,
+) -> None:
+    """Remove one matched exclusion set from canonical keys and registry."""
+
+    cleanup_keys = {
+        tuple(key)
+        for key in (direct_keys or ())
+        if isinstance(key, tuple)
+    }
+    cleanup_keys.update(
+        tuple(key)
+        for group in (matching_groups or ())
+        if isinstance(group, Mapping)
+        for key in group.get("stored_keys", ())
+        if isinstance(key, tuple)
+    )
+    for match_key in cleanup_keys:
+        gui_controllers.set_geometry_preview_match_included(
+            preview_state,
+            match_key,
+            included=True,
+        )
+
+    matched_signatures = {
+        _live_geometry_preview_group_signature(group)
+        for group in (matching_groups or ())
+        if isinstance(group, Mapping)
+    }
+    remaining_groups = [
+        dict(group)
+        for group in _live_geometry_preview_exclusion_groups(preview_state)
+        if _live_geometry_preview_group_signature(group) not in matched_signatures
+    ]
+    _replace_live_geometry_preview_exclusion_groups(preview_state, remaining_groups)
+
+
 def live_geometry_preview_match_is_excluded(
     preview_state,
     entry: dict[str, object] | None,
+    *,
+    live_preview_match_key: Callable[[dict[str, object] | None], tuple[object, ...] | None]
+    | None = None,
 ) -> bool:
     """Return whether one live preview match entry is excluded."""
 
-    key = live_geometry_preview_match_key(entry)
-    excluded_keys = getattr(preview_state, "excluded_keys", set())
-    return key in excluded_keys if key is not None else False
+    descriptor, matching_groups, direct_keys = (
+        _live_geometry_preview_matching_exclusion_state(
+            preview_state,
+            entry,
+            callback_key=(
+                live_preview_match_key(entry)
+                if callable(live_preview_match_key)
+                else None
+            ),
+        )
+    )
+    return bool(
+        direct_keys
+        or matching_groups
+        or any(
+            key in getattr(preview_state, "excluded_keys", set())
+            for key in descriptor.get("stored_keys", ())
+        )
+    )
 
 
 def filter_live_geometry_preview_matches(
@@ -2789,6 +3096,8 @@ def filter_live_geometry_preview_matches(
     matched_pairs: Sequence[dict[str, object]] | None,
     *,
     existing_pairs: Sequence[dict[str, object]] | None = None,
+    live_preview_match_key: Callable[[dict[str, object] | None], tuple[object, ...] | None]
+    | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """Return live preview matches after applying user exclusions."""
 
@@ -2803,21 +3112,35 @@ def filter_live_geometry_preview_matches(
     for entry in source_pairs or []:
         if not isinstance(entry, dict):
             continue
-        if not live_geometry_preview_match_is_excluded(preview_state, entry):
+        if not live_geometry_preview_match_is_excluded(
+            preview_state,
+            entry,
+            live_preview_match_key=live_preview_match_key,
+        ):
             continue
-        if live_geometry_preview_match_key(entry) is not None:
+        descriptor = _live_geometry_preview_exclusion_descriptor(
+            entry,
+            callback_key=(
+                live_preview_match_key(entry)
+                if callable(live_preview_match_key)
+                else None
+            ),
+        )
+        if descriptor.get("lookup_aliases"):
             continue
         hkl_key = live_geometry_preview_match_hkl(entry)
         if hkl_key is not None:
             excluded_hkls.add(hkl_key)
 
-    excluded_keys = getattr(preview_state, "excluded_keys", set())
     for raw_entry in matched_pairs or []:
         if not isinstance(raw_entry, dict):
             continue
         entry = dict(raw_entry)
-        key = live_geometry_preview_match_key(entry)
-        excluded = key in excluded_keys if key is not None else False
+        excluded = live_geometry_preview_match_is_excluded(
+            preview_state,
+            entry,
+            live_preview_match_key=live_preview_match_key,
+        )
         if not excluded:
             hkl_key = live_geometry_preview_match_hkl(entry)
             if hkl_key is not None and hkl_key in excluded_hkls:
@@ -2835,6 +3158,8 @@ def apply_live_geometry_preview_match_exclusions(
     match_stats: dict[str, object] | None,
     *,
     existing_pairs: Sequence[dict[str, object]] | None = None,
+    live_preview_match_key: Callable[[dict[str, object] | None], tuple[object, ...] | None]
+    | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object], int]:
     """Apply live preview exclusions and refresh fit-facing summary metrics."""
 
@@ -2842,6 +3167,7 @@ def apply_live_geometry_preview_match_exclusions(
         preview_state,
         matched_pairs,
         existing_pairs=existing_pairs,
+        live_preview_match_key=live_preview_match_key,
     )
     stats = dict(match_stats) if isinstance(match_stats, dict) else {}
     stats["excluded_count"] = int(excluded_count)
@@ -3445,6 +3771,10 @@ def clear_live_geometry_preview_exclusions_with_side_effects(
     """Clear preview exclusions and apply the dependent runtime side effects."""
 
     gui_controllers.clear_geometry_preview_excluded_keys(preview_state)
+    if hasattr(preview_state, "_live_geometry_preview_exclusion_groups"):
+        preview_state._live_geometry_preview_exclusion_groups = []
+    if hasattr(preview_state, "_live_geometry_preview_excluded_key_groups"):
+        preview_state._live_geometry_preview_excluded_key_groups = {}
     gui_controllers.clear_geometry_preview_excluded_q_groups(preview_state)
     invalidate_geometry_manual_pick_cache()
     update_geometry_preview_exclude_button_label()
@@ -3515,7 +3845,16 @@ def toggle_live_geometry_preview_exclusion_at(
         )
         return False
 
-    key = live_preview_match_key(best_entry)
+    callback_key = live_preview_match_key(best_entry)
+    descriptor, matching_groups, direct_keys = (
+        _live_geometry_preview_matching_exclusion_state(
+            preview_state,
+            best_entry,
+            callback_key=callback_key,
+        )
+    )
+    stored_keys = tuple(descriptor.get("stored_keys", ()))
+    key = stored_keys[0] if stored_keys else None
     hkl_key = live_preview_match_hkl(best_entry)
     if key is None or hkl_key is None:
         _set_status_text(
@@ -3524,19 +3863,30 @@ def toggle_live_geometry_preview_exclusion_at(
         )
         return False
 
-    excluded_keys = getattr(preview_state, "excluded_keys", set())
-    if key in excluded_keys:
-        gui_controllers.set_geometry_preview_match_included(
+    if matching_groups or direct_keys:
+        _live_geometry_preview_clear_matching_exclusion_state(
             preview_state,
-            key,
-            included=True,
+            matching_groups,
+            direct_keys,
         )
         action = "Included"
     else:
-        gui_controllers.set_geometry_preview_match_included(
+        _live_geometry_preview_clear_matching_exclusion_state(
             preview_state,
-            key,
-            included=False,
+            matching_groups,
+            direct_keys,
+        )
+        for match_key in stored_keys:
+            gui_controllers.set_geometry_preview_match_included(
+                preview_state,
+                match_key,
+                included=False,
+            )
+        exclusion_groups = _live_geometry_preview_exclusion_groups(preview_state)
+        exclusion_groups.append(descriptor)
+        _replace_live_geometry_preview_exclusion_groups(
+            preview_state,
+            exclusion_groups,
         )
         action = "Excluded"
 
