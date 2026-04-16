@@ -3,6 +3,10 @@ import numpy as np
 from ra_sim.gui import manual_geometry as mg
 
 
+def _source_key(entry):
+    return mg.geometry_manual_candidate_source_key(dict(entry) if isinstance(entry, dict) else None)
+
+
 def _group_candidates(entries):
     grouped = {}
     for raw_entry in entries or ():
@@ -20,12 +24,8 @@ def _build_lookup(entries):
     for raw_entry in entries or ():
         if not isinstance(raw_entry, dict):
             continue
-        try:
-            key = (
-                int(raw_entry.get("source_table_index")),
-                int(raw_entry.get("source_row_index")),
-            )
-        except Exception:
+        key = _source_key(raw_entry)
+        if key is None:
             continue
         lookup[key] = dict(raw_entry)
     return lookup
@@ -74,7 +74,10 @@ def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> N
     assert group_entry["label"] == "1,0,2"
     assert group_entry["sim_col"] == 13.5
     assert np.isclose(float(group_entry["qr"]), 1.2345678901)
-    assert np.isclose(float(next_state["simulated_lookup"][(4, 7)]["qz"]), -0.4567890123)
+    assert np.isclose(
+        float(next_state["simulated_lookup"][_source_key(peak_record)]["qz"]),
+        -0.4567890123,
+    )
     assert next_sig == ("sig",)
 
 
@@ -185,7 +188,14 @@ def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_previe
     assert ("q_group", "primary", 3, 1) in cache_data["grouped_candidates"]
     assert ("q_group", "primary", 1, 2) not in cache_data["grouped_candidates"]
     assert cache_state["signature"] == cache_data["signature"]
-    assert cache_state["data"]["simulated_lookup"][(7, 9)]["sim_col"] == 44.0
+    assert cache_state["data"]["simulated_lookup"][
+        _source_key(
+            {
+                "source_table_index": 7,
+                "source_row_index": 9,
+            }
+        )
+    ]["sim_col"] == 44.0
 
 
 def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analytic_forward_path(
@@ -270,7 +280,7 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
                 ("('q_group', 'primary', 1, 0)",),
             ),
             "simulated_peaks": [dict(cached_entry)],
-            "simulated_lookup": {(1, 2): dict(cached_entry)},
+            "simulated_lookup": {_source_key(cached_entry): dict(cached_entry)},
             "grouped_candidates": {
                 ("q_group", "primary", 1, 0): [dict(cached_entry)]
             },
@@ -296,16 +306,149 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
     assert cache_data["cache_metadata"]["cache_source"] == (
         "existing_cache_data.simulated_peaks(reprojected)"
     )
-    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 13.0
-    assert cache_data["simulated_lookup"][(1, 2)]["sim_row"] == 2.0
-    assert cache_data["simulated_lookup"][(1, 2)]["sim_col_raw"] == 3.0
-    assert cache_data["simulated_lookup"][(1, 2)]["sim_row_raw"] == 4.0
-    assert cache_data["simulated_lookup"][(1, 2)]["caked_x"] == 13.0
-    assert cache_data["simulated_lookup"][(1, 2)]["caked_y"] == 2.0
+    cache_entry = cache_data["simulated_lookup"][_source_key(cached_entry)]
+    assert cache_entry["sim_col"] == 13.0
+    assert cache_entry["sim_row"] == 2.0
+    assert cache_entry["sim_col_raw"] == 3.0
+    assert cache_entry["sim_row_raw"] == 4.0
+    assert cache_entry["caked_x"] == 13.0
+    assert cache_entry["caked_y"] == 2.0
     assert next_sig[3] == ("new-bg",)
     assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0][
         "caked_x"
     ] == 13.0
+
+
+def test_build_geometry_manual_pick_cache_preserves_mirrored_branch_lookup_entries() -> None:
+    mirrored_rows = [
+        {
+            "label": "left",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "sim_col": 181.0,
+            "sim_row": 95.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "right",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+            "weight": 1.0,
+        },
+    ]
+
+    cache_data, _, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=False,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [
+            dict(entry) for entry in mirrored_rows
+        ],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        peak_records=[],
+    )
+
+    left_key = _source_key(mirrored_rows[0])
+    right_key = _source_key(mirrored_rows[1])
+
+    assert left_key != right_key
+    assert set(cache_data["simulated_lookup"]) == {left_key, right_key}
+    assert cache_data["simulated_lookup"][left_key]["sim_col"] == 181.0
+    assert cache_data["simulated_lookup"][right_key]["sim_col"] == 190.0
+    assert set(next_state["simulated_lookup"]) == {left_key, right_key}
+
+
+def test_build_geometry_manual_pick_cache_resolves_legacy_peak_only_branch_entry() -> None:
+    mirrored_rows = [
+        {
+            "label": "left",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "sim_col": 181.0,
+            "sim_row": 95.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "right",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+            "weight": 1.0,
+        },
+    ]
+
+    cache_data, _, _ = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=False,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [
+            dict(entry) for entry in mirrored_rows
+        ],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        peak_records=[],
+    )
+
+    resolved = mg.geometry_manual_lookup_source_entry(
+        cache_data["simulated_lookup"],
+        {
+            "label": "right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_peak_index": 1,
+        },
+    )
+
+    assert resolved is not None
+    assert resolved["source_branch_index"] == 1
+    assert resolved["source_reflection_index"] == 203
 
 
 def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenance() -> None:

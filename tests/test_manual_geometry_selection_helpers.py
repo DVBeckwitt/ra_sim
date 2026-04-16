@@ -141,17 +141,17 @@ def _group_candidates(entries):
     return grouped
 
 
+def _source_key(entry):
+    return mg.geometry_manual_candidate_source_key(dict(entry) if isinstance(entry, dict) else None)
+
+
 def _build_lookup(entries):
     lookup = {}
     for raw_entry in entries or ():
         if not isinstance(raw_entry, dict):
             continue
-        try:
-            key = (
-                int(raw_entry.get("source_table_index")),
-                int(raw_entry.get("source_row_index")),
-            )
-        except Exception:
+        key = _source_key(raw_entry)
+        if key is None:
             continue
         lookup[key] = dict(raw_entry)
     return lookup
@@ -169,7 +169,7 @@ def _candidate_multiset(entries):
             hkl_value = None
         normalized.append(
             {
-                "candidate_source_key": mg.geometry_manual_candidate_source_key(raw_entry),
+                "candidate_source_key": _source_key(raw_entry),
                 "hkl": hkl_value,
                 "source_reflection_index": raw_entry.get("source_reflection_index"),
                 "source_reflection_namespace": raw_entry.get(
@@ -302,6 +302,9 @@ def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
         }
     ) == ("source_branch", 3, 1)
     assert mg.geometry_manual_candidate_source_key(
+        {"source_table_index": "3", "source_row_index": 9, "source_peak_index": 1}
+    ) == ("source_branch", 3, 1)
+    assert mg.geometry_manual_candidate_source_key(
         {"source_table_index": "3", "source_row_index": 9, "source_peak_index": 5}
     ) == (
         "source",
@@ -311,6 +314,53 @@ def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
     assert mg.geometry_manual_candidate_source_key({"hkl": (1, 2, 3)}) == ("hkl", 1, 2, 3)
     assert mg.geometry_manual_candidate_source_key({"label": "1,2,3"}) == ("hkl", 1, 2, 3)
     assert mg.geometry_manual_candidate_source_key({"label": "left peak"}) == ("label", "left peak")
+
+
+def test_geometry_manual_lookup_source_entry_does_not_alias_table_and_reflection_branch_keys() -> None:
+    legacy_saved_entry = {
+        "label": "right",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    wrong_candidate = {
+        "label": "wrong",
+        "hkl": (2, 0, 1),
+        "source_table_index": 12,
+        "source_row_index": 7,
+        "source_reflection_index": 9,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    right_candidate = {
+        "label": "right",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    simulated_lookup = {
+        _source_key(wrong_candidate): dict(wrong_candidate),
+        _source_key(right_candidate): dict(right_candidate),
+    }
+
+    resolved = mg.geometry_manual_lookup_source_entry(
+        simulated_lookup,
+        legacy_saved_entry,
+    )
+
+    assert resolved is not None
+    assert resolved["label"] == "right"
+    assert resolved["source_reflection_index"] == 203
 
 
 def test_geometry_manual_tagged_candidate_from_session_returns_matching_entry() -> None:
@@ -1754,7 +1804,7 @@ def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> 
 
     updated = mg.update_geometry_manual_peak_record_cache(
         peak_records,
-        source_key=(1, 2),
+        source_key=_source_key(peak_records[0]),
         refined_caked=(11.0, 12.0),
         refined_native=(13.0, 14.0),
         refined_display=(15.0, 16.0),
@@ -1776,6 +1826,169 @@ def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> 
     assert peak_overlay_cache["records"][0]["phi_deg"] == 12.0
     assert peak_overlay_cache["positions"][0] == (15.0, 16.0)
     assert peak_overlay_cache["click_spatial_index"] is None
+
+
+def test_update_geometry_manual_peak_record_cache_updates_only_matching_mirrored_branch() -> None:
+    left_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    right_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    peak_records = [dict(left_record), dict(right_record)]
+    peak_positions = [
+        (float(left_record["display_col"]), float(left_record["display_row"])),
+        (float(right_record["display_col"]), float(right_record["display_row"])),
+    ]
+    peak_overlay_cache = {
+        "records": [dict(left_record), dict(right_record)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(right_record),
+        refined_display=(193.0, 99.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is True
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 193.0
+    assert peak_records[1]["display_row"] == 99.0
+    assert peak_positions == [(181.0, 95.0), (193.0, 99.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 193.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (193.0, 99.0)]
+    assert peak_overlay_cache["click_spatial_index"] is None
+
+
+def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_current_record() -> None:
+    legacy_saved_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    left_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    right_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    peak_records = [dict(left_record), dict(right_record)]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(left_record), dict(right_record)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(legacy_saved_entry),
+        source_entry=legacy_saved_entry,
+        refined_display=(191.0, 97.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is True
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 191.0
+    assert peak_records[1]["display_row"] == 97.0
+    assert peak_positions == [(181.0, 95.0), (191.0, 97.0)]
+    assert peak_overlay_cache["records"][1]["display_col"] == 191.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (191.0, 97.0)]
+
+
+def test_update_geometry_manual_peak_record_cache_skips_branchless_row_key_for_mirrored_branches() -> None:
+    legacy_saved_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "label": "",
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    left_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    right_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    peak_records = [dict(left_record), dict(right_record)]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(left_record), dict(right_record)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(legacy_saved_entry),
+        refined_display=(191.0, 97.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is False
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 190.0
+    assert peak_records[1]["display_row"] == 96.0
+    assert peak_positions == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 190.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["click_spatial_index"] == {"position_count": 2}
 
 
 def test_restore_geometry_manual_pick_view_resets_zoom_state() -> None:
@@ -2903,7 +3116,12 @@ def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None
         current_geometry_fit_params=lambda: {"a": 1.0},
         get_cache_data=lambda **_kwargs: {
             "simulated_lookup": {
-                (4, 7): {"sim_col": 13.5, "sim_row": 15.5},
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {"sim_col": 13.5, "sim_row": 15.5},
             }
         },
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
@@ -2961,6 +3179,469 @@ def test_build_geometry_manual_initial_pairs_display_uses_saved_refined_caked_co
             "hkl": (1, 0, 2),
             "bg_display": (109.0, -11.0),
             "sim_display": (113.5, -12.5),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_detector_view() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 182.0,
+        "y": 138.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    left_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+    }
+    right_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["source_branch_index"] == 1
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (182.0, 138.0),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry_to_current_lookup() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 182.0,
+        "y": 138.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    left_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+    }
+    right_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["source_branch_index"] == 1
+    assert "source_reflection_index" not in measured_display[0]
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (182.0, 138.0),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_matches_branchless_legacy_entry_by_hkl() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 182.0,
+        "y": 138.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+    }
+    left_candidate = {
+        "label": "1,0,5",
+        "hkl": (1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+    }
+    right_candidate = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["source_row_index"] == 0
+    assert "source_branch_index" not in measured_display[0]
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (182.0, 138.0),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_for_branchless_legacy_entry() -> None:
+    saved_pair = {
+        "label": "",
+        "x": 190.0,
+        "y": 96.0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+        "stale_caked_fields": True,
+        "source_table_index": 9,
+        "source_row_index": 0,
+    }
+    left_candidate = {
+        "label": "left",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+    }
+    right_candidate = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["stale_caked_fields"] is True
+    assert initial_pairs_display[0]["bg_display"] == (190.0, 96.0)
+    assert initial_pairs_display[0]["sim_display"] == (190.0, 96.0)
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for_branchless_legacy_entry() -> None:
+    saved_pair = {
+        "label": "",
+        "x": 190.0,
+        "y": 96.0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+        "stale_caked_fields": False,
+        "source_table_index": 9,
+        "source_row_index": 0,
+    }
+    left_candidate = {
+        "label": "left",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+    }
+    right_candidate = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
+    }
+
+    _measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert initial_pairs_display[0]["bg_display"] == (190.0, 96.0)
+    assert initial_pairs_display[0]["sim_display"] == (181.0, 95.0)
+
+
+def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_legacy_entry() -> None:
+    saved_pair = {
+        "label": "",
+        "x": 185.5,
+        "y": 138.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+    }
+    left_candidate = {
+        "label": "left",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 96.0,
+    }
+    right_candidate = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["source_row_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": "",
+            "bg_display": (185.5, 138.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_caked_view() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "caked_x": 29.5,
+        "caked_y": -58.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    left_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+        "sim_col": 29.0,
+        "sim_row": -58.5,
+    }
+    right_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
+        "sim_col": 30.25,
+        "sim_row": -57.5,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+
+    assert measured_display[0]["source_branch_index"] == 1
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (29.5, -58.0),
+            "sim_display": (30.25, -57.5),
         }
     ]
 
@@ -3331,7 +4012,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
     assert grouped[("q_group", "primary", 1, 0)][0]["sim_col"] == 13.0
 
     lookup = callbacks.simulated_lookup(projected)
-    assert lookup[(1, 2)]["sim_row"] == 2.0
+    assert lookup[_source_key(projected[0])]["sim_row"] == 2.0
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_caked_rows_from_raw_coords(
@@ -4702,6 +5383,22 @@ def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_
 
 
 def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
+    sibling_candidate = {
+        "label": "1,0,5",
+        "hkl": (1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+    }
     candidate = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -4715,6 +5412,8 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         "source_row_index": 0,
         "sim_col": 190.0,
         "sim_row": 96.0,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
     }
     saved_entry_sets: list[list[dict[str, object]]] = []
 
@@ -4723,13 +5422,13 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         137.0,
         pick_session={
             "group_key": ("q_group", "primary", 1, 5),
-            "group_entries": [dict(candidate)],
+            "group_entries": [dict(sibling_candidate), dict(candidate)],
             "pending_entries": [],
             "target_count": 1,
             "base_entries": [],
             "q_label": "selected group",
             "background_index": 0,
-            "tagged_candidate_key": ("source_branch", 203, 1),
+            "tagged_candidate_key": _source_key(candidate),
             "tagged_candidate": dict(candidate),
         },
         current_background_index=0,
@@ -4775,7 +5474,10 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         pairs_for_index=lambda _idx: [dict(emitted_pair)],
         current_geometry_fit_params=lambda: {"a": 1.0},
         get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
-        source_rows_for_background=lambda *_args, **_kwargs: [dict(candidate)],
+        source_rows_for_background=lambda *_args, **_kwargs: [
+            dict(sibling_candidate),
+            dict(candidate),
+        ],
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
         build_simulated_lookup=_build_lookup,
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
@@ -4788,7 +5490,10 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         pairs_for_index=lambda _idx: [dict(emitted_pair)],
         current_geometry_fit_params=lambda: {"a": 1.0},
         get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
-        source_rows_for_background=lambda *_args, **_kwargs: [dict(candidate)],
+        source_rows_for_background=lambda *_args, **_kwargs: [
+            dict(sibling_candidate),
+            dict(candidate),
+        ],
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
         build_simulated_lookup=_build_lookup,
         entry_display_coords=lambda entry: (
@@ -4822,6 +5527,51 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
             "sim_display": (30.25, -57.5),
         }
     ]
+
+    peak_records = [
+        {
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "display_col": 181.0,
+            "display_row": 95.0,
+        },
+        {
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "display_col": 190.0,
+            "display_row": 96.0,
+        },
+    ]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(record) for record in peak_records],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(emitted_pair),
+        source_entry=emitted_pair,
+        refined_display=(191.0, 97.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is True
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 191.0
+    assert peak_records[1]["display_row"] == 97.0
+    assert peak_positions == [(181.0, 95.0), (191.0, 97.0)]
 
 
 def test_runtime_projection_callbacks_report_rebuild_disabled_diagnostics() -> None:

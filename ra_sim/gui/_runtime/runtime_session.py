@@ -113,6 +113,7 @@ from ra_sim.simulation.diffraction import (
     OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
     process_peaks_parallel,
+    process_peaks_parallel_safe,
     process_qr_rods_parallel,
 )
 from ra_sim.simulation.diffraction_debug import (
@@ -3258,19 +3259,19 @@ def _refine_geometry_manual_pair_entry_from_cache(
     }
 
     resolved_source_entry = dict(source_entry) if isinstance(source_entry, dict) else None
-    source_key: tuple[int, int] | None
-    try:
-        source_key = (
-            int(updated_entry.get("source_table_index")),
-            int(updated_entry.get("source_row_index")),
-        )
-    except Exception:
-        source_key = None
     if not isinstance(resolved_source_entry, dict):
         simulated_lookup = dict(placement_refine_cache.get("simulated_lookup", {}))
-        resolved_source_entry = simulated_lookup.get(source_key) if source_key is not None else None
+        resolved_source_entry = gui_manual_geometry.geometry_manual_lookup_source_entry(
+            simulated_lookup,
+            updated_entry,
+            normalize_hkl_key=_normalize_hkl_key,
+        )
     if not isinstance(resolved_source_entry, dict):
         return updated_entry
+    source_key: tuple[object, ...] | None = (
+        _geometry_manual_candidate_source_key(resolved_source_entry)
+        or _geometry_manual_candidate_source_key(updated_entry)
+    )
 
     try:
         seed_tth = float(
@@ -3381,6 +3382,7 @@ def _refine_geometry_manual_pair_entry_from_cache(
     gui_manual_geometry.update_geometry_manual_peak_record_cache(
         simulation_runtime_state.peak_records,
         source_key=source_key,
+        source_entry=resolved_source_entry,
         refined_caked=(float(refined_tth), float(refined_phi)),
         refined_native=(
             (
@@ -3502,18 +3504,19 @@ def _refine_current_geometry_manual_pairs() -> None:
         ):
             entry.pop(key, None)
 
-        try:
-            source_key = (
-                int(entry.get("source_table_index")),
-                int(entry.get("source_row_index")),
-            )
-        except Exception:
-            source_key = None
-        source_entry = simulated_lookup.get(source_key) if source_key is not None else None
+        source_entry = gui_manual_geometry.geometry_manual_lookup_source_entry(
+            simulated_lookup,
+            entry,
+            normalize_hkl_key=_normalize_hkl_key,
+        )
         if not isinstance(source_entry, dict):
             updated_entries.append(entry)
             skipped_count += 1
             continue
+        source_key = (
+            _geometry_manual_candidate_source_key(source_entry)
+            or _geometry_manual_candidate_source_key(entry)
+        )
 
         try:
             seed_tth = float(source_entry.get("caked_x", source_entry.get("two_theta_deg", np.nan)))
@@ -3624,6 +3627,7 @@ def _refine_current_geometry_manual_pairs() -> None:
         gui_manual_geometry.update_geometry_manual_peak_record_cache(
             simulation_runtime_state.peak_records,
             source_key=source_key,
+            source_entry=source_entry,
             refined_caked=(float(refined_tth), float(refined_phi)),
             refined_native=(
                 (
@@ -5825,6 +5829,11 @@ def _update_geometry_preview_exclude_button_label():
         refresh_mode_banner()
 
 
+def _process_peaks_parallel_safe_prefer_python_runner(*args, **kwargs):
+    kwargs.setdefault("prefer_python_runner", True)
+    return process_peaks_parallel_safe(*args, **kwargs)
+
+
 def _initialize_runtime_controls_block_09() -> None:
     global pruning_workflow, bragg_qr_workflow_runtime, current_sf_prune_bias, current_solve_q_values, update_sf_prune_status_label, apply_bragg_qr_filters, on_sf_prune_bias_change, on_solve_q_steps_change
     global on_solve_q_rel_tol_change, set_solve_q_control_states, on_solve_q_mode_change, structure_factor_pruning_controls_runtime, peak_selection_workflow, peak_selection_runtime, ensure_peak_overlay_data, peak_selection_runtime_callbacks
@@ -6007,7 +6016,7 @@ def _initialize_runtime_controls_block_09() -> None:
         ),
         on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
         n2=n2,
-        process_peaks_parallel=process_peaks_parallel,
+        process_peaks_parallel=_process_peaks_parallel_safe_prefer_python_runner,
         tcl_error_types=(tk.TclError,),
     )
     peak_selection_runtime = peak_selection_workflow.runtime
@@ -8142,6 +8151,9 @@ def _prepare_caked_intersection_cache(
         out = np.full((arr.shape[0], out_cols), np.nan, dtype=float)
         if arr.shape[0] > 0 and arr.shape[1] > 0:
             out[:, :arr.shape[1]] = arr
+        if out.shape[1] >= 16:
+            out[:, 14] = np.nan
+            out[:, 15] = np.nan
 
         if (
             arr.shape[0] == 0
@@ -16188,7 +16200,7 @@ def _initialize_runtime_controls_block_40() -> None:
 
     geometry_fit_simulation_runtime_callbacks = (
         gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-            process_peaks_parallel=process_peaks_parallel,
+            process_peaks_parallel=process_peaks_parallel_safe,
             hit_tables_to_max_positions=hit_tables_to_max_positions,
             native_sim_to_display_coords=_native_sim_to_display_coords,
             peak_table_lattice_factory=lambda: (
@@ -22493,14 +22505,10 @@ def _geometry_fit_live_update_manual_peak_cache(
     else:
         native_image_shape = (int(image_size), int(image_size))
 
-    def _source_key(record: Mapping[str, object]) -> tuple[int, int] | None:
-        try:
-            return (
-                int(record.get("source_table_index")),
-                int(record.get("source_row_index")),
-            )
-        except Exception:
+    def _source_key(record: Mapping[str, object]) -> tuple[object, ...] | None:
+        if not isinstance(record, Mapping):
             return None
+        return _geometry_manual_candidate_source_key(dict(record))
 
     def _dataset_index(record: Mapping[str, object]) -> int:
         try:
@@ -22582,6 +22590,7 @@ def _geometry_fit_live_update_manual_peak_cache(
         if gui_manual_geometry.update_geometry_manual_peak_record_cache(
             simulation_runtime_state.peak_records,
             source_key=source_key,
+            source_entry=raw_record,
             refined_caked=refined_caked,
             refined_native=native_point,
             refined_display=refined_display,
@@ -22600,28 +22609,28 @@ def _geometry_fit_live_update_manual_peak_cache(
             ]
             dataset_entries[dataset_index] = entries
 
-        for entry in entries:
-            try:
-                entry_key = (
-                    int(entry.get("source_table_index")),
-                    int(entry.get("source_row_index")),
-                )
-            except Exception:
-                entry_key = None
-            if entry_key != source_key:
-                continue
-            if refined_display is not None:
-                entry["refined_sim_x"] = float(refined_display[0])
-                entry["refined_sim_y"] = float(refined_display[1])
-            if native_point is not None:
-                entry["refined_sim_native_x"] = float(native_point[0])
-                entry["refined_sim_native_y"] = float(native_point[1])
-            if refined_caked is not None:
-                entry["refined_sim_caked_x"] = float(refined_caked[0])
-                entry["refined_sim_caked_y"] = float(refined_caked[1])
-            dirty_datasets.add(int(dataset_index))
-            updated_any = True
-            break
+        matched_entry_index = gui_manual_geometry.geometry_manual_resolve_source_entry_index(
+            raw_record,
+            entries,
+            normalize_hkl_key=_normalize_hkl_key,
+        )
+        if matched_entry_index is None:
+            continue
+        if not (0 <= int(matched_entry_index) < len(entries)):
+            continue
+
+        entry = entries[int(matched_entry_index)]
+        if refined_display is not None:
+            entry["refined_sim_x"] = float(refined_display[0])
+            entry["refined_sim_y"] = float(refined_display[1])
+        if native_point is not None:
+            entry["refined_sim_native_x"] = float(native_point[0])
+            entry["refined_sim_native_y"] = float(native_point[1])
+        if refined_caked is not None:
+            entry["refined_sim_caked_x"] = float(refined_caked[0])
+            entry["refined_sim_caked_y"] = float(refined_caked[1])
+        dirty_datasets.add(int(dataset_index))
+        updated_any = True
 
     for dataset_index in sorted(dirty_datasets):
         _set_geometry_manual_pairs_for_index(

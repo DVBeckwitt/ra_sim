@@ -174,11 +174,14 @@ def resolve_canonical_branch(
             return int(branch_idx), branch_source, None
 
     if allow_legacy_peak_fallback:
+        stale_caked_fields = bool(entry.get("stale_caked_fields"))
         for key in (
             "refined_sim_caked_y",
             "caked_y",
             "raw_caked_y",
         ):
+            if stale_caked_fields and key != "refined_sim_caked_y":
+                continue
             branch_idx, branch_source, branch_reason = _resolve_signed_value(
                 entry.get(key),
                 source_name=str(key),

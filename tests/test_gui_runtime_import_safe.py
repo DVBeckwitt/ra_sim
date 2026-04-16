@@ -328,17 +328,49 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "_AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator" in source
     assert "start_forward_simulation_numba_warmup_in_background" in source
     assert "start_qr_rod_simulation_numba_warmup_in_background" in source
+    assert "process_peaks_parallel_safe," in source
+    assert "def _process_peaks_parallel_safe_prefer_python_runner(*args, **kwargs):" in source
+    assert 'kwargs.setdefault("prefer_python_runner", True)' in source
     assert "def _schedule_exact_cake_numba_warmup_once() -> None:" in source
     assert "def _schedule_forward_simulation_numba_warmup_once() -> None:" in source
     assert "def _schedule_qr_rod_simulation_numba_warmup_once() -> None:" in source
     assert "simulation_runtime_state.exact_cake_numba_warmup_scheduled" in source
     assert "simulation_runtime_state.forward_simulation_numba_warmup_scheduled" in source
     assert "simulation_runtime_state.qr_rod_simulation_numba_warmup_scheduled" in source
+    assert "process_peaks_parallel=_process_peaks_parallel_safe_prefer_python_runner," in source
+    assert source.count("process_peaks_parallel=process_peaks_parallel_safe,") == 1
+    assert "source_entry=resolved_source_entry," in source
+    assert "source_entry=source_entry," in source
+    assert "source_entry=raw_record," in source
     assert "root.after_idle(start_exact_cake_numba_warmup_in_background)" in source
     assert (
         "root.after_idle(start_forward_simulation_numba_warmup_in_background)" in source
     )
     assert "root.after_idle(start_qr_rod_simulation_numba_warmup_in_background)" in source
+
+
+def test_runtime_session_selected_peak_probe_runner_prefers_python(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    captured = {}
+
+    monkeypatch.setattr(
+        runtime_session,
+        "process_peaks_parallel_safe",
+        lambda *args, **kwargs: (
+            captured.update({"args": args, "kwargs": dict(kwargs)}) or "runner-result"
+        ),
+        raising=False,
+    )
+
+    result = runtime_session._process_peaks_parallel_safe_prefer_python_runner(
+        "sentinel",
+        sample="value",
+    )
+
+    assert result == "runner-result"
+    assert captured["args"] == ("sentinel",)
+    assert captured["kwargs"]["sample"] == "value"
+    assert captured["kwargs"]["prefer_python_runner"] is True
 
 
 def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_and_wavelength() -> None:
@@ -443,6 +475,983 @@ def test_runtime_caking_does_not_call_exact_integrator(monkeypatch) -> None:
     np.testing.assert_array_equal(
         calls[0]["kwargs"]["cols"],
         np.array([2, 3], dtype=np.int32),
+    )
+
+
+def test_runtime_session_live_manual_peak_cache_update_uses_branch_aware_keys(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    left_entry = {
+        "label": "left",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    right_entry = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    legacy_saved_right_entry = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    saved_pairs = [
+        {
+            **left_entry,
+            "x": 181.0,
+            "y": 95.0,
+        },
+        {
+            **legacy_saved_right_entry,
+            "x": 190.0,
+            "y": 96.0,
+        },
+    ]
+    peak_records = [dict(left_entry), dict(right_entry)]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(left_entry), dict(right_entry)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+    captured_saved_pairs: dict[int, list[dict[str, object]]] = {}
+    side_effects: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            stored_sim_image=np.zeros((8, 8), dtype=float),
+            peak_records=peak_records,
+            peak_positions=peak_positions,
+            peak_overlay_cache=peak_overlay_cache,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_sim_to_display_coords",
+        lambda col, row, _shape: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pairs_for_index",
+        lambda index: [dict(entry) for entry in saved_pairs] if int(index) == 0 else [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pairs_for_index",
+        lambda index, entries: captured_saved_pairs.__setitem__(
+            int(index),
+            [dict(entry) for entry in entries or ()],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: side_effects.append(("invalidate", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs",
+        lambda **kwargs: side_effects.append(("render", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "schedule_update",
+        lambda: side_effects.append(("schedule", None)),
+        raising=False,
+    )
+
+    runtime_session._geometry_fit_live_update_manual_peak_cache(
+        {
+            "live_cache_records": [
+                {
+                    "dataset_index": 0,
+                    "source_table_index": 9,
+                    "source_row_index": 0,
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "simulated_detector_x": 191.0,
+                    "simulated_detector_y": 97.0,
+                    "simulated_two_theta_deg": 30.25,
+                    "simulated_phi_deg": -57.5,
+                }
+            ]
+        }
+    )
+
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 191.0
+    assert peak_records[1]["display_row"] == 97.0
+    assert peak_positions == [(181.0, 95.0), (191.0, 97.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 191.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (191.0, 97.0)]
+    assert captured_saved_pairs[0][0]["source_branch_index"] == 0
+    assert "refined_sim_x" not in captured_saved_pairs[0][0]
+    assert captured_saved_pairs[0][1]["source_branch_index"] == 1
+    assert captured_saved_pairs[0][1]["refined_sim_x"] == 191.0
+    assert captured_saved_pairs[0][1]["refined_sim_y"] == 97.0
+    assert captured_saved_pairs[0][1]["refined_sim_caked_x"] == 30.25
+    assert captured_saved_pairs[0][1]["refined_sim_caked_y"] == -57.5
+    assert side_effects == [
+        ("invalidate", None),
+        ("render", {"update_status": False}),
+        ("schedule", None),
+    ]
+
+
+def test_runtime_session_live_manual_peak_cache_update_matches_branchless_saved_entry_by_hkl(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    left_entry = {
+        "label": "1,0,5",
+        "hkl": (1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    right_entry = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    saved_pairs = [
+        {
+            "label": "1,0,5",
+            "hkl": (1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "x": 181.0,
+            "y": 95.0,
+        },
+        {
+            "label": "-1,0,5",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "x": 190.0,
+            "y": 96.0,
+        },
+    ]
+    peak_records = [dict(left_entry), dict(right_entry)]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(left_entry), dict(right_entry)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+    captured_saved_pairs: dict[int, list[dict[str, object]]] = {}
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            stored_sim_image=np.zeros((8, 8), dtype=float),
+            peak_records=peak_records,
+            peak_positions=peak_positions,
+            peak_overlay_cache=peak_overlay_cache,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_sim_to_display_coords",
+        lambda col, row, _shape: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pairs_for_index",
+        lambda index: [dict(entry) for entry in saved_pairs] if int(index) == 0 else [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pairs_for_index",
+        lambda index, entries: captured_saved_pairs.__setitem__(
+            int(index),
+            [dict(entry) for entry in entries or ()],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "schedule_update",
+        lambda: None,
+        raising=False,
+    )
+
+    runtime_session._geometry_fit_live_update_manual_peak_cache(
+        {
+            "live_cache_records": [
+                {
+                    "dataset_index": 0,
+                    "label": "-1,0,5",
+                    "hkl": (-1, 0, 5),
+                    "source_table_index": 9,
+                    "source_row_index": 0,
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "simulated_detector_x": 191.0,
+                    "simulated_detector_y": 97.0,
+                    "simulated_two_theta_deg": 30.25,
+                    "simulated_phi_deg": -57.5,
+                }
+            ]
+        }
+    )
+
+    assert "refined_sim_x" not in captured_saved_pairs[0][0]
+    assert captured_saved_pairs[0][1]["refined_sim_x"] == 191.0
+    assert captured_saved_pairs[0][1]["refined_sim_y"] == 97.0
+    assert captured_saved_pairs[0][1]["refined_sim_caked_x"] == 30.25
+    assert captured_saved_pairs[0][1]["refined_sim_caked_y"] == -57.5
+
+
+def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_lookup(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    left_source = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+    }
+    right_source = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "caked_x": 30.0,
+        "caked_y": -57.0,
+    }
+    right_entry = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "caked_x": 29.5,
+        "caked_y": -58.0,
+    }
+    peak_records = [
+        {
+            **left_source,
+            "display_col": 181.0,
+            "display_row": 95.0,
+        },
+        {
+            **right_source,
+            "display_col": 190.0,
+            "display_row": 96.0,
+        },
+    ]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(peak_records[0]), dict(peak_records[1])],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+    seen_source_branches: list[int] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+            last_caked_radial_values=np.linspace(10.0, 17.0, 8, dtype=float),
+            last_caked_azimuth_values=np.linspace(-4.0, 3.0, 8, dtype=float),
+            stored_sim_image=np.zeros((8, 8), dtype=float),
+            peak_records=peak_records,
+            peak_positions=peak_positions,
+            peak_overlay_cache=peak_overlay_cache,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(
+            manual_pick_cache_signature=("sig",),
+            manual_pick_cache_data={"old": True},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: {
+            "simulated_lookup": {
+                runtime_session._geometry_manual_candidate_source_key(left_source): dict(left_source),
+                runtime_session._geometry_manual_candidate_source_key(right_source): dict(right_source),
+            },
+            "match_config": {"search_radius_px": 6.0},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {"a": 1.0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8), dtype=float),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda image, cfg: (dict(cfg), {"image_shape": tuple(np.asarray(image).shape)}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda source_entry, *_args, **_kwargs: (
+            seen_source_branches.append(int(source_entry["source_branch_index"]))
+            or (30.25, -57.5)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda two_theta, phi: (float(two_theta), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_sim_to_display_coords",
+        lambda col, row, _shape: (float(col), float(row)),
+        raising=False,
+    )
+
+    refined_entry = runtime_session._refine_geometry_manual_pair_entry_from_cache(
+        dict(right_entry)
+    )
+
+    assert seen_source_branches == [1]
+    assert refined_entry is not None
+    assert refined_entry["refined_sim_caked_x"] == 30.25
+    assert refined_entry["refined_sim_caked_y"] == -57.5
+    assert refined_entry["refined_sim_native_x"] == 30.25
+    assert refined_entry["refined_sim_native_y"] == -57.5
+    assert refined_entry["refined_sim_x"] == 30.25
+    assert refined_entry["refined_sim_y"] == -57.5
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 30.25
+    assert peak_records[1]["display_row"] == -57.5
+    assert peak_positions == [(181.0, 95.0), (30.25, -57.5)]
+    assert runtime_session.geometry_runtime_state.manual_pick_cache_signature is None
+    assert runtime_session.geometry_runtime_state.manual_pick_cache_data == {}
+
+
+def test_runtime_session_refine_current_manual_pairs_uses_branch_aware_lookup(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    left_entry = {
+        "label": "left",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+        "x": 181.0,
+        "y": 95.0,
+    }
+    right_entry = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "caked_x": 29.5,
+        "caked_y": -58.0,
+        "x": 190.0,
+        "y": 96.0,
+    }
+    left_source_entry = {
+        **left_entry,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+    }
+    right_source_entry = {
+        **right_entry,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+    }
+    source_lookup = {
+        runtime_session._geometry_manual_candidate_source_key(left_source_entry): {
+            **left_source_entry,
+            "caked_x": 29.0,
+            "caked_y": -58.5,
+        },
+        runtime_session._geometry_manual_candidate_source_key(right_source_entry): {
+            **right_source_entry,
+            "caked_x": 30.0,
+            "caked_y": -57.0,
+        },
+    }
+    peak_records = [
+        {
+            **left_source_entry,
+            "display_col": 181.0,
+            "display_row": 95.0,
+        },
+        {
+            **right_source_entry,
+            "display_col": 190.0,
+            "display_row": 96.0,
+        },
+    ]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(peak_records[0]), dict(peak_records[1])],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+    saved_after_refine: dict[int, list[dict[str, object]]] = {}
+    progress_messages: list[str] = []
+    side_effects: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_state",
+        SimpleNamespace(pick_session={}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+            last_caked_radial_values=np.linspace(10.0, 17.0, 8, dtype=float),
+            last_caked_azimuth_values=np.linspace(-4.0, 3.0, 8, dtype=float),
+            stored_sim_image=np.zeros((8, 8), dtype=float),
+            peak_records=peak_records,
+            peak_positions=peak_positions,
+            peak_overlay_cache=peak_overlay_cache,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(
+            manual_pick_cache_signature=("sig",),
+            manual_pick_cache_data={"old": True},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_pick_session_active",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pairs_for_index",
+        lambda index: [dict(left_entry), dict(right_entry)] if int(index) == 0 else [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: {
+            "simulated_lookup": {key: dict(value) for key, value in source_lookup.items()},
+            "match_config": {"search_radius_px": 6.0},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {"a": 1.0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8), dtype=float),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda image, cfg: (dict(cfg), {"image_shape": tuple(np.asarray(image).shape)}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda source_entry, *_args, **_kwargs: (
+            (29.0, -58.5)
+            if int(source_entry["source_branch_index"]) == 0
+            else (30.25, -57.5)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda two_theta, phi: (float(two_theta), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_sim_to_display_coords",
+        lambda col, row, _shape: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_push_geometry_manual_undo_state",
+        lambda: side_effects.append("undo"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pairs_for_index",
+        lambda index, entries: saved_after_refine.__setitem__(
+            int(index),
+            [dict(entry) for entry in entries or ()],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_fit_dataset_cache",
+        lambda: side_effects.append("clear-fit-cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_manual_preview_artists",
+        lambda **kwargs: side_effects.append(f"clear-preview:{kwargs.get('redraw')}"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs",
+        lambda **kwargs: side_effects.append(f"render:{kwargs.get('update_status')}"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_geometry_manual_pick_button_label",
+        lambda: side_effects.append("button"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_background_status",
+        lambda: side_effects.append("status"),
+        raising=False,
+    )
+
+    runtime_session._refine_current_geometry_manual_pairs()
+
+    assert saved_after_refine[0][0]["source_branch_index"] == 0
+    assert saved_after_refine[0][0]["refined_sim_caked_x"] == 29.0
+    assert saved_after_refine[0][0]["refined_sim_caked_y"] == -58.5
+    assert saved_after_refine[0][1]["source_branch_index"] == 1
+    assert saved_after_refine[0][1]["refined_sim_caked_x"] == 30.25
+    assert saved_after_refine[0][1]["refined_sim_caked_y"] == -57.5
+    assert peak_records[0]["display_col"] == 29.0
+    assert peak_records[0]["display_row"] == -58.5
+    assert peak_records[1]["display_col"] == 30.25
+    assert peak_records[1]["display_row"] == -57.5
+    assert runtime_session.geometry_runtime_state.manual_pick_cache_signature is None
+    assert runtime_session.geometry_runtime_state.manual_pick_cache_data == {}
+    assert side_effects == [
+        "undo",
+        "clear-fit-cache",
+        "clear-preview:False",
+        "render:False",
+        "button",
+        "status",
+    ]
+    assert progress_messages[-1] == (
+        "Refined 2 Qr/Qz simulation points on background 1 (1 moved, 0 skipped)."
+    )
+
+
+def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_for_branchless_entry(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    saved_entry = {
+        "label": "",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+        "stale_caked_fields": True,
+        "x": 190.0,
+        "y": 96.0,
+    }
+    left_source_entry = {
+        "label": "left",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "caked_x": 29.0,
+        "caked_y": -58.5,
+        "x": 181.0,
+        "y": 95.0,
+    }
+    right_source_entry = {
+        "label": "right",
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "caked_x": 30.0,
+        "caked_y": -57.0,
+        "x": 190.0,
+        "y": 96.0,
+    }
+    source_lookup = {
+        runtime_session._geometry_manual_candidate_source_key(left_source_entry): dict(
+            left_source_entry
+        ),
+        runtime_session._geometry_manual_candidate_source_key(right_source_entry): dict(
+            right_source_entry
+        ),
+    }
+    peak_records = [
+        {
+            **left_source_entry,
+            "display_col": 181.0,
+            "display_row": 95.0,
+        },
+        {
+            **right_source_entry,
+            "display_col": 190.0,
+            "display_row": 96.0,
+        },
+    ]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(peak_records[0]), dict(peak_records[1])],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+    saved_after_refine: dict[int, list[dict[str, object]]] = {}
+    progress_messages: list[str] = []
+    side_effects: list[str] = []
+    seen_source_branches: list[int] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_state",
+        SimpleNamespace(pick_session={}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+            last_caked_radial_values=np.linspace(10.0, 17.0, 8, dtype=float),
+            last_caked_azimuth_values=np.linspace(-4.0, 3.0, 8, dtype=float),
+            stored_sim_image=np.zeros((8, 8), dtype=float),
+            peak_records=peak_records,
+            peak_positions=peak_positions,
+            peak_overlay_cache=peak_overlay_cache,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(
+            manual_pick_cache_signature=("sig",),
+            manual_pick_cache_data={"old": True},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_pick_session_active",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pairs_for_index",
+        lambda index: [dict(saved_entry)] if int(index) == 0 else [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: {
+            "simulated_lookup": {key: dict(value) for key, value in source_lookup.items()},
+            "match_config": {"search_radius_px": 6.0},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {"a": 1.0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8), dtype=float),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda image, cfg: (dict(cfg), {"image_shape": tuple(np.asarray(image).shape)}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda source_entry, *_args, **_kwargs: (
+            seen_source_branches.append(int(source_entry["source_branch_index"]))
+            or (
+                (29.0, -58.5)
+                if int(source_entry["source_branch_index"]) == 0
+                else (30.25, -57.5)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda two_theta, phi: (float(two_theta), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_sim_to_display_coords",
+        lambda col, row, _shape: (float(col), float(row)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_push_geometry_manual_undo_state",
+        lambda: side_effects.append("undo"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pairs_for_index",
+        lambda index, entries: saved_after_refine.__setitem__(
+            int(index),
+            [dict(entry) for entry in entries or ()],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_fit_dataset_cache",
+        lambda: side_effects.append("clear-fit-cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_manual_preview_artists",
+        lambda **kwargs: side_effects.append(f"clear-preview:{kwargs.get('redraw')}"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs",
+        lambda **kwargs: side_effects.append(f"render:{kwargs.get('update_status')}"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_geometry_manual_pick_button_label",
+        lambda: side_effects.append("button"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_background_status",
+        lambda: side_effects.append("status"),
+        raising=False,
+    )
+
+    runtime_session._refine_current_geometry_manual_pairs()
+
+    peak_records_by_branch = {
+        int(record["source_branch_index"]): dict(record) for record in peak_records
+    }
+
+    assert seen_source_branches == [1]
+    assert saved_after_refine[0][0]["stale_caked_fields"] is True
+    assert saved_after_refine[0][0]["refined_sim_caked_x"] == 30.25
+    assert saved_after_refine[0][0]["refined_sim_caked_y"] == -57.5
+    assert peak_records_by_branch[0]["display_col"] == 181.0
+    assert peak_records_by_branch[0]["display_row"] == 95.0
+    assert peak_records_by_branch[1]["display_col"] == 30.25
+    assert peak_records_by_branch[1]["display_row"] == -57.5
+    assert runtime_session.geometry_runtime_state.manual_pick_cache_signature is None
+    assert runtime_session.geometry_runtime_state.manual_pick_cache_data == {}
+    assert side_effects == [
+        "undo",
+        "clear-fit-cache",
+        "clear-preview:False",
+        "render:False",
+        "button",
+        "status",
+    ]
+    assert progress_messages[-1] == (
+        "Refined 1 Qr/Qz simulation points on background 1 (1 moved, 0 skipped)."
     )
 
 
@@ -1527,6 +2536,64 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
     np.testing.assert_allclose(out[0, :9], [1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0])
     assert out[0, 14] == 40.5
     assert out[0, 15] == 49.75
+
+
+def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    table = np.asarray(
+        [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
+        dtype=float,
+    )
+
+    transformed = runtime_session._prepare_caked_intersection_cache(
+        [table],
+        transform_bundle=None,
+    )
+
+    out = np.asarray(transformed[0], dtype=float)
+    assert out.shape == (1, 16)
+    np.testing.assert_allclose(out[0, :14], table[0, :14])
+    assert np.isnan(out[0, 14])
+    assert np.isnan(out[0, 15])
+
+
+def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_projector_returns_none(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        pass
+
+    bundle = FakeBundle()
+    projector_calls: list[tuple[object, float, float]] = []
+    table = np.asarray(
+        [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
+        dtype=float,
+    )
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or (None, None)
+        ),
+    )
+
+    transformed = runtime_session._prepare_caked_intersection_cache(
+        [table],
+        transform_bundle=bundle,
+    )
+
+    out = np.asarray(transformed[0], dtype=float)
+    assert projector_calls == [(bundle, 40.0, 50.0)]
+    assert out.shape == (1, 16)
+    np.testing.assert_allclose(out[0, :14], table[0, :14])
+    assert np.isnan(out[0, 14])
+    assert np.isnan(out[0, 15])
 
 
 def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(

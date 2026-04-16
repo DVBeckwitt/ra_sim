@@ -103,7 +103,7 @@ class GeometryManualRuntimeProjectionCallbacks:
     ]
     simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
-        dict[tuple[int, int], dict[str, object]],
+        dict[tuple[object, ...], dict[str, object]],
     ]
 
 
@@ -1373,7 +1373,8 @@ def geometry_manual_apply_refined_simulated_override(
 def update_geometry_manual_peak_record_cache(
     peak_records: Sequence[object] | None,
     *,
-    source_key: tuple[int, int] | None,
+    source_key: tuple[object, ...] | None,
+    source_entry: Mapping[str, object] | None = None,
     refined_caked: tuple[float, float] | None = None,
     refined_native: tuple[float, float] | None = None,
     refined_display: tuple[float, float] | None = None,
@@ -1382,14 +1383,21 @@ def update_geometry_manual_peak_record_cache(
 ) -> bool:
     """Update cached simulated peak records after manual caked-space refinement."""
 
-    if not (isinstance(source_key, tuple) and len(source_key) >= 2):
+    normalized_source_entry = dict(source_entry) if isinstance(source_entry, Mapping) else None
+    if normalized_source_entry is None and not (
+        isinstance(source_key, tuple) and len(source_key) >= 2
+    ):
         return False
 
-    try:
-        source_table_index = int(source_key[0])
-        source_row_index = int(source_key[1])
-    except Exception:
-        return False
+    normalized_source_key: tuple[object, ...] | None = None
+    if isinstance(source_key, tuple) and len(source_key) >= 2:
+        if len(source_key) >= 3 and str(source_key[0]) in {"source", "source_branch"}:
+            normalized_source_key = tuple(source_key)
+        else:
+            try:
+                normalized_source_key = ("source", int(source_key[0]), int(source_key[1]))
+            except Exception:
+                normalized_source_key = None
 
     try:
         refined_tth = (
@@ -1425,13 +1433,17 @@ def update_geometry_manual_peak_record_cache(
     def _entry_matches(record: object) -> bool:
         if not isinstance(record, Mapping):
             return False
-        try:
-            return (
-                int(record.get("source_table_index")) == source_table_index
-                and int(record.get("source_row_index")) == source_row_index
+        if normalized_source_entry is not None:
+            return geometry_manual_source_entries_share_identity(
+                normalized_source_entry,
+                record,
             )
-        except Exception:
+        if normalized_source_key is None:
             return False
+        return geometry_manual_source_key_matches_entry(
+            normalized_source_key,
+            record,
+        )
 
     def _apply_updates(record: dict[str, object]) -> bool:
         updated_local = False
@@ -1676,23 +1688,26 @@ def geometry_manual_candidate_source_key(
 
     if not isinstance(entry, dict):
         return None
-    try:
-        source_branch_index = int(entry.get("source_branch_index"))
-    except Exception:
-        source_branch_index = -1
+    source_branch_index, _source_branch_source, _source_branch_reason = (
+        resolve_canonical_branch(
+            _geometry_manual_identity_resolution_entry(entry),
+            allow_legacy_peak_fallback=True,
+        )
+    )
     if source_branch_index in {0, 1}:
-        try:
-            reflection_idx = entry.get(
-                "source_reflection_index",
-                entry.get("source_table_index"),
-            )
+        source_anchor = (
+            _coerce_nonnegative_index(entry.get("source_reflection_index"))
+            if _entry_has_explicit_trusted_reflection_identity(entry)
+            else None
+        )
+        if source_anchor is None:
+            source_anchor = _coerce_nonnegative_index(entry.get("source_table_index"))
+        if source_anchor is not None:
             return (
                 "source_branch",
-                int(reflection_idx),
+                int(source_anchor),
                 int(source_branch_index),
             )
-        except Exception:
-            pass
     try:
         return (
             "source",
@@ -1707,6 +1722,665 @@ def geometry_manual_candidate_source_key(
     label = str(entry.get("label", "")).strip()
     if label:
         return ("label", label)
+    return None
+
+
+def _geometry_manual_identity_resolution_entry(
+    entry: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    if not (isinstance(entry, Mapping) and bool(entry.get("stale_caked_fields"))):
+        return entry
+
+    identity_entry = dict(entry)
+    for key in (
+        "background_two_theta_deg",
+        "background_phi_deg",
+        "caked_x",
+        "caked_y",
+        "raw_caked_x",
+        "raw_caked_y",
+        "simulated_two_theta_deg",
+        "simulated_phi_deg",
+        "two_theta_deg",
+        "phi_deg",
+    ):
+        identity_entry.pop(key, None)
+    return identity_entry
+
+
+def _geometry_manual_entry_has_explicit_branch_identity(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
+    )
+    return branch_idx in {0, 1}
+
+
+def _geometry_manual_source_row_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        return (
+            int(entry.get("source_table_index")),
+            int(entry.get("source_row_index")),
+        )
+    except Exception:
+        return None
+
+
+def _geometry_manual_entry_normalized_hkl(
+    entry: Mapping[str, object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> tuple[int, int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    return normalize_hkl_key(entry.get("hkl", entry.get("label")))
+
+
+def _geometry_manual_entry_label(entry: Mapping[str, object] | None) -> str:
+    if not isinstance(entry, Mapping):
+        return ""
+    return str(entry.get("label", "") or "").strip()
+
+
+def _geometry_manual_finite_point(
+    entry: Mapping[str, object] | None,
+    key_pairs: Sequence[tuple[str, str]],
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    for key_x, key_y in key_pairs:
+        try:
+            col = float(entry.get(key_x, np.nan))
+            row = float(entry.get(key_y, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(col) and np.isfinite(row):
+            return float(col), float(row)
+    return None
+
+
+def _geometry_manual_entry_refined_sim_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_x", "refined_sim_y"),
+            ("sim_col", "sim_row"),
+            ("display_col", "display_row"),
+            ("simulated_x", "simulated_y"),
+        ),
+    )
+
+
+def _geometry_manual_entry_caked_point(
+    entry: Mapping[str, object] | None,
+    *,
+    allow_stale: bool = False,
+) -> tuple[float, float] | None:
+    if (
+        not allow_stale
+        and isinstance(entry, Mapping)
+        and bool(entry.get("stale_caked_fields"))
+    ):
+        return None
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("caked_x", "caked_y"),
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+    )
+
+
+def _geometry_manual_entry_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("x", "y"),
+            ("display_col", "display_row"),
+            ("sim_col", "sim_row"),
+            ("simulated_x", "simulated_y"),
+        ),
+    )
+
+
+def _geometry_manual_entry_native_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("native_col", "native_row"),
+            ("detector_x", "detector_y"),
+            ("background_detector_x", "background_detector_y"),
+            ("simulated_detector_x", "simulated_detector_y"),
+        ),
+    )
+
+
+def _geometry_manual_resolve_nearest_candidate_index(
+    entry: Mapping[str, object] | None,
+    indexed_candidates: Sequence[tuple[int, Mapping[str, object]]],
+) -> int | None:
+    point_getter_pairs: tuple[
+        tuple[
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+        ],
+        ...,
+    ] = (
+        (
+            _geometry_manual_entry_refined_sim_point,
+            _geometry_manual_entry_refined_sim_point,
+        ),
+        (
+            _geometry_manual_entry_caked_point,
+            lambda candidate: _geometry_manual_entry_caked_point(
+                candidate,
+                allow_stale=True,
+            ),
+        ),
+        (
+            _geometry_manual_entry_display_point,
+            _geometry_manual_entry_display_point,
+        ),
+        (
+            _geometry_manual_entry_native_point,
+            _geometry_manual_entry_native_point,
+        ),
+    )
+
+    for entry_point_getter, candidate_point_getter in point_getter_pairs:
+        entry_point = entry_point_getter(entry)
+        if entry_point is None:
+            continue
+
+        candidate_distances: list[tuple[float, int]] = []
+        for idx, candidate in indexed_candidates:
+            candidate_point = candidate_point_getter(candidate)
+            if candidate_point is None:
+                continue
+            candidate_distances.append(
+                (
+                    float(
+                        np.hypot(
+                            float(candidate_point[0]) - float(entry_point[0]),
+                            float(candidate_point[1]) - float(entry_point[1]),
+                        )
+                    ),
+                    int(idx),
+                )
+            )
+        if not candidate_distances:
+            continue
+
+        candidate_distances.sort(key=lambda item: (float(item[0]), int(item[1])))
+        best_distance, best_idx = candidate_distances[0]
+        if (
+            len(candidate_distances) == 1
+            or abs(float(candidate_distances[1][0]) - float(best_distance)) > 1.0e-9
+        ):
+            return int(best_idx)
+        return None
+
+    return None
+
+
+def _geometry_manual_disambiguate_source_candidates(
+    entry: Mapping[str, object] | None,
+    indexed_candidates: Sequence[tuple[int, Mapping[str, object]]],
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> int | None:
+    candidate_pool = list(indexed_candidates)
+    if not candidate_pool:
+        return None
+    if len(candidate_pool) == 1:
+        return int(candidate_pool[0][0])
+
+    normalized_hkl = _geometry_manual_entry_normalized_hkl(
+        entry,
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    if normalized_hkl is not None:
+        hkl_matches = [
+            (idx, candidate)
+            for idx, candidate in candidate_pool
+            if _geometry_manual_entry_normalized_hkl(
+                candidate,
+                normalize_hkl_key=normalize_hkl_key,
+            )
+            == normalized_hkl
+        ]
+        if len(hkl_matches) == 1:
+            return int(hkl_matches[0][0])
+        if hkl_matches:
+            candidate_pool = hkl_matches
+
+    label = _geometry_manual_entry_label(entry)
+    if label:
+        label_matches = [
+            (idx, candidate)
+            for idx, candidate in candidate_pool
+            if _geometry_manual_entry_label(candidate) == label
+        ]
+        if len(label_matches) == 1:
+            return int(label_matches[0][0])
+        if label_matches:
+            candidate_pool = label_matches
+
+    return _geometry_manual_resolve_nearest_candidate_index(entry, candidate_pool)
+
+
+def geometry_manual_resolve_source_entry_index(
+    entry: Mapping[str, object] | None,
+    candidate_entries: Sequence[object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> int | None:
+    """Resolve one saved/manual entry to an index within a candidate sequence."""
+
+    resolution_entry = _geometry_manual_identity_resolution_entry(entry)
+    if not isinstance(resolution_entry, Mapping):
+        return None
+
+    indexed_candidates = [
+        (int(idx), candidate)
+        for idx, candidate in enumerate(candidate_entries or ())
+        if isinstance(candidate, Mapping)
+    ]
+    if not indexed_candidates:
+        return None
+
+    source_key = geometry_manual_candidate_source_key(
+        dict(resolution_entry),
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    if source_key is not None:
+        exact_matches = [
+            int(idx)
+            for idx, candidate in indexed_candidates
+            if geometry_manual_candidate_source_key(
+                dict(candidate),
+                normalize_hkl_key=normalize_hkl_key,
+            )
+            == source_key
+            and (
+                str(source_key[0]) != "source_branch"
+                or geometry_manual_source_entries_share_identity(
+                    resolution_entry,
+                    candidate,
+                    normalize_hkl_key=normalize_hkl_key,
+                )
+            )
+        ]
+        if exact_matches:
+            return int(exact_matches[0])
+
+        if len(source_key) >= 1 and str(source_key[0]) == "source_branch":
+            identity_matches = [
+                (idx, candidate)
+                for idx, candidate in indexed_candidates
+                if geometry_manual_source_entries_share_identity(
+                    resolution_entry,
+                    candidate,
+                    normalize_hkl_key=normalize_hkl_key,
+                )
+            ]
+            if len(identity_matches) == 1:
+                return int(identity_matches[0][0])
+            if identity_matches:
+                return _geometry_manual_disambiguate_source_candidates(
+                    resolution_entry,
+                    identity_matches,
+                    normalize_hkl_key=normalize_hkl_key,
+                )
+
+        if (
+            len(source_key) >= 3
+            and str(source_key[0]) == "source_branch"
+        ):
+            alias_matches = [
+                (idx, candidate)
+                for idx, candidate in indexed_candidates
+                if geometry_manual_source_key_matches_entry(
+                    source_key,
+                    candidate,
+                    normalize_hkl_key=normalize_hkl_key,
+                )
+            ]
+            if len(alias_matches) == 1:
+                return int(alias_matches[0][0])
+            if alias_matches:
+                return _geometry_manual_disambiguate_source_candidates(
+                    resolution_entry,
+                    alias_matches,
+                    normalize_hkl_key=normalize_hkl_key,
+                )
+
+            query_row_key = _geometry_manual_source_row_key(resolution_entry)
+            query_branch_index, _query_branch_source, _query_branch_reason = (
+                resolve_canonical_branch(
+                    resolution_entry,
+                    allow_legacy_peak_fallback=True,
+                )
+            )
+            if query_row_key is not None and query_branch_index in {0, 1}:
+                row_branch_matches = [
+                    (idx, candidate)
+                    for idx, candidate in indexed_candidates
+                    if _geometry_manual_source_row_key(candidate) == query_row_key
+                    and resolve_canonical_branch(
+                        _geometry_manual_identity_resolution_entry(candidate),
+                        allow_legacy_peak_fallback=True,
+                    )[0]
+                    == int(query_branch_index)
+                ]
+                if len(row_branch_matches) == 1:
+                    return int(row_branch_matches[0][0])
+                if row_branch_matches:
+                    return _geometry_manual_disambiguate_source_candidates(
+                        resolution_entry,
+                        row_branch_matches,
+                        normalize_hkl_key=normalize_hkl_key,
+                    )
+
+        if (
+            len(source_key) >= 3
+            and str(source_key[0]) == "source"
+            and not _geometry_manual_entry_has_explicit_branch_identity(resolution_entry)
+        ):
+            row_key = (int(source_key[1]), int(source_key[2]))
+            nonbranch_matches = [
+                (idx, candidate)
+                for idx, candidate in indexed_candidates
+                if _geometry_manual_source_row_key(candidate) == row_key
+                and not _geometry_manual_entry_has_explicit_branch_identity(candidate)
+            ]
+            if len(nonbranch_matches) == 1:
+                return int(nonbranch_matches[0][0])
+            if nonbranch_matches:
+                return _geometry_manual_disambiguate_source_candidates(
+                    resolution_entry,
+                    nonbranch_matches,
+                    normalize_hkl_key=normalize_hkl_key,
+                )
+
+    row_key = _geometry_manual_source_row_key(resolution_entry)
+    if row_key is None:
+        return None
+
+    row_matches = [
+        (idx, candidate)
+        for idx, candidate in indexed_candidates
+        if _geometry_manual_source_row_key(candidate) == row_key
+    ]
+    if not row_matches:
+        return None
+    return _geometry_manual_disambiguate_source_candidates(
+        resolution_entry,
+        row_matches,
+        normalize_hkl_key=normalize_hkl_key,
+    )
+
+
+def geometry_manual_source_key_matches_entry(
+    source_key: tuple[object, ...] | None,
+    entry: Mapping[str, object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> bool:
+    """Return whether one persisted/manual source key resolves to an entry."""
+
+    if not (isinstance(source_key, tuple) and len(source_key) >= 2):
+        return False
+    if not isinstance(entry, Mapping):
+        return False
+
+    entry_dict = dict(entry)
+    entry_key = geometry_manual_candidate_source_key(
+        entry_dict,
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    key_kind = str(source_key[0])
+    if key_kind != "source_branch" and entry_key == tuple(source_key):
+        return True
+
+    if len(source_key) == 2:
+        if _geometry_manual_entry_has_explicit_branch_identity(entry_dict):
+            return False
+        try:
+            return (
+                int(entry_dict.get("source_table_index")) == int(source_key[0])
+                and int(entry_dict.get("source_row_index")) == int(source_key[1])
+            )
+        except Exception:
+            return False
+
+    if key_kind == "source":
+        if _geometry_manual_entry_has_explicit_branch_identity(entry_dict):
+            return False
+        try:
+            return (
+                int(entry_dict.get("source_table_index")) == int(source_key[1])
+                and int(entry_dict.get("source_row_index")) == int(source_key[2])
+            )
+        except Exception:
+            return False
+
+    if key_kind != "source_branch":
+        return False
+
+    try:
+        source_anchor = int(source_key[1])
+        source_branch_index = int(source_key[2])
+    except Exception:
+        return False
+
+    entry_branch_index, _entry_branch_source, _entry_branch_reason = resolve_canonical_branch(
+        _geometry_manual_identity_resolution_entry(entry_dict),
+        allow_legacy_peak_fallback=True,
+    )
+    if entry_branch_index not in {0, 1} or int(entry_branch_index) != int(source_branch_index):
+        return False
+
+    entry_anchor = (
+        _coerce_nonnegative_index(entry_dict.get("source_reflection_index"))
+        if _entry_has_explicit_trusted_reflection_identity(entry_dict)
+        else _coerce_nonnegative_index(entry_dict.get("source_table_index"))
+    )
+    return entry_anchor is not None and int(entry_anchor) == int(source_anchor)
+
+
+def geometry_manual_source_entries_share_identity(
+    left_entry: Mapping[str, object] | None,
+    right_entry: Mapping[str, object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> bool:
+    """Return whether two saved/live entries describe the same source identity."""
+
+    if not (isinstance(left_entry, Mapping) and isinstance(right_entry, Mapping)):
+        return False
+
+    left_key = geometry_manual_candidate_source_key(
+        dict(left_entry),
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    right_key = geometry_manual_candidate_source_key(
+        dict(right_entry),
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    if left_key is not None and left_key == right_key:
+        if str(left_key[0]) != "source_branch":
+            return True
+        if _entry_has_explicit_trusted_reflection_identity(
+            left_entry
+        ) == _entry_has_explicit_trusted_reflection_identity(right_entry):
+            return True
+
+    left_branch_index, _left_branch_source, _left_branch_reason = resolve_canonical_branch(
+        _geometry_manual_identity_resolution_entry(left_entry),
+        allow_legacy_peak_fallback=True,
+    )
+    right_branch_index, _right_branch_source, _right_branch_reason = resolve_canonical_branch(
+        _geometry_manual_identity_resolution_entry(right_entry),
+        allow_legacy_peak_fallback=True,
+    )
+    if left_branch_index in {0, 1} or right_branch_index in {0, 1}:
+        if left_branch_index not in {0, 1} or right_branch_index not in {0, 1}:
+            return False
+        if int(left_branch_index) != int(right_branch_index):
+            return False
+
+        left_has_trusted_reflection = _entry_has_explicit_trusted_reflection_identity(left_entry)
+        right_has_trusted_reflection = _entry_has_explicit_trusted_reflection_identity(
+            right_entry
+        )
+        if left_has_trusted_reflection and right_has_trusted_reflection:
+            left_reflection_index = _coerce_nonnegative_index(
+                left_entry.get("source_reflection_index")
+            )
+            right_reflection_index = _coerce_nonnegative_index(
+                right_entry.get("source_reflection_index")
+            )
+            return (
+                left_reflection_index is not None
+                and left_reflection_index == right_reflection_index
+            )
+
+        left_row_key = _geometry_manual_source_row_key(left_entry)
+        right_row_key = _geometry_manual_source_row_key(right_entry)
+        if left_row_key is None or left_row_key != right_row_key:
+            return False
+
+        left_hkl = _geometry_manual_entry_normalized_hkl(
+            left_entry,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+        right_hkl = _geometry_manual_entry_normalized_hkl(
+            right_entry,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+        if left_hkl is not None and right_hkl is not None and left_hkl != right_hkl:
+            return False
+        return True
+
+    return bool(
+        left_key is not None
+        and str(left_key[0]) != "source_branch"
+        and geometry_manual_source_key_matches_entry(
+            left_key,
+            right_entry,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+    ) or bool(
+        right_key is not None
+        and str(right_key[0]) != "source_branch"
+        and geometry_manual_source_key_matches_entry(
+            right_key,
+            left_entry,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+    )
+
+
+def geometry_manual_lookup_source_entry(
+    simulated_lookup: Mapping[tuple[object, ...], object] | None,
+    entry: Mapping[str, object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> dict[str, object] | None:
+    """Resolve one saved/manual entry against cached simulated-peak lookup data."""
+
+    if not (isinstance(simulated_lookup, Mapping) and isinstance(entry, Mapping)):
+        return None
+
+    source_key = geometry_manual_candidate_source_key(
+        dict(entry),
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    resolved = simulated_lookup.get(source_key) if source_key is not None else None
+    if isinstance(resolved, Mapping):
+        if not (
+            isinstance(source_key, tuple)
+            and len(source_key) >= 1
+            and str(source_key[0]) == "source_branch"
+        ):
+            return dict(resolved)
+        resolved_dict = dict(resolved)
+        if geometry_manual_source_entries_share_identity(
+            entry,
+            resolved_dict,
+            normalize_hkl_key=normalize_hkl_key,
+        ):
+            return resolved_dict
+    if (
+        source_key is not None
+        and isinstance(source_key, tuple)
+        and len(source_key) >= 3
+        and str(source_key[0]) == "source"
+        and not _geometry_manual_entry_has_explicit_branch_identity(entry)
+    ):
+        legacy_resolved = simulated_lookup.get((int(source_key[1]), int(source_key[2])))
+        if isinstance(legacy_resolved, Mapping) and not _geometry_manual_entry_has_explicit_branch_identity(
+            legacy_resolved
+        ):
+            return dict(legacy_resolved)
+
+    if (
+        isinstance(source_key, tuple)
+        and len(source_key) >= 1
+        and str(source_key[0]) == "source_branch"
+    ):
+        identity_candidate_entries = [
+            (idx, candidate)
+            for idx, candidate in enumerate(simulated_lookup.values())
+            if isinstance(candidate, Mapping)
+            and geometry_manual_source_entries_share_identity(
+                entry,
+                candidate,
+                normalize_hkl_key=normalize_hkl_key,
+            )
+        ]
+        if len(identity_candidate_entries) == 1:
+            return dict(identity_candidate_entries[0][1])
+
+        resolved_index = _geometry_manual_disambiguate_source_candidates(
+            entry,
+            identity_candidate_entries,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+        if resolved_index is not None and 0 <= int(resolved_index) < len(
+            identity_candidate_entries
+        ):
+            return dict(identity_candidate_entries[int(resolved_index)][1])
+
+    candidate_entries = [
+        candidate for candidate in simulated_lookup.values() if isinstance(candidate, Mapping)
+    ]
+    resolved_index = geometry_manual_resolve_source_entry_index(
+        entry,
+        candidate_entries,
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    if resolved_index is None:
+        return None
+    if 0 <= int(resolved_index) < len(candidate_entries):
+        return dict(candidate_entries[int(resolved_index)])
     return None
 
 
@@ -3712,14 +4386,7 @@ def build_geometry_manual_initial_pairs_display(
         bg_coords = entry_display_coords(entry)
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
-        try:
-            source_key = (
-                int(entry.get("source_table_index")),
-                int(entry.get("source_row_index")),
-            )
-        except Exception:
-            source_key = None
-        sim_entry = simulated_lookup.get(source_key) if source_key is not None else None
+        sim_entry = geometry_manual_lookup_source_entry(simulated_lookup, entry)
         sim_entry = geometry_manual_apply_refined_simulated_override(
             entry,
             sim_entry,
@@ -4477,17 +5144,13 @@ def make_runtime_geometry_manual_projection_callbacks(
 
     def _simulated_lookup(
         simulated_peaks: Sequence[dict[str, object]] | None,
-    ) -> dict[tuple[int, int], dict[str, object]]:
-        lookup: dict[tuple[int, int], dict[str, object]] = {}
+    ) -> dict[tuple[object, ...], dict[str, object]]:
+        lookup: dict[tuple[object, ...], dict[str, object]] = {}
         for raw_entry in simulated_peaks or []:
             if not isinstance(raw_entry, dict):
                 continue
-            try:
-                key = (
-                    int(raw_entry.get("source_table_index")),
-                    int(raw_entry.get("source_row_index")),
-                )
-            except Exception:
+            key = geometry_manual_candidate_source_key(raw_entry)
+            if key is None:
                 continue
             lookup[key] = dict(raw_entry)
         return lookup
