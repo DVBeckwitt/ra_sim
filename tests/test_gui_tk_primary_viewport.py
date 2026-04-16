@@ -245,7 +245,7 @@ def test_screen_and_world_transforms_round_trip_detector_view() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 50.0, 25.0)
-    assert world == (25.0, 75.0)
+    assert world == (25.0, 25.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (50.0, 25.0)
 
 
@@ -259,7 +259,7 @@ def test_screen_and_world_transforms_use_plot_bounds_when_present() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 60.0, 30.0)
-    assert world == (25.0, 75.0)
+    assert world == (25.0, 25.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (60.0, 30.0)
 
 
@@ -272,8 +272,22 @@ def test_screen_and_world_transforms_round_trip_caked_view() -> None:
     )
 
     world = tk_primary_viewport.screen_to_world(view_state, 120.0, 30.0)
-    assert world == (22.0, -15.0)
+    assert world == (22.0, 15.0)
     assert tk_primary_viewport.world_to_screen(view_state, *world) == (120.0, 30.0)
+
+
+def test_detector_view_y_transform_keeps_canvas_top_above_beam_center() -> None:
+    view_state = tk_primary_viewport.ViewportViewState(
+        width=200,
+        height=100,
+        xlim=(0.0, 100.0),
+        ylim=(100.0, 0.0),
+    )
+
+    world = tk_primary_viewport.screen_to_world(view_state, 50.0, 25.0)
+
+    assert world == (25.0, 25.0)
+    assert tk_primary_viewport.world_to_screen(view_state, 25.0, 25.0) == (50.0, 25.0)
 
 
 def test_current_view_state_uses_axes_position_for_plot_bounds() -> None:
@@ -560,12 +574,11 @@ def test_render_layer_patch_matches_matplotlib_caked_zoom_crop() -> None:
 
     assert rendered is not None
     patch_image, left, top = rendered
-    assert (left, top) == (0, -1)
-    assert patch_image.size == (1, 4)
+    assert (left, top) == (0, 0)
+    assert patch_image.size == (1, 3)
     assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
     assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
     assert patch_image.getpixel((0, 2)) == (0, 255, 0, 255)
-    assert patch_image.getpixel((0, 3)) == (0, 255, 0, 255)
 
 
 def test_render_scene_preserves_horizontal_alignment_for_fractional_detector_zoom(
@@ -665,9 +678,9 @@ def test_render_scene_preserves_vertical_alignment_for_fractional_detector_zoom(
 
     assert rendered.size == (1, 12)
     assert rendered.getpixel((0, 0)) == (255, 0, 0, 255)
-    assert rendered.getpixel((0, 1)) == (0, 255, 0, 255)
-    assert rendered.getpixel((0, 6)) == (0, 0, 255, 255)
-    assert rendered.getpixel((0, 10)) == (255, 255, 0, 255)
+    assert rendered.getpixel((0, 3)) == (0, 255, 0, 255)
+    assert rendered.getpixel((0, 7)) == (0, 0, 255, 255)
+    assert rendered.getpixel((0, 11)) == (255, 255, 0, 255)
 
 
 def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
@@ -692,7 +705,7 @@ def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
     assert events[0].button == 1
     assert events[0].inaxes == "AX"
     assert events[0].xdata == 30.0
-    assert events[0].ydata == 75.0
+    assert events[0].ydata == 25.0
 
 
 def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
@@ -713,7 +726,7 @@ def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
     assert events[0].button == "up"
     assert events[0].step == 1.0
     assert events[0].xdata == 15.0
-    assert events[0].ydata == 60.0
+    assert events[0].ydata == 40.0
 
 
 def test_tk_canvas_proxy_ignores_points_outside_plot_bounds() -> None:

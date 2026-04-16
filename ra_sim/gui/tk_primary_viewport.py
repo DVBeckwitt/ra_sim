@@ -246,11 +246,13 @@ def world_to_screen(
     x0, x1 = view_state.xlim
     y0, y1 = view_state.ylim
     span_x = float(x1) - float(x0)
-    span_y = float(y1) - float(y0)
-    if abs(span_x) <= _EPSILON or abs(span_y) <= _EPSILON:
+    top_world = float(y1)
+    bottom_world = float(y0)
+    world_span = bottom_world - top_world
+    if abs(span_x) <= _EPSILON or abs(world_span) <= _EPSILON:
         return None
     sx = float(left) + ((float(world_x) - float(x0)) / span_x) * float(width)
-    sy = float(top) + ((float(world_y) - float(y0)) / span_y) * float(height)
+    sy = float(top) + ((float(world_y) - top_world) / world_span) * float(height)
     if not (isfinite(sx) and isfinite(sy)):
         return None
     return (float(sx), float(sy))
@@ -265,11 +267,13 @@ def screen_to_world(
     x0, x1 = view_state.xlim
     y0, y1 = view_state.ylim
     span_x = float(x1) - float(x0)
-    span_y = float(y1) - float(y0)
-    if abs(span_x) <= _EPSILON or abs(span_y) <= _EPSILON:
+    top_world = float(y1)
+    bottom_world = float(y0)
+    world_span = bottom_world - top_world
+    if abs(span_x) <= _EPSILON or abs(world_span) <= _EPSILON:
         return None
     world_x = float(x0) + ((float(screen_x) - float(left)) / float(width)) * span_x
-    world_y = float(y0) + ((float(screen_y) - float(top)) / float(height)) * span_y
+    world_y = top_world + ((float(screen_y) - float(top)) / float(height)) * world_span
     if not (isfinite(world_x) and isfinite(world_y)):
         return None
     return (float(world_x), float(world_y))
@@ -1032,24 +1036,32 @@ class _TkPrimaryViewport:
         view_x0, view_x1 = view_state.xlim
         view_y0, view_y1 = view_state.ylim
         view_span_x = float(view_x1) - float(view_x0)
-        view_span_y = float(view_y1) - float(view_y0)
+        view_top_world = float(view_y1)
+        view_bottom_world = float(view_y0)
+        view_world_span_y = view_bottom_world - view_top_world
         extent_span_x = float(extent_x1) - float(extent_x0)
-        if abs(view_span_x) <= _EPSILON or abs(view_span_y) <= _EPSILON:
+        if abs(view_span_x) <= _EPSILON or abs(view_world_span_y) <= _EPSILON:
             return None
         if abs(extent_span_x) <= _EPSILON:
             return None
-        source_y_start = float(extent_y0)
-        source_y_end = float(extent_y1)
-        extent_span_y = float(source_y_end) - float(source_y_start)
-        if abs(extent_span_y) <= _EPSILON:
+        if _normalize_image_origin(layer.origin) == "upper":
+            source_top_world = float(extent_y1)
+            source_bottom_world = float(extent_y0)
+        else:
+            source_top_world = float(extent_y0)
+            source_bottom_world = float(extent_y1)
+        source_world_span = source_bottom_world - source_top_world
+        if abs(source_world_span) <= _EPSILON:
             return None
         x_centers = np.arange(dst_left, dst_right, dtype=np.float64) + 0.5
         y_centers = np.arange(dst_top, dst_bottom, dtype=np.float64) + 0.5
         world_x = float(view_x0) + ((x_centers - float(left)) / float(plot_width)) * view_span_x
-        world_y = float(view_y0) + ((y_centers - float(top)) / float(plot_height)) * view_span_y
+        world_y = view_top_world + (
+            ((y_centers - float(top)) / float(plot_height)) * view_world_span_y
+        )
         source_x = ((world_x - float(extent_x0)) / extent_span_x) * float(src_width) - 0.5
         source_y = (
-            ((world_y - source_y_start) / extent_span_y) * float(src_height) - 0.5
+            ((world_y - source_top_world) / source_world_span) * float(src_height) - 0.5
         )
         valid_x = np.isfinite(source_x) & (source_x >= (-0.5 - _EPSILON)) & (
             source_x <= (float(src_width) - 0.5 + _EPSILON)
