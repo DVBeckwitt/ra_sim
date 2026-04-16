@@ -3,7 +3,7 @@ import json
 import hashlib
 from dataclasses import replace
 import numpy as np
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import pytest
 from types import SimpleNamespace
 
@@ -5791,6 +5791,37 @@ def test_build_geometry_fit_action_notice_returns_rejection_warning() -> None:
     )
 
 
+def test_build_geometry_fit_action_notice_formats_windows_log_path_on_posix_notice_host() -> None:
+    notice = geometry_fit.build_geometry_fit_action_notice(
+        geometry_fit.GeometryFitRuntimeActionResult(
+            params={},
+            var_names=["gamma"],
+            preserve_live_theta=True,
+            execution_result=geometry_fit.GeometryFitRuntimeExecutionResult(
+                log_path=PurePosixPath("C:/tmp/geometry_fit_log.txt"),
+                apply_result=geometry_fit.GeometryFitRuntimeApplyResult(
+                    accepted=False,
+                    rejection_reason="RMS residual 624.37 px exceeds the acceptance limit of 100.00 px.",
+                    rms=624.374847,
+                    fitted_params=None,
+                    postprocess=None,
+                ),
+            ),
+        )
+    )
+
+    assert notice == geometry_fit.GeometryFitActionNotice(
+        level="warning",
+        title="Geometry Fit Rejected",
+        message=(
+            "Geometry fit finished but the solution was rejected.\n"
+            "RMS residual 624.37 px exceeds the acceptance limit of 100.00 px.\n"
+            "The live geometry state was left unchanged.\n"
+            "Fit log: C:\\tmp\\geometry_fit_log.txt"
+        ),
+    )
+
+
 def test_build_geometry_fit_action_notice_returns_error_notice() -> None:
     notice = geometry_fit.build_geometry_fit_action_notice(
         geometry_fit.GeometryFitRuntimeActionResult(
@@ -5816,7 +5847,7 @@ def test_build_geometry_fit_action_notice_returns_error_notice_with_preflight_lo
             preserve_live_theta=True,
             prepare_result=geometry_fit.GeometryFitPreparationResult(
                 error_text="Geometry fit unavailable",
-                log_path=Path("C:/tmp/geometry_fit_log.txt"),
+                log_path=PurePosixPath("C:/tmp/geometry_fit_log.txt"),
             ),
             error_text="Geometry fit unavailable",
         )

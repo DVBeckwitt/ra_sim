@@ -11,7 +11,7 @@ import math
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import numpy as np
@@ -2415,6 +2415,23 @@ def make_runtime_geometry_fit_action_callback(
     return _run
 
 
+def _format_geometry_fit_notice_path(log_path: object) -> str:
+    """Return one log path string formatted for user-facing notices."""
+
+    try:
+        formatted_path = os.fspath(log_path)
+    except TypeError:
+        formatted_path = str(log_path)
+    if isinstance(formatted_path, bytes):
+        formatted_path = os.fsdecode(formatted_path)
+    else:
+        formatted_path = str(formatted_path)
+    windows_path = PureWindowsPath(formatted_path)
+    if windows_path.drive and windows_path.is_absolute():
+        return str(windows_path)
+    return formatted_path
+
+
 def build_geometry_fit_action_notice(
     action_result: GeometryFitRuntimeActionResult | None,
 ) -> GeometryFitActionNotice | None:
@@ -2435,7 +2452,7 @@ def build_geometry_fit_action_notice(
             if prepare_result is not None:
                 log_path = getattr(prepare_result, "log_path", None)
         if log_path is not None:
-            lines.append(f"Fit log: {Path(log_path)}")
+            lines.append(f"Fit log: {_format_geometry_fit_notice_path(log_path)}")
         return GeometryFitActionNotice(
             level="error",
             title="Geometry Fit Failed",
@@ -2457,7 +2474,7 @@ def build_geometry_fit_action_notice(
     lines.append("The live geometry state was left unchanged.")
     log_path = getattr(execution_result, "log_path", None)
     if log_path is not None:
-        lines.append(f"Fit log: {Path(log_path)}")
+        lines.append(f"Fit log: {_format_geometry_fit_notice_path(log_path)}")
     return GeometryFitActionNotice(
         level="warning",
         title="Geometry Fit Rejected",
