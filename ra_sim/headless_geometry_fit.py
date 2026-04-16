@@ -8,7 +8,6 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-import CifFile
 import numpy as np
 
 from ra_sim.config import get_dir, get_instrument_config, get_path
@@ -105,6 +104,18 @@ class _HeadlessVar:
 
     def set(self, value: object) -> None:
         self._value = value
+
+
+def _read_first_cif_block(path: str) -> tuple[object, object]:
+    """Load one CIF and return the container plus its first block."""
+
+    import CifFile
+
+    cf = CifFile.ReadCif(path)
+    keys = list(cf.keys())
+    if not keys:
+        raise ValueError(f"No CIF data blocks found in {path}")
+    return cf, cf[keys[0]]
 
 
 def _coerce_float(value: object, default: float) -> float:
@@ -288,14 +299,12 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         pixel_size=pixel_size_m,
     )
 
-    cf = CifFile.ReadCif(primary_cif_path)
-    blk = cf[list(cf.keys())[0]]
+    cf, blk = _read_first_cif_block(primary_cif_path)
     av = gui_structure_model.parse_cif_num(blk.get("_cell_length_a"))
     bv = gui_structure_model.parse_cif_num(blk.get("_cell_length_b"))
     cv = gui_structure_model.parse_cif_num(blk.get("_cell_length_c"))
     if secondary_cif_path:
-        cf2 = CifFile.ReadCif(secondary_cif_path)
-        blk2 = cf2[list(cf2.keys())[0]]
+        cf2, blk2 = _read_first_cif_block(secondary_cif_path)
         av2 = gui_structure_model.parse_cif_num(blk2.get("_cell_length_a") or av)
         cv2 = gui_structure_model.parse_cif_num(blk2.get("_cell_length_c") or cv)
     else:
@@ -520,8 +529,7 @@ def _load_structure_model(
         if isinstance(saved_state.get("dynamic_lists"), dict)
         else {}
     )
-    cf = CifFile.ReadCif(defaults.primary_cif_path)
-    blk = cf[list(cf.keys())[0]]
+    cf, blk = _read_first_cif_block(defaults.primary_cif_path)
     occupancy_site_labels, occupancy_site_expanded_map = (
         gui_structure_model.extract_occupancy_site_metadata(
             blk,

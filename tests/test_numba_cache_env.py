@@ -39,6 +39,24 @@ def _default_numba_cache_path(home: str) -> str:
     return str((Path(home) / ".cache" / "ra_sim" / "numba").resolve())
 
 
+_CLI_HEAVY_PREFIXES = (
+    "ra_sim.headless_geometry_fit",
+    "ra_sim.gui",
+    "ra_sim.fitting.optimization",
+    "ra_sim.utils.stacking_fault",
+    "ra_sim.utils.diffraction_tools",
+    "ra_sim.utils.calculations",
+    "ra_sim.utils.tools",
+    "ra_sim.simulation",
+)
+
+
+def _assert_cli_heavy_modules_unloaded() -> None:
+    for prefix in _CLI_HEAVY_PREFIXES:
+        assert prefix not in sys.modules
+        assert not any(name.startswith(prefix + ".") for name in sys.modules)
+
+
 def test_numba_cache_dir_defaults_to_stable_path(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
@@ -91,5 +109,28 @@ def test_numba_cache_dir_present_before_cli_jit_modules_import(monkeypatch, tmp_
         importlib.import_module("ra_sim.cli")
         expected = _default_numba_cache_path(str(tmp_path))
         assert os.environ["NUMBA_CACHE_DIR"] == expected
+    finally:
+        _restore_modules(previous)
+
+
+def test_cli_import_keeps_geometry_and_simulation_stack_lazy(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        cli = importlib.import_module("ra_sim.cli")
+        expected = _default_numba_cache_path(str(tmp_path))
+        assert os.environ["NUMBA_CACHE_DIR"] == expected
+        _assert_cli_heavy_modules_unloaded()
+
+        a_val, c_val = cli._parse_cif_cell_a_c(str(Path("tests/local_test.cif")))
+
+        assert a_val == 4.0
+        assert c_val == 10.0
+        _assert_cli_heavy_modules_unloaded()
     finally:
         _restore_modules(previous)

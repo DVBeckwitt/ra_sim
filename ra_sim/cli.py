@@ -30,6 +30,8 @@ import argparse
 import copy
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+import importlib
 import json
 import math
 from pathlib import Path
@@ -40,71 +42,13 @@ from typing import Any, Dict, Mapping
 import numpy as np
 from PIL import Image
 
-from ra_sim import launcher
-from ra_sim import headless_geometry_fit as shared_headless_geometry_fit
 from ra_sim.config import get_dir, get_instrument_config, get_path
 from ra_sim.debug_controls import mosaic_fit_log_files_enabled
 from ra_sim.debug_controls import register_run_output_path, start_run_bundle
-from ra_sim.fitting.optimization import (
-    fit_geometry_parameters,
-    fit_mosaic_shape_parameters,
-    simulate_and_compare_hkl,
-)
-from ra_sim.gui import background as gui_background
-from ra_sim.gui import background_theta as gui_background_theta
-from ra_sim.gui import controllers as gui_controllers
-from ra_sim.gui import geometry_fit as gui_geometry_fit
-from ra_sim.gui import geometry_overlay as gui_geometry_overlay
-from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
-from ra_sim.gui import manual_geometry as gui_manual_geometry
-from ra_sim.gui import structure_model as gui_structure_model
-from ra_sim.gui.state import AtomSiteOverrideState, SimulationRuntimeState
 from ra_sim.hbn_geometry import load_tilt_hint
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
-from ra_sim.utils.stacking_fault import (
-    DEFAULT_PHASE_DELTA_EXPRESSION,
-    DEFAULT_PHI_L_DIVISOR,
-    ht_Iinf_dict,
-    ht_dict_to_qr_dict,
-    normalize_phi_l_divisor,
-    normalize_phase_delta_expression,
-    validate_phase_delta_expression,
-)
-from ra_sim.utils.diffraction_tools import (
-    detector_two_theta_max,
-    DEFAULT_PIXEL_SIZE_M,
-)
-from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import (
-    DEFAULT_SOLVE_Q_MODE,
-    DEFAULT_SOLVE_Q_REL_TOL,
-    DEFAULT_SOLVE_Q_STEPS,
-    OPTICS_MODE_EXACT,
-    OPTICS_MODE_FAST,
-    SOLVE_Q_MODE_ADAPTIVE,
-    SOLVE_Q_MODE_UNIFORM,
-    hit_tables_to_max_positions,
-    process_peaks_parallel,
-)
-from ra_sim.simulation.engine import simulate_qr_rods
-from ra_sim.simulation.types import (
-    BeamSamples,
-    DebyeWallerParams,
-    DetectorGeometry,
-    MosaicParams,
-    SimulationRequest,
-)
-from ra_sim.utils.calculations import (
-    resolve_index_of_refraction,
-    resolve_index_of_refraction_array,
-)
-from ra_sim.utils.tools import (
-    build_intensity_dataframes,
-    inject_fractional_reflections,
-    miller_generator,
-)
 
 
 @dataclass(frozen=True)
@@ -164,6 +108,119 @@ class _HeadlessVar:
 
     def set(self, value: object) -> None:
         self._value = value
+
+
+@lru_cache(maxsize=1)
+def _load_launcher():
+    return importlib.import_module("ra_sim.launcher")
+
+
+@lru_cache(maxsize=1)
+def _load_shared_headless_geometry_fit():
+    return importlib.import_module("ra_sim.headless_geometry_fit")
+
+
+@lru_cache(maxsize=1)
+def _load_cli_geometry_modules() -> SimpleNamespace:
+    from ra_sim.gui import background as gui_background
+    from ra_sim.gui import background_theta as gui_background_theta
+    from ra_sim.gui import controllers as gui_controllers
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+    from ra_sim.gui import geometry_overlay as gui_geometry_overlay
+    from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
+    from ra_sim.gui import manual_geometry as gui_manual_geometry
+    from ra_sim.gui import structure_model as gui_structure_model
+    from ra_sim.gui.state import AtomSiteOverrideState, SimulationRuntimeState
+
+    return SimpleNamespace(
+        gui_background=gui_background,
+        gui_background_theta=gui_background_theta,
+        gui_controllers=gui_controllers,
+        gui_geometry_fit=gui_geometry_fit,
+        gui_geometry_overlay=gui_geometry_overlay,
+        gui_geometry_q_group_manager=gui_geometry_q_group_manager,
+        gui_manual_geometry=gui_manual_geometry,
+        gui_structure_model=gui_structure_model,
+        AtomSiteOverrideState=AtomSiteOverrideState,
+        SimulationRuntimeState=SimulationRuntimeState,
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_fitting_optimization():
+    return importlib.import_module("ra_sim.fitting.optimization")
+
+
+@lru_cache(maxsize=1)
+def _load_stacking_fault_module():
+    return importlib.import_module("ra_sim.utils.stacking_fault")
+
+
+@lru_cache(maxsize=1)
+def _load_diffraction_tools_module():
+    return importlib.import_module("ra_sim.utils.diffraction_tools")
+
+
+@lru_cache(maxsize=1)
+def _load_simulation_modules() -> SimpleNamespace:
+    from ra_sim.simulation import diffraction, engine, mosaic_profiles, types
+
+    return SimpleNamespace(
+        diffraction=diffraction,
+        engine=engine,
+        mosaic_profiles=mosaic_profiles,
+        types=types,
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_calculation_module():
+    return importlib.import_module("ra_sim.utils.calculations")
+
+
+@lru_cache(maxsize=1)
+def _load_tools_module():
+    return importlib.import_module("ra_sim.utils.tools")
+
+
+class _LazyModuleProxy:
+    """Resolve a heavy module only when code actually touches it."""
+
+    def __init__(self, loader) -> None:
+        object.__setattr__(self, "_loader", loader)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(object.__getattribute__(self, "_loader")(), name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(object.__getattribute__(self, "_loader")(), name, value)
+
+
+shared_headless_geometry_fit = _LazyModuleProxy(_load_shared_headless_geometry_fit)
+
+
+def ht_Iinf_dict(*args, **kwargs):
+    return _load_stacking_fault_module().ht_Iinf_dict(*args, **kwargs)
+
+
+def ht_dict_to_qr_dict(*args, **kwargs):
+    return _load_stacking_fault_module().ht_dict_to_qr_dict(*args, **kwargs)
+
+
+def generate_random_profiles(*args, **kwargs):
+    return _load_simulation_modules().mosaic_profiles.generate_random_profiles(*args, **kwargs)
+
+
+def resolve_index_of_refraction(*args, **kwargs):
+    return _load_calculation_module().resolve_index_of_refraction(*args, **kwargs)
+
+
+def resolve_index_of_refraction_array(*args, **kwargs):
+    return _load_calculation_module().resolve_index_of_refraction_array(*args, **kwargs)
+
+
+def simulate_qr_rods(*args, **kwargs):
+    return _load_simulation_modules().engine.simulate_qr_rods(*args, **kwargs)
 
 
 def _parse_cif_cell_a_c(cif_file: str) -> tuple[float, float]:
@@ -237,19 +294,20 @@ def _coerce_finite_float(value: object) -> float | None:
 def _resolve_solve_q_mode(mode_raw: object) -> int:
     """Normalize CLI/config solve-q mode values to engine constants."""
 
+    diffraction = _load_simulation_modules().diffraction
     if isinstance(mode_raw, (int, np.integer, float, np.floating)):
         return (
-            SOLVE_Q_MODE_UNIFORM
+            diffraction.SOLVE_Q_MODE_UNIFORM
             if int(round(float(mode_raw))) == 0
-            else SOLVE_Q_MODE_ADAPTIVE
+            else diffraction.SOLVE_Q_MODE_ADAPTIVE
         )
 
     mode_txt = str(mode_raw).strip().lower()
     if mode_txt in {"uniform", "fast", "0"}:
-        return SOLVE_Q_MODE_UNIFORM
+        return diffraction.SOLVE_Q_MODE_UNIFORM
     if mode_txt in {"adaptive", "robust", "1"}:
-        return SOLVE_Q_MODE_ADAPTIVE
-    return DEFAULT_SOLVE_Q_MODE
+        return diffraction.SOLVE_Q_MODE_ADAPTIVE
+    return diffraction.DEFAULT_SOLVE_Q_MODE
 
 
 def _apply_headless_tilt_hint(
@@ -377,13 +435,18 @@ def _saved_state_text(
 def _normalize_headless_optics_mode_flag(value: object) -> int:
     """Normalize saved optics-mode values to simulation engine flags."""
 
+    diffraction = _load_simulation_modules().diffraction
     if isinstance(value, (int, np.integer)):
-        return OPTICS_MODE_EXACT if int(value) == OPTICS_MODE_EXACT else OPTICS_MODE_FAST
+        return (
+            diffraction.OPTICS_MODE_EXACT
+            if int(value) == diffraction.OPTICS_MODE_EXACT
+            else diffraction.OPTICS_MODE_FAST
+        )
     if isinstance(value, (float, np.floating)):
         return (
-            OPTICS_MODE_EXACT
-            if int(round(float(value))) == OPTICS_MODE_EXACT
-            else OPTICS_MODE_FAST
+            diffraction.OPTICS_MODE_EXACT
+            if int(round(float(value))) == diffraction.OPTICS_MODE_EXACT
+            else diffraction.OPTICS_MODE_FAST
         )
 
     text = str(value).strip().lower()
@@ -401,8 +464,8 @@ def _normalize_headless_optics_mode_flag(value: object) -> int:
         "complex-k dwba slab optics",
         "phase-matched complex-k multilayer dwba",
     }:
-        return OPTICS_MODE_EXACT
-    return OPTICS_MODE_FAST
+        return diffraction.OPTICS_MODE_EXACT
+    return diffraction.OPTICS_MODE_FAST
 
 
 def _load_cif_snapshot(path: str) -> tuple[object, object]:
@@ -422,6 +485,7 @@ def _headless_geometry_fit_sample_count(
 ) -> int:
     """Resolve the Monte Carlo sample count used by headless geometry fitting."""
 
+    gui_controllers = _load_cli_geometry_modules().gui_controllers
     return gui_controllers.resolve_sampling_count(
         _saved_state_text(saved_variables, "resolution_var", "Low"),
         custom_option=HEADLESS_GEOMETRY_CUSTOM_SAMPLING_OPTION,
@@ -444,6 +508,7 @@ def _build_headless_geometry_mosaic_params(
 ) -> tuple[dict[str, object], int]:
     """Build the deterministic runtime mosaic payload used by geometry fitting."""
 
+    diffraction = _load_simulation_modules().diffraction
     fwhm2sigma = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
     sample_count = (
         max(int(sample_count_override), 1)
@@ -473,7 +538,7 @@ def _build_headless_geometry_mosaic_params(
         else _saved_state_var_value(
             saved_variables,
             "solve_q_steps_var",
-            beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+            beam_config.get("solve_q_steps", diffraction.DEFAULT_SOLVE_Q_STEPS),
         )
     )
     try:
@@ -482,7 +547,7 @@ def _build_headless_geometry_mosaic_params(
         solve_q_steps_value = _saved_state_int(
             saved_variables,
             "solve_q_steps_var",
-            beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+            beam_config.get("solve_q_steps", diffraction.DEFAULT_SOLVE_Q_STEPS),
         )
     solve_q_steps = int(
         np.clip(
@@ -496,7 +561,7 @@ def _build_headless_geometry_mosaic_params(
             _saved_state_float(
                 saved_variables,
                 "solve_q_rel_tol_var",
-                beam_config.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+                beam_config.get("solve_q_rel_tol", diffraction.DEFAULT_SOLVE_Q_REL_TOL),
             ),
             1.0e-6,
             5.0e-2,
@@ -506,7 +571,7 @@ def _build_headless_geometry_mosaic_params(
         _saved_state_var_value(
             saved_variables,
             "solve_q_mode_var",
-            beam_config.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE),
+            beam_config.get("solve_q_mode", diffraction.DEFAULT_SOLVE_Q_MODE),
         )
     )
 
@@ -561,7 +626,7 @@ def run_headless_geometry_fit(
     if not isinstance(state, Mapping):
         raise ValueError("GUI state payload is missing a valid 'state' object.")
     if not run_mosaic_shape_fit:
-        shared_result = shared_headless_geometry_fit.run_headless_geometry_fit(
+        shared_result = _load_shared_headless_geometry_fit().run_headless_geometry_fit(
             copy.deepcopy(dict(state)),
             state_path=source_path,
             downloads_dir=output_dir,
@@ -580,6 +645,36 @@ def run_headless_geometry_fit(
         if shared_result.rms_px is not None:
             report["rms_px"] = float(shared_result.rms_px)
         return dict(shared_result.state), report
+    geometry_modules = _load_cli_geometry_modules()
+    gui_background = geometry_modules.gui_background
+    gui_background_theta = geometry_modules.gui_background_theta
+    gui_controllers = geometry_modules.gui_controllers
+    gui_geometry_fit = geometry_modules.gui_geometry_fit
+    gui_geometry_overlay = geometry_modules.gui_geometry_overlay
+    gui_geometry_q_group_manager = geometry_modules.gui_geometry_q_group_manager
+    gui_manual_geometry = geometry_modules.gui_manual_geometry
+    gui_structure_model = geometry_modules.gui_structure_model
+    AtomSiteOverrideState = geometry_modules.AtomSiteOverrideState
+    SimulationRuntimeState = geometry_modules.SimulationRuntimeState
+
+    optimization = _load_fitting_optimization()
+    fit_geometry_parameters = optimization.fit_geometry_parameters
+    fit_mosaic_shape_parameters = optimization.fit_mosaic_shape_parameters
+    simulate_and_compare_hkl = optimization.simulate_and_compare_hkl
+
+    stacking_fault = _load_stacking_fault_module()
+    diffraction_tools = _load_diffraction_tools_module()
+    detector_two_theta_max = diffraction_tools.detector_two_theta_max
+
+    simulation_diffraction = _load_simulation_modules().diffraction
+    hit_tables_to_max_positions = simulation_diffraction.hit_tables_to_max_positions
+    process_peaks_parallel = simulation_diffraction.process_peaks_parallel
+
+    tools_module = _load_tools_module()
+    build_intensity_dataframes = tools_module.build_intensity_dataframes
+    inject_fractional_reflections = tools_module.inject_fractional_reflections
+    miller_generator = tools_module.miller_generator
+
     updated_state = copy.deepcopy(dict(state))
     saved_variables = _saved_state_section(updated_state, "variables")
     saved_lists = _saved_state_section(updated_state, "dynamic_lists")
@@ -747,10 +842,23 @@ def run_headless_geometry_fit(
         "w1": _saved_state_float(saved_variables, "w1_var", w_defaults[1]),
         "w2": _saved_state_float(saved_variables, "w2_var", w_defaults[2]),
         "iodine_z": _saved_state_float(saved_variables, "iodine_z_var", 0.0),
-        "phi_l_divisor": _saved_state_float(saved_variables, "phi_l_divisor_var", ht_cfg.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR)),
+        "phi_l_divisor": _saved_state_float(
+            saved_variables,
+            "phi_l_divisor_var",
+            ht_cfg.get("phi_l_divisor", stacking_fault.DEFAULT_PHI_L_DIVISOR),
+        ),
         "finite_stack": _saved_state_bool(saved_variables, "finite_stack_var", bool(ht_cfg.get("finite_stack", True))),
         "stack_layers": max(1, _saved_state_int(saved_variables, "stack_layers_var", ht_cfg.get("stack_layers", 50))),
-        "phase_delta_expression": str(_saved_state_var_value(saved_variables, "phase_delta_expr_var", ht_cfg.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION))),
+        "phase_delta_expression": str(
+            _saved_state_var_value(
+                saved_variables,
+                "phase_delta_expr_var",
+                ht_cfg.get(
+                    "phase_delta_expression",
+                    stacking_fault.DEFAULT_PHASE_DELTA_EXPRESSION,
+                ),
+            )
+        ),
     }
 
     center = np.array([float(center_x_var.get()), float(center_y_var.get())], dtype=np.float64)
@@ -817,8 +925,21 @@ def run_headless_geometry_fit(
         c_axis=float(c_var.get()),
         finite_stack_flag=_saved_state_bool(saved_variables, "finite_stack_var", bool(ht_cfg.get("finite_stack", True))),
         layers=max(1, _saved_state_int(saved_variables, "stack_layers_var", ht_cfg.get("stack_layers", 50))),
-        phase_delta_expression_current=str(_saved_state_var_value(saved_variables, "phase_delta_expr_var", ht_cfg.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION))),
-        phi_l_divisor_current=_saved_state_float(saved_variables, "phi_l_divisor_var", ht_cfg.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR)),
+        phase_delta_expression_current=str(
+            _saved_state_var_value(
+                saved_variables,
+                "phase_delta_expr_var",
+                ht_cfg.get(
+                    "phase_delta_expression",
+                    stacking_fault.DEFAULT_PHASE_DELTA_EXPRESSION,
+                ),
+            )
+        ),
+        phi_l_divisor_current=_saved_state_float(
+            saved_variables,
+            "phi_l_divisor_var",
+            ht_cfg.get("phi_l_divisor", stacking_fault.DEFAULT_PHI_L_DIVISOR),
+        ),
         atom_site_values=atom_site_values,
         iodine_z_current=float(iodine_z_current),
         atom_site_override_state=atom_site_override_state,
@@ -1613,19 +1734,19 @@ def _cmd_gui(args: argparse.Namespace) -> None:
     """Launch the Tkinter GUI through the packaged launcher."""
 
     write_excel_flag = None if not args.no_excel else False
-    launcher.launch_simulation_gui(write_excel_flag=write_excel_flag)
+    _load_launcher().launch_simulation_gui(write_excel_flag=write_excel_flag)
 
 
 def _cmd_calibrant(args: argparse.Namespace) -> None:
     """Launch the hBN calibrant fitter GUI through the packaged launcher."""
 
-    launcher.launch_calibrant_gui(bundle=args.bundle)
+    _load_launcher().launch_calibrant_gui(bundle=args.bundle)
 
 
 def _cmd_mosaic(_args: argparse.Namespace) -> None:
     """Launch the installed mosaic_sim visualizer."""
 
-    launcher.launch_mosaic_visualizer()
+    _load_launcher().launch_mosaic_visualizer()
 
 
 def _prompt_startup_mode() -> str | None:
@@ -1662,6 +1783,14 @@ def build_headless_simulation_defaults(
 ) -> HeadlessSimulationDefaults:
     """Resolve config-driven defaults and typed parameter objects for the CLI."""
 
+    diffraction_tools = _load_diffraction_tools_module()
+    stacking_fault = _load_stacking_fault_module()
+    simulation_types = _load_simulation_modules().types
+    detector_two_theta_max = diffraction_tools.detector_two_theta_max
+    DEFAULT_PIXEL_SIZE_M = diffraction_tools.DEFAULT_PIXEL_SIZE_M
+    DetectorGeometry = simulation_types.DetectorGeometry
+    MosaicParams = simulation_types.MosaicParams
+    DebyeWallerParams = simulation_types.DebyeWallerParams
     inst = get_instrument_config().get("instrument", {})
     det_cfg = inst.get("detector", {})
     geom_cfg = inst.get("geometry_defaults", {})
@@ -1735,18 +1864,18 @@ def build_headless_simulation_defaults(
 
     finite_stack_flag = bool(ht_cfg.get("finite_stack", True))
     stack_layers_count = int(max(1, float(ht_cfg.get("stack_layers", 50))))
-    phase_delta_expression = validate_phase_delta_expression(
-        normalize_phase_delta_expression(
+    phase_delta_expression = stacking_fault.validate_phase_delta_expression(
+        stacking_fault.normalize_phase_delta_expression(
             ht_cfg.get(
                 "phase_delta_expression",
-                DEFAULT_PHASE_DELTA_EXPRESSION,
+                stacking_fault.DEFAULT_PHASE_DELTA_EXPRESSION,
             ),
-            fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
+            fallback=stacking_fault.DEFAULT_PHASE_DELTA_EXPRESSION,
         )
     )
-    phi_l_divisor = normalize_phi_l_divisor(
-        ht_cfg.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR),
-        fallback=DEFAULT_PHI_L_DIVISOR,
+    phi_l_divisor = stacking_fault.normalize_phi_l_divisor(
+        ht_cfg.get("phi_l_divisor", stacking_fault.DEFAULT_PHI_L_DIVISOR),
+        fallback=stacking_fault.DEFAULT_PHI_L_DIVISOR,
     )
 
     fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
@@ -1877,6 +2006,7 @@ def build_headless_beam_samples(
 ) -> BeamSamples:
     """Build Monte Carlo beam samples and wavelength-dependent optical constants."""
 
+    BeamSamples = _load_simulation_modules().types.BeamSamples
     (
         beam_x_array,
         beam_y_array,
@@ -1911,6 +2041,7 @@ def build_headless_simulation_request(
 ) -> SimulationRequest:
     """Build the typed simulation request consumed by the engine."""
 
+    SimulationRequest = _load_simulation_modules().types.SimulationRequest
     beam = (
         build_headless_beam_samples(defaults)
         if beam_samples is None
