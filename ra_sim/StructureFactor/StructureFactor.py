@@ -1,33 +1,64 @@
-"""Calculations related to X-ray structure factors."""
+"""Legacy Bi2Se3-specific X-ray structure-factor helpers."""
 
 import numpy as np
 from numba import njit
 
-# Function to calculate the structure factor
-def calculate_structure_factor(h, k, l, atoms, data, occ):
+_SUPPORTED_BI2SE3_LABELS = ("Bi", "Se1", "Se2")
+
+
+def calculate_bi2se3_structure_factor(h, k, l, atoms, data, occ):
+    """Return one legacy Bi2Se3 structure-factor intensity.
+
+    This helper is intentionally material-specific. It preserves the older
+    ``sqrt(h^2 + k^2 + l^2)`` Q surrogate only for the legacy Bi2Se3 path.
+    """
+
+    if len(occ) != 3:
+        raise ValueError(
+            f"Bi2Se3 structure factor requires exactly 3 occupancies for "
+            f"{_SUPPORTED_BI2SE3_LABELS}; got {len(occ)}."
+        )
+    if len(data) != 2:
+        raise ValueError(
+            "Bi2Se3 structure factor requires exactly 2 scattering-factor "
+            "callables: [Bi, Se]."
+        )
+    if not all(callable(fn) for fn in data):
+        raise ValueError(
+            "Bi2Se3 structure factor requires scattering-factor callables for [Bi, Se]."
+        )
+
+    atoms = tuple(atoms)
+    atom_labels = [name for name, *_coords in atoms]
+    unsupported_labels = sorted(
+        {str(label) for label in atom_labels if label not in _SUPPORTED_BI2SE3_LABELS}
+    )
+    if unsupported_labels:
+        raise ValueError(
+            "Unsupported Bi2Se3 atom labels: "
+            f"{unsupported_labels}. Supported labels: {_SUPPORTED_BI2SE3_LABELS}."
+        )
+
     F_hkl = 0 + 0j  # Initialize complex number for structure factor
 
-    # Substitute q into equation data[0] and data[1]
-    f_Bi = data[0](np.sqrt(h**2 + k**2 + l**2)) - 4.23706 + 8.83640j
-    f_Se = data[1](np.sqrt(h**2 + k**2 + l**2)) - 0.787865 + 1.13462j
+    q_magnitude = np.sqrt(h**2 + k**2 + l**2)
+
+    # Substitute legacy q surrogate into Bi and Se scattering-factor callables.
+    f_bi = data[0](q_magnitude) - 4.23706 + 8.83640j
+    f_se = data[1](q_magnitude) - 0.787865 + 1.13462j
 
     # Precompute 2j * np.pi
     two_pi_j = 2j * np.pi
 
-    # Precompute the occupancies multipliers
-    f_Bi *= occ[0]
-    f_Se *= occ[1]
-    f_Se2 = f_Se * occ[2]
+    label_to_factor = {
+        "Bi": f_bi * occ[0],
+        "Se1": f_se * occ[1],
+        "Se2": f_se * occ[2],
+    }
 
     # Calculate structure factor for each atom
     for name, x, y, z in atoms:
-        if name == 'Bi':
-            f = f_Bi
-        elif name == 'Se1':
-            f = f_Se
-        elif name == 'Se2':
-            f = f_Se2
-
+        f = label_to_factor[name]
         # Calculate phase_in more efficiently
         phase_in = two_pi_j * (h * x + k * y + l * z)
         F_hkl += f * np.exp(phase_in)
