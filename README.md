@@ -138,8 +138,12 @@ python -m pip install --group dev -e .
 
 After install, these console scripts are available:
 
-- `ra-sim` for the shared launcher and headless CLI
+- `ra-sim` for the shared CLI entry point (`ra_sim.cli:main`)
 - `ra-sim-dev` for bootstrap, checks, tests, and lockfile refreshes
+
+The module entry point stays distinct:
+
+- `python -m ra_sim` routes through the lightweight launcher (`ra_sim.__main__` -> `ra_sim.launcher`)
 
 ### 3. Create Local Config Files
 
@@ -170,11 +174,23 @@ At minimum, update the local config with paths to your experiment files:
 
 ### 5. Launch RA-SIM
 
-Interactive launcher dialog:
+Lightweight launcher and startup chooser:
 
 ```bash
 python -m ra_sim
 ```
+
+With no subcommand, this opens the GUI startup chooser through the lightweight
+launcher.
+
+Shared CLI entry point:
+
+```bash
+ra-sim
+```
+
+With no arguments, `ra-sim` prompts in the terminal for a startup mode instead
+of opening the lightweight launcher.
 
 Direct simulation GUI:
 
@@ -182,11 +198,14 @@ Direct simulation GUI:
 python -m ra_sim gui
 ```
 
-Installed-script equivalent:
+Shared CLI equivalent:
 
 ```bash
 ra-sim gui
 ```
+
+On Windows, `run_ra_sim.bat` is a thin wrapper around `python -m ra_sim` and
+falls back to `py -m ra_sim`, so it follows the lightweight launcher path.
 
 ## Configuration
 
@@ -279,10 +298,13 @@ RA-SIM has two closely related command surfaces:
 
 - `python -m ra_sim`
   - lightweight launcher first
-  - opens the startup dialog when called without subcommands
+  - opens the GUI startup chooser when called without subcommands
   - still forwards non-launcher subcommands like `simulate` and `hbn-fit` into the shared CLI
-- `ra-sim` or `python -m ra_sim.cli`
-  - exposes the full shared CLI directly
+- `ra-sim`
+  - installed shared CLI entry point from `pyproject.toml`
+  - with no args, prompts in the terminal instead of opening the GUI launcher
+- `python -m ra_sim.cli`
+  - exposes the same shared CLI directly
 
 Because of that split:
 
@@ -292,9 +314,9 @@ Because of that split:
 
 ### Common Entry Points
 
-| Task | `python -m ra_sim ...` | Installed script |
+| Task | `python -m ra_sim ...` | Shared CLI / wrapper |
 | --- | --- | --- |
-| Startup chooser | `python -m ra_sim` | `ra-sim` |
+| Startup chooser | `python -m ra_sim` | `run_ra_sim.bat` (Windows wrapper) |
 | Main GUI | `python -m ra_sim gui` | `ra-sim gui` |
 | Calibrant GUI | `python -m ra_sim calibrant --bundle bundle.npz` | `ra-sim calibrant --bundle bundle.npz` |
 | Mosaic visualizer | `python -m ra_sim mosaic` | `ra-sim mosaic` |
@@ -302,6 +324,9 @@ Because of that split:
 | Headless hBN fit | `python -m ra_sim hbn-fit --load-bundle` | `ra-sim hbn-fit --load-bundle` |
 | Headless geometry fit from saved GUI state | `python -m ra_sim fit-geometry state.json` | `ra-sim fit-geometry state.json` |
 | Headless geometry + mosaic-shape fit | `python -m ra_sim fit-mosaic-shape state.json` | `ra-sim fit-mosaic-shape state.json` |
+
+`run_ra_sim.bat` is only a Windows convenience wrapper for `python -m ra_sim`
+or `py -m ra_sim`; it is not the installed `ra-sim` console script.
 
 ### Typical Workflow
 
