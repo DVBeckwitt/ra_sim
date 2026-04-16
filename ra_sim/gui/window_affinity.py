@@ -12,6 +12,7 @@ from uuid import UUID
 
 HRESULT = ctypes.c_long
 HMONITOR = wintypes.HANDLE
+WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
 
 COINIT_APARTMENTTHREADED = 0x2
 CLSCTX_INPROC_SERVER = 0x1
@@ -31,9 +32,9 @@ class LaunchWindowContext:
 
 class _GUID(ctypes.Structure):
     _fields_ = [
-        ("Data1", wintypes.DWORD),
-        ("Data2", wintypes.WORD),
-        ("Data3", wintypes.WORD),
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
         ("Data4", ctypes.c_ubyte * 8),
     ]
 
@@ -67,7 +68,7 @@ class _IVirtualDesktopManagerVTable(ctypes.Structure):
     _fields_ = [
         (
             "QueryInterface",
-            ctypes.WINFUNCTYPE(
+            WINFUNCTYPE(
                 HRESULT,
                 ctypes.c_void_p,
                 ctypes.POINTER(_GUID),
@@ -76,21 +77,21 @@ class _IVirtualDesktopManagerVTable(ctypes.Structure):
         ),
         (
             "AddRef",
-            ctypes.WINFUNCTYPE(
+            WINFUNCTYPE(
                 wintypes.ULONG,
                 ctypes.c_void_p,
             ),
         ),
         (
             "Release",
-            ctypes.WINFUNCTYPE(
+            WINFUNCTYPE(
                 wintypes.ULONG,
                 ctypes.c_void_p,
             ),
         ),
         (
             "IsWindowOnCurrentVirtualDesktop",
-            ctypes.WINFUNCTYPE(
+            WINFUNCTYPE(
                 HRESULT,
                 ctypes.c_void_p,
                 wintypes.HWND,
@@ -99,7 +100,7 @@ class _IVirtualDesktopManagerVTable(ctypes.Structure):
         ),
         (
             "GetWindowDesktopId",
-            ctypes.WINFUNCTYPE(
+            WINFUNCTYPE(
                 HRESULT,
                 ctypes.c_void_p,
                 wintypes.HWND,
@@ -108,7 +109,7 @@ class _IVirtualDesktopManagerVTable(ctypes.Structure):
         ),
         (
             "MoveWindowToDesktop",
-            ctypes.WINFUNCTYPE(
+            WINFUNCTYPE(
                 HRESULT,
                 ctypes.c_void_p,
                 wintypes.HWND,

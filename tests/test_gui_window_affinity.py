@@ -56,6 +56,19 @@ def test_capture_launch_window_context_collects_desktop_and_monitor_metadata(
     )
 
 
+def test_capture_launch_window_context_returns_none_without_windows_calls(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(window_affinity.os, "name", "posix", raising=False)
+    monkeypatch.setattr(
+        window_affinity,
+        "_capture_launch_source_hwnd",
+        lambda: (_ for _ in ()).throw(AssertionError("should not query hwnd")),
+    )
+
+    assert window_affinity.capture_launch_window_context() is None
+
+
 def test_apply_window_launch_context_moves_window_and_centers_it_near_launcher(
     monkeypatch,
 ) -> None:
@@ -83,6 +96,33 @@ def test_apply_window_launch_context_moves_window_and_centers_it_near_launcher(
     assert window.updated is True
     assert moved == [(200, desktop_id)]
     assert window.geometry_text == "320x240+240+200"
+
+
+def test_apply_window_launch_context_returns_false_without_windows_calls(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(window_affinity.os, "name", "posix", raising=False)
+    monkeypatch.setattr(
+        window_affinity,
+        "_resolve_tk_window_hwnd",
+        lambda obj: (_ for _ in ()).throw(AssertionError("should not resolve hwnd")),
+    )
+    monkeypatch.setattr(
+        window_affinity,
+        "_move_window_to_desktop",
+        lambda hwnd, desktop: (_ for _ in ()).throw(AssertionError("should not move window")),
+    )
+    monkeypatch.setattr(
+        window_affinity,
+        "_build_window_geometry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not build geometry")),
+    )
+
+    window = _FakeWindow()
+
+    assert window_affinity.apply_window_launch_context(window) is False
+    assert window.updated is False
+    assert window.geometry_text is None
 
 
 def test_apply_window_launch_context_clamps_geometry_to_launcher_monitor(
