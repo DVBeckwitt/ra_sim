@@ -4,6 +4,9 @@ import numpy as np
 from numba import njit
 
 _SUPPORTED_BI2SE3_LABELS = ("Bi", "Se1", "Se2")
+_ANGSTROMS_PER_NM = 10.0
+_NOMINAL_FILM_THICKNESS_ANGSTROM = 500.0
+_NOMINAL_FILM_THICKNESS_NM = _NOMINAL_FILM_THICKNESS_ANGSTROM / _ANGSTROMS_PER_NM
 
 
 def calculate_bi2se3_structure_factor(h, k, l, atoms, data, occ):
@@ -65,27 +68,31 @@ def calculate_bi2se3_structure_factor(h, k, l, atoms, data, occ):
 
     return np.abs(F_hkl)**2
 
+
+@njit
+def _nominal_layer_count_from_spacing_nm(c_nm):
+    if not np.isfinite(c_nm) or c_nm <= 0.0:
+        raise ValueError("c_nm must be positive and finite.")
+    return max(1, int(np.round(_NOMINAL_FILM_THICKNESS_NM / c_nm)))
+
+
 @njit
 def attenuation(c_nm, qz_real, qz_imag):
-    """
-    Compute the finite-layer interference factor with an additional surface roughness damping.
-    
+    """Compute finite-layer interference factor for a nominal 500 Å film.
+
     Parameters:
       c_nm    : layer spacing in nm
       qz_real : real part of qz (in nm^-1)
       qz_imag : imaginary part of qz (in nm^-1)
-      sigma   : roughness (nm)
-      
+
     Returns:
-      The attenuated interference factor (float).
-      
-    Note:
-      Thickness is given in Ångströms. Make sure c_nm is in nm.
+      The finite-stack interference factor for a 50.0 nm nominal thickness.
+
+    Raises:
+      ValueError : if c_nm is not positive and finite
     """
-    Thickness = 500.0  # Example thickness in Ångströms
-    # Compute number of layers (N)
-    N = np.round(Thickness / c_nm)
-    
+    N = _nominal_layer_count_from_spacing_nm(c_nm)
+
     # Create complex qz using complex(0,1)
     qz = (qz_real + complex(0,1)*qz_imag)
     # Compute phase: phi = qz * c_nm
@@ -101,4 +108,4 @@ def attenuation(c_nm, qz_real, qz_imag):
 
     F = (abs(ratio))**2
 
-    return F 
+    return F

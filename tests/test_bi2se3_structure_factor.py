@@ -3,6 +3,10 @@ import math
 import pytest
 
 from ra_sim.StructureFactor import calculate_bi2se3_structure_factor
+from ra_sim.StructureFactor.StructureFactor import (
+    _nominal_layer_count_from_spacing_nm,
+    attenuation,
+)
 
 
 def test_calculate_bi2se3_structure_factor_rejects_unsupported_labels_up_front():
@@ -68,6 +72,42 @@ def test_calculate_bi2se3_structure_factor_supports_iterator_atoms():
     actual = calculate_bi2se3_structure_factor(1, 1, 1, iter(atoms), data, occ)
 
     assert math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def test_attenuation_uses_50_nm_nominal_thickness_for_500_angstrom_film():
+    c_nm = 0.625
+    layer_count = _nominal_layer_count_from_spacing_nm(c_nm)
+
+    assert layer_count == 80
+    assert layer_count != 800
+    assert math.isclose(
+        attenuation(c_nm, 0.0, 0.0),
+        float(layer_count**2),
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+
+
+def test_attenuation_clamps_large_spacing_to_one_layer():
+    c_nm = 100.0
+    layer_count = _nominal_layer_count_from_spacing_nm(c_nm)
+
+    assert layer_count == 1
+    assert math.isclose(
+        attenuation(c_nm, 0.0, 0.0),
+        1.0,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("c_nm", (0.0, -0.625, float("nan"), float("inf")))
+def test_attenuation_rejects_non_physical_layer_spacing(c_nm):
+    with pytest.raises(ValueError, match="positive and finite"):
+        _nominal_layer_count_from_spacing_nm(c_nm)
+
+    with pytest.raises(ValueError, match="positive and finite"):
+        attenuation(c_nm, 0.0, 0.0)
 
 
 @pytest.mark.parametrize("occ", ([1.0, 1.0], [1.0, 1.0, 1.0, 1.0]))
