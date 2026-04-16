@@ -2,6 +2,7 @@ import ast
 import contextlib
 import importlib
 import json
+import os
 import py_compile
 import subprocess
 import sys
@@ -141,6 +142,46 @@ def test_runtime_impl_wrapper_import_is_lazy() -> None:
             sys.modules[PACKAGE_RUNTIME_IMPL_MODULE_NAME] = previous_wrapper
         if previous_session is not None:
             sys.modules["ra_sim.gui._runtime.runtime_session"] = previous_session
+
+
+def test_runtime_session_import_stays_headless_until_tk_canvas_is_needed() -> None:
+    script = """
+import importlib
+import json
+import sys
+
+sys.modules.pop("matplotlib.backends.backend_tkagg", None)
+sys.modules.pop("ra_sim.gui._runtime.runtime_session", None)
+
+runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+import matplotlib
+
+print(
+    json.dumps(
+        {
+            "backend": matplotlib.get_backend(),
+            "tk_backend_loaded": "matplotlib.backends.backend_tkagg" in sys.modules,
+            "tk_canvas_cache_initialized": runtime_session._TK_FIGURE_CANVAS_CLS is not None,
+        }
+    )
+)
+"""
+    env = os.environ.copy()
+    env["MPLBACKEND"] = "Agg"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        text=True,
+        env=env,
+    )
+    payload = json.loads(result.stdout.strip())
+
+    assert payload["backend"].lower() == "agg"
+    assert payload["tk_backend_loaded"] is False
+    assert payload["tk_canvas_cache_initialized"] is False
 
 
 def test_runtime_session_defers_scipy_gui_modules_until_first_use() -> None:

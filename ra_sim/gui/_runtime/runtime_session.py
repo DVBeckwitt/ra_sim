@@ -32,11 +32,6 @@ from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 import matplotlib
-
-# Force TkAgg before importing figure/canvas helpers.
-matplotlib.use("TkAgg")
-
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import ListedColormap, LogNorm, Normalize
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
@@ -255,6 +250,7 @@ if (
 
 _AZIMUTHAL_INTEGRATOR_CLS = None
 # SciPy-backed GUI helpers are imported lazily to keep GUI startup responsive.
+_TK_FIGURE_CANVAS_CLS = None
 _ANALYSIS_PEAK_TOOLS_MODULE = None
 _ORDERED_STRUCTURE_FIT_MODULE = None
 _ANALYSIS_PEAK_PROFILE_GAUSSIAN = "gaussian"
@@ -268,6 +264,17 @@ def _get_azimuthal_integrator_cls():
     if _AZIMUTHAL_INTEGRATOR_CLS is None:
         _AZIMUTHAL_INTEGRATOR_CLS = FastAzimuthalIntegrator
     return _AZIMUTHAL_INTEGRATOR_CLS
+
+
+def _get_tk_figure_canvas_cls():
+    global _TK_FIGURE_CANVAS_CLS
+
+    if _TK_FIGURE_CANVAS_CLS is None:
+        matplotlib.use("TkAgg")
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+        _TK_FIGURE_CANVAS_CLS = FigureCanvasTkAgg
+    return _TK_FIGURE_CANVAS_CLS
 
 
 def _get_analysis_peak_tools_module():
@@ -2122,10 +2129,11 @@ def _initialize_runtime_plot_block_01() -> None:
     global fig, ax, matplotlib_canvas, matplotlib_canvas_widget, PRIMARY_VIEWPORT_BACKEND, canvas, primary_viewport_backend, FAST_VIEWER_DRAW_INTERVAL_S
     global FAST_VIEWER_STARTUP_ENABLED, FAST_VIEWER_EMBEDDED_SURFACE_ENABLED, global_image_buffer, image_display, background_display, highlight_cmap, integration_region_overlay, _initial_simulation_loading_overlay_artists
 
+    figure_canvas_cls = _get_tk_figure_canvas_cls()
     fig = Figure(figsize=(8, 8))
     ax = fig.add_subplot(111)
     ax.set_aspect("auto")
-    matplotlib_canvas = FigureCanvasTkAgg(
+    matplotlib_canvas = figure_canvas_cls(
         fig,
         master=app_shell_view_state.canvas_frame,
     )
@@ -7838,7 +7846,8 @@ def _mount_analysis_figure(parent) -> None:
             pass
         canvas_1d = None
 
-    canvas_1d = FigureCanvasTkAgg(
+    figure_canvas_cls = _get_tk_figure_canvas_cls()
+    canvas_1d = figure_canvas_cls(
         fig_1d,
         master=parent,
     )
