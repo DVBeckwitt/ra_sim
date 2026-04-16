@@ -14,15 +14,9 @@ import numba
 
 from ra_sim.config import get_material_config
 
-try:  # pragma: no cover - optional dependency used at runtime
-    import Dans_Diffraction as dif
-except Exception:  # pragma: no cover - optional dependency
-    dif = None
-
-try:  # pragma: no cover - optional dependency used at runtime
-    import xraydb
-except Exception:  # pragma: no cover - optional dependency
-    xraydb = None
+_OPTIONAL_IMPORT_UNSET = object()
+_DANS_DIFFRACTION_MODULE = _OPTIONAL_IMPORT_UNSET
+_XRAYDB_MODULE = _OPTIONAL_IMPORT_UNSET
 
 # ``materials.yaml`` is discovered through :mod:`ra_sim.config` so that the
 # same configuration mechanism can be used by both the GUI and command line
@@ -51,6 +45,32 @@ _TOTAL_ATOMIC_NUMBER = float(np.dot(_STOICHIOMETRY, _ATOMIC_NUMBERS))
 _WEIGHTED_MASS_ATTENUATION = float(np.dot(_MASS_FRACTIONS, _MASS_ATTENUATION))
 _HC_ANGSTROM_EV = 12398.419843320026
 _ELEMENT_SYMBOL_RE = re.compile(r"[A-Z][a-z]?")
+
+
+def _get_dans_diffraction_module():
+    global _DANS_DIFFRACTION_MODULE
+
+    if _DANS_DIFFRACTION_MODULE is _OPTIONAL_IMPORT_UNSET:
+        try:  # pragma: no cover - optional dependency used at runtime
+            import Dans_Diffraction as dans_diffraction_module
+        except Exception:  # pragma: no cover - optional dependency
+            return None
+        else:
+            _DANS_DIFFRACTION_MODULE = dans_diffraction_module
+    return _DANS_DIFFRACTION_MODULE
+
+
+def _get_xraydb_module():
+    global _XRAYDB_MODULE
+
+    if _XRAYDB_MODULE is _OPTIONAL_IMPORT_UNSET:
+        try:  # pragma: no cover - optional dependency used at runtime
+            import xraydb as xraydb_module
+        except Exception:  # pragma: no cover - optional dependency
+            return None
+        else:
+            _XRAYDB_MODULE = xraydb_module
+    return _XRAYDB_MODULE
 
 
 # Function to calculate d-spacing for hexagonal crystals
@@ -199,7 +219,6 @@ def resolve_canonical_branch(
             return int(legacy_branch), "source_peak_index", None
 
     return None, None, None
-
 @njit
 def IoR(lambda_, rho_e, r, mu):
     # delta = (lambda^2 * rho_e * r_e)/(2 pi)
@@ -324,6 +343,8 @@ def _material_optics_properties(material: str | None = None) -> dict[str, object
 
 @lru_cache(maxsize=32)
 def _cif_optics_properties(cif_path: str) -> dict[str, object]:
+    dif = _get_dans_diffraction_module()
+    xraydb = _get_xraydb_module()
     if dif is None or xraydb is None:
         raise RuntimeError("CIF-based optics require Dans_Diffraction and xraydb.")
 
@@ -390,6 +411,7 @@ def _cif_optics_properties(cif_path: str) -> dict[str, object]:
 
 
 def _weighted_mass_attenuation_from_cif(props: dict[str, object], energy_kev) -> np.ndarray:
+    xraydb = _get_xraydb_module()
     if xraydb is None:
         raise RuntimeError("CIF-based optics require xraydb.")
     weighted = np.zeros_like(np.asarray(energy_kev, dtype=np.float64), dtype=np.float64)

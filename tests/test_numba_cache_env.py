@@ -1,8 +1,13 @@
 import importlib
+import importlib.abc
 import os
 import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
+
+import numpy as np
+import pytest
 
 
 def _snapshot_ra_sim_modules() -> dict[str, Any]:
@@ -133,4 +138,215 @@ def test_cli_import_keeps_geometry_and_simulation_stack_lazy(monkeypatch, tmp_pa
         assert c_val == 10.0
         _assert_cli_heavy_modules_unloaded()
     finally:
+        _restore_modules(previous)
+
+
+def test_runtime_session_import_stays_helper_only_without_optional_cif_deps(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    class _BlockCifFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "CifFile":
+                raise ModuleNotFoundError("No module named 'CifFile'")
+            if fullname == "Dans_Diffraction":
+                raise ModuleNotFoundError("No module named 'Dans_Diffraction'")
+            return None
+
+    previous = _snapshot_ra_sim_modules()
+    finder = _BlockCifFinder()
+    cif_path = Path(__file__).resolve().parent / "local_test.cif"
+
+    try:
+        _clear_ra_sim_modules()
+        sys.modules.pop("CifFile", None)
+        sys.modules.pop("Dans_Diffraction", None)
+        sys.meta_path.insert(0, finder)
+
+        runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+        assert runtime_session._STRUCTURE_MODEL_MODULE is None
+        assert "ra_sim.gui.structure_model" not in sys.modules
+        assert runtime_session.parse_cif_num("2.5(1)") == 2.5
+        assert runtime_session._normalize_occupancy_label("", 0) == "site_1"
+        labels, expanded_map = runtime_session._extract_occupancy_site_metadata(
+            {"_atom_site_label": ["I1", "Nb1", "I1"]},
+            "unused.cif",
+        )
+        assert labels == ["I1", "Nb1"]
+        assert expanded_map == []
+        rows = runtime_session._extract_atom_site_fractional_metadata(
+            {
+                "_atom_site_label": ["I", "I"],
+                "_atom_site_fract_x": ["1/2", "0.125(2)"],
+                "_atom_site_fract_y": ["0.25", "0.5"],
+                "_atom_site_fract_z": ["0.0", "1/4"],
+            }
+        )
+        assert [row["label"] for row in rows] == ["I #1", "I #2"]
+        assert rows[0]["x"] == 0.5
+        assert rows[1]["z"] == 0.25
+        assert runtime_session._STRUCTURE_MODEL_MODULE is not None
+        assert "ra_sim.gui.structure_model" in sys.modules
+
+        with pytest.raises(ModuleNotFoundError, match="CifFile"):
+            runtime_session._read_cif_block(str(cif_path))
+
+        assert runtime_session._STRUCTURE_MODEL_MODULE is not None
+        assert "ra_sim.gui.structure_model" in sys.modules
+    finally:
+        if finder in sys.meta_path:
+            sys.meta_path.remove(finder)
+        _restore_modules(previous)
+
+
+def test_structure_model_import_keeps_pure_helpers_available_without_optional_cif_deps(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    class _BlockCifFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "CifFile":
+                raise ModuleNotFoundError("No module named 'CifFile'")
+            if fullname == "Dans_Diffraction":
+                raise ModuleNotFoundError("No module named 'Dans_Diffraction'")
+            return None
+
+    previous = _snapshot_ra_sim_modules()
+    finder = _BlockCifFinder()
+    cif_path = Path(__file__).resolve().parent / "local_test.cif"
+
+    try:
+        _clear_ra_sim_modules()
+        sys.modules.pop("CifFile", None)
+        sys.modules.pop("Dans_Diffraction", None)
+        sys.meta_path.insert(0, finder)
+
+        structure_model = importlib.import_module("ra_sim.gui.structure_model")
+
+        assert structure_model.parse_cif_num("2.5(1)") == 2.5
+        labels, expanded_map = structure_model.extract_occupancy_site_metadata(
+            {"_atom_site_label": ["I1", "Nb1", "I1"]},
+            "unused.cif",
+        )
+        assert labels == ["I1", "Nb1"]
+        assert expanded_map == []
+        rows = structure_model.extract_atom_site_fractional_metadata(
+            {
+                "_atom_site_label": ["I", "I"],
+                "_atom_site_fract_x": ["1/2", "0.125(2)"],
+                "_atom_site_fract_y": ["0.25", "0.5"],
+                "_atom_site_fract_z": ["0.0", "1/4"],
+            }
+        )
+        assert [row["label"] for row in rows] == ["I #1", "I #2"]
+        assert rows[0]["x"] == 0.5
+        assert rows[1]["z"] == 0.25
+
+        with pytest.raises(ModuleNotFoundError, match="Dans_Diffraction"):
+            structure_model.extract_occupancy_site_metadata(
+                {"_atom_site_label": ["I1", "Nb1", "I1"]},
+                "unused.cif",
+                expand_structure=True,
+            )
+
+        with pytest.raises(ModuleNotFoundError, match="CifFile"):
+            structure_model._read_cif_block(str(cif_path))
+    finally:
+        if finder in sys.meta_path:
+            sys.meta_path.remove(finder)
+        _restore_modules(previous)
+
+
+def test_calculations_optional_optics_imports_retry_after_late_dependency_availability(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    class _BlockOptionalOpticsFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "Dans_Diffraction":
+                raise ModuleNotFoundError("No module named 'Dans_Diffraction'")
+            if fullname == "xraydb":
+                raise ModuleNotFoundError("No module named 'xraydb'")
+            return None
+
+    previous = _snapshot_ra_sim_modules()
+    finder = _BlockOptionalOpticsFinder()
+
+    try:
+        _clear_ra_sim_modules()
+        sys.modules.pop("Dans_Diffraction", None)
+        sys.modules.pop("xraydb", None)
+        sys.meta_path.insert(0, finder)
+
+        calculations = importlib.import_module("ra_sim.utils.calculations")
+
+        assert "Dans_Diffraction" not in sys.modules
+        assert "xraydb" not in sys.modules
+        assert calculations.d_spacing(1, 0, 0, 2.0, 3.0) == 1.7320508075688774
+        assert calculations._get_dans_diffraction_module() is None
+        assert calculations._DANS_DIFFRACTION_MODULE is calculations._OPTIONAL_IMPORT_UNSET
+        assert calculations._get_xraydb_module() is None
+        assert calculations._XRAYDB_MODULE is calculations._OPTIONAL_IMPORT_UNSET
+
+        with pytest.raises(
+            RuntimeError,
+            match="CIF-based optics require Dans_Diffraction and xraydb.",
+        ):
+            calculations._cif_optics_properties("unused.cif")
+
+        if finder in sys.meta_path:
+            sys.meta_path.remove(finder)
+
+        fake_dans_diffraction = ModuleType("Dans_Diffraction")
+
+        class _FakeCrystal:
+            def __init__(self, _path):
+                self.Symmetry = SimpleNamespace(generate_matrices=lambda: None)
+                self.Structure = SimpleNamespace(
+                    type=["I", "Nb"],
+                    occupancy=np.array([1.0, 1.0], dtype=np.float64),
+                )
+                self.Cell = SimpleNamespace(volume=lambda: 100.0)
+
+            def generate_structure(self):
+                return None
+
+        fake_dans_diffraction.Crystal = _FakeCrystal
+
+        fake_xraydb = ModuleType("xraydb")
+        fake_xraydb.atomic_mass = lambda symbol: {"I": 126.90447, "Nb": 92.90637}[symbol]
+        fake_xraydb.atomic_number = lambda symbol: {"I": 53.0, "Nb": 41.0}[symbol]
+
+        previous_dans = sys.modules.get("Dans_Diffraction")
+        previous_xraydb = sys.modules.get("xraydb")
+        with monkeypatch.context() as module_patch:
+            module_patch.setitem(sys.modules, "Dans_Diffraction", fake_dans_diffraction)
+            module_patch.setitem(sys.modules, "xraydb", fake_xraydb)
+
+            assert calculations._get_dans_diffraction_module() is fake_dans_diffraction
+            assert calculations._get_xraydb_module() is fake_xraydb
+
+            calculations._cif_optics_properties.cache_clear()
+            props = calculations._cif_optics_properties("unused.cif")
+
+            assert props["path"].endswith("unused.cif")
+            assert props["element_symbols"] == ("I", "Nb")
+            assert props["density_g_cm3"] > 0.0
+            assert props["electron_density_m3"] > 0.0
+
+        assert sys.modules.get("Dans_Diffraction") is previous_dans
+        assert sys.modules.get("xraydb") is previous_xraydb
+    finally:
+        if finder in sys.meta_path:
+            sys.meta_path.remove(finder)
         _restore_modules(previous)
