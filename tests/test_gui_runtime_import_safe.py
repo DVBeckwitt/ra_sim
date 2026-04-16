@@ -2728,10 +2728,18 @@ def test_runtime_impl_run_analysis_job_builds_q_space_from_detector_images() -> 
     helper_end = source.index("def _submit_async_analysis_job(", helper_start)
     helper_source = source[helper_start:helper_end]
 
-    assert "sim_q_space = _prepare_q_space_display_payload(\n        sim_image," in helper_source
-    assert "bg_q_space = _prepare_q_space_display_payload(\n        bg_array," in helper_source
+    assert 'q_space_requested = bool(job.get("q_space_requested", False))' in helper_source
+    assert "if q_space_requested:" in helper_source
+    assert "sim_q_space = _prepare_q_space_display_payload(\n            sim_image," in helper_source
+    assert "bg_q_space = _prepare_q_space_display_payload(\n            bg_array," in helper_source
     assert "sim_q_space = _prepare_q_space_display_payload(\n        sim_caked," not in helper_source
     assert "bg_q_space = _prepare_q_space_display_payload(\n        bg_caked," not in helper_source
+
+
+def test_runtime_impl_analysis_job_payload_tracks_q_space_intent() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '"q_space_requested": q_space_requested,' in source
 
 
 def test_runtime_impl_q_space_view_mode_is_not_gated_on_caked_toggle() -> None:
@@ -2767,9 +2775,21 @@ def test_run_analysis_job_can_emit_sim_q_space_without_caked_payload(monkeypatch
             "shape": tuple(np.asarray(image).shape),
         },
     )
-    monkeypatch.setattr(runtime_session, "_prepare_caked_display_payload", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(runtime_session, "_prepare_caked_intersection_cache", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(runtime_session, "temporary_numba_thread_limit", lambda *_args, **_kwargs: contextlib.nullcontext())
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
     monkeypatch.setattr(runtime_session, "default_reserved_cpu_worker_count", lambda: 1)
 
     result = runtime_session._run_analysis_job(
@@ -2802,6 +2822,7 @@ def test_run_analysis_job_can_emit_sim_q_space_without_caked_payload(monkeypatch
             "cor_angle_deg": 0.0,
             "zs": 0.0,
             "zb": 0.0,
+            "q_space_requested": True,
         }
     )
 
@@ -2812,6 +2833,177 @@ def test_run_analysis_job_can_emit_sim_q_space_without_caked_payload(monkeypatch
     assert np.asarray(result["sim_q_space"]["image"], dtype=float).size > 0
     assert np.asarray(result["sim_q_space"]["qr"], dtype=float).size == 48
     assert np.asarray(result["sim_q_space"]["qz"], dtype=float).size == 40
+
+
+def test_run_analysis_job_skips_q_space_for_caked_only_requests(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    q_space_calls: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _job: object())
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda image, _ai, **_kwargs: {
+            "shape": tuple(np.asarray(image).shape),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda res2, **_kwargs: (
+            None
+            if res2 is None
+            else {
+                "image": np.ones((2, 2), dtype=np.float64),
+                "radial": np.array([1.0, 2.0], dtype=np.float64),
+                "azimuth": np.array([-1.0, 1.0], dtype=np.float64),
+                "transform_bundle": None,
+                "detector_shape": None,
+                "extent": [0.0, 1.0, -1.0, 1.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_q_space_display_payload",
+        lambda detector_image, **_kwargs: q_space_calls.append(
+            None if detector_image is None else np.asarray(detector_image, dtype=np.float64)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(runtime_session, "default_reserved_cpu_worker_count", lambda: 1)
+
+    result = runtime_session._run_analysis_job(
+        {
+            "job_id": 8,
+            "signature": ("analysis", 2),
+            "epoch": 3,
+            "image": np.eye(8, dtype=np.float64),
+            "background_image": None,
+            "npt_rad": 48,
+            "npt_azim": 40,
+            "is_preview": False,
+            "cached_bg_res2": None,
+            "cached_bg_caked": None,
+            "intersection_cache": None,
+            "sim_cache_sig": ("sim", 2),
+            "bg_cache_sig": None,
+            "sim_caking_sig": ("cake", 2),
+            "bg_caking_sig": None,
+            "distance_m": 0.5,
+            "center": np.array([4.0, 4.0], dtype=np.float64),
+            "pixel_size_m": 1.0e-4,
+            "wavelength_m": 1.24e-10,
+            "gamma_deg": 0.0,
+            "Gamma_deg": 0.0,
+            "chi_deg": 0.0,
+            "psi_deg": 0.0,
+            "psi_z_deg": 0.0,
+            "theta_initial_deg": 0.0,
+            "cor_angle_deg": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+            "q_space_requested": False,
+        }
+    )
+
+    assert isinstance(result["sim_caked"], dict)
+    assert result["bg_caked"] is None
+    assert result["sim_q_space"] is None
+    assert result["bg_q_space"] is None
+    assert q_space_calls == []
+
+
+def test_run_analysis_job_caked_only_request_ignores_q_space_failure(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _job: object())
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda image, _ai, **_kwargs: {
+            "shape": tuple(np.asarray(image).shape),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda res2, **_kwargs: (
+            None
+            if res2 is None
+            else {
+                "image": np.ones((2, 2), dtype=np.float64),
+                "radial": np.array([1.0, 2.0], dtype=np.float64),
+                "azimuth": np.array([-1.0, 1.0], dtype=np.float64),
+                "transform_bundle": None,
+                "detector_shape": None,
+                "extent": [0.0, 1.0, -1.0, 1.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_q_space_display_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("q-space failure")),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(runtime_session, "default_reserved_cpu_worker_count", lambda: 1)
+
+    result = runtime_session._run_analysis_job(
+        {
+            "job_id": 9,
+            "signature": ("analysis", 3),
+            "epoch": 3,
+            "image": np.eye(8, dtype=np.float64),
+            "background_image": None,
+            "npt_rad": 48,
+            "npt_azim": 40,
+            "is_preview": False,
+            "cached_bg_res2": None,
+            "cached_bg_caked": None,
+            "intersection_cache": None,
+            "sim_cache_sig": ("sim", 3),
+            "bg_cache_sig": None,
+            "sim_caking_sig": ("cake", 3),
+            "bg_caking_sig": None,
+            "distance_m": 0.5,
+            "center": np.array([4.0, 4.0], dtype=np.float64),
+            "pixel_size_m": 1.0e-4,
+            "wavelength_m": 1.24e-10,
+            "gamma_deg": 0.0,
+            "Gamma_deg": 0.0,
+            "chi_deg": 0.0,
+            "psi_deg": 0.0,
+            "psi_z_deg": 0.0,
+            "theta_initial_deg": 0.0,
+            "cor_angle_deg": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+            "q_space_requested": False,
+        }
+    )
+
+    assert isinstance(result["sim_caked"], dict)
+    assert result["sim_q_space"] is None
+    assert result["bg_q_space"] is None
 
 
 def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(monkeypatch) -> None:
@@ -2858,8 +3050,16 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
             "extent": [0.0, 1.0, 0.0, 1.0],
         },
     )
-    monkeypatch.setattr(runtime_session, "_set_live_caked_transform_bundle", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(runtime_session, "_prepare_caked_intersection_cache", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_live_caked_transform_bundle",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda *_args, **_kwargs: (),
+    )
     monkeypatch.setattr(
         runtime_session,
         "_prepare_q_space_display_payload",
@@ -2901,6 +3101,7 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
     monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
     monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
     monkeypatch.setattr(runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0)
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
 
     restored = runtime_session._restore_caked_display_payload_from_cached_results(background_visible=True)
 
@@ -2908,6 +3109,72 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
     assert len(q_space_inputs) == 2
     np.testing.assert_array_equal(q_space_inputs[1], background_native)
     assert len(stored_payloads) == 1
+
+
+def test_restore_caked_payload_skips_q_space_rebuild_outside_q_space_mode(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    stored_payloads: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_res2_sim=object(),
+            last_res2_background=object(),
+            ai_cache={"ai": None, "detector_shape": (4, 4)},
+            stored_intersection_cache=(),
+            unscaled_image=np.ones((4, 4), dtype=np.float64),
+            last_caked_image_unscaled=None,
+            last_caked_radial_values=None,
+            last_caked_azimuth_values=None,
+            last_caked_extent=None,
+            last_caked_intersection_cache=None,
+            last_caked_background_image_unscaled=None,
+            last_q_space_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_q_space_background_image_unscaled=np.ones((2, 2), dtype=np.float64),
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.ones((2, 2), dtype=np.float64),
+            "radial": np.array([1.0, 2.0], dtype=np.float64),
+            "azimuth": np.array([-1.0, 1.0], dtype=np.float64),
+            "transform_bundle": None,
+            "extent": [0.0, 1.0, 0.0, 1.0],
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_live_caked_transform_bundle",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_q_space_display_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("restore should skip q-space rebuild outside q-space mode")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_q_space_display_payload",
+        lambda **kwargs: stored_payloads.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "caked")
+
+    restored = runtime_session._restore_caked_display_payload_from_cached_results(
+        background_visible=True
+    )
+
+    assert restored is True
+    assert stored_payloads == [{"sim_payload": None, "bg_payload": None}]
 
 
 def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> None:
