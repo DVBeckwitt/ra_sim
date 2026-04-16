@@ -270,6 +270,15 @@ def test_runtime_impl_gates_raster_projection_helpers_until_controls_stage() -> 
     assert "apply_projection(artist)" in helper_block
 
 
+def test_runtime_impl_defines_safe_fast_viewer_defaults_before_plot_init() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    init_start = source.index("def _initialize_runtime_plot_block_03() -> None:")
+
+    assert source.index("def _fast_viewer_active() -> bool:") < init_start
+    assert source.index("def _fast_viewer_requested_enabled() -> bool:") < init_start
+    assert source.index("def _fast_viewer_suspend_reason() -> str | None:") < init_start
+
+
 def test_runtime_impl_uses_tiny_startup_placeholder_rasters() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -2709,6 +2718,15 @@ def test_runtime_impl_detector_view_reset_clears_caked_cache_provenance() -> Non
     )
 
 
+def test_runtime_impl_forces_canvas_redraw_when_primary_view_mode_changes() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "force_canvas_redraw=False," in source
+    assert "_request_main_canvas_redraw(force_matplotlib=bool(force_canvas_redraw))" in source
+    assert "target_primary_view_mode = (" in source
+    assert "force_canvas_redraw=(previous_primary_view_mode != target_primary_view_mode)," in source
+
+
 def test_runtime_impl_prepare_q_space_payload_uses_direct_detector_remap() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     helper_start = source.index("def _prepare_q_space_display_payload(")
@@ -2770,6 +2788,90 @@ def test_runtime_impl_fast_viewer_layer_versions_report_q_space_extent() -> None
     assert 'if active_mode == "q_space":' in helper_source
     assert '"last_q_space_extent"' in helper_source
     assert '"simulation": (\n            active_mode,' in helper_source
+
+
+def test_initialize_runtime_plot_block_02_projects_startup_rasters_without_fast_viewer_workflow(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _FakeArtist:
+        def __init__(self, array: np.ndarray, extent: tuple[float, float, float, float]) -> None:
+            self._array = np.asarray(array, dtype=float)
+            self._extent = tuple(float(value) for value in extent)
+            self.origin = "upper"
+            self.data = None
+
+        def get_array(self):
+            return self._array
+
+        def get_extent(self):
+            return self._extent
+
+        def set_extent(self, extent):
+            self._extent = tuple(float(value) for value in extent)
+
+        def set_data(self, data):
+            self.data = np.asarray(data, dtype=float)
+
+    projection_calls: list[dict[str, object]] = []
+
+    def _project_raster_to_view(source, **kwargs):
+        projection_calls.append(dict(kwargs))
+        return SimpleNamespace(
+            extent=tuple(float(value) for value in kwargs["extent"]),
+            image=np.asarray(source, dtype=float),
+        )
+
+    image_display = _FakeArtist(np.arange(4, dtype=float).reshape(2, 2), (0.0, 1.0, 1.0, 0.0))
+    background_display = _FakeArtist(np.ones((2, 2), dtype=float), (0.0, 1.0, 1.0, 0.0))
+    overlay_display = _FakeArtist(np.zeros((2, 2), dtype=float), (0.0, 1.0, 1.0, 0.0))
+
+    monkeypatch.setattr(runtime_session, "_RUNTIME_CONTROLS_INITIALIZED", True, raising=False)
+    monkeypatch.setattr(runtime_session, "PRIMARY_VIEWPORT_BACKEND", "matplotlib", raising=False)
+    monkeypatch.setattr(runtime_session, "_fast_viewer_active", lambda: False)
+    monkeypatch.setattr(runtime_session, "image_size", 2, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(last_caked_extent=None, last_q_space_extent=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            get_xlim=lambda: (0.0, 2.0),
+            get_ylim=lambda: (2.0, 0.0),
+            bbox=SimpleNamespace(width=200.0, height=200.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_display_projection",
+        SimpleNamespace(project_raster_to_view=_project_raster_to_view),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_main_display_raster_size_limit",
+        lambda: 64,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_display", image_display, raising=False)
+    monkeypatch.setattr(runtime_session, "background_display", background_display, raising=False)
+    monkeypatch.setattr(runtime_session, "integration_region_overlay", overlay_display, raising=False)
+
+    runtime_session._initialize_runtime_plot_block_02()
+
+    assert len(projection_calls) == 3
+    assert image_display.get_extent() == (0.0, 2.0, 2.0, 0.0)
+    assert background_display.get_extent() == (0.0, 2.0, 2.0, 0.0)
+    assert overlay_display.get_extent() == (0.0, 2.0, 2.0, 0.0)
+    assert image_display.data is not None
+    assert background_display.data is not None
+    assert overlay_display.data is not None
 
 
 def test_run_analysis_job_can_emit_sim_q_space_without_caked_payload(monkeypatch) -> None:
@@ -2963,6 +3065,175 @@ def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(
     assert show_caked_var.get() is True
     assert shell_mode_var.get() == "q_space"
     assert schedule_calls == ["schedule"]
+
+
+def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: float | bool) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    redraw_calls: list[bool] = []
+    synced_modes: list[str | None] = []
+    stored_sources: list[np.ndarray] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            unscaled_image=np.ones((2, 2), dtype=np.float64),
+            last_q_space_image_unscaled=None,
+            last_q_space_background_image_unscaled=None,
+            last_caked_image_unscaled=np.full((2, 2), 2.0, dtype=np.float64),
+            last_caked_background_image_unscaled=None,
+            last_1d_integration_data={
+                "radials_sim": None,
+                "intensities_2theta_sim": None,
+                "azimuths_sim": None,
+                "intensities_azimuth_sim": None,
+                "radials_bg": None,
+                "intensities_2theta_bg": None,
+                "azimuths_bg": None,
+                "intensities_azimuth_bg": None,
+            },
+            caked_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(
+            visible=False,
+            current_background_index=0,
+            backend_rotation_k=0,
+            backend_flip_x=False,
+            backend_flip_y=False,
+            current_background_display=None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            simulation_min_var=_Var(0.0),
+            simulation_max_var=_Var(10.0),
+            background_min_var=_Var(0.0),
+            background_max_var=_Var(1.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(
+            simulation_limits_user_override=False,
+            background_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_1d_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "colorbar_main",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caked_colorbar",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    fake_image_artist = SimpleNamespace(set_visible=lambda *_args, **_kwargs: None)
+    fake_background_artist = SimpleNamespace(set_visible=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "image_display", fake_image_artist, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_display",
+        fake_background_artist,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "caked",
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: float(default),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_ensure_global_image_buffer_shape",
+        lambda _image: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "global_image_buffer",
+        np.zeros((2, 2), dtype=np.float64),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_roi_preview_display_sources",
+        lambda **kwargs: (kwargs["simulation_image"], kwargs["background_image"]),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_simulation_sliders_from_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_primary_raster_source",
+        lambda _artist, source: stored_sources.append(np.asarray(source, dtype=float).copy()),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **kwargs: synced_modes.append(kwargs.get("view_mode")),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_intensity_display_range",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda *, force_matplotlib=False: redraw_calls.append(bool(force_matplotlib)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_update_chi_square_display", lambda: None)
+
+    runtime_session.apply_scale_factor_to_existing_results(
+        update_1d=False,
+        force_canvas_redraw=True,
+        update_chi_square=False,
+    )
+
+    assert synced_modes == ["caked"]
+    assert redraw_calls == [True]
+    assert len(stored_sources) >= 1
 
 
 def test_run_analysis_job_skips_q_space_for_caked_only_requests(monkeypatch) -> None:

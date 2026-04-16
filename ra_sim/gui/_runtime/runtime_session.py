@@ -331,6 +331,20 @@ _RUNTIME_UPDATE_TRACE_HANDLE = None
 _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = False
 
 
+def _fast_viewer_active() -> bool:
+    """Keep startup redraw helpers safe until fast-viewer workflow exists."""
+
+    return False
+
+
+def _fast_viewer_requested_enabled() -> bool:
+    return False
+
+
+def _fast_viewer_suspend_reason() -> str | None:
+    return None
+
+
 def _all_logging_disabled() -> bool:
     return not _runtime_update_trace_logging_enabled()
 
@@ -7534,6 +7548,7 @@ def apply_scale_factor_to_existing_results(
     *,
     update_1d=True,
     update_canvas=True,
+    force_canvas_redraw=False,
     update_chi_square=True,
 ):
     chi_state = globals().setdefault(
@@ -7768,7 +7783,7 @@ def apply_scale_factor_to_existing_results(
             canvas_1d.draw_idle()
 
     if update_canvas:
-        _request_main_canvas_redraw(force_matplotlib=False)
+        _request_main_canvas_redraw(force_matplotlib=bool(force_canvas_redraw))
     if update_chi_square:
         _update_chi_square_display()
 
@@ -12991,6 +13006,9 @@ def do_update():
     defer_overlay_refresh = _defer_nonessential_redraw()
     analysis_space_display_mode = _resolved_primary_analysis_display_mode()
     analysis_space_display_available = analysis_space_display_mode in {"caked", "q_space"}
+    target_primary_view_mode = (
+        analysis_space_display_mode if analysis_space_display_available else "detector"
+    )
 
     if analysis_space_display_available:
         current_scale = _get_scale_factor_value(default=1.0)
@@ -13216,6 +13234,7 @@ def do_update():
     apply_scale_factor_to_existing_results(
         update_limits=False,
         update_1d=False,
+        force_canvas_redraw=(previous_primary_view_mode != target_primary_view_mode),
         update_chi_square=not defer_overlay_refresh,
     )
 
