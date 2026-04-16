@@ -26,10 +26,6 @@ from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
 )
-from ra_sim.simulation.exact_cake_portable import (
-    PortableGeometry,
-    detector_points_to_angles as _flat_detector_points_to_angles,
-)
 from ra_sim.utils.calculations import (
     d_spacing,
     resolve_canonical_branch,
@@ -10576,13 +10572,12 @@ def _detector_pixels_to_fit_space(
     except (TypeError, ValueError, IndexError):
         return two_theta, phi
 
-    geometry = PortableGeometry(
-        pixel_size_m=float(pixel_size),
-        distance_m=float(detector_distance),
-        center_row_px=float(centre_row),
-        center_col_px=float(centre_col),
-    )
-    return _flat_detector_points_to_angles(cols_arr, rows_arr, geometry)
+    x = (cols_arr - centre_col) * float(pixel_size)
+    z = (centre_row - rows_arr) * float(pixel_size)
+    two_theta[:] = np.degrees(np.arctan2(np.hypot(x, z), float(detector_distance)))
+    phi[:] = np.degrees(np.arctan2(x, z))
+    phi[:] = (phi + 180.0) % 360.0 - 180.0
+    return two_theta, phi
 
 
 def _detector_anchor_from_entry(

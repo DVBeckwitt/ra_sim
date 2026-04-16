@@ -352,17 +352,33 @@ def test_detector_pixels_to_fit_space_matches_zero_tilt_geometry() -> None:
 
     assert np.allclose(two_theta, expected_two_theta, atol=1.0e-12)
     assert np.allclose(phi, expected_phi, atol=1.0e-12)
+    assert phi[1] == 90.0
     assert phi[-1] == -180.0
 
+def test_pixel_to_angles_matches_zero_tilt_single_pixel_formula() -> None:
+    col = 13.0
+    row = 10.0
+    center = [10.0, 10.0]
+    detector_distance = 5.0
+    pixel_size = 2.0
+
     single_two_theta, single_phi = opt._pixel_to_angles(
-        float(cols[1]),
-        float(rows[1]),
+        col,
+        row,
         center,
         detector_distance,
         pixel_size,
     )
-    assert single_two_theta == pytest.approx(float(expected_two_theta[1]))
-    assert single_phi == pytest.approx(float(expected_phi[1]))
+
+    x = (col - float(center[1])) * pixel_size
+    z = (float(center[0]) - row) * pixel_size
+    expected_two_theta = float(np.degrees(np.arctan2(np.hypot(x, z), detector_distance)))
+    expected_phi = float(np.degrees(np.arctan2(x, z)))
+    expected_phi = (expected_phi + 180.0) % 360.0 - 180.0
+
+    assert single_two_theta == pytest.approx(expected_two_theta)
+    assert single_phi == pytest.approx(expected_phi)
+    assert single_phi == 90.0
 
 
 def test_detector_pixels_to_fit_space_ignores_gamma_and_Gamma() -> None:
