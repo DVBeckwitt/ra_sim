@@ -1430,20 +1430,34 @@ def update_geometry_manual_peak_record_cache(
         refined_display_col = float("nan")
         refined_display_row = float("nan")
 
-    def _entry_matches(record: object) -> bool:
-        if not isinstance(record, Mapping):
-            return False
+    def _collect_matching_indexes(records: Sequence[object] | None) -> list[int]:
+        if records is None:
+            return []
         if normalized_source_entry is not None:
-            return geometry_manual_source_entries_share_identity(
-                normalized_source_entry,
-                record,
-            )
+            identity_matches: list[int] = []
+            for idx, raw_record in enumerate(records):
+                if not isinstance(raw_record, Mapping):
+                    continue
+                if geometry_manual_source_entries_share_identity(
+                    normalized_source_entry,
+                    raw_record,
+                ):
+                    identity_matches.append(int(idx))
+            if len(identity_matches) > 0:
+                return identity_matches
+
         if normalized_source_key is None:
-            return False
-        return geometry_manual_source_key_matches_entry(
-            normalized_source_key,
-            record,
-        )
+            return []
+        key_matches: list[int] = []
+        for idx, raw_record in enumerate(records):
+            if not isinstance(raw_record, Mapping):
+                continue
+            if geometry_manual_source_key_matches_entry(
+                normalized_source_key,
+                raw_record,
+            ):
+                key_matches.append(int(idx))
+        return key_matches
 
     def _apply_updates(record: dict[str, object]) -> bool:
         updated_local = False
@@ -1461,53 +1475,51 @@ def update_geometry_manual_peak_record_cache(
             updated_local = True
         return updated_local
 
+    matched_peak_indexes: list[int] = _collect_matching_indexes(peak_records)
     updated = False
-    matched_peak_indexes: list[int] = []
-    for idx, raw_record in enumerate(peak_records or ()):
-        if not isinstance(raw_record, dict) or not _entry_matches(raw_record):
-            continue
-        if _apply_updates(raw_record):
+    if len(matched_peak_indexes) == 1:
+        raw_record = peak_records[matched_peak_indexes[0]]
+        if isinstance(raw_record, dict) and _apply_updates(raw_record):
             updated = True
-        matched_peak_indexes.append(int(idx))
 
     if (
-        matched_peak_indexes
+        len(matched_peak_indexes) == 1
         and isinstance(peak_positions, list)
         and np.isfinite(refined_display_col)
         and np.isfinite(refined_display_row)
     ):
-        for idx in matched_peak_indexes:
-            if 0 <= int(idx) < len(peak_positions):
-                peak_positions[int(idx)] = (
-                    float(refined_display_col),
-                    float(refined_display_row),
-                )
-                updated = True
+        idx = int(matched_peak_indexes[0])
+        if 0 <= idx < len(peak_positions):
+            peak_positions[idx] = (
+                float(refined_display_col),
+                float(refined_display_row),
+            )
+            updated = True
 
     if isinstance(peak_overlay_cache, dict):
-        matched_overlay_indexes: list[int] = []
         overlay_records = peak_overlay_cache.get("records")
+        matched_overlay_indexes: list[int] = _collect_matching_indexes(
+            overlay_records
+        )
         if isinstance(overlay_records, list):
-            for idx, raw_record in enumerate(overlay_records):
-                if not isinstance(raw_record, dict) or not _entry_matches(raw_record):
-                    continue
-                if _apply_updates(raw_record):
+            if len(matched_overlay_indexes) == 1:
+                raw_record = overlay_records[matched_overlay_indexes[0]]
+                if isinstance(raw_record, dict) and _apply_updates(raw_record):
                     updated = True
-                matched_overlay_indexes.append(int(idx))
         if (
-            matched_overlay_indexes
+            len(matched_overlay_indexes) == 1
             and np.isfinite(refined_display_col)
             and np.isfinite(refined_display_row)
         ):
             overlay_positions = peak_overlay_cache.get("positions")
             if isinstance(overlay_positions, list):
-                for idx in matched_overlay_indexes:
-                    if 0 <= int(idx) < len(overlay_positions):
-                        overlay_positions[int(idx)] = (
-                            float(refined_display_col),
-                            float(refined_display_row),
-                        )
-                        updated = True
+                idx = int(matched_overlay_indexes[0])
+                if 0 <= idx < len(overlay_positions):
+                    overlay_positions[idx] = (
+                        float(refined_display_col),
+                        float(refined_display_row),
+                    )
+                    updated = True
         if updated:
             peak_overlay_cache["click_spatial_index"] = None
 
@@ -1786,6 +1798,31 @@ def _geometry_manual_entry_label(entry: Mapping[str, object] | None) -> str:
     if not isinstance(entry, Mapping):
         return ""
     return str(entry.get("label", "") or "").strip()
+
+
+def _geometry_manual_nonbranch_identity_fields_match(
+    left_entry: Mapping[str, object] | None,
+    right_entry: Mapping[str, object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> bool:
+    left_hkl = _geometry_manual_entry_normalized_hkl(
+        left_entry,
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    right_hkl = _geometry_manual_entry_normalized_hkl(
+        right_entry,
+        normalize_hkl_key=normalize_hkl_key,
+    )
+    if left_hkl is not None and right_hkl is not None:
+        return left_hkl == right_hkl
+
+    left_label = _geometry_manual_entry_label(left_entry)
+    right_label = _geometry_manual_entry_label(right_entry)
+    if left_label and right_label:
+        return left_label == right_label
+
+    return False
 
 
 def _geometry_manual_finite_point(
@@ -2197,12 +2234,19 @@ def geometry_manual_source_key_matches_entry(
     if entry_branch_index not in {0, 1} or int(entry_branch_index) != int(source_branch_index):
         return False
 
-    entry_anchor = (
-        _coerce_nonnegative_index(entry_dict.get("source_reflection_index"))
-        if _entry_has_explicit_trusted_reflection_identity(entry_dict)
-        else _coerce_nonnegative_index(entry_dict.get("source_table_index"))
-    )
-    return entry_anchor is not None and int(entry_anchor) == int(source_anchor)
+    entry_anchors = {
+        idx
+        for idx in (
+            _coerce_nonnegative_index(entry_dict.get("source_table_index")),
+            (
+                _coerce_nonnegative_index(entry_dict.get("source_reflection_index"))
+                if _entry_has_explicit_trusted_reflection_identity(entry_dict)
+                else None
+            ),
+        )
+        if idx is not None
+    }
+    return int(source_anchor) in entry_anchors
 
 
 def geometry_manual_source_entries_share_identity(
@@ -2224,9 +2268,14 @@ def geometry_manual_source_entries_share_identity(
         dict(right_entry),
         normalize_hkl_key=normalize_hkl_key,
     )
+    nonbranch_identity_matches = _geometry_manual_nonbranch_identity_fields_match(
+        left_entry,
+        right_entry,
+        normalize_hkl_key=normalize_hkl_key,
+    )
     if left_key is not None and left_key == right_key:
         if str(left_key[0]) != "source_branch":
-            return True
+            return bool(nonbranch_identity_matches)
         if _entry_has_explicit_trusted_reflection_identity(
             left_entry
         ) == _entry_has_explicit_trusted_reflection_identity(right_entry):
@@ -2267,21 +2316,12 @@ def geometry_manual_source_entries_share_identity(
         if left_row_key is None or left_row_key != right_row_key:
             return False
 
-        left_hkl = _geometry_manual_entry_normalized_hkl(
-            left_entry,
-            normalize_hkl_key=normalize_hkl_key,
-        )
-        right_hkl = _geometry_manual_entry_normalized_hkl(
-            right_entry,
-            normalize_hkl_key=normalize_hkl_key,
-        )
-        if left_hkl is not None and right_hkl is not None and left_hkl != right_hkl:
-            return False
-        return True
+        return bool(nonbranch_identity_matches)
 
     return bool(
         left_key is not None
         and str(left_key[0]) != "source_branch"
+        and nonbranch_identity_matches
         and geometry_manual_source_key_matches_entry(
             left_key,
             right_entry,
@@ -2290,6 +2330,7 @@ def geometry_manual_source_entries_share_identity(
     ) or bool(
         right_key is not None
         and str(right_key[0]) != "source_branch"
+        and nonbranch_identity_matches
         and geometry_manual_source_key_matches_entry(
             right_key,
             left_entry,

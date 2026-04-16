@@ -1919,7 +1919,6 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
     updated = mg.update_geometry_manual_peak_record_cache(
         peak_records,
         source_key=_source_key(legacy_saved_entry),
-        source_entry=legacy_saved_entry,
         refined_display=(191.0, 97.0),
         peak_positions=peak_positions,
         peak_overlay_cache=peak_overlay_cache,
@@ -1933,6 +1932,185 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
     assert peak_positions == [(181.0, 95.0), (191.0, 97.0)]
     assert peak_overlay_cache["records"][1]["display_col"] == 191.0
     assert peak_overlay_cache["positions"] == [(181.0, 95.0), (191.0, 97.0)]
+
+
+def test_geometry_manual_source_key_matches_entry_matches_legacy_branch_key_to_current_record() -> None:
+    legacy_saved_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+    }
+    current_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+    }
+
+    assert (
+        mg.geometry_manual_source_key_matches_entry(
+            _source_key(legacy_saved_entry),
+            current_record,
+        )
+        is True
+    )
+
+
+def test_geometry_manual_source_entries_share_identity_rejects_branchless_same_row_siblings_with_different_hkl() -> None:
+    left_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "hkl": (1, 0, 5),
+        "label": "1,0,5",
+    }
+    right_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "hkl": (-1, 0, 5),
+        "label": "-1,0,5",
+    }
+
+    assert mg.geometry_manual_source_entries_share_identity(left_entry, right_entry) is False
+
+
+def test_update_geometry_manual_peak_record_cache_source_entry_does_not_fan_out_across_branchless_same_row_siblings() -> None:
+    source_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "hkl": (1, 0, 5),
+        "label": "1,0,5",
+    }
+    left_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "hkl": (1, 0, 5),
+        "label": "1,0,5",
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    right_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "hkl": (-1, 0, 5),
+        "label": "-1,0,5",
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    peak_records = [dict(left_record), dict(right_record)]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(left_record), dict(right_record)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(source_entry),
+        source_entry=source_entry,
+        refined_display=(182.0, 94.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is True
+    assert peak_records[0]["display_col"] == 182.0
+    assert peak_records[0]["display_row"] == 94.0
+    assert peak_records[1]["display_col"] == 190.0
+    assert peak_records[1]["display_row"] == 96.0
+    assert peak_positions == [(182.0, 94.0), (190.0, 96.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 182.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 190.0
+    assert peak_overlay_cache["positions"] == [(182.0, 94.0), (190.0, 96.0)]
+
+
+def test_update_geometry_manual_peak_record_cache_source_entry_falls_back_to_row_key_when_identity_is_inconclusive() -> None:
+    source_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    cache_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    peak_records = [dict(cache_record)]
+    peak_positions = [(181.0, 95.0)]
+    peak_overlay_cache = {
+        "records": [dict(cache_record)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 1},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(source_entry),
+        source_entry=source_entry,
+        refined_display=(182.0, 94.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is True
+    assert peak_records[0]["display_col"] == 182.0
+    assert peak_records[0]["display_row"] == 94.0
+    assert peak_positions == [(182.0, 94.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 182.0
+    assert peak_overlay_cache["positions"] == [(182.0, 94.0)]
+    assert peak_overlay_cache["click_spatial_index"] is None
+
+
+def test_update_geometry_manual_peak_record_cache_source_entry_only_updates_row_key_unique_matches() -> None:
+    source_entry = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    first_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "display_col": 181.0,
+        "display_row": 95.0,
+    }
+    second_record = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "display_col": 190.0,
+        "display_row": 96.0,
+    }
+    peak_records = [dict(first_record), dict(second_record)]
+    peak_positions = [(181.0, 95.0), (190.0, 96.0)]
+    peak_overlay_cache = {
+        "records": [dict(first_record), dict(second_record)],
+        "positions": list(peak_positions),
+        "click_spatial_index": {"position_count": 2},
+    }
+
+    updated = mg.update_geometry_manual_peak_record_cache(
+        peak_records,
+        source_key=_source_key(source_entry),
+        source_entry=source_entry,
+        refined_display=(192.0, 98.0),
+        peak_positions=peak_positions,
+        peak_overlay_cache=peak_overlay_cache,
+    )
+
+    assert updated is False
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 190.0
+    assert peak_records[1]["display_row"] == 96.0
+    assert peak_positions == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 190.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["click_spatial_index"] == {"position_count": 2}
 
 
 def test_update_geometry_manual_peak_record_cache_skips_branchless_row_key_for_mirrored_branches() -> None:
