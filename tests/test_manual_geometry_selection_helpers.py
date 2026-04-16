@@ -153,7 +153,14 @@ def _build_lookup(entries):
         key = _source_key(raw_entry)
         if key is None:
             continue
-        lookup[key] = dict(raw_entry)
+        entry = dict(raw_entry)
+        existing = lookup.get(key)
+        if existing is None:
+            lookup[key] = entry
+        elif isinstance(existing, list):
+            existing.append(entry)
+        else:
+            lookup[key] = [dict(existing), entry]
     return lookup
 
 
@@ -380,6 +387,205 @@ def test_geometry_manual_tagged_candidate_from_session_returns_matching_entry() 
         {"tagged_candidate_key": ("source", 9, 9)},
         candidate_entries,
     ) is None
+
+
+def test_geometry_manual_tagged_candidate_from_session_prefers_tagged_entry_identity() -> None:
+    tagged_candidate = {
+        "label": "target-right",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    candidate_entries = [
+        {
+            "label": "other-right",
+            "hkl": (-2, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+        dict(tagged_candidate),
+    ]
+
+    tagged = mg.geometry_manual_tagged_candidate_from_session(
+        {
+            "tagged_candidate_key": ("source_branch", 1, 1),
+            "tagged_candidate": dict(tagged_candidate),
+        },
+        candidate_entries,
+    )
+
+    assert tagged is not None
+    assert tagged["label"] == "target-right"
+    assert tagged["source_row_index"] == 3
+
+
+def test_geometry_manual_tagged_candidate_from_session_returns_none_when_stored_tagged_candidate_misses_identity() -> None:
+    candidate_entries = [
+        {
+            "label": "other-right",
+            "hkl": (-2, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+        {
+            "label": "left",
+            "hkl": (1, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 1,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+        },
+    ]
+
+    tagged = mg.geometry_manual_tagged_candidate_from_session(
+        {
+            "tagged_candidate_key": ("source_branch", 1, 1),
+            "tagged_candidate": {
+                "label": "missing-right",
+                "hkl": (-1, 0, 5),
+                "source_table_index": 1,
+                "source_row_index": 99,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            },
+        },
+        candidate_entries,
+    )
+
+    assert tagged is None
+
+
+def test_geometry_manual_tagged_candidate_from_session_returns_none_for_nonbranch_same_key_identity_miss() -> None:
+    candidate_entries = [
+        {
+            "label": "other-right",
+            "hkl": (-2, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 3,
+        },
+        {
+            "label": "left",
+            "hkl": (1, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 1,
+        },
+    ]
+
+    tagged = mg.geometry_manual_tagged_candidate_from_session(
+        {
+            "tagged_candidate_key": ("source", 1, 3),
+            "tagged_candidate": {
+                "label": "missing-right",
+                "hkl": (-1, 0, 5),
+                "source_table_index": 1,
+                "source_row_index": 3,
+            },
+        },
+        candidate_entries,
+    )
+
+    assert tagged is None
+
+
+def test_geometry_manual_tagged_candidate_from_session_returns_none_after_cleared_identity_locked_snapshot() -> None:
+    candidate_entries = [
+        {
+            "label": "other-right",
+            "hkl": (-2, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 3,
+        },
+        {
+            "label": "left",
+            "hkl": (1, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 1,
+        },
+    ]
+
+    tagged = mg.geometry_manual_tagged_candidate_from_session(
+        {
+            "tagged_candidate_key": ("source", 1, 3),
+            "_tagged_candidate_requires_identity": True,
+        },
+        candidate_entries,
+    )
+
+    assert tagged is None
+
+
+def test_geometry_manual_resolve_source_entry_index_disambiguates_nonbranch_same_key_candidates() -> None:
+    candidate_entries = [
+        {
+            "label": "other-right",
+            "hkl": (-2, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 110.0,
+            "sim_row": 120.0,
+        },
+        {
+            "label": "target-right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 210.0,
+            "sim_row": 220.0,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target-right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_lookup_source_entry_disambiguates_nonbranch_same_key_bucket() -> None:
+    target_entry = {
+        "label": "target-right",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+    }
+    simulated_lookup = {
+        ("source", 9, 0): [
+            {
+                "label": "other-right",
+                "hkl": (-2, 0, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "sim_col": 110.0,
+                "sim_row": 120.0,
+            },
+            {
+                "label": "target-right",
+                "hkl": (-1, 0, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "sim_col": 210.0,
+                "sim_row": 220.0,
+            },
+        ]
+    }
+
+    resolved = mg.geometry_manual_lookup_source_entry(simulated_lookup, target_entry)
+
+    assert resolved is not None
+    assert resolved["label"] == "target-right"
+    assert resolved["hkl"] == (-1, 0, 5)
 
 
 def test_current_geometry_manual_match_config_reuses_auto_match_defaults() -> None:
@@ -1882,6 +2088,8 @@ def test_update_geometry_manual_peak_record_cache_updates_only_matching_mirrored
 
 def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_current_record() -> None:
     legacy_saved_entry = {
+        "label": "right",
+        "hkl": (-1, 0, 5),
         "source_table_index": 9,
         "source_row_index": 0,
         "source_branch_index": 1,
@@ -1889,6 +2097,8 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
         "display_row": 96.0,
     }
     left_record = {
+        "label": "left",
+        "hkl": (1, 0, 5),
         "source_table_index": 9,
         "source_row_index": 0,
         "source_reflection_index": 203,
@@ -1899,6 +2109,8 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
         "display_row": 95.0,
     }
     right_record = {
+        "label": "right",
+        "hkl": (-1, 0, 5),
         "source_table_index": 9,
         "source_row_index": 0,
         "source_reflection_index": 203,
@@ -1919,6 +2131,7 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
     updated = mg.update_geometry_manual_peak_record_cache(
         peak_records,
         source_key=_source_key(legacy_saved_entry),
+        source_entry=legacy_saved_entry,
         refined_display=(191.0, 97.0),
         peak_positions=peak_positions,
         peak_overlay_cache=peak_overlay_cache,
@@ -1934,7 +2147,7 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
     assert peak_overlay_cache["positions"] == [(181.0, 95.0), (191.0, 97.0)]
 
 
-def test_geometry_manual_source_key_matches_entry_matches_legacy_branch_key_to_current_record() -> None:
+def test_geometry_manual_source_key_matches_entry_does_not_alias_table_and_reflection_branch_keys() -> None:
     legacy_saved_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -1954,7 +2167,7 @@ def test_geometry_manual_source_key_matches_entry_matches_legacy_branch_key_to_c
             _source_key(legacy_saved_entry),
             current_record,
         )
-        is True
+        is False
     )
 
 
@@ -1970,6 +2183,27 @@ def test_geometry_manual_source_entries_share_identity_rejects_branchless_same_r
         "source_row_index": 0,
         "hkl": (-1, 0, 5),
         "label": "-1,0,5",
+    }
+
+    assert mg.geometry_manual_source_entries_share_identity(left_entry, right_entry) is False
+
+
+def test_geometry_manual_source_entries_share_identity_rejects_untrusted_same_branch_siblings() -> None:
+    left_entry = {
+        "source_table_index": 9,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "hkl": (1, 0, 5),
+        "label": "1,0,5-right",
+    }
+    right_entry = {
+        "source_table_index": 9,
+        "source_row_index": 3,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "hkl": (2, 0, 5),
+        "label": "2,0,5-right",
     }
 
     assert mg.geometry_manual_source_entries_share_identity(left_entry, right_entry) is False
@@ -2413,7 +2647,57 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert entries[0]["qz"] == 2.3456789012
 
 
-def test_refresh_geometry_manual_pick_session_candidates_rebinds_live_group_entries() -> None:
+def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pending_branch_entries() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 5),
+        "group_entries": [
+            {
+                "label": "target-right",
+                "hkl": (-1, 0, 5),
+                "source_table_index": 1,
+                "source_row_index": 3,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+            }
+        ],
+        "pending_entries": [
+            {
+                "label": "other-right",
+                "hkl": (-2, 0, 5),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "x": 9.0,
+                "y": 10.0,
+            },
+            {
+                "label": "target-right",
+                "hkl": (-1, 0, 5),
+                "source_table_index": 1,
+                "source_row_index": 3,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "x": 19.0,
+                "y": 21.0,
+            },
+        ],
+        "background_index": 0,
+    }
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["bg_display"] == (19.0, 21.0)
+
+
+def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_nonbranch_snapshot_by_key() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 2),
         "group_entries": [
@@ -2478,10 +2762,10 @@ def test_refresh_geometry_manual_pick_session_candidates_rebinds_live_group_entr
 
     assert refreshed["cache_signature"] == ("sim", 2)
     assert refreshed["target_count"] == 2
-    assert refreshed["group_entries"][0]["label"] == "new-right"
-    assert refreshed["group_entries"][0]["sim_col"] == 70.0
-    assert refreshed["group_entries"][1]["label"] == "new-left"
-    assert refreshed["tagged_candidate"]["label"] == "new-right"
+    assert refreshed["group_entries"][0]["label"] == "new-left"
+    assert refreshed["group_entries"][0]["sim_col"] == 50.0
+    assert refreshed["group_entries"][1]["label"] == "new-right"
+    assert "tagged_candidate" not in refreshed
     assert refreshed["pending_entries"][0]["source_row_index"] == 3
 
 
@@ -2545,6 +2829,256 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_u
         assert refreshed["tagged_candidate"]["source_branch_index"] == 1
         assert refreshed["group_entries"][0]["source_reflection_index"] == 9
         assert refreshed["group_entries"][0]["source_branch_index"] == 1
+
+
+def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_identity_under_permutation() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    tagged_candidate = {
+        "label": "target-right",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    sibling_candidate = {
+        "label": "other-right",
+        "hkl": (-2, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    pick_session = {
+        "group_key": group_key,
+        "group_entries": [dict(sibling_candidate), dict(tagged_candidate)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source_branch", 1, 1),
+        "tagged_candidate": dict(tagged_candidate),
+    }
+
+    forward = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(sibling_candidate), dict(tagged_candidate)]},
+        cache_signature=("sig", 1),
+    )
+    reversed_order = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(tagged_candidate), dict(sibling_candidate)]},
+        cache_signature=("sig", 1),
+    )
+
+    for refreshed in (forward, reversed_order):
+        assert refreshed["group_entries"][0]["label"] == "target-right"
+        assert refreshed["group_entries"][0]["source_row_index"] == 3
+        assert refreshed["tagged_candidate"]["label"] == "target-right"
+        assert refreshed["tagged_candidate"]["source_row_index"] == 3
+
+
+def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_stored_tagged_candidate_by_key() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    left_candidate = {
+        "label": "left",
+        "hkl": (1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 1,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    sibling_candidate = {
+        "label": "other-right",
+        "hkl": (-2, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    pick_session = {
+        "group_key": group_key,
+        "group_entries": [dict(left_candidate), dict(sibling_candidate)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source_branch", 1, 1),
+        "tagged_candidate": {
+            "label": "missing-right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 99,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 99.0,
+            "sim_row": 100.0,
+        },
+    }
+
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(left_candidate), dict(sibling_candidate)]},
+        cache_signature=("sig", 1),
+    )
+
+    assert refreshed["group_entries"][0]["label"] == "left"
+    assert refreshed["group_entries"][1]["label"] == "other-right"
+    assert refreshed["tagged_candidate_key"] == ("source_branch", 1, 1)
+    assert "tagged_candidate" not in refreshed
+
+
+def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_nonbranch_stored_tagged_candidate_by_key() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    left_candidate = {
+        "label": "left",
+        "hkl": (1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    sibling_candidate = {
+        "label": "other-right",
+        "hkl": (-2, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    pick_session = {
+        "group_key": group_key,
+        "group_entries": [dict(left_candidate), dict(sibling_candidate)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source", 1, 3),
+        "tagged_candidate": {
+            "label": "missing-right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 3,
+            "sim_col": 99.0,
+            "sim_row": 100.0,
+        },
+    }
+
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(left_candidate), dict(sibling_candidate)]},
+        cache_signature=("sig", 1),
+    )
+
+    assert refreshed["group_entries"][0]["label"] == "left"
+    assert refreshed["group_entries"][1]["label"] == "other-right"
+    assert refreshed["tagged_candidate_key"] == ("source", 1, 3)
+    assert "tagged_candidate" not in refreshed
+
+
+def test_refresh_geometry_manual_pick_session_candidates_keeps_cleared_identity_lock_on_second_refresh() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    left_candidate = {
+        "label": "left",
+        "hkl": (1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    sibling_candidate = {
+        "label": "other-right",
+        "hkl": (-2, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    pick_session = {
+        "group_key": group_key,
+        "group_entries": [dict(left_candidate), dict(sibling_candidate)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source", 1, 3),
+        "tagged_candidate": {
+            "label": "missing-right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 1,
+            "source_row_index": 3,
+            "sim_col": 99.0,
+            "sim_row": 100.0,
+        },
+    }
+
+    first = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(left_candidate), dict(sibling_candidate)]},
+        cache_signature=("sig", 1),
+    )
+    second = mg.refresh_geometry_manual_pick_session_candidates(
+        first,
+        grouped_candidates={group_key: [dict(left_candidate), dict(sibling_candidate)]},
+        cache_signature=("sig", 2),
+    )
+
+    assert first["_tagged_candidate_requires_identity"] is True
+    assert "tagged_candidate" not in first
+    assert second["_tagged_candidate_requires_identity"] is True
+    assert second["cache_signature"] == ("sig", 2)
+    assert second["group_entries"][0]["label"] == "left"
+    assert second["group_entries"][1]["label"] == "other-right"
+    assert "tagged_candidate" not in second
+
+
+def test_refresh_geometry_manual_pick_session_candidates_preserves_legacy_key_only_fallback() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    left_candidate = {
+        "label": "left",
+        "hkl": (1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    right_candidate = {
+        "label": "right",
+        "hkl": (-1, 0, 5),
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    pick_session = {
+        "group_key": group_key,
+        "group_entries": [dict(left_candidate), dict(right_candidate)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 2,
+        "tagged_candidate_key": ("source", 1, 3),
+    }
+
+    first = mg.refresh_geometry_manual_pick_session_candidates(
+        pick_session,
+        grouped_candidates={group_key: [dict(left_candidate), dict(right_candidate)]},
+        cache_signature=("sig", 1),
+    )
+    second = mg.refresh_geometry_manual_pick_session_candidates(
+        first,
+        grouped_candidates={group_key: [dict(left_candidate), dict(right_candidate)]},
+        cache_signature=("sig", 2),
+    )
+
+    for refreshed in (first, second):
+        assert refreshed["_tagged_candidate_requires_identity"] is False
+        assert refreshed["group_entries"][0]["label"] == "right"
+        assert refreshed["tagged_candidate"]["label"] == "right"
+        assert refreshed["tagged_candidate_key"] == ("source", 1, 3)
 
 
 def test_cancel_geometry_manual_pick_session_clears_session_and_triggers_callbacks() -> None:

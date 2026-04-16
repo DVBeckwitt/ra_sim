@@ -27,7 +27,14 @@ def _build_lookup(entries):
         key = _source_key(raw_entry)
         if key is None:
             continue
-        lookup[key] = dict(raw_entry)
+        entry = dict(raw_entry)
+        existing = lookup.get(key)
+        if existing is None:
+            lookup[key] = entry
+        elif isinstance(existing, list):
+            existing.append(entry)
+        else:
+            lookup[key] = [dict(existing), entry]
     return lookup
 
 
@@ -380,6 +387,76 @@ def test_build_geometry_manual_pick_cache_preserves_mirrored_branch_lookup_entri
     assert cache_data["simulated_lookup"][left_key]["sim_col"] == 181.0
     assert cache_data["simulated_lookup"][right_key]["sim_col"] == 190.0
     assert set(next_state["simulated_lookup"]) == {left_key, right_key}
+
+
+def test_build_geometry_manual_pick_cache_preserves_colliding_legacy_branch_lookup_entries() -> None:
+    legacy_rows = [
+        {
+            "label": "other-right",
+            "hkl": (-2, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 2,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 181.0,
+            "sim_row": 95.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "target-right",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 3,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+            "weight": 1.0,
+        },
+    ]
+
+    cache_data, _, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=False,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [
+            dict(entry) for entry in legacy_rows
+        ],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        peak_records=[],
+    )
+
+    legacy_key = _source_key(legacy_rows[0])
+
+    assert legacy_key == _source_key(legacy_rows[1])
+    assert isinstance(cache_data["simulated_lookup"][legacy_key], list)
+    assert len(cache_data["simulated_lookup"][legacy_key]) == 2
+    assert isinstance(next_state["simulated_lookup"][legacy_key], list)
+    resolved = mg.geometry_manual_lookup_source_entry(
+        cache_data["simulated_lookup"],
+        {
+            "label": "target-right",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 3,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+    )
+
+    assert resolved is not None
+    assert resolved["label"] == "target-right"
+    assert resolved["source_row_index"] == 3
 
 
 def test_build_geometry_manual_pick_cache_resolves_legacy_peak_only_branch_entry() -> None:

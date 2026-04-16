@@ -103,8 +103,12 @@ class GeometryManualRuntimeProjectionCallbacks:
     ]
     simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
-        dict[tuple[object, ...], dict[str, object]],
+        GeometryManualLookupMap,
     ]
+
+
+GeometryManualLookupBucket = dict[str, object] | list[dict[str, object]]
+GeometryManualLookupMap = dict[tuple[object, ...], GeometryManualLookupBucket]
 
 
 def _resolve_runtime_value(value_or_callable: object) -> object:
@@ -1825,6 +1829,61 @@ def _geometry_manual_nonbranch_identity_fields_match(
     return False
 
 
+def _geometry_manual_lookup_bucket_entries(
+    bucket: object,
+) -> list[dict[str, object]]:
+    if isinstance(bucket, Mapping):
+        return [dict(bucket)]
+    if isinstance(bucket, Sequence) and not isinstance(
+        bucket,
+        (str, bytes, bytearray),
+    ):
+        return [dict(entry) for entry in bucket if isinstance(entry, Mapping)]
+    return []
+
+
+def _geometry_manual_copy_lookup(
+    lookup: Mapping[tuple[object, ...], object] | None,
+) -> GeometryManualLookupMap:
+    copied: GeometryManualLookupMap = {}
+    for raw_key, raw_bucket in (lookup or {}).items():
+        if not isinstance(raw_key, tuple):
+            continue
+        bucket_entries = _geometry_manual_lookup_bucket_entries(raw_bucket)
+        if not bucket_entries:
+            continue
+        if len(bucket_entries) == 1:
+            copied[tuple(raw_key)] = dict(bucket_entries[0])
+        else:
+            copied[tuple(raw_key)] = [dict(entry) for entry in bucket_entries]
+    return copied
+
+
+def _geometry_manual_add_lookup_entry(
+    lookup: GeometryManualLookupMap,
+    key: tuple[object, ...],
+    entry: Mapping[str, object] | None,
+) -> None:
+    if not isinstance(entry, Mapping):
+        return
+
+    bucket_entries = _geometry_manual_lookup_bucket_entries(lookup.get(key))
+    bucket_entries.append(dict(entry))
+    if len(bucket_entries) == 1:
+        lookup[key] = dict(bucket_entries[0])
+    else:
+        lookup[key] = [dict(bucket_entry) for bucket_entry in bucket_entries]
+
+
+def _geometry_manual_flatten_lookup_entries(
+    lookup: Mapping[tuple[object, ...], object] | None,
+) -> list[dict[str, object]]:
+    flattened: list[dict[str, object]] = []
+    for raw_bucket in (lookup or {}).values():
+        flattened.extend(_geometry_manual_lookup_bucket_entries(raw_bucket))
+    return flattened
+
+
 def _geometry_manual_finite_point(
     entry: Mapping[str, object] | None,
     key_pairs: Sequence[tuple[str, str]],
@@ -2048,7 +2107,7 @@ def geometry_manual_resolve_source_entry_index(
     )
     if source_key is not None:
         exact_matches = [
-            int(idx)
+            (int(idx), candidate)
             for idx, candidate in indexed_candidates
             if geometry_manual_candidate_source_key(
                 dict(candidate),
@@ -2064,8 +2123,16 @@ def geometry_manual_resolve_source_entry_index(
                 )
             )
         ]
+        if len(exact_matches) == 1:
+            return int(exact_matches[0][0])
         if exact_matches:
-            return int(exact_matches[0])
+            exact_match_index = _geometry_manual_disambiguate_source_candidates(
+                resolution_entry,
+                exact_matches,
+                normalize_hkl_key=normalize_hkl_key,
+            )
+            if exact_match_index is not None:
+                return int(exact_match_index)
 
         if len(source_key) >= 1 and str(source_key[0]) == "source_branch":
             identity_matches = [
@@ -2234,19 +2301,12 @@ def geometry_manual_source_key_matches_entry(
     if entry_branch_index not in {0, 1} or int(entry_branch_index) != int(source_branch_index):
         return False
 
-    entry_anchors = {
-        idx
-        for idx in (
-            _coerce_nonnegative_index(entry_dict.get("source_table_index")),
-            (
-                _coerce_nonnegative_index(entry_dict.get("source_reflection_index"))
-                if _entry_has_explicit_trusted_reflection_identity(entry_dict)
-                else None
-            ),
-        )
-        if idx is not None
-    }
-    return int(source_anchor) in entry_anchors
+    entry_anchor = (
+        _coerce_nonnegative_index(entry_dict.get("source_reflection_index"))
+        if _entry_has_explicit_trusted_reflection_identity(entry_dict)
+        else _coerce_nonnegative_index(entry_dict.get("source_table_index"))
+    )
+    return entry_anchor is not None and int(entry_anchor) == int(source_anchor)
 
 
 def geometry_manual_source_entries_share_identity(
@@ -2278,7 +2338,7 @@ def geometry_manual_source_entries_share_identity(
             return bool(nonbranch_identity_matches)
         if _entry_has_explicit_trusted_reflection_identity(
             left_entry
-        ) == _entry_has_explicit_trusted_reflection_identity(right_entry):
+        ) and _entry_has_explicit_trusted_reflection_identity(right_entry):
             return True
 
     left_branch_index, _left_branch_source, _left_branch_reason = resolve_canonical_branch(
@@ -2339,6 +2399,64 @@ def geometry_manual_source_entries_share_identity(
     )
 
 
+def _geometry_manual_resolve_identity_candidate_index(
+    entry: Mapping[str, object] | None,
+    candidate_entries: Sequence[object] | None,
+    *,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = _default_normalize_hkl_key,
+) -> int | None:
+    if not isinstance(entry, Mapping):
+        return None
+
+    normalized_candidates = [
+        dict(candidate)
+        for candidate in (candidate_entries or ())
+        if isinstance(candidate, Mapping)
+    ]
+    if not normalized_candidates:
+        return None
+
+    identity_matches = [
+        (idx, candidate)
+        for idx, candidate in enumerate(normalized_candidates)
+        if geometry_manual_source_entries_share_identity(
+            entry,
+            candidate,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+    ]
+    if len(identity_matches) == 1:
+        return int(identity_matches[0][0])
+    if identity_matches:
+        return _geometry_manual_disambiguate_source_candidates(
+            entry,
+            identity_matches,
+            normalize_hkl_key=normalize_hkl_key,
+        )
+    return None
+
+
+def _geometry_manual_tagged_candidate_requires_identity(
+    pick_session: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(pick_session, Mapping):
+        return False
+    explicit_flag = pick_session.get("_tagged_candidate_requires_identity")
+    if isinstance(explicit_flag, bool):
+        return explicit_flag
+    return isinstance(pick_session.get("tagged_candidate"), Mapping)
+
+
+def _geometry_manual_allow_tagged_key_fallback(
+    _tagged_candidate_key: tuple[object, ...] | None,
+    *,
+    requires_identity: bool = False,
+    stored_tagged_candidate: Mapping[str, object] | None,
+) -> bool:
+    _ = stored_tagged_candidate
+    return not bool(requires_identity)
+
+
 def geometry_manual_lookup_source_entry(
     simulated_lookup: Mapping[tuple[object, ...], object] | None,
     entry: Mapping[str, object] | None,
@@ -2354,21 +2472,38 @@ def geometry_manual_lookup_source_entry(
         dict(entry),
         normalize_hkl_key=normalize_hkl_key,
     )
-    resolved = simulated_lookup.get(source_key) if source_key is not None else None
-    if isinstance(resolved, Mapping):
+    direct_candidates = (
+        _geometry_manual_lookup_bucket_entries(simulated_lookup.get(source_key))
+        if source_key is not None
+        else []
+    )
+    if direct_candidates:
         if not (
             isinstance(source_key, tuple)
             and len(source_key) >= 1
             and str(source_key[0]) == "source_branch"
         ):
-            return dict(resolved)
-        resolved_dict = dict(resolved)
-        if geometry_manual_source_entries_share_identity(
+            resolved_index = geometry_manual_resolve_source_entry_index(
+                entry,
+                direct_candidates,
+                normalize_hkl_key=normalize_hkl_key,
+            )
+            if resolved_index is not None and 0 <= int(resolved_index) < len(
+                direct_candidates
+            ):
+                return dict(direct_candidates[int(resolved_index)])
+            if len(direct_candidates) == 1:
+                return dict(direct_candidates[0])
+
+        direct_identity_index = _geometry_manual_resolve_identity_candidate_index(
             entry,
-            resolved_dict,
+            direct_candidates,
             normalize_hkl_key=normalize_hkl_key,
+        )
+        if direct_identity_index is not None and 0 <= int(direct_identity_index) < len(
+            direct_candidates
         ):
-            return resolved_dict
+            return dict(direct_candidates[int(direct_identity_index)])
     if (
         source_key is not None
         and isinstance(source_key, tuple)
@@ -2376,43 +2511,42 @@ def geometry_manual_lookup_source_entry(
         and str(source_key[0]) == "source"
         and not _geometry_manual_entry_has_explicit_branch_identity(entry)
     ):
-        legacy_resolved = simulated_lookup.get((int(source_key[1]), int(source_key[2])))
-        if isinstance(legacy_resolved, Mapping) and not _geometry_manual_entry_has_explicit_branch_identity(
-            legacy_resolved
-        ):
-            return dict(legacy_resolved)
+        legacy_candidates = [
+            candidate
+            for candidate in _geometry_manual_lookup_bucket_entries(
+                simulated_lookup.get((int(source_key[1]), int(source_key[2])))
+            )
+            if not _geometry_manual_entry_has_explicit_branch_identity(candidate)
+        ]
+        if legacy_candidates:
+            resolved_index = geometry_manual_resolve_source_entry_index(
+                entry,
+                legacy_candidates,
+                normalize_hkl_key=normalize_hkl_key,
+            )
+            if resolved_index is not None and 0 <= int(resolved_index) < len(
+                legacy_candidates
+            ):
+                return dict(legacy_candidates[int(resolved_index)])
+            if len(legacy_candidates) == 1:
+                return dict(legacy_candidates[0])
 
+    candidate_entries = _geometry_manual_flatten_lookup_entries(simulated_lookup)
     if (
         isinstance(source_key, tuple)
         and len(source_key) >= 1
         and str(source_key[0]) == "source_branch"
     ):
-        identity_candidate_entries = [
-            (idx, candidate)
-            for idx, candidate in enumerate(simulated_lookup.values())
-            if isinstance(candidate, Mapping)
-            and geometry_manual_source_entries_share_identity(
-                entry,
-                candidate,
-                normalize_hkl_key=normalize_hkl_key,
-            )
-        ]
-        if len(identity_candidate_entries) == 1:
-            return dict(identity_candidate_entries[0][1])
-
-        resolved_index = _geometry_manual_disambiguate_source_candidates(
+        identity_match_index = _geometry_manual_resolve_identity_candidate_index(
             entry,
-            identity_candidate_entries,
+            candidate_entries,
             normalize_hkl_key=normalize_hkl_key,
         )
-        if resolved_index is not None and 0 <= int(resolved_index) < len(
-            identity_candidate_entries
+        if identity_match_index is not None and 0 <= int(identity_match_index) < len(
+            candidate_entries
         ):
-            return dict(identity_candidate_entries[int(resolved_index)][1])
+            return dict(candidate_entries[int(identity_match_index)])
 
-    candidate_entries = [
-        candidate for candidate in simulated_lookup.values() if isinstance(candidate, Mapping)
-    ]
     resolved_index = geometry_manual_resolve_source_entry_index(
         entry,
         candidate_entries,
@@ -2456,19 +2590,36 @@ def geometry_manual_prioritize_candidate_entries(
     """Return candidate entries with the preferred entry, if any, moved to the front."""
 
     entries = [dict(entry) for entry in candidate_entries or [] if isinstance(entry, dict)]
-    preferred_key = candidate_source_key(preferred_candidate)
-    if preferred_key is None or not entries:
+    if not entries:
         return entries
 
-    reordered: list[dict[str, object]] = []
-    matched = False
-    for entry in entries:
-        if not matched and candidate_source_key(entry) == preferred_key:
-            reordered.insert(0, entry)
-            matched = True
-        else:
-            reordered.append(entry)
-    return reordered
+    preferred_index = _geometry_manual_resolve_identity_candidate_index(
+        preferred_candidate,
+        entries,
+    )
+    if preferred_index is None:
+        preferred_key = candidate_source_key(preferred_candidate)
+        if preferred_key is None:
+            return entries
+        preferred_index = next(
+            (
+                idx
+                for idx, entry in enumerate(entries)
+                if candidate_source_key(entry) == preferred_key
+            ),
+            None,
+        )
+    if preferred_index is None or not (0 <= int(preferred_index) < len(entries)):
+        return entries
+    preferred_entry = dict(entries[int(preferred_index)])
+    return [
+        preferred_entry,
+        *[
+            dict(entry)
+            for idx, entry in enumerate(entries)
+            if int(idx) != int(preferred_index)
+        ],
+    ]
 
 
 def refresh_geometry_manual_pick_session_candidates(
@@ -2514,8 +2665,32 @@ def refresh_geometry_manual_pick_session_candidates(
         group_target_count_fn = geometry_manual_group_target_count
 
     preferred_candidate = None
+    tagged_candidate_requires_identity = _geometry_manual_tagged_candidate_requires_identity(
+        pick_session
+    )
+    stored_tagged_candidate = (
+        dict(pick_session["tagged_candidate"])
+        if isinstance(pick_session.get("tagged_candidate"), dict)
+        else None
+    )
     tagged_candidate_key = pick_session.get("tagged_candidate_key")
-    if tagged_candidate_key is not None:
+    allow_tagged_key_fallback = _geometry_manual_allow_tagged_key_fallback(
+        tagged_candidate_key,
+        requires_identity=tagged_candidate_requires_identity,
+        stored_tagged_candidate=stored_tagged_candidate,
+    )
+    if stored_tagged_candidate is not None:
+        preferred_index = _geometry_manual_resolve_identity_candidate_index(
+            stored_tagged_candidate,
+            live_entries,
+        )
+        if preferred_index is not None and 0 <= int(preferred_index) < len(live_entries):
+            preferred_candidate = dict(live_entries[int(preferred_index)])
+    if (
+        allow_tagged_key_fallback
+        and preferred_candidate is None
+        and tagged_candidate_key is not None
+    ):
         preferred_candidate = next(
             (
                 dict(entry)
@@ -2524,11 +2699,6 @@ def refresh_geometry_manual_pick_session_candidates(
             ),
             None,
         )
-    if preferred_candidate is None and isinstance(
-        pick_session.get("tagged_candidate"),
-        dict,
-    ):
-        preferred_candidate = dict(pick_session["tagged_candidate"])
 
     try:
         refreshed_entries = prioritize_candidate_entries(
@@ -2542,6 +2712,14 @@ def refresh_geometry_manual_pick_session_candidates(
             preferred_candidate,
         )
     refreshed_session = dict(pick_session)
+    if (
+        isinstance(pick_session.get("_tagged_candidate_requires_identity"), bool)
+        or stored_tagged_candidate is not None
+        or tagged_candidate_key is not None
+    ):
+        refreshed_session["_tagged_candidate_requires_identity"] = bool(
+            tagged_candidate_requires_identity
+        )
     refreshed_session["group_entries"] = list(refreshed_entries)
     refreshed_session["target_count"] = int(
         group_target_count_fn(group_key, refreshed_entries)
@@ -2549,17 +2727,30 @@ def refresh_geometry_manual_pick_session_candidates(
     if cache_signature is not None:
         refreshed_session["cache_signature"] = cache_signature
 
-    tagged_candidate = next(
-        (
-            dict(entry)
-            for entry in refreshed_entries
-            if candidate_source_key(entry) == tagged_candidate_key
-        ),
-        None,
-    )
+    tagged_candidate = None
+    if stored_tagged_candidate is not None:
+        tagged_index = _geometry_manual_resolve_identity_candidate_index(
+            stored_tagged_candidate,
+            refreshed_entries,
+        )
+        if tagged_index is not None and 0 <= int(tagged_index) < len(refreshed_entries):
+            tagged_candidate = dict(refreshed_entries[int(tagged_index)])
+    if (
+        allow_tagged_key_fallback
+        and tagged_candidate is None
+        and tagged_candidate_key is not None
+    ):
+        tagged_candidate = next(
+            (
+                dict(entry)
+                for entry in refreshed_entries
+                if candidate_source_key(entry) == tagged_candidate_key
+            ),
+            None,
+        )
     if tagged_candidate is not None:
         refreshed_session["tagged_candidate"] = tagged_candidate
-    elif "tagged_candidate" in refreshed_session and tagged_candidate_key is None:
+    elif "tagged_candidate" in refreshed_session:
         refreshed_session.pop("tagged_candidate", None)
 
     return refreshed_session
@@ -2579,12 +2770,42 @@ def geometry_manual_tagged_candidate_from_session(
     if not isinstance(pick_session, dict):
         return None
 
+    stored_tagged_candidate = (
+        dict(pick_session["tagged_candidate"])
+        if isinstance(pick_session.get("tagged_candidate"), dict)
+        else None
+    )
+    tagged_candidate_requires_identity = _geometry_manual_tagged_candidate_requires_identity(
+        pick_session
+    )
     tagged_key = pick_session.get("tagged_candidate_key")
+    allow_tagged_key_fallback = _geometry_manual_allow_tagged_key_fallback(
+        tagged_key if isinstance(tagged_key, tuple) else None,
+        requires_identity=tagged_candidate_requires_identity,
+        stored_tagged_candidate=stored_tagged_candidate,
+    )
+    if stored_tagged_candidate is not None:
+        tagged_index = _geometry_manual_resolve_identity_candidate_index(
+            stored_tagged_candidate,
+            candidate_entries,
+        )
+        if tagged_index is not None:
+            normalized_candidates = [
+                dict(raw_entry)
+                for raw_entry in (candidate_entries or ())
+                if isinstance(raw_entry, dict)
+            ]
+            if 0 <= int(tagged_index) < len(normalized_candidates):
+                return dict(normalized_candidates[int(tagged_index)])
+        if not allow_tagged_key_fallback:
+            return None
+    if tagged_candidate_requires_identity:
+        return None
+
     if tagged_key is None:
-        tagged_candidate = pick_session.get("tagged_candidate")
         tagged_key = (
-            candidate_source_key(tagged_candidate)
-            if isinstance(tagged_candidate, dict)
+            candidate_source_key(stored_tagged_candidate)
+            if stored_tagged_candidate is not None
             else None
         )
     if tagged_key is None:
@@ -2954,7 +3175,7 @@ def build_geometry_manual_pick_cache(
     ],
     build_simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
-        dict[tuple[object, ...], dict[str, object]],
+        GeometryManualLookupMap,
     ],
     project_peaks_to_current_view: Callable[
         [Sequence[dict[str, object]] | None],
@@ -3004,7 +3225,7 @@ def build_geometry_manual_pick_cache(
 
     simulated_peaks: list[dict[str, object]] = []
     grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
-    simulated_lookup: dict[tuple[object, ...], dict[str, object]] = {}
+    simulated_lookup: GeometryManualLookupMap = {}
     reuse_requires_caked_projection = bool(
         isinstance(cache_sig, tuple) and len(cache_sig) >= 3 and bool(cache_sig[2])
     )
@@ -3264,7 +3485,7 @@ def build_geometry_manual_pick_cache(
     cache_result = {
         "signature": cache_sig,
         "simulated_peaks": [dict(entry) for entry in simulated_peaks],
-        "simulated_lookup": dict(simulated_lookup),
+        "simulated_lookup": _geometry_manual_copy_lookup(simulated_lookup),
         "grouped_candidates": {
             key: [dict(entry) for entry in entries]
             for key, entries in grouped_candidates.items()
@@ -4294,13 +4515,17 @@ def geometry_manual_session_initial_pairs_display(
     if not isinstance(group_entries, list) or not isinstance(pending_entries, list):
         return []
 
-    pending_lookup: dict[tuple[object, ...], dict[str, object]] = {}
+    pending_lookup: GeometryManualLookupMap = {}
     for raw_entry in pending_entries:
         if not isinstance(raw_entry, dict):
             continue
         source_key = candidate_source_key(raw_entry)
         if source_key is not None:
-            pending_lookup[source_key] = raw_entry
+            _geometry_manual_add_lookup_entry(
+                pending_lookup,
+                source_key,
+                raw_entry,
+            )
 
     initial_pairs_display: list[dict[str, object]] = []
     for pair_idx, raw_entry in enumerate(group_entries):
@@ -4325,7 +4550,27 @@ def geometry_manual_session_initial_pairs_display(
             entry["sim_display"] = (float(sim_col), float(sim_row))
 
         source_key = candidate_source_key(raw_entry)
-        measured_entry = pending_lookup.get(source_key) if source_key is not None else None
+        pending_candidates = (
+            _geometry_manual_lookup_bucket_entries(pending_lookup.get(source_key))
+            if source_key is not None
+            else []
+        )
+        measured_entry = None
+        pending_index = _geometry_manual_resolve_identity_candidate_index(
+            raw_entry,
+            pending_candidates,
+        )
+        if pending_index is not None and 0 <= int(pending_index) < len(pending_candidates):
+            measured_entry = dict(pending_candidates[int(pending_index)])
+        elif pending_candidates:
+            resolved_index = geometry_manual_resolve_source_entry_index(
+                raw_entry,
+                pending_candidates,
+            )
+            if resolved_index is not None and 0 <= int(resolved_index) < len(
+                pending_candidates
+            ):
+                measured_entry = dict(pending_candidates[int(resolved_index)])
         _copy_q_values_from_sources(entry, raw_entry, measured_entry)
         if isinstance(measured_entry, dict):
             bg_coords = entry_display_coords(measured_entry)
@@ -4353,7 +4598,7 @@ def build_geometry_manual_initial_pairs_display(
     simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]] | None = None,
     build_simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
-        dict[tuple[object, ...], dict[str, object]],
+        GeometryManualLookupMap,
     ],
     entry_display_coords: Callable[
         [dict[str, object] | None],
@@ -4379,9 +4624,11 @@ def build_geometry_manual_initial_pairs_display(
             prefer_cache=True,
             background_index=background_index,
         )
-        simulated_lookup = dict(cache_data.get("simulated_lookup", {}))
+        simulated_lookup = _geometry_manual_copy_lookup(
+            cache_data.get("simulated_lookup", {})
+        )
     else:
-        simulated_lookup = {}
+        simulated_lookup: GeometryManualLookupMap = {}
     if not simulated_lookup:
         source_rows = (
             [
@@ -4470,7 +4717,7 @@ def make_runtime_geometry_manual_cache_callbacks(
     ],
     build_simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
-        dict[tuple[object, ...], dict[str, object]],
+        GeometryManualLookupMap,
     ],
     project_peaks_to_current_view: Callable[
         [Sequence[dict[str, object]] | None],
@@ -5185,15 +5432,19 @@ def make_runtime_geometry_manual_projection_callbacks(
 
     def _simulated_lookup(
         simulated_peaks: Sequence[dict[str, object]] | None,
-    ) -> dict[tuple[object, ...], dict[str, object]]:
-        lookup: dict[tuple[object, ...], dict[str, object]] = {}
+    ) -> GeometryManualLookupMap:
+        lookup: GeometryManualLookupMap = {}
         for raw_entry in simulated_peaks or []:
             if not isinstance(raw_entry, dict):
                 continue
             key = geometry_manual_candidate_source_key(raw_entry)
             if key is None:
                 continue
-            lookup[key] = dict(raw_entry)
+            _geometry_manual_add_lookup_entry(
+                lookup,
+                key,
+                raw_entry,
+            )
         return lookup
 
     return GeometryManualRuntimeProjectionCallbacks(
@@ -5753,6 +6004,7 @@ def geometry_manual_toggle_selection_at(
         next_session["tagged_candidate_key"] = tagged_candidate_key
     if isinstance(tagged_candidate, dict):
         next_session["tagged_candidate"] = dict(tagged_candidate)
+        next_session["_tagged_candidate_requires_identity"] = True
     set_pick_session_fn(next_session)
     render_current_pairs_fn(update_status=False)
     update_button_label_fn()
