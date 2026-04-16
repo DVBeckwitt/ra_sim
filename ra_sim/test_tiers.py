@@ -19,6 +19,7 @@ FAST_TEST_FILES = (
     "test_dependency_metadata.py",
     "test_dev_cli.py",
     "test_import_smoke.py",
+    "test_structure_factor_atomic_coordinates.py",
 )
 INTEGRATION_TEST_FILES = (
     "test_cli_headless.py",
