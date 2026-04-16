@@ -6201,7 +6201,17 @@ def _initialize_runtime_controls_block_10() -> None:
                 )
             ),
             show_caked_2d_var=lambda: analysis_view_controls_view_state.show_caked_2d_var,
-            toggle_caked_2d=lambda: toggle_caked_2d(),
+            toggle_caked_2d=lambda: toggle_caked_2d(
+                "caked"
+                if bool(
+                    getattr(
+                        analysis_view_controls_view_state.show_caked_2d_var,
+                        "get",
+                        lambda: False,
+                    )()
+                )
+                else "detector"
+            ),
             ensure_geometry_fit_caked_view=(
                 lambda: _ensure_geometry_fit_caked_view(force_refresh=True)
             ),
@@ -6448,18 +6458,38 @@ def _apply_main_caked_view_toggle() -> None:
     _refresh_run_status_bar()
 
 
-def toggle_caked_2d() -> None:
+def _normalize_app_shell_view_mode_request(
+    requested_mode: object | None,
+    *,
+    fallback: str,
+) -> str:
+    normalized = str(requested_mode or fallback).strip().lower()
+    if normalized not in {"detector", "caked", "q_space"}:
+        normalized = str(fallback or "detector").strip().lower()
+    if normalized not in {"detector", "caked", "q_space"}:
+        normalized = "detector"
+    return normalized
+
+
+def toggle_caked_2d(requested_mode: str | None = None) -> None:
+    show_caked_now = bool(
+        getattr(
+            analysis_view_controls_view_state.show_caked_2d_var,
+            "get",
+            lambda: False,
+        )()
+    )
+    gui_views.set_app_shell_view_mode(
+        app_shell_view_state,
+        _normalize_app_shell_view_mode_request(
+            requested_mode,
+            fallback="caked" if show_caked_now else "detector",
+        ),
+    )
     _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
     _sync_center_marker(redraw=False)
     if bool(analysis_peak_selection_state.pick_armed):
-        show_caked_now = bool(
-            getattr(
-                analysis_view_controls_view_state.show_caked_2d_var,
-                "get",
-                lambda: False,
-            )()
-        )
         if not show_caked_now:
             _set_analysis_peak_pick_mode(
                 False,
@@ -6482,9 +6512,7 @@ def _initialize_runtime_controls_block_14() -> None:
 
 
 def _set_persistent_view_mode(mode: str) -> None:
-    normalized = str(mode or "detector").strip().lower()
-    if normalized not in {"detector", "caked", "q_space"}:
-        normalized = "detector"
+    normalized = _normalize_app_shell_view_mode_request(mode, fallback="detector")
 
     show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
     if show_caked_2d_var is None:
@@ -6496,11 +6524,11 @@ def _set_persistent_view_mode(mode: str) -> None:
     if normalized == "detector":
         if show_caked_now:
             show_caked_2d_var.set(False)
-            toggle_caked_2d()
+            toggle_caked_2d(normalized)
     else:
         if not show_caked_now:
             show_caked_2d_var.set(True)
-            toggle_caked_2d()
+            toggle_caked_2d(normalized)
         else:
             if normalized != "caked" and bool(analysis_peak_selection_state.pick_armed):
                 _set_analysis_peak_pick_mode(
@@ -11002,10 +11030,9 @@ def _store_q_space_display_payload(
 def _restore_caked_display_payload_from_cached_results(
     *,
     background_visible: bool,
+    q_space_requested: bool,
 ) -> bool:
     """Rebuild caked display arrays from the current cached analysis results."""
-
-    q_space_requested = _current_app_shell_view_mode() == "q_space"
     sim_caked = _prepare_caked_display_payload(
         simulation_runtime_state.last_res2_sim,
         ai=simulation_runtime_state.ai_cache.get("ai"),
@@ -12710,9 +12737,10 @@ def do_update():
         )
 
     show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+    requested_view_mode = _current_app_shell_view_mode()
     q_space_requested = bool(
         simulation_runtime_state.unscaled_image is not None
-        and _current_app_shell_view_mode() == "q_space"
+        and requested_view_mode == "q_space"
     )
     show_1d_requested = bool(analysis_view_controls_view_state.show_1d_var.get())
     one_d_analysis_requested = bool(
@@ -12825,7 +12853,8 @@ def do_update():
             background_visible=bool(background_runtime_state.visible),
         )
         _restore_caked_display_payload_from_cached_results(
-            background_visible=bool(background_runtime_state.visible)
+            background_visible=bool(background_runtime_state.visible),
+            q_space_requested=q_space_requested,
         )
         _trace_live_cache_event(
             "analysis",
@@ -14388,7 +14417,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     peak_selection_runtime_callbacks.reselect_current_peak()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
-    toggle_caked_2d()
+    toggle_caked_2d(
+        getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")()
+    )
     toggle_log_display()
     _sync_primary_raster_geometry(
         view_mode=_resolved_primary_analysis_display_mode()
@@ -21256,7 +21287,7 @@ def _set_analysis_peak_pick_mode(
         show_caked_var = analysis_view_controls_view_state.show_caked_2d_var
         if show_caked_var is not None and not bool(show_caked_var.get()):
             show_caked_var.set(True)
-            toggle_caked_2d()
+            toggle_caked_2d("caked")
         if not _active_caked_primary_view():
             enabled_flag = False
             status_text = "Analysis peak picking requires the caked view."

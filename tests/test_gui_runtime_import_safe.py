@@ -1677,7 +1677,7 @@ def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
 
     assert "def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:" in source
     assert "gui_qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(" in source
-    assert "def toggle_caked_2d() -> None:" in source
+    assert "def toggle_caked_2d(requested_mode: str | None = None) -> None:" in source
     assert "_invalidate_qr_cylinder_overlay_view_state(clear_artists=True)" in source
     assert "def _apply_main_caked_view_toggle() -> None:" in source
     assert "_apply_main_caked_view_toggle()" in source
@@ -2742,6 +2742,14 @@ def test_runtime_impl_analysis_job_payload_tracks_q_space_intent() -> None:
     assert '"q_space_requested": q_space_requested,' in source
 
 
+def test_runtime_impl_resolves_requested_view_mode_before_q_space_restore() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert 'requested_view_mode = _current_app_shell_view_mode()' in source
+    assert 'and requested_view_mode == "q_space"' in source
+    assert 'q_space_requested=q_space_requested,' in source
+
+
 def test_runtime_impl_q_space_view_mode_is_not_gated_on_caked_toggle() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     helper_start = source.index("def _current_app_shell_view_mode() -> str:")
@@ -2833,6 +2841,128 @@ def test_run_analysis_job_can_emit_sim_q_space_without_caked_payload(monkeypatch
     assert np.asarray(result["sim_q_space"]["image"], dtype=float).size > 0
     assert np.asarray(result["sim_q_space"]["qr"], dtype=float).size == 48
     assert np.asarray(result["sim_q_space"]["qz"], dtype=float).size == 40
+
+
+def test_toggle_caked_2d_legacy_path_overrides_stale_q_space_shell_mode(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+        def set(self, value: object) -> None:
+            self._value = value
+
+    shell_mode_var = _Var("q_space")
+    show_caked_var = _Var(True)
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=show_caked_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "app_shell_view_state",
+        SimpleNamespace(view_mode_var=shell_mode_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(pick_armed=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(
+            set_app_shell_view_mode=lambda view_state, mode: view_state.view_mode_var.set(mode)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_qr_cylinder_overlay_view_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_apply_main_caked_view_toggle", lambda: None)
+    monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+
+    runtime_session.toggle_caked_2d()
+
+    assert shell_mode_var.get() == "caked"
+
+
+def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+        def set(self, value: object) -> None:
+            self._value = value
+
+    shell_mode_var = _Var("detector")
+    show_caked_var = _Var(False)
+    schedule_calls: list[str] = []
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=show_caked_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "app_shell_view_state",
+        SimpleNamespace(view_mode_var=shell_mode_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(pick_armed=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(unscaled_image=np.ones((1, 1), dtype=np.float64)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(
+            set_app_shell_view_mode=lambda view_state, mode: view_state.view_mode_var.set(mode)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_qr_cylinder_overlay_view_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_refresh_run_status_bar", lambda: None)
+    monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "schedule_update", lambda: schedule_calls.append("schedule"))
+
+    runtime_session._set_persistent_view_mode("q_space")
+
+    assert show_caked_var.get() is True
+    assert shell_mode_var.get() == "q_space"
+    assert schedule_calls == ["schedule"]
 
 
 def test_run_analysis_job_skips_q_space_for_caked_only_requests(monkeypatch) -> None:
@@ -3101,9 +3231,11 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
     monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
     monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
     monkeypatch.setattr(runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0)
-    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
 
-    restored = runtime_session._restore_caked_display_payload_from_cached_results(background_visible=True)
+    restored = runtime_session._restore_caked_display_payload_from_cached_results(
+        background_visible=True,
+        q_space_requested=True,
+    )
 
     assert restored is True
     assert len(q_space_inputs) == 2
@@ -3111,7 +3243,9 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
     assert len(stored_payloads) == 1
 
 
-def test_restore_caked_payload_skips_q_space_rebuild_outside_q_space_mode(monkeypatch) -> None:
+def test_restore_caked_payload_ignores_stale_shell_q_space_when_not_requested(
+    monkeypatch,
+) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     stored_payloads: list[dict[str, object]] = []
 
@@ -3167,10 +3301,11 @@ def test_restore_caked_payload_skips_q_space_rebuild_outside_q_space_mode(monkey
         "_store_q_space_display_payload",
         lambda **kwargs: stored_payloads.append(dict(kwargs)),
     )
-    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "caked")
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
 
     restored = runtime_session._restore_caked_display_payload_from_cached_results(
-        background_visible=True
+        background_visible=True,
+        q_space_requested=False,
     )
 
     assert restored is True
