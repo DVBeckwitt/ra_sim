@@ -1130,8 +1130,12 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     runtime_state.stored_peak_table_lattice = None
     runtime_state.peak_records = [
         {
-            "display_col": 1.5,
-            "display_row": 2.5,
+            "display_col": 30.25,
+            "display_row": -57.5,
+            "native_col": 1.5,
+            "native_row": 2.5,
+            "sim_col_raw": 1.5,
+            "sim_row_raw": 2.5,
             "hkl_raw": [1, 0, 0],
             "intensity": 7.0,
             "phi": 15.0,
@@ -1140,6 +1144,22 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "source_row_index": 1,
             "source_peak_index": 13,
             "q_group_key": ("q_group", "primary", 1, 0),
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        },
+        {
+            "display_col": 31.25,
+            "display_row": -56.5,
+            "hkl_raw": [2, 0, 0],
+            "intensity": 4.0,
+            "phi": -15.0,
+            "source_label": "primary",
+            "source_table_index": 0,
+            "source_row_index": 2,
+            "source_peak_index": 0,
+            "q_group_key": ("q_group", "primary", 2, 0),
+            "caked_x": 31.25,
+            "caked_y": -56.5,
         }
     ]
     live["primary_a"] = 11.0
@@ -1149,6 +1169,8 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert len(cached_preview_peaks) == 1
     assert cached_preview_peaks[0]["sim_col"] == 1.5
     assert cached_preview_peaks[0]["sim_row"] == 2.5
+    assert cached_preview_peaks[0]["display_col"] == 1.5
+    assert cached_preview_peaks[0]["display_row"] == 2.5
     assert cached_preview_peaks[0]["weight"] == 7.0
     assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
     assert cached_preview_peaks[0]["label"] == "1,0,0"
@@ -1165,8 +1187,12 @@ def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenan
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
-                "display_col": 1.5,
-                "display_row": 2.5,
+                "display_col": 30.25,
+                "display_row": -57.5,
+                "native_col": 1.5,
+                "native_row": 2.5,
+                "sim_col_raw": 1.5,
+                "sim_row_raw": 2.5,
                 "hkl_raw": [1, 0, 0],
                 "intensity": 7.0,
                 "phi": 15.0,
@@ -1175,6 +1201,8 @@ def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenan
                 "source_row_index": 1,
                 "source_peak_index": 13,
                 "q_group_key": ("q_group", "primary", 1, 0),
+                "caked_x": 30.25,
+                "caked_y": -57.5,
             }
         ],
         stored_max_positions_local=None,
@@ -1211,6 +1239,8 @@ def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenan
     cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
 
     assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["sim_col"] == 1.5
+    assert cached_preview_peaks[0]["sim_row"] == 2.5
     assert cached_preview_peaks[0]["source_reflection_index"] == 7
     assert cached_preview_peaks[0]["source_reflection_namespace"] == "full_reflection"
     assert cached_preview_peaks[0]["source_reflection_is_full"] is True

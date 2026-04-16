@@ -1014,6 +1014,8 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
     record = {
         "display_col": 110.0,
         "display_row": 220.0,
+        "sim_col": 30.25,
+        "sim_row": -57.5,
         "native_col": 10.0,
         "native_row": 20.0,
         "hkl": [1, 0, 2],
@@ -1042,8 +1044,9 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
         runtime_state,
         primary_a=4.0,
         primary_c=6.0,
-        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
-            AssertionError("restored GUI-state cache should avoid display reprojection")
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 100.0,
+            float(row) + 200.0,
         ),
         reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("restored GUI-state cache should avoid legacy peak rebuild")
@@ -1054,6 +1057,8 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
     assert runtime_state.peak_positions == [(110.0, 220.0)]
     assert runtime_state.peak_millers == [(1, 0, 2)]
     assert runtime_state.peak_intensities == [8.0]
+    assert runtime_state.peak_records[0]["sim_col"] == 110.0
+    assert runtime_state.peak_records[0]["sim_row"] == 220.0
     assert runtime_state.peak_records[0]["hkl"] == (1, 0, 2)
     assert runtime_state.peak_records[0]["hkl_raw"] == (1.0, 0.0, 2.0)
     assert runtime_state.peak_records[0]["q_group_key"] == (
@@ -1064,6 +1069,113 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
     )
     assert runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert runtime_state.peak_overlay_cache["click_spatial_index"] is not None
+
+
+def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_cache_for_caked_view() -> None:
+    record = {
+        "display_col": 110.0,
+        "display_row": 220.0,
+        "sim_col": 110.0,
+        "sim_row": 220.0,
+        "native_col": 10.0,
+        "native_row": 20.0,
+        "two_theta_deg": 30.25,
+        "phi_deg": -57.5,
+        "hkl": [1, 0, 2],
+        "hkl_raw": [1.0, 0.0, 2.0],
+        "intensity": 8.0,
+        "q_group_key": ["q_group", "primary", 1.5, 2],
+    }
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "sig": None,
+            "positions": [],
+            "millers": [],
+            "intensities": [],
+            "records": [dict(record)],
+            "click_spatial_index": None,
+            "restored_from_gui_state": True,
+        },
+        peak_records=[dict(record)],
+        stored_max_positions_local=None,
+        stored_sim_image=None,
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("caked restore should not use detector display projection")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("restored GUI-state cache should avoid legacy peak rebuild")
+        ),
+        caked_view_enabled_factory=True,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 20.25,
+            float(row) - 77.5,
+        ),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_records[0]["sim_col"] == 30.25
+    assert runtime_state.peak_records[0]["sim_row"] == -57.5
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
+    assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
+
+
+def test_peak_selection_runtime_peak_overlay_data_skips_ambiguous_restored_rows() -> None:
+    stable_record = {
+        "display_col": 110.0,
+        "display_row": 220.0,
+        "native_col": 10.0,
+        "native_row": 20.0,
+        "hkl": [1, 0, 2],
+        "intensity": 8.0,
+    }
+    ambiguous_record = {
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "hkl": [2, 0, 3],
+        "intensity": 5.0,
+    }
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "sig": None,
+            "positions": [],
+            "millers": [],
+            "intensities": [],
+            "records": [dict(stable_record), dict(ambiguous_record)],
+            "click_spatial_index": None,
+            "restored_from_gui_state": True,
+        },
+        peak_records=[dict(stable_record), dict(ambiguous_record)],
+        stored_max_positions_local=None,
+        stored_sim_image=None,
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("restored GUI-state cache should avoid legacy peak rebuild")
+        ),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(110.0, 220.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2)]
+    assert len(runtime_state.peak_records) == 1
+    assert runtime_state.peak_records[0]["display_col"] == 110.0
+    assert runtime_state.peak_overlay_cache["positions"] == [(110.0, 220.0)]
 
 
 def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:

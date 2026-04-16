@@ -207,6 +207,12 @@ def _coerce_nonnegative_index(value: object) -> int | None:
     return int(idx) if idx >= 0 else None
 
 
+def _resolve_legacy_source_peak_index(entry: Mapping[str, object] | None) -> int | None:
+    if not isinstance(entry, Mapping):
+        return None
+    return _coerce_nonnegative_index(entry.get("source_peak_index"))
+
+
 def _entry_has_explicit_trusted_reflection_identity(
     entry: Mapping[str, object] | None,
 ) -> bool:
@@ -3116,21 +3122,74 @@ def geometry_manual_live_peak_candidates_from_records(
     if active_signature_matches is not None:
         provenance_signature_matches = bool(active_signature_matches)
 
+    def _finite_point(
+        source: Mapping[str, object],
+        x_key: str,
+        y_key: str,
+    ) -> tuple[float, float] | None:
+        try:
+            col = float(source.get(x_key, np.nan))
+            row = float(source.get(y_key, np.nan))
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    def _points_match(
+        left: tuple[float, float] | None,
+        right: tuple[float, float] | None,
+        *,
+        tol: float = 1.0e-9,
+    ) -> bool:
+        return bool(
+            left is not None
+            and right is not None
+            and abs(float(left[0]) - float(right[0])) <= float(tol)
+            and abs(float(left[1]) - float(right[1])) <= float(tol)
+        )
+
     candidates: list[dict[str, object]] = []
     for raw_record in peak_records:
         if not isinstance(raw_record, Mapping):
             continue
         entry = dict(raw_record)
-        try:
-            display_col = float(entry.get("display_col", np.nan))
-            display_row = float(entry.get("display_row", np.nan))
-        except Exception:
-            continue
-        if not (np.isfinite(display_col) and np.isfinite(display_row)):
+        display_point = _finite_point(entry, "display_col", "display_row")
+        native_point = _finite_point(entry, "native_col", "native_row")
+        if native_point is None:
+            native_point = _finite_point(entry, "sim_native_x", "sim_native_y")
+        caked_point = _finite_point(entry, "caked_x", "caked_y")
+        if caked_point is None:
+            caked_point = _finite_point(entry, "raw_caked_x", "raw_caked_y")
+        if caked_point is None:
+            caked_point = _finite_point(entry, "two_theta_deg", "phi_deg")
+        raw_detector_display = _finite_point(entry, "sim_col_raw", "sim_row_raw")
+
+        if (
+            raw_detector_display is None
+            and native_point is None
+            and caked_point is None
+        ):
             continue
 
-        entry["sim_col"] = float(display_col)
-        entry["sim_row"] = float(display_row)
+        if display_point is None:
+            display_point = raw_detector_display or caked_point
+        if display_point is not None:
+            entry["sim_col"] = float(display_point[0])
+            entry["sim_row"] = float(display_point[1])
+        if raw_detector_display is not None:
+            entry["sim_col_raw"] = float(raw_detector_display[0])
+            entry["sim_row_raw"] = float(raw_detector_display[1])
+        if native_point is not None:
+            entry["native_col"] = float(native_point[0])
+            entry["native_row"] = float(native_point[1])
+            entry["sim_native_x"] = float(native_point[0])
+            entry["sim_native_y"] = float(native_point[1])
+        if caked_point is not None:
+            entry["caked_x"] = float(caked_point[0])
+            entry["caked_y"] = float(caked_point[1])
+            entry.setdefault("raw_caked_x", float(caked_point[0]))
+            entry.setdefault("raw_caked_y", float(caked_point[1]))
         if entry.get("weight") is None:
             try:
                 entry["weight"] = max(0.0, float(entry.get("intensity", 0.0)))
@@ -3244,6 +3303,17 @@ def build_geometry_manual_pick_cache(
         normalized_rows = [
             dict(entry) for entry in (candidate_rows or ()) if isinstance(entry, Mapping)
         ]
+        if callable(project_peaks_to_current_view):
+            reprojection_rows = _filter_cached_source_rows_for_reprojection(
+                normalized_rows
+            )
+            if reprojection_rows:
+                try:
+                    normalized_rows = _filter_reprojected_cache_rows(
+                        project_peaks_to_current_view(reprojection_rows)
+                    )
+                except Exception:
+                    normalized_rows = []
         candidate_groups = build_grouped_candidates(normalized_rows)
         if not candidate_groups:
             return False
@@ -3303,12 +3373,24 @@ def build_geometry_manual_pick_cache(
             if not isinstance(raw_entry, Mapping):
                 continue
             entry = dict(raw_entry)
-            try:
-                raw_col = float(entry.get("sim_col_raw", np.nan))
-                raw_row = float(entry.get("sim_row_raw", np.nan))
-            except Exception:
-                continue
-            if not (np.isfinite(raw_col) and np.isfinite(raw_row)):
+            stable_pairs = (
+                ("sim_col_raw", "sim_row_raw"),
+                ("native_col", "native_row"),
+                ("sim_native_x", "sim_native_y"),
+                ("caked_x", "caked_y"),
+                ("raw_caked_x", "raw_caked_y"),
+            )
+            has_reprojectable_coords = False
+            for x_key, y_key in stable_pairs:
+                try:
+                    raw_col = float(entry.get(x_key, np.nan))
+                    raw_row = float(entry.get(y_key, np.nan))
+                except Exception:
+                    continue
+                if np.isfinite(raw_col) and np.isfinite(raw_row):
+                    has_reprojectable_coords = True
+                    break
+            if not has_reprojectable_coords:
                 continue
             filtered_rows.append(entry)
         return filtered_rows
@@ -5095,6 +5177,20 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _project_peaks_to_current_view(
         simulated_peaks: Sequence[dict[str, object]] | None,
     ) -> list[dict[str, object]]:
+        def _entry_point(
+            source: Mapping[str, object],
+            x_key: str,
+            y_key: str,
+        ) -> tuple[float, float] | None:
+            try:
+                col = float(source.get(x_key, np.nan))
+                row = float(source.get(y_key, np.nan))
+            except Exception:
+                return None
+            if not (np.isfinite(col) and np.isfinite(row)):
+                return None
+            return float(col), float(row)
+
         projected: list[dict[str, object]] = []
         use_caked = _pick_uses_caked_space()
         radial_axis = (
@@ -5116,19 +5212,16 @@ def make_runtime_geometry_manual_projection_callbacks(
             if not isinstance(raw_entry, dict):
                 continue
             entry = dict(raw_entry)
-            try:
-                raw_col = float(entry.get("sim_col_raw", np.nan))
-                raw_row = float(entry.get("sim_row_raw", np.nan))
-            except Exception:
-                raw_col = float("nan")
-                raw_row = float("nan")
-            if not (np.isfinite(raw_col) and np.isfinite(raw_row)):
-                try:
-                    raw_col = float(entry.get("sim_col", np.nan))
-                    raw_row = float(entry.get("sim_row", np.nan))
-                except Exception:
-                    raw_col = float("nan")
-                    raw_row = float("nan")
+            native_point = _entry_point(entry, "native_col", "native_row")
+            if native_point is None:
+                native_point = _entry_point(entry, "sim_native_x", "sim_native_y")
+            caked_point = _entry_point(entry, "caked_x", "caked_y")
+            if caked_point is None:
+                caked_point = _entry_point(entry, "raw_caked_x", "raw_caked_y")
+            if caked_point is None:
+                caked_point = _entry_point(entry, "two_theta_deg", "phi_deg")
+
+            raw_detector_display = _entry_point(entry, "sim_col_raw", "sim_row_raw")
             for stale_key in (
                 "caked_x",
                 "caked_y",
@@ -5140,57 +5233,139 @@ def make_runtime_geometry_manual_projection_callbacks(
                 "sim_row_global",
             ):
                 entry.pop(stale_key, None)
-            entry["sim_col"] = float(raw_col)
-            entry["sim_row"] = float(raw_row)
-            entry["sim_col_raw"] = float(raw_col)
-            entry["sim_row_raw"] = float(raw_row)
 
-            if np.isfinite(raw_col) and np.isfinite(raw_row):
-                native_point = None
-                if callable(display_to_native_sim_coords):
-                    try:
-                        native_point = display_to_native_sim_coords(
-                            float(raw_col),
-                            float(raw_row),
-                            sim_shape,
-                        )
-                    except Exception:
-                        native_point = None
-                if (
-                    isinstance(native_point, tuple)
-                    and len(native_point) >= 2
-                    and np.isfinite(float(native_point[0]))
-                    and np.isfinite(float(native_point[1]))
-                ):
-                    caked_coords = _native_to_caked_display_coords(
+            if native_point is not None and len(sim_shape) >= 2 and min(sim_shape) > 0:
+                try:
+                    rotated = rotate_point_for_display(
                         float(native_point[0]),
                         float(native_point[1]),
+                        sim_shape,
+                        int(display_rotate_k),
                     )
-                    if caked_coords is not None:
-                        entry["caked_x"] = float(caked_coords[0])
-                        entry["caked_y"] = float(caked_coords[1])
-                        entry["raw_caked_x"] = float(caked_coords[0])
-                        entry["raw_caked_y"] = float(caked_coords[1])
+                except Exception:
+                    rotated = None
+                if (
+                    isinstance(rotated, tuple)
+                    and len(rotated) >= 2
+                    and np.isfinite(float(rotated[0]))
+                    and np.isfinite(float(rotated[1]))
+                ):
+                    raw_detector_display = (float(rotated[0]), float(rotated[1]))
+
+            if (
+                native_point is None
+                and raw_detector_display is not None
+                and callable(display_to_native_sim_coords)
+            ):
+                try:
+                    derived_native = display_to_native_sim_coords(
+                        float(raw_detector_display[0]),
+                        float(raw_detector_display[1]),
+                        sim_shape,
+                    )
+                except Exception:
+                    derived_native = None
+                if (
+                    isinstance(derived_native, tuple)
+                    and len(derived_native) >= 2
+                    and np.isfinite(float(derived_native[0]))
+                    and np.isfinite(float(derived_native[1]))
+                ):
+                    native_point = (
+                        float(derived_native[0]),
+                        float(derived_native[1]),
+                    )
+
+            if (
+                raw_detector_display is None
+                and caked_point is not None
+                and callable(caked_angles_to_background_display_coords)
+            ):
+                try:
+                    projected_detector = caked_angles_to_background_display_coords(
+                        float(caked_point[0]),
+                        float(caked_point[1]),
+                    )
+                except Exception:
+                    projected_detector = None
+                if (
+                    isinstance(projected_detector, tuple)
+                    and len(projected_detector) >= 2
+                    and projected_detector[0] is not None
+                    and projected_detector[1] is not None
+                    and np.isfinite(float(projected_detector[0]))
+                    and np.isfinite(float(projected_detector[1]))
+                ):
+                    raw_detector_display = (
+                        float(projected_detector[0]),
+                        float(projected_detector[1]),
+                    )
+                    if (
+                        native_point is None
+                        and callable(_background_display_to_native_detector_coords)
+                    ):
+                        derived_native = _background_display_to_native_detector_coords(
+                            float(raw_detector_display[0]),
+                            float(raw_detector_display[1]),
+                        )
+                        if (
+                            isinstance(derived_native, tuple)
+                            and len(derived_native) >= 2
+                            and np.isfinite(float(derived_native[0]))
+                            and np.isfinite(float(derived_native[1]))
+                        ):
+                            native_point = (
+                                float(derived_native[0]),
+                                float(derived_native[1]),
+                            )
+
+            if native_point is not None:
+                entry["native_col"] = float(native_point[0])
+                entry["native_row"] = float(native_point[1])
+                entry["sim_native_x"] = float(native_point[0])
+                entry["sim_native_y"] = float(native_point[1])
+
+            if native_point is not None:
+                caked_point = None
+                caked_coords = _native_to_caked_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+                if caked_coords is not None:
+                    caked_point = (float(caked_coords[0]), float(caked_coords[1]))
+
+            if raw_detector_display is not None:
+                entry["sim_col_raw"] = float(raw_detector_display[0])
+                entry["sim_row_raw"] = float(raw_detector_display[1])
+            if caked_point is not None:
+                entry["caked_x"] = float(caked_point[0])
+                entry["caked_y"] = float(caked_point[1])
+                entry["raw_caked_x"] = float(caked_point[0])
+                entry["raw_caked_y"] = float(caked_point[1])
 
             if use_caked:
-                try:
-                    caked_col = float(entry.get("caked_x", np.nan))
-                    caked_row = float(entry.get("caked_y", np.nan))
-                except Exception:
-                    caked_col = float("nan")
-                    caked_row = float("nan")
-                if np.isfinite(caked_col) and np.isfinite(caked_row):
-                    entry["sim_col"] = float(caked_col)
-                    entry["sim_row"] = float(caked_row)
-                    entry["sim_col_global"] = float(caked_col)
-                    entry["sim_row_global"] = float(caked_row)
+                if caked_point is not None:
+                    entry["sim_col"] = float(caked_point[0])
+                    entry["sim_row"] = float(caked_point[1])
+                    entry["display_col"] = float(caked_point[0])
+                    entry["display_row"] = float(caked_point[1])
+                    entry["sim_col_global"] = float(caked_point[0])
+                    entry["sim_row_global"] = float(caked_point[1])
                     entry["sim_col_local"] = float(
-                        caked_axis_to_image_index(caked_col, radial_axis)
+                        caked_axis_to_image_index(float(caked_point[0]), radial_axis)
                     )
                     entry["sim_row_local"] = float(
-                        caked_axis_to_image_index(caked_row, azimuth_axis)
+                        caked_axis_to_image_index(float(caked_point[1]), azimuth_axis)
                     )
+                    projected.append(entry)
+                continue
 
+            if raw_detector_display is None:
+                continue
+            entry["sim_col"] = float(raw_detector_display[0])
+            entry["sim_row"] = float(raw_detector_display[1])
+            entry["display_col"] = float(raw_detector_display[0])
+            entry["display_row"] = float(raw_detector_display[1])
             projected.append(entry)
         return projected
 

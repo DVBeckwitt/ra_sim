@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from ra_sim.simulation.diffraction import (
+    get_process_peaks_runtime_kwargs,
     process_peaks_parallel as diffraction_process_peaks_parallel,
 )
 from ra_sim.simulation.diffraction import (
@@ -887,8 +888,12 @@ def build_geometry_fit_simulated_peaks(
                 trusted_reflection_index = None
             peak_record = {
                 "hkl": hkl,
+                "native_col": float(native_col),
+                "native_row": float(native_row),
                 "sim_col": float(display_col),
                 "sim_row": float(display_row),
+                "sim_col_raw": float(display_col),
+                "sim_row_raw": float(display_row),
                 "weight": max(0.0, float(abs(intensity))),
                 "source_label": str(source_label),
                 "source_table_index": int(table_idx),
@@ -1332,6 +1337,7 @@ def simulate_geometry_fit_hit_tables(
             solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)),
             solve_q_mode=int(mosaic.get("solve_q_mode", default_solve_q_mode)),
             sample_weights=mosaic.get("sample_weights"),
+            **get_process_peaks_runtime_kwargs(),
         )
     except Exception as exc:
         diagnostics.update(
@@ -1735,6 +1741,94 @@ def make_runtime_geometry_q_group_value_callbacks(
     def _primary_c() -> float:
         return _coerce_float(_resolve_runtime_value(primary_c_factory), float("nan"))
 
+    def _detector_preview_image_shape() -> tuple[int, int]:
+        stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+        if stored_sim_image is not None:
+            try:
+                return tuple(int(v) for v in np.asarray(stored_sim_image).shape[:2])
+            except Exception:
+                pass
+        image_size = max(
+            0,
+            _coerce_int(_resolve_runtime_value(image_size_factory), 0),
+        )
+        return (image_size, image_size)
+
+    def _finite_point(
+        source: Mapping[str, object],
+        x_key: str,
+        y_key: str,
+    ) -> tuple[float, float] | None:
+        try:
+            col = float(source.get(x_key, np.nan))
+            row = float(source.get(y_key, np.nan))
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    def _normalize_detector_peak_record_fallback_rows(
+        candidate_rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        image_shape = _detector_preview_image_shape()
+        normalized_rows: list[dict[str, object]] = []
+        for raw_entry in candidate_rows or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            native_point = _finite_point(entry, "native_col", "native_row")
+            if native_point is None:
+                native_point = _finite_point(entry, "sim_native_x", "sim_native_y")
+            raw_detector_display = _finite_point(entry, "sim_col_raw", "sim_row_raw")
+            if (
+                raw_detector_display is None
+                and native_point is not None
+                and callable(native_sim_to_display_coords)
+                and len(image_shape) >= 2
+                and min(image_shape) > 0
+            ):
+                try:
+                    projected = native_sim_to_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                        image_shape,
+                    )
+                except Exception:
+                    projected = None
+                if (
+                    isinstance(projected, tuple)
+                    and len(projected) >= 2
+                    and np.isfinite(float(projected[0]))
+                    and np.isfinite(float(projected[1]))
+                ):
+                    raw_detector_display = (
+                        float(projected[0]),
+                        float(projected[1]),
+                    )
+            if raw_detector_display is None:
+                continue
+            entry["sim_col"] = float(raw_detector_display[0])
+            entry["sim_row"] = float(raw_detector_display[1])
+            entry["display_col"] = float(raw_detector_display[0])
+            entry["display_row"] = float(raw_detector_display[1])
+            entry["sim_col_raw"] = float(raw_detector_display[0])
+            entry["sim_row_raw"] = float(raw_detector_display[1])
+            if native_point is not None:
+                entry["native_col"] = float(native_point[0])
+                entry["native_row"] = float(native_point[1])
+                entry["sim_native_x"] = float(native_point[0])
+                entry["sim_native_y"] = float(native_point[1])
+            for stale_key in (
+                "sim_col_global",
+                "sim_row_global",
+                "sim_col_local",
+                "sim_row_local",
+            ):
+                entry.pop(stale_key, None)
+            normalized_rows.append(entry)
+        return normalized_rows
+
     def _has_intersection_cache() -> bool:
         for attr_name in (
             "stored_primary_intersection_cache",
@@ -1768,15 +1862,7 @@ def make_runtime_geometry_q_group_value_callbacks(
             (str, bytes),
         ):
             use_nominal_cache_grouping = _has_intersection_cache()
-            stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
-            if stored_sim_image is not None:
-                image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
-            else:
-                image_size = max(
-                    0,
-                    _coerce_int(_resolve_runtime_value(image_size_factory), 0),
-                )
-                image_shape = (image_size, image_size)
+            image_shape = _detector_preview_image_shape()
 
             peak_kwargs: dict[str, object] = {
                 "image_shape": image_shape,
@@ -1848,6 +1934,7 @@ def make_runtime_geometry_q_group_value_callbacks(
             provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
             expected_table_count=provenance.get("expected_table_count"),
         )
+        cached_peaks = _normalize_detector_peak_record_fallback_rows(cached_peaks)
         for entry in cached_peaks:
             if _has_intersection_cache() and "q_group_nominal_hkl" not in entry:
                 entry["q_group_nominal_hkl"] = True

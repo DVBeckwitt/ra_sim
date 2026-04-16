@@ -4668,6 +4668,10 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
                 "source_row_index": 2,
                 "sim_col": 3.0,
                 "sim_row": 4.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "native_col": 3.0,
+                "native_row": 4.0,
             }
         ]
 
@@ -4792,10 +4796,16 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
             "sim_row": 2.0,
             "sim_col_raw": 3.0,
             "sim_row_raw": 4.0,
+            "native_col": 3.0,
+            "native_row": 4.0,
+            "sim_native_x": 3.0,
+            "sim_native_y": 4.0,
             "caked_x": 13.0,
             "caked_y": 2.0,
             "raw_caked_x": 13.0,
             "raw_caked_y": 2.0,
+            "display_col": 13.0,
+            "display_row": 2.0,
             "sim_col_global": 13.0,
             "sim_row_global": 2.0,
             "sim_col_local": 3.0,
@@ -4870,10 +4880,16 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "sim_row": -9.0,
             "sim_col_raw": 3.0,
             "sim_row_raw": 4.0,
+            "native_col": 3.0,
+            "native_row": 4.0,
+            "sim_native_x": 3.0,
+            "sim_native_y": 4.0,
             "caked_x": 17.0,
             "caked_y": -9.0,
             "raw_caked_x": 17.0,
             "raw_caked_y": -9.0,
+            "display_col": 17.0,
+            "display_row": -9.0,
             "sim_col_global": 17.0,
             "sim_row_global": -9.0,
             "sim_col_local": 7.0,
@@ -4935,22 +4951,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_clears_stale_caked_fi
         ]
     )
 
-    assert projected == [
-        {
-            "label": "1,0,0",
-            "q_group_key": ("q_group", "primary", 1, 0),
-            "source_table_index": 1,
-            "source_row_index": 2,
-            "sim_col": 3.0,
-            "sim_row": 4.0,
-            "sim_col_raw": 3.0,
-            "sim_row_raw": 4.0,
-        }
-    ]
-    assert "caked_x" not in projected[0]
-    assert "caked_y" not in projected[0]
-    assert "raw_caked_x" not in projected[0]
-    assert "raw_caked_y" not in projected[0]
+    assert projected == []
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_back_when_filter_removes_every_group() -> None:
@@ -5205,6 +5206,10 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
                 "source_row_index": 2,
                 "sim_col": 3.0,
                 "sim_row": 4.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "native_col": 3.0,
+                "native_row": 4.0,
             }
         ],
         ensure_peak_overlay_data=lambda **_kwargs: (_ for _ in ()).throw(
@@ -5233,8 +5238,14 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
             "source_row_index": 2,
             "sim_col": 3.0,
             "sim_row": 4.0,
+            "native_col": 3.0,
+            "native_row": 4.0,
+            "sim_native_x": 3.0,
+            "sim_native_y": 4.0,
             "sim_col_raw": 3.0,
             "sim_row_raw": 4.0,
+            "display_col": 3.0,
+            "display_row": 4.0,
         }
     ]
     assert diagnostics["source"] == "cache"
@@ -5255,6 +5266,10 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstra
                 "source_row_index": 2,
                 "sim_col": 3.0,
                 "sim_row": 4.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "native_col": 3.0,
+                "native_row": 4.0,
             }
         ]
         return True
@@ -5293,8 +5308,14 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstra
             "source_row_index": 2,
             "sim_col": 3.0,
             "sim_row": 4.0,
+            "native_col": 3.0,
+            "native_row": 4.0,
+            "sim_native_x": 3.0,
+            "sim_native_y": 4.0,
             "sim_col_raw": 3.0,
             "sim_row_raw": 4.0,
+            "display_col": 3.0,
+            "display_row": 4.0,
         }
     ]
     assert diagnostics["source"] == "cache"

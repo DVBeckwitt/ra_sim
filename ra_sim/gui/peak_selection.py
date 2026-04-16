@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.simulation.diffraction import get_process_peaks_runtime_kwargs
 from ra_sim.debug_controls import retain_optional_cache
 from . import views as gui_views
 from . import manual_geometry as gui_manual_geometry
@@ -1071,6 +1072,7 @@ def simulate_ideal_hkl_native_center(
                 solve_q_mode=int(config.solve_q_mode),
                 sample_weights=sample_weights_arr,
                 single_sample_indices=forced_sample_indices,
+                **get_process_peaks_runtime_kwargs(),
             )
         except Exception:
             return None
@@ -1477,9 +1479,18 @@ def ensure_runtime_peak_overlay_data(
             and not _peak_overlay_has_intersection_cache(simulation_runtime_state)
         )
     ):
+        show_caked = _runtime_bool(caked_view_enabled_factory, False)
         if _peak_overlay_has_restored_gui_state_cache(
             simulation_runtime_state
-        ) and _restore_peak_overlay_lists_from_cached_records(simulation_runtime_state):
+        ) and _restore_peak_overlay_lists_from_cached_records(
+            simulation_runtime_state,
+            show_caked=bool(show_caked),
+            image_shape=(0, 0),
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        ):
             return True
         _clear_peak_overlay_lists(simulation_runtime_state)
         return False
@@ -2020,7 +2031,92 @@ def _build_peak_click_spatial_index(
     }
 
 
-def _restore_peak_overlay_lists_from_cached_records(simulation_runtime_state) -> bool:
+def _resolve_peak_record_display_coords(
+    raw_record: Mapping[str, object],
+    *,
+    show_caked: bool,
+    image_shape: tuple[int, int],
+    native_sim_to_display_coords: Callable[..., tuple[float, float]] | None,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
+) -> tuple[float, float] | None:
+    """Return active-view display coords for one cached peak record."""
+
+    def _point(x_key: str, y_key: str) -> tuple[float, float] | None:
+        try:
+            col = float(raw_record.get(x_key, np.nan))
+            row = float(raw_record.get(y_key, np.nan))
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    native_point = _point("native_col", "native_row") or _point(
+        "sim_native_x",
+        "sim_native_y",
+    )
+    raw_detector_display = _point("sim_col_raw", "sim_row_raw")
+    caked_point = (
+        _point("caked_x", "caked_y")
+        or _point("raw_caked_x", "raw_caked_y")
+        or _point("two_theta_deg", "phi_deg")
+    )
+
+    if bool(show_caked):
+        if native_point is not None and callable(native_detector_coords_to_caked_display_coords):
+            try:
+                projected = native_detector_coords_to_caked_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+            except Exception:
+                projected = None
+            if (
+                isinstance(projected, tuple)
+                and len(projected) >= 2
+                and np.isfinite(float(projected[0]))
+                and np.isfinite(float(projected[1]))
+            ):
+                return (float(projected[0]), float(projected[1]))
+        if caked_point is not None:
+            return caked_point
+        return None
+
+    if native_point is not None and callable(native_sim_to_display_coords):
+        try:
+            projected = native_sim_to_display_coords(
+                float(native_point[0]),
+                float(native_point[1]),
+                image_shape,
+            )
+        except Exception:
+            projected = None
+        if (
+            isinstance(projected, tuple)
+            and len(projected) >= 2
+            and np.isfinite(float(projected[0]))
+            and np.isfinite(float(projected[1]))
+        ):
+            return (float(projected[0]), float(projected[1]))
+    if raw_detector_display is not None:
+        return raw_detector_display
+    return None
+
+
+def _restore_peak_overlay_lists_from_cached_records(
+    simulation_runtime_state,
+    *,
+    show_caked: bool,
+    image_shape: tuple[int, int],
+    native_sim_to_display_coords: Callable[..., tuple[float, float]] | None,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
+) -> bool:
     """Rebuild live overlay lists from imported cached peak records."""
 
     cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
@@ -2036,12 +2132,16 @@ def _restore_peak_overlay_lists_from_cached_records(simulation_runtime_state) ->
     for raw_record in raw_records or ():
         if not isinstance(raw_record, Mapping):
             continue
-        try:
-            display_col = float(raw_record.get("display_col", np.nan))
-            display_row = float(raw_record.get("display_row", np.nan))
-        except Exception:
-            continue
-        if not (np.isfinite(display_col) and np.isfinite(display_row)):
+        display_point = _resolve_peak_record_display_coords(
+            raw_record,
+            show_caked=bool(show_caked),
+            image_shape=image_shape,
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        if display_point is None:
             continue
 
         hkl_value = raw_record.get("hkl")
@@ -2077,9 +2177,13 @@ def _restore_peak_overlay_lists_from_cached_records(simulation_runtime_state) ->
                 pass
         if isinstance(record.get("q_group_key"), list):
             record["q_group_key"] = tuple(record["q_group_key"])
+        record["sim_col"] = float(display_point[0])
+        record["sim_row"] = float(display_point[1])
+        record["display_col"] = float(display_point[0])
+        record["display_row"] = float(display_point[1])
 
         restored_records.append(record)
-        restored_positions.append((float(display_col), float(display_row)))
+        restored_positions.append((float(display_point[0]), float(display_point[1])))
         restored_millers.append(hkl_triplet)
         restored_intensities.append(float(intensity))
 

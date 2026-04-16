@@ -49,6 +49,8 @@ def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> N
     peak_record = {
         "display_col": 13.5,
         "display_row": 15.5,
+        "native_col": 13.5,
+        "native_row": 15.5,
         "hkl": (1, 0, 2),
         "q_group_key": ("q_group", "primary", 1, 2),
         "source_table_index": 4,
@@ -93,6 +95,8 @@ def test_make_runtime_geometry_manual_cache_callbacks_uses_live_peak_records() -
     peak_record = {
         "display_col": 21.0,
         "display_row": 34.0,
+        "native_col": 21.0,
+        "native_row": 34.0,
         "hkl_raw": (1.0, 0.0, 2.0),
         "q_group_key": ("q_group", "primary", 1, 2),
         "source_table_index": 5,
@@ -318,12 +322,161 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
     assert cache_entry["sim_row"] == 2.0
     assert cache_entry["sim_col_raw"] == 3.0
     assert cache_entry["sim_row_raw"] == 4.0
-    assert cache_entry["caked_x"] == 13.0
-    assert cache_entry["caked_y"] == 2.0
-    assert next_sig[3] == ("new-bg",)
-    assert next_state["grouped_candidates"][("q_group", "primary", 1, 0)][0][
-        "caked_x"
-    ] == 13.0
+
+
+def test_build_geometry_manual_pick_cache_peak_record_fallback_reprojects_detector_from_native_fields() -> None:
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.zeros((8, 8), dtype=float),
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("native detector coords should drive detector reprojection")
+        ),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
+    )
+
+    peak_record = {
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "native_col": 6.0,
+        "native_row": 7.0,
+        "two_theta_deg": 30.25,
+        "phi_deg": -57.5,
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "intensity": 3.0,
+    }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        peak_records=[peak_record],
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+    )
+
+    cache_entry = cache_data["simulated_lookup"][_source_key(peak_record)]
+    assert cache_entry["sim_col"] == 6.0
+    assert cache_entry["sim_row"] == 7.0
+    assert cache_entry["sim_col_raw"] == 6.0
+    assert cache_entry["sim_row_raw"] == 7.0
+    assert cache_entry["native_col"] == 6.0
+    assert cache_entry["native_row"] == 7.0
+    assert cache_entry["display_col"] == 6.0
+    assert cache_entry["display_row"] == 7.0
+    assert "caked_x" not in cache_entry
+    assert "caked_y" not in cache_entry
+    assert next_sig == ("sig",)
+    grouped_entry = next_state["grouped_candidates"][peak_record["q_group_key"]][0]
+    assert grouped_entry["sim_col"] == 6.0
+    assert grouped_entry["sim_row"] == 7.0
+    assert grouped_entry["display_col"] == 6.0
+    assert grouped_entry["display_row"] == 7.0
+    assert "caked_x" not in grouped_entry
+
+
+def test_geometry_manual_live_peak_candidates_from_records_does_not_promote_caked_display_into_detector_truth() -> None:
+    peak_record = {
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "intensity": 3.0,
+    }
+
+    candidates = mg.geometry_manual_live_peak_candidates_from_records([peak_record])
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["sim_col"] == 30.25
+    assert candidate["sim_row"] == -57.5
+    assert candidate["caked_x"] == 30.25
+    assert candidate["caked_y"] == -57.5
+    assert "sim_col_raw" not in candidate
+    assert "sim_row_raw" not in candidate
+    assert "native_col" not in candidate
+    assert "native_row" not in candidate
+
+
+def test_geometry_manual_live_peak_candidates_from_records_skips_display_only_records() -> None:
+    peak_record = {
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "intensity": 3.0,
+    }
+
+    assert mg.geometry_manual_live_peak_candidates_from_records([peak_record]) == []
+
+
+def test_project_peaks_to_current_view_does_not_promote_transient_display_into_detector_truth() -> None:
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.zeros((8, 8), dtype=float),
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("transient display coords must not seed detector reprojection")
+        ),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "display_col": 30.25,
+                "display_row": -57.5,
+                "sim_col": 30.25,
+                "sim_row": -57.5,
+                "hkl": (-1, 0, 5),
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "intensity": 3.0,
+            }
+        ]
+    )
+
+    assert projected == []
 
 
 def test_build_geometry_manual_pick_cache_preserves_mirrored_branch_lookup_entries() -> None:
@@ -531,13 +684,15 @@ def test_build_geometry_manual_pick_cache_resolves_legacy_peak_only_branch_entry
 def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenance() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-            {
-                "display_col": 21.0,
-                "display_row": 34.0,
-                "hkl": (1, 0, 2),
-                "q_group_key": ("q_group", "primary", 1, 2),
-                "source_table_index": 0,
-                "source_row_index": 8,
+                {
+                    "display_col": 21.0,
+                    "display_row": 34.0,
+                    "native_col": 21.0,
+                    "native_row": 34.0,
+                    "hkl": (1, 0, 2),
+                    "q_group_key": ("q_group", "primary", 1, 2),
+                    "source_table_index": 0,
+                    "source_row_index": 8,
                 "source_peak_index": 13,
                 "phi": 15.0,
             }
@@ -558,13 +713,15 @@ def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenan
 def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_not_match() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-            {
-                "display_col": 21.0,
-                "display_row": 34.0,
-                "hkl": (1, 0, 2),
-                "q_group_key": ("q_group", "primary", 1, 2),
-                "source_table_index": 0,
-                "source_row_index": 8,
+                {
+                    "display_col": 21.0,
+                    "display_row": 34.0,
+                    "native_col": 21.0,
+                    "native_row": 34.0,
+                    "hkl": (1, 0, 2),
+                    "q_group_key": ("q_group", "primary", 1, 2),
+                    "source_table_index": 0,
+                    "source_row_index": 8,
                 "source_peak_index": 19,
                 "phi": -15.0,
             }
@@ -585,13 +742,15 @@ def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_n
 def test_geometry_manual_live_peak_candidates_restore_trust_on_revision_match() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-            {
-                "display_col": 21.0,
-                "display_row": 34.0,
-                "hkl": (1, 0, 2),
-                "q_group_key": ("q_group", "primary", 1, 2),
-                "source_table_index": 0,
-                "source_row_index": 8,
+                {
+                    "display_col": 21.0,
+                    "display_row": 34.0,
+                    "native_col": 21.0,
+                    "native_row": 34.0,
+                    "hkl": (1, 0, 2),
+                    "q_group_key": ("q_group", "primary", 1, 2),
+                    "source_table_index": 0,
+                    "source_row_index": 8,
                 "source_peak_index": 13,
                 "phi": 15.0,
             }
@@ -614,13 +773,15 @@ def test_geometry_manual_live_peak_candidates_restore_trust_on_revision_match() 
 def test_geometry_manual_live_peak_candidates_drop_trust_when_map_length_mismatches() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-            {
-                "display_col": 21.0,
-                "display_row": 34.0,
-                "hkl": (1, 0, 2),
-                "q_group_key": ("q_group", "primary", 1, 2),
-                "source_table_index": 0,
-                "source_row_index": 8,
+                {
+                    "display_col": 21.0,
+                    "display_row": 34.0,
+                    "native_col": 21.0,
+                    "native_row": 34.0,
+                    "hkl": (1, 0, 2),
+                    "q_group_key": ("q_group", "primary", 1, 2),
+                    "source_table_index": 0,
+                    "source_row_index": 8,
                 "source_peak_index": 13,
                 "phi": 15.0,
             }
