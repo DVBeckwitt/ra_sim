@@ -1417,6 +1417,27 @@ def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
     assert np.isclose(stats["median_match_confidence"], 0.6)
 
 
+def test_geometry_q_group_manager_live_preview_source_peak_precedes_coord_key() -> None:
+    entry = {
+        "hkl": (2, 0, 1),
+        "source_peak_index": 5,
+        "sim_x": 1.2,
+        "sim_y": 3.4,
+    }
+
+    assert geometry_q_group_manager.live_geometry_preview_match_key(entry) == (
+        "peak_index",
+        5,
+        2,
+        0,
+        1,
+    )
+    assert geometry_q_group_manager._live_geometry_preview_compatible_match_keys(entry) == (
+        ("peak_index", 5, 2, 0, 1),
+        ("hkl_coord", 2, 0, 1, 1.2, 3.4),
+    )
+
+
 def test_geometry_q_group_manager_live_preview_exclusions_keep_legacy_aliases() -> None:
     legacy_entry = {
         "hkl": (4, 0, 1),

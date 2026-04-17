@@ -2902,11 +2902,11 @@ def _live_geometry_preview_coord_match_key(
     )
 
 
-def _live_geometry_preview_legacy_peak_match_key(
+def _live_geometry_preview_source_peak_match_key(
     entry: dict[str, object] | None,
     hkl_key: tuple[int, int, int] | None = None,
 ) -> tuple[object, ...] | None:
-    """Return the raw legacy peak-index exclusion key for one entry when available."""
+    """Return the explicit source peak-index exclusion key for one entry when available."""
 
     if not isinstance(entry, dict):
         return None
@@ -2948,8 +2948,8 @@ def _live_geometry_preview_compatible_match_keys(
 
     _append_match_key(_live_geometry_preview_row_match_key(entry, hkl_key))
     _append_match_key(_live_geometry_preview_branch_match_key(entry, hkl_key))
+    _append_match_key(_live_geometry_preview_source_peak_match_key(entry, hkl_key))
     _append_match_key(_live_geometry_preview_coord_match_key(entry, hkl_key))
-    _append_match_key(_live_geometry_preview_legacy_peak_match_key(entry, hkl_key))
     return tuple(compatible_keys)
 
 
@@ -3004,7 +3004,7 @@ def _live_geometry_preview_exclusion_descriptor(
         "lookup_aliases": tuple(lookup_aliases),
         "row_key": _live_geometry_preview_row_match_key(entry, hkl_key),
         "branch_key": _live_geometry_preview_branch_match_key(entry, hkl_key),
-        "legacy_peak_key": _live_geometry_preview_legacy_peak_match_key(entry, hkl_key),
+        "source_peak_key": _live_geometry_preview_source_peak_match_key(entry, hkl_key),
     }
 
 
@@ -3052,7 +3052,7 @@ def _live_geometry_preview_group_matches_descriptor(
     if not group_aliases.intersection(descriptor_aliases):
         return False
 
-    for identity_name in ("row_key", "branch_key", "legacy_peak_key"):
+    for identity_name in ("row_key", "branch_key", "source_peak_key"):
         group_key = group.get(identity_name)
         descriptor_key = descriptor.get(identity_name)
         if (
@@ -3079,7 +3079,7 @@ def _live_geometry_preview_group_signature(
         ),
         group.get("row_key"),
         group.get("branch_key"),
-        group.get("legacy_peak_key"),
+        group.get("source_peak_key"),
     )
 
 
@@ -3089,7 +3089,7 @@ def _live_geometry_preview_matching_exclusion_state(
     *,
     callback_key: tuple[object, ...] | None = None,
 ) -> tuple[dict[str, object], list[dict[str, object]], tuple[tuple[object, ...], ...]]:
-    """Return descriptor, matching groups, and direct legacy keys for one entry."""
+    """Return descriptor, matching groups, and direct exclusion keys for one entry."""
 
     descriptor = _live_geometry_preview_exclusion_descriptor(
         entry,
