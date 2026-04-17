@@ -3124,12 +3124,21 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     class FakeBundle:
-        pass
+        detector_shape = (64, 96)
 
     bundle = FakeBundle()
+    rotate_calls: list[tuple[float, float, tuple[int, int], int]] = []
     projector_calls: list[tuple[object, float, float]] = []
 
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session,
+        "_rotate_point_for_display",
+        lambda col, row, shape, k: (
+            rotate_calls.append((float(col), float(row), tuple(shape), int(k)))
+            or (41.0, 49.0)
+        ),
+    )
     monkeypatch.setattr(
         runtime_session,
         "detector_pixel_to_caked_bin",
@@ -3150,11 +3159,12 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert projector_calls == [(bundle, 40.0, 50.0)]
+    assert rotate_calls == [(40.0, 50.0, (64, 96), runtime_session.DISPLAY_ROTATE_K)]
+    assert projector_calls == [(bundle, 41.0, 49.0)]
     assert out.shape == (1, 16)
     np.testing.assert_allclose(out[0, :9], [1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0])
-    assert out[0, 14] == 40.5
-    assert out[0, 15] == 49.75
+    assert out[0, 14] == 41.5
+    assert out[0, 15] == 48.75
 
 
 def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> (
@@ -3185,7 +3195,7 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_proje
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     class FakeBundle:
-        pass
+        detector_shape = (64, 96)
 
     bundle = FakeBundle()
     projector_calls: list[tuple[object, float, float]] = []
@@ -3195,6 +3205,11 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_proje
     )
 
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session,
+        "_rotate_point_for_display",
+        lambda col, row, shape, k: (float(col) + 1.0, float(row) - 1.0),
+    )
     monkeypatch.setattr(
         runtime_session,
         "detector_pixel_to_caked_bin",
@@ -3209,11 +3224,93 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_proje
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert projector_calls == [(bundle, 40.0, 50.0)]
+    assert projector_calls == [(bundle, 41.0, 49.0)]
     assert out.shape == (1, 16)
     np.testing.assert_allclose(out[0, :14], table[0, :14])
     assert np.isnan(out[0, 14])
     assert np.isnan(out[0, 15])
+
+
+def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_columns(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        detector_shape = (32, 48)
+
+    bundle = FakeBundle()
+    detector_cache = [
+        np.asarray([[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]], dtype=float)
+    ]
+    projector_calls: list[tuple[object, float, float]] = []
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session,
+        "_rotate_point_for_display",
+        lambda col, row, shape, k: (float(col) + 1.0, float(row) - 1.0),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        lambda transform_bundle, col, row: (
+            projector_calls.append((transform_bundle, float(col), float(row)))
+            or (12.25, -33.5)
+        ),
+    )
+
+    prepared_cache = runtime_session._prepare_caked_intersection_cache(
+        detector_cache,
+        transform_bundle=bundle,
+    )
+
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_transform_bundle",
+        bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache_transform_bundle",
+        bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache",
+        prepared_cache,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "stored_intersection_cache",
+        detector_cache,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache_source_signature",
+        (id(detector_cache), len(detector_cache)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_detector_coords_to_live_caked_coords",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("current caked cache should reuse prepared caked columns")
+        ),
+    )
+
+    x_vals, y_vals = runtime_session._analysis_cache_overlay_coords(
+        prepared_cache[0],
+        show_caked=True,
+    )
+
+    assert projector_calls == [(bundle, 41.0, 49.0)]
+    np.testing.assert_allclose(x_vals, [12.25])
+    np.testing.assert_allclose(y_vals, [-33.5])
 
 
 def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(
@@ -4795,6 +4892,197 @@ def test_toggle_caked_2d_skips_qr_overlay_invalidation_when_overlays_are_off(
 
     assert shell_mode_var.get() == "caked"
     assert invalidations == []
+
+
+def test_toggle_caked_2d_reselects_current_hkl_peak_for_new_view(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+        def set(self, value: object) -> None:
+            self._value = value
+
+    shell_mode_var = _Var("detector")
+    show_caked_var = _Var(True)
+    reselect_calls: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(
+            show_caked_2d_var=show_caked_var,
+            show_qz_rods_var=_Var(False),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_overlay_actions_view_state",
+        SimpleNamespace(show_geometry_overlays_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "app_shell_view_state",
+        SimpleNamespace(view_mode_var=shell_mode_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(pick_armed=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_runtime_callbacks",
+        SimpleNamespace(
+            reselect_current_peak=lambda: reselect_calls.append("reselect") or True
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(
+            set_app_shell_view_mode=lambda view_state, mode: view_state.view_mode_var.set(mode)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_caked_roi_preview_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"integrate_qz_rods": False, "qr_half_width": 0.0},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_qr_cylinder_overlay_view_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_apply_main_caked_view_toggle", lambda: None)
+    monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+
+    runtime_session.toggle_caked_2d()
+
+    assert shell_mode_var.get() == "caked"
+    assert reselect_calls == ["reselect"]
+
+
+def test_toggle_caked_2d_hides_selected_peak_when_reselect_fails(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+        def set(self, value: object) -> None:
+            self._value = value
+
+    class _Marker:
+        def __init__(self) -> None:
+            self.visible = True
+
+        def set_visible(self, value: object) -> None:
+            self.visible = bool(value)
+
+    shell_mode_var = _Var("detector")
+    show_caked_var = _Var(True)
+    marker = _Marker()
+    redraw_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(
+            show_caked_2d_var=show_caked_var,
+            show_qz_rods_var=_Var(False),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_overlay_actions_view_state",
+        SimpleNamespace(show_geometry_overlays_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "app_shell_view_state",
+        SimpleNamespace(view_mode_var=shell_mode_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(pick_armed=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_runtime_callbacks",
+        SimpleNamespace(reselect_current_peak=lambda: False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "selected_peak_marker",
+        marker,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(
+            set_app_shell_view_mode=lambda view_state, mode: view_state.view_mode_var.set(mode)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda *, force_matplotlib=False: redraw_calls.append(bool(force_matplotlib)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_caked_roi_preview_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"integrate_qz_rods": False, "qr_half_width": 0.0},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_qr_cylinder_overlay_view_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_apply_main_caked_view_toggle", lambda: None)
+    monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+
+    runtime_session.toggle_caked_2d()
+
+    assert shell_mode_var.get() == "caked"
+    assert marker.visible is False
+    assert redraw_calls == [False]
 
 
 def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(

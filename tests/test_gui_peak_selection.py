@@ -2317,6 +2317,154 @@ def test_select_peak_from_canvas_click_uses_intersection_cache_centers_for_neare
     assert status_messages == []
 
 
+def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_nearest_hkl() -> None:
+    bundle = object()
+    detector_cache = [
+        np.asarray(
+            [
+                [np.nan, np.nan, 300.0, 300.0, 9.0, 0.375, 0.0, 0.0, 3.0],
+                [np.nan, np.nan, 50.0, 60.0, 8.0, 0.125, 0.0, 0.0, 0.0],
+            ],
+            dtype=float,
+        )
+    ]
+    caked_cache = [
+        np.asarray(
+            [
+                [np.nan, np.nan, 300.0, 300.0, 9.0, 0.375, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 60.0],
+                [np.nan, np.nan, 50.0, 60.0, 8.0, 0.125, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 200.0, 210.0],
+            ],
+            dtype=float,
+        )
+    ]
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=None,
+        stored_primary_intersection_cache=detector_cache,
+        stored_intersection_cache=detector_cache,
+        last_caked_intersection_cache=caked_cache,
+        last_caked_transform_bundle=bundle,
+        last_caked_intersection_cache_transform_bundle=bundle,
+        last_caked_intersection_cache_source_signature=(id(detector_cache), len(detector_cache)),
+        stored_sim_image=np.zeros((512, 512), dtype=float),
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    select_calls = []
+    pick_mode_calls = []
+    status_messages = []
+    sync_calls = []
+
+    def _select(idx: int, **kwargs) -> bool:
+        select_calls.append((int(idx), dict(kwargs)))
+        return True
+
+    def _ensure_detector_overlay(*, force: bool = False) -> bool:
+        return peak_selection.ensure_runtime_peak_overlay_data(
+            runtime_state,
+            primary_a=5.0,
+            primary_c=7.0,
+            native_sim_to_display_coords=lambda col, row, _image_shape: (
+                float(col),
+                float(row),
+            ),
+            reflection_q_group_metadata=lambda *_args, **_kwargs: (
+                "group-key",
+                None,
+                0.0,
+            ),
+            caked_view_enabled_factory=False,
+            force=force,
+        )
+
+    detector_ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        298.0,
+        302.0,
+        config=_canvas_pick_config(image_shape=(512, 512)),
+        ensure_peak_overlay_data=_ensure_detector_overlay,
+        schedule_update=lambda: (_ for _ in ()).throw(
+            AssertionError("detector overlay should build immediately")
+        ),
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=_select,
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        sync_peak_selection_state=lambda: sync_calls.append(True),
+        set_status_text=status_messages.append,
+    )
+
+    assert detector_ok is True
+    assert runtime_state.peak_positions == [(300.0, 300.0), (50.0, 60.0)]
+    assert runtime_state.peak_millers == [(0, 0, 3), (0, 0, 0)]
+    assert select_calls[0][0] == 0
+    assert select_calls[0][1]["selected_native"] == (300.0, 300.0)
+
+    def _ensure_caked_overlay(*, force: bool = False) -> bool:
+        return peak_selection.ensure_runtime_peak_overlay_data(
+            runtime_state,
+            primary_a=5.0,
+            primary_c=7.0,
+            native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+                AssertionError("current caked cache should not use detector display coords")
+            ),
+            reflection_q_group_metadata=lambda *_args, **_kwargs: (
+                "group-key",
+                None,
+                0.0,
+            ),
+            caked_view_enabled_factory=True,
+            native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+                AssertionError("current caked cache should reuse stored caked coords")
+            ),
+            force=force,
+        )
+
+    caked_ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        51.0,
+        59.0,
+        config=_canvas_pick_config(image_shape=(512, 512)),
+        ensure_peak_overlay_data=_ensure_caked_overlay,
+        schedule_update=lambda: (_ for _ in ()).throw(
+            AssertionError("caked overlay should rebuild immediately")
+        ),
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            float(col),
+            float(row),
+        ),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=_select,
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        sync_peak_selection_state=lambda: sync_calls.append(True),
+        set_status_text=status_messages.append,
+    )
+
+    assert caked_ok is True
+    assert runtime_state.peak_positions == [(50.0, 60.0), (200.0, 210.0)]
+    assert select_calls[1][0] == 0
+    assert select_calls[1][1]["selected_native"] == (300.0, 300.0)
+    assert pick_mode_calls == [(False, None), (False, None)]
+    assert peak_state.suppress_drag_press_once is True
+    assert sync_calls == [True, True]
+    assert status_messages == []
+
+
 def test_peak_selection_runtime_binding_factory_builds_live_bindings(
     monkeypatch,
 ) -> None:
@@ -2615,6 +2763,22 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         )
         or False,
     )
+    monkeypatch.setattr(
+        peak_selection,
+        "find_peak_record_from_runtime_canvas_click",
+        lambda bindings_arg, click_col, click_row, *, max_axis_distance_px: (
+            callback_calls.append(
+                (
+                    "find_click_cb",
+                    bindings_arg,
+                    click_col,
+                    click_row,
+                    max_axis_distance_px,
+                )
+            )
+            or (4, {"q_group_key": ("q",)}, 1.25, True)
+        ),
+    )
 
     def build_bindings():
         versions["count"] += 1
@@ -2630,6 +2794,12 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     callbacks.clear_selected_peak()
     assert callbacks.open_selected_peak_intersection_figure() is True
     assert callbacks.select_peak_from_canvas_click(3.0, 4.0) is False
+    assert callbacks.find_peak_record_for_canvas_click(5.0, 6.0, 7.0) == (
+        4,
+        {"q_group_key": ("q",)},
+        1.25,
+        True,
+    )
 
     assert callback_calls == [
         ("label", "bindings-1"),
@@ -2640,6 +2810,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         ("clear_cb", "bindings-6"),
         ("open_cb", "bindings-7"),
         ("click_cb", "bindings-8", 3.0, 4.0),
+        ("find_click_cb", "bindings-9", 5.0, 6.0, 7.0),
     ]
 
 

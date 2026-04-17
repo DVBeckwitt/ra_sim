@@ -146,6 +146,10 @@ class SelectedPeakRuntimeCallbacks:
     clear_selected_peak: Callable[[], None]
     open_selected_peak_intersection_figure: Callable[[], bool]
     select_peak_from_canvas_click: Callable[[float, float], bool]
+    find_peak_record_for_canvas_click: Callable[
+        [float, float, float],
+        tuple[int, dict[str, object] | None, float, bool],
+    ]
 
 
 @dataclass(frozen=True)
@@ -2827,6 +2831,38 @@ def _nearest_peak_index_for_click(
     return best_i, best_d2, False
 
 
+def find_peak_record_for_canvas_click(
+    simulation_runtime_state,
+    click_col: float,
+    click_row: float,
+    *,
+    ensure_peak_overlay_data: Any,
+    max_axis_distance_px: float,
+) -> tuple[int, dict[str, object] | None, float, bool]:
+    """Return nearest visible peak record from one click without mutating selection."""
+
+    ensure_peak_overlay_data(force=False)
+    if not simulation_runtime_state.peak_positions:
+        return -1, None, float("nan"), False
+
+    best_i, best_d2, within_window = _nearest_peak_index_for_click(
+        simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+        max_axis_distance_px=float(max_axis_distance_px),
+    )
+    if best_i == -1 or not np.isfinite(best_d2):
+        return -1, None, float("nan"), False
+
+    peak_record = None
+    if best_i < len(simulation_runtime_state.peak_records):
+        raw_record = simulation_runtime_state.peak_records[best_i]
+        if isinstance(raw_record, Mapping):
+            peak_record = dict(raw_record)
+
+    return int(best_i), peak_record, float(np.sqrt(best_d2)), bool(within_window)
+
+
 def _resolve_selected_peak_click_coordinates(
     simulation_runtime_state,
     idx: int,
@@ -2928,30 +2964,26 @@ def select_peak_from_canvas_click(
 ) -> bool:
     """Select the nearest visible peak from one detector or caked-view click."""
 
-    # Always revalidate the overlay before resolving the click. Detector and
-    # caked views maintain distinct peak-position projections, so a view switch
-    # can leave the live lists stale even when they are non-empty.
-    ensure_peak_overlay_data(force=False)
+    best_i, peak_record, best_dist, within_window = find_peak_record_for_canvas_click(
+        simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+        ensure_peak_overlay_data=ensure_peak_overlay_data,
+        max_axis_distance_px=max(0.0, float(config.max_distance_px)),
+    )
     if not simulation_runtime_state.peak_positions:
         schedule_update()
         set_status_text("Preparing simulated peak map... click again after update.")
         return False
 
-    half_window_px = max(0.0, float(config.max_distance_px))
-    best_i, best_d2, within_window = _nearest_peak_index_for_click(
-        simulation_runtime_state,
-        float(click_col),
-        float(click_row),
-        max_axis_distance_px=float(half_window_px),
-    )
     if best_i == -1:
         set_status_text("No peaks on screen.")
         return False
     if not within_window:
-        window_size_px = max(1.0, 2.0 * float(half_window_px))
+        window_size_px = max(1.0, 2.0 * max(0.0, float(config.max_distance_px)))
         set_status_text(
             f"No simulated peak within the {window_size_px:.0f}x{window_size_px:.0f}px "
-            f"search window (nearest is {best_d2**0.5:.1f}px away)."
+            f"search window (nearest is {best_dist:.1f}px away)."
         )
         return False
 
@@ -2968,22 +3000,20 @@ def select_peak_from_canvas_click(
         image_shape,
     )
     selected_native = None
-    if best_i < len(simulation_runtime_state.peak_records):
-        peak_record = simulation_runtime_state.peak_records[best_i]
-        if isinstance(peak_record, Mapping):
-            try:
-                native_col = float(peak_record.get("native_col"))
-                native_row = float(peak_record.get("native_row"))
-            except Exception:
-                native_col = float("nan")
-                native_row = float("nan")
-            if np.isfinite(native_col) and np.isfinite(native_row):
-                selected_native = (float(native_col), float(native_row))
+    if isinstance(peak_record, Mapping):
+        try:
+            native_col = float(peak_record.get("native_col"))
+            native_row = float(peak_record.get("native_row"))
+        except Exception:
+            native_col = float("nan")
+            native_row = float("nan")
+        if np.isfinite(native_col) and np.isfinite(native_row):
+            selected_native = (float(native_col), float(native_row))
 
     picked = bool(
         select_peak_by_index(
             best_i,
-            prefix=f"Nearest peak (Δ={best_d2**0.5:.1f}px)",
+            prefix=f"Nearest peak (Δ={best_dist:.1f}px)",
             sync_hkl_vars=True,
             clicked_display=(float(click_col), float(click_row)),
             clicked_native=(float(clicked_native_col), float(clicked_native_row)),
@@ -3576,6 +3606,24 @@ def select_peak_from_runtime_canvas_click(
     )
 
 
+def find_peak_record_from_runtime_canvas_click(
+    bindings: SelectedPeakRuntimeBindings,
+    click_col: float,
+    click_row: float,
+    *,
+    max_axis_distance_px: float,
+) -> tuple[int, dict[str, object] | None, float, bool]:
+    """Return nearest visible live peak for one click under runtime bindings."""
+
+    return find_peak_record_for_canvas_click(
+        bindings.simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+        ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
+        max_axis_distance_px=float(max_axis_distance_px),
+    )
+
+
 def make_runtime_peak_selection_bindings_factory(
     *,
     simulation_runtime_state,
@@ -3660,6 +3708,14 @@ def make_runtime_peak_selection_callbacks(
                 bindings_factory(),
                 float(click_col),
                 float(click_row),
+            )
+        ),
+        find_peak_record_for_canvas_click=lambda click_col, click_row, max_axis_distance_px: (
+            find_peak_record_from_runtime_canvas_click(
+                bindings_factory(),
+                float(click_col),
+                float(click_row),
+                max_axis_distance_px=float(max_axis_distance_px),
             )
         ),
     )

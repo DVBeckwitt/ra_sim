@@ -1803,6 +1803,36 @@ def _display_to_native_sim_coords(col: float, row: float, image_shape: tuple[int
     )
 
 
+def _native_detector_coords_to_bundle_detector_coords(
+    col: float,
+    row: float,
+    detector_shape: Sequence[object] | None,
+) -> tuple[float | None, float | None]:
+    """Map native detector coords into exact-cake bundle detector frame."""
+
+    try:
+        col_val = float(col)
+        row_val = float(row)
+    except Exception:
+        return None, None
+    if not (np.isfinite(col_val) and np.isfinite(row_val)):
+        return None, None
+    if detector_shape is None:
+        return None, None
+    try:
+        shape = tuple(int(v) for v in tuple(detector_shape)[:2])
+    except Exception:
+        return None, None
+    if len(shape) < 2 or min(shape) <= 0:
+        return None, None
+    return _rotate_point_for_display(
+        float(col_val),
+        float(row_val),
+        shape,
+        DISPLAY_ROTATE_K,
+    )
+
+
 def _native_detector_coords_to_live_bundle_detector_coords(
     col: float,
     row: float,
@@ -1815,13 +1845,10 @@ def _native_detector_coords_to_live_bundle_detector_coords(
         shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
     elif simulation_runtime_state.unscaled_image is not None:
         shape = tuple(int(v) for v in np.asarray(simulation_runtime_state.unscaled_image).shape[:2])
-    if shape is None or len(shape) < 2 or min(shape) <= 0:
-        return None, None
-    return _rotate_point_for_display(
+    return _native_detector_coords_to_bundle_detector_coords(
         float(col),
         float(row),
         shape,
-        DISPLAY_ROTATE_K,
     )
 
 
@@ -6218,6 +6245,9 @@ def _initialize_runtime_controls_block_10() -> None:
         select_peak_from_canvas_click=(
             peak_selection_runtime_callbacks.select_peak_from_canvas_click
         ),
+        find_peak_record_for_canvas_click=(
+            peak_selection_runtime_callbacks.find_peak_record_for_canvas_click
+        ),
     )
     analysis_peak_runtime_callbacks = SimpleNamespace(
         set_pick_mode=(
@@ -6683,6 +6713,34 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
         _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
     _sync_center_marker(redraw=False)
+    reselect_current_peak = getattr(
+        globals().get("peak_selection_runtime_callbacks"),
+        "reselect_current_peak",
+        None,
+    )
+    if callable(reselect_current_peak):
+        reselected_peak = False
+        try:
+            reselected_peak = bool(reselect_current_peak())
+        except Exception:
+            reselected_peak = False
+        if not reselected_peak:
+            selected_peak_artist = globals().get("selected_peak_marker")
+            set_visible = getattr(selected_peak_artist, "set_visible", None)
+            hidden_stale_peak = False
+            if callable(set_visible):
+                try:
+                    set_visible(False)
+                    hidden_stale_peak = True
+                except Exception:
+                    pass
+            if hidden_stale_peak:
+                request_main_redraw = globals().get("_request_main_canvas_redraw")
+                if callable(request_main_redraw):
+                    try:
+                        request_main_redraw(force_matplotlib=False)
+                    except Exception:
+                        pass
     if bool(analysis_peak_selection_state.pick_armed):
         if not show_caked_now:
             _set_analysis_peak_pick_mode(
@@ -8716,12 +8774,20 @@ def _prepare_caked_intersection_cache(
         cols = np.asarray(arr[:, 2], dtype=float)
         rows = np.asarray(arr[:, 3], dtype=float)
         valid = np.isfinite(cols) & np.isfinite(rows)
+        detector_shape = getattr(transform_bundle, "detector_shape", None)
 
         for idx in np.flatnonzero(valid):
-            two_theta, phi = detector_pixel_to_caked_bin(
-                transform_bundle,
+            bundle_col, bundle_row = _native_detector_coords_to_bundle_detector_coords(
                 float(cols[idx]),
                 float(rows[idx]),
+                detector_shape,
+            )
+            if bundle_col is None or bundle_row is None:
+                continue
+            two_theta, phi = detector_pixel_to_caked_bin(
+                transform_bundle,
+                float(bundle_col),
+                float(bundle_row),
             )
             if two_theta is None or phi is None:
                 continue
