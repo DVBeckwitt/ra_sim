@@ -224,20 +224,97 @@ def simulate_qr_rods(*args, **kwargs):
 
 
 def _parse_cif_cell_a_c(cif_file: str) -> tuple[float, float]:
-    """Return (a, c) from a CIF file using PyCifRW."""
-    import CifFile
+    """Return ``(a, c)`` from a CIF file.
+
+    Prefer PyCifRW when it is available, but keep a lightweight text fallback so
+    simple CLI helpers can read scalar cell constants without requiring the full
+    optional CIF stack to be installed.
+    """
     import re
 
-    cf = CifFile.ReadCif(cif_file)
-    blk = cf[list(cf.keys())[0]]
-
-    def _parse_num(txt: str) -> float:
+    def _parse_num(txt: object) -> float:
         if isinstance(txt, (int, float)):
             return float(txt)
-        m = re.match(r"[-+0-9\.Ee]+", str(txt).strip())
+        text = str(txt).strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+            text = text[1:-1].strip()
+        m = re.match(r"[-+0-9\.Ee]+", text)
         if not m:
             raise ValueError(f"Can't parse '{txt}' as a number from CIF")
         return float(m.group(0))
+
+    def _extract_scalar_token(value: str) -> str | None:
+        match = re.match(r"\s*('(?:[^']*)'|\"(?:[^\"]*)\"|\S+)", value)
+        if not match:
+            return None
+        return match.group(1)
+
+    def _strip_inline_comment(line: str) -> str:
+        in_quote: str | None = None
+        for idx, char in enumerate(line):
+            if char in {"'", '"'}:
+                if in_quote is None:
+                    in_quote = char
+                elif in_quote == char:
+                    in_quote = None
+                continue
+            if char == "#" and in_quote is None:
+                return line[:idx].rstrip()
+        return line.rstrip()
+
+    def _fallback_cell_lengths(path: str) -> dict[str, object]:
+        values: dict[str, object] = {}
+        cell_keys = {"_cell_length_a", "_cell_length_c"}
+        in_text_field = False
+        pending_key: str | None = None
+        with open(path, encoding="utf-8", errors="ignore") as handle:
+            for raw_line in handle:
+                if raw_line.startswith(";"):
+                    in_text_field = not in_text_field
+                    pending_key = None
+                    continue
+                if in_text_field:
+                    continue
+                stripped = _strip_inline_comment(raw_line).strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if pending_key is not None and not stripped.startswith("_"):
+                    scalar = _extract_scalar_token(stripped)
+                    if scalar is not None:
+                        values[pending_key] = scalar
+                        pending_key = None
+                        if len(values) == 2:
+                            break
+                    continue
+                parts = stripped.split(None, 1)
+                key = parts[0]
+                if key not in cell_keys:
+                    pending_key = None
+                    continue
+                if len(parts) == 1:
+                    pending_key = key
+                    continue
+                _, value = parts
+                scalar = _extract_scalar_token(value)
+                if scalar is None:
+                    pending_key = key
+                    continue
+                values[key] = scalar
+                pending_key = None
+                if len(values) == 2:
+                    break
+        return values
+
+    try:
+        import CifFile
+    except ModuleNotFoundError as exc:
+        missing_name = getattr(exc, "name", None)
+        if missing_name not in (None, "CifFile") and "CifFile" not in str(exc):
+            raise
+        blk = _fallback_cell_lengths(cif_file)
+    else:
+        cf = CifFile.ReadCif(cif_file)
+        blk = cf[list(cf.keys())[0]]
 
     a_text = blk.get("_cell_length_a")
     c_text = blk.get("_cell_length_c")

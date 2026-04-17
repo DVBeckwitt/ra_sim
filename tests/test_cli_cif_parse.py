@@ -61,6 +61,18 @@ def _block_spglib_import(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _blocked_import)
 
 
+def _block_ciffile_import(monkeypatch):
+    original_import = builtins.__import__
+
+    def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "CifFile":
+            raise ModuleNotFoundError("No module named 'CifFile'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delitem(sys.modules, "CifFile", raising=False)
+    monkeypatch.setattr(builtins, "__import__", _blocked_import)
+
+
 def test_parse_cif_cell_a_c_reads_raw_values():
     a_val, c_val = _parse_cif_cell_a_c(str(Path("tests/local_test.cif")))
     assert a_val == pytest.approx(4.0)
@@ -80,6 +92,141 @@ def test_parse_cif_cell_a_c_handles_uncertainty_suffix(tmp_path):
         encoding="utf-8",
     )
     a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+    assert a_val == pytest.approx(4.123)
+    assert c_val == pytest.approx(30.456)
+
+
+def test_parse_cif_cell_a_c_falls_back_without_pycifrw(tmp_path, monkeypatch):
+    cif_path = tmp_path / "fallback.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_test",
+                "_cell_length_a    4.123(4)",
+                "_cell_length_c    30.456(7)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _block_ciffile_import(monkeypatch)
+
+    a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+
+    assert a_val == pytest.approx(4.123)
+    assert c_val == pytest.approx(30.456)
+
+
+def test_parse_cif_cell_a_c_fallback_accepts_quoted_scalars(tmp_path, monkeypatch):
+    cif_path = tmp_path / "quoted.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_test",
+                "_cell_length_a    '4.123(4)'",
+                '_cell_length_c    "30.456(7)"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _block_ciffile_import(monkeypatch)
+
+    a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+
+    assert a_val == pytest.approx(4.123)
+    assert c_val == pytest.approx(30.456)
+
+
+def test_parse_cif_cell_a_c_fallback_accepts_quoted_scalars_with_comments(
+    tmp_path,
+    monkeypatch,
+):
+    cif_path = tmp_path / "quoted-comments.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_test",
+                "_cell_length_a    '4.123(4)' # comment",
+                '_cell_length_c    "30.456(7)" # another comment',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _block_ciffile_import(monkeypatch)
+
+    a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+
+    assert a_val == pytest.approx(4.123)
+    assert c_val == pytest.approx(30.456)
+
+
+def test_parse_cif_cell_a_c_fallback_ignores_semicolon_text_fields(tmp_path, monkeypatch):
+    cif_path = tmp_path / "semicolon-text.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_test",
+                "_audit_note",
+                ";",
+                "_cell_length_a 999",
+                "_cell_length_c 888",
+                ";",
+                "_cell_length_a    4.123(4)",
+                "_cell_length_c    30.456(7)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _block_ciffile_import(monkeypatch)
+
+    a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+
+    assert a_val == pytest.approx(4.123)
+    assert c_val == pytest.approx(30.456)
+
+
+def test_parse_cif_cell_a_c_fallback_accepts_split_line_scalars(tmp_path, monkeypatch):
+    cif_path = tmp_path / "split-line.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_test",
+                "_cell_length_a",
+                "  4.123(4)",
+                "_cell_length_c",
+                "  30.456(7)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _block_ciffile_import(monkeypatch)
+
+    a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+
+    assert a_val == pytest.approx(4.123)
+    assert c_val == pytest.approx(30.456)
+
+
+def test_parse_cif_cell_a_c_fallback_accepts_split_line_scalars_after_tag_comments(
+    tmp_path,
+    monkeypatch,
+):
+    cif_path = tmp_path / "split-line-tag-comments.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_test",
+                "_cell_length_a # comment",
+                "  4.123(4)",
+                "_cell_length_c # another comment",
+                "  30.456(7)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _block_ciffile_import(monkeypatch)
+
+    a_val, c_val = _parse_cif_cell_a_c(str(cif_path))
+
     assert a_val == pytest.approx(4.123)
     assert c_val == pytest.approx(30.456)
 
