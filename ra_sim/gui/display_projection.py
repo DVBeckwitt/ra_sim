@@ -206,6 +206,205 @@ def _slice_for_axis(
     return (start_idx, stop_idx, float(projected_start), float(projected_end))
 
 
+def _oriented_window(
+    window: tuple[float, float],
+    *,
+    reference_limits: tuple[float, float],
+) -> tuple[float, float]:
+    if float(reference_limits[1]) >= float(reference_limits[0]):
+        return (float(window[0]), float(window[1]))
+    return (float(window[1]), float(window[0]))
+
+
+def _axis_sample_indices(
+    *,
+    source_start: float,
+    source_end: float,
+    source_count: int,
+    target_count: int,
+    target_start: float,
+    target_end: float,
+) -> np.ndarray:
+    if source_count <= 0 or target_count <= 0:
+        return np.zeros((0,), dtype=np.int64)
+    step = (float(source_end) - float(source_start)) / float(source_count)
+    if not math.isfinite(step) or abs(step) <= _PROJECTION_EPSILON:
+        return np.zeros((int(target_count),), dtype=np.int64)
+    output_step = (float(target_end) - float(target_start)) / float(target_count)
+    centers = float(target_start) + (
+        (np.arange(int(target_count), dtype=np.float64) + 0.5) * float(output_step)
+    )
+    sample_positions = ((centers - float(source_start)) / float(step)) - 0.5
+    indices = np.asarray(np.floor(sample_positions + 0.5), dtype=np.int64)
+    return np.clip(indices, 0, int(source_count) - 1)
+
+
+def _axis_pool_bounds(
+    *,
+    source_start: float,
+    source_end: float,
+    source_count: int,
+    target_count: int,
+    target_start: float,
+    target_end: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    if source_count <= 0 or target_count <= 0:
+        return (
+            np.zeros((0,), dtype=np.int64),
+            np.zeros((0,), dtype=np.int64),
+        )
+    count = int(source_count)
+    targets = int(target_count)
+    if (
+        abs(float(source_start) - float(target_start)) <= _PROJECTION_EPSILON
+        and abs(float(source_end) - float(target_end)) <= _PROJECTION_EPSILON
+    ):
+        aligned_edges = np.linspace(0, count, max(1, targets) + 1, dtype=np.int64)
+        return (aligned_edges[:-1], aligned_edges[1:])
+    step = (float(source_end) - float(source_start)) / float(source_count)
+    if not math.isfinite(step) or abs(step) <= _PROJECTION_EPSILON:
+        lo = np.zeros((targets,), dtype=np.int64)
+        hi = np.ones((targets,), dtype=np.int64)
+        return (lo, hi)
+    edge_positions = (
+        np.linspace(
+            float(target_start),
+            float(target_end),
+            max(1, targets) + 1,
+            dtype=np.float64,
+        )
+        - float(source_start)
+    ) / float(step)
+    boundaries = np.empty((targets + 1,), dtype=np.int64)
+    if float(edge_positions[-1]) >= float(edge_positions[0]):
+        boundaries[0] = int(math.floor(float(edge_positions[0])))
+        boundaries[-1] = int(math.ceil(float(edge_positions[-1])))
+    else:
+        boundaries[0] = int(math.ceil(float(edge_positions[0])))
+        boundaries[-1] = int(math.floor(float(edge_positions[-1])))
+    if targets > 1:
+        boundaries[1:-1] = np.asarray(
+            np.floor(edge_positions[1:-1] + 0.5),
+            dtype=np.int64,
+        )
+    boundaries = np.clip(boundaries, 0, count)
+    lower = np.minimum(boundaries[:-1], boundaries[1:])
+    upper = np.maximum(boundaries[:-1], boundaries[1:])
+    empty_bins = upper <= lower
+    if not np.any(empty_bins):
+        return (lower, upper)
+
+    sample_indices = _axis_sample_indices(
+        source_start=float(source_start),
+        source_end=float(source_end),
+        source_count=count,
+        target_count=targets,
+        target_start=float(target_start),
+        target_end=float(target_end),
+    )
+    lower = lower.copy()
+    upper = upper.copy()
+    lower[empty_bins] = sample_indices[empty_bins]
+    upper[empty_bins] = np.clip(sample_indices[empty_bins] + 1, 1, count)
+    return (lower, upper)
+
+
+def _bounds_are_identity(
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    source_count: int,
+) -> bool:
+    count = int(source_count)
+    if count <= 0:
+        return False
+    return bool(
+        len(lower_bounds) == count
+        and len(upper_bounds) == count
+        and np.array_equal(lower_bounds, np.arange(count, dtype=np.int64))
+        and np.array_equal(upper_bounds, np.arange(1, count + 1, dtype=np.int64))
+    )
+
+
+def _resample_raster_to_extent(
+    image: np.ndarray,
+    *,
+    source_extent: tuple[float, float, float, float],
+    target_extent: tuple[float, float, float, float],
+    target_rows: int,
+    target_cols: int,
+    preserve_bright_features: bool,
+) -> np.ndarray:
+    rows = int(image.shape[0])
+    cols = int(image.shape[1])
+    target_rows = max(1, int(target_rows))
+    target_cols = max(1, int(target_cols))
+
+    extents_match = all(
+        abs(float(source_extent[index]) - float(target_extent[index])) <= _PROJECTION_EPSILON
+        for index in range(4)
+    )
+    if extents_match:
+        return _downsample_raster(
+            image,
+            target_rows=target_rows,
+            target_cols=target_cols,
+            preserve_bright_features=bool(preserve_bright_features),
+        )
+
+    if not bool(preserve_bright_features) or image.ndim != 2:
+        row_indices = _axis_sample_indices(
+            source_start=float(source_extent[2]),
+            source_end=float(source_extent[3]),
+            source_count=rows,
+            target_count=target_rows,
+            target_start=float(target_extent[2]),
+            target_end=float(target_extent[3]),
+        )
+        col_indices = _axis_sample_indices(
+            source_start=float(source_extent[0]),
+            source_end=float(source_extent[1]),
+            source_count=cols,
+            target_count=target_cols,
+            target_start=float(target_extent[0]),
+            target_end=float(target_extent[1]),
+        )
+        if image.ndim == 2:
+            return image[np.ix_(row_indices, col_indices)]
+        return image[row_indices][:, col_indices, ...]
+
+    reducer = np.fmax if np.issubdtype(image.dtype, np.floating) else np.maximum
+    row_lower, row_upper = _axis_pool_bounds(
+        source_start=float(source_extent[2]),
+        source_end=float(source_extent[3]),
+        source_count=rows,
+        target_count=target_rows,
+        target_start=float(target_extent[2]),
+        target_end=float(target_extent[3]),
+    )
+    if _bounds_are_identity(row_lower, row_upper, rows):
+        row_reduced = image
+    else:
+        row_reduced = np.empty((len(row_lower), cols), dtype=image.dtype)
+        for out_index, (row_lo, row_hi) in enumerate(zip(row_lower, row_upper, strict=False)):
+            row_reduced[out_index] = reducer.reduce(image[int(row_lo) : int(row_hi)], axis=0)
+
+    col_lower, col_upper = _axis_pool_bounds(
+        source_start=float(source_extent[0]),
+        source_end=float(source_extent[1]),
+        source_count=cols,
+        target_count=target_cols,
+        target_start=float(target_extent[0]),
+        target_end=float(target_extent[1]),
+    )
+    if _bounds_are_identity(col_lower, col_upper, cols):
+        return row_reduced
+
+    reduced = np.empty((row_reduced.shape[0], len(col_lower)), dtype=image.dtype)
+    for out_index, (col_lo, col_hi) in enumerate(zip(col_lower, col_upper, strict=False)):
+        reduced[:, out_index] = reducer.reduce(row_reduced[:, int(col_lo) : int(col_hi)], axis=1)
+    return reduced
+
+
 def _target_shape(
     *,
     rows: int,
@@ -415,13 +614,13 @@ def project_raster_to_view(
         overscan_fraction=overscan_fraction,
     )
 
-    col_start, col_stop, projected_x0, projected_x1 = _slice_for_axis(
+    col_start, col_stop, cropped_x0, cropped_x1 = _slice_for_axis(
         full_extent[0],
         full_extent[1],
         int(arr.shape[1]),
         view_limits=x_window,
     )
-    row_start, row_stop, projected_y0, projected_y1 = _slice_for_axis(
+    row_start, row_stop, cropped_y0, cropped_y1 = _slice_for_axis(
         full_extent[2],
         full_extent[3],
         int(arr.shape[0]),
@@ -444,20 +643,32 @@ def project_raster_to_view(
         bbox_width_px=bbox_width_px,
         bbox_height_px=bbox_height_px,
     )
-    projected = _downsample_raster(
+
+    projected_xlim = _oriented_window(x_window, reference_limits=xlim)
+    projected_ylim = _oriented_window(y_window, reference_limits=ylim)
+    cropped_extent = (
+        float(cropped_x0),
+        float(cropped_x1),
+        float(cropped_y0),
+        float(cropped_y1),
+    )
+    projected_extent = (
+        float(projected_xlim[0]),
+        float(projected_xlim[1]),
+        float(projected_ylim[0]),
+        float(projected_ylim[1]),
+    )
+    projected = _resample_raster_to_extent(
         cropped,
+        source_extent=cropped_extent,
+        target_extent=projected_extent,
         target_rows=target_rows,
         target_cols=target_cols,
         preserve_bright_features=bool(preserve_bright_features),
     )
     projection = RasterProjection(
         image=projected,
-        extent=(
-            float(projected_x0),
-            float(projected_x1),
-            float(projected_y0),
-            float(projected_y1),
-        ),
+        extent=projected_extent,
     )
     if source_signature is None and not np.shares_memory(projection.image, arr):
         return projection

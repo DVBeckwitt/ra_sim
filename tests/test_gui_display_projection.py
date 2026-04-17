@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from ra_sim.gui import display_projection
 
@@ -162,6 +163,101 @@ def test_project_raster_to_view_preserves_zoomed_detail_when_budget_is_large() -
     assert projection is not None
     assert projection.image.shape == (16, 16)
     assert np.array_equal(projection.image, image[116:132, 120:136])
+
+
+def test_project_raster_to_view_tracks_fractional_detector_pan_phase() -> None:
+    image = np.repeat(np.arange(10, dtype=float)[:, None], 10, axis=1)
+
+    first = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 10.0, 10.0, 0.0),
+        axis_xlim=(0.0, 10.0),
+        axis_ylim=(8.7, 1.7),
+        max_size=100,
+        bbox_width_px=10,
+        bbox_height_px=7,
+        overscan_fraction=0.0,
+    )
+    second = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 10.0, 10.0, 0.0),
+        axis_xlim=(0.0, 10.0),
+        axis_ylim=(8.2, 1.2),
+        max_size=100,
+        bbox_width_px=10,
+        bbox_height_px=7,
+        overscan_fraction=0.0,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.extent == pytest.approx((0.0, 10.0, 8.7, 1.7))
+    assert second.extent == pytest.approx((0.0, 10.0, 8.2, 1.2))
+    assert np.array_equal(first.image[:, 0], np.arange(1.0, 8.0))
+    assert np.array_equal(second.image[:, 0], np.arange(2.0, 9.0))
+    assert not np.array_equal(first.image, second.image)
+
+
+def test_project_raster_to_view_preserve_bright_features_tracks_fractional_detector_pan_phase() -> (
+    None
+):
+    image = np.repeat(np.arange(10, dtype=float)[:, None], 10, axis=1)
+
+    first = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 10.0, 10.0, 0.0),
+        axis_xlim=(0.0, 10.0),
+        axis_ylim=(8.7, 1.7),
+        max_size=100,
+        bbox_width_px=10,
+        bbox_height_px=7,
+        overscan_fraction=0.0,
+        preserve_bright_features=True,
+    )
+    second = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 10.0, 10.0, 0.0),
+        axis_xlim=(0.0, 10.0),
+        axis_ylim=(8.2, 1.2),
+        max_size=100,
+        bbox_width_px=10,
+        bbox_height_px=7,
+        overscan_fraction=0.0,
+        preserve_bright_features=True,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.extent == pytest.approx((0.0, 10.0, 8.7, 1.7))
+    assert second.extent == pytest.approx((0.0, 10.0, 8.2, 1.2))
+    assert np.array_equal(first.image[:, 0], np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]))
+    assert np.array_equal(second.image[:, 0], np.arange(2.0, 9.0))
+    assert not np.array_equal(first.image, second.image)
+
+
+def test_project_raster_to_view_preserve_bright_features_keeps_fractional_edge_peak_visible() -> (
+    None
+):
+    image = np.zeros((10, 1), dtype=float)
+    image[1, 0] = 1.0
+
+    projection = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 1.0, 10.0, 0.0),
+        axis_xlim=(0.0, 1.0),
+        axis_ylim=(8.45, -0.55),
+        max_size=100,
+        bbox_width_px=1,
+        bbox_height_px=2,
+        overscan_fraction=0.0,
+        preserve_bright_features=True,
+    )
+
+    assert projection is not None
+    assert projection.extent == pytest.approx((0.0, 1.0, 8.45, 0.0))
+    assert projection.image.shape == (2, 1)
+    assert float(np.max(projection.image)) == 1.0
+    assert np.array_equal(projection.image[:, 0], np.array([1.0, 0.0]))
 
 
 def test_project_raster_to_view_reuses_cached_projection_for_same_request(
