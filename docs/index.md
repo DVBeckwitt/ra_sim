@@ -16,6 +16,7 @@ you need implementation-level detail.
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
 - [debug-and-cache.md](debug-and-cache.md): debug controls, output locations, and cache retention
 - [grouped-pick-recovery.md](grouped-pick-recovery.md): current recovery status and acceptance plan for canonical grouped-pick identity
+- [sim-peak-overlay-recovery.md](sim-peak-overlay-recovery.md): current status for the unresolved simulated peak detector/caked overlay bug
 - [troubleshooting.md](troubleshooting.md): common setup, config, and workflow failures
 
 ## Quick Routing
@@ -26,6 +27,7 @@ If you need to:
 - change simulation/fitting code: read [architecture.md](architecture.md) and then the code map in [simulation_and_fitting.md](simulation_and_fitting.md#code-map)
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
 - debug grouped-pick manual geometry identity/preflight: read [grouped-pick-recovery.md](grouped-pick-recovery.md) and then [geometry fitting from picked spots](simulation_and_fitting.md#geometry-fitting-from-picked-spots)
+- debug rotated or drifting simulated peak overlays: read [sim-peak-overlay-recovery.md](sim-peak-overlay-recovery.md)
 - debug logs or retained caches: read [debug-and-cache.md](debug-and-cache.md)
 - fix local setup or path issues: read [troubleshooting.md](troubleshooting.md)
 
