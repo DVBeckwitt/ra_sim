@@ -4493,6 +4493,7 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
 
     class _Var:
         def __init__(self, value: float | bool) -> None:
@@ -4606,11 +4607,6 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     )
     monkeypatch.setattr(
         runtime_session,
-        "_clear_pending_main_figure_preview_interaction",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        runtime_session,
         "_ensure_global_image_buffer_shape",
         lambda _image: None,
     )
@@ -4679,6 +4675,7 @@ def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_si
     payload_signature: tuple[str, int],
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
 
     class _Var:
         def __init__(self, value: float | bool) -> None:
@@ -4797,11 +4794,6 @@ def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_si
     )
     monkeypatch.setattr(
         runtime_session,
-        "_clear_pending_main_figure_preview_interaction",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        runtime_session,
         "_ensure_global_image_buffer_shape",
         lambda _image: None,
     )
@@ -4865,6 +4857,7 @@ def test_apply_scale_factor_to_existing_results_uses_runtime_image_signature_for
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
 
     class _Var:
         def __init__(self, value: float | bool) -> None:
@@ -4976,11 +4969,6 @@ def test_apply_scale_factor_to_existing_results_uses_runtime_image_signature_for
         runtime_session,
         "_resolved_primary_analysis_display_mode",
         lambda: "detector",
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "_clear_pending_main_figure_preview_interaction",
-        lambda: None,
     )
     monkeypatch.setattr(
         runtime_session,
