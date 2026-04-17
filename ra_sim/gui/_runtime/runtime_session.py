@@ -3942,6 +3942,7 @@ def _geometry_manual_choose_group_at(
         col,
         row,
         window_size_px=window_size_px,
+        use_caked_display=_geometry_manual_pick_uses_caked_space(),
     )
 
 
@@ -4029,6 +4030,7 @@ def _geometry_manual_nearest_candidate_to_point(
         col,
         row,
         candidate_entries,
+        use_caked_display=_geometry_manual_pick_uses_caked_space(),
     )
 
 
@@ -4364,6 +4366,7 @@ def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
         geometry_manual_state.pick_session,
         current_background_index=background_runtime_state.current_background_index,
+        use_caked_display=_geometry_manual_pick_uses_caked_space(),
         candidate_source_key=_geometry_manual_candidate_source_key,
         entry_display_coords=_geometry_manual_entry_display_coords,
     )
@@ -7314,11 +7317,15 @@ def _integration_overlay_raster_source_signature(
     *,
     parent_source_signature: object | None,
     overlay_source: np.ndarray | None,
+    overlay_source_signature: object | None = None,
 ) -> object | None:
     return (
         "integration_region_overlay",
         parent_source_signature,
-        _resolved_primary_raster_source_signature(overlay_source),
+        _resolved_primary_raster_source_signature(
+            overlay_source,
+            explicit_source_signature=overlay_source_signature,
+        ),
     )
 
 
@@ -7482,7 +7489,11 @@ def _apply_current_primary_raster_projection() -> None:
         _apply_projected_primary_raster_to_artist(artist)
 
 
-def _set_primary_integration_overlay_image(image: object) -> None:
+def _set_primary_integration_overlay_image(
+    image: object,
+    *,
+    source_signature: object | None = None,
+) -> None:
     overlay_artist = globals().get("integration_region_overlay")
     if overlay_artist is None:
         return
@@ -7494,6 +7505,7 @@ def _set_primary_integration_overlay_image(image: object) -> None:
     overlay_source_signature = _integration_overlay_raster_source_signature(
         parent_source_signature=image_source_signature,
         overlay_source=overlay_source,
+        overlay_source_signature=source_signature,
     )
     _store_primary_raster_source(
         overlay_artist,
@@ -12445,9 +12457,12 @@ def _apply_primary_figure_display_from_cached_results(
                 background_runtime_state.visible
                 and simulation_runtime_state.last_q_space_background_image_unscaled is not None
             ):
-                analysis_background_source = np.asarray(
-                    simulation_runtime_state.last_q_space_background_image_unscaled,
-                    dtype=float,
+                analysis_background_source = (
+                    np.asarray(
+                        simulation_runtime_state.last_q_space_background_image_unscaled,
+                        dtype=float,
+                    )
+                    * current_scale
                 )
             display_primary_source = analysis_image * current_scale
             display_secondary_source = analysis_background_source
@@ -12482,9 +12497,12 @@ def _apply_primary_figure_display_from_cached_results(
                 background_runtime_state.visible
                 and simulation_runtime_state.last_caked_background_image_unscaled is not None
             ):
-                analysis_background_source = np.asarray(
-                    simulation_runtime_state.last_caked_background_image_unscaled,
-                    dtype=float,
+                analysis_background_source = (
+                    np.asarray(
+                        simulation_runtime_state.last_caked_background_image_unscaled,
+                        dtype=float,
+                    )
+                    * current_scale
                 )
             scaled_analysis_for_limits = analysis_image * current_scale
             display_primary_source, display_secondary_source = (

@@ -3710,6 +3710,108 @@ def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_witho
     assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
 
 
+def test_build_geometry_manual_fit_dataset_prefers_current_view_overlay_fallback_in_caked_view() -> None:
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_peak_index": 0,
+            "hkl": (1, 1, 0),
+            "display_col": 13.1,
+            "display_row": 2.1,
+            "caked_x": 13.1,
+            "caked_y": 2.1,
+            "sim_col": 500.0,
+            "sim_row": 600.0,
+            "sim_col_raw": 5.0,
+            "sim_row_raw": 6.0,
+        },
+        {
+            "q_group_key": ("q", 1),
+            "source_table_index": 1,
+            "source_row_index": 0,
+            "source_peak_index": 0,
+            "hkl": (1, 1, 0),
+            "display_col": 30.0,
+            "display_row": 40.0,
+            "caked_x": 30.0,
+            "caked_y": 40.0,
+            "sim_col": 300.2,
+            "sim_row": 400.2,
+            "sim_col_raw": 7.0,
+            "sim_row_raw": 8.0,
+        },
+    ]
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "hkl": (1, 1, 0),
+                "x": 300.0,
+                "y": 400.0,
+                "caked_x": 13.0,
+                "caked_y": 2.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [
+                dict(row) for row in simulated_rows
+            ]
+        ),
+        geometry_manual_simulated_peaks_for_params=(  # pragma: no branch
+            lambda params, *, prefer_cache: [dict(row) for row in simulated_rows]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("caked_x", entry.get("x", 0.0))),
+            float(entry.get("caked_y", entry.get("y", 0.0))),
+        ),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    initial_entry = dataset["initial_pairs_display"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+
+    assert initial_entry["sim_display"] == (13.1, 2.1)
+    assert initial_entry["sim_caked_display"] == (13.1, 2.1)
+    assert diag["overlay_resolution_kind"] == "q_group_fallback"
+    assert diag["overlay_source_row_key"] == (0, 0)
+    assert diag["overlay_distance_px"] == pytest.approx(np.hypot(0.1, 0.1))
+
+
 def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables_dynamic_reanchor(
     monkeypatch,
 ) -> None:

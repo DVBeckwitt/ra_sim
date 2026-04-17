@@ -1510,6 +1510,34 @@ def run_headless_geometry_fit(
             prefer_safe_python_runner=True,
         )
     )
+
+    def _native_detector_coords_to_live_bundle_detector_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float | None, float | None]:
+        shape = tuple(int(v) for v in np.asarray(_current_background_native()).shape[:2])
+        if len(shape) < 2 or min(shape) <= 0:
+            return None, None
+        return gui_geometry_overlay.rotate_point_for_display(
+            float(col),
+            float(row),
+            shape,
+            DISPLAY_ROTATE_K,
+        )
+
+    def _live_bundle_detector_coords_to_background_display_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float | None, float | None]:
+        try:
+            col_val = float(col)
+            row_val = float(row)
+        except Exception:
+            return None, None
+        if not (np.isfinite(col_val) and np.isfinite(row_val)):
+            return None, None
+        return float(col_val), float(row_val)
+
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=False,
         last_caked_background_image_unscaled=None,
@@ -1539,6 +1567,12 @@ def run_headless_geometry_fit(
                 image_shape,
                 sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
             )
+        ),
+        native_detector_coords_to_bundle_detector_coords=(
+            _native_detector_coords_to_live_bundle_detector_coords
+        ),
+        bundle_detector_coords_to_background_display_coords=(
+            _live_bundle_detector_coords_to_background_display_coords
         ),
     )
 

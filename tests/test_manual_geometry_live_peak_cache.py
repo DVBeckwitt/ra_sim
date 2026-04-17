@@ -81,7 +81,11 @@ def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> N
     assert cache_data["cache_metadata"]["cache_source"] == "peak_records"
     assert cache_data["cache_metadata"]["stale_reason"] is None
     assert group_entry["label"] == "1,0,2"
-    assert group_entry["sim_col"] == 13.5
+    assert group_entry["display_col"] == 13.5
+    assert group_entry["display_row"] == 15.5
+    assert group_entry["native_col"] == 13.5
+    assert group_entry["native_row"] == 15.5
+    assert "sim_col" not in group_entry
     assert np.isclose(float(group_entry["qr"]), 1.2345678901)
     assert np.isclose(
         float(next_state["simulated_lookup"][_source_key(peak_record)]["qz"]),
@@ -318,8 +322,10 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
         "existing_cache_data.simulated_peaks(reprojected)"
     )
     cache_entry = cache_data["simulated_lookup"][_source_key(cached_entry)]
-    assert cache_entry["sim_col"] == 13.0
-    assert cache_entry["sim_row"] == 2.0
+    assert cache_entry["sim_col"] == 3.0
+    assert cache_entry["sim_row"] == 4.0
+    assert cache_entry["display_col"] == 13.0
+    assert cache_entry["display_row"] == 2.0
     assert cache_entry["sim_col_raw"] == 3.0
     assert cache_entry["sim_row_raw"] == 4.0
 
@@ -414,14 +420,50 @@ def test_geometry_manual_live_peak_candidates_from_records_does_not_promote_cake
 
     assert len(candidates) == 1
     candidate = candidates[0]
-    assert candidate["sim_col"] == 30.25
-    assert candidate["sim_row"] == -57.5
+    assert candidate["display_col"] == 30.25
+    assert candidate["display_row"] == -57.5
     assert candidate["caked_x"] == 30.25
     assert candidate["caked_y"] == -57.5
+    assert "sim_col" not in candidate
+    assert "sim_row" not in candidate
     assert "sim_col_raw" not in candidate
     assert "sim_row_raw" not in candidate
     assert "native_col" not in candidate
     assert "native_row" not in candidate
+
+
+def test_geometry_manual_live_peak_candidates_from_records_preserves_native_and_display_without_detector_truth() -> None:
+    peak_record = {
+        "display_col": 13.0,
+        "display_row": 2.0,
+        "native_col": 6.0,
+        "native_row": 7.0,
+        "caked_x": 13.0,
+        "caked_y": 2.0,
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "intensity": 3.0,
+    }
+
+    candidates = mg.geometry_manual_live_peak_candidates_from_records([peak_record])
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["display_col"] == 13.0
+    assert candidate["display_row"] == 2.0
+    assert candidate["native_col"] == 6.0
+    assert candidate["native_row"] == 7.0
+    assert candidate["sim_native_x"] == 6.0
+    assert candidate["sim_native_y"] == 7.0
+    assert candidate["caked_x"] == 13.0
+    assert candidate["caked_y"] == 2.0
+    assert "sim_col" not in candidate
+    assert "sim_row" not in candidate
+    assert "sim_col_raw" not in candidate
+    assert "sim_row_raw" not in candidate
 
 
 def test_geometry_manual_live_peak_candidates_from_records_skips_display_only_records() -> None:
@@ -477,6 +519,87 @@ def test_project_peaks_to_current_view_does_not_promote_transient_display_into_d
     )
 
     assert projected == []
+
+
+def test_project_peaks_to_current_view_derives_detector_truth_from_native_not_caked_display(
+    monkeypatch,
+) -> None:
+    bundle = mg.CakeTransformBundle(
+        detector_shape=(8, 8),
+        radial_deg=np.linspace(10.0, 17.0, 8, dtype=float),
+        raw_azimuth_deg=np.linspace(-4.0, 3.0, 8, dtype=float),
+        gui_azimuth_deg=np.linspace(-4.0, 3.0, 8, dtype=float),
+        lut=object(),
+    )
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (13.0, 2.0)
+            if live_bundle is bundle and (float(col), float(row)) == (6.0, 7.0)
+            else (None, None)
+        ),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8, dtype=float),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8, dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("native detector coords should drive reprojection")
+        ),
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
+        display_rotate_k=0,
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "display_col": 13.0,
+                "display_row": 2.0,
+                "native_col": 6.0,
+                "native_row": 7.0,
+                "caked_x": 13.0,
+                "caked_y": 2.0,
+                "hkl": (-1, 0, 5),
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "intensity": 3.0,
+            }
+        ]
+    )
+
+    assert len(projected) == 1
+    entry = projected[0]
+    assert entry["native_col"] == 6.0
+    assert entry["native_row"] == 7.0
+    assert entry["sim_native_x"] == 6.0
+    assert entry["sim_native_y"] == 7.0
+    assert entry["sim_col"] == 6.0
+    assert entry["sim_row"] == 7.0
+    assert entry["sim_col_raw"] == 6.0
+    assert entry["sim_row_raw"] == 7.0
+    assert entry["display_col"] == 13.0
+    assert entry["display_row"] == 2.0
+    assert entry["caked_x"] == 13.0
+    assert entry["caked_y"] == 2.0
+    assert entry["raw_caked_x"] == 13.0
+    assert entry["raw_caked_y"] == 2.0
 
 
 def test_build_geometry_manual_pick_cache_preserves_mirrored_branch_lookup_entries() -> None:
@@ -888,7 +1011,7 @@ def test_geometry_manual_canonicalize_live_source_entry_only_repairs_trust_from_
     assert "source_reflection_is_full" not in unrepaired
 
 
-def test_refresh_geometry_manual_pair_entry_keeps_saved_caked_angles_as_truth() -> None:
+def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_and_refreshes_caked_fields() -> None:
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {
             "label": "0,0,3",
@@ -920,23 +1043,26 @@ def test_refresh_geometry_manual_pair_entry_keeps_saved_caked_angles_as_truth() 
     )
 
     assert refreshed is not None
-    assert refreshed["detector_x"] == 140.0
-    assert refreshed["detector_y"] == 140.0
-    assert refreshed["x"] == 140.0
-    assert refreshed["y"] == 140.0
-    assert refreshed["background_two_theta_deg"] == 150.0
-    assert refreshed["background_phi_deg"] == 160.0
-    assert refreshed["caked_x"] == 150.0
-    assert refreshed["caked_y"] == 160.0
-    assert refreshed["raw_caked_x"] == 151.0
-    assert refreshed["raw_caked_y"] == 161.0
+    assert refreshed["detector_x"] == 30.0
+    assert refreshed["detector_y"] == 40.0
+    assert refreshed["x"] == 30.0
+    assert refreshed["y"] == 40.0
+    assert refreshed["background_two_theta_deg"] == 40.0
+    assert refreshed["background_phi_deg"] == 60.0
+    assert refreshed["caked_x"] == 40.0
+    assert refreshed["caked_y"] == 60.0
+    assert refreshed["raw_caked_x"] == 40.0
+    assert refreshed["raw_caked_y"] == 60.0
     assert "stale_caked_fields" not in refreshed
 
-    display_point = (float(refreshed["caked_x"]) - 10.0, float(refreshed["caked_y"]) - 20.0)
-    assert display_point == (140.0, 140.0)
+    display_point = (
+        float(refreshed["caked_x"]) - 10.0,
+        float(refreshed["caked_y"]) - 20.0,
+    )
+    assert display_point == (30.0, 40.0)
 
 
-def test_refresh_geometry_manual_pair_entry_prefers_canonical_background_angles() -> None:
+def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_over_canonical_background_angles() -> None:
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {
             "label": "0,0,3",
@@ -968,15 +1094,17 @@ def test_refresh_geometry_manual_pair_entry_prefers_canonical_background_angles(
     )
 
     assert refreshed is not None
-    assert refreshed["background_two_theta_deg"] == 150.0
-    assert refreshed["background_phi_deg"] == 160.0
-    assert refreshed["caked_x"] == 150.0
-    assert refreshed["caked_y"] == 160.0
-    assert refreshed["x"] == 140.0
-    assert refreshed["y"] == 140.0
+    assert refreshed["detector_x"] == 30.0
+    assert refreshed["detector_y"] == 40.0
+    assert refreshed["background_two_theta_deg"] == 40.0
+    assert refreshed["background_phi_deg"] == 60.0
+    assert refreshed["caked_x"] == 40.0
+    assert refreshed["caked_y"] == 60.0
+    assert refreshed["x"] == 30.0
+    assert refreshed["y"] == 40.0
 
 
-def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_not_analytic_inverse(
+def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_for_caked_only_entries(
     monkeypatch,
 ) -> None:
     bundle = mg.CakeTransformBundle(
@@ -1034,8 +1162,6 @@ def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_not_analytic_invers
             "hkl": (0, 0, 3),
             "x": 30.0,
             "y": 40.0,
-            "detector_x": 30.0,
-            "detector_y": 40.0,
             "background_two_theta_deg": 150.0,
             "background_phi_deg": 160.0,
             "caked_x": 40.0,
@@ -1045,12 +1171,14 @@ def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_not_analytic_invers
         },
         background_display_shape=(200, 200),
         background_display_to_native_detector_coords=lambda col, row: (
-            float(col),
-            float(row),
+            (None, None)
+            if abs(float(col) - 30.0) <= 1.0e-9 and abs(float(row) - 40.0) <= 1.0e-9
+            else (float(col), float(row))
         ),
         caked_angles_to_background_display_coords=_caked_angles_to_background_display,
-        native_detector_coords_to_caked_display_coords=_fail_projection_legacy_path(
-            "detector-to-caked backfill should not run for canonical angles"
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 19.0,
         ),
         rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
         display_rotate_k=0,
@@ -1065,9 +1193,49 @@ def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_not_analytic_invers
     assert refreshed["background_phi_deg"] == 160.0
     assert refreshed["caked_x"] == 150.0
     assert refreshed["caked_y"] == 160.0
-    assert refreshed["raw_caked_x"] == 41.0
-    assert refreshed["raw_caked_y"] == 51.0
-    assert inverse_calls == [(150.0, 160.0, bundle)]
+    assert refreshed["raw_caked_x"] == 150.0
+    assert refreshed["raw_caked_y"] == 160.0
+    assert inverse_calls == [
+        (150.0, 160.0, bundle),
+        (150.0, 160.0, bundle),
+    ]
+
+
+def test_refresh_geometry_manual_pair_entry_marks_stale_caked_fields_when_roundtrip_breaks() -> None:
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "0,0,3",
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "background_two_theta_deg": 150.0,
+            "background_phi_deg": 160.0,
+        },
+        background_display_shape=(200, 200),
+        background_display_to_native_detector_coords=lambda col, row: (
+            (None, None)
+            if abs(float(col) - 30.0) <= 1.0e-9 and abs(float(row) - 40.0) <= 1.0e-9
+            else (float(col), float(row))
+        ),
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            float(two_theta),
+            float(phi),
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 100.0,
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (float(col), float(row)),
+        display_rotate_k=0,
+        stale_caked_tolerance_px=0.5,
+    )
+
+    assert refreshed is not None
+    assert refreshed["stale_caked_fields"] is True
+    assert "detector_x" not in refreshed
+    assert "detector_y" not in refreshed
+    assert "x" not in refreshed
+    assert "y" not in refreshed
 
 
 def test_refresh_geometry_manual_pair_entry_migrates_legacy_peak_branch_once() -> None:

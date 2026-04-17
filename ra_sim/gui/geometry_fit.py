@@ -4523,24 +4523,37 @@ def build_geometry_manual_fit_dataset(
             return None
         return float(col), float(row)
 
-    def _entry_saved_simulated_display_point(
+    def _entry_saved_simulated_current_view_point(
         entry: Mapping[str, object] | None,
     ) -> tuple[float, float] | None:
         if not isinstance(entry, Mapping):
             return None
-        for x_key, y_key in (
-            ("refined_sim_x", "refined_sim_y"),
-            ("refined_sim_native_x", "refined_sim_native_y"),
-            ("refined_sim_caked_x", "refined_sim_caked_y"),
-        ):
-            try:
-                col = float(entry.get(x_key, np.nan))
-                row = float(entry.get(y_key, np.nan))
-            except Exception:
-                continue
-            if np.isfinite(col) and np.isfinite(row):
-                return float(col), float(row)
-        return None
+        current_view_point = _entry_point(entry, "display_col", "display_row")
+        if current_view_point is not None:
+            return current_view_point
+        if use_caked_display:
+            return _entry_point(
+                entry,
+                "refined_sim_caked_x",
+                "refined_sim_caked_y",
+            )
+        return _entry_point(entry, "refined_sim_x", "refined_sim_y")
+
+    def _candidate_current_view_point(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        current_view_point = _entry_point(entry, "display_col", "display_row")
+        if current_view_point is not None:
+            return current_view_point
+        if use_caked_display:
+            return _caked_angle_pair(
+                entry,
+                x_keys=("caked_x", "two_theta_deg"),
+                y_keys=("caked_y", "phi_deg"),
+            )
+        return _entry_point(entry, "sim_col", "sim_row")
 
     def _source_entry_branch_matches(
         entry: Mapping[str, object] | None,
@@ -4633,23 +4646,19 @@ def build_geometry_manual_fit_dataset(
         if len(candidate_pool) == 1:
             return dict(candidate_pool[0])
 
-        display_point = _entry_saved_simulated_display_point(entry)
+        display_point = _entry_saved_simulated_current_view_point(entry)
         if display_point is None:
             display_point = _entry_display_point(entry)
         if display_point is None:
             return dict(candidate_pool[0])
 
         def _distance_sq(candidate: Mapping[str, object]) -> float:
-            try:
-                sim_col = float(candidate.get("sim_col"))
-                sim_row = float(candidate.get("sim_row"))
-            except Exception:
-                return float("inf")
-            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            candidate_point = _candidate_current_view_point(candidate)
+            if candidate_point is None:
                 return float("inf")
             return float(
-                (sim_col - float(display_point[0])) ** 2
-                + (sim_row - float(display_point[1])) ** 2
+                (float(candidate_point[0]) - float(display_point[0])) ** 2
+                + (float(candidate_point[1]) - float(display_point[1])) ** 2
             )
 
         candidate_pool.sort(key=_distance_sq)
@@ -4671,16 +4680,12 @@ def build_geometry_manual_fit_dataset(
         display_point = _entry_display_point(entry)
         if display_point is None or not isinstance(resolved_source_entry, Mapping):
             return float("inf")
-        try:
-            sim_col = float(resolved_source_entry.get("sim_col"))
-            sim_row = float(resolved_source_entry.get("sim_row"))
-        except Exception:
-            return float("inf")
-        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        resolved_source_point = _candidate_current_view_point(resolved_source_entry)
+        if resolved_source_point is None:
             return float("inf")
         return float(
-            (sim_col - float(display_point[0])) ** 2
-            + (sim_row - float(display_point[1])) ** 2
+            (float(resolved_source_point[0]) - float(display_point[0])) ** 2
+            + (float(resolved_source_point[1]) - float(display_point[1])) ** 2
         )
 
     def _source_candidate_status(
@@ -4813,7 +4818,7 @@ def build_geometry_manual_fit_dataset(
                 y_keys=("caked_y", "phi_deg"),
             )
         if frame_name == "refined_sim_display":
-            return _entry_point(candidate, "sim_col", "sim_row")
+            return _candidate_current_view_point(candidate)
         if frame_name == "measured_detector":
             return _entry_point(candidate, "sim_col_raw", "sim_row_raw") or _entry_point(
                 candidate,
@@ -4821,7 +4826,7 @@ def build_geometry_manual_fit_dataset(
                 "sim_native_y",
             )
         if frame_name == "measured_display":
-            return _entry_point(candidate, "sim_col", "sim_row")
+            return _candidate_current_view_point(candidate)
         return None
 
     def _legacy_branch_hint_resolution(
@@ -5533,10 +5538,11 @@ def build_geometry_manual_fit_dataset(
                 if key in fit_source_entry:
                     initial_entry[key] = fit_source_entry.get(key)
         if isinstance(overlay_source_entry, Mapping):
-            try:
-                sim_col = float(overlay_source_entry.get("sim_col"))
-                sim_row = float(overlay_source_entry.get("sim_row"))
-            except Exception:
+            display_point = _candidate_current_view_point(overlay_source_entry)
+            if display_point is not None:
+                sim_col = float(display_point[0])
+                sim_row = float(display_point[1])
+            else:
                 sim_col = float("nan")
                 sim_row = float("nan")
             if np.isfinite(sim_col) and np.isfinite(sim_row):

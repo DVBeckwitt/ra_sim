@@ -588,6 +588,204 @@ def test_geometry_manual_lookup_source_entry_disambiguates_nonbranch_same_key_bu
     assert resolved["hkl"] == (-1, 0, 5)
 
 
+def test_geometry_manual_resolve_source_entry_index_prefers_caked_match_over_detector_refined_coords() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 13.1,
+            "display_row": 2.1,
+            "caked_x": 13.1,
+            "caked_y": 2.1,
+            "sim_col": 500.0,
+            "sim_row": 600.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 30.0,
+            "display_row": 40.0,
+            "caked_x": 30.0,
+            "caked_y": 40.0,
+            "sim_col": 300.2,
+            "sim_row": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "refined_sim_x": 300.0,
+            "refined_sim_y": 400.0,
+            "refined_sim_caked_x": 13.0,
+            "refined_sim_caked_y": 2.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_current_view_display_over_saved_xy() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 13.1,
+            "display_row": 2.1,
+            "sim_col": 500.0,
+            "sim_row": 600.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 300.2,
+            "display_row": 400.2,
+            "sim_col": 30.0,
+            "sim_row": 40.0,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "x": 300.0,
+            "y": 400.0,
+            "display_col": 13.0,
+            "display_row": 2.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_legacy_caked_candidate_for_current_view_display() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "caked_x": 13.1,
+            "caked_y": 2.1,
+            "sim_col": 500.0,
+            "sim_row": 600.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "caked_x": 30.0,
+            "caked_y": 40.0,
+            "sim_col": 13.2,
+            "sim_row": 2.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 13.0,
+            "display_row": 2.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_ignores_stale_display_coords() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 13.1,
+            "sim_row": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 300.2,
+            "sim_row": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "x": 300.0,
+            "y": 400.0,
+            "display_col": 13.0,
+            "display_row": 2.0,
+            "stale_caked_fields": True,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_view_display_missing() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 13.1,
+            "sim_row": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 300.2,
+            "sim_row": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "x": 300.0,
+            "y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
 def test_current_geometry_manual_match_config_reuses_auto_match_defaults() -> None:
     cfg = mg.current_geometry_manual_match_config(
         {
@@ -727,6 +925,48 @@ def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_pe
     assert isinstance(candidate, dict)
     assert candidate["label"] == "right"
     assert dist < 3.0
+
+
+def test_geometry_manual_candidate_helpers_prefer_caked_coords_in_caked_view() -> None:
+    caked_near = {
+        "label": "caked-near",
+        "caked_x": 13.1,
+        "caked_y": 2.1,
+        "sim_col": 500.0,
+        "sim_row": 600.0,
+    }
+    detector_near = {
+        "label": "detector-near",
+        "caked_x": 30.0,
+        "caked_y": 40.0,
+        "sim_col": 13.2,
+        "sim_row": 2.2,
+    }
+
+    caked_near_dist = mg.geometry_manual_candidate_distance_to_point(
+        13.0,
+        2.0,
+        caked_near,
+        use_caked_display=True,
+    )
+    detector_near_dist = mg.geometry_manual_candidate_distance_to_point(
+        13.0,
+        2.0,
+        detector_near,
+        use_caked_display=True,
+    )
+    candidate, dist = mg.geometry_manual_nearest_candidate_to_point(
+        13.0,
+        2.0,
+        [caked_near, detector_near],
+        use_caked_display=True,
+    )
+
+    assert caked_near_dist < 1.0
+    assert detector_near_dist > 10.0
+    assert candidate is not None
+    assert candidate["label"] == "caked-near"
+    assert abs(dist - caked_near_dist) < 1.0e-9
 
 
 def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> None:
@@ -1054,7 +1294,7 @@ def test_ensure_geometry_fit_caked_view_switches_and_refreshes_immediately() -> 
     assert integration_update_pending is None
 
 
-def test_native_detector_coords_to_caked_display_coords_uses_live_lut_projection(
+def test_native_detector_coords_to_caked_display_coords_uses_bundle_frame_adapter(
     monkeypatch,
 ) -> None:
     bundle = object()
@@ -1085,10 +1325,14 @@ def test_native_detector_coords_to_caked_display_coords_uses_live_lut_projection
         wrap_phi_range=_wrap_phi_range,
         caked_radial_values=np.array([10.0, 12.5, 15.0], dtype=float),
         caked_azimuth_values=np.array([-170.0, -10.0, 20.0, 170.0], dtype=float),
+        native_detector_coords_to_bundle_detector_coords=lambda col, row: (
+            float(col) + 1.0,
+            float(row) + 2.0,
+        ),
     )
 
     assert result == (12.6, 169.2)
-    assert projector_calls == [(bundle, 0.9, 0.1)]
+    assert projector_calls == [(bundle, 1.9, 2.1)]
 
 
 def test_native_detector_coords_to_caked_display_coords_uses_explicit_transform_bundle(
@@ -1227,6 +1471,106 @@ def test_caked_angles_to_background_display_coords_applies_backend_inverse_to_lu
 
     assert result == (101.0, 202.0)
     assert inverse_calls == [(0.0, 1.0)]
+
+
+def test_caked_angles_to_background_display_coords_prefers_bundle_frame_display_adapter(
+    monkeypatch,
+) -> None:
+    backend_inverse_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(
+        mg,
+        "_caked_point_to_detector_pixel",
+        lambda *_args, **_kwargs: (7.0, 8.0),
+    )
+
+    result = mg.caked_angles_to_background_display_coords(
+        12.0,
+        30.0,
+        ai=object(),
+        native_background=np.ones((8, 8), dtype=float),
+        caked_radial_values=np.array([10.0, 12.0, 14.0], dtype=float),
+        caked_azimuth_values=np.array([-30.0, 0.0, 30.0], dtype=float),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        scattering_angles_to_detector_pixel=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic inverse fallback should not be used")
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        backend_detector_coords_to_native_detector_coords=lambda col, row: (
+            backend_inverse_calls.append((float(col), float(row))) or (101.0, 202.0)
+        ),
+        bundle_detector_coords_to_background_display_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+    )
+
+    assert result == (107.0, 208.0)
+    assert backend_inverse_calls == []
+
+
+def test_geometry_manual_apply_refined_simulated_override_keeps_detector_coords_in_caked_view() -> None:
+    refined = mg.geometry_manual_apply_refined_simulated_override(
+        {
+            "refined_sim_x": 30.0,
+            "refined_sim_y": 40.0,
+            "refined_sim_native_x": 5.0,
+            "refined_sim_native_y": 6.0,
+            "refined_sim_caked_x": 13.0,
+            "refined_sim_caked_y": 2.0,
+        },
+        {
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "display_col": 3.0,
+            "display_row": 4.0,
+            "caked_x": 11.0,
+            "caked_y": 12.0,
+        },
+        prefer_caked_display=True,
+    )
+
+    assert refined is not None
+    assert refined["sim_col"] == 30.0
+    assert refined["sim_row"] == 40.0
+    assert refined["sim_col_raw"] == 30.0
+    assert refined["sim_row_raw"] == 40.0
+    assert refined["display_col"] == 13.0
+    assert refined["display_row"] == 2.0
+    assert refined["sim_native_x"] == 5.0
+    assert refined["sim_native_y"] == 6.0
+
+
+def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_display_when_not_caked() -> None:
+    refined = mg.geometry_manual_apply_refined_simulated_override(
+        {
+            "refined_sim_x": 30.0,
+            "refined_sim_y": 40.0,
+            "refined_sim_caked_x": 13.0,
+            "refined_sim_caked_y": 2.0,
+        },
+        {
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "display_col": 3.0,
+            "display_row": 4.0,
+            "caked_x": 11.0,
+            "caked_y": 12.0,
+        },
+        prefer_caked_display=False,
+    )
+
+    assert refined is not None
+    assert refined["sim_col"] == 30.0
+    assert refined["sim_row"] == 40.0
+    assert refined["display_col"] == 30.0
+    assert refined["display_row"] == 40.0
+    assert refined["caked_x"] == 13.0
+    assert refined["caked_y"] == 2.0
 
 
 def test_detector_to_caked_to_detector_round_trips_through_same_transform_bundle(
@@ -2645,6 +2989,42 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert entries[0]["bg_display"] == (9.0, 10.0)
     assert entries[0]["qr"] == 1.2345678901
     assert entries[0]["qz"] == 2.3456789012
+
+
+def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_legacy_group_rows() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 5),
+        "group_entries": [
+            {
+                "label": "-1,0,5",
+                "hkl": (-1, 0, 5),
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+                "sim_col": 190.0,
+                "sim_row": 96.0,
+            }
+        ],
+        "pending_entries": [],
+        "background_index": 0,
+    }
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        use_caked_display=True,
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (30.25, -57.5)
 
 
 def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pending_branch_entries() -> None:
@@ -4102,6 +4482,8 @@ def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_
         "label": "",
         "x": 190.0,
         "y": 96.0,
+        "display_col": 29.0,
+        "display_row": -58.5,
         "caked_x": 29.0,
         "caked_y": -58.5,
         "stale_caked_fields": True,
@@ -4308,8 +4690,8 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
         "source_peak_index": 0,
         "caked_x": 29.0,
         "caked_y": -58.5,
-        "sim_col": 29.0,
-        "sim_row": -58.5,
+        "sim_col": 188.0,
+        "sim_row": 95.0,
     }
     right_candidate = {
         "source_table_index": 9,
@@ -4321,8 +4703,8 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
         "source_peak_index": 1,
         "caked_x": 30.25,
         "caked_y": -57.5,
-        "sim_col": 30.25,
-        "sim_row": -57.5,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
     }
 
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
@@ -4718,17 +5100,19 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
 
     assert projected[0]["caked_x"] == 13.0
     assert projected[0]["caked_y"] == 2.0
-    assert projected[0]["sim_col"] == 13.0
-    assert projected[0]["sim_row"] == 2.0
+    assert projected[0]["sim_col"] == 3.0
+    assert projected[0]["sim_row"] == 4.0
+    assert projected[0]["display_col"] == 13.0
+    assert projected[0]["display_row"] == 2.0
     assert projected[0]["sim_col_local"] == 3.0
     assert projected[0]["sim_row_local"] == 4.0
 
     grouped = callbacks.pick_candidates(projected)
     assert list(grouped) == [("q_group", "primary", 1, 0)]
-    assert grouped[("q_group", "primary", 1, 0)][0]["sim_col"] == 13.0
+    assert grouped[("q_group", "primary", 1, 0)][0]["display_col"] == 13.0
 
     lookup = callbacks.simulated_lookup(projected)
-    assert lookup[_source_key(projected[0])]["sim_row"] == 2.0
+    assert lookup[_source_key(projected[0])]["display_row"] == 2.0
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_caked_rows_from_raw_coords(
@@ -4792,8 +5176,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
             "q_group_key": ("q_group", "primary", 1, 0),
             "source_table_index": 1,
             "source_row_index": 2,
-            "sim_col": 13.0,
-            "sim_row": 2.0,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
             "sim_col_raw": 3.0,
             "sim_row_raw": 4.0,
             "native_col": 3.0,
@@ -4876,8 +5260,8 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "q_group_key": ("q_group", "primary", 1, 0),
             "source_table_index": 1,
             "source_row_index": 2,
-            "sim_col": 17.0,
-            "sim_row": -9.0,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
             "sim_col_raw": 3.0,
             "sim_row_raw": 4.0,
             "native_col": 3.0,
@@ -6032,6 +6416,38 @@ def test_build_geometry_manual_pick_cache_matches_active_group_multiset_for_cach
     )
 
 
+def test_geometry_manual_choose_group_at_prefers_caked_coords_in_caked_view() -> None:
+    caked_near = {
+        "label": "caked-near",
+        "caked_x": 13.1,
+        "caked_y": 2.1,
+        "sim_col": 500.0,
+        "sim_row": 600.0,
+    }
+    detector_near = {
+        "label": "detector-near",
+        "caked_x": 30.0,
+        "caked_y": 40.0,
+        "sim_col": 13.2,
+        "sim_row": 2.2,
+    }
+
+    group_key, group_entries, dist = mg.geometry_manual_choose_group_at(
+        {
+            ("good",): [caked_near],
+            ("bad",): [detector_near],
+        },
+        13.0,
+        2.0,
+        window_size_px=4.0,
+        use_caked_display=True,
+    )
+
+    assert group_key == ("good",)
+    assert group_entries == [caked_near]
+    assert dist < 1.0
+
+
 def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_projection() -> None:
     candidate = {
         "label": "-1,0,5",
@@ -6113,6 +6529,87 @@ def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_
         assert entry["raw_caked_x"] == 13.0
         assert entry["raw_caked_y"] == 2.0
     assert first == second
+
+
+def test_geometry_manual_place_selection_at_prefers_caked_nearest_candidate_in_caked_view() -> None:
+    caked_near = {
+        "label": "caked-near",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 9,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "caked_x": 13.2,
+        "caked_y": 2.4,
+        "sim_col": 500.0,
+        "sim_row": 600.0,
+    }
+    detector_near = {
+        "label": "detector-near",
+        "hkl": (1, 0, 5),
+        "source_reflection_index": 10,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 9,
+        "source_row_index": 1,
+        "caked_x": 30.0,
+        "caked_y": 40.0,
+        "sim_col": 13.15,
+        "sim_row": 2.35,
+    }
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        13.0,
+        2.0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 5),
+            "group_entries": [dict(caked_near), dict(detector_near)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "zoom_active": True,
+            "zoom_center": (13.0, 2.0),
+            "saved_xlim": (10.0, 16.0),
+            "saved_ylim": (-4.0, 4.0),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (13.1, 2.2),
+        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(
+            list(entries or [])
+        )
+        or list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            float(phi) + 100.0,
+            float(two_theta) + 200.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 1.0,
+            float(row) - 2.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert saved_entry_sets[-1][0]["label"] == "caked-near"
+    assert saved_entry_sets[-1][0]["source_row_index"] == 0
 
 
 def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:

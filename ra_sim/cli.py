@@ -1169,6 +1169,33 @@ def run_headless_geometry_fit(
     backend_flip_x = _saved_state_bool(flags_state, "background_backend_flip_x", False)
     backend_flip_y = _saved_state_bool(flags_state, "background_backend_flip_y", False)
 
+    def _native_detector_coords_to_live_bundle_detector_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float | None, float | None]:
+        shape = tuple(int(v) for v in np.asarray(_current_background_native()).shape[:2])
+        if len(shape) < 2 or min(shape) <= 0:
+            return None, None
+        return gui_geometry_overlay.rotate_point_for_display(
+            float(col),
+            float(row),
+            shape,
+            HEADLESS_GEOMETRY_BACKGROUND_DISPLAY_ROTATE_K,
+        )
+
+    def _live_bundle_detector_coords_to_background_display_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float | None, float | None]:
+        try:
+            col_val = float(col)
+            row_val = float(row)
+        except Exception:
+            return None, None
+        if not (np.isfinite(col_val) and np.isfinite(row_val)):
+            return None, None
+        return float(col_val), float(row_val)
+
     simulation_callbacks = gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
         process_peaks_parallel=process_peaks_parallel,
         hit_tables_to_max_positions=hit_tables_to_max_positions,
@@ -1201,6 +1228,12 @@ def run_headless_geometry_fit(
         intensities=lambda: structure_model_state.intensities,
         image_size=int(image_size),
         display_to_native_sim_coords=lambda col, row, image_shape: gui_geometry_overlay.display_to_native_sim_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
+        native_detector_coords_to_bundle_detector_coords=(
+            _native_detector_coords_to_live_bundle_detector_coords
+        ),
+        bundle_detector_coords_to_background_display_coords=(
+            _live_bundle_detector_coords_to_background_display_coords
+        ),
     )
 
     source_snapshot_diagnostics_state: dict[str, object] = {}
