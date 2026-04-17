@@ -2776,29 +2776,25 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
         on_toggle_1d_plots=lambda: calls.append("toggle-1d"),
         on_toggle_caked_2d=lambda: calls.append("toggle-2d"),
         on_toggle_log_display=lambda: calls.append("toggle-display"),
-        on_toggle_show_qz_rods=lambda: calls.append("toggle-qz-rods"),
         on_toggle_beam_center_spot=lambda: calls.append("toggle-beam-center"),
     )
 
     assert view_state.show_1d_var.get() is False
     assert view_state.show_caked_2d_var.get() is False
-    assert view_state.show_qz_rods_var.get() is False
     assert view_state.show_beam_center_spot_var.get() is False
     assert view_state.log_display_var.get() is False
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
-        "Show Qz rods",
         "Show beam center spot",
         "Log display",
     ]
     assert view_state.check_1d is None
     assert view_state.check_2d is None
-    assert view_state.show_qz_rods_checkbutton is _FakeCheckbutton.created[0]
-    assert view_state.check_beam_center_spot is _FakeCheckbutton.created[1]
-    assert view_state.check_log_display is _FakeCheckbutton.created[2]
+    assert view_state.check_beam_center_spot is _FakeCheckbutton.created[0]
+    assert view_state.check_log_display is _FakeCheckbutton.created[1]
 
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
-    assert calls == ["toggle-qz-rods", "toggle-beam-center", "toggle-display"]
+    assert calls == ["toggle-beam-center", "toggle-display"]
 
 
 def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> None:
@@ -2867,9 +2863,11 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     _FakeScale.created = []
     monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
     monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Combobox", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Scale", _FakeScale)
     monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
     monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
@@ -2887,12 +2885,21 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         tth_max=55.4,
         phi_min=-12.6,
         phi_max=18.7,
+        qz_min=-0.75,
+        qz_max=1.25,
+        delta_qr=0.02,
         on_tth_min_changed=lambda value: slider_calls.append(("tth-min", float(value))),
         on_tth_max_changed=lambda value: slider_calls.append(("tth-max", float(value))),
         on_phi_min_changed=lambda value: slider_calls.append(("phi-min", float(value))),
         on_phi_max_changed=lambda value: slider_calls.append(("phi-max", float(value))),
-        on_toggle_integrate_qz_rods=lambda: toggle_calls.append("toggle"),
-        on_qr_half_width_changed=lambda value: slider_calls.append(("qr-half-width", float(value))),
+        on_qz_min_changed=lambda value: slider_calls.append(("qz-min", float(value))),
+        on_qz_max_changed=lambda value: slider_calls.append(("qz-max", float(value))),
+        on_delta_qr_changed=lambda value: slider_calls.append(("delta-qr", float(value))),
+        integrate_selected_qr_rod=False,
+        selected_qr_rod_key="phase-a|1",
+        selected_qr_rod_options=[("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1")],
+        on_toggle_integrate_selected_qr_rod=lambda: toggle_calls.append("toggle"),
+        on_selected_qr_rod_changed=lambda value: slider_calls.append(("rod-select", value)),
         on_apply_entry=lambda entry_var, value_var, slider: apply_calls.append(
             (
                 entry_var.get(),
@@ -2907,66 +2914,86 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.frame.text == "Integration Region"
     assert view_state.frame.expanded is True
     assert view_state.range_frame is view_state.frame.frame
+    assert isinstance(view_state.rectangle_section_frame, _FakeFrame)
+    assert isinstance(view_state.rod_section_frame, _FakeFrame)
     assert isinstance(view_state.tth_min_container, _FakeFrame)
     assert isinstance(view_state.phi_max_container, _FakeFrame)
-    assert isinstance(view_state.qr_half_width_container, _FakeFrame)
+    assert isinstance(view_state.selected_qr_rod_container, _FakeFrame)
+    assert isinstance(view_state.qz_min_container, _FakeFrame)
+    assert isinstance(view_state.delta_qr_container, _FakeFrame)
     assert view_state.tth_min_var.get() == 1.5
     assert view_state.tth_max_var.get() == 55.4
     assert view_state.phi_min_var.get() == -12.6
     assert view_state.phi_max_var.get() == 18.7
-    assert view_state.integrate_qz_rods_var.get() is False
-    assert view_state.qr_half_width_var.get() == 0.01
+    assert view_state.integrate_selected_qr_rod_var.get() is False
+    assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
+    assert view_state.selected_qr_rod_display_var.get() == "phase-a m=1 | Qr=1.2500 A^-1"
+    assert view_state.qz_min_var.get() == -0.75
+    assert view_state.qz_max_var.get() == 1.25
+    assert view_state.delta_qr_var.get() == 0.02
     assert view_state.tth_min_label_var.get() == "1.5"
     assert view_state.tth_max_label_var.get() == "55.4"
     assert view_state.phi_min_label_var.get() == "-12.6"
     assert view_state.phi_max_label_var.get() == "18.7"
-    assert view_state.qr_half_width_label_var.get() == "0.0100"
+    assert view_state.qz_min_label_var.get() == "-0.7500"
+    assert view_state.qz_max_label_var.get() == "1.2500"
+    assert view_state.delta_qr_label_var.get() == "0.0200"
     assert view_state.tth_min_entry_var.get() == "1.5000"
     assert view_state.phi_max_entry_var.get() == "18.7000"
-    assert view_state.qr_half_width_entry_var.get() == "0.0100"
+    assert view_state.qz_min_entry_var.get() == "-0.7500"
+    assert view_state.delta_qr_entry_var.get() == "0.0200"
     assert view_state.tth_min_label.kwargs["textvariable"] is view_state.tth_min_label_var
     assert view_state.phi_max_label.kwargs["textvariable"] is view_state.phi_max_label_var
-    assert (
-        view_state.qr_half_width_label.kwargs["textvariable"] is view_state.qr_half_width_label_var
-    )
+    assert view_state.qz_min_label.kwargs["textvariable"] is view_state.qz_min_label_var
+    assert view_state.delta_qr_label.kwargs["textvariable"] is view_state.delta_qr_label_var
     assert view_state.tth_min_entry.textvariable is view_state.tth_min_entry_var
     assert view_state.phi_max_entry.textvariable is view_state.phi_max_entry_var
-    assert view_state.qr_half_width_entry.textvariable is view_state.qr_half_width_entry_var
-    assert _FakeCheckbutton.created[0].kwargs["text"] == "Integrate Qz rods"
-    assert view_state.integrate_qz_rods_checkbutton is _FakeCheckbutton.created[0]
+    assert view_state.qz_min_entry.textvariable is view_state.qz_min_entry_var
+    assert view_state.delta_qr_entry.textvariable is view_state.delta_qr_entry_var
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Enable selected Qr rod ROI"
+    assert view_state.integrate_selected_qr_rod_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.tth_min_slider is _FakeScale.created[0]
     assert view_state.tth_max_slider is _FakeScale.created[1]
     assert view_state.phi_min_slider is _FakeScale.created[2]
     assert view_state.phi_max_slider is _FakeScale.created[3]
-    assert view_state.qr_half_width_slider is _FakeScale.created[4]
+    assert view_state.qz_min_slider is _FakeScale.created[4]
+    assert view_state.qz_max_slider is _FakeScale.created[5]
+    assert view_state.delta_qr_slider is _FakeScale.created[6]
     assert view_state.tth_min_slider.cget("from") == 0.0
     assert view_state.tth_min_slider.cget("to") == 90.0
     assert view_state.phi_min_slider.cget("from") == -180.0
     assert view_state.phi_max_slider.cget("to") == 180.0
-    assert view_state.qr_half_width_slider.cget("from") == 0.0
-    assert view_state.qr_half_width_slider.cget("to") == 0.25
-    assert view_state.qr_half_width_slider.state == "disabled"
-    assert view_state.qr_half_width_entry.state == "disabled"
+    assert view_state.qz_min_slider.cget("from") == -0.75
+    assert view_state.qz_max_slider.cget("to") == 1.25
+    assert view_state.delta_qr_slider.cget("from") == 0.0
+    assert view_state.delta_qr_slider.cget("to") == 0.25
+    assert view_state.selected_qr_rod_combobox.state == "readonly"
+    assert view_state.qz_min_slider.state == "disabled"
+    assert view_state.delta_qr_entry.state == "disabled"
     assert "<ButtonRelease-1>" in view_state.tth_min_slider.bindings
     assert "<Return>" in view_state.tth_min_entry.bindings
     assert "<FocusOut>" in view_state.phi_max_entry.bindings
-    assert "<Return>" in view_state.qr_half_width_entry.bindings
+    assert "<<ComboboxSelected>>" in view_state.selected_qr_rod_combobox.bindings
+    assert "<Return>" in view_state.delta_qr_entry.bindings
 
     view_state.tth_min_slider.command("3.0")
     view_state.phi_max_slider.command("17.5")
-    view_state.qr_half_width_slider.command("0.125")
-    assert slider_calls == [("tth-min", 3.0), ("phi-max", 17.5), ("qr-half-width", 0.125)]
+    view_state.delta_qr_slider.command("0.125")
+    assert slider_calls == [("tth-min", 3.0), ("phi-max", 17.5), ("delta-qr", 0.125)]
 
     _FakeCheckbutton.created[0].command()
     assert toggle_calls == ["toggle"]
+    view_state.selected_qr_rod_display_var.set("phase-a m=1 | Qr=1.2500 A^-1")
+    view_state.selected_qr_rod_combobox.bindings["<<ComboboxSelected>>"](None)
+    assert slider_calls[-1] == ("rod-select", "phase-a m=1 | Qr=1.2500 A^-1")
 
     view_state.tth_min_entry.bindings["<Return>"](None)
     view_state.phi_max_entry.bindings["<FocusOut>"](None)
-    view_state.qr_half_width_entry.bindings["<Return>"](None)
+    view_state.delta_qr_entry.bindings["<Return>"](None)
     assert apply_calls == [
         ("1.5000", 1.5, 0.0, 90.0),
         ("18.7000", 18.7, -180.0, 180.0),
-        ("0.0100", 0.01, 0.0, 0.25),
+        ("0.0200", 0.02, 0.0, 0.25),
     ]
 
     view_state.tth_min_var.set(4.0)

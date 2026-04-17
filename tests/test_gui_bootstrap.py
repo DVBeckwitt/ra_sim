@@ -130,8 +130,8 @@ def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None
     fake_tk.Tk = lambda: fake_root
     fake_tk.TclError = RuntimeError
     fake_fitter_module = ModuleType("ra_sim.hbn_fitter.fitter")
-    fake_fitter_module.HBNFitterGUI = (
-        lambda root, startup_bundle=None: events.append(("gui", root, startup_bundle))
+    fake_fitter_module.HBNFitterGUI = lambda root, startup_bundle=None: events.append(
+        ("gui", root, startup_bundle)
     )
 
     monkeypatch.setattr(
@@ -151,10 +151,9 @@ def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None
     monkeypatch.setattr(
         bootstrap.window_affinity,
         "apply_window_launch_context",
-        lambda window, *, context=None, width=None, height=None: events.append(
-            ("affinity", window, context, width, height)
-        )
-        or True,
+        lambda window, *, context=None, width=None, height=None: (
+            events.append(("affinity", window, context, width, height)) or True
+        ),
     )
 
     bootstrap.launch_calibrant_gui(bundle="bundle.npz")
@@ -201,14 +200,10 @@ def test_build_runtime_structure_factor_pruning_bootstrap_delegates_callbacks() 
             uniform_flag,
             adaptive_flag,
         ):
-            calls.append(
-                ("solve_q_values", bindings_factory, uniform_flag, adaptive_flag)
-            )
+            calls.append(("solve_q_values", bindings_factory, uniform_flag, adaptive_flag))
             return "solve-q-callback"
 
-        def make_runtime_structure_factor_pruning_status_callback(
-            self, bindings_factory
-        ):
+        def make_runtime_structure_factor_pruning_status_callback(self, bindings_factory):
             calls.append(("status", bindings_factory))
             return "status-callback"
 
@@ -270,9 +265,7 @@ def test_build_runtime_qr_cylinder_overlay_bootstrap_delegates_callbacks() -> No
             )
         ),
         make_runtime_qr_cylinder_overlay_toggle_callback=(
-            lambda bindings_factory: (
-                calls.append(("toggle", bindings_factory)) or "overlay-toggle"
-            )
+            lambda bindings_factory: calls.append(("toggle", bindings_factory)) or "overlay-toggle"
         ),
     )
 
@@ -412,9 +405,7 @@ def test_build_runtime_bragg_qr_bootstrap_delegates_callbacks() -> None:
             lambda **kwargs: calls.append(("bindings", kwargs)) or "bragg-bindings"
         ),
         make_runtime_bragg_qr_refresh_callback=(
-            lambda bindings_factory: (
-                calls.append(("refresh", bindings_factory)) or "bragg-refresh"
-            )
+            lambda bindings_factory: calls.append(("refresh", bindings_factory)) or "bragg-refresh"
         ),
         make_runtime_bragg_qr_open_callback=(
             lambda **kwargs: calls.append(("open", kwargs)) or "bragg-open"
@@ -522,14 +513,11 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
     canvas_calls: list[tuple[object, ...]] = []
     canvas_module = SimpleNamespace(
         make_runtime_canvas_interaction_bindings_factory=(
-            lambda **kwargs: (
-                canvas_calls.append(("bindings", kwargs)) or "canvas-bindings"
-            )
+            lambda **kwargs: canvas_calls.append(("bindings", kwargs)) or "canvas-bindings"
         ),
         make_runtime_canvas_interaction_callbacks=(
             lambda bindings_factory: (
-                canvas_calls.append(("callbacks", bindings_factory))
-                or "canvas-callbacks"
+                canvas_calls.append(("callbacks", bindings_factory)) or "canvas-callbacks"
             )
         ),
     )
@@ -547,15 +535,11 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
     background_calls: list[tuple[object, ...]] = []
     background_module = SimpleNamespace(
         make_runtime_background_bindings_factory=(
-            lambda **kwargs: (
-                background_calls.append(("bindings", kwargs))
-                or "background-bindings"
-            )
+            lambda **kwargs: background_calls.append(("bindings", kwargs)) or "background-bindings"
         ),
         make_runtime_background_callbacks=(
             lambda bindings_factory: (
-                background_calls.append(("callbacks", bindings_factory))
-                or "background-callbacks"
+                background_calls.append(("callbacks", bindings_factory)) or "background-callbacks"
             )
         ),
     )
@@ -572,11 +556,9 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
 
     background_control_calls: list[tuple[str, object]] = []
     background_callbacks = SimpleNamespace(
-        refresh_status=lambda: background_control_calls.append(("refresh-status",))
-        or "status",
+        refresh_status=lambda: background_control_calls.append(("refresh-status",)) or "status",
         refresh_backend_status=(
-            lambda: background_control_calls.append(("refresh-backend-status",))
-            or "backend-status"
+            lambda: background_control_calls.append(("refresh-backend-status",)) or "backend-status"
         ),
         toggle_visibility=lambda: background_control_calls.append(("toggle",)) or True,
         switch_background="switch-background",
@@ -594,12 +576,10 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
     background_controls_bundle = bootstrap.build_runtime_background_controls_bootstrap(
         views_module=SimpleNamespace(
             populate_stacked_button_group=lambda parent, button_specs: (
-                background_control_calls.append(
-                    ("buttons", parent, list(button_specs))
-                )
+                background_control_calls.append(("buttons", parent, list(button_specs)))
             ),
-            create_background_file_controls=lambda **kwargs: (
-                background_control_calls.append(("workspace-controls", kwargs))
+            create_background_file_controls=lambda **kwargs: background_control_calls.append(
+                ("workspace-controls", kwargs)
             ),
             create_background_backend_debug_controls=lambda **kwargs: (
                 background_control_calls.append(("backend-controls", kwargs))
@@ -657,8 +637,7 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
     background_theta_module = SimpleNamespace(
         make_runtime_background_theta_bindings_factory=(
             lambda **kwargs: (
-                background_theta_calls.append(("bindings", kwargs))
-                or "background-theta-bindings"
+                background_theta_calls.append(("bindings", kwargs)) or "background-theta-bindings"
             )
         ),
         make_runtime_background_theta_callbacks=(
@@ -686,11 +665,13 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     calls: list[tuple[object, ...]] = []
     peak_module = SimpleNamespace(
         make_runtime_selected_peak_config_factories=(
-            lambda **kwargs: calls.append(("config", kwargs))
-            or SimpleNamespace(
-                canvas_pick="canvas-config",
-                intersection="intersection-config",
-                ideal_center="ideal-center",
+            lambda **kwargs: (
+                calls.append(("config", kwargs))
+                or SimpleNamespace(
+                    canvas_pick="canvas-config",
+                    intersection="intersection-config",
+                    ideal_center="ideal-center",
+                )
             )
         ),
         make_runtime_peak_overlay_data_callback=(
@@ -698,8 +679,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
         ),
         make_runtime_peak_selection_maintenance_callbacks=(
             lambda bindings_factory: (
-                calls.append(("maintenance", bindings_factory))
-                or "maintenance-callbacks"
+                calls.append(("maintenance", bindings_factory)) or "maintenance-callbacks"
             )
         ),
     )
@@ -707,10 +687,12 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     monkeypatch.setattr(
         bootstrap,
         "build_runtime_peak_selection_bootstrap",
-        lambda **kwargs: calls.append(("runtime", kwargs))
-        or SimpleNamespace(
-            bindings_factory="bindings-factory",
-            callbacks="callbacks",
+        lambda **kwargs: (
+            calls.append(("runtime", kwargs))
+            or SimpleNamespace(
+                bindings_factory="bindings-factory",
+                callbacks="callbacks",
+            )
         ),
     )
 
@@ -861,8 +843,7 @@ def test_build_runtime_geometry_manual_bootstrap_wraps_callback_bundle() -> None
     bundle = bootstrap.build_runtime_geometry_manual_bootstrap(
         manual_geometry_module=SimpleNamespace(
             make_runtime_geometry_manual_callbacks=(
-                lambda **kwargs: calls.append(("manual", kwargs))
-                or "manual-callbacks"
+                lambda **kwargs: calls.append(("manual", kwargs)) or "manual-callbacks"
             )
         ),
         background_visible="visible",
@@ -887,8 +868,7 @@ def test_build_runtime_geometry_manual_cache_bootstrap_wraps_callback_bundle() -
     bundle = bootstrap.build_runtime_geometry_manual_cache_bootstrap(
         manual_geometry_module=SimpleNamespace(
             make_runtime_geometry_manual_cache_callbacks=(
-                lambda **kwargs: calls.append(("manual-cache", kwargs))
-                or "manual-cache-callbacks"
+                lambda **kwargs: calls.append(("manual-cache", kwargs)) or "manual-cache-callbacks"
             )
         ),
         fit_config={"geometry": {}},
@@ -913,8 +893,9 @@ def test_build_runtime_geometry_manual_projection_bootstrap_wraps_callback_bundl
     bundle = bootstrap.build_runtime_geometry_manual_projection_bootstrap(
         manual_geometry_module=SimpleNamespace(
             make_runtime_geometry_manual_projection_callbacks=(
-                lambda **kwargs: calls.append(("manual-projection", kwargs))
-                or "manual-projection-callbacks"
+                lambda **kwargs: (
+                    calls.append(("manual-projection", kwargs)) or "manual-projection-callbacks"
+                )
             )
         ),
         caked_view_enabled="caked-view",
@@ -939,8 +920,7 @@ def test_build_runtime_geometry_tool_action_callbacks_bootstrap_wraps_bundle() -
     bundle = bootstrap.build_runtime_geometry_tool_action_callbacks_bootstrap(
         geometry_fit_module=SimpleNamespace(
             make_runtime_geometry_tool_action_callbacks=(
-                lambda **kwargs: calls.append(("tool-actions", kwargs))
-                or "tool-action-callbacks"
+                lambda **kwargs: calls.append(("tool-actions", kwargs)) or "tool-action-callbacks"
             )
         ),
         geometry_fit_history_state="history-state",
@@ -1047,9 +1027,7 @@ def test_build_runtime_hkl_lookup_controls_bootstrap_resolves_latest_callback_bu
             open_selected_peak_intersection_figure=lambda: callback_calls.append(
                 (prefix, "bragg-ewald")
             ),
-            update_hkl_pick_button_label=lambda: callback_calls.append(
-                (prefix, "refresh")
-            ),
+            update_hkl_pick_button_label=lambda: callback_calls.append((prefix, "refresh")),
             set_hkl_pick_mode=lambda enabled, message=None: callback_calls.append(
                 (prefix, "set", bool(enabled), message)
             ),
@@ -1154,9 +1132,7 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
         create_integration_region_rectangle=(
             lambda ax: calls.append(("region-rect", ax)) or "region-rect"
         ),
-        create_drag_select_rectangle=(
-            lambda ax: calls.append(("drag-rect", ax)) or "drag-rect"
-        ),
+        create_drag_select_rectangle=(lambda ax: calls.append(("drag-rect", ax)) or "drag-rect"),
         make_runtime_integration_region_visuals_callback=(
             lambda bindings_factory: (
                 calls.append(("refresh", bindings_factory)) or "refresh-callback"
@@ -1167,10 +1143,12 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
     monkeypatch.setattr(
         bootstrap,
         "build_runtime_integration_range_drag_bootstrap",
-        lambda **kwargs: calls.append(("runtime", kwargs))
-        or SimpleNamespace(
-            bindings_factory="bindings-factory",
-            callbacks="callbacks",
+        lambda **kwargs: (
+            calls.append(("runtime", kwargs))
+            or SimpleNamespace(
+                bindings_factory="bindings-factory",
+                callbacks="callbacks",
+            )
         ),
     )
 
@@ -1215,12 +1193,14 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
             lambda **kwargs: calls.append(("bindings", kwargs)) or "bindings-factory"
         ),
         make_runtime_integration_range_update_callbacks=(
-            lambda bindings_factory: calls.append(("callbacks", bindings_factory))
-            or SimpleNamespace(
-                schedule_range_update="schedule-range-update",
-                toggle_1d_plots="toggle-1d",
-                toggle_caked_2d="toggle-caked",
-                toggle_log_display="toggle-log-display",
+            lambda bindings_factory: (
+                calls.append(("callbacks", bindings_factory))
+                or SimpleNamespace(
+                    schedule_range_update="schedule-range-update",
+                    toggle_1d_plots="toggle-1d",
+                    toggle_caked_2d="toggle-caked",
+                    toggle_log_display="toggle-log-display",
+                )
             )
         ),
         create_runtime_integration_range_controls=(
@@ -1228,9 +1208,7 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
         ),
     )
     views_module = SimpleNamespace(
-        create_analysis_view_controls=lambda **kwargs: calls.append(
-            ("analysis-controls", kwargs)
-        )
+        create_analysis_view_controls=lambda **kwargs: calls.append(("analysis-controls", kwargs))
     )
 
     bundle = bootstrap.build_runtime_integration_range_update_bootstrap(
@@ -1270,8 +1248,11 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "tth_max": 60.0,
                 "phi_min": -15.0,
                 "phi_max": 15.0,
-                "integrate_qz_rods": False,
-                "qr_half_width": 0.01,
+                "integrate_selected_qr_rod": False,
+                "selected_qr_rod_key": "",
+                "qz_min": -1.0,
+                "qz_max": 1.0,
+                "delta_qr": 0.01,
             },
         ),
         (
@@ -1284,7 +1265,6 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "on_toggle_log_display": "toggle-log-display",
                 "show_1d": False,
                 "show_caked_2d": False,
-                "show_qz_rods": False,
                 "log_display": False,
             },
         ),
@@ -1300,33 +1280,37 @@ def test_build_runtime_bragg_qr_workflow_bootstrap_composes_pruning_and_manager(
     monkeypatch.setattr(
         bootstrap,
         "build_runtime_structure_factor_pruning_bootstrap",
-        lambda **kwargs: calls.append(("pruning", kwargs))
-        or SimpleNamespace(
-            bindings_factory="pruning-bindings",
-            current_sf_prune_bias="current-bias",
-            current_solve_q_values="current-solve-q",
-            update_status_label="update-status",
-            apply_filters=(
-                lambda *, trigger_update=True: (
-                    filter_calls.append(bool(trigger_update))
-                    or {"trigger_update": bool(trigger_update)}
-                )
-            ),
-            on_sf_prune_bias_change="on-bias",
-            on_solve_q_steps_change="on-steps",
-            on_solve_q_rel_tol_change="on-rel-tol",
-            set_solve_q_control_states="set-controls",
-            on_solve_q_mode_change="on-mode",
+        lambda **kwargs: (
+            calls.append(("pruning", kwargs))
+            or SimpleNamespace(
+                bindings_factory="pruning-bindings",
+                current_sf_prune_bias="current-bias",
+                current_solve_q_values="current-solve-q",
+                update_status_label="update-status",
+                apply_filters=(
+                    lambda *, trigger_update=True: (
+                        filter_calls.append(bool(trigger_update))
+                        or {"trigger_update": bool(trigger_update)}
+                    )
+                ),
+                on_sf_prune_bias_change="on-bias",
+                on_solve_q_steps_change="on-steps",
+                on_solve_q_rel_tol_change="on-rel-tol",
+                set_solve_q_control_states="set-controls",
+                on_solve_q_mode_change="on-mode",
+            )
         ),
     )
     monkeypatch.setattr(
         bootstrap,
         "build_runtime_bragg_qr_bootstrap",
-        lambda **kwargs: calls.append(("manager", kwargs))
-        or SimpleNamespace(
-            bindings_factory="manager-bindings",
-            refresh_window="refresh-window",
-            open_window="open-window",
+        lambda **kwargs: (
+            calls.append(("manager", kwargs))
+            or SimpleNamespace(
+                bindings_factory="manager-bindings",
+                refresh_window="refresh-window",
+                open_window="open-window",
+            )
         ),
     )
 
@@ -1411,14 +1395,10 @@ def test_build_runtime_bragg_qr_workflow_bootstrap_composes_pruning_and_manager(
     geometry_calls: list[tuple[object, ...]] = []
     geometry_module = SimpleNamespace(
         make_runtime_geometry_q_group_bindings_factory=(
-            lambda **kwargs: (
-                geometry_calls.append(("bindings", kwargs)) or "geometry-bindings"
-            )
+            lambda **kwargs: geometry_calls.append(("bindings", kwargs)) or "geometry-bindings"
         ),
         make_runtime_geometry_q_group_callbacks=(
-            lambda **kwargs: (
-                geometry_calls.append(("callbacks", kwargs)) or "geometry-callbacks"
-            )
+            lambda **kwargs: geometry_calls.append(("callbacks", kwargs)) or "geometry-callbacks"
         ),
     )
     geometry_bundle = bootstrap.build_runtime_geometry_q_group_bootstrap(

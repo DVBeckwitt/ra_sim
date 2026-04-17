@@ -3123,7 +3123,10 @@ def _schedule_first_visible_simulation_settle_pass() -> None:
 
     def _run_first_visible_simulation_settle(*, attempt: int, retry_allowed: bool) -> None:
         simulation_runtime_state.first_visible_simulation_settle_token = None
-        if getattr(simulation_runtime_state, "last_unscaled_image_signature", None) != expected_signature:
+        if (
+            getattr(simulation_runtime_state, "last_unscaled_image_signature", None)
+            != expected_signature
+        ):
             return
         if getattr(simulation_runtime_state, "unscaled_image", None) is None:
             return
@@ -3147,9 +3150,7 @@ def _schedule_first_visible_simulation_settle_pass() -> None:
             _refresh_settled_overlays()
             _request_legacy_main_matplotlib_redraw(force=True)
             _flush_main_canvas_tk_present()
-            simulation_runtime_state.first_visible_simulation_settled_signature = (
-                expected_signature
-            )
+            simulation_runtime_state.first_visible_simulation_settled_signature = expected_signature
         except Exception as exc:
             _append_runtime_update_exception_trace(
                 "first_visible_simulation_settle_failed",
@@ -5422,70 +5423,163 @@ def _current_qr_cylinder_caked_projection_context() -> Mapping[str, object] | No
     )
 
 
-def _current_qr_cylinder_caked_band_masks() -> dict[str, object] | None:
+def _analysis_selected_qr_rod_entries() -> list[dict[str, object]]:
+    active_entries_factory = globals().get("active_qr_cylinder_overlay_entries_factory")
+    if not callable(active_entries_factory):
+        return []
+    return [dict(entry) for entry in (active_entries_factory() or ()) if isinstance(entry, Mapping)]
+
+
+def _selected_qr_rod_option_pairs(
+    entries: Sequence[Mapping[str, object]] | None,
+) -> list[tuple[str, str]]:
+    option_pairs: list[tuple[str, str]] = []
+    for entry in entries or ():
+        encoded_key = gui_controllers.encode_bragg_qr_group_key(entry.get("key"))
+        if not encoded_key:
+            continue
+        option_pairs.append(
+            (
+                encoded_key,
+                gui_controllers.format_bragg_qr_entry_label(entry),
+            )
+        )
+    return option_pairs
+
+
+def _selected_qr_rod_entry_for_key(
+    entries: Sequence[Mapping[str, object]] | None,
+    encoded_key: object,
+) -> dict[str, object] | None:
+    normalized_key = gui_controllers.decode_bragg_qr_group_key(encoded_key)
+    if normalized_key is None:
+        return None
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        entry_key = gui_controllers.decode_bragg_qr_group_key(
+            gui_controllers.encode_bragg_qr_group_key(entry.get("key"))
+        )
+        if entry_key == normalized_key:
+            return dict(entry)
+    return None
+
+
+def _current_selected_qr_rod_entry(
+    entries: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object] | None:
+    entries_list = [dict(entry) for entry in (entries or _analysis_selected_qr_rod_entries())]
+    if not entries_list:
+        return None
+    roi_values = _current_analysis_roi_values()
+    selected_entry = _selected_qr_rod_entry_for_key(
+        entries_list,
+        roi_values.get("selected_qr_rod_key", ""),
+    )
+    return selected_entry if selected_entry is not None else dict(entries_list[0])
+
+
+def _current_caked_qz_extent() -> tuple[float, float] | None:
+    radial_axis = np.asarray(
+        simulation_runtime_state.last_caked_radial_values,
+        dtype=float,
+    ).reshape(-1)
+    azimuth_axis = np.asarray(
+        simulation_runtime_state.last_caked_azimuth_values,
+        dtype=float,
+    ).reshape(-1)
+    radial_axis = radial_axis[(radial_axis >= 0.0) & (radial_axis <= 90.0)]
+    if radial_axis.size <= 0 or azimuth_axis.size <= 0:
+        return None
+    try:
+        _qr_map, qz_map = gui_controllers.caked_axes_to_qr_qz_maps(
+            radial_axis,
+            azimuth_axis,
+            wavelength_m=float(lambda_) * 1.0e-10,
+        )
+    except Exception:
+        return None
+    valid_qz = qz_map[np.isfinite(qz_map)]
+    if valid_qz.size <= 0:
+        return None
+    return float(np.min(valid_qz)), float(np.max(valid_qz))
+
+
+def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     if not _active_caked_primary_view():
         return None
 
-    range_values = _current_analysis_range_values()
-    if not bool(range_values.get("integrate_qz_rods", False)):
+    roi_values = _current_analysis_roi_values()
+    if not bool(roi_values.get("integrate_selected_qr_rod", False)):
         return None
 
-    qr_half_width_local = float(range_values.get("qr_half_width", 0.0))
-    if qr_half_width_local <= 0.0:
+    try:
+        delta_qr = float(roi_values.get("delta_qr", 0.0))
+        qz_min = float(roi_values.get("qz_min", 0.0))
+        qz_max = float(roi_values.get("qz_max", 0.0))
+        wavelength_m = float(lambda_) * 1.0e-10
+    except Exception:
+        return None
+    if delta_qr <= 0.0:
+        return None
+    qz_lo, qz_hi = sorted((qz_min, qz_max))
+
+    entries = _analysis_selected_qr_rod_entries()
+    selected_entry = _current_selected_qr_rod_entry(entries)
+    if selected_entry is None:
         return None
 
-    active_entries_factory = globals().get("active_qr_cylinder_overlay_entries_factory")
-    if not callable(active_entries_factory):
-        return None
-    entries = list(active_entries_factory() or [])
-    if not entries:
+    radial_axis = np.asarray(
+        simulation_runtime_state.last_caked_radial_values,
+        dtype=float,
+    ).reshape(-1)
+    azimuth_axis = np.asarray(
+        simulation_runtime_state.last_caked_azimuth_values,
+        dtype=float,
+    ).reshape(-1)
+    radial_axis = radial_axis[(radial_axis >= 0.0) & (radial_axis <= 90.0)]
+    if radial_axis.size <= 0 or azimuth_axis.size <= 0:
         return None
 
-    projection_context = _current_qr_cylinder_caked_projection_context()
-    radial_axis = simulation_runtime_state.last_caked_radial_values
-    azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
-    if projection_context is None or radial_axis is None or azimuth_axis is None:
-        return None
-
-    render_config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
-    if not callable(render_config_factory):
-        return None
-    render_config = render_config_factory()
-    if render_config is None:
-        return None
-    caked_render_config = replace(render_config, render_in_caked_space=True)
-
-    radial_signature = gui_qr_cylinder_overlay._float64_axis_digest(radial_axis)
-    azimuth_signature = gui_qr_cylinder_overlay._float64_axis_digest(azimuth_axis)
+    encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
     signature = (
-        tuple(
-            (
-                entry.get("key"),
-                round(float(entry.get("qr", 0.0)), 10),
-            )
-            for entry in entries
-        ),
-        round(float(qr_half_width_local), 10),
-        gui_qr_cylinder_overlay.build_qr_cylinder_overlay_signature(
-            entries,
-            config=caked_render_config,
-            projection_context=projection_context,
-        ),
-        radial_signature,
-        azimuth_signature,
+        encoded_key,
+        round(float(selected_entry.get("qr", 0.0)), 10),
+        round(delta_qr, 10),
+        round(qz_lo, 10),
+        round(qz_hi, 10),
+        round(wavelength_m, 16),
+        gui_qr_cylinder_overlay._float64_axis_digest(radial_axis),
+        gui_qr_cylinder_overlay._float64_axis_digest(azimuth_axis),
     )
     cache = geometry_runtime_state.qr_cylinder_band_cache
     if cache.get("signature") != signature:
-        result = gui_qr_cylinder_overlay.build_qr_cylinder_caked_band_masks(
-            entries,
-            config=caked_render_config,
-            projection_context=projection_context,
-            radial_axis=radial_axis,
-            azimuth_axis=azimuth_axis,
-            delta_qr=float(qr_half_width_local),
+        try:
+            qr_map, qz_map = gui_controllers.caked_axes_to_qr_qz_maps(
+                radial_axis,
+                azimuth_axis,
+                wavelength_m=wavelength_m,
+            )
+        except Exception:
+            return None
+        mask = (
+            np.isfinite(qr_map)
+            & np.isfinite(qz_map)
+            & (np.abs(qr_map - float(selected_entry.get("qr", np.nan))) <= delta_qr)
+            & (qz_map >= qz_lo)
+            & (qz_map <= qz_hi)
         )
         cache["signature"] = signature
-        cache["result"] = result
+        cache["result"] = {
+            "selected_entry": dict(selected_entry),
+            "selected_qr_rod_key": encoded_key,
+            "mask": np.asarray(mask, dtype=bool),
+            "signature": signature,
+            "qz_extent": (
+                float(np.min(qz_map[np.isfinite(qz_map)])),
+                float(np.max(qz_map[np.isfinite(qz_map)])),
+            ),
+        }
     return cache.get("result")
 
 
@@ -5908,75 +6002,69 @@ def _initialize_runtime_controls_block_05() -> None:
         qr_cylinder_overlay_runtime_refresh, \
         _qr_cylinder_overlay_runtime_toggle_impl
 
-    qr_cylinder_overlay_workflow = gui_runtime_qr_cylinder_overlay.build_runtime_qr_cylinder_overlay_workflow(
-        bragg_qr_manager_module=gui_bragg_qr_manager,
-        qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
-        bootstrap_module=gui_bootstrap,
-        active_entry_factory_kwargs={
-            "simulation_runtime_state": simulation_runtime_state,
-            "primary_candidate": (lambda: a_var.get()),
-            "primary_fallback": float(av),
-            "secondary_candidate": (lambda: av2),
-            "primary_miller_all": (lambda: globals().get("SIM_MILLER1")),
-            "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
-        },
-        render_config_factory_kwargs={
-            "render_in_caked_space_factory": (lambda: _active_caked_primary_view()),
-            "image_size": int(image_size),
-            "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
-            "center_col_factory": (lambda: float(center_y_var.get())),
-            "center_row_factory": (lambda: float(center_x_var.get())),
-            "distance_cor_to_detector_factory": (lambda: float(corto_detector_var.get())),
-            "gamma_deg_factory": (lambda: float(gamma_var.get())),
-            "Gamma_deg_factory": (lambda: float(Gamma_var.get())),
-            "chi_deg_factory": (lambda: float(chi_var.get())),
-            "psi_deg_factory": (lambda: float(psi)),
-            "psi_z_deg_factory": (lambda: float(psi_z_var.get())),
-            "zs_factory": (lambda: float(zs_var.get())),
-            "zb_factory": (lambda: float(zb_var.get())),
-            "theta_initial_deg_factory": (
-                lambda: float(_current_effective_theta_initial(strict_count=False))
-            ),
-            "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
-            "pixel_size_m": float(pixel_size_m),
-            "wavelength": float(lambda_),
-            "n2": n2,
-        },
-        overlay_bootstrap_kwargs={
-            "ax": ax,
-            "overlay_artists": geometry_runtime_state.qr_cylinder_overlay_artists,
-            "overlay_cache": geometry_runtime_state.qr_cylinder_overlay_cache,
-            "overlay_enabled_factory": (
-                lambda: (
-                    (
+    qr_cylinder_overlay_workflow = (
+        gui_runtime_qr_cylinder_overlay.build_runtime_qr_cylinder_overlay_workflow(
+            bragg_qr_manager_module=gui_bragg_qr_manager,
+            qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
+            bootstrap_module=gui_bootstrap,
+            active_entry_factory_kwargs={
+                "simulation_runtime_state": simulation_runtime_state,
+                "primary_candidate": (lambda: a_var.get()),
+                "primary_fallback": float(av),
+                "secondary_candidate": (lambda: av2),
+                "primary_miller_all": (lambda: globals().get("SIM_MILLER1")),
+                "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
+            },
+            render_config_factory_kwargs={
+                "render_in_caked_space_factory": (lambda: _active_caked_primary_view()),
+                "image_size": int(image_size),
+                "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
+                "center_col_factory": (lambda: float(center_y_var.get())),
+                "center_row_factory": (lambda: float(center_x_var.get())),
+                "distance_cor_to_detector_factory": (lambda: float(corto_detector_var.get())),
+                "gamma_deg_factory": (lambda: float(gamma_var.get())),
+                "Gamma_deg_factory": (lambda: float(Gamma_var.get())),
+                "chi_deg_factory": (lambda: float(chi_var.get())),
+                "psi_deg_factory": (lambda: float(psi)),
+                "psi_z_deg_factory": (lambda: float(psi_z_var.get())),
+                "zs_factory": (lambda: float(zs_var.get())),
+                "zb_factory": (lambda: float(zb_var.get())),
+                "theta_initial_deg_factory": (
+                    lambda: float(_current_effective_theta_initial(strict_count=False))
+                ),
+                "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
+                "pixel_size_m": float(pixel_size_m),
+                "wavelength": float(lambda_),
+                "n2": n2,
+            },
+            overlay_bootstrap_kwargs={
+                "ax": ax,
+                "overlay_artists": geometry_runtime_state.qr_cylinder_overlay_artists,
+                "overlay_cache": geometry_runtime_state.qr_cylinder_overlay_cache,
+                "overlay_enabled_factory": (
+                    lambda: (
                         bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
                         if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
                         is not None
                         else False
                     )
-                    or (
-                        bool(analysis_view_controls_view_state.show_qz_rods_var.get())
-                        if analysis_view_controls_view_state.show_qz_rods_var is not None
-                        and _active_caked_primary_view()
-                        else False
+                ),
+                "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
+                "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
+                "get_caked_projection_context": (
+                    lambda: _current_qr_cylinder_caked_projection_context()
+                ),
+                "native_sim_to_display_coords": _native_sim_to_display_coords,
+                "draw_idle_factory": (lambda: canvas.draw_idle if "canvas" in globals() else None),
+                "set_status_text_factory": (
+                    lambda: (
+                        (lambda text: progress_label_positions.config(text=text))
+                        if "progress_label_positions" in globals()
+                        else None
                     )
-                )
-            ),
-            "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
-            "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
-            "get_caked_projection_context": (
-                lambda: _current_qr_cylinder_caked_projection_context()
-            ),
-            "native_sim_to_display_coords": _native_sim_to_display_coords,
-            "draw_idle_factory": (lambda: canvas.draw_idle if "canvas" in globals() else None),
-            "set_status_text_factory": (
-                lambda: (
-                    (lambda text: progress_label_positions.config(text=text))
-                    if "progress_label_positions" in globals()
-                    else None
-                )
-            ),
-        },
+                ),
+            },
+        )
     )
     active_qr_cylinder_overlay_entries_factory = qr_cylinder_overlay_workflow.active_entries_factory
     qr_cylinder_overlay_render_config_factory = qr_cylinder_overlay_workflow.render_config_factory
@@ -6079,39 +6167,131 @@ def _set_runtime_widget_enabled(widget: object, enabled: bool) -> None:
             pass
 
 
-def _sync_qz_rod_controls_state() -> None:
-    analysis_view_state = globals().get("analysis_view_controls_view_state")
+def _sync_selected_qr_rod_controls_state() -> None:
     range_view_state = globals().get("integration_range_controls_view_state")
+    if range_view_state is None:
+        return
+
+    option_pairs = _selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries())
+    gui_integration_range_drag._set_runtime_selected_qr_rod_options(  # noqa: SLF001
+        range_view_state,
+        option_pairs,
+    )
+
     caked_active = bool(_active_caked_primary_view())
-    _set_runtime_widget_enabled(
-        getattr(analysis_view_state, "show_qz_rods_checkbutton", None),
-        caked_active,
+    has_options = bool(option_pairs)
+    toggle_widget = getattr(range_view_state, "integrate_selected_qr_rod_checkbutton", None)
+    toggle_var = getattr(range_view_state, "integrate_selected_qr_rod_var", None)
+
+    if caked_active and not has_options:
+        setattr(range_view_state, "integrate_selected_qr_rod_value", False)
+        gui_integration_range_drag._safe_var_set(toggle_var, False)  # noqa: SLF001
+
+    selected_key = gui_integration_range_drag._get_runtime_string_value(  # noqa: SLF001
+        range_view_state,
+        "selected_qr_rod_key",
+        "",
     )
-    _set_runtime_widget_enabled(
-        getattr(
+    option_keys = [encoded_key for encoded_key, _label in option_pairs]
+    if option_keys and selected_key not in option_keys:
+        selected_key = option_keys[0]
+        gui_integration_range_drag._set_runtime_string_value(  # noqa: SLF001
             range_view_state,
-            "integrate_qz_rods_checkbutton",
-            None,
-        ),
-        caked_active,
+            "selected_qr_rod_key",
+            selected_key,
+        )
+    elif not option_keys and caked_active:
+        gui_integration_range_drag._set_runtime_string_value(  # noqa: SLF001
+            range_view_state,
+            "selected_qr_rod_key",
+            "",
+        )
+
+    display_label = (getattr(range_view_state, "selected_qr_rod_option_labels", {}) or {}).get(
+        selected_key, ""
     )
-    integrate_enabled = _read_analysis_bool_value(
-        getattr(range_view_state, "integrate_qz_rods_var", None),
-        bool(getattr(range_view_state, "integrate_qz_rods_value", False)),
-    )
-    width_controls_enabled = bool(caked_active and integrate_enabled)
-    _set_runtime_widget_enabled(
-        getattr(range_view_state, "qr_half_width_slider", None),
-        width_controls_enabled,
-    )
-    _set_runtime_widget_enabled(
-        getattr(range_view_state, "qr_half_width_entry", None),
-        width_controls_enabled,
+    gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        getattr(range_view_state, "selected_qr_rod_display_var", None),
+        display_label,
     )
 
+    qz_extent = _current_caked_qz_extent()
+    if qz_extent is not None:
+        qz_lo, qz_hi = sorted((float(qz_extent[0]), float(qz_extent[1])))
+        gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
+            range_view_state,
+            "qz_min",
+            qz_lo,
+            qz_hi,
+        )
+        gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
+            range_view_state,
+            "qz_max",
+            qz_lo,
+            qz_hi,
+        )
+        current_qz_min = _read_analysis_range_value(
+            getattr(range_view_state, "qz_min_var", None),
+            getattr(range_view_state, "qz_min_value", qz_lo),
+        )
+        current_qz_max = _read_analysis_range_value(
+            getattr(range_view_state, "qz_max_var", None),
+            getattr(range_view_state, "qz_max_value", qz_hi),
+        )
+        clamped_qz_min = min(max(float(current_qz_min), qz_lo), qz_hi)
+        clamped_qz_max = min(max(float(current_qz_max), qz_lo), qz_hi)
+        if clamped_qz_min > clamped_qz_max:
+            clamped_qz_min, clamped_qz_max = qz_lo, qz_hi
+        gui_integration_range_drag._set_runtime_range_value(  # noqa: SLF001
+            range_view_state,
+            "qz_min",
+            clamped_qz_min,
+        )
+        gui_integration_range_drag._set_runtime_range_value(  # noqa: SLF001
+            range_view_state,
+            "qz_max",
+            clamped_qz_max,
+        )
 
-def _sync_show_qz_rods_quick_control_state() -> None:
-    _sync_qz_rod_controls_state()
+    rod_mode_enabled = _read_analysis_bool_value(
+        toggle_var,
+        bool(getattr(range_view_state, "integrate_selected_qr_rod_value", False)),
+    )
+
+    rectangle_widgets = (
+        getattr(range_view_state, "tth_min_slider", None),
+        getattr(range_view_state, "tth_min_entry", None),
+        getattr(range_view_state, "tth_max_slider", None),
+        getattr(range_view_state, "tth_max_entry", None),
+        getattr(range_view_state, "phi_min_slider", None),
+        getattr(range_view_state, "phi_min_entry", None),
+        getattr(range_view_state, "phi_max_slider", None),
+        getattr(range_view_state, "phi_max_entry", None),
+    )
+    rod_widgets = (
+        getattr(range_view_state, "selected_qr_rod_combobox", None),
+        getattr(range_view_state, "qz_min_slider", None),
+        getattr(range_view_state, "qz_min_entry", None),
+        getattr(range_view_state, "qz_max_slider", None),
+        getattr(range_view_state, "qz_max_entry", None),
+        getattr(range_view_state, "delta_qr_slider", None),
+        getattr(range_view_state, "delta_qr_entry", None),
+    )
+
+    if not caked_active:
+        _set_runtime_widget_enabled(toggle_widget, False)
+        for widget in rectangle_widgets:
+            _set_runtime_widget_enabled(widget, True)
+        for widget in rod_widgets:
+            _set_runtime_widget_enabled(widget, False)
+    else:
+        _set_runtime_widget_enabled(toggle_widget, has_options)
+        for widget in rectangle_widgets:
+            _set_runtime_widget_enabled(widget, not rod_mode_enabled)
+        for widget in rod_widgets:
+            _set_runtime_widget_enabled(widget, bool(has_options and rod_mode_enabled))
+
+    gui_integration_range_drag._sync_runtime_range_text_vars(range_view_state)  # noqa: SLF001
 
 
 def _geometry_overlays_enabled() -> bool:
@@ -6973,20 +7153,9 @@ def _toggle_caked_2d_requires_overlay_invalidation(target_view_mode: str) -> boo
         )()
     )
     geometry_roi_preview_active = bool(_current_geometry_fit_caked_roi_preview_enabled())
-    show_qz_rods = bool(
-        getattr(
-            getattr(analysis_view_state, "show_qz_rods_var", None),
-            "get",
-            lambda: False,
-        )()
-    )
-    range_values = dict(_current_analysis_range_values() or {})
-    qz_rods_active = bool(
-        show_qz_rods
-        and bool(range_values.get("integrate_qz_rods", False))
-        and float(range_values.get("qr_half_width", 0.0)) > 0.0
-    )
-    return bool(show_geometry_overlays or geometry_roi_preview_active or qz_rods_active)
+    roi_values = dict(_current_analysis_roi_values() or {})
+    selected_qr_rod_active = bool(roi_values.get("integrate_selected_qr_rod", False))
+    return bool(show_geometry_overlays or geometry_roi_preview_active or selected_qr_rod_active)
 
 
 def toggle_caked_2d(requested_mode: str | None = None) -> None:
@@ -7008,7 +7177,7 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
     if _toggle_caked_2d_requires_overlay_invalidation(target_view_mode):
         _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
-    _sync_qz_rod_controls_state()
+    _sync_selected_qr_rod_controls_state()
     _sync_center_marker(redraw=False)
     reselect_current_peak = getattr(
         globals().get("peak_selection_runtime_callbacks"),
@@ -7086,7 +7255,7 @@ def _set_persistent_view_mode(mode: str) -> None:
             schedule_update_fn = globals().get("schedule_update")
             if callable(schedule_update_fn):
                 schedule_update_fn()
-    _sync_show_qz_rods_quick_control_state()
+    _sync_selected_qr_rod_controls_state()
     _refresh_run_status_bar()
 
 
@@ -7134,12 +7303,16 @@ def _initialize_runtime_controls_block_15() -> None:
             ),
             set_integration_overlay_image_factory=lambda: _set_primary_integration_overlay_image,
             caked_custom_mask_factory=lambda: (
-                (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
-                if callable(globals().get("_current_qr_cylinder_caked_band_masks", None))
+                (_current_selected_qr_rod_caked_mask_payload() or {}).get("mask")
+                if callable(globals().get("_current_selected_qr_rod_caked_mask_payload", None))
                 else None
             ),
             caked_custom_mask_signature_factory=lambda: (
-                ((geometry_runtime_state.qr_cylinder_band_cache or {}).get("signature"))
+                (
+                    (_current_selected_qr_rod_caked_mask_payload() or {}).get("signature")
+                    if callable(globals().get("_current_selected_qr_rod_caked_mask_payload", None))
+                    else None
+                )
                 if getattr(geometry_runtime_state, "qr_cylinder_band_cache", None) is not None
                 else None
             ),
@@ -8094,15 +8267,16 @@ def _auto_match_scale_factor_to_radial_peak():
                 phi_max = float(phi_max_var.get())
                 sim_res2 = caking(sim_img, ai)
                 bg_res2 = caking(bg_img, ai)
-                rod_band_mask = (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
-                if rod_band_mask is not None:
+                rod_roi_payload = _current_selected_qr_rod_caked_mask_payload()
+                if rod_roi_payload is not None:
                     i2t_sim, _, _, _ = _caked_profiles_from_sum_fields(
                         sim_res2,
                         tth_min=tth_min,
                         tth_max=tth_max,
                         phi_min=phi_min,
                         phi_max=phi_max,
-                        rod_band_mask=rod_band_mask,
+                        roi_mask=rod_roi_payload.get("mask"),
+                        use_rectangular_roi=False,
                     )
                     i2t_bg, _, _, _ = _caked_profiles_from_sum_fields(
                         bg_res2,
@@ -8110,7 +8284,8 @@ def _auto_match_scale_factor_to_radial_peak():
                         tth_max=tth_max,
                         phi_min=phi_min,
                         phi_max=phi_max,
-                        rod_band_mask=rod_band_mask,
+                        roi_mask=rod_roi_payload.get("mask"),
+                        use_rectangular_roi=False,
                     )
                 else:
                     i2t_sim, _, _, _ = caked_up(
@@ -8909,7 +9084,8 @@ def _caked_profiles_from_sum_fields(
     tth_max,
     phi_min,
     phi_max,
-    rod_band_mask=None,
+    roi_mask=None,
+    use_rectangular_roi=True,
 ):
     raw_intensity = np.asarray(getattr(res2, "intensity"), dtype=float)
     raw_sum_signal = np.asarray(getattr(res2, "sum_signal"), dtype=float)
@@ -8940,15 +9116,19 @@ def _caked_profiles_from_sum_fields(
     phi_min = float(phi_min)
     phi_max = float(phi_max)
 
-    mask_rad = (radial_axis_used >= tth_min) & (radial_axis_used <= tth_max)
-    mask_az = gui_integration_range_drag.detector_phi_mask(gui_azimuth, phi_min, phi_max)
-    rect_mask = np.asarray(np.outer(mask_az, mask_rad), dtype=bool)
+    if use_rectangular_roi:
+        mask_rad = (radial_axis_used >= tth_min) & (radial_axis_used <= tth_max)
+        mask_az = gui_integration_range_drag.detector_phi_mask(gui_azimuth, phi_min, phi_max)
+        final_mask = np.asarray(np.outer(mask_az, mask_rad), dtype=bool)
+    else:
+        final_mask = np.ones_like(gui_sum_signal, dtype=bool)
 
-    final_mask = rect_mask
-    if rod_band_mask is not None:
-        candidate_mask = np.asarray(rod_band_mask, dtype=bool)
-        if candidate_mask.shape == rect_mask.shape:
-            final_mask = rect_mask & candidate_mask
+    if roi_mask is not None:
+        candidate_mask = np.asarray(roi_mask, dtype=bool)
+        if candidate_mask.shape == final_mask.shape:
+            final_mask = (
+                candidate_mask if not use_rectangular_roi else (final_mask & candidate_mask)
+            )
 
     sig = gui_sum_signal * final_mask
     nor = gui_sum_normalization * final_mask
@@ -9226,15 +9406,16 @@ def _clear_1d_plot_cache_and_lines():
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
     _ensure_analysis_figure()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
-    rod_band_mask = (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
-    if rod_band_mask is not None:
+    rod_roi_payload = _current_selected_qr_rod_caked_mask_payload()
+    if rod_roi_payload is not None:
         i2t_sim, i_phi_sim, az_sim, rad_sim = _caked_profiles_from_sum_fields(
             sim_res2,
             tth_min=tth_min_var.get(),
             tth_max=tth_max_var.get(),
             phi_min=phi_min_var.get(),
             phi_max=phi_max_var.get(),
-            rod_band_mask=rod_band_mask,
+            roi_mask=rod_roi_payload.get("mask"),
+            use_rectangular_roi=False,
         )
     else:
         i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
@@ -9254,14 +9435,15 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
     line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
     if bg_res2 is not None:
-        if rod_band_mask is not None:
+        if rod_roi_payload is not None:
             i2t_bg, i_phi_bg, az_bg, rad_bg = _caked_profiles_from_sum_fields(
                 bg_res2,
                 tth_min=tth_min_var.get(),
                 tth_max=tth_max_var.get(),
                 phi_min=phi_min_var.get(),
                 phi_max=phi_max_var.get(),
-                rod_band_mask=rod_band_mask,
+                roi_mask=rod_roi_payload.get("mask"),
+                use_rectangular_roi=False,
             )
         else:
             i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
@@ -14438,6 +14620,9 @@ def do_update():
         preserved_primary_limits,
     )
 
+    if not defer_overlay_refresh:
+        _sync_selected_qr_rod_controls_state()
+
     # 1D integration
     if one_d_analysis_requested and sim_res2 is not None and not defer_overlay_refresh:
         _update_1d_plots_from_caked(sim_res2, bg_res2)
@@ -14888,6 +15073,21 @@ def reset_to_defaults():
     tth_max_var.set(80.0)
     phi_min_var.set(-15.0)
     phi_max_var.set(15.0)
+    integrate_selected_qr_rod_var.set(False)
+    selected_qr_rod_key_var.set("")
+    qz_extent = _current_caked_qz_extent()
+    if qz_extent is None:
+        qz_lo, qz_hi = -1.0, 1.0
+    else:
+        qz_lo, qz_hi = sorted((float(qz_extent[0]), float(qz_extent[1])))
+    qz_min_var.set(qz_lo)
+    qz_max_var.set(qz_hi)
+    delta_qr_var.set(0.01)
+    integration_range_controls_view_state.integrate_selected_qr_rod_value = False
+    integration_range_controls_view_state.selected_qr_rod_key_value = ""
+    integration_range_controls_view_state.qz_min_value = float(qz_lo)
+    integration_range_controls_view_state.qz_max_value = float(qz_hi)
+    integration_range_controls_view_state.delta_qr_value = 0.01
     analysis_view_controls_view_state.show_1d_var.set(False)
     analysis_view_controls_view_state.show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
@@ -14952,6 +15152,7 @@ def reset_to_defaults():
             gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
         )
     _sync_finite_controls()
+    _sync_selected_qr_rod_controls_state()
 
     update_mosaic_cache()
     _invalidate_simulation_cache()
@@ -15416,9 +15617,15 @@ def _gui_state_variable_items() -> dict[str, object]:
             "qr_cylinder_display_mode_var": (
                 geometry_overlay_actions_view_state.qr_cylinder_display_mode_var
             ),
-            "show_qz_rods_var": analysis_view_controls_view_state.show_qz_rods_var,
-            "integrate_qz_rods_var": (integration_range_controls_view_state.integrate_qz_rods_var),
-            "qr_half_width_var": integration_range_controls_view_state.qr_half_width_var,
+            "integrate_selected_qr_rod_var": (
+                integration_range_controls_view_state.integrate_selected_qr_rod_var
+            ),
+            "selected_qr_rod_key_var": (
+                integration_range_controls_view_state.selected_qr_rod_key_var
+            ),
+            "qz_min_var": integration_range_controls_view_state.qz_min_var,
+            "qz_max_var": integration_range_controls_view_state.qz_max_var,
+            "delta_qr_var": integration_range_controls_view_state.delta_qr_var,
         }
     )
     return items
@@ -15614,7 +15821,7 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         simulation_limits_user_override=(display_controls_state.simulation_limits_user_override),
         scale_factor_user_override=display_controls_state.scale_factor_user_override,
     )
-    snapshot["analysis_range"] = dict(_current_analysis_range_values())
+    snapshot["analysis_range"] = dict(_current_analysis_roi_values())
     return snapshot
 
 
@@ -15667,6 +15874,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         gui_state_io.apply_gui_state_files(
             snapshot.get("files", {}),
             apply_primary_cif_path=_apply_primary_cif_path,
+            apply_secondary_cif_path=_apply_secondary_cif_path,
             load_background_files=_load_background_files_for_import_state,
         )
     )
@@ -15679,6 +15887,11 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             tk_variable_type=tk.Variable,
         )
     )
+    if bool(structure_model_state.has_second_cif):
+        try:
+            update_weights()
+        except Exception as exc:
+            warnings.append(f"secondary CIF weights: {exc}")
     _apply_analysis_range_snapshot(snapshot.get("analysis_range", {}))
 
     gui_state_io.apply_gui_state_background_theta_compatibility(
@@ -15776,7 +15989,14 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     toggle_caked_2d(getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")())
     toggle_log_display()
     _sync_primary_raster_geometry(view_mode=_resolved_primary_analysis_display_mode())
-    _sync_show_qz_rods_quick_control_state()
+    _sync_selected_qr_rod_controls_state()
+    if bool(analysis_peak_selection_state.pick_armed) and bool(
+        _current_analysis_roi_values().get("integrate_selected_qr_rod", False)
+    ):
+        _set_analysis_peak_pick_mode(
+            False,
+            message="Analysis peak picking is disabled while selected Qr rod ROI mode is active.",
+        )
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -15871,7 +16091,6 @@ def _import_full_gui_state() -> None:
         if finite_stack_controls_view_state.phase_delta_entry_var is not None:
             gui_views.set_finite_stack_phase_delta_entry_text(
                 finite_stack_controls_view_state,
-            apply_secondary_cif_path=_apply_secondary_cif_path,
                 _current_phase_delta_expression(),
             )
         if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
@@ -15884,11 +16103,6 @@ def _import_full_gui_state() -> None:
         ensure_valid_resolution_choice()
         schedule_update()
         progress_label.config(text=message)
-    if bool(structure_model_state.has_second_cif):
-        try:
-            update_weights()
-        except Exception as exc:
-            warnings.append(f"secondary CIF weights: {exc}")
         return
 
     try:
@@ -16609,9 +16823,7 @@ def _initialize_runtime_controls_block_38() -> None:
             native_detector_coords_to_caked_display_coords=(
                 _native_detector_coords_to_live_caked_coords
             ),
-            project_peaks_to_current_view=(
-                _project_geometry_manual_peaks_to_current_view
-            ),
+            project_peaks_to_current_view=(_project_geometry_manual_peaks_to_current_view),
         )
     )
     _build_live_preview_simulated_peaks_from_cache = (
@@ -19134,7 +19346,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         _log_section(
             "Overlay frame diagnostics:",
             [
-                "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+                "transform_rule=sim:native_to_overlay_display; bg:inverse_orientation_then_overlay_display",
                 f"overlay_records={len(overlay_records)}",
                 f"paired_records={int(frame_diag.get('paired_records', 0))}",
                 f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
@@ -20082,7 +20294,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             _log_section(
                 "Overlay frame diagnostics:",
                 [
-                    "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+                    "transform_rule=sim:native_to_overlay_display; bg:inverse_orientation_then_overlay_display",
                     f"overlay_records={len(overlay_records)}",
                     f"paired_records={int(frame_diag.get('paired_records', 0))}",
                     f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
@@ -22081,7 +22293,9 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         ("tth_max", 80.0),
         ("phi_min", -15.0),
         ("phi_max", 15.0),
-        ("qr_half_width", 0.01),
+        ("qz_min", -1.0),
+        ("qz_max", 1.0),
+        ("delta_qr", 0.01),
     )
     for key, fallback in numeric_specs:
         if key not in snapshot:
@@ -22096,12 +22310,26 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
             numeric_value,
         )
 
-    if "integrate_qz_rods" in snapshot:
-        integrate_value = bool(snapshot.get("integrate_qz_rods"))
-        setattr(view_state, "integrate_qz_rods_value", integrate_value)
+    if "integrate_selected_qr_rod" in snapshot:
+        integrate_value = bool(snapshot.get("integrate_selected_qr_rod"))
+        setattr(view_state, "integrate_selected_qr_rod_value", integrate_value)
         gui_integration_range_drag._safe_var_set(  # noqa: SLF001
-            getattr(view_state, "integrate_qz_rods_var", None),
+            getattr(view_state, "integrate_selected_qr_rod_var", None),
             integrate_value,
+        )
+    if "selected_qr_rod_key" in snapshot:
+        selected_key = str(snapshot.get("selected_qr_rod_key", ""))
+        setattr(view_state, "selected_qr_rod_key_value", selected_key)
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "selected_qr_rod_key_var", None),
+            selected_key,
+        )
+        display_label = (getattr(view_state, "selected_qr_rod_option_labels", {}) or {}).get(
+            selected_key, ""
+        )
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "selected_qr_rod_display_var", None),
+            display_label,
         )
 
 
@@ -22123,15 +22351,42 @@ def _current_analysis_range_values() -> dict[str, object]:
             globals().get("phi_max_var"),
             _read_analysis_cached_range_value("phi_max_value", 15.0),
         ),
-        "integrate_qz_rods": _read_analysis_bool_value(
-            globals().get("integrate_qz_rods_var"),
-            _read_analysis_cached_bool_value("integrate_qz_rods_value", False),
-        ),
-        "qr_half_width": _read_analysis_range_value(
-            globals().get("qr_half_width_var"),
-            _read_analysis_cached_range_value("qr_half_width_value", 0.01),
-        ),
     }
+
+
+def _current_analysis_roi_values() -> dict[str, object]:
+    range_values = dict(_current_analysis_range_values())
+    range_values.update(
+        {
+            "integrate_selected_qr_rod": _read_analysis_bool_value(
+                globals().get("integrate_selected_qr_rod_var"),
+                _read_analysis_cached_bool_value("integrate_selected_qr_rod_value", False),
+            ),
+            "selected_qr_rod_key": str(
+                gui_integration_range_drag._safe_var_get(  # noqa: SLF001
+                    globals().get("selected_qr_rod_key_var")
+                )
+                or getattr(
+                    globals().get("integration_range_controls_view_state"),
+                    "selected_qr_rod_key_value",
+                    "",
+                )
+            ),
+            "qz_min": _read_analysis_range_value(
+                globals().get("qz_min_var"),
+                _read_analysis_cached_range_value("qz_min_value", -1.0),
+            ),
+            "qz_max": _read_analysis_range_value(
+                globals().get("qz_max_var"),
+                _read_analysis_cached_range_value("qz_max_value", 1.0),
+            ),
+            "delta_qr": _read_analysis_range_value(
+                globals().get("delta_qr_var"),
+                _read_analysis_cached_range_value("delta_qr_value", 0.01),
+            ),
+        }
+    )
+    return range_values
 
 
 def _initialize_runtime_controls_block_43() -> None:
@@ -22661,10 +22916,11 @@ def _render_analysis_plot_controls(
     global canvas_1d
     global analysis_1d_interaction_bindings
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
-    global integrate_qz_rods_var, qr_half_width_var
+    global integrate_selected_qr_rod_var, selected_qr_rod_key_var
+    global qz_min_var, qz_max_var, delta_qr_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
 
-    values = dict(range_values or _current_analysis_range_values())
+    values = dict(range_values or _current_analysis_roi_values())
     _clear_widget_children(parent)
     refresh_region_visuals_callback = globals().get("refresh_integration_region_visuals")
     if not callable(refresh_region_visuals_callback):
@@ -22687,9 +22943,14 @@ def _render_analysis_plot_controls(
         tth_max=float(values.get("tth_max", 80.0)),
         phi_min=float(values.get("phi_min", -15.0)),
         phi_max=float(values.get("phi_max", 15.0)),
-        integrate_qz_rods=bool(values.get("integrate_qz_rods", False)),
-        qr_half_width=float(values.get("qr_half_width", 0.01)),
+        integrate_selected_qr_rod=bool(values.get("integrate_selected_qr_rod", False)),
+        selected_qr_rod_key=str(values.get("selected_qr_rod_key", "")),
+        selected_qr_rod_options=_selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries()),
+        qz_min=float(values.get("qz_min", -1.0)),
+        qz_max=float(values.get("qz_max", 1.0)),
+        delta_qr=float(values.get("delta_qr", 0.01)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
+        disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False),
         refresh_region_visuals=refresh_region_visuals_callback,
     )
 
@@ -22697,13 +22958,18 @@ def _render_analysis_plot_controls(
     tth_max_var = integration_range_controls_view_state.tth_max_var
     phi_min_var = integration_range_controls_view_state.phi_min_var
     phi_max_var = integration_range_controls_view_state.phi_max_var
-    integrate_qz_rods_var = integration_range_controls_view_state.integrate_qz_rods_var
-    qr_half_width_var = integration_range_controls_view_state.qr_half_width_var
+    integrate_selected_qr_rod_var = (
+        integration_range_controls_view_state.integrate_selected_qr_rod_var
+    )
+    selected_qr_rod_key_var = integration_range_controls_view_state.selected_qr_rod_key_var
+    qz_min_var = integration_range_controls_view_state.qz_min_var
+    qz_max_var = integration_range_controls_view_state.qz_max_var
+    delta_qr_var = integration_range_controls_view_state.delta_qr_var
     tth_min_slider = integration_range_controls_view_state.tth_min_slider
     tth_max_slider = integration_range_controls_view_state.tth_max_slider
     phi_min_slider = integration_range_controls_view_state.phi_min_slider
     phi_max_slider = integration_range_controls_view_state.phi_max_slider
-    _sync_qz_rod_controls_state()
+    _sync_selected_qr_rod_controls_state()
 
     if any(
         ref is None
@@ -22781,6 +23047,22 @@ def _set_analysis_peak_pick_mode(
         return
 
     if enabled_flag:
+        if bool(_current_analysis_roi_values().get("integrate_selected_qr_rod", False)):
+            enabled_flag = False
+            status_text = (
+                message
+                or "Analysis peak picking is disabled while selected Qr rod ROI mode is active."
+            )
+            analysis_peak_selection_state.pick_armed = False
+            _update_analysis_peak_pick_button_label()
+            _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
+            _set_analysis_peak_fit_results_text(_analysis_peak_fit_results_text())
+            try:
+                progress_label_positions.config(text=status_text)
+            except Exception:
+                pass
+            _render_analysis_peak_overlays(redraw=True)
+            return
         _set_geometry_manual_pick_mode(False, message="Manual geometry picking paused.")
         _set_hkl_pick_mode_with_mode_banner(False, message="HKL image-pick paused.")
         _set_geometry_preview_exclude_mode(
@@ -22864,6 +23146,14 @@ def _select_analysis_peak_from_canvas_click(
     two_theta_deg: float,
     phi_deg: float,
 ) -> bool:
+    if bool(_current_analysis_roi_values().get("integrate_selected_qr_rod", False)):
+        try:
+            progress_label_positions.config(
+                text="Peak picking is disabled while selected Qr rod ROI mode is active."
+            )
+        except Exception:
+            pass
+        return True
     range_values = _current_analysis_range_values()
     analysis_peak_tools = _get_analysis_peak_tools_module()
     if not analysis_peak_tools.integration_region_contains(
@@ -23998,13 +24288,6 @@ def _initialize_runtime_controls_block_48() -> None:
                 "command": _toggle_beam_center_spot,
             },
             {
-                "key": "show_qz_rods",
-                "label": "Show Qz rods",
-                "control_type": "check",
-                "variable": analysis_view_controls_view_state.show_qz_rods_var,
-                "command": qr_cylinder_overlay_runtime_toggle,
-            },
-            {
                 "key": "log_display",
                 "label": "Log display",
                 "control_type": "check",
@@ -24031,15 +24314,12 @@ def _initialize_runtime_controls_block_48() -> None:
             "checkbutton"
         )
     )
-    analysis_view_controls_view_state.show_qz_rods_checkbutton = (
-        app_shell_view_state.quick_control_widgets.get("show_qz_rods", {}).get("checkbutton")
-    )
     geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
         app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
             "checkbutton"
         )
     )
-    _sync_show_qz_rods_quick_control_state()
+    _sync_selected_qr_rod_controls_state()
 
 
 def _refresh_refine_section_summaries(*_args) -> None:
@@ -27090,6 +27370,175 @@ def _apply_primary_cif_path(raw_path):
         _refresh_session_summary_panel()
 
 
+def _apply_secondary_cif_path(raw_path):
+    """Load, replace, or clear secondary CIF, then rebuild diffraction inputs."""
+
+    text_path = "" if raw_path is None else str(raw_path).strip().strip('"').strip("'")
+    candidate = Path(text_path).expanduser() if text_path else None
+    if candidate is not None and not candidate.is_file():
+        progress_label.config(text=f"Secondary CIF file not found: {candidate}")
+        return
+    if candidate is None and not bool(structure_model_state.has_second_cif):
+        return
+
+    snapshot = SimpleNamespace(
+        cif_file2=structure_model_state.cif_file2,
+        cf2=structure_model_state.cf2,
+        blk2=structure_model_state.blk2,
+        has_second_cif=bool(structure_model_state.has_second_cif),
+        av2=structure_model_state.av2,
+        cv2=structure_model_state.cv2,
+        ht_cache_multi=dict(structure_model_state.ht_cache_multi),
+        ht_curves_cache=dict(structure_model_state.ht_curves_cache),
+        miller=structure_model_state.miller,
+        intensities=structure_model_state.intensities,
+        degeneracy=structure_model_state.degeneracy,
+        details=list(structure_model_state.details),
+        df_summary=structure_model_state.df_summary,
+        df_details=structure_model_state.df_details,
+        intensities_cif1=structure_model_state.intensities_cif1,
+        intensities_cif2=structure_model_state.intensities_cif2,
+        sim_miller1_all=structure_model_state.sim_miller1_all,
+        sim_intens1_all=structure_model_state.sim_intens1_all,
+        sim_miller2_all=structure_model_state.sim_miller2_all,
+        sim_intens2_all=structure_model_state.sim_intens2_all,
+        sim_primary_qr_all=copy.deepcopy(structure_model_state.sim_primary_qr_all),
+        last_occ_for_ht=list(structure_model_state.last_occ_for_ht),
+        last_p_triplet=list(structure_model_state.last_p_triplet),
+        last_weights=list(structure_model_state.last_weights),
+        last_a_for_ht=float(structure_model_state.last_a_for_ht),
+        last_c_for_ht=float(structure_model_state.last_c_for_ht),
+        last_iodine_z_for_ht=float(structure_model_state.last_iodine_z_for_ht),
+        last_phi_l_divisor=float(structure_model_state.last_phi_l_divisor),
+        last_phase_delta_expression=str(structure_model_state.last_phase_delta_expression),
+        last_finite_stack=bool(structure_model_state.last_finite_stack),
+        last_stack_layers=int(structure_model_state.last_stack_layers),
+        last_rod_points_per_gz=int(structure_model_state.last_rod_points_per_gz),
+        last_atom_site_fractional_signature=tuple(
+            structure_model_state.last_atom_site_fractional_signature
+        ),
+        runtime_sim_miller1_all=simulation_runtime_state.sim_miller1_all,
+        runtime_sim_intens1_all=simulation_runtime_state.sim_intens1_all,
+        runtime_sim_primary_qr_all=copy.deepcopy(simulation_runtime_state.sim_primary_qr_all),
+        runtime_sim_miller2_all=simulation_runtime_state.sim_miller2_all,
+        runtime_sim_intens2_all=simulation_runtime_state.sim_intens2_all,
+        runtime_last_sim_signature=simulation_runtime_state.last_sim_signature,
+        runtime_last_simulation_signature=simulation_runtime_state.last_simulation_signature,
+    )
+    try:
+        current_occ = _current_occupancy_values()
+        try:
+            p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+        except (tk.TclError, ValueError):
+            p_vals = [float(defaults["p0"]), float(defaults["p1"]), float(defaults["p2"])]
+        try:
+            w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+        except (tk.TclError, ValueError):
+            w_raw = [float(defaults["w0"]), float(defaults["w1"]), float(defaults["w2"])]
+        weights = gui_controllers.normalize_stacking_weight_values(w_raw)
+        try:
+            a_axis = float(a_var.get())
+        except (tk.TclError, ValueError):
+            a_axis = float(structure_model_state.av)
+        try:
+            c_axis = float(c_var.get())
+        except (tk.TclError, ValueError):
+            c_axis = float(structure_model_state.cv)
+
+        if candidate is None:
+            structure_model_state.cif_file2 = None
+            structure_model_state.cf2 = None
+            structure_model_state.blk2 = None
+            structure_model_state.has_second_cif = False
+            structure_model_state.av2 = None
+            structure_model_state.cv2 = None
+        else:
+            cf2_loaded, blk2_loaded = _read_cif_block(str(candidate))
+            if blk2_loaded is None:
+                raise ValueError("No CIF data blocks found.")
+            a2_text = blk2_loaded.get("_cell_length_a")
+            c2_text = blk2_loaded.get("_cell_length_c")
+            structure_model_state.cif_file2 = str(candidate)
+            structure_model_state.cf2 = cf2_loaded
+            structure_model_state.blk2 = blk2_loaded
+            structure_model_state.has_second_cif = True
+            structure_model_state.av2 = (
+                parse_cif_num(a2_text) if a2_text is not None else float(a_axis)
+            )
+            structure_model_state.cv2 = (
+                parse_cif_num(c2_text) if c2_text is not None else float(c_axis)
+            )
+
+        _rebuild_diffraction_inputs(
+            current_occ,
+            p_vals,
+            weights,
+            a_axis,
+            c_axis,
+            force=True,
+            trigger_update=True,
+        )
+        _sync_structure_model_aliases()
+        _invalidate_simulation_cache()
+        if candidate is None:
+            progress_label.config(text="Cleared secondary CIF.")
+        else:
+            progress_label.config(text=f"Loaded secondary CIF: {candidate.name}")
+        _refresh_session_summary_panel()
+    except Exception as exc:
+        structure_model_state.cif_file2 = snapshot.cif_file2
+        structure_model_state.cf2 = snapshot.cf2
+        structure_model_state.blk2 = snapshot.blk2
+        structure_model_state.has_second_cif = bool(snapshot.has_second_cif)
+        structure_model_state.av2 = snapshot.av2
+        structure_model_state.cv2 = snapshot.cv2
+        structure_model_state.ht_cache_multi = dict(snapshot.ht_cache_multi)
+        structure_model_state.ht_curves_cache = dict(snapshot.ht_curves_cache)
+        structure_model_state.miller = snapshot.miller
+        structure_model_state.intensities = snapshot.intensities
+        structure_model_state.degeneracy = snapshot.degeneracy
+        structure_model_state.details = list(snapshot.details)
+        structure_model_state.df_summary = snapshot.df_summary
+        structure_model_state.df_details = snapshot.df_details
+        structure_model_state.intensities_cif1 = snapshot.intensities_cif1
+        structure_model_state.intensities_cif2 = snapshot.intensities_cif2
+        structure_model_state.sim_miller1_all = snapshot.sim_miller1_all
+        structure_model_state.sim_intens1_all = snapshot.sim_intens1_all
+        structure_model_state.sim_miller2_all = snapshot.sim_miller2_all
+        structure_model_state.sim_intens2_all = snapshot.sim_intens2_all
+        structure_model_state.sim_primary_qr_all = copy.deepcopy(snapshot.sim_primary_qr_all)
+        structure_model_state.last_occ_for_ht = list(snapshot.last_occ_for_ht)
+        structure_model_state.last_p_triplet = list(snapshot.last_p_triplet)
+        structure_model_state.last_weights = list(snapshot.last_weights)
+        structure_model_state.last_a_for_ht = float(snapshot.last_a_for_ht)
+        structure_model_state.last_c_for_ht = float(snapshot.last_c_for_ht)
+        structure_model_state.last_iodine_z_for_ht = float(snapshot.last_iodine_z_for_ht)
+        structure_model_state.last_phi_l_divisor = float(snapshot.last_phi_l_divisor)
+        structure_model_state.last_phase_delta_expression = str(
+            snapshot.last_phase_delta_expression
+        )
+        structure_model_state.last_finite_stack = bool(snapshot.last_finite_stack)
+        structure_model_state.last_stack_layers = int(snapshot.last_stack_layers)
+        structure_model_state.last_rod_points_per_gz = int(snapshot.last_rod_points_per_gz)
+        structure_model_state.last_atom_site_fractional_signature = tuple(
+            snapshot.last_atom_site_fractional_signature
+        )
+        simulation_runtime_state.sim_miller1_all = snapshot.runtime_sim_miller1_all
+        simulation_runtime_state.sim_intens1_all = snapshot.runtime_sim_intens1_all
+        simulation_runtime_state.sim_primary_qr_all = copy.deepcopy(
+            snapshot.runtime_sim_primary_qr_all
+        )
+        simulation_runtime_state.sim_miller2_all = snapshot.runtime_sim_miller2_all
+        simulation_runtime_state.sim_intens2_all = snapshot.runtime_sim_intens2_all
+        simulation_runtime_state.last_sim_signature = snapshot.runtime_last_sim_signature
+        simulation_runtime_state.last_simulation_signature = (
+            snapshot.runtime_last_simulation_signature
+        )
+        _sync_structure_model_aliases()
+        progress_label.config(text=f"Failed to load secondary CIF: {exc}")
+        _refresh_session_summary_panel()
+
+
 def _browse_primary_cif():
     """Open a file picker and apply the selected primary CIF path."""
     gui_structure_model.browse_primary_cif_with_dialog(
@@ -27359,175 +27808,6 @@ def build_runtime_state_context() -> RuntimeContext:
     globals()["simulation_runtime_state"] = context.simulation_runtime_state
     globals()["background_runtime_state"] = context.background_runtime_state
     return context
-def _apply_secondary_cif_path(raw_path):
-    """Load, replace, or clear secondary CIF, then rebuild diffraction inputs."""
-
-    text_path = "" if raw_path is None else str(raw_path).strip().strip('"').strip("'")
-    candidate = Path(text_path).expanduser() if text_path else None
-    if candidate is not None and not candidate.is_file():
-        progress_label.config(text=f"Secondary CIF file not found: {candidate}")
-        return
-    if candidate is None and not bool(structure_model_state.has_second_cif):
-        return
-
-    snapshot = SimpleNamespace(
-        cif_file2=structure_model_state.cif_file2,
-        cf2=structure_model_state.cf2,
-        blk2=structure_model_state.blk2,
-        has_second_cif=bool(structure_model_state.has_second_cif),
-        av2=structure_model_state.av2,
-        cv2=structure_model_state.cv2,
-        ht_cache_multi=dict(structure_model_state.ht_cache_multi),
-        ht_curves_cache=dict(structure_model_state.ht_curves_cache),
-        miller=structure_model_state.miller,
-        intensities=structure_model_state.intensities,
-        degeneracy=structure_model_state.degeneracy,
-        details=list(structure_model_state.details),
-        df_summary=structure_model_state.df_summary,
-        df_details=structure_model_state.df_details,
-        intensities_cif1=structure_model_state.intensities_cif1,
-        intensities_cif2=structure_model_state.intensities_cif2,
-        sim_miller1_all=structure_model_state.sim_miller1_all,
-        sim_intens1_all=structure_model_state.sim_intens1_all,
-        sim_miller2_all=structure_model_state.sim_miller2_all,
-        sim_intens2_all=structure_model_state.sim_intens2_all,
-        sim_primary_qr_all=copy.deepcopy(structure_model_state.sim_primary_qr_all),
-        last_occ_for_ht=list(structure_model_state.last_occ_for_ht),
-        last_p_triplet=list(structure_model_state.last_p_triplet),
-        last_weights=list(structure_model_state.last_weights),
-        last_a_for_ht=float(structure_model_state.last_a_for_ht),
-        last_c_for_ht=float(structure_model_state.last_c_for_ht),
-        last_iodine_z_for_ht=float(structure_model_state.last_iodine_z_for_ht),
-        last_phi_l_divisor=float(structure_model_state.last_phi_l_divisor),
-        last_phase_delta_expression=str(structure_model_state.last_phase_delta_expression),
-        last_finite_stack=bool(structure_model_state.last_finite_stack),
-        last_stack_layers=int(structure_model_state.last_stack_layers),
-        last_rod_points_per_gz=int(structure_model_state.last_rod_points_per_gz),
-        last_atom_site_fractional_signature=tuple(
-            structure_model_state.last_atom_site_fractional_signature
-        ),
-        runtime_sim_miller1_all=simulation_runtime_state.sim_miller1_all,
-        runtime_sim_intens1_all=simulation_runtime_state.sim_intens1_all,
-        runtime_sim_primary_qr_all=copy.deepcopy(simulation_runtime_state.sim_primary_qr_all),
-        runtime_sim_miller2_all=simulation_runtime_state.sim_miller2_all,
-        runtime_sim_intens2_all=simulation_runtime_state.sim_intens2_all,
-        runtime_last_sim_signature=simulation_runtime_state.last_sim_signature,
-        runtime_last_simulation_signature=simulation_runtime_state.last_simulation_signature,
-    )
-    try:
-        current_occ = _current_occupancy_values()
-        try:
-            p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
-        except (tk.TclError, ValueError):
-            p_vals = [float(defaults["p0"]), float(defaults["p1"]), float(defaults["p2"])]
-        try:
-            w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
-        except (tk.TclError, ValueError):
-            w_raw = [float(defaults["w0"]), float(defaults["w1"]), float(defaults["w2"])]
-        weights = gui_controllers.normalize_stacking_weight_values(w_raw)
-        try:
-            a_axis = float(a_var.get())
-        except (tk.TclError, ValueError):
-            a_axis = float(structure_model_state.av)
-        try:
-            c_axis = float(c_var.get())
-        except (tk.TclError, ValueError):
-            c_axis = float(structure_model_state.cv)
-
-        if candidate is None:
-            structure_model_state.cif_file2 = None
-            structure_model_state.cf2 = None
-            structure_model_state.blk2 = None
-            structure_model_state.has_second_cif = False
-            structure_model_state.av2 = None
-            structure_model_state.cv2 = None
-        else:
-            cf2_loaded, blk2_loaded = _read_cif_block(str(candidate))
-            if blk2_loaded is None:
-                raise ValueError("No CIF data blocks found.")
-            a2_text = blk2_loaded.get("_cell_length_a")
-            c2_text = blk2_loaded.get("_cell_length_c")
-            structure_model_state.cif_file2 = str(candidate)
-            structure_model_state.cf2 = cf2_loaded
-            structure_model_state.blk2 = blk2_loaded
-            structure_model_state.has_second_cif = True
-            structure_model_state.av2 = (
-                parse_cif_num(a2_text) if a2_text is not None else float(a_axis)
-            )
-            structure_model_state.cv2 = (
-                parse_cif_num(c2_text) if c2_text is not None else float(c_axis)
-            )
-
-        _rebuild_diffraction_inputs(
-            current_occ,
-            p_vals,
-            weights,
-            a_axis,
-            c_axis,
-            force=True,
-            trigger_update=True,
-        )
-        _sync_structure_model_aliases()
-        _invalidate_simulation_cache()
-        if candidate is None:
-            progress_label.config(text="Cleared secondary CIF.")
-        else:
-            progress_label.config(text=f"Loaded secondary CIF: {candidate.name}")
-        _refresh_session_summary_panel()
-    except Exception as exc:
-        structure_model_state.cif_file2 = snapshot.cif_file2
-        structure_model_state.cf2 = snapshot.cf2
-        structure_model_state.blk2 = snapshot.blk2
-        structure_model_state.has_second_cif = bool(snapshot.has_second_cif)
-        structure_model_state.av2 = snapshot.av2
-        structure_model_state.cv2 = snapshot.cv2
-        structure_model_state.ht_cache_multi = dict(snapshot.ht_cache_multi)
-        structure_model_state.ht_curves_cache = dict(snapshot.ht_curves_cache)
-        structure_model_state.miller = snapshot.miller
-        structure_model_state.intensities = snapshot.intensities
-        structure_model_state.degeneracy = snapshot.degeneracy
-        structure_model_state.details = list(snapshot.details)
-        structure_model_state.df_summary = snapshot.df_summary
-        structure_model_state.df_details = snapshot.df_details
-        structure_model_state.intensities_cif1 = snapshot.intensities_cif1
-        structure_model_state.intensities_cif2 = snapshot.intensities_cif2
-        structure_model_state.sim_miller1_all = snapshot.sim_miller1_all
-        structure_model_state.sim_intens1_all = snapshot.sim_intens1_all
-        structure_model_state.sim_miller2_all = snapshot.sim_miller2_all
-        structure_model_state.sim_intens2_all = snapshot.sim_intens2_all
-        structure_model_state.sim_primary_qr_all = copy.deepcopy(snapshot.sim_primary_qr_all)
-        structure_model_state.last_occ_for_ht = list(snapshot.last_occ_for_ht)
-        structure_model_state.last_p_triplet = list(snapshot.last_p_triplet)
-        structure_model_state.last_weights = list(snapshot.last_weights)
-        structure_model_state.last_a_for_ht = float(snapshot.last_a_for_ht)
-        structure_model_state.last_c_for_ht = float(snapshot.last_c_for_ht)
-        structure_model_state.last_iodine_z_for_ht = float(snapshot.last_iodine_z_for_ht)
-        structure_model_state.last_phi_l_divisor = float(snapshot.last_phi_l_divisor)
-        structure_model_state.last_phase_delta_expression = str(
-            snapshot.last_phase_delta_expression
-        )
-        structure_model_state.last_finite_stack = bool(snapshot.last_finite_stack)
-        structure_model_state.last_stack_layers = int(snapshot.last_stack_layers)
-        structure_model_state.last_rod_points_per_gz = int(snapshot.last_rod_points_per_gz)
-        structure_model_state.last_atom_site_fractional_signature = tuple(
-            snapshot.last_atom_site_fractional_signature
-        )
-        simulation_runtime_state.sim_miller1_all = snapshot.runtime_sim_miller1_all
-        simulation_runtime_state.sim_intens1_all = snapshot.runtime_sim_intens1_all
-        simulation_runtime_state.sim_primary_qr_all = copy.deepcopy(
-            snapshot.runtime_sim_primary_qr_all
-        )
-        simulation_runtime_state.sim_miller2_all = snapshot.runtime_sim_miller2_all
-        simulation_runtime_state.sim_intens2_all = snapshot.runtime_sim_intens2_all
-        simulation_runtime_state.last_sim_signature = snapshot.runtime_last_sim_signature
-        simulation_runtime_state.last_simulation_signature = (
-            snapshot.runtime_last_simulation_signature
-        )
-        _sync_structure_model_aliases()
-        progress_label.config(text=f"Failed to load secondary CIF: {exc}")
-        _refresh_session_summary_panel()
-
-
 
 
 def build_runtime_window_context(context: RuntimeContext) -> RuntimeContext:

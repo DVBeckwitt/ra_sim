@@ -217,12 +217,7 @@ def default_rod_points_per_gz(
         c_value = float("nan")
         l_step_value = float("nan")
 
-    if (
-        np.isfinite(c_value)
-        and c_value > 0.0
-        and np.isfinite(l_step_value)
-        and l_step_value > 0.0
-    ):
+    if np.isfinite(c_value) and c_value > 0.0 and np.isfinite(l_step_value) and l_step_value > 0.0:
         points = int(round(c_value / (2.0 * np.pi * l_step_value)))
     else:
         points = int(fallback)
@@ -279,14 +274,41 @@ def rod_gz_max_from_two_theta(
         lambda_value = float(lambda_angstrom)
     except (TypeError, ValueError):
         return 0.0
-    if (
-        not np.isfinite(two_theta_value)
-        or not np.isfinite(lambda_value)
-        or lambda_value <= 0.0
-    ):
+    if not np.isfinite(two_theta_value) or not np.isfinite(lambda_value) or lambda_value <= 0.0:
         return 0.0
     half_angle_rad = np.radians(max(two_theta_value, 0.0) / 2.0)
     return float((4.0 * np.pi / lambda_value) * np.sin(half_angle_rad))
+
+
+def caked_axes_to_qr_qz_maps(
+    radial_deg: object,
+    azimuth_deg: object,
+    *,
+    wavelength_m: object,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(Qr, Qz)`` maps for one caked ``(2theta, phi)`` axis pair."""
+
+    radial_arr = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
+    azimuth_arr = np.asarray(azimuth_deg, dtype=np.float64).reshape(-1)
+    wavelength_angstrom = float(wavelength_m) * 1.0e10
+    if (
+        radial_arr.size <= 0
+        or azimuth_arr.size <= 0
+        or not np.isfinite(wavelength_angstrom)
+        or wavelength_angstrom <= 0.0
+    ):
+        raise ValueError("Caked Q-space maps require finite axes and wavelength.")
+
+    q_mag = (4.0 * np.pi / wavelength_angstrom) * np.sin(
+        np.radians(np.clip(radial_arr, 0.0, None) / 2.0)
+    )
+    phi_rad = np.radians(azimuth_arr)
+    qr_map = np.abs(np.sin(phi_rad))[:, None] * q_mag[None, :]
+    qz_map = np.cos(phi_rad)[:, None] * q_mag[None, :]
+    return (
+        np.asarray(qr_map, dtype=np.float64),
+        np.asarray(qz_map, dtype=np.float64),
+    )
 
 
 def caked_image_to_q_space_payload(
@@ -302,7 +324,6 @@ def caked_image_to_q_space_payload(
         image_arr = np.asarray(image, dtype=np.float64)
         radial_arr = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
         azimuth_arr = np.asarray(azimuth_deg, dtype=np.float64).reshape(-1)
-        wavelength_angstrom = float(wavelength_m) * 1.0e10
     except Exception:
         return None
 
@@ -312,23 +333,19 @@ def caked_image_to_q_space_payload(
         or radial_arr.size <= 0
         or azimuth_arr.size <= 0
         or image_arr.shape != (azimuth_arr.size, radial_arr.size)
-        or not np.isfinite(wavelength_angstrom)
-        or wavelength_angstrom <= 0.0
     ):
         return None
 
-    q_mag = (4.0 * np.pi / wavelength_angstrom) * np.sin(
-        np.radians(np.clip(radial_arr, 0.0, None) / 2.0)
-    )
-    phi_rad = np.radians(azimuth_arr)
-    qr_map = np.abs(np.sin(phi_rad))[:, None] * q_mag[None, :]
-    qz_map = np.cos(phi_rad)[:, None] * q_mag[None, :]
+    try:
+        qr_map, qz_map = caked_axes_to_qr_qz_maps(
+            radial_arr,
+            azimuth_arr,
+            wavelength_m=wavelength_m,
+        )
+    except Exception:
+        return None
 
-    valid = (
-        np.isfinite(image_arr)
-        & np.isfinite(qr_map)
-        & np.isfinite(qz_map)
-    )
+    valid = np.isfinite(image_arr) & np.isfinite(qr_map) & np.isfinite(qz_map)
     if not np.any(valid):
         return None
 
@@ -371,7 +388,12 @@ def caked_image_to_q_space_payload(
         "image": q_space_image,
         "qr": qr_axis,
         "qz": qz_axis,
-        "extent": [float(qr_edges[0]), float(qr_edges[-1]), float(qz_edges[0]), float(qz_edges[-1])],
+        "extent": [
+            float(qr_edges[0]),
+            float(qr_edges[-1]),
+            float(qz_edges[0]),
+            float(qz_edges[-1]),
+        ],
     }
 
 
@@ -746,11 +768,49 @@ def solve_q_mode_flag_from_label(
 def normalize_bragg_qr_source_label(source_label: str | None) -> str:
     """Normalize one Bragg-Qr source label to ``primary`` or ``secondary``."""
 
-    return (
-        "secondary"
-        if str(source_label).strip().lower() == "secondary"
-        else "primary"
-    )
+    return "secondary" if str(source_label).strip().lower() == "secondary" else "primary"
+
+
+def encode_bragg_qr_group_key(group_key: object) -> str:
+    """Encode one Bragg-Qr group key into a stable Tk-safe string."""
+
+    if not isinstance(group_key, (tuple, list)) or len(group_key) < 2:
+        return ""
+    try:
+        source_label = normalize_bragg_qr_source_label(group_key[0])
+        m_idx = int(group_key[1])
+    except (TypeError, ValueError):
+        return ""
+    return f"{source_label}|{m_idx}"
+
+
+def decode_bragg_qr_group_key(encoded_key: object) -> tuple[str, int] | None:
+    """Decode one Tk-safe Bragg-Qr group key string back into ``(source, m)``."""
+
+    text = str(encoded_key or "").strip()
+    if "|" not in text:
+        return None
+    source_label, m_text = text.split("|", 1)
+    try:
+        return normalize_bragg_qr_source_label(source_label), int(m_text)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_bragg_qr_entry_label(entry: Mapping[str, object] | None) -> str:
+    """Return one compact user-facing label for a Bragg-Qr entry."""
+
+    if not isinstance(entry, Mapping):
+        return ""
+    key = decode_bragg_qr_group_key(encode_bragg_qr_group_key(entry.get("key")))
+    if key is None:
+        return ""
+    try:
+        qr_value = float(entry.get("qr", float("nan")))
+    except Exception:
+        qr_value = float("nan")
+    qr_text = f"{qr_value:.4f} A^-1" if np.isfinite(qr_value) else "nan"
+    return f"{key[0]} m={key[1]} | Qr={qr_text}"
 
 
 def bragg_qr_l_value_to_key(l_value: object) -> int:
@@ -853,28 +913,18 @@ def structure_factor_prune_profile_from_bias(
     if bias_clipped >= 0.0:
         extra_aggressive = max(0.0, bias_clipped - 1.0)
         retain_fraction = (
-            _SF_PRUNE_RETAIN_BASE
-            - 0.0045 * bias_clipped
-            - 0.0200 * (extra_aggressive**1.35)
+            _SF_PRUNE_RETAIN_BASE - 0.0045 * bias_clipped - 0.0200 * (extra_aggressive**1.35)
         )
     else:
         retain_fraction = _SF_PRUNE_RETAIN_BASE + 0.00028 * ((-bias_clipped) ** 1.1)
-    retain_fraction = float(
-        np.clip(retain_fraction, _SF_PRUNE_RETAIN_MIN, _SF_PRUNE_RETAIN_MAX)
-    )
+    retain_fraction = float(np.clip(retain_fraction, _SF_PRUNE_RETAIN_MIN, _SF_PRUNE_RETAIN_MAX))
 
     extra_aggressive = max(0.0, bias_clipped - 1.0)
     rel_floor_exp = (1.8 * bias_clipped) + (2.2 * extra_aggressive)
     rel_floor = _SF_PRUNE_REL_FLOOR_BASE * (10.0**rel_floor_exp)
     rel_floor = float(np.clip(rel_floor, _SF_PRUNE_REL_FLOOR_MIN, _SF_PRUNE_REL_FLOOR_MAX))
 
-    min_keep = int(
-        round(
-            _SF_PRUNE_MIN_KEEP_BASE
-            - 8.0 * bias_clipped
-            - 10.0 * extra_aggressive
-        )
-    )
+    min_keep = int(round(_SF_PRUNE_MIN_KEEP_BASE - 8.0 * bias_clipped - 10.0 * extra_aggressive))
     min_keep = int(max(3, min_keep))
 
     neighbor_span = 1 if bias_clipped <= 0.7 else 0
@@ -887,13 +937,16 @@ def prune_l_intensity_curve(
     *,
     bias: object,
     return_indices: bool = False,
-) -> tuple[np.ndarray, np.ndarray, int, int] | tuple[
-    np.ndarray,
-    np.ndarray,
-    int,
-    int,
-    np.ndarray,
-]:
+) -> (
+    tuple[np.ndarray, np.ndarray, int, int]
+    | tuple[
+        np.ndarray,
+        np.ndarray,
+        int,
+        int,
+        np.ndarray,
+    ]
+):
     """Prune one diffuse rod L/intensity curve using the configured SF bias."""
 
     l_arr = np.asarray(l_vals, dtype=np.float64).reshape(-1)
@@ -935,8 +988,8 @@ def prune_l_intensity_curve(
             return (*base_result, kept_indices)
         return base_result
 
-    retain_fraction, rel_floor, min_keep, neighbor_span = (
-        structure_factor_prune_profile_from_bias(bias)
+    retain_fraction, rel_floor, min_keep, neighbor_span = structure_factor_prune_profile_from_bias(
+        bias
     )
     order = np.argsort(i_valid)[::-1]
     keep_mask = np.zeros(total_count, dtype=bool)
@@ -986,13 +1039,16 @@ def prune_reflection_rows(
     *,
     bias: object,
     return_indices: bool = False,
-) -> tuple[np.ndarray, np.ndarray, int, int] | tuple[
-    np.ndarray,
-    np.ndarray,
-    int,
-    int,
-    np.ndarray,
-]:
+) -> (
+    tuple[np.ndarray, np.ndarray, int, int]
+    | tuple[
+        np.ndarray,
+        np.ndarray,
+        int,
+        int,
+        np.ndarray,
+    ]
+):
     """Prune one HKL/intensity array using the configured SF bias."""
 
     arr = np.asarray(miller_arr, dtype=np.float64)
@@ -1056,9 +1112,7 @@ def prune_reflection_rows(
             return (*base_result, kept_indices)
         return base_result
 
-    retain_fraction, rel_floor, min_keep, _ = structure_factor_prune_profile_from_bias(
-        bias
-    )
+    retain_fraction, rel_floor, min_keep, _ = structure_factor_prune_profile_from_bias(bias)
     order = np.argsort(intens_valid)[::-1]
     keep_mask = np.zeros(total_count, dtype=bool)
 
@@ -1162,9 +1216,7 @@ def replace_manual_geometry_pairs_by_background(
         except Exception:
             continue
         entries = [
-            copy.deepcopy(dict(entry))
-            for entry in raw_entries or ()
-            if isinstance(entry, dict)
+            copy.deepcopy(dict(entry)) for entry in raw_entries or () if isinstance(entry, dict)
         ]
         if entries:
             normalized[index] = entries
@@ -1180,11 +1232,7 @@ def replace_manual_geometry_pick_session(
 ) -> dict[str, object]:
     """Replace the active manual-geometry pick session in place."""
 
-    normalized = (
-        copy.deepcopy(dict(pick_session))
-        if isinstance(pick_session, Mapping)
-        else {}
-    )
+    normalized = copy.deepcopy(dict(pick_session)) if isinstance(pick_session, Mapping) else {}
     state.pick_session.clear()
     state.pick_session.update(normalized)
     return state.pick_session
@@ -1742,9 +1790,7 @@ def _available_bragg_qr_l_keys(
     keys: set[tuple[str, int, int]] = set()
 
     if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
-        for m_idx, entry in copy_bragg_qr_dict(
-            simulation_runtime_state.sim_primary_qr_all
-        ).items():
+        for m_idx, entry in copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr_all).items():
             l_keys = bragg_qr_l_keys_from_l_array(entry.get("L", []))
             for l_key in l_keys:
                 lk = int(l_key)
@@ -1759,9 +1805,7 @@ def _available_bragg_qr_l_keys(
         )
         if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
             continue
-        finite_mask = (
-            np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
-        )
+        finite_mask = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
         if not np.any(finite_mask):
             continue
         rows = arr[finite_mask, :3]
@@ -1799,8 +1843,7 @@ def prune_disabled_bragg_qr_filters(
     bragg_qr_manager_state.disabled_l_values = {
         (normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
         for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values
-        if (normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
-        in available_l
+        if (normalize_bragg_qr_source_label(src), int(m_idx), int(l_key)) in available_l
     }
 
 
@@ -1881,9 +1924,7 @@ def _primary_miller_filter_signature(
 ) -> tuple[object, ...]:
     """Return one stable primary Miller/manual-filter signature."""
 
-    disabled_primary_m, disabled_primary_l = _primary_disable_signature(
-        bragg_qr_manager_state
-    )
+    disabled_primary_m, disabled_primary_l = _primary_disable_signature(bragg_qr_manager_state)
     return (
         "miller",
         _stable_array_source_signature(simulation_runtime_state.sim_miller1_all),
@@ -1899,9 +1940,7 @@ def _primary_qr_filter_signature(
 ) -> tuple[object, ...]:
     """Return one stable primary QR/manual-filter signature."""
 
-    disabled_primary_m, disabled_primary_l = _primary_disable_signature(
-        bragg_qr_manager_state
-    )
+    disabled_primary_m, disabled_primary_l = _primary_disable_signature(bragg_qr_manager_state)
     return (
         "qr",
         _primary_qr_source_signature(simulation_runtime_state),
@@ -2206,9 +2245,7 @@ def apply_bragg_qr_filters(
     )
     simulation_runtime_state.primary_requested_source_mode = primary_source_mode
     simulation_runtime_state.primary_requested_contribution_keys = (
-        list(primary_qr_keys)
-        if primary_source_mode == "qr"
-        else list(primary_miller_keys)
+        list(primary_qr_keys) if primary_source_mode == "qr" else list(primary_miller_keys)
     )
     simulation_runtime_state.primary_requested_filter_signature = (
         primary_qr_filter_signature
@@ -2250,15 +2287,13 @@ def format_structure_factor_pruning_status(
     if qr_total > 0:
         pct = (100.0 * qr_kept / qr_total) if qr_total else 0.0
         return (
-            f"SF pruning keeps {qr_kept:,}/{qr_total:,} rod points "
-            f"({pct:.1f}%), bias={bias:+.2f}"
+            f"SF pruning keeps {qr_kept:,}/{qr_total:,} rod points ({pct:.1f}%), bias={bias:+.2f}"
         )
 
     if hk_total > 0:
         pct = (100.0 * hk_kept / hk_total) if hk_total else 0.0
         return (
-            f"SF pruning keeps {hk_kept:,}/{hk_total:,} HKL points "
-            f"({pct:.1f}%), bias={bias:+.2f}"
+            f"SF pruning keeps {hk_kept:,}/{hk_total:,} HKL points ({pct:.1f}%), bias={bias:+.2f}"
         )
 
     return f"SF pruning bias={bias:+.2f}"
@@ -2363,9 +2398,7 @@ def build_bragg_qr_l_value_map(
         dtype=np.float64,
     )
     if arr.ndim == 2 and arr.shape[0] > 0 and arr.shape[1] >= 3:
-        finite_mask = (
-            np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
-        )
+        finite_mask = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
         if np.any(finite_mask):
             rows = arr[finite_mask, :3]
             m_vals = bragg_qr_m_indices_from_miller_array(rows, unique=False)
@@ -2407,8 +2440,7 @@ def build_bragg_qr_qr_list_model(
     """Build the Bragg-Qr group listbox lines, selection, and status text."""
 
     normalized_selected = {
-        (normalize_bragg_qr_source_label(src), int(m_idx))
-        for src, m_idx in (selected_keys or ())
+        (normalize_bragg_qr_source_label(src), int(m_idx)) for src, m_idx in (selected_keys or ())
     }
     enabled_count = 0
     index_keys: list[tuple[str, int]] = []
@@ -2436,9 +2468,7 @@ def build_bragg_qr_qr_list_model(
     if not entries_list:
         lines = ["No Bragg Qr groups are available for the current simulation."]
 
-    selected_indices = [
-        idx for idx, key in enumerate(index_keys) if key in normalized_selected
-    ]
+    selected_indices = [idx for idx, key in enumerate(index_keys) if key in normalized_selected]
     see_index = selected_indices[0] if selected_indices else None
     if index_keys and not selected_indices:
         default_idx = 0
@@ -2515,9 +2545,7 @@ def build_bragg_qr_l_list_model(
         lines.append(f"[{state_text}] L={float(l_val):.4f}")
         index_keys.append(int(l_key))
 
-    selected_indices = [
-        idx for idx, l_key in enumerate(index_keys) if int(l_key) in selected_set
-    ]
+    selected_indices = [idx for idx, l_key in enumerate(index_keys) if int(l_key) in selected_set]
     suffix = " | Qr group disabled" if group_disabled else ""
     return {
         "selected_group_key": (source_label, m_idx),

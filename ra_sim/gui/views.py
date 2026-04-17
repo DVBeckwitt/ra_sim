@@ -4377,11 +4377,9 @@ def create_analysis_view_controls(
     on_toggle_1d_plots: Callable[[], None],
     on_toggle_caked_2d: Callable[[], None],
     on_toggle_log_display: Callable[[], None],
-    on_toggle_show_qz_rods: Callable[[], None] | None = None,
     on_toggle_beam_center_spot: Callable[[], None] | None = None,
     show_1d: bool = False,
     show_caked_2d: bool = False,
-    show_qz_rods: bool = False,
     show_beam_center_spot: bool = False,
     log_display: bool = False,
 ) -> None:
@@ -4389,21 +4387,12 @@ def create_analysis_view_controls(
 
     show_1d_var = tk.BooleanVar(value=bool(show_1d or show_caked_2d))
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
-    show_qz_rods_var = tk.BooleanVar(value=bool(show_qz_rods))
     show_beam_center_spot_var = tk.BooleanVar(value=bool(show_beam_center_spot))
 
-    show_qz_rods_checkbutton = None
     check_beam_center_spot = None
     log_display_var = tk.BooleanVar(value=bool(log_display))
     check_log_display = None
     if parent is not None:
-        show_qz_rods_checkbutton = ttk.Checkbutton(
-            parent,
-            text="Show Qz rods",
-            variable=show_qz_rods_var,
-            command=(on_toggle_show_qz_rods if callable(on_toggle_show_qz_rods) else None),
-        )
-        show_qz_rods_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
         check_beam_center_spot = ttk.Checkbutton(
             parent,
             text="Show beam center spot",
@@ -4423,8 +4412,6 @@ def create_analysis_view_controls(
     view_state.check_1d = None
     view_state.show_caked_2d_var = show_caked_2d_var
     view_state.check_2d = None
-    view_state.show_qz_rods_var = show_qz_rods_var
-    view_state.show_qz_rods_checkbutton = show_qz_rods_checkbutton
     view_state.show_beam_center_spot_var = show_beam_center_spot_var
     view_state.check_beam_center_spot = check_beam_center_spot
     view_state.log_display_var = log_display_var
@@ -4439,15 +4426,22 @@ def create_integration_range_controls(
     tth_max: float,
     phi_min: float,
     phi_max: float,
+    qz_min: float,
+    qz_max: float,
+    delta_qr: float,
     on_tth_min_changed: Callable[[object], None],
     on_tth_max_changed: Callable[[object], None],
     on_phi_min_changed: Callable[[object], None],
     on_phi_max_changed: Callable[[object], None],
+    on_qz_min_changed: Callable[[object], None],
+    on_qz_max_changed: Callable[[object], None],
+    on_delta_qr_changed: Callable[[object], None],
     on_apply_entry: Callable[[object, object, object], None],
-    integrate_qz_rods: bool = False,
-    qr_half_width: float = 0.01,
-    on_toggle_integrate_qz_rods: Callable[[], None] | None = None,
-    on_qr_half_width_changed: Callable[[object], None] | None = None,
+    integrate_selected_qr_rod: bool = False,
+    selected_qr_rod_key: str = "",
+    selected_qr_rod_options: Sequence[tuple[str, str]] | None = None,
+    on_toggle_integrate_selected_qr_rod: Callable[[], None] | None = None,
+    on_selected_qr_rod_changed: Callable[[object], None] | None = None,
 ) -> None:
     """Create the 1D integration-range controls and store their widget refs."""
 
@@ -4455,17 +4449,33 @@ def create_integration_range_controls(
     frame.pack(side=tk.TOP, fill=tk.X, pady=5)
     range_frame = frame.frame
 
-    integrate_qz_rods_var = tk.BooleanVar(value=bool(integrate_qz_rods))
-    integrate_qz_rods_checkbutton = ttk.Checkbutton(
-        range_frame,
-        text="Integrate Qz rods",
-        variable=integrate_qz_rods_var,
-        command=(on_toggle_integrate_qz_rods if callable(on_toggle_integrate_qz_rods) else None),
+    rectangle_section_frame = ttk.LabelFrame(range_frame, text="Rectangle ROI (2θ / φ)")
+    rectangle_section_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 6))
+
+    rod_section_frame = ttk.LabelFrame(range_frame, text="Selected Qr Rod ROI")
+    rod_section_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 2))
+
+    integrate_selected_qr_rod_var = tk.BooleanVar(value=bool(integrate_selected_qr_rod))
+    integrate_selected_qr_rod_checkbutton = ttk.Checkbutton(
+        rod_section_frame,
+        text="Enable selected Qr rod ROI",
+        variable=integrate_selected_qr_rod_var,
+        command=(
+            on_toggle_integrate_selected_qr_rod
+            if callable(on_toggle_integrate_selected_qr_rod)
+            else None
+        ),
     )
-    integrate_qz_rods_checkbutton.pack(side=tk.TOP, anchor=tk.W, padx=5, pady=(0, 4))
+    integrate_selected_qr_rod_checkbutton.pack(
+        side=tk.TOP,
+        anchor=tk.W,
+        padx=5,
+        pady=(2, 4),
+    )
 
     def _create_range_row(
         *,
+        parent_frame: tk.Misc,
         prefix: str,
         label_text: str,
         initial_value: float,
@@ -4476,7 +4486,7 @@ def create_integration_range_controls(
         entry_format: str = "{:.4f}",
         widget_state: str = tk.NORMAL,
     ) -> None:
-        container = ttk.Frame(range_frame)
+        container = ttk.Frame(parent_frame)
         container.pack(side=tk.TOP, fill=tk.X, pady=2)
         ttk.Label(container, text=label_text).pack(side=tk.LEFT, padx=5)
 
@@ -4536,7 +4546,37 @@ def create_integration_range_controls(
         setattr(view_state, f"{prefix}_label", label)
         setattr(view_state, f"{prefix}_entry", entry)
 
+    selected_qr_rod_container = ttk.Frame(rod_section_frame)
+    selected_qr_rod_container.pack(side=tk.TOP, fill=tk.X, pady=2)
+    selected_qr_rod_label = ttk.Label(selected_qr_rod_container, text="Qr rod:")
+    selected_qr_rod_label.pack(side=tk.LEFT, padx=5)
+
+    selected_qr_rod_key_var = tk.StringVar(value=str(selected_qr_rod_key))
+    selected_qr_rod_display_var = tk.StringVar(value="")
+    option_pairs = list(selected_qr_rod_options or ())
+    label_by_key = {str(key): str(label) for key, label in option_pairs}
+    key_by_label = {str(label): str(key) for key, label in option_pairs}
+    selected_qr_rod_display_var.set(label_by_key.get(str(selected_qr_rod_key), ""))
+    selected_qr_rod_combobox = ttk.Combobox(
+        selected_qr_rod_container,
+        textvariable=selected_qr_rod_display_var,
+        values=[str(label) for _, label in option_pairs],
+        state=("readonly" if option_pairs else tk.DISABLED),
+    )
+    selected_qr_rod_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+    selected_qr_rod_combobox.bind(
+        "<<ComboboxSelected>>",
+        (
+            lambda _event: (
+                on_selected_qr_rod_changed(selected_qr_rod_display_var.get())
+                if callable(on_selected_qr_rod_changed)
+                else None
+            )
+        ),
+    )
+
     _create_range_row(
+        parent_frame=rectangle_section_frame,
         prefix="tth_min",
         label_text="2θ Min (°):",
         initial_value=tth_min,
@@ -4545,6 +4585,7 @@ def create_integration_range_controls(
         slider_command=on_tth_min_changed,
     )
     _create_range_row(
+        parent_frame=rectangle_section_frame,
         prefix="tth_max",
         label_text="2θ Max (°):",
         initial_value=tth_max,
@@ -4553,6 +4594,7 @@ def create_integration_range_controls(
         slider_command=on_tth_max_changed,
     )
     _create_range_row(
+        parent_frame=rectangle_section_frame,
         prefix="phi_min",
         label_text="φ Min (°):",
         initial_value=phi_min,
@@ -4561,6 +4603,7 @@ def create_integration_range_controls(
         slider_command=on_phi_min_changed,
     )
     _create_range_row(
+        parent_frame=rectangle_section_frame,
         prefix="phi_max",
         label_text="φ Max (°):",
         initial_value=phi_max,
@@ -4569,25 +4612,56 @@ def create_integration_range_controls(
         slider_command=on_phi_max_changed,
     )
     _create_range_row(
-        prefix="qr_half_width",
-        label_text="ΔQr half-width:",
-        initial_value=qr_half_width,
-        lower_bound=0.0,
-        upper_bound=0.25,
-        slider_command=(
-            on_qr_half_width_changed
-            if callable(on_qr_half_width_changed)
-            else (lambda _value: None)
-        ),
+        parent_frame=rod_section_frame,
+        prefix="qz_min",
+        label_text="Qz Min:",
+        initial_value=qz_min,
+        lower_bound=qz_min,
+        upper_bound=qz_max,
+        slider_command=on_qz_min_changed,
         label_format="{:.4f}",
         entry_format="{:.4f}",
-        widget_state=(tk.NORMAL if integrate_qz_rods else tk.DISABLED),
+        widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
+    )
+    _create_range_row(
+        parent_frame=rod_section_frame,
+        prefix="qz_max",
+        label_text="Qz Max:",
+        initial_value=qz_max,
+        lower_bound=qz_min,
+        upper_bound=qz_max,
+        slider_command=on_qz_max_changed,
+        label_format="{:.4f}",
+        entry_format="{:.4f}",
+        widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
+    )
+    _create_range_row(
+        parent_frame=rod_section_frame,
+        prefix="delta_qr",
+        label_text="ΔQr:",
+        initial_value=delta_qr,
+        lower_bound=0.0,
+        upper_bound=0.25,
+        slider_command=on_delta_qr_changed,
+        label_format="{:.4f}",
+        entry_format="{:.4f}",
+        widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
     )
 
     view_state.frame = frame
     view_state.range_frame = range_frame
-    view_state.integrate_qz_rods_var = integrate_qz_rods_var
-    view_state.integrate_qz_rods_checkbutton = integrate_qz_rods_checkbutton
+    view_state.rectangle_section_frame = rectangle_section_frame
+    view_state.rod_section_frame = rod_section_frame
+    view_state.integrate_selected_qr_rod_var = integrate_selected_qr_rod_var
+    view_state.integrate_selected_qr_rod_checkbutton = integrate_selected_qr_rod_checkbutton
+    view_state.selected_qr_rod_container = selected_qr_rod_container
+    view_state.selected_qr_rod_key_var = selected_qr_rod_key_var
+    view_state.selected_qr_rod_display_var = selected_qr_rod_display_var
+    view_state.selected_qr_rod_label = selected_qr_rod_label
+    view_state.selected_qr_rod_combobox = selected_qr_rod_combobox
+    view_state.selected_qr_rod_options = [str(key) for key, _label in option_pairs]
+    view_state.selected_qr_rod_option_labels = dict(label_by_key)
+    view_state.selected_qr_rod_key_by_label = dict(key_by_label)
 
 
 def create_analysis_export_controls(

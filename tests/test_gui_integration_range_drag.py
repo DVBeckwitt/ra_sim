@@ -190,35 +190,19 @@ def test_create_runtime_drag_rectangles_attach_hidden_overlays() -> None:
     assert drag_rect.init_xy == (0.0, 0.0)
     assert drag_rect.init_width == 0.0
     assert drag_rect.init_height == 0.0
-    assert (
-        drag_rect.init_kwargs["edgecolor"]
-        == integration_range_drag._ACTIVE_DRAG_EDGE_COLOR
-    )
-    assert (
-        drag_rect.init_kwargs["facecolor"]
-        == integration_range_drag._ACTIVE_DRAG_FACE_RGBA
-    )
-    assert (
-        drag_rect.init_kwargs["linewidth"]
-        == integration_range_drag._ACTIVE_DRAG_LINEWIDTH
-    )
+    assert drag_rect.init_kwargs["edgecolor"] == integration_range_drag._ACTIVE_DRAG_EDGE_COLOR
+    assert drag_rect.init_kwargs["facecolor"] == integration_range_drag._ACTIVE_DRAG_FACE_RGBA
+    assert drag_rect.init_kwargs["linewidth"] == integration_range_drag._ACTIVE_DRAG_LINEWIDTH
     assert drag_rect.init_kwargs["zorder"] == 8
     assert drag_rect.visible is False
     assert region_rect.init_xy == (0.0, 0.0)
     assert region_rect.init_width == 0.0
     assert region_rect.init_height == 0.0
     assert (
-        region_rect.init_kwargs["edgecolor"]
-        == integration_range_drag._SELECTED_REGION_EDGE_COLOR
+        region_rect.init_kwargs["edgecolor"] == integration_range_drag._SELECTED_REGION_EDGE_COLOR
     )
-    assert (
-        region_rect.init_kwargs["facecolor"]
-        == integration_range_drag._SELECTED_REGION_FACE_RGBA
-    )
-    assert (
-        region_rect.init_kwargs["linewidth"]
-        == integration_range_drag._SELECTED_REGION_LINEWIDTH
-    )
+    assert region_rect.init_kwargs["facecolor"] == integration_range_drag._SELECTED_REGION_FACE_RGBA
+    assert region_rect.init_kwargs["linewidth"] == integration_range_drag._SELECTED_REGION_LINEWIDTH
     assert region_rect.init_kwargs["linestyle"] == "-"
     assert region_rect.visible is False
 
@@ -407,6 +391,7 @@ def test_integration_range_update_binding_factory_builds_live_bindings(
 def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync() -> None:
     schedule_calls = []
     refresh_calls = []
+    disable_peak_pick_calls = []
     callback_refs = {}
     view_state = state.IntegrationRangeControlsViewState()
     show_1d_var = _FakeVar(False)
@@ -417,24 +402,45 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].tth_max_var = _FakeVar(kwargs["tth_max"])
         kwargs["view_state"].phi_min_var = _FakeVar(kwargs["phi_min"])
         kwargs["view_state"].phi_max_var = _FakeVar(kwargs["phi_max"])
+        kwargs["view_state"].qz_min_var = _FakeVar(kwargs["qz_min"])
+        kwargs["view_state"].qz_max_var = _FakeVar(kwargs["qz_max"])
+        kwargs["view_state"].delta_qr_var = _FakeVar(kwargs["delta_qr"])
         kwargs["view_state"].tth_min_label_var = _FakeVar("")
         kwargs["view_state"].tth_max_label_var = _FakeVar("")
         kwargs["view_state"].phi_min_label_var = _FakeVar("")
         kwargs["view_state"].phi_max_label_var = _FakeVar("")
-        kwargs["view_state"].integrate_qz_rods_var = _FakeVar(kwargs["integrate_qz_rods"])
-        kwargs["view_state"].qr_half_width_var = _FakeVar(kwargs["qr_half_width"])
-        kwargs["view_state"].qr_half_width_label_var = _FakeVar("")
+        kwargs["view_state"].qz_min_label_var = _FakeVar("")
+        kwargs["view_state"].qz_max_label_var = _FakeVar("")
+        kwargs["view_state"].delta_qr_label_var = _FakeVar("")
+        kwargs["view_state"].integrate_selected_qr_rod_var = _FakeVar(
+            kwargs["integrate_selected_qr_rod"]
+        )
+        kwargs["view_state"].selected_qr_rod_key_var = _FakeVar(kwargs["selected_qr_rod_key"])
+        kwargs["view_state"].selected_qr_rod_display_var = _FakeVar("")
+        kwargs["view_state"].selected_qr_rod_option_labels = {
+            str(key): str(label) for key, label in kwargs["selected_qr_rod_options"]
+        }
+        kwargs["view_state"].selected_qr_rod_key_by_label = {
+            str(label): str(key) for key, label in kwargs["selected_qr_rod_options"]
+        }
         kwargs["view_state"].tth_min_entry_var = _FakeVar("")
         kwargs["view_state"].tth_max_entry_var = _FakeVar("")
         kwargs["view_state"].phi_min_entry_var = _FakeVar("")
         kwargs["view_state"].phi_max_entry_var = _FakeVar("")
-        kwargs["view_state"].qr_half_width_entry_var = _FakeVar("")
+        kwargs["view_state"].qz_min_entry_var = _FakeVar("")
+        kwargs["view_state"].qz_max_entry_var = _FakeVar("")
+        kwargs["view_state"].delta_qr_entry_var = _FakeVar("")
         kwargs["view_state"].tth_min_slider = _FakeSlider(0.0, 60.0)
         kwargs["view_state"].tth_max_slider = _FakeSlider(0.0, 60.0)
         kwargs["view_state"].phi_min_slider = _FakeSlider(-15.0, 15.0)
         kwargs["view_state"].phi_max_slider = _FakeSlider(-15.0, 15.0)
-        kwargs["view_state"].qr_half_width_slider = _FakeSlider(0.0, 0.25)
-        kwargs["view_state"].qr_half_width_entry = _FakeEntry(state="disabled")
+        kwargs["view_state"].selected_qr_rod_combobox = _FakeEntry(state="disabled")
+        kwargs["view_state"].qz_min_slider = _FakeSlider(-2.0, 2.0)
+        kwargs["view_state"].qz_max_slider = _FakeSlider(-2.0, 2.0)
+        kwargs["view_state"].delta_qr_slider = _FakeSlider(0.0, 0.25)
+        kwargs["view_state"].qz_min_entry = _FakeEntry(state="disabled")
+        kwargs["view_state"].qz_max_entry = _FakeEntry(state="disabled")
+        kwargs["view_state"].delta_qr_entry = _FakeEntry(state="disabled")
 
     integration_range_drag.create_runtime_integration_range_controls(
         parent="parent",
@@ -445,7 +451,10 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         tth_max=60.0,
         phi_min=-15.0,
         phi_max=15.0,
+        selected_qr_rod_key="phase-a|1",
+        selected_qr_rod_options=[("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1")],
         schedule_range_update=lambda: schedule_calls.append("range"),
+        disable_peak_pick=lambda: disable_peak_pick_calls.append("disable"),
         refresh_region_visuals=lambda: refresh_calls.append("refresh"),
     )
 
@@ -453,14 +462,21 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.tth_min_label_var.get() == "0.0"
     assert view_state.tth_max_entry_var.get() == "60.0000"
     assert view_state.phi_min_entry_var.get() == "-15.0000"
-    assert view_state.qr_half_width_label_var.get() == "0.0100"
-    assert view_state.qr_half_width_entry_var.get() == "0.0100"
-    assert view_state.qr_half_width_slider.state == "disabled"
-    assert view_state.qr_half_width_entry.state == "disabled"
+    assert view_state.qz_min_label_var.get() == "-1.0000"
+    assert view_state.qz_max_entry_var.get() == "1.0000"
+    assert view_state.delta_qr_label_var.get() == "0.0100"
+    assert view_state.delta_qr_entry_var.get() == "0.0100"
+    assert view_state.selected_qr_rod_display_var.get() == "phase-a m=1 | Qr=1.2500 A^-1"
+    assert view_state.selected_qr_rod_combobox.state == "disabled"
+    assert view_state.qz_min_slider.state == "disabled"
+    assert view_state.qz_max_entry.state == "disabled"
+    assert view_state.delta_qr_slider.state == "disabled"
     assert len(view_state.tth_min_var.trace_calls) == 1
     assert len(view_state.phi_max_var.trace_calls) == 1
-    assert len(view_state.qr_half_width_var.trace_calls) == 1
-    assert len(view_state.integrate_qz_rods_var.trace_calls) == 1
+    assert len(view_state.qz_min_var.trace_calls) == 1
+    assert len(view_state.qz_max_var.trace_calls) == 1
+    assert len(view_state.delta_qr_var.trace_calls) == 1
+    assert len(view_state.integrate_selected_qr_rod_var.trace_calls) == 1
 
     callback_refs["on_tth_min_changed"]("12.5")
     assert view_state.tth_min_var.get() == 12.5
@@ -470,20 +486,28 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert refresh_calls == []
 
     show_1d_var.set(False)
-    callback_refs["on_qr_half_width_changed"]("0.125")
-    assert view_state.qr_half_width_var.get() == 0.125
+    callback_refs["on_delta_qr_changed"]("0.125")
+    assert view_state.delta_qr_var.get() == 0.125
     assert show_1d_var.get() is True
-    assert view_state.qr_half_width_label_var.get() == "0.1250"
-    assert view_state.qr_half_width_entry_var.get() == "0.1250"
+    assert view_state.delta_qr_label_var.get() == "0.1250"
+    assert view_state.delta_qr_entry_var.get() == "0.1250"
     assert refresh_calls == ["refresh"]
 
     show_1d_var.set(False)
-    view_state.integrate_qz_rods_var.set(True)
-    callback_refs["on_toggle_integrate_qz_rods"]()
+    view_state.integrate_selected_qr_rod_var.set(True)
+    callback_refs["on_toggle_integrate_selected_qr_rod"]()
     assert show_1d_var.get() is True
-    assert view_state.qr_half_width_slider.state == "normal"
-    assert view_state.qr_half_width_entry.state == "normal"
+    assert view_state.selected_qr_rod_combobox.state == "normal"
+    assert view_state.qz_min_slider.state == "normal"
+    assert view_state.qz_max_entry.state == "normal"
+    assert view_state.delta_qr_slider.state == "normal"
     assert refresh_calls == ["refresh", "refresh"]
+    assert disable_peak_pick_calls == ["disable"]
+
+    show_1d_var.set(False)
+    view_state.integrate_selected_qr_rod_var.set(False)
+    callback_refs["on_toggle_integrate_selected_qr_rod"]()
+    assert disable_peak_pick_calls == ["disable"]
 
     show_1d_var.set(False)
     view_state.phi_max_entry_var.set("45.0")
@@ -496,21 +520,25 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.phi_max_label_var.get() == "15.0"
     assert view_state.phi_max_entry_var.get() == "15.0000"
-    assert refresh_calls == ["refresh", "refresh"]
+    assert refresh_calls == ["refresh", "refresh", "refresh"]
 
     show_1d_var.set(False)
-    view_state.qr_half_width_entry_var.set("9.0")
+    view_state.delta_qr_entry_var.set("9.0")
     callback_refs["on_apply_entry"](
-        view_state.qr_half_width_entry_var,
-        view_state.qr_half_width_var,
-        view_state.qr_half_width_slider,
+        view_state.delta_qr_entry_var,
+        view_state.delta_qr_var,
+        view_state.delta_qr_slider,
     )
-    assert view_state.qr_half_width_var.get() == 0.25
+    assert view_state.delta_qr_var.get() == 0.25
     assert show_1d_var.get() is True
-    assert view_state.qr_half_width_label_var.get() == "0.2500"
-    assert view_state.qr_half_width_entry_var.get() == "0.2500"
-    assert schedule_calls == ["range", "range", "range", "range", "range"]
-    assert refresh_calls == ["refresh", "refresh", "refresh"]
+    assert view_state.delta_qr_label_var.get() == "0.2500"
+    assert view_state.delta_qr_entry_var.get() == "0.2500"
+    show_1d_var.set(False)
+    callback_refs["on_selected_qr_rod_changed"]("phase-a m=1 | Qr=1.2500 A^-1")
+    assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
+    assert show_1d_var.get() is True
+    assert schedule_calls == ["range", "range", "range", "range", "range", "range", "range"]
+    assert refresh_calls == ["refresh", "refresh", "refresh", "refresh", "refresh"]
 
     view_state.phi_min_var.set(-7.25)
     trace_callback = view_state.phi_min_var.trace_calls[0][1]
@@ -742,6 +770,7 @@ def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> N
     view_state.tth_max_var.set(3.0)
     view_state.phi_min_var.set(-180.0)
     view_state.phi_max_var.set(180.0)
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
     overlay = _FakeOverlay()
     overlay_rect = _FakeRect()
     sim_res2 = SimpleNamespace(
@@ -791,6 +820,7 @@ def test_update_runtime_integration_region_visuals_emits_caked_overlay_source_si
     view_state.tth_max_var.set(3.0)
     view_state.phi_min_var.set(-180.0)
     view_state.phi_max_var.set(180.0)
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
     overlay = _FakeOverlay()
     overlay_rect = _FakeRect()
     sim_res2 = SimpleNamespace(
@@ -851,16 +881,14 @@ def test_update_runtime_integration_region_visuals_emits_caked_overlay_source_si
     assert len(projected) == 3
     np.testing.assert_allclose(projected[0][0], custom_mask.astype(float))
     assert projected[0][1] == (
-        "caked_integration_overlay",
+        "caked_selected_qr_rod_overlay",
         (3, 3),
-        (1.0, 3.0, -180.0, 180.0),
         ("mask-sig", 1),
     )
     assert projected[1][1] == projected[0][1]
     assert projected[2][1] == (
-        "caked_integration_overlay",
+        "caked_selected_qr_rod_overlay",
         (3, 3),
-        (1.0, 3.0, -180.0, 180.0),
         ("mask-sig", 2),
     )
 
@@ -961,7 +989,9 @@ def test_update_runtime_integration_region_visuals_updates_raw_overlay() -> None
     assert int(np.sum(overlay.data)) == 6
 
 
-def test_update_runtime_integration_region_visuals_keeps_detector_fallback_for_active_rod_mask() -> None:
+def test_update_runtime_integration_region_visuals_keeps_detector_fallback_for_active_rod_mask() -> (
+    None
+):
     view_state = _range_view_state()
     view_state.integrate_qz_rods_var = _FakeVar(True)
     view_state.tth_min_var.set(10.0)
@@ -1023,7 +1053,9 @@ def test_update_runtime_integration_region_visuals_keeps_detector_fallback_for_a
     assert int(np.sum(overlay.data)) == 6
 
 
-def test_update_runtime_integration_region_visuals_keeps_detector_fallback_with_mismatched_rod_mask() -> None:
+def test_update_runtime_integration_region_visuals_keeps_detector_fallback_with_mismatched_rod_mask() -> (
+    None
+):
     view_state = _range_view_state()
     view_state.integrate_qz_rods_var = _FakeVar(True)
     view_state.tth_min_var.set(10.0)
@@ -1085,7 +1117,9 @@ def test_update_runtime_integration_region_visuals_keeps_detector_fallback_with_
     assert int(np.sum(overlay.data)) == 6
 
 
-def test_update_runtime_integration_region_visuals_keeps_detector_fallback_without_rod_mask() -> None:
+def test_update_runtime_integration_region_visuals_keeps_detector_fallback_without_rod_mask() -> (
+    None
+):
     view_state = _range_view_state()
     view_state.integrate_qz_rods_var = _FakeVar(True)
     view_state.tth_min_var.set(10.0)
@@ -1932,36 +1966,29 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
     monkeypatch.setattr(
         integration_range_drag,
         "handle_runtime_integration_drag_press",
-        lambda bindings_arg, event: callback_calls.append(("press", bindings_arg, event))
-        or True,
+        lambda bindings_arg, event: callback_calls.append(("press", bindings_arg, event)) or True,
     )
     monkeypatch.setattr(
         integration_range_drag,
         "handle_runtime_integration_drag_motion",
-        lambda bindings_arg, event: callback_calls.append(("motion", bindings_arg, event))
-        or False,
+        lambda bindings_arg, event: callback_calls.append(("motion", bindings_arg, event)) or False,
     )
     monkeypatch.setattr(
         integration_range_drag,
         "handle_runtime_integration_drag_release",
-        lambda bindings_arg, event: callback_calls.append(("release", bindings_arg, event))
-        or True,
+        lambda bindings_arg, event: callback_calls.append(("release", bindings_arg, event)) or True,
     )
     monkeypatch.setattr(
         integration_range_drag,
         "reset_runtime_integration_drag",
-        lambda bindings_arg, *, redraw=True: callback_calls.append(
-            ("reset", bindings_arg, redraw)
-        ),
+        lambda bindings_arg, *, redraw=True: callback_calls.append(("reset", bindings_arg, redraw)),
     )
 
     def build_bindings():
         versions["count"] += 1
         return f"bindings-{versions['count']}"
 
-    callbacks = integration_range_drag.make_runtime_integration_range_drag_callbacks(
-        build_bindings
-    )
+    callbacks = integration_range_drag.make_runtime_integration_range_drag_callbacks(build_bindings)
 
     press_event = _FakeEvent(button=1)
     motion_event = _FakeEvent(button=1)

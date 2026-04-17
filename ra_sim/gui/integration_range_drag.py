@@ -25,16 +25,20 @@ _DEFAULT_TTH_MIN = 0.0
 _DEFAULT_TTH_MAX = 80.0
 _DEFAULT_PHI_MIN = -15.0
 _DEFAULT_PHI_MAX = 15.0
+_DEFAULT_QZ_MIN = -1.0
+_DEFAULT_QZ_MAX = 1.0
 _TTH_SLIDER_BOUNDS = (0.0, 90.0)
 _PHI_SLIDER_BOUNDS = (-180.0, 180.0)
-_QR_HALF_WIDTH_SLIDER_BOUNDS = (0.0, 0.25)
+_DELTA_QR_SLIDER_BOUNDS = (0.0, 0.25)
 _DISPLAY_COORD_EPSILON = 1.0e-9
 _RUNTIME_RANGE_TEXT_FORMATS: dict[str, tuple[str, str]] = {
     "tth_min": ("{:.1f}", "{:.4f}"),
     "tth_max": ("{:.1f}", "{:.4f}"),
     "phi_min": ("{:.1f}", "{:.4f}"),
     "phi_max": ("{:.1f}", "{:.4f}"),
-    "qr_half_width": ("{:.4f}", "{:.4f}"),
+    "qz_min": ("{:.4f}", "{:.4f}"),
+    "qz_max": ("{:.4f}", "{:.4f}"),
+    "delta_qr": ("{:.4f}", "{:.4f}"),
 }
 
 
@@ -200,6 +204,38 @@ def _set_runtime_range_value(
     return numeric_value
 
 
+def _get_runtime_string_value(
+    view_state: object,
+    prefix: str,
+    fallback: str = "",
+) -> str:
+    value_var = getattr(view_state, f"{prefix}_var", None)
+    value = _safe_var_get(value_var)
+    if value is not None:
+        text = str(value)
+        setattr(view_state, f"{prefix}_value", text)
+        return text
+
+    cached_value = getattr(view_state, f"{prefix}_value", None)
+    if cached_value is not None:
+        return str(cached_value)
+
+    text = str(fallback)
+    setattr(view_state, f"{prefix}_value", text)
+    return text
+
+
+def _set_runtime_string_value(
+    view_state: object,
+    prefix: str,
+    value: object,
+) -> str:
+    text = str(value)
+    setattr(view_state, f"{prefix}_value", text)
+    _safe_var_set(getattr(view_state, f"{prefix}_var", None), text)
+    return text
+
+
 def _runtime_range_boolean(
     view_state: object,
     prefix: str,
@@ -239,6 +275,25 @@ def _get_runtime_slider_bounds(
     except Exception:
         return float(fallback_lo), float(fallback_hi)
     return lower, upper
+
+
+def _set_runtime_slider_bounds(
+    view_state: object,
+    prefix: str,
+    lower_bound: float,
+    upper_bound: float,
+) -> None:
+    slider = getattr(view_state, f"{prefix}_slider", None)
+    if slider is None:
+        return
+    lower = float(lower_bound)
+    upper = float(upper_bound)
+    if upper < lower:
+        lower, upper = upper, lower
+    try:
+        slider.configure(from_=lower, to=upper)
+    except Exception:
+        pass
 
 
 def _activate_runtime_1d_analysis(show_1d_var: object) -> None:
@@ -345,9 +400,7 @@ def _runtime_caked_custom_mask_signature(
 def _runtime_detector_geometry_signature(
     bindings: IntegrationRangeDragBindings,
 ) -> object | None:
-    return _resolve_runtime_value(
-        getattr(bindings, "detector_geometry_signature_factory", None)
-    )
+    return _resolve_runtime_value(getattr(bindings, "detector_geometry_signature_factory", None))
 
 
 def _rounded_overlay_bounds_signature(
@@ -357,10 +410,7 @@ def _rounded_overlay_bounds_signature(
     phi_min: float,
     phi_max: float,
 ) -> tuple[float, float, float, float]:
-    return tuple(
-        round(float(value), 10)
-        for value in (tth_min, tth_max, phi_min, phi_max)
-    )
+    return tuple(round(float(value), 10) for value in (tth_min, tth_max, phi_min, phi_max))
 
 
 def _detector_overlay_source_signature(
@@ -856,7 +906,9 @@ def _update_detector_drag_arc_preview(
     )
     arc_samples = max(24, int(np.ceil(max(span_degrees * 2.0, radius_max - radius_min))))
     edge_samples = max(4, int(np.ceil(abs(radius_max - radius_min))) + 1)
-    angle_values = np.linspace(float(angle_start), float(angle_start) + float(span_degrees), arc_samples)
+    angle_values = np.linspace(
+        float(angle_start), float(angle_start) + float(span_degrees), arc_samples
+    )
     angle_radians = np.deg2rad(angle_values)
 
     outer_x = float(center_x) + float(radius_max) * np.cos(angle_radians)
@@ -1136,29 +1188,33 @@ def _validated_runtime_caked_custom_mask(
     bindings: IntegrationRangeDragBindings,
     sim_res2: object,
     *,
-    tth_min: float,
-    tth_max: float,
-    phi_min: float,
-    phi_max: float,
-) -> tuple[np.ndarray | None, np.ndarray | None]:
+    require_shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
     custom_mask = _runtime_caked_custom_mask(bindings)
     if custom_mask is None:
-        return None, None
+        return None
 
     caked_reference_res2 = sim_res2 if sim_res2 is not None else _runtime_last_sim_res2(bindings)
     if caked_reference_res2 is None:
-        return None, None
+        return None
 
-    rect_mask = _caked_rect_mask(
-        caked_reference_res2,
-        tth_min=tth_min,
-        tth_max=tth_max,
-        phi_min=phi_min,
-        phi_max=phi_max,
+    radial_axis = np.asarray(getattr(caked_reference_res2, "radial", ()), dtype=float).reshape(-1)
+    raw_azimuth_axis = np.asarray(
+        getattr(caked_reference_res2, "azimuthal", ()),
+        dtype=float,
+    ).reshape(-1)
+    if radial_axis.size <= 0 or raw_azimuth_axis.size <= 0:
+        return None
+    radial_mask = (radial_axis >= 0.0) & (radial_axis <= 90.0)
+    if not np.any(radial_mask):
+        return None
+    expected_shape = (
+        int(raw_azimuth_axis.size),
+        int(np.count_nonzero(radial_mask)),
     )
-    if rect_mask is None or custom_mask.shape != rect_mask.shape:
-        return None, rect_mask
-    return custom_mask, rect_mask
+    if require_shape is not None:
+        expected_shape = tuple(int(value) for value in require_shape)
+    return custom_mask if tuple(custom_mask.shape) == tuple(expected_shape) else None
 
 
 def update_runtime_integration_region_visuals(
@@ -1171,9 +1227,7 @@ def update_runtime_integration_region_visuals(
     if bool(getattr(bindings.drag_state, "active", False)):
         return
 
-    show_region = _runtime_range_visible(bindings) and _runtime_unscaled_image_present(
-        bindings
-    )
+    show_region = _runtime_range_visible(bindings) and _runtime_unscaled_image_present(bindings)
     if not show_region:
         bindings.integration_region_overlay.set_visible(False)
         bindings.integration_region_rect.set_visible(False)
@@ -1193,29 +1247,23 @@ def update_runtime_integration_region_visuals(
     )
     phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
     phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
-    custom_mask, rect_mask = _validated_runtime_caked_custom_mask(
-        bindings,
-        sim_res2,
-        tth_min=tth_min,
-        tth_max=tth_max,
-        phi_min=phi_min,
-        phi_max=phi_max,
+    rod_mode_enabled = _runtime_range_boolean(
+        view_state,
+        "integrate_selected_qr_rod",
+        False,
     )
 
     if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
-        if custom_mask is not None and rect_mask is not None:
-            clipped_mask = custom_mask & rect_mask
-            if np.any(clipped_mask):
+        if rod_mode_enabled:
+            custom_mask = _validated_runtime_caked_custom_mask(bindings, sim_res2)
+            if custom_mask is not None and np.any(custom_mask):
                 _set_integration_overlay_image(
                     bindings,
-                    clipped_mask.astype(float),
-                    source_signature=_caked_overlay_source_signature(
-                        rect_mask_shape=tuple(int(value) for value in rect_mask.shape),
-                        tth_min=tth_min,
-                        tth_max=tth_max,
-                        phi_min=phi_min,
-                        phi_max=phi_max,
-                        custom_mask_signature=_runtime_caked_custom_mask_signature(bindings),
+                    custom_mask.astype(float),
+                    source_signature=(
+                        "caked_selected_qr_rod_overlay",
+                        tuple(int(value) for value in custom_mask.shape),
+                        _runtime_caked_custom_mask_signature(bindings),
                     ),
                 )
                 bindings.integration_region_overlay.set_visible(True)
@@ -1300,6 +1348,16 @@ def handle_runtime_integration_drag_press(
     drag_state = bindings.drag_state
     x0, y0 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
     if _runtime_caked_view_enabled(bindings):
+        if _runtime_range_boolean(
+            bindings.range_view_state,
+            "integrate_selected_qr_rod",
+            False,
+        ):
+            _set_status_text(
+                bindings,
+                "Rectangle drag is disabled while selected Qr rod ROI mode is active.",
+            )
+            return True
         drag_state.active = True
         drag_state.mode = "caked"
         drag_state.x0 = x0
@@ -1717,10 +1775,31 @@ def _sync_runtime_range_text_vars(view_state: object) -> None:
         _safe_var_set(entry_var, entry_format.format(numeric_value))
 
 
-def _sync_runtime_qr_half_width_control_state(view_state: object) -> None:
-    enabled = _runtime_range_boolean(view_state, "integrate_qz_rods", False)
-    _set_widget_enabled(getattr(view_state, "qr_half_width_slider", None), enabled)
-    _set_widget_enabled(getattr(view_state, "qr_half_width_entry", None), enabled)
+def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
+    rod_mode_enabled = _runtime_range_boolean(view_state, "integrate_selected_qr_rod", False)
+
+    for widget_name in (
+        "tth_min_slider",
+        "tth_min_entry",
+        "tth_max_slider",
+        "tth_max_entry",
+        "phi_min_slider",
+        "phi_min_entry",
+        "phi_max_slider",
+        "phi_max_entry",
+    ):
+        _set_widget_enabled(getattr(view_state, widget_name, None), not rod_mode_enabled)
+
+    for widget_name in (
+        "selected_qr_rod_combobox",
+        "qz_min_slider",
+        "qz_min_entry",
+        "qz_max_slider",
+        "qz_max_entry",
+        "delta_qr_slider",
+        "delta_qr_entry",
+    ):
+        _set_widget_enabled(getattr(view_state, widget_name, None), rod_mode_enabled)
 
 
 def _refresh_runtime_region_visuals(
@@ -1793,16 +1872,66 @@ def _make_runtime_range_slider_callback(
     return _on_changed
 
 
-def _toggle_runtime_integrate_qz_rods(
+def _set_runtime_selected_qr_rod_options(
+    view_state: object,
+    options: list[tuple[str, str]],
+) -> None:
+    labels = [str(label) for _key, label in options]
+    keys = [str(key) for key, _label in options]
+    label_by_key = {str(key): str(label) for key, label in options}
+    key_by_label = {str(label): str(key) for key, label in options}
+
+    setattr(view_state, "selected_qr_rod_options", keys)
+    setattr(view_state, "selected_qr_rod_option_labels", label_by_key)
+    setattr(view_state, "selected_qr_rod_key_by_label", key_by_label)
+
+    combobox = getattr(view_state, "selected_qr_rod_combobox", None)
+    if combobox is not None:
+        try:
+            combobox.configure(
+                values=labels,
+                state=("readonly" if labels else "disabled"),
+            )
+        except Exception:
+            pass
+
+    current_key = _get_runtime_string_value(view_state, "selected_qr_rod_key", "")
+    current_label = label_by_key.get(current_key, "")
+    _safe_var_set(getattr(view_state, "selected_qr_rod_display_var", None), current_label)
+
+
+def _toggle_runtime_integrate_selected_qr_rod(
     *,
     view_state: object,
     show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
+    disable_peak_pick: Callable[[], object] | None = None,
     refresh_region_visuals: Callable[[], object] | None = None,
 ) -> None:
     _activate_runtime_1d_analysis(show_1d_var)
-    _sync_runtime_qr_half_width_control_state(view_state)
+    if _runtime_range_boolean(view_state, "integrate_selected_qr_rod", False):
+        if callable(disable_peak_pick):
+            disable_peak_pick()
+    _sync_runtime_selected_qr_rod_mode_state(view_state)
     _sync_runtime_range_text_vars(view_state)
+    if callable(schedule_range_update):
+        schedule_range_update()
+    _refresh_runtime_region_visuals(refresh_region_visuals)
+
+
+def _select_runtime_selected_qr_rod(
+    *,
+    view_state: object,
+    display_value: object,
+    show_1d_var: object,
+    schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
+) -> None:
+    label = str(display_value or "")
+    encoded_key = (getattr(view_state, "selected_qr_rod_key_by_label", {}) or {}).get(label, "")
+    _safe_var_set(getattr(view_state, "selected_qr_rod_display_var", None), label)
+    _set_runtime_string_value(view_state, "selected_qr_rod_key", encoded_key)
+    _activate_runtime_1d_analysis(show_1d_var)
     if callable(schedule_range_update):
         schedule_range_update()
     _refresh_runtime_region_visuals(refresh_region_visuals)
@@ -1818,9 +1947,14 @@ def create_runtime_integration_range_controls(
     tth_max: float,
     phi_min: float,
     phi_max: float,
-    integrate_qz_rods: bool = False,
-    qr_half_width: float = 0.01,
+    integrate_selected_qr_rod: bool = False,
+    selected_qr_rod_key: str = "",
+    selected_qr_rod_options: list[tuple[str, str]] | None = None,
+    qz_min: float = _DEFAULT_QZ_MIN,
+    qz_max: float = _DEFAULT_QZ_MAX,
+    delta_qr: float = 0.01,
     schedule_range_update: Callable[..., object] | None,
+    disable_peak_pick: Callable[[], object] | None = None,
     refresh_region_visuals: Callable[[], object] | None = None,
 ) -> None:
     """Create the 1D integration-range controls and wire runtime callbacks."""
@@ -1829,9 +1963,15 @@ def create_runtime_integration_range_controls(
     _set_runtime_range_value(view_state, "tth_max", float(tth_max))
     _set_runtime_range_value(view_state, "phi_min", float(phi_min))
     _set_runtime_range_value(view_state, "phi_max", float(phi_max))
-    setattr(view_state, "integrate_qz_rods_value", bool(integrate_qz_rods))
-    _safe_var_set(getattr(view_state, "integrate_qz_rods_var", None), bool(integrate_qz_rods))
-    _set_runtime_range_value(view_state, "qr_half_width", float(qr_half_width))
+    setattr(view_state, "integrate_selected_qr_rod_value", bool(integrate_selected_qr_rod))
+    _safe_var_set(
+        getattr(view_state, "integrate_selected_qr_rod_var", None),
+        bool(integrate_selected_qr_rod),
+    )
+    _set_runtime_string_value(view_state, "selected_qr_rod_key", str(selected_qr_rod_key))
+    _set_runtime_range_value(view_state, "qz_min", float(qz_min))
+    _set_runtime_range_value(view_state, "qz_max", float(qz_max))
+    _set_runtime_range_value(view_state, "delta_qr", float(delta_qr))
 
     views_module.create_integration_range_controls(
         parent=parent,
@@ -1840,8 +1980,9 @@ def create_runtime_integration_range_controls(
         tth_max=tth_max,
         phi_min=phi_min,
         phi_max=phi_max,
-        integrate_qz_rods=bool(integrate_qz_rods),
-        qr_half_width=float(qr_half_width),
+        qz_min=float(qz_min),
+        qz_max=float(qz_max),
+        delta_qr=float(delta_qr),
         on_tth_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="tth_min_var",
@@ -1866,15 +2007,40 @@ def create_runtime_integration_range_controls(
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
-        on_toggle_integrate_qz_rods=lambda: _toggle_runtime_integrate_qz_rods(
+        on_qz_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
+            value_var_name="qz_min_var",
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
             refresh_region_visuals=refresh_region_visuals,
         ),
-        on_qr_half_width_changed=_make_runtime_range_slider_callback(
+        on_qz_max_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
-            value_var_name="qr_half_width_var",
+            value_var_name="qz_max_var",
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
+            refresh_region_visuals=refresh_region_visuals,
+        ),
+        on_delta_qr_changed=_make_runtime_range_slider_callback(
+            view_state=view_state,
+            value_var_name="delta_qr_var",
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
+            refresh_region_visuals=refresh_region_visuals,
+        ),
+        integrate_selected_qr_rod=bool(integrate_selected_qr_rod),
+        selected_qr_rod_key=str(selected_qr_rod_key),
+        selected_qr_rod_options=list(selected_qr_rod_options or ()),
+        on_toggle_integrate_selected_qr_rod=lambda: _toggle_runtime_integrate_selected_qr_rod(
+            view_state=view_state,
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
+            disable_peak_pick=disable_peak_pick,
+            refresh_region_visuals=refresh_region_visuals,
+        ),
+        on_selected_qr_rod_changed=lambda value: _select_runtime_selected_qr_rod(
+            view_state=view_state,
+            display_value=value,
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
             refresh_region_visuals=refresh_region_visuals,
@@ -1888,7 +2054,12 @@ def create_runtime_integration_range_controls(
             schedule_range_update=schedule_range_update,
             refresh_region_visuals=(
                 refresh_region_visuals
-                if value_var is getattr(view_state, "qr_half_width_var", None)
+                if value_var
+                in (
+                    getattr(view_state, "qz_min_var", None),
+                    getattr(view_state, "qz_max_var", None),
+                    getattr(view_state, "delta_qr_var", None),
+                )
                 else None
             ),
         ),
@@ -1899,14 +2070,21 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "tth_max_var", None),
         getattr(view_state, "phi_min_var", None),
         getattr(view_state, "phi_max_var", None),
-        getattr(view_state, "integrate_qz_rods_var", None),
-        getattr(view_state, "qr_half_width_var", None),
+        getattr(view_state, "integrate_selected_qr_rod_var", None),
+        getattr(view_state, "selected_qr_rod_key_var", None),
+        getattr(view_state, "selected_qr_rod_display_var", None),
+        getattr(view_state, "qz_min_var", None),
+        getattr(view_state, "qz_max_var", None),
+        getattr(view_state, "delta_qr_var", None),
         getattr(view_state, "tth_min_slider", None),
         getattr(view_state, "tth_max_slider", None),
         getattr(view_state, "phi_min_slider", None),
         getattr(view_state, "phi_max_slider", None),
-        getattr(view_state, "qr_half_width_slider", None),
-        getattr(view_state, "qr_half_width_entry", None),
+        getattr(view_state, "selected_qr_rod_combobox", None),
+        getattr(view_state, "qz_min_slider", None),
+        getattr(view_state, "qz_max_slider", None),
+        getattr(view_state, "delta_qr_slider", None),
+        getattr(view_state, "delta_qr_entry", None),
     )
     if any(ref is None for ref in refs):
         raise RuntimeError("Integration-range controls did not create the expected widgets.")
@@ -1916,24 +2094,25 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "tth_max_var", None),
         getattr(view_state, "phi_min_var", None),
         getattr(view_state, "phi_max_var", None),
-        getattr(view_state, "qr_half_width_var", None),
+        getattr(view_state, "qz_min_var", None),
+        getattr(view_state, "qz_max_var", None),
+        getattr(view_state, "delta_qr_var", None),
     ):
         if value_var is None:
             continue
         _safe_var_trace_add(
             value_var,
-            lambda *_args, _view_state=view_state: _sync_runtime_range_text_vars(
-                _view_state
-            ),
+            lambda *_args, _view_state=view_state: _sync_runtime_range_text_vars(_view_state),
         )
     _safe_var_trace_add(
-        getattr(view_state, "integrate_qz_rods_var", None),
-        lambda *_args, _view_state=view_state: _sync_runtime_qr_half_width_control_state(
+        getattr(view_state, "integrate_selected_qr_rod_var", None),
+        lambda *_args, _view_state=view_state: _sync_runtime_selected_qr_rod_mode_state(
             _view_state
         ),
     )
+    _set_runtime_selected_qr_rod_options(view_state, list(selected_qr_rod_options or ()))
     _sync_runtime_range_text_vars(view_state)
-    _sync_runtime_qr_half_width_control_state(view_state)
+    _sync_runtime_selected_qr_rod_mode_state(view_state)
 
 
 def _toggle_runtime_1d_plots(

@@ -60,6 +60,42 @@ def test_save_and_load_gui_state_file_round_trip(tmp_path):
     assert loaded["state"]["files"]["background_files"] == ["a.osc", "b.osc"]
 
 
+def test_save_and_load_gui_state_file_round_trip_preserves_selected_qr_rod_analysis_range(
+    tmp_path,
+):
+    file_path = tmp_path / "gui_state_with_rod_roi.json"
+    save_gui_state_file(
+        file_path,
+        {
+            "analysis_range": {
+                "tth_min": 1.5,
+                "tth_max": 55.0,
+                "phi_min": -12.0,
+                "phi_max": 18.0,
+                "integrate_selected_qr_rod": True,
+                "selected_qr_rod_key": "phase-a|1",
+                "qz_min": -0.5,
+                "qz_max": 1.5,
+                "delta_qr": 0.03125,
+            }
+        },
+    )
+
+    loaded = load_gui_state_file(file_path)
+
+    assert loaded["state"]["analysis_range"] == {
+        "tth_min": 1.5,
+        "tth_max": 55.0,
+        "phi_min": -12.0,
+        "phi_max": 18.0,
+        "integrate_selected_qr_rod": True,
+        "selected_qr_rod_key": "phase-a|1",
+        "qz_min": -0.5,
+        "qz_max": 1.5,
+        "delta_qr": 0.03125,
+    }
+
+
 def test_load_gui_state_file_rejects_wrong_type(tmp_path):
     file_path = tmp_path / "bad_state.json"
     file_path.write_text('{"type":"wrong","state":{}}', encoding="utf-8")

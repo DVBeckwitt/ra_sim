@@ -7,6 +7,7 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from ra_sim import install_prereqs
@@ -598,8 +599,7 @@ def launch_calibrant_gui(*, bundle: str | None = None) -> None:
         from ra_sim.hbn_fitter.fitter import HBNFitterGUI
     except Exception as exc:
         raise RuntimeError(
-            "Unable to import the packaged calibrant fitter GUI from "
-            "`ra_sim.hbn_fitter.fitter`."
+            "Unable to import the packaged calibrant fitter GUI from `ra_sim.hbn_fitter.fitter`."
         ) from exc
 
     launch_context = window_affinity.capture_launch_window_context()
@@ -627,9 +627,8 @@ def should_forward_to_cli(argv: Sequence[str]) -> bool:
     if not argv:
         return False
     first_arg = argv[0]
-    return (
-        first_arg not in LAUNCHER_COMMANDS.union({"-h", "--help"})
-        and not first_arg.startswith("--")
+    return first_arg not in LAUNCHER_COMMANDS.union({"-h", "--help"}) and not first_arg.startswith(
+        "--"
     )
 
 
@@ -841,9 +840,7 @@ def build_runtime_structure_factor_pruning_controls_bootstrap(
             set_solve_q_control_states=set_solve_q_control_states,
         )
 
-    return StructureFactorPruningControlsRuntimeBootstrap(
-        create_controls=_create_controls
-    )
+    return StructureFactorPruningControlsRuntimeBootstrap(create_controls=_create_controls)
 
 
 def build_runtime_bragg_qr_workflow_bootstrap(
@@ -925,10 +922,8 @@ def build_runtime_qr_cylinder_overlay_bootstrap(
 ) -> RuntimeBindingsRefreshToggleBootstrap:
     """Build the live Qr-cylinder overlay runtime callback surface."""
 
-    bindings_factory = (
-        qr_cylinder_overlay_module.make_runtime_qr_cylinder_overlay_bindings_factory(
-            **bindings_kwargs
-        )
+    bindings_factory = qr_cylinder_overlay_module.make_runtime_qr_cylinder_overlay_bindings_factory(
+        **bindings_kwargs
     )
     return RuntimeBindingsRefreshToggleBootstrap(
         bindings_factory=bindings_factory,
@@ -953,9 +948,7 @@ def build_runtime_peak_selection_bootstrap(
     )
     return RuntimeBindingsCallbacksBootstrap(
         bindings_factory=bindings_factory,
-        callbacks=peak_selection_module.make_runtime_peak_selection_callbacks(
-            bindings_factory
-        ),
+        callbacks=peak_selection_module.make_runtime_peak_selection_callbacks(bindings_factory),
     )
 
 
@@ -967,9 +960,7 @@ def build_runtime_geometry_manual_bootstrap(
     """Build the live manual-geometry callback bundle through shared helpers."""
 
     return RuntimeCallbacksBootstrap(
-        callbacks=manual_geometry_module.make_runtime_geometry_manual_callbacks(
-            **bindings_kwargs
-        )
+        callbacks=manual_geometry_module.make_runtime_geometry_manual_callbacks(**bindings_kwargs)
     )
 
 
@@ -1009,9 +1000,7 @@ def build_runtime_geometry_tool_action_callbacks_bootstrap(
     """Build the live geometry-tool action callback bundle through shared helpers."""
 
     return RuntimeCallbacksBootstrap(
-        callbacks=geometry_fit_module.make_runtime_geometry_tool_action_callbacks(
-            **bindings_kwargs
-        )
+        callbacks=geometry_fit_module.make_runtime_geometry_tool_action_callbacks(**bindings_kwargs)
     )
 
 
@@ -1213,15 +1202,9 @@ def build_runtime_hkl_lookup_controls_bootstrap(
         views_module.create_hkl_lookup_controls(
             parent=parent,
             view_state=view_state,
-            on_select_hkl=lambda: _invoke_peak_selection_callback(
-                "select_peak_from_hkl_controls"
-            ),
-            on_toggle_hkl_pick=lambda: _invoke_peak_selection_callback(
-                "toggle_hkl_pick_mode"
-            ),
-            on_clear_selected_peak=lambda: _invoke_peak_selection_callback(
-                "clear_selected_peak"
-            ),
+            on_select_hkl=lambda: _invoke_peak_selection_callback("select_peak_from_hkl_controls"),
+            on_toggle_hkl_pick=lambda: _invoke_peak_selection_callback("toggle_hkl_pick_mode"),
+            on_clear_selected_peak=lambda: _invoke_peak_selection_callback("clear_selected_peak"),
             on_show_bragg_ewald=lambda: _invoke_peak_selection_callback(
                 "open_selected_peak_intersection_figure"
             ),
@@ -1343,10 +1326,8 @@ def build_runtime_geometry_fit_action_bootstrap(
 ) -> GeometryFitActionRuntimeBootstrap:
     """Build the live geometry-fit action bindings and fit-button callback."""
 
-    bindings_factory = (
-        geometry_fit_module.make_runtime_geometry_fit_action_bindings_factory(
-            **bindings_kwargs
-        )
+    bindings_factory = geometry_fit_module.make_runtime_geometry_fit_action_bindings_factory(
+        **bindings_kwargs
     )
     return GeometryFitActionRuntimeBootstrap(
         bindings_factory=bindings_factory,
@@ -1386,9 +1367,7 @@ def build_runtime_integration_range_workflow_bootstrap(
 ) -> IntegrationRangeDragRuntimeBootstrap:
     """Build the live integration-range drag workflow and visual refresh hooks."""
 
-    integration_region_rect = (
-        integration_range_drag_module.create_integration_region_rectangle(ax)
-    )
+    integration_region_rect = integration_range_drag_module.create_integration_region_rectangle(ax)
     drag_select_rect = integration_range_drag_module.create_drag_select_rectangle(ax)
     runtime_bootstrap = build_runtime_integration_range_drag_bootstrap(
         integration_range_drag_module=integration_range_drag_module,
@@ -1414,7 +1393,7 @@ def build_runtime_integration_range_update_bootstrap(
     integration_range_drag_module: Any,
     range_view_state: Any,
     analysis_view_state: Any,
-    range_defaults: dict[str, float] | None = None,
+    range_defaults: Mapping[str, object] | None = None,
     analysis_defaults: dict[str, bool] | None = None,
     **bindings_kwargs: Any,
 ) -> IntegrationRangeUpdateRuntimeBootstrap:
@@ -1433,15 +1412,17 @@ def build_runtime_integration_range_update_bootstrap(
         "tth_max": 60.0,
         "phi_min": -15.0,
         "phi_max": 15.0,
-        "integrate_qz_rods": False,
-        "qr_half_width": 0.01,
+        "integrate_selected_qr_rod": False,
+        "selected_qr_rod_key": "",
+        "qz_min": -1.0,
+        "qz_max": 1.0,
+        "delta_qr": 0.01,
     }
     if range_defaults:
         normalized_range_defaults.update(range_defaults)
     normalized_analysis_defaults = {
         "show_1d": False,
         "show_caked_2d": False,
-        "show_qz_rods": False,
         "log_display": False,
     }
     if analysis_defaults:
@@ -1493,10 +1474,8 @@ def build_runtime_canvas_interaction_bootstrap(
 ) -> RuntimeBindingsCallbacksBootstrap:
     """Build the live canvas-interaction binding/callback bundle."""
 
-    bindings_factory = (
-        canvas_interactions_module.make_runtime_canvas_interaction_bindings_factory(
-            **bindings_kwargs
-        )
+    bindings_factory = canvas_interactions_module.make_runtime_canvas_interaction_bindings_factory(
+        **bindings_kwargs
     )
     return RuntimeBindingsCallbacksBootstrap(
         bindings_factory=bindings_factory,
@@ -1518,9 +1497,7 @@ def build_runtime_background_bootstrap(
     )
     return RuntimeBindingsCallbacksBootstrap(
         bindings_factory=bindings_factory,
-        callbacks=background_manager_module.make_runtime_background_callbacks(
-            bindings_factory
-        ),
+        callbacks=background_manager_module.make_runtime_background_callbacks(bindings_factory),
     )
 
 
@@ -1536,9 +1513,7 @@ def build_runtime_background_theta_bootstrap(
     )
     return RuntimeBindingsCallbacksBootstrap(
         bindings_factory=bindings_factory,
-        callbacks=background_theta_module.make_runtime_background_theta_callbacks(
-            bindings_factory
-        ),
+        callbacks=background_theta_module.make_runtime_background_theta_callbacks(bindings_factory),
     )
 
 

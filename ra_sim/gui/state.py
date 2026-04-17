@@ -459,8 +459,6 @@ class AnalysisViewControlsViewState:
     check_1d: Any = None
     show_caked_2d_var: Any = None
     check_2d: Any = None
-    show_qz_rods_var: Any = None
-    show_qz_rods_checkbutton: Any = None
     show_beam_center_spot_var: Any = None
     check_beam_center_spot: Any = None
     log_display_var: Any = None
@@ -517,6 +515,8 @@ class IntegrationRangeControlsViewState:
 
     frame: Any = None
     range_frame: Any = None
+    rectangle_section_frame: Any = None
+    rod_section_frame: Any = None
     tth_min_value: float = 0.0
     tth_min_container: Any = None
     tth_min_var: Any = None
@@ -549,16 +549,42 @@ class IntegrationRangeControlsViewState:
     phi_max_slider: Any = None
     phi_max_entry_var: Any = None
     phi_max_entry: Any = None
-    integrate_qz_rods_var: Any = None
-    integrate_qz_rods_checkbutton: Any = None
-    qr_half_width_value: float = 0.01
-    qr_half_width_container: Any = None
-    qr_half_width_var: Any = None
-    qr_half_width_label_var: Any = None
-    qr_half_width_label: Any = None
-    qr_half_width_slider: Any = None
-    qr_half_width_entry_var: Any = None
-    qr_half_width_entry: Any = None
+    integrate_selected_qr_rod_value: bool = False
+    integrate_selected_qr_rod_var: Any = None
+    integrate_selected_qr_rod_checkbutton: Any = None
+    selected_qr_rod_container: Any = None
+    selected_qr_rod_key_value: str = ""
+    selected_qr_rod_key_var: Any = None
+    selected_qr_rod_display_var: Any = None
+    selected_qr_rod_label: Any = None
+    selected_qr_rod_combobox: Any = None
+    selected_qr_rod_options: list[str] = field(default_factory=list)
+    selected_qr_rod_option_labels: dict[str, str] = field(default_factory=dict)
+    selected_qr_rod_key_by_label: dict[str, str] = field(default_factory=dict)
+    qz_min_value: float = -1.0
+    qz_min_container: Any = None
+    qz_min_var: Any = None
+    qz_min_label_var: Any = None
+    qz_min_label: Any = None
+    qz_min_slider: Any = None
+    qz_min_entry_var: Any = None
+    qz_min_entry: Any = None
+    qz_max_value: float = 1.0
+    qz_max_container: Any = None
+    qz_max_var: Any = None
+    qz_max_label_var: Any = None
+    qz_max_label: Any = None
+    qz_max_slider: Any = None
+    qz_max_entry_var: Any = None
+    qz_max_entry: Any = None
+    delta_qr_value: float = 0.01
+    delta_qr_container: Any = None
+    delta_qr_var: Any = None
+    delta_qr_label_var: Any = None
+    delta_qr_label: Any = None
+    delta_qr_slider: Any = None
+    delta_qr_entry_var: Any = None
+    delta_qr_entry: Any = None
 
 
 @dataclass

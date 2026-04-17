@@ -355,20 +355,20 @@ def test_shutdown_gui_clears_geometry_fit_workers_and_pending_tokens(
     monkeypatch.setattr(
         runtime_session,
         "simulation_runtime_state",
-            SimpleNamespace(
-                update_phase="running",
-                update_running=True,
-                integration_update_pending="integration-token",
-                update_pending="update-token",
-                worker_poll_token="worker-poll-token",
-                analysis_poll_token="analysis-poll-token",
-                interaction_settle_token="settle-token",
-                first_visible_simulation_settle_token="first-visible-settle-token",
-                geometry_fit_poll_token="geometry-fit-poll-token",
-                worker_executor=worker_executor,
-                worker_future=worker_future,
-                worker_active_job={"job_id": 1},
-                worker_queued_job={"job_id": 2},
+        SimpleNamespace(
+            update_phase="running",
+            update_running=True,
+            integration_update_pending="integration-token",
+            update_pending="update-token",
+            worker_poll_token="worker-poll-token",
+            analysis_poll_token="analysis-poll-token",
+            interaction_settle_token="settle-token",
+            first_visible_simulation_settle_token="first-visible-settle-token",
+            geometry_fit_poll_token="geometry-fit-poll-token",
+            worker_executor=worker_executor,
+            worker_future=worker_future,
+            worker_active_job={"job_id": 1},
+            worker_queued_job={"job_id": 2},
             worker_ready_result={"status": "ready"},
             analysis_executor=analysis_executor,
             analysis_future=analysis_future,
@@ -2226,7 +2226,7 @@ def test_runtime_impl_wires_caked_custom_mask_signature_factory() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "caked_custom_mask_signature_factory=lambda: (" in source
-    assert 'geometry_runtime_state.qr_cylinder_band_cache or {}).get("signature")' in source
+    assert '(_current_selected_qr_rod_caked_mask_payload() or {}).get("signature")' in source
 
 
 def test_runtime_impl_wires_detector_geometry_signature_factory() -> None:
@@ -3505,7 +3505,9 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
     monkeypatch.setattr(
         runtime_session,
         "build_geometry",
-        lambda **kwargs: geometry_calls.append({k: float(v) for k, v in kwargs.items()}) or geometry_token,
+        lambda **kwargs: (
+            geometry_calls.append({k: float(v) for k, v in kwargs.items()}) or geometry_token
+        ),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -4665,6 +4667,7 @@ def test_do_update_schedules_post_idle_redraw_when_worker_result_creates_first_v
     scheduled_post_idle_redraw_calls: list[str] = []
     scheduled_settle_calls: list[str] = []
     apply_scale_factor_calls: list[dict[str, object]] = []
+    sync_selected_qr_rod_calls: list[str] = []
     ready_result = {
         "primary_image": np.ones((2, 2), dtype=np.float64),
         "secondary_image": np.zeros((2, 2), dtype=np.float64),
@@ -4683,6 +4686,12 @@ def test_do_update_schedules_post_idle_redraw_when_worker_result_creates_first_v
         scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
         scheduled_settle_calls=scheduled_settle_calls,
         apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_selected_qr_rod_controls_state",
+        lambda: sync_selected_qr_rod_calls.append("sync"),
+        raising=False,
     )
     apply_ready_calls = _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
         monkeypatch,
@@ -4710,6 +4719,7 @@ def test_do_update_schedules_post_idle_redraw_when_worker_result_creates_first_v
             "update_chi_square": True,
         }
     ]
+    assert sync_selected_qr_rod_calls == ["sync"]
     assert scheduled_post_idle_redraw_calls == ["scheduled"]
     assert scheduled_settle_calls == ["scheduled"]
 
@@ -5156,7 +5166,10 @@ def test_schedule_first_visible_simulation_settle_pass_reapplies_display_applica
     assert cleared_tokens == [None]
     assert len(scheduled_callbacks) == 1
     assert scheduled_callbacks[0][0] == getattr(runtime_session, "LIVE_DRAG_SETTLE_MS", 80)
-    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token == "after-token-1"
+    assert (
+        runtime_session.simulation_runtime_state.first_visible_simulation_settle_token
+        == "after-token-1"
+    )
     assert events == []
 
     scheduled_callbacks[0][1]()
@@ -5419,7 +5432,9 @@ def test_schedule_first_visible_simulation_settle_pass_noops_for_stale_signature
 
     assert events == []
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
-    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature is None
+    assert (
+        runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature is None
+    )
 
 
 def test_schedule_first_visible_simulation_settle_pass_replaces_pending_token_for_new_signature(
@@ -5497,7 +5512,10 @@ def test_schedule_first_visible_simulation_settle_pass_replaces_pending_token_fo
     runtime_session._schedule_first_visible_simulation_settle_pass()
 
     assert cleared_tokens == [None, "after-token-1"]
-    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token == "after-token-2"
+    assert (
+        runtime_session.simulation_runtime_state.first_visible_simulation_settle_token
+        == "after-token-2"
+    )
 
     scheduled_callbacks[0][1]()
     assert events == []
@@ -5673,7 +5691,9 @@ def test_schedule_first_visible_simulation_settle_pass_retries_once_before_force
         },
     ]
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
-    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature is None
+    assert (
+        runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature is None
+    )
 
 
 def test_apply_primary_figure_display_from_cached_results_preserves_hidden_analysis_payloads_during_detector_redraw(
@@ -8346,7 +8366,7 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert "first_visible_simulation_before_update" in do_update_block
     assert "_schedule_post_idle_main_canvas_redraw()" in do_update_block
     assert "_schedule_first_visible_simulation_settle_pass()" in do_update_block
-    assert 'and not bool(simulation_runtime_state.preview_active)' in do_update_block
+    assert "and not bool(simulation_runtime_state.preview_active)" in do_update_block
     assert "and simulation_runtime_state.worker_active_job is None" in do_update_block
     assert "and simulation_runtime_state.worker_queued_job is None" in do_update_block
     assert "and not _live_interaction_active()" in do_update_block
@@ -8493,7 +8513,7 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
 
     assert '"key": "fast_viewer"' not in source
     assert '"key": "log_display"' in source
-    assert '"key": "show_qz_rods"' in source
+    assert '"key": "show_qz_rods"' not in source
     assert '"key": "clear_integration_region"' in source
     assert '"key": "auto_match_scale"' in source
     assert 'control_type": "check"' in source
@@ -8510,8 +8530,69 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
             )
         ]
     )
-    assert "def _current_qr_cylinder_caked_band_masks() -> dict[str, object] | None:" in source
+    assert (
+        "def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:" in source
+    )
+    assert "def _sync_selected_qr_rod_controls_state() -> None:" in source
     assert "def _invalidate_qr_cylinder_band_cache() -> None:" in source
+
+
+def test_runtime_impl_reset_to_defaults_resets_selected_qr_rod_controls() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index("def reset_to_defaults():")
+    block_end = source.index("def _initialize_runtime_controls_block_33() -> None:", block_start)
+    block = source[block_start:block_end]
+
+    assert "integrate_selected_qr_rod_var.set(False)" in block
+    assert 'selected_qr_rod_key_var.set("")' in block
+    assert "qz_extent = _current_caked_qz_extent()" in block
+    assert "delta_qr_var.set(0.01)" in block
+    assert "_sync_selected_qr_rod_controls_state()" in block
+
+
+def test_runtime_impl_selected_qr_rod_toggle_disables_peak_pick_immediately() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False)" in source
+
+
+def test_runtime_impl_syncs_selected_qr_rod_controls_before_1d_refresh() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    do_update_start = source.index("def do_update():")
+    do_update_block = source[do_update_start:]
+
+    sync_index = do_update_block.index("_sync_selected_qr_rod_controls_state()")
+    update_1d_index = do_update_block.index("_update_1d_plots_from_caked(sim_res2, bg_res2)")
+
+    assert sync_index < update_1d_index
+
+
+def test_runtime_impl_gui_state_import_disables_peak_pick_when_selected_qr_rod_restores() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index(
+        "def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:"
+    )
+    block_end = source.index("def _export_full_gui_state() -> None:", block_start)
+    block = source[block_start:block_end]
+
+    sync_index = block.index("_sync_selected_qr_rod_controls_state()")
+    roi_index = block.index(
+        '_current_analysis_roi_values().get("integrate_selected_qr_rod", False)'
+    )
+    disable_index = block.index("_set_analysis_peak_pick_mode(")
+
+    assert "analysis_peak_selection_state.pick_armed" in block
+    assert sync_index < roi_index < disable_index
+
+
+def test_runtime_impl_full_gui_state_export_includes_selected_qr_rod_fields() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index("def _collect_full_gui_state_snapshot() -> dict[str, object]:")
+    block_end = source.index("def _load_background_files_for_import_state(", block_start)
+    block = source[block_start:block_end]
+
+    assert 'snapshot["analysis_range"] = dict(_current_analysis_roi_values())' in block
+    assert "_current_analysis_range_values()" not in block
 
 
 def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
@@ -8527,8 +8608,11 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
             tth_max_value=55.0,
             phi_min_value=-12.0,
             phi_max_value=18.0,
-            integrate_qz_rods_value=True,
-            qr_half_width_value=0.03125,
+            integrate_selected_qr_rod_value=True,
+            selected_qr_rod_key_value="phase-a|1",
+            qz_min_value=-0.5,
+            qz_max_value=1.5,
+            delta_qr_value=0.03125,
         ),
         raising=False,
     )
@@ -8537,36 +8621,53 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
         "tth_max_var",
         "phi_min_var",
         "phi_max_var",
-        "integrate_qz_rods_var",
-        "qr_half_width_var",
+        "integrate_selected_qr_rod_var",
+        "selected_qr_rod_key_var",
+        "qz_min_var",
+        "qz_max_var",
+        "delta_qr_var",
     ):
         monkeypatch.setitem(runtime_session.__dict__, name, None)
 
     values = runtime_session._current_analysis_range_values()
+    roi_values = runtime_session._current_analysis_roi_values()
 
     assert values == {
         "tth_min": 1.5,
         "tth_max": 55.0,
         "phi_min": -12.0,
         "phi_max": 18.0,
-        "integrate_qz_rods": True,
-        "qr_half_width": 0.03125,
+    }
+    assert roi_values == {
+        "tth_min": 1.5,
+        "tth_max": 55.0,
+        "phi_min": -12.0,
+        "phi_max": 18.0,
+        "integrate_selected_qr_rod": True,
+        "selected_qr_rod_key": "phase-a|1",
+        "qz_min": -0.5,
+        "qz_max": 1.5,
+        "delta_qr": 0.03125,
     }
 
 
-def test_runtime_session_current_qr_cylinder_caked_band_masks_uses_cached_rod_controls(
+def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_rod_controls(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     build_calls: list[float] = []
+    encoded_key = runtime_session.gui_controllers.encode_bragg_qr_group_key(("phase-a", 1))
     monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: True)
 
     monkeypatch.setattr(
         runtime_session,
         "integration_range_controls_view_state",
         SimpleNamespace(
-            integrate_qz_rods_value=True,
-            qr_half_width_value=0.03125,
+            integrate_selected_qr_rod_value=True,
+            selected_qr_rod_key_value=encoded_key,
+            qz_min_value=-1.0,
+            qz_max_value=1.0,
+            delta_qr_value=0.03125,
         ),
         raising=False,
     )
@@ -8588,66 +8689,48 @@ def test_runtime_session_current_qr_cylinder_caked_band_masks_uses_cached_rod_co
     )
     monkeypatch.setattr(
         runtime_session,
-        "_current_qr_cylinder_caked_projection_context",
-        lambda: {"projection": "ok"},
-    )
-    monkeypatch.setattr(
-        runtime_session,
         "active_qr_cylinder_overlay_entries_factory",
-        lambda: [{"key": "rod-a", "qr": 1.25}],
+        lambda: [{"key": ("phase-a", 1), "qr": 1.25}],
         raising=False,
     )
+    monkeypatch.setattr(runtime_session, "lambda_", 1.54, raising=False)
     monkeypatch.setattr(
-        runtime_session,
-        "qr_cylinder_overlay_render_config_factory",
-        lambda: runtime_session.gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
-            render_in_caked_space=False,
-            image_size=64,
-            display_rotate_k=-1,
-            center_col=10.0,
-            center_row=11.0,
-            distance_cor_to_detector=123.0,
-            gamma_deg=1.5,
-            Gamma_deg=2.5,
-            chi_deg=3.5,
-            psi_deg=4.5,
-            psi_z_deg=5.5,
-            zs=6.5,
-            zb=7.5,
-            theta_initial_deg=8.5,
-            cor_angle_deg=9.5,
-            pixel_size_m=1.0e-4,
-            wavelength=1.54,
-            n2=1.1 + 0.0j,
-        ),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        runtime_session.gui_qr_cylinder_overlay,
-        "build_qr_cylinder_overlay_signature",
-        lambda entries, **kwargs: (
-            tuple(entry["key"] for entry in entries),
-            bool(kwargs["config"].render_in_caked_space),
+        runtime_session.gui_controllers,
+        "caked_axes_to_qr_qz_maps",
+        lambda radial_axis, azimuth_axis, *, wavelength_m: (
+            build_calls.append(float(wavelength_m))
+            or (
+                np.asarray([[1.24, 1.25], [1.26, 1.27]], dtype=float),
+                np.asarray([[-0.5, 0.5], [-0.25, 1.75]], dtype=float),
+            )
         ),
     )
-    monkeypatch.setattr(
-        runtime_session.gui_qr_cylinder_overlay,
-        "build_qr_cylinder_caked_band_masks",
-        lambda entries, **kwargs: (
-            build_calls.append(float(kwargs["delta_qr"]))
-            or {"union_mask": np.ones((2, 2), dtype=bool)}
-        ),
-    )
-    for name in ("integrate_qz_rods_var", "qr_half_width_var"):
+    for name in (
+        "integrate_selected_qr_rod_var",
+        "selected_qr_rod_key_var",
+        "qz_min_var",
+        "qz_max_var",
+        "delta_qr_var",
+    ):
         monkeypatch.setitem(runtime_session.__dict__, name, None)
 
-    result = runtime_session._current_qr_cylinder_caked_band_masks()
+    result = runtime_session._current_selected_qr_rod_caked_mask_payload()
+    cached = runtime_session._current_selected_qr_rod_caked_mask_payload()
+    monkeypatch.setattr(runtime_session, "lambda_", 1.55, raising=False)
+    changed = runtime_session._current_selected_qr_rod_caked_mask_payload()
 
-    assert build_calls == [0.03125]
-    np.testing.assert_array_equal(result["union_mask"], np.ones((2, 2), dtype=bool))
+    assert build_calls == [1.54e-10, 1.55e-10]
+    assert cached is result
+    assert result["selected_qr_rod_key"] == encoded_key
+    np.testing.assert_array_equal(
+        result["mask"],
+        np.asarray([[True, True], [True, False]], dtype=bool),
+    )
+    assert changed is not None
+    assert changed["signature"] != result["signature"]
 
 
-def test_runtime_session_current_qr_cylinder_caked_band_masks_returns_none_outside_caked_view(
+def test_runtime_session_current_selected_qr_rod_caked_mask_payload_returns_none_outside_caked_view(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -8658,27 +8741,37 @@ def test_runtime_session_current_qr_cylinder_caked_band_masks_returns_none_outsi
         runtime_session,
         "integration_range_controls_view_state",
         SimpleNamespace(
-            integrate_qz_rods_value=True,
-            qr_half_width_value=0.03125,
+            integrate_selected_qr_rod_value=True,
+            selected_qr_rod_key_value="phase-a|1",
+            qz_min_value=-1.0,
+            qz_max_value=1.0,
+            delta_qr_value=0.03125,
         ),
         raising=False,
     )
     monkeypatch.setattr(
-        runtime_session.gui_qr_cylinder_overlay,
-        "build_qr_cylinder_caked_band_masks",
+        runtime_session.gui_controllers,
+        "caked_axes_to_qr_qz_maps",
         lambda *args, **kwargs: build_calls.append("build"),
     )
-    for name in ("integrate_qz_rods_var", "qr_half_width_var"):
+    for name in (
+        "integrate_selected_qr_rod_var",
+        "selected_qr_rod_key_var",
+        "qz_min_var",
+        "qz_max_var",
+        "delta_qr_var",
+    ):
         monkeypatch.setitem(runtime_session.__dict__, name, None)
 
-    assert runtime_session._current_qr_cylinder_caked_band_masks() is None
+    assert runtime_session._current_selected_qr_rod_caked_mask_payload() is None
     assert build_calls == []
 
 
-def test_runtime_session_sync_qz_rod_controls_state_disables_non_caked_controls(
+def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_controls(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    encoded_key = runtime_session.gui_controllers.encode_bragg_qr_group_key(("phase-a", 1))
 
     class _Var:
         def __init__(self, value: object) -> None:
@@ -8693,57 +8786,111 @@ def test_runtime_session_sync_qz_rod_controls_state_disables_non_caked_controls(
     class _Widget:
         def __init__(self) -> None:
             self.state_value = "normal"
+            self.values = []
+            self.bounds: dict[str, object] = {}
 
         def configure(self, **kwargs) -> None:
             self.state_value = str(kwargs.get("state", self.state_value))
+            if "values" in kwargs:
+                self.values = list(kwargs["values"])
+            if "from_" in kwargs:
+                self.bounds["from"] = kwargs["from_"]
+            if "to" in kwargs:
+                self.bounds["to"] = kwargs["to"]
 
         def config(self, **kwargs) -> None:
             self.configure(**kwargs)
 
-    show_widget = _Widget()
     integrate_widget = _Widget()
-    width_slider = _Widget()
-    width_entry = _Widget()
+    combobox = _Widget()
+    qz_min_slider = _Widget()
+    qz_min_entry = _Widget()
+    qz_max_slider = _Widget()
+    qz_max_entry = _Widget()
+    delta_slider = _Widget()
+    delta_entry = _Widget()
+    tth_min_slider = _Widget()
+    tth_min_entry = _Widget()
+    tth_max_slider = _Widget()
+    tth_max_entry = _Widget()
+    phi_min_slider = _Widget()
+    phi_min_entry = _Widget()
+    phi_max_slider = _Widget()
+    phi_max_entry = _Widget()
     integrate_var = _Var(True)
-
-    monkeypatch.setattr(
-        runtime_session,
-        "analysis_view_controls_view_state",
-        SimpleNamespace(show_qz_rods_checkbutton=show_widget),
-        raising=False,
-    )
     monkeypatch.setattr(
         runtime_session,
         "integration_range_controls_view_state",
         SimpleNamespace(
-            integrate_qz_rods_var=integrate_var,
-            integrate_qz_rods_value=True,
-            integrate_qz_rods_checkbutton=integrate_widget,
-            qr_half_width_slider=width_slider,
-            qr_half_width_entry=width_entry,
+            integrate_selected_qr_rod_var=integrate_var,
+            integrate_selected_qr_rod_value=True,
+            integrate_selected_qr_rod_checkbutton=integrate_widget,
+            selected_qr_rod_combobox=combobox,
+            selected_qr_rod_display_var=_Var(""),
+            selected_qr_rod_key_var=_Var(""),
+            qz_min_var=_Var(-2.0),
+            qz_max_var=_Var(2.0),
+            qz_min_value=-2.0,
+            qz_max_value=2.0,
+            qz_min_slider=qz_min_slider,
+            qz_min_entry=qz_min_entry,
+            qz_max_slider=qz_max_slider,
+            qz_max_entry=qz_max_entry,
+            delta_qr_slider=delta_slider,
+            delta_qr_entry=delta_entry,
+            tth_min_slider=tth_min_slider,
+            tth_min_entry=tth_min_entry,
+            tth_max_slider=tth_max_slider,
+            tth_max_entry=tth_max_entry,
+            phi_min_slider=phi_min_slider,
+            phi_min_entry=phi_min_entry,
+            phi_max_slider=phi_max_slider,
+            phi_max_entry=phi_max_entry,
         ),
         raising=False,
     )
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_selected_qr_rod_entries",
+        lambda: [{"key": ("phase-a", 1), "qr": 1.25}],
+    )
+    monkeypatch.setattr(runtime_session, "_current_caked_qz_extent", lambda: (-0.5, 1.5))
+    monkeypatch.setattr(
+        runtime_session.gui_integration_range_drag,
+        "_sync_runtime_range_text_vars",
+        lambda *_args, **_kwargs: None,
+    )
 
     monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: False)
-    runtime_session._sync_qz_rod_controls_state()
-    assert show_widget.state_value == "disabled"
+    runtime_session._sync_selected_qr_rod_controls_state()
     assert integrate_widget.state_value == "disabled"
-    assert width_slider.state_value == "disabled"
-    assert width_entry.state_value == "disabled"
+    assert combobox.state_value == "disabled"
+    assert qz_min_slider.state_value == "disabled"
+    assert delta_entry.state_value == "disabled"
+    assert tth_min_slider.state_value == "normal"
+    assert phi_max_entry.state_value == "normal"
 
     integrate_var.set(False)
     monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: True)
-    runtime_session._sync_qz_rod_controls_state()
-    assert show_widget.state_value == "normal"
+    runtime_session._sync_selected_qr_rod_controls_state()
     assert integrate_widget.state_value == "normal"
-    assert width_slider.state_value == "disabled"
-    assert width_entry.state_value == "disabled"
+    assert combobox.state_value == "disabled"
+    assert qz_min_slider.state_value == "disabled"
+    assert delta_entry.state_value == "disabled"
+    assert tth_min_slider.state_value == "normal"
+    assert (
+        runtime_session.integration_range_controls_view_state.selected_qr_rod_key_var.get()
+        == encoded_key
+    )
+    assert qz_min_slider.bounds == {"from": -0.5, "to": 1.5}
+    assert qz_max_slider.bounds == {"from": -0.5, "to": 1.5}
 
     integrate_var.set(True)
-    runtime_session._sync_qz_rod_controls_state()
-    assert width_slider.state_value == "normal"
-    assert width_entry.state_value == "normal"
+    runtime_session._sync_selected_qr_rod_controls_state()
+    assert combobox.state_value == "normal"
+    assert qz_min_slider.state_value == "normal"
+    assert delta_entry.state_value == "normal"
+    assert tth_min_slider.state_value == "disabled"
 
 
 def test_runtime_session_current_qr_cylinder_caked_projection_context_prefers_live_bundle_shape(

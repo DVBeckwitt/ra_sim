@@ -113,10 +113,7 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(app_state.status_panel_view, state.StatusPanelViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
-    assert (
-        app_state.geometry_fit_dataset_cache
-        is not other_state.geometry_fit_dataset_cache
-    )
+    assert app_state.geometry_fit_dataset_cache is not other_state.geometry_fit_dataset_cache
     assert app_state.background_runtime is not other_state.background_runtime
     assert app_state.peak_selection is not other_state.peak_selection
     assert app_state.integration_range_drag is not other_state.integration_range_drag
@@ -127,11 +124,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         app_state.geometry_fit_parameter_controls_view
         is not other_state.geometry_fit_parameter_controls_view
     )
+    assert app_state.geometry_fit_constraints_view is not other_state.geometry_fit_constraints_view
     assert (
-        app_state.geometry_fit_constraints_view
-        is not other_state.geometry_fit_constraints_view
+        app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     )
-    assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
     assert app_state.primary_cif_controls_view is not other_state.primary_cif_controls_view
@@ -146,35 +142,19 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         app_state.beam_mosaic_parameter_sliders_view
         is not other_state.beam_mosaic_parameter_sliders_view
     )
-    assert (
-        app_state.sampling_optics_controls_view
-        is not other_state.sampling_optics_controls_view
-    )
-    assert (
-        app_state.finite_stack_controls_view
-        is not other_state.finite_stack_controls_view
-    )
+    assert app_state.sampling_optics_controls_view is not other_state.sampling_optics_controls_view
+    assert app_state.finite_stack_controls_view is not other_state.finite_stack_controls_view
     assert (
         app_state.stacking_parameter_controls_view
         is not other_state.stacking_parameter_controls_view
     )
     assert app_state.geometry_tool_actions_view is not other_state.geometry_tool_actions_view
     assert app_state.hkl_lookup_view is not other_state.hkl_lookup_view
+    assert app_state.geometry_overlay_actions_view is not other_state.geometry_overlay_actions_view
+    assert app_state.analysis_view_controls_view is not other_state.analysis_view_controls_view
+    assert app_state.analysis_export_controls_view is not other_state.analysis_export_controls_view
     assert (
-        app_state.geometry_overlay_actions_view
-        is not other_state.geometry_overlay_actions_view
-    )
-    assert (
-        app_state.analysis_view_controls_view
-        is not other_state.analysis_view_controls_view
-    )
-    assert (
-        app_state.analysis_export_controls_view
-        is not other_state.analysis_export_controls_view
-    )
-    assert (
-        app_state.integration_range_controls_view
-        is not other_state.integration_range_controls_view
+        app_state.integration_range_controls_view is not other_state.integration_range_controls_view
     )
     assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay
@@ -229,9 +209,7 @@ def test_build_initial_state_reads_instrument_config(monkeypatch) -> None:
 
     app_state = controllers.build_initial_state()
 
-    assert app_state.instrument_config == {
-        "instrument": {"detector": {"image_size": 4096}}
-    }
+    assert app_state.instrument_config == {"instrument": {"detector": {"image_size": 4096}}}
     assert app_state.image_size == 4096
 
 
@@ -278,16 +256,30 @@ def test_clear_tk_after_token_handles_missing_or_failing_cancel_callbacks() -> N
 
 
 def test_structure_factor_pruning_controller_helpers_clip_and_normalize_inputs() -> None:
-    assert controllers.clip_structure_factor_prune_bias("1.5", fallback=0.0, minimum=-2.0, maximum=2.0) == 1.5
-    assert controllers.clip_structure_factor_prune_bias("bad", fallback=0.25, minimum=-2.0, maximum=2.0) == 0.25
+    assert (
+        controllers.clip_structure_factor_prune_bias("1.5", fallback=0.0, minimum=-2.0, maximum=2.0)
+        == 1.5
+    )
+    assert (
+        controllers.clip_structure_factor_prune_bias(
+            "bad", fallback=0.25, minimum=-2.0, maximum=2.0
+        )
+        == 0.25
+    )
     assert controllers.clip_solve_q_steps("12.6", fallback=8, minimum=4, maximum=20) == 13
     assert controllers.clip_solve_q_steps("bad", fallback=8, minimum=4, maximum=20) == 8
-    assert controllers.clip_solve_q_rel_tol("1e-4", fallback=1e-3, minimum=1e-6, maximum=1e-2) == 1e-4
-    assert controllers.clip_solve_q_rel_tol("bad", fallback=1e-3, minimum=1e-6, maximum=1e-2) == 1e-3
+    assert (
+        controllers.clip_solve_q_rel_tol("1e-4", fallback=1e-3, minimum=1e-6, maximum=1e-2) == 1e-4
+    )
+    assert (
+        controllers.clip_solve_q_rel_tol("bad", fallback=1e-3, minimum=1e-6, maximum=1e-2) == 1e-3
+    )
     assert controllers.normalize_solve_q_mode_label("fast") == "uniform"
     assert controllers.normalize_solve_q_mode_label("robust") == "adaptive"
     assert controllers.solve_q_mode_flag_from_label("uniform", uniform_flag=7, adaptive_flag=9) == 7
-    assert controllers.solve_q_mode_flag_from_label("adaptive", uniform_flag=7, adaptive_flag=9) == 9
+    assert (
+        controllers.solve_q_mode_flag_from_label("adaptive", uniform_flag=7, adaptive_flag=9) == 9
+    )
 
 
 def test_structure_factor_pruning_profile_supports_more_aggressive_slider_ceiling() -> None:
@@ -306,10 +298,30 @@ def test_structure_factor_pruning_profile_supports_more_aggressive_slider_ceilin
 
 
 def test_beam_mosaic_slider_controller_helper_clamps_to_bounds() -> None:
-    assert controllers.clamp_slider_value_to_bounds(2.5, lower_bound=0.0, upper_bound=2.0, fallback=1.0) == 2.0
-    assert controllers.clamp_slider_value_to_bounds(-1.0, lower_bound=0.0, upper_bound=2.0, fallback=1.0) == 0.0
-    assert controllers.clamp_slider_value_to_bounds("bad", lower_bound=0.0, upper_bound=2.0, fallback=1.25) == 1.25
-    assert controllers.clamp_slider_value_to_bounds(1.0, lower_bound=3.0, upper_bound=2.0, fallback=1.0) == 2.0
+    assert (
+        controllers.clamp_slider_value_to_bounds(
+            2.5, lower_bound=0.0, upper_bound=2.0, fallback=1.0
+        )
+        == 2.0
+    )
+    assert (
+        controllers.clamp_slider_value_to_bounds(
+            -1.0, lower_bound=0.0, upper_bound=2.0, fallback=1.0
+        )
+        == 0.0
+    )
+    assert (
+        controllers.clamp_slider_value_to_bounds(
+            "bad", lower_bound=0.0, upper_bound=2.0, fallback=1.25
+        )
+        == 1.25
+    )
+    assert (
+        controllers.clamp_slider_value_to_bounds(
+            1.0, lower_bound=3.0, upper_bound=2.0, fallback=1.0
+        )
+        == 2.0
+    )
 
 
 def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> None:
@@ -319,71 +331,98 @@ def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> 
     assert controllers.parse_sampling_float("1.25e-3", 0.0) == 1.25e-3
     assert controllers.parse_sampling_float("bad", 0.5, minimum=0.0) == 0.5
 
-    assert controllers.normalize_sampling_resolution_choice(
-        "Custom",
-        allowed_options=["Low", "High", "Custom"],
-        fallback="Low",
-    ) == "Custom"
-    assert controllers.normalize_sampling_resolution_choice(
-        "unexpected",
-        allowed_options=["Low", "High", "Custom"],
-        fallback="High",
-    ) == "High"
+    assert (
+        controllers.normalize_sampling_resolution_choice(
+            "Custom",
+            allowed_options=["Low", "High", "Custom"],
+            fallback="Low",
+        )
+        == "Custom"
+    )
+    assert (
+        controllers.normalize_sampling_resolution_choice(
+            "unexpected",
+            allowed_options=["Low", "High", "Custom"],
+            fallback="High",
+        )
+        == "High"
+    )
 
-    assert controllers.resolve_sampling_count(
-        "Custom",
-        custom_option="Custom",
-        custom_value="3,600",
-        preset_counts={"Low": 32, "High": 128},
-        fallback_resolution="Low",
-        fallback_count=16,
-    ) == 3600
-    assert controllers.resolve_sampling_count(
-        "High",
-        custom_option="Custom",
-        custom_value="3,600",
-        preset_counts={"Low": 32, "High": 128},
-        fallback_resolution="Low",
-        fallback_count=16,
-    ) == 128
+    assert (
+        controllers.resolve_sampling_count(
+            "Custom",
+            custom_option="Custom",
+            custom_value="3,600",
+            preset_counts={"Low": 32, "High": 128},
+            fallback_resolution="Low",
+            fallback_count=16,
+        )
+        == 3600
+    )
+    assert (
+        controllers.resolve_sampling_count(
+            "High",
+            custom_option="Custom",
+            custom_value="3,600",
+            preset_counts={"Low": 32, "High": 128},
+            fallback_resolution="Low",
+            fallback_count=16,
+        )
+        == 128
+    )
 
-    assert controllers.format_sampling_resolution_summary(
-        "Custom",
-        custom_option="Custom",
-        custom_value="3,600",
-        preset_counts={"Low": 32, "High": 128},
-        fallback_resolution="Low",
-        fallback_count=16,
-    ) == "3,600 samples (custom)"
-    assert controllers.format_sampling_resolution_summary(
-        "Low",
-        custom_option="Custom",
-        custom_value="999",
-        preset_counts={"Low": 32, "High": 128},
-        fallback_resolution="Low",
-        fallback_count=16,
-    ) == "32 samples"
+    assert (
+        controllers.format_sampling_resolution_summary(
+            "Custom",
+            custom_option="Custom",
+            custom_value="3,600",
+            preset_counts={"Low": 32, "High": 128},
+            fallback_resolution="Low",
+            fallback_count=16,
+        )
+        == "3,600 samples (custom)"
+    )
+    assert (
+        controllers.format_sampling_resolution_summary(
+            "Low",
+            custom_option="Custom",
+            custom_value="999",
+            preset_counts={"Low": 32, "High": 128},
+            fallback_resolution="Low",
+            fallback_count=16,
+        )
+        == "32 samples"
+    )
     assert controllers.format_sampling_count_summary(50) == "50 samples"
 
-    assert controllers.default_rod_points_per_gz(
-        2.0 * np.pi,
-    ) == 100
+    assert (
+        controllers.default_rod_points_per_gz(
+            2.0 * np.pi,
+        )
+        == 100
+    )
     assert controllers.normalize_rod_points_per_gz("275.4", 100) == 275
     assert np.isclose(
         controllers.rod_l_step_from_points_per_gz(250, 5.0),
         5.0 / (2.0 * np.pi * 250.0),
     )
-    assert controllers.longest_rod_point_count(
-        100,
-        two_theta_max=60.0,
-        lambda_angstrom=1.54,
-    ) == 408
+    assert (
+        controllers.longest_rod_point_count(
+            100,
+            two_theta_max=60.0,
+            lambda_angstrom=1.54,
+        )
+        == 408
+    )
     assert controllers.format_rod_points_per_gz(250) == "250 / Gz"
-    assert controllers.format_longest_rod_point_summary(
-        100,
-        two_theta_max=60.0,
-        lambda_angstrom=1.54,
-    ) == "Longest rod: 408 points (Gz max 4.080)"
+    assert (
+        controllers.format_longest_rod_point_summary(
+            100,
+            two_theta_max=60.0,
+            lambda_angstrom=1.54,
+        )
+        == "Longest rod: 408 points (Gz max 4.080)"
+    )
 
 
 def test_finite_stack_controller_helpers_normalize_and_format() -> None:
@@ -391,15 +430,21 @@ def test_finite_stack_controller_helpers_normalize_and_format() -> None:
     assert controllers.normalize_finite_stack_layer_count("bad", 10) == 10
     assert controllers.format_finite_stack_layer_count(9.8) == "10"
 
-    assert controllers.normalize_finite_stack_phase_delta_expression(
-        "pi*L/2",
-        fallback="0",
-    ) == "pi*L/2"
+    assert (
+        controllers.normalize_finite_stack_phase_delta_expression(
+            "pi*L/2",
+            fallback="0",
+        )
+        == "pi*L/2"
+    )
 
-    assert controllers.normalize_finite_stack_phi_l_divisor(
-        "3.5",
-        fallback=1.0,
-    ) == 3.5
+    assert (
+        controllers.normalize_finite_stack_phi_l_divisor(
+            "3.5",
+            fallback=1.0,
+        )
+        == 3.5
+    )
     assert controllers.format_finite_stack_phi_l_divisor(4.0) == "4"
 
 
@@ -739,8 +784,7 @@ def test_geometry_preview_controller_tracks_exclusions_skip_flag_and_cache() -> 
         cache_data,
     )
     assert (
-        controllers.get_geometry_auto_match_background_cache(preview_state, cache_key)
-        is cache_data
+        controllers.get_geometry_auto_match_background_cache(preview_state, cache_key) is cache_data
     )
     assert (
         controllers.get_geometry_auto_match_background_cache(
@@ -783,9 +827,7 @@ def test_geometry_q_group_controller_replaces_entries_row_vars_and_refresh_flag(
             "peak_count": 2,
         }
     ]
-    assert controllers.listed_geometry_q_group_keys(q_state) == {
-        ("q_group", "primary", 1, 0)
-    }
+    assert controllers.listed_geometry_q_group_keys(q_state) == {("q_group", "primary", 1, 0)}
 
     controllers.set_geometry_q_group_row_var(
         q_state,
@@ -819,9 +861,7 @@ def test_bragg_qr_manager_controller_tracks_indices_selection_and_mutations() ->
     ) == [0, 3]
     assert bragg_state.l_index_keys is l_alias
 
-    assert controllers.selected_bragg_qr_keys(bragg_state, [1, 9]) == [
-        ("secondary", 2)
-    ]
+    assert controllers.selected_bragg_qr_keys(bragg_state, [1, 9]) == [("secondary", 2)]
     assert controllers.selected_bragg_qr_l_keys(bragg_state, [0, 1, 7]) == [0, 3]
     assert controllers.set_bragg_qr_selected_group_key(
         bragg_state,
@@ -993,6 +1033,9 @@ def test_bragg_qr_filter_controller_tracks_raw_primary_miller_indices_when_qr_is
 def test_bragg_qr_controller_helpers_format_status_and_keys() -> None:
     assert controllers.normalize_bragg_qr_source_label("SECONDARY") == "secondary"
     assert controllers.normalize_bragg_qr_source_label("anything else") == "primary"
+    assert controllers.encode_bragg_qr_group_key(("phase-a", 1)) == "primary|1"
+    assert controllers.decode_bragg_qr_group_key("phase-a|1") == ("primary", 1)
+    assert controllers.decode_bragg_qr_group_key("secondary|2") == ("secondary", 2)
     assert controllers.bragg_qr_l_value_to_key(1.25) == 1250000
     assert controllers.bragg_qr_l_key_to_value(1250000) == 1.25
     assert np.array_equal(
@@ -1024,6 +1067,18 @@ def test_bragg_qr_controller_helpers_format_status_and_keys() -> None:
         )
         == "SF pruning keeps 4/10 rod points (40.0%), bias=+0.50"
     )
+
+
+def test_caked_axes_to_qr_qz_maps_uses_wavelength_m_and_caked_angles() -> None:
+    qr_map, qz_map = controllers.caked_axes_to_qr_qz_maps(
+        np.asarray([20.0], dtype=float),
+        np.asarray([0.0, 90.0], dtype=float),
+        wavelength_m=1.54e-10,
+    )
+
+    q_mag = (4.0 * np.pi / 1.54) * np.sin(np.radians(10.0))
+    np.testing.assert_allclose(qr_map, np.asarray([[0.0], [q_mag]], dtype=float))
+    np.testing.assert_allclose(qz_map, np.asarray([[q_mag], [0.0]], dtype=float), atol=1e-12)
 
 
 def test_bragg_qr_manager_entry_and_l_value_helpers_build_expected_data() -> None:
@@ -1082,9 +1137,7 @@ def test_bragg_qr_manager_list_models_format_selection_and_status() -> None:
     bragg_state = state.BraggQrManagerState(
         selected_group_key=("secondary", 1),
         disabled_groups={("secondary", 1)},
-        disabled_l_values={
-            ("secondary", 1, controllers.bragg_qr_l_value_to_key(0.5))
-        },
+        disabled_l_values={("secondary", 1, controllers.bragg_qr_l_value_to_key(0.5))},
     )
     entries = [
         {
