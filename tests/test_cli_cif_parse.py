@@ -210,6 +210,22 @@ def test_write_xtl_spglib_dataset_errors_surface(tmp_path, monkeypatch):
         write_xtl(*_simple_cubic_structure(), filename=xtl_path)
 
 
+def test_write_xtl_spglib_dataset_none_raises_clear_error(tmp_path, monkeypatch):
+    xtl_path = tmp_path / "spglib-none.xtl"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "spglib",
+        SimpleNamespace(get_symmetry_dataset=lambda _cell: None),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="spglib could not derive symmetry metadata from the supplied structure",
+    ):
+        write_xtl(*_simple_cubic_structure(), filename=xtl_path)
+
+
 def test_get_atomic_coordinates_wraps_and_deduplicates_same_label_expansion_rows():
     cell_params, atoms = get_atomic_coordinates(
         np.eye(3),

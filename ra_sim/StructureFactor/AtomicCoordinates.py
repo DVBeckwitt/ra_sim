@@ -70,7 +70,7 @@ def _derive_xtl_symmetry_metadata(lattice, positions, numbers):
     )
 
     if dataset is None:
-        return "", ""
+        raise RuntimeError("spglib could not derive symmetry metadata from the supplied structure.")
 
     symmetry_number = ""
     if int(dataset.number) != 1:
