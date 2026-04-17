@@ -1541,8 +1541,16 @@ def test_geometry_manual_apply_refined_simulated_override_keeps_detector_coords_
     assert refined["sim_row_raw"] == 40.0
     assert refined["display_col"] == 13.0
     assert refined["display_row"] == 2.0
+    assert refined["native_col"] == 5.0
+    assert refined["native_row"] == 6.0
     assert refined["sim_native_x"] == 5.0
     assert refined["sim_native_y"] == 6.0
+    assert refined["caked_x"] == 13.0
+    assert refined["caked_y"] == 2.0
+    assert refined["raw_caked_x"] == 13.0
+    assert refined["raw_caked_y"] == 2.0
+    assert refined["two_theta_deg"] == 13.0
+    assert refined["phi_deg"] == 2.0
 
 
 def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_display_when_not_caked() -> None:
@@ -1569,8 +1577,14 @@ def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_di
     assert refined["sim_row"] == 40.0
     assert refined["display_col"] == 30.0
     assert refined["display_row"] == 40.0
+    assert refined["x"] == 30.0
+    assert refined["y"] == 40.0
     assert refined["caked_x"] == 13.0
     assert refined["caked_y"] == 2.0
+    assert refined["raw_caked_x"] == 13.0
+    assert refined["raw_caked_y"] == 2.0
+    assert refined["two_theta_deg"] == 13.0
+    assert refined["phi_deg"] == 2.0
 
 
 def test_detector_to_caked_to_detector_round_trips_through_same_transform_bundle(
@@ -1989,6 +2003,106 @@ def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_caked_
     assert restored["source_peak_index"] == 1
 
 
+def test_refresh_geometry_manual_pair_entry_prefers_native_coords_over_stale_display_aliases() -> None:
+    background_shape = (100, 200)
+    native_point = (20.0, 10.0)
+    stale_display = (90.0, 20.0)
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "1,0,0",
+            "x": stale_display[0],
+            "y": stale_display[1],
+            "sim_col": stale_display[0],
+            "sim_row": stale_display[1],
+            "sim_col_raw": stale_display[0],
+            "sim_row_raw": stale_display[1],
+            "native_col": native_point[0],
+            "native_row": native_point[1],
+            "sim_native_x": native_point[0],
+            "sim_native_y": native_point[1],
+        },
+        background_display_shape=background_shape,
+        background_display_to_native_detector_coords=lambda col, row: mg._default_rotate_point(
+            float(col),
+            float(row),
+            background_shape,
+            1,
+        ),
+        rotate_point_for_display=mg._default_rotate_point,
+        display_rotate_k=-1,
+    )
+
+    expected_display = mg._default_rotate_point(
+        native_point[0],
+        native_point[1],
+        background_shape,
+        -1,
+    )
+
+    assert refreshed is not None
+    assert refreshed["detector_x"] == native_point[0]
+    assert refreshed["detector_y"] == native_point[1]
+    assert refreshed["native_col"] == native_point[0]
+    assert refreshed["native_row"] == native_point[1]
+    assert refreshed["sim_native_x"] == native_point[0]
+    assert refreshed["sim_native_y"] == native_point[1]
+    assert refreshed["x"] == expected_display[0]
+    assert refreshed["y"] == expected_display[1]
+    assert refreshed["display_col"] == expected_display[0]
+    assert refreshed["display_row"] == expected_display[1]
+    assert refreshed["sim_col"] == expected_display[0]
+    assert refreshed["sim_row"] == expected_display[1]
+    assert refreshed["sim_col_raw"] == expected_display[0]
+    assert refreshed["sim_row_raw"] == expected_display[1]
+
+
+def test_refresh_geometry_manual_pair_entry_accepts_projected_detector_rows_without_measured_xy() -> None:
+    background_shape = (100, 200)
+    native_point = (20.0, 10.0)
+    detector_display = mg._default_rotate_point(
+        native_point[0],
+        native_point[1],
+        background_shape,
+        -1,
+    )
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        {
+            "label": "1,0,0",
+            "display_col": detector_display[0],
+            "display_row": detector_display[1],
+            "sim_col": detector_display[0],
+            "sim_row": detector_display[1],
+            "sim_col_raw": detector_display[0],
+            "sim_row_raw": detector_display[1],
+            "native_col": native_point[0],
+            "native_row": native_point[1],
+            "sim_native_x": native_point[0],
+            "sim_native_y": native_point[1],
+            "caked_x": 35.0,
+            "caked_y": -20.0,
+            "raw_caked_x": 35.0,
+            "raw_caked_y": -20.0,
+        },
+        background_display_shape=background_shape,
+        background_display_to_native_detector_coords=lambda col, row: mg._default_rotate_point(
+            float(col),
+            float(row),
+            background_shape,
+            1,
+        ),
+        rotate_point_for_display=mg._default_rotate_point,
+        display_rotate_k=-1,
+    )
+
+    assert refreshed is not None
+    assert refreshed["detector_x"] == native_point[0]
+    assert refreshed["detector_y"] == native_point[1]
+    assert refreshed["x"] == detector_display[0]
+    assert refreshed["y"] == detector_display[1]
+
+
 def test_geometry_manual_pairs_export_rows_include_background_metadata() -> None:
     rows = mg.geometry_manual_pairs_export_rows(
         pairs_by_background={1: [{"label": "1,0,0", "x": 2.0, "y": 3.0}]},
@@ -2333,8 +2447,18 @@ def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> 
             "source_row_index": 2,
             "display_col": 3.0,
             "display_row": 4.0,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
             "native_col": 5.0,
             "native_row": 6.0,
+            "sim_native_x": 5.0,
+            "sim_native_y": 6.0,
+            "caked_x": 7.0,
+            "caked_y": 8.0,
+            "raw_caked_x": 7.0,
+            "raw_caked_y": 8.0,
             "two_theta_deg": 7.0,
             "phi_deg": 8.0,
         },
@@ -2367,13 +2491,27 @@ def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> 
     assert peak_records[0]["phi_deg"] == 12.0
     assert peak_records[0]["native_col"] == 13.0
     assert peak_records[0]["native_row"] == 14.0
+    assert peak_records[0]["sim_native_x"] == 13.0
+    assert peak_records[0]["sim_native_y"] == 14.0
     assert peak_records[0]["display_col"] == 15.0
     assert peak_records[0]["display_row"] == 16.0
+    assert peak_records[0]["sim_col"] == 15.0
+    assert peak_records[0]["sim_row"] == 16.0
+    assert peak_records[0]["sim_col_raw"] == 15.0
+    assert peak_records[0]["sim_row_raw"] == 16.0
+    assert peak_records[0]["caked_x"] == 11.0
+    assert peak_records[0]["caked_y"] == 12.0
+    assert peak_records[0]["raw_caked_x"] == 11.0
+    assert peak_records[0]["raw_caked_y"] == 12.0
     assert peak_records[1]["display_col"] == 30.0
     assert peak_positions[0] == (15.0, 16.0)
     assert peak_positions[1] == (30.0, 40.0)
     assert peak_overlay_cache["records"][0]["two_theta_deg"] == 11.0
     assert peak_overlay_cache["records"][0]["phi_deg"] == 12.0
+    assert peak_overlay_cache["records"][0]["sim_col"] == 15.0
+    assert peak_overlay_cache["records"][0]["sim_row"] == 16.0
+    assert peak_overlay_cache["records"][0]["caked_x"] == 11.0
+    assert peak_overlay_cache["records"][0]["caked_y"] == 12.0
     assert peak_overlay_cache["positions"][0] == (15.0, 16.0)
     assert peak_overlay_cache["click_spatial_index"] is None
 
@@ -2989,6 +3127,193 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert entries[0]["bg_display"] == (9.0, 10.0)
     assert entries[0]["qr"] == 1.2345678901
     assert entries[0]["qz"] == 2.3456789012
+
+
+def test_geometry_manual_session_initial_pairs_display_refreshes_active_sim_display_geometry() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+                "qr": 1.0,
+                "qz": 2.0,
+            }
+        ],
+        "pending_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "x": 9.0,
+                "y": 10.0,
+            }
+        ],
+        "background_index": 0,
+    }
+    refresh_calls: list[dict[str, object]] = []
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        refresh_entry_geometry=lambda entry: (
+            refresh_calls.append(dict(entry or {}))
+            or {
+                **dict(entry or {}),
+                "sim_col": 50.0,
+                "sim_row": 60.0,
+                "qr": 3.25,
+                "qz": 4.75,
+            }
+        ),
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0]["sim_col"] == 5.0
+    assert refresh_calls[0]["sim_row"] == 6.0
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (50.0, 60.0)
+    assert entries[0]["bg_display"] == (9.0, 10.0)
+    assert entries[0]["qr"] == 3.25
+    assert entries[0]["qz"] == 4.75
+
+
+def test_geometry_manual_session_initial_pairs_display_uses_refreshed_detector_xy() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+            }
+        ],
+        "pending_entries": [],
+        "background_index": 0,
+    }
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        refresh_entry_geometry=lambda entry: {
+            **dict(entry or {}),
+            "x": 50.0,
+            "y": 60.0,
+        },
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (50.0, 60.0)
+
+
+def test_geometry_manual_session_initial_pairs_display_refreshes_projected_detector_rows() -> None:
+    background_shape = (100, 200)
+    native_point = (20.0, 10.0)
+    detector_display = mg._default_rotate_point(
+        native_point[0],
+        native_point[1],
+        background_shape,
+        -1,
+    )
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "display_col": detector_display[0],
+                "display_row": detector_display[1],
+                "sim_col": detector_display[0],
+                "sim_row": detector_display[1],
+                "sim_col_raw": detector_display[0],
+                "sim_row_raw": detector_display[1],
+                "native_col": native_point[0],
+                "native_row": native_point[1],
+                "sim_native_x": native_point[0],
+                "sim_native_y": native_point[1],
+                "caked_x": 35.0,
+                "caked_y": -20.0,
+                "raw_caked_x": 35.0,
+                "raw_caked_y": -20.0,
+            }
+        ],
+        "pending_entries": [],
+        "background_index": 0,
+    }
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        refresh_entry_geometry=lambda entry: mg.refresh_geometry_manual_pair_entry(
+            entry,
+            background_display_shape=background_shape,
+            background_display_to_native_detector_coords=lambda col, row: mg._default_rotate_point(
+                float(col),
+                float(row),
+                background_shape,
+                1,
+            ),
+            rotate_point_for_display=mg._default_rotate_point,
+            display_rotate_k=-1,
+        ),
+        entry_display_coords=lambda entry: (
+            float(entry["display_col"]),
+            float(entry["display_row"]),
+        ),
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == detector_display
+
+
+def test_geometry_manual_session_initial_pairs_display_ignores_refresh_errors() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+                "qr": 1.0,
+                "qz": 2.0,
+            }
+        ],
+        "pending_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "x": 9.0,
+                "y": 10.0,
+            }
+        ],
+        "background_index": 0,
+    }
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        refresh_entry_geometry=lambda _entry: (_ for _ in ()).throw(
+            RuntimeError("refresh failed")
+        ),
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (5.0, 6.0)
+    assert entries[0]["bg_display"] == (9.0, 10.0)
+    assert entries[0]["qr"] == 1.0
+    assert entries[0]["qz"] == 2.0
 
 
 def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_legacy_group_rows() -> None:
@@ -6010,6 +6335,287 @@ def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_perm
         assert session["tagged_candidate"]["source_branch_index"] == 1
         assert session["group_entries"][0]["source_reflection_index"] == 9
         assert session["group_entries"][0]["source_branch_index"] == 1
+
+
+def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_when_window_choose_misses() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    shared_search_limits: list[float] = []
+    group_key = ("q_group", "primary", 1, 2)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "left",
+                        "hkl": (1, 0, 2),
+                        "q_group_key": group_key,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "sim_col": 200.0,
+                        "sim_row": 210.0,
+                    },
+                    {
+                        "label": "right",
+                        "hkl": (-1, 0, 2),
+                        "q_group_key": group_key,
+                        "source_table_index": 1,
+                        "source_row_index": 3,
+                        "sim_col": 220.0,
+                        "sim_row": 230.0,
+                    },
+                ]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        find_peak_record_for_click_fn=lambda col, row, max_axis_distance: (
+            shared_search_limits.append(float(max_axis_distance))
+            or (
+                7,
+                {
+                    "label": "right",
+                    "hkl": (-1, 0, 2),
+                    "q_group_key": group_key,
+                    "source_table_index": 1,
+                    "source_row_index": 3,
+                    "sim_col": 10.5,
+                    "sim_row": 20.5,
+                },
+                0.75,
+                True,
+            )
+        ),
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert shared_search_limits == [25.0]
+    assert next_session["group_key"] == group_key
+    assert next_session["tagged_candidate"]["label"] == "right"
+    assert next_session["group_entries"][0]["source_row_index"] == 3
+    assert set_sessions[-1]["tagged_candidate_key"] == ("source", 1, 3)
+    assert "Tagged seed [right]." in status_messages[-1]
+    assert "nearest Bragg seed 0.8px" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_shared_peak_finder_preserves_branch_from_phi() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    mirrored_entries = [
+        {
+            "label": "left",
+            "hkl": (-1, 0, 5),
+            "q_group_key": group_key,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 181.0,
+            "sim_row": 95.0,
+        },
+        {
+            "label": "right",
+            "hkl": (-1, 0, 5),
+            "q_group_key": group_key,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+        },
+    ]
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        0.0,
+        0.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {group_key: [dict(entry) for entry in mirrored_entries]},
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        find_peak_record_for_click_fn=lambda _col, _row, _max_axis_distance: (
+            1,
+            {
+                "label": "shared-right",
+                "hkl": (-1, 0, 5),
+                "q_group_key": group_key,
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "phi": 15.0,
+            },
+            0.5,
+            True,
+        ),
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["tagged_candidate_key"] == ("source_branch", 203, 1)
+    assert next_session["tagged_candidate"]["source_branch_index"] == 1
+    assert next_session["tagged_candidate"]["source_peak_index"] == 1
+    assert next_session["group_entries"][0]["source_branch_index"] == 1
+
+
+def test_geometry_manual_toggle_selection_at_uses_shared_peak_finder_in_caked_view() -> None:
+    status_messages: list[str] = []
+    shared_search_limits: list[float] = []
+    group_key = ("q_group", "primary", 1, 0)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        13.0,
+        2.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "caked-near",
+                        "hkl": (1, 0, 0),
+                        "q_group_key": group_key,
+                        "source_table_index": 2,
+                        "source_row_index": 1,
+                        "sim_col": 500.0,
+                        "sim_row": 600.0,
+                        "caked_x": 40.0,
+                        "caked_y": 50.0,
+                    }
+                ]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        find_peak_record_for_click_fn=lambda col, row, max_axis_distance: (
+            shared_search_limits.append(float(max_axis_distance))
+            or (
+                0,
+                {
+                    "label": "caked-near",
+                    "hkl": (1, 0, 0),
+                    "q_group_key": group_key,
+                    "source_table_index": 2,
+                    "source_row_index": 1,
+                    "caked_x": float(col),
+                    "caked_y": float(row),
+                },
+                0.25,
+                True,
+            )
+        ),
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+        caked_search_tth_deg=2.0,
+        caked_search_phi_deg=6.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert shared_search_limits == [3.0]
+    assert next_session["group_key"] == group_key
+    assert next_session["tagged_candidate"]["source_row_index"] == 1
+    assert "nearest Bragg seed 0.2 deg" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_falls_back_when_shared_peak_has_no_group_key() -> None:
+    group_key = ("q_group", "primary", 1, 0)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "1,0,0",
+                        "hkl": (1, 0, 0),
+                        "q_group_key": group_key,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                    }
+                ]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        find_peak_record_for_click_fn=lambda _col, _row, _max_axis_distance: (
+            0,
+            {"label": "missing-group-key"},
+            0.1,
+            True,
+        ),
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["tagged_candidate_key"] == ("source", 1, 2)
 
 
 def test_geometry_manual_place_selection_at_saves_completed_group() -> None:

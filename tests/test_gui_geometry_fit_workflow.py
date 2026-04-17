@@ -1196,10 +1196,18 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
         geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [{"dummy": True}],
         geometry_manual_simulated_lookup=lambda _simulated_peaks: {
             (1, 2): {
+                "display_col": 901.0,
+                "display_row": -802.0,
                 "sim_col": 91.0,
                 "sim_row": 82.0,
                 "sim_col_raw": 9.0,
                 "sim_row_raw": 8.0,
+                "caked_x": 91.0,
+                "caked_y": 82.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
             }
         },
         geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
@@ -1849,7 +1857,7 @@ def test_headless_geometry_fit_legacy_dense_rebind_matches_shared_preflight(
             requested_signature_summary="sig",
             projected_rows=[dict(row) for row in simulated_rows],
             stored_rows=[dict(row) for row in simulated_rows],
-            rebuild_source="peak_records_fallback",
+            rebuild_source="peak_records",
             rebuild_attempts=["live_preview"],
             diagnostics={"status": "rebuild_ok"},
             source_reflection_indices=[
@@ -3495,10 +3503,18 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
         ),
         geometry_manual_simulated_lookup=lambda _simulated_peaks: {
             (1, 2): {
+                "display_col": 901.0,
+                "display_row": -802.0,
                 "sim_col": 91.0,
                 "sim_row": 82.0,
                 "sim_col_raw": 9.0,
                 "sim_row_raw": 8.0,
+                "caked_x": 91.0,
+                "caked_y": 82.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
             }
         },
         geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
@@ -3529,6 +3545,7 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
     )
 
     assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["bg_caked_display"] == (150.0, 160.0)
 
 
@@ -3626,15 +3643,15 @@ def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_cak
         orientation_cfg={},
     )
 
-    assert dataset["initial_pairs_display"][0]["bg_display"] == (13.0, -56.0)
-    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 23.0
-    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == -36.0
-    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 23.0
-    assert dataset["measured_for_fit"][0]["background_phi_deg"] == -36.0
-    assert dataset["measured_for_fit"][0]["background_detector_x"] == 13.0
-    assert dataset["measured_for_fit"][0]["background_detector_y"] == -56.0
-    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 23.0
-    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == -36.0
+    assert dataset["initial_pairs_display"][0]["bg_display"] == (30.0, 40.0)
+    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 40.0
+    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == 60.0
+    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 40.0
+    assert dataset["measured_for_fit"][0]["background_phi_deg"] == 60.0
+    assert dataset["measured_for_fit"][0]["background_detector_x"] == 30.0
+    assert dataset["measured_for_fit"][0]["background_detector_y"] == 40.0
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 40.0
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == 60.0
 
 
 def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
@@ -3810,6 +3827,86 @@ def test_build_geometry_manual_fit_dataset_prefers_current_view_overlay_fallback
     assert diag["overlay_resolution_kind"] == "q_group_fallback"
     assert diag["overlay_source_row_key"] == (0, 0)
     assert diag["overlay_distance_px"] == pytest.approx(np.hypot(0.1, 0.1))
+
+
+def test_build_geometry_manual_fit_dataset_prefers_detector_display_over_stale_sim_aliases() -> None:
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 1),
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_peak_index": 0,
+            "hkl": (1, 1, 0),
+            "display_col": 300.0,
+            "display_row": -200.0,
+            "sim_col": 500.0,
+            "sim_row": 600.0,
+            "sim_col_raw": 5.0,
+            "sim_row_raw": 6.0,
+        }
+    ]
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "hkl": (1, 1, 0),
+                "x": 13.0,
+                "y": 2.0,
+                "refined_sim_x": 13.1,
+                "refined_sim_y": 2.1,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [
+                dict(row) for row in simulated_rows
+            ]
+        ),
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(row) for row in simulated_rows]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("x", 0.0)),
+            float(entry.get("y", 0.0)),
+        ),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    initial_entry = dataset["initial_pairs_display"][0]
+
+    assert initial_entry["sim_display"] == (13.1, 2.1)
 
 
 def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables_dynamic_reanchor(
@@ -5000,6 +5097,10 @@ def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_activ
         {
             "display_col": 10.0,
             "display_row": 20.0,
+            "native_col": 10.0,
+            "native_row": 20.0,
+            "sim_col_raw": 10.0,
+            "sim_row_raw": 20.0,
             "hkl": (1, 0, 0),
             "q_group_key": ("q", 1),
             "source_table_index": 0,
@@ -5107,7 +5208,7 @@ def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_activ
         build_live_rows=lambda: {
             "rows": list(fixed_rows),
             "cache_metadata": {
-                "cache_source": "peak_records_fallback",
+                "cache_source": "peak_records",
                 "active_signature_matches": True,
                 "source_snapshot_row_count": 1,
             },
@@ -5130,7 +5231,7 @@ def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_activ
 
     assert accepted.rebuild_source == "live_runtime_cache"
     assert accepted.metadata["live_runtime_cache_metadata"]["cache_source"] == (
-        "peak_records_fallback"
+        "peak_records"
     )
     assert accepted.metadata["live_runtime_cache_metadata"]["active_signature_matches"] is True
 

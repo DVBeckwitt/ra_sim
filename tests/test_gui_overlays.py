@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ra_sim.gui import overlays
+from ra_sim.gui import manual_geometry, overlays
 
 
 def test_clear_artists_removes_existing_plot_artists() -> None:
@@ -224,6 +224,284 @@ def test_draw_initial_geometry_pairs_overlay_draws_shared_qz_axis_line_for_hk0()
         ]
 
         assert len(line_segments) == 2
+    finally:
+        plt.close(fig)
+
+
+def test_draw_initial_geometry_pairs_overlay_uses_detector_reprojected_sim_point() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={},
+            current_background_index=0,
+            prefer_cache=False,
+            use_caked_display=False,
+            pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "x": 12.0,
+                    "y": 14.0,
+                }
+            ],
+            get_cache_data=lambda **kwargs: {},
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [
+                {
+                    "display_col": 400.0,
+                    "display_row": -500.0,
+                    "sim_col": 11.0,
+                    "sim_row": 13.0,
+                    "sim_col_raw": 9.0,
+                    "sim_row_raw": 8.0,
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            build_simulated_lookup=lambda rows: {(1, 2): dict(rows[0])},
+            entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (11.0, 13.0) in marker_points
+        assert (12.0, 14.0) in marker_points
+        assert (400.0, -500.0) not in marker_points
+        assert np.hypot(11.0 - 12.0, 13.0 - 14.0) < 2.0
+    finally:
+        plt.close(fig)
+
+
+def test_draw_initial_geometry_pairs_overlay_ignores_stale_detector_sim_aliases() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={},
+            current_background_index=0,
+            prefer_cache=False,
+            use_caked_display=False,
+            pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "x": 12.0,
+                    "y": 14.0,
+                    "refined_sim_x": 11.0,
+                    "refined_sim_y": 13.0,
+                }
+            ],
+            get_cache_data=lambda **kwargs: {},
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [
+                {
+                    "display_col": 300.0,
+                    "display_row": -200.0,
+                    "sim_col": 400.0,
+                    "sim_row": -500.0,
+                    "sim_col_raw": 9.0,
+                    "sim_row_raw": 8.0,
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            build_simulated_lookup=lambda rows: {(1, 2): dict(rows[0])},
+            entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (11.0, 13.0) in marker_points
+        assert (12.0, 14.0) in marker_points
+        assert (400.0, -500.0) not in marker_points
+        assert np.hypot(11.0 - 12.0, 13.0 - 14.0) < 2.0
+    finally:
+        plt.close(fig)
+
+
+def test_draw_initial_geometry_pairs_overlay_uses_caked_reprojected_sim_point() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={},
+            current_background_index=0,
+            prefer_cache=False,
+            use_caked_display=True,
+            pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "caked_x": 12.0,
+                    "caked_y": 14.0,
+                }
+            ],
+            get_cache_data=lambda **kwargs: {},
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [
+                {
+                    "display_col": 400.0,
+                    "display_row": -500.0,
+                    "sim_col": 11.0,
+                    "sim_row": 13.0,
+                    "sim_col_raw": 9.0,
+                    "sim_row_raw": 8.0,
+                    "caked_x": 11.5,
+                    "caked_y": 13.5,
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            build_simulated_lookup=lambda rows: {(1, 2): dict(rows[0])},
+            entry_display_coords=lambda entry: (
+                float(entry["caked_x"]),
+                float(entry["caked_y"]),
+            ),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (11.5, 13.5) in marker_points
+        assert (12.0, 14.0) in marker_points
+        assert (400.0, -500.0) not in marker_points
+        assert np.hypot(11.5 - 12.0, 13.5 - 14.0) < 1.0
+    finally:
+        plt.close(fig)
+
+
+def test_draw_initial_geometry_pairs_overlay_ignores_stale_caked_sim_aliases() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={},
+            current_background_index=0,
+            prefer_cache=False,
+            use_caked_display=True,
+            pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "caked_x": 12.0,
+                    "caked_y": 14.0,
+                    "refined_sim_caked_x": 11.5,
+                    "refined_sim_caked_y": 13.5,
+                }
+            ],
+            get_cache_data=lambda **kwargs: {},
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [
+                {
+                    "display_col": 400.0,
+                    "display_row": -500.0,
+                    "sim_col": 11.0,
+                    "sim_row": 13.0,
+                    "sim_col_raw": 9.0,
+                    "sim_row_raw": 8.0,
+                    "caked_x": 401.0,
+                    "caked_y": -499.0,
+                    "raw_caked_x": 402.0,
+                    "raw_caked_y": -498.0,
+                    "two_theta_deg": 403.0,
+                    "phi_deg": -497.0,
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            build_simulated_lookup=lambda rows: {(1, 2): dict(rows[0])},
+            entry_display_coords=lambda entry: (
+                float(entry["caked_x"]),
+                float(entry["caked_y"]),
+            ),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (11.5, 13.5) in marker_points
+        assert (12.0, 14.0) in marker_points
+        assert (401.0, -499.0) not in marker_points
+        assert np.hypot(11.5 - 12.0, 13.5 - 14.0) < 1.0
     finally:
         plt.close(fig)
 
