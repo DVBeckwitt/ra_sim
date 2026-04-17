@@ -4,6 +4,7 @@ from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compose_orientation_transforms,
     compute_geometry_overlay_frame_diagnostics,
+    inverse_transform_points_orientation,
     rotate_point_for_display,
     transform_points_orientation,
 )
@@ -82,7 +83,7 @@ def test_build_geometry_fit_overlay_records_inverts_orientation_before_display()
         native_sim[0],
         native_sim[1],
         native_shape,
-        0,
+        -1,
     )
     expected_bg_display = rotate_point_for_display(
         native_bg[0],
@@ -96,8 +97,10 @@ def test_build_geometry_fit_overlay_records_inverts_orientation_before_display()
             {
                 "overlay_match_index": 5,
                 "hkl": (2, 1, 0),
-                "sim_display": expected_sim_display,
-                "bg_display": expected_bg_display,
+                "sim_display": (999.0, 998.0),
+                "bg_display": (997.0, 996.0),
+                "sim_native": native_sim,
+                "bg_native": native_bg,
             }
         ],
         [
@@ -119,6 +122,8 @@ def test_build_geometry_fit_overlay_records_inverts_orientation_before_display()
     )
 
     assert len(records) == 1
+    assert records[0]["initial_sim_display"] == pytest.approx(expected_sim_display)
+    assert records[0]["initial_bg_display"] == pytest.approx(expected_bg_display)
     assert records[0]["final_sim_display"] == pytest.approx(expected_sim_display)
     assert records[0]["final_bg_display"] == pytest.approx(expected_bg_display)
 
@@ -138,16 +143,37 @@ def test_build_geometry_fit_overlay_records_matches_real_world_orientation_case(
         "flip_y": True,
         "flip_order": "yx",
     }
-    initial_sim_display = (1827.0, 1362.0)
-    initial_bg_display = (1820.992, 1375.983)
+    native_sim = (1827.0, 1362.0)
+    measured_fit = (1820.992, 1375.983)
+    native_bg = inverse_transform_points_orientation(
+        [measured_fit],
+        native_shape,
+        orientation_choice,
+    )[0]
+    expected_sim_display = rotate_point_for_display(
+        native_sim[0],
+        native_sim[1],
+        native_shape,
+        -1,
+    )
+    expected_bg_display = rotate_point_for_display(
+        native_bg[0],
+        native_bg[1],
+        native_shape,
+        -1,
+    )
 
     records = build_geometry_fit_overlay_records(
         [
             {
                 "overlay_match_index": 0,
                 "hkl": (-1, 0, 5),
-                "sim_display": initial_sim_display,
-                "bg_display": initial_bg_display,
+                # Cached detector-view aliases from the simulator frame should
+                # not override canonical native detector coordinates.
+                "sim_display": native_sim,
+                "bg_display": measured_fit,
+                "sim_native": native_sim,
+                "bg_native": native_bg,
             }
         ],
         [
@@ -155,10 +181,10 @@ def test_build_geometry_fit_overlay_records_matches_real_world_orientation_case(
                 "match_status": "matched",
                 "overlay_match_index": 0,
                 "hkl": (-1, 0, 5),
-                "simulated_x": 1827.0,
-                "simulated_y": 1362.0,
-                "measured_x": 1820.992,
-                "measured_y": 1375.983,
+                "simulated_x": native_sim[0],
+                "simulated_y": native_sim[1],
+                "measured_x": measured_fit[0],
+                "measured_y": measured_fit[1],
                 "distance_px": 15.219,
             }
         ],
@@ -171,8 +197,10 @@ def test_build_geometry_fit_overlay_records_matches_real_world_orientation_case(
     assert len(records) == 1
     assert records[0]["simulated_frame"] == "sim_native"
     assert records[0]["measured_frame"] == "fit_oriented"
-    assert records[0]["final_sim_display"] == pytest.approx(initial_sim_display)
-    assert records[0]["final_bg_display"] == pytest.approx(initial_bg_display)
+    assert records[0]["initial_sim_display"] == pytest.approx(expected_sim_display)
+    assert records[0]["initial_bg_display"] == pytest.approx(expected_bg_display)
+    assert records[0]["final_sim_display"] == pytest.approx(expected_sim_display)
+    assert records[0]["final_bg_display"] == pytest.approx(expected_bg_display)
 
     frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(records)
     assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
@@ -255,7 +283,7 @@ def test_build_geometry_fit_overlay_records_prefers_native_initial_points_over_c
         10.0,
         20.0,
         native_shape,
-        0,
+        -1,
     )
     expected_bg_display = rotate_point_for_display(
         12.0,
@@ -270,7 +298,7 @@ def test_build_geometry_fit_overlay_records_prefers_native_initial_points_over_c
                 "overlay_match_index": 0,
                 "hkl": (1, 0, 0),
                 # These simulate view-specific cached coordinates captured in a
-                # different projection than the detector/simulator redraw.
+                # different projection than the current detector overlay redraw.
                 "sim_display": (101.0, 202.0),
                 "bg_display": (303.0, 404.0),
                 "sim_native": (10.0, 20.0),
@@ -303,6 +331,74 @@ def test_build_geometry_fit_overlay_records_prefers_native_initial_points_over_c
 
     assert records[0]["initial_sim_display"] == pytest.approx(expected_sim_display)
     assert records[0]["initial_bg_display"] == pytest.approx(expected_bg_display)
+
+
+def test_build_geometry_fit_overlay_records_reprojects_legacy_display_fallbacks():
+    native_shape = (256, 256)
+    native_sim = (10.0, 20.0)
+    native_bg = (12.0, 22.0)
+    legacy_sim_display = rotate_point_for_display(
+        native_sim[0],
+        native_sim[1],
+        native_shape,
+        1,
+    )
+    legacy_bg_display = rotate_point_for_display(
+        native_bg[0],
+        native_bg[1],
+        native_shape,
+        -1,
+    )
+    expected_overlay_sim_display = rotate_point_for_display(
+        native_sim[0],
+        native_sim[1],
+        native_shape,
+        -1,
+    )
+
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_display": legacy_sim_display,
+                "bg_display": legacy_bg_display,
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": native_sim[0],
+                "simulated_y": native_sim[1],
+                "measured_x": native_bg[0],
+                "measured_y": native_bg[1],
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=native_shape,
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=1,
+        background_display_rotate_k=-1,
+    )
+
+    assert records[0]["initial_sim_native"] == pytest.approx(native_sim)
+    assert records[0]["initial_bg_native"] == pytest.approx(native_bg)
+    assert records[0]["initial_sim_display"] == pytest.approx(
+        expected_overlay_sim_display
+    )
+    assert records[0]["initial_bg_display"] == pytest.approx(legacy_bg_display)
+    assert records[0]["final_sim_display"] == pytest.approx(
+        expected_overlay_sim_display
+    )
+    assert records[0]["final_bg_display"] == pytest.approx(legacy_bg_display)
 
 
 def test_build_geometry_fit_overlay_records_preserves_caked_display_locks():

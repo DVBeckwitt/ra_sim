@@ -949,15 +949,23 @@ def build_geometry_fit_overlay_records(
     Coordinate-frame contract for ``point_match_diagnostics``:
 
     - ``simulated_x/y`` are simulation-native coordinates straight from the
-      solver / hit-table path. They should only receive the simulation display
-      rotation.
+      solver / hit-table path.
     - ``measured_x/y`` are fit-oriented coordinates already transformed to
       align with the simulation frame used by the solver. They must be inverse-
       oriented back to native background space before the background display
       rotation is applied.
+
+    Overlay records are drawn on the current main axes, not on the simulator's
+    private detector frame. When native detector coordinates are available,
+    both the simulation and background points therefore need to be rebuilt in
+    the current overlay display frame, which matches the background detector
+    display rotation.
     """
 
     native_frame_shape = (int(native_shape[0]), int(native_shape[1]))
+    sim_display_rotate_k = int(sim_display_rotate_k)
+    background_display_rotate_k = int(background_display_rotate_k)
+    overlay_display_rotate_k = int(background_display_rotate_k)
 
     def _parse_point(value: object) -> tuple[float, float] | None:
         if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
@@ -1023,27 +1031,61 @@ def build_geometry_fit_overlay_records(
 
         initial_sim_native = _parse_point(initial_entry.get("sim_native"))
         initial_bg_native = _parse_point(initial_entry.get("bg_native"))
+        initial_sim_display_raw = _parse_point(initial_entry.get("sim_display"))
+        initial_bg_display_raw = _parse_point(initial_entry.get("bg_display"))
         initial_sim_caked_display = _parse_point(
             initial_entry.get("sim_caked_display")
         )
         initial_bg_caked_display = _parse_point(
             initial_entry.get("bg_caked_display")
         )
+        # Legacy saved overlays may only have cached detector-view display
+        # points. Recover native detector coordinates first so redraws can be
+        # rebuilt in the current overlay frame instead of the stale snapshot
+        # frame.
+        if initial_sim_native is None and initial_sim_display_raw is not None:
+            recovered_native = display_to_native_sim_coords(
+                float(initial_sim_display_raw[0]),
+                float(initial_sim_display_raw[1]),
+                native_frame_shape,
+                sim_display_rotate_k=sim_display_rotate_k,
+            )
+            if np.isfinite(float(recovered_native[0])) and np.isfinite(
+                float(recovered_native[1])
+            ):
+                initial_sim_native = (
+                    float(recovered_native[0]),
+                    float(recovered_native[1]),
+                )
+        if initial_bg_native is None and initial_bg_display_raw is not None:
+            recovered_native = rotate_point_for_display(
+                float(initial_bg_display_raw[0]),
+                float(initial_bg_display_raw[1]),
+                native_frame_shape,
+                -background_display_rotate_k,
+            )
+            if np.isfinite(float(recovered_native[0])) and np.isfinite(
+                float(recovered_native[1])
+            ):
+                initial_bg_native = (
+                    float(recovered_native[0]),
+                    float(recovered_native[1]),
+                )
         initial_sim_display = None
         initial_bg_display = None
         # Saved fits can be redrawn in a different view than the one that
         # produced the initial overlay snapshot, so prefer native coordinates
-        # when available and rebuild the detector-frame display positions.
+        # when available and rebuild the current overlay-display positions.
         if initial_sim_native is not None:
             rotated = rotate_point_for_display(
                 float(initial_sim_native[0]),
                 float(initial_sim_native[1]),
                 native_frame_shape,
-                sim_display_rotate_k,
+                overlay_display_rotate_k,
             )
             initial_sim_display = (float(rotated[0]), float(rotated[1]))
         else:
-            initial_sim_display = _parse_point(initial_entry.get("sim_display"))
+            initial_sim_display = initial_sim_display_raw
         if initial_bg_native is not None:
             rotated = rotate_point_for_display(
                 float(initial_bg_native[0]),
@@ -1053,7 +1095,7 @@ def build_geometry_fit_overlay_records(
             )
             initial_bg_display = (float(rotated[0]), float(rotated[1]))
         else:
-            initial_bg_display = _parse_point(initial_entry.get("bg_display"))
+            initial_bg_display = initial_bg_display_raw
         record["initial_sim_display"] = initial_sim_display
         record["initial_bg_display"] = initial_bg_display
         if initial_sim_caked_display is not None:
@@ -1108,7 +1150,7 @@ def build_geometry_fit_overlay_records(
                 float(simulated_native[0]),
                 float(simulated_native[1]),
                 native_frame_shape,
-                sim_display_rotate_k,
+                overlay_display_rotate_k,
             )
             final_bg_display = rotate_point_for_display(
                 float(measured_native[0]),
