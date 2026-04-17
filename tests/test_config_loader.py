@@ -78,6 +78,40 @@ def test_loader_helpers_read_active_config_bundle(
     assert loader.get_debug_config()["debug"]["console"]["enabled"] is True
 
 
+def test_material_config_returns_deep_copies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        materials={
+            "default_material": "MatA",
+            "constants": {"lattice": {"a": 1.0, "b": 2.0}},
+            "materials": {
+                "MatA": {
+                    "density": 1.0,
+                    "fit": {"weights": [1.0, 2.0, 3.0]},
+                }
+            },
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    material_config = loader.get_material_config()
+    material_config["material"]["fit"]["weights"][0] = 99.0
+    material_config["constants"]["lattice"]["a"] = 99.0
+
+    reloaded = loader.get_material_config()
+    assert reloaded == {
+        "name": "MatA",
+        "material": {
+            "density": 1.0,
+            "fit": {"weights": [1.0, 2.0, 3.0]},
+        },
+        "constants": {"lattice": {"a": 1.0, "b": 2.0}},
+    }
+
+
 def test_loader_supports_windows_paths_in_double_quoted_yaml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

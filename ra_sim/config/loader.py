@@ -307,8 +307,8 @@ def get_material_config(
 
     return {
         "name": material,
-        "material": material_block,
-        "constants": material_constants,
+        "material": copy.deepcopy(material_block),
+        "constants": copy.deepcopy(material_constants),
     }
 
 
