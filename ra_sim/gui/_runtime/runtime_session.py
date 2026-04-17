@@ -2135,6 +2135,7 @@ def _initialize_runtime_shell_block_01() -> None:
     if (
         app_shell_view_state.workspace_body is None
         or app_shell_view_state.fit_body is None
+        or app_shell_view_state.simulation_body is None
         or app_shell_view_state.analysis_views_frame is None
         or app_shell_view_state.analysis_exports_frame is None
         or app_shell_view_state.analysis_popout_button is None
@@ -22931,8 +22932,10 @@ def _initialize_runtime_controls_block_45() -> None:
     mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
     sampling_pruning_frame = CollapsibleFrame(
-        app_shell_view_state.right_col,
+        app_shell_view_state.simulation_body,
         text="Sampling, Optics, Arc Integration && Pruning",
+        expanded=True,
+        collapsible=False,
     )
     sampling_pruning_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -26476,6 +26479,7 @@ def _set_widget_tree_enabled(widget, *, enabled: bool) -> None:
 def _set_structure_bootstrap_controls_enabled(enabled: bool) -> None:
     control_roots = (
         workspace_panels_view_state.workspace_inputs_frame,
+        app_shell_view_state.simulation_body,
         app_shell_view_state.right_col,
         app_shell_view_state.fit_body,
     )

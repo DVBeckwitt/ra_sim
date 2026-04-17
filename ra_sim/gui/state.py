@@ -699,6 +699,7 @@ class AppShellViewState:
     setup_tab: Any = None
     match_tab: Any = None
     refine_tab: Any = None
+    simulation_tab: Any = None
     analyze_tab: Any = None
     workspace_tab: Any = None
     fit_tab: Any = None
@@ -717,6 +718,8 @@ class AppShellViewState:
     setup_canvas: Any = None
     match_body: Any = None
     match_canvas: Any = None
+    simulation_body: Any = None
+    simulation_canvas: Any = None
     refine_basic_tab: Any = None
     refine_advanced_tab: Any = None
     refine_basic_body: Any = None

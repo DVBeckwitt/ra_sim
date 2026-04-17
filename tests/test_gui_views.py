@@ -467,10 +467,17 @@ def test_bind_fit2d_theme_restyles_and_restores_widgets(monkeypatch) -> None:
 
 
 class _FakeCollapsibleFrame:
-    def __init__(self, parent, text: str = "", expanded: bool = False) -> None:
+    def __init__(
+        self,
+        parent,
+        text: str = "",
+        expanded: bool = False,
+        collapsible: bool = True,
+    ) -> None:
         self.parent = parent
         self.text = text
         self.expanded = expanded
+        self.collapsible = collapsible
         self.summary_text = ""
         self.frame = _FakeFrame(self)
         self.pack_calls = []
@@ -990,6 +997,7 @@ def test_open_analysis_popout_window_populates_and_reuses_existing_window(
     assert isinstance(view_state.peak_tools_frame.parent, _FakeCollapsibleFrame)
     assert view_state.peak_tools_frame.parent.text == "Peak Picking and Fitting"
     assert view_state.peak_tools_frame.parent.expanded is True
+    assert view_state.peak_tools_frame.parent.collapsible is False
     assert view_state.dock_button is _FakeButton.created[0]
     assert view_state.dock_button.kwargs["text"] == "Dock Back"
 
@@ -1060,6 +1068,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         "Setup",
         "Match",
         "Refine",
+        "Simulation",
         "Analyze",
         "Help",
     ]
@@ -1069,6 +1078,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     ]
     assert isinstance(view_state.setup_body, _FakeFrame)
     assert isinstance(view_state.match_body, _FakeFrame)
+    assert isinstance(view_state.simulation_body, _FakeFrame)
     assert isinstance(view_state.refine_basic_body, _FakeFrame)
     assert isinstance(view_state.refine_advanced_body, _FakeFrame)
     assert isinstance(view_state.workspace_body, _FakeFrame)
@@ -1077,6 +1087,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.parameter_structure_body, _FakeFrame)
     assert isinstance(view_state.setup_canvas, _FakeCanvas)
     assert isinstance(view_state.match_canvas, _FakeCanvas)
+    assert isinstance(view_state.simulation_canvas, _FakeCanvas)
     assert isinstance(view_state.refine_basic_canvas, _FakeCanvas)
     assert isinstance(view_state.refine_advanced_canvas, _FakeCanvas)
     assert isinstance(view_state.match_header_frame, _FakeFrame)
@@ -1102,6 +1113,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.analysis_peak_tools_frame.parent, _FakeCollapsibleFrame)
     assert view_state.analysis_peak_tools_frame.parent.text == "Peak Picking and Fitting"
     assert view_state.analysis_peak_tools_frame.parent.expanded is True
+    assert view_state.analysis_peak_tools_frame.parent.collapsible is False
     assert view_state.analysis_peak_tools_frame.parent.parent is view_state.analysis_views_frame
     assert isinstance(view_state.status_frame, _FakeFrame)
     assert isinstance(view_state.fig_frame, _FakeFrame)
@@ -1136,6 +1148,8 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
 
     view_state.control_tab_var.set("match")
     assert view_state.controls_notebook.selected_tab is view_state.match_tab
+    view_state.control_tab_var.set("simulation")
+    assert view_state.controls_notebook.selected_tab is view_state.simulation_tab
 
     callback, add = view_state.parameter_notebook.bindings["<<NotebookTabChanged>>"]
     assert add == "+"
@@ -1187,11 +1201,13 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
     view_state.refine_advanced_canvas.rooty = 0
     view_state.refine_advanced_canvas.width = 100
     view_state.refine_advanced_canvas.height = 100
+    view_state.simulation_canvas.rootx = 600
+    view_state.simulation_canvas.rooty = 0
+    view_state.simulation_canvas.width = 100
+    view_state.simulation_canvas.height = 100
 
     dispatch = next(
-        callback
-        for sequence, callback, _add in root.bind_all_calls
-        if sequence == "<MouseWheel>"
+        callback for sequence, callback, _add in root.bind_all_calls if sequence == "<MouseWheel>"
     )
     event = type("Event", (), {"delta": 60, "num": None, "x_root": 175, "y_root": 25})()
 
@@ -1200,6 +1216,12 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
     assert view_state.match_canvas.scrolled == [(-1, "units")]
     assert view_state.refine_basic_canvas.scrolled == []
     assert view_state.refine_advanced_canvas.scrolled == []
+    assert view_state.simulation_canvas.scrolled == []
+
+    event = type("Event", (), {"delta": 60, "num": None, "x_root": 625, "y_root": 25})()
+
+    assert dispatch(event) == "break"
+    assert view_state.simulation_canvas.scrolled == [(-1, "units")]
 
 
 def test_create_app_shell_adds_fit2d_help_preference_when_var_is_supplied(

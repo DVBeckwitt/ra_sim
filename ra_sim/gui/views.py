@@ -1175,11 +1175,13 @@ def create_app_shell(
     setup_tab = ttk.Frame(controls_notebook)
     match_tab = ttk.Frame(controls_notebook)
     refine_tab = ttk.Frame(controls_notebook)
+    simulation_tab = ttk.Frame(controls_notebook)
     analyze_tab = ttk.Frame(controls_notebook)
     help_tab = ttk.Frame(controls_notebook)
     controls_notebook.add(setup_tab, text="Setup")
     controls_notebook.add(match_tab, text="Match")
     controls_notebook.add(refine_tab, text="Refine")
+    controls_notebook.add(simulation_tab, text="Simulation")
     controls_notebook.add(analyze_tab, text="Analyze")
     controls_notebook.add(help_tab, text="Help")
 
@@ -1187,6 +1189,10 @@ def create_app_shell(
     setup_scroll_frame.pack(fill=tk.BOTH, expand=True)
     match_scroll_frame, match_body, match_canvas = _create_scrolled_frame(match_tab)
     match_scroll_frame.pack(fill=tk.BOTH, expand=True)
+    simulation_scroll_frame, simulation_body, simulation_canvas = _create_scrolled_frame(
+        simulation_tab
+    )
+    simulation_scroll_frame.pack(fill=tk.BOTH, expand=True)
 
     parameter_notebook = ttk.Notebook(refine_tab)
     parameter_notebook.pack(fill=tk.BOTH, expand=True)
@@ -1243,6 +1249,16 @@ def create_app_shell(
             event=event,
         ),
     )
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("app-shell-scroll", id(view_state), "simulation"),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            simulation_canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
 
     control_tab_var = tk.StringVar(value="setup")
     parameter_tab_var = tk.StringVar(value="basic")
@@ -1253,6 +1269,7 @@ def create_app_shell(
             "setup": setup_tab,
             "match": match_tab,
             "refine": refine_tab,
+            "simulation": simulation_tab,
             "analyze": analyze_tab,
             "help": help_tab,
         },
@@ -1355,6 +1372,7 @@ def create_app_shell(
         analysis_controls_frame,
         text="Peak Picking and Fitting",
         expanded=True,
+        collapsible=False,
     )
     analysis_peak_tools_panel.pack(fill=tk.X)
     analysis_peak_tools_frame = analysis_peak_tools_panel.frame
@@ -1391,7 +1409,13 @@ def create_app_shell(
     ).pack(anchor=tk.W, pady=(4, 0))
     ttk.Label(
         help_quickstart_frame,
-        text="4. Analyze: compare detector, caked, and 1D views to verify the model.",
+        text="4. Simulation: tune sampling, optics, and pruning once the geometry path is behaving.",
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W, pady=(4, 0))
+    ttk.Label(
+        help_quickstart_frame,
+        text="5. Analyze: compare detector, caked, and 1D views to verify the model.",
         justify=tk.LEFT,
         wraplength=420,
     ).pack(anchor=tk.W, pady=(4, 0))
@@ -1556,6 +1580,7 @@ def create_app_shell(
     view_state.setup_tab = setup_tab
     view_state.match_tab = match_tab
     view_state.refine_tab = refine_tab
+    view_state.simulation_tab = simulation_tab
     view_state.analyze_tab = analyze_tab
     view_state.workspace_tab = setup_tab
     view_state.fit_tab = match_tab
@@ -1578,6 +1603,8 @@ def create_app_shell(
     view_state.setup_canvas = setup_canvas
     view_state.match_body = match_body
     view_state.match_canvas = match_canvas
+    view_state.simulation_body = simulation_body
+    view_state.simulation_canvas = simulation_canvas
     view_state.refine_basic_tab = refine_basic_tab
     view_state.refine_advanced_tab = refine_advanced_tab
     view_state.refine_basic_body = refine_basic_body
@@ -5389,6 +5416,7 @@ def open_analysis_popout_window(
         controls_frame,
         text="Peak Picking and Fitting",
         expanded=True,
+        collapsible=False,
     )
     peak_tools_panel.pack(fill=tk.X)
     peak_tools_frame = peak_tools_panel.frame
