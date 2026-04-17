@@ -644,17 +644,74 @@ HBN_FITTER_ROTATE_K = 0
 # in the same frame as the displayed background (after DISPLAY_ROTATE_K).
 SIMULATION_GEOMETRY_ROTATE_K = DISPLAY_ROTATE_K - SIM_DISPLAY_ROTATE_K
 
+
 # Preserve native-orientation copies for fitting/analysis. Load only the first
 # background at startup and lazy-load the rest on demand to improve first paint.
 def _initialize_runtime_state_block_01() -> None:
-    global _initial_background_state, poni_file_path, parameters, Distance_CoR_to_Detector, Gamma_initial, gamma_initial, poni1, poni2
-    global wave_m, lambda_from_poni, tilt_hint, hinted_center_row, hinted_center_col, hinted_gamma, hinted_Gamma, hinted_distance
-    global center_text, image_size, pixel_size_m, legacy_resolution_sample_counts, DEFAULT_RANDOM_SAMPLE_COUNT, MIN_RANDOM_SAMPLE_COUNT, MAX_RANDOM_SAMPLE_COUNT, MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT
-    global MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS, CUSTOM_SAMPLING_OPTION, write_excel, intensity_threshold, vmax_default, vmax_slider_max, center_default, two_theta_max
-    global two_theta_range, mx, fwhm2sigma, divergence_fwhm, divergence_sigma, sigma_mosaic, gamma_mosaic, eta
+    global \
+        _initial_background_state, \
+        poni_file_path, \
+        parameters, \
+        Distance_CoR_to_Detector, \
+        Gamma_initial, \
+        gamma_initial, \
+        poni1, \
+        poni2
+    global \
+        wave_m, \
+        lambda_from_poni, \
+        tilt_hint, \
+        hinted_center_row, \
+        hinted_center_col, \
+        hinted_gamma, \
+        hinted_Gamma, \
+        hinted_distance
+    global \
+        center_text, \
+        image_size, \
+        pixel_size_m, \
+        legacy_resolution_sample_counts, \
+        DEFAULT_RANDOM_SAMPLE_COUNT, \
+        MIN_RANDOM_SAMPLE_COUNT, \
+        MAX_RANDOM_SAMPLE_COUNT, \
+        MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT
+    global \
+        MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS, \
+        CUSTOM_SAMPLING_OPTION, \
+        write_excel, \
+        intensity_threshold, \
+        vmax_default, \
+        vmax_slider_max, \
+        center_default, \
+        two_theta_max
+    global \
+        two_theta_range, \
+        mx, \
+        fwhm2sigma, \
+        divergence_fwhm, \
+        divergence_sigma, \
+        sigma_mosaic, \
+        gamma_mosaic, \
+        eta
     global theta_initial, cor_angle, chi, psi, psi_z, zb, bw_sigma, zs
-    global sample_width_m, sample_length_m, sample_depth_m, debye_x, debye_y, bandwidth_percent_default, bandwidth, occupancy_default_values
-    global include_rods_flag, instrument_pruning_control_defaults, sf_prune_bias_default, solve_q_steps_default, solve_q_rel_tol_default, solve_q_mode_default, lambda_override, lambda_
+    global \
+        sample_width_m, \
+        sample_length_m, \
+        sample_depth_m, \
+        debye_x, \
+        debye_y, \
+        bandwidth_percent_default, \
+        bandwidth, \
+        occupancy_default_values
+    global \
+        include_rods_flag, \
+        instrument_pruning_control_defaults, \
+        sf_prune_bias_default, \
+        solve_q_steps_default, \
+        solve_q_rel_tol_default, \
+        solve_q_mode_default, \
+        lambda_override, \
+        lambda_
     global n2, cif_file, cif_file2, cf, blk
 
     _initial_background_state = gui_background_manager.initialize_background_runtime_state(
@@ -849,7 +906,6 @@ def _initialize_runtime_state_block_01() -> None:
     cf, blk = _read_cif_block(cif_file)
 
 
-
 def _normalize_occupancy_label(raw_label, fallback_idx):
     return gui_structure_model.normalize_occupancy_label(raw_label, fallback_idx)
 
@@ -863,7 +919,9 @@ def _extract_occupancy_site_metadata(cif_block, cif_path):
 def _initialize_runtime_state_block_02() -> None:
     global occupancy_site_labels, occupancy_site_expanded_map, occupancy_site_count, occ
 
-    occupancy_site_labels, occupancy_site_expanded_map = _extract_occupancy_site_metadata(blk, cif_file)
+    occupancy_site_labels, occupancy_site_expanded_map = _extract_occupancy_site_metadata(
+        blk, cif_file
+    )
     if occupancy_site_labels:
         occupancy_site_count = len(occupancy_site_labels)
     else:
@@ -879,7 +937,6 @@ def _initialize_runtime_state_block_02() -> None:
         occupancy_site_count,
     )
     occ = [min(1.0, max(0.0, float(v))) for v in occ]
-
 
 
 def _expand_occupancy_values_for_generated_sites(occ_values):
@@ -903,7 +960,6 @@ def _initialize_runtime_state_block_03() -> None:
 
     atom_site_fractional_metadata = _extract_atom_site_fractional_metadata(blk)
     atom_site_fract_vars = []
-
 
 
 def _atom_site_fractional_default_values():
@@ -993,7 +1049,6 @@ def _initialize_runtime_state_block_04() -> None:
     c_text = blk.get("_cell_length_c")
 
 
-
 # strip the '(uncertainty)' and cast
 def parse_cif_num(txt):
     return gui_structure_model.parse_cif_num(txt)
@@ -1001,7 +1056,15 @@ def parse_cif_num(txt):
 
 def _initialize_runtime_state_block_05() -> None:
     global av, bv, cv, cf2, blk2, a2_text, c2_text, av2
-    global cv2, energy, p_defaults, w_defaults, phase_delta_expression_default, phi_l_divisor_default, finite_stack_default, stack_layers_default
+    global \
+        cv2, \
+        energy, \
+        p_defaults, \
+        w_defaults, \
+        phase_delta_expression_default, \
+        phi_l_divisor_default, \
+        finite_stack_default, \
+        stack_layers_default
     global iodine_z_default, defaults, structure_model_state
 
     if a_text is None or b_text is None or c_text is None:
@@ -1033,7 +1096,9 @@ def _initialize_runtime_state_block_05() -> None:
         fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
     )
     try:
-        phase_delta_expression_default = validate_phase_delta_expression(phase_delta_expression_default)
+        phase_delta_expression_default = validate_phase_delta_expression(
+            phase_delta_expression_default
+        )
     except ValueError:
         phase_delta_expression_default = DEFAULT_PHASE_DELTA_EXPRESSION
     phi_l_divisor_default = normalize_phi_l_divisor(
@@ -1129,7 +1194,6 @@ def _initialize_runtime_state_block_05() -> None:
         miller_generator=miller_generator,
         inject_fractional_reflections=inject_fractional_reflections,
     )
-
 
 
 def _sync_structure_model_aliases() -> None:
@@ -1264,10 +1328,7 @@ def _bootstrap_structure_model_state_for_startup() -> None:
 
 
 def _ensure_structure_model_dataframes() -> tuple[object, object]:
-    if (
-        structure_model_state.df_summary is None
-        or structure_model_state.df_details is None
-    ):
+    if structure_model_state.df_summary is None or structure_model_state.df_details is None:
         df_summary, df_details = _build_intensity_dataframes(
             structure_model_state.miller,
             structure_model_state.intensities,
@@ -1280,9 +1341,7 @@ def _ensure_structure_model_dataframes() -> tuple[object, object]:
     return structure_model_state.df_summary, structure_model_state.df_details
 
 
-def _build_intensity_dataframes(
-    miller, intensities, degeneracy, details
-) -> tuple[object, object]:
+def _build_intensity_dataframes(miller, intensities, degeneracy, details) -> tuple[object, object]:
     from ra_sim.utils.diffraction_tools import build_intensity_dataframes
 
     return build_intensity_dataframes(
@@ -1326,7 +1385,6 @@ def _initialize_runtime_state_block_06() -> None:
     BRAGG_QR_L_INVALID_KEY = gui_controllers.BRAGG_QR_L_INVALID_KEY
 
     _apply_structure_model_runtime_cache_state()
-
 
 
 def export_initial_excel():
@@ -1745,6 +1803,44 @@ def _display_to_native_sim_coords(col: float, row: float, image_shape: tuple[int
     )
 
 
+def _native_detector_coords_to_live_bundle_detector_coords(
+    col: float,
+    row: float,
+) -> tuple[float | None, float | None]:
+    """Map native detector coords into the live display-aligned bundle frame."""
+
+    native_background = _get_current_background_native()
+    shape = None
+    if native_background is not None:
+        shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    elif simulation_runtime_state.unscaled_image is not None:
+        shape = tuple(int(v) for v in np.asarray(simulation_runtime_state.unscaled_image).shape[:2])
+    if shape is None or len(shape) < 2 or min(shape) <= 0:
+        return None, None
+    return _rotate_point_for_display(
+        float(col),
+        float(row),
+        shape,
+        DISPLAY_ROTATE_K,
+    )
+
+
+def _live_bundle_detector_coords_to_background_display_coords(
+    col: float,
+    row: float,
+) -> tuple[float | None, float | None]:
+    """Map live bundle detector coords back into background display coords."""
+
+    try:
+        col_val = float(col)
+        row_val = float(row)
+    except Exception:
+        return None, None
+    if not (np.isfinite(col_val) and np.isfinite(row_val)):
+        return None, None
+    return float(col_val), float(row_val)
+
+
 def _transform_points_orientation(
     points: list[tuple[float, float]],
     shape: tuple[int, int],
@@ -1931,7 +2027,12 @@ def _geometry_overlay_frame_diagnostics(
 # Measured peaks are collected interactively in the current GUI workflow.
 # Keep this list for compatibility, but avoid loading a large file at startup.
 def _initialize_runtime_root_block_01() -> None:
-    global measured_peaks, root, fit2d_error_sound_var, geometry_fit_caked_roi_enabled_var, geometry_fit_caked_roi_preview_var
+    global \
+        measured_peaks, \
+        root, \
+        fit2d_error_sound_var, \
+        geometry_fit_caked_roi_enabled_var, \
+        geometry_fit_caked_roi_preview_var
 
     measured_peaks = []
 
@@ -1943,7 +2044,6 @@ def _initialize_runtime_root_block_01() -> None:
     fit2d_error_sound_var = tk.BooleanVar(value=False)
     geometry_fit_caked_roi_enabled_var = tk.BooleanVar(value=False)
     geometry_fit_caked_roi_preview_var = tk.BooleanVar(value=False)
-
 
 
 def _runtime_report_callback_exception(exc_type, exc_value, exc_tb):
@@ -1980,8 +2080,16 @@ def _runtime_report_callback_exception(exc_type, exc_value, exc_tb):
 def _initialize_runtime_root_block_02() -> None:
     root.report_callback_exception = _runtime_report_callback_exception
 
+
 def _initialize_runtime_shell_block_01() -> None:
-    global progress_label_positions, progress_label_geometry, ordered_structure_progressbar, progress_label_ordered_structure, mosaic_progressbar, progress_label_mosaic, progress_label
+    global \
+        progress_label_positions, \
+        progress_label_geometry, \
+        ordered_structure_progressbar, \
+        progress_label_ordered_structure, \
+        mosaic_progressbar, \
+        progress_label_mosaic, \
+        progress_label
     global update_timing_label, chi_square_label
 
     _ensure_runtime_update_trace_hooks()
@@ -2051,7 +2159,6 @@ def _initialize_runtime_shell_block_01() -> None:
     ):
         raise RuntimeError("Status panel was not created.")
     progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
-
 
 
 def _shutdown_gui():
@@ -2131,7 +2238,13 @@ def _initialize_runtime_shell_block_02() -> None:
 
 def _initialize_runtime_plot_block_01() -> None:
     global fig, ax, matplotlib_canvas, matplotlib_canvas_widget, canvas
-    global global_image_buffer, image_display, background_display, highlight_cmap, integration_region_overlay, _initial_simulation_loading_overlay_artists
+    global \
+        global_image_buffer, \
+        image_display, \
+        background_display, \
+        highlight_cmap, \
+        integration_region_overlay, \
+        _initial_simulation_loading_overlay_artists
 
     figure_canvas_cls = _get_tk_figure_canvas_cls()
     fig = Figure(figsize=(8, 8))
@@ -2167,7 +2280,6 @@ def _initialize_runtime_plot_block_01() -> None:
         origin="upper",
     )
 
-
     background_display = ax.imshow(
         gui_display_projection.downsample_raster_for_display(
             background_runtime_state.current_background_display,
@@ -2195,9 +2307,7 @@ def _initialize_runtime_plot_block_01() -> None:
     )
     integration_region_overlay.set_visible(False)
 
-
     _initial_simulation_loading_overlay_artists = []
-
 
 
 def _clear_initial_simulation_loading_overlay(*, redraw: bool = False) -> None:
@@ -2260,9 +2370,7 @@ def _show_initial_simulation_loading_overlay() -> None:
     )
     ax.add_patch(track_artist)
     ax.add_patch(fill_artist)
-    _initial_simulation_loading_overlay_artists.extend(
-        [text_artist, track_artist, fill_artist]
-    )
+    _initial_simulation_loading_overlay_artists.extend([text_artist, track_artist, fill_artist])
 
 
 def _apply_axes_image_origin(image_display, origin):
@@ -2347,15 +2455,9 @@ def _sync_primary_raster_geometry(
             continue
         origin, extent = geometry
         controls_ready = bool(globals().get("_RUNTIME_CONTROLS_INITIALIZED", False))
-        store_geometry = (
-            globals().get("_store_primary_raster_geometry")
-            if controls_ready
-            else None
-        )
+        store_geometry = globals().get("_store_primary_raster_geometry") if controls_ready else None
         apply_projection = (
-            globals().get("_apply_projected_primary_raster_to_artist")
-            if controls_ready
-            else None
+            globals().get("_apply_projected_primary_raster_to_artist") if controls_ready else None
         )
         if callable(store_geometry):
             store_geometry(artist, origin=origin, extent=extent)
@@ -2372,7 +2474,6 @@ def _initialize_runtime_plot_block_02() -> None:
     _sync_primary_raster_geometry(show_caked_image=False)
 
 
-
 def _maybe_refresh_run_status_bar() -> None:
     refresh_fn = globals().get("_refresh_run_status_bar")
     if callable(refresh_fn):
@@ -2386,7 +2487,6 @@ def _set_runtime_canvas(target_canvas) -> None:
     global canvas
 
     canvas = target_canvas
-
 
 
 # ---------------------------------------------------------------------------
@@ -2535,13 +2635,27 @@ def _current_optics_mode_flag() -> int:
 
 
 def _initialize_runtime_plot_block_04() -> None:
-    global colorbar_main, caked_cbar_ax, caked_colorbar, center_marker, selected_peak_marker, _main_matplotlib_preview_controller, geometry_preview_state, geometry_q_group_view_state
-    global geometry_q_group_state, geometry_manual_state, primary_canvas_interaction_canvas, primary_canvas_interaction_cids
+    global \
+        colorbar_main, \
+        caked_cbar_ax, \
+        caked_colorbar, \
+        center_marker, \
+        selected_peak_marker, \
+        _main_matplotlib_preview_controller, \
+        geometry_preview_state, \
+        geometry_q_group_view_state
+    global \
+        geometry_q_group_state, \
+        geometry_manual_state, \
+        primary_canvas_interaction_canvas, \
+        primary_canvas_interaction_cids
 
-    colorbar_main, caked_cbar_ax, caked_colorbar = gui_main_figure_chrome.configure_main_figure_layout(
-        fig,
-        ax,
-        image_display,
+    colorbar_main, caked_cbar_ax, caked_colorbar = (
+        gui_main_figure_chrome.configure_main_figure_layout(
+            fig,
+            ax,
+            image_display,
+        )
     )
 
     (center_marker,) = ax.plot(center_default[1], center_default[0], "ro", markersize=5, zorder=2)
@@ -2600,7 +2714,6 @@ def _initialize_runtime_plot_block_04() -> None:
     _set_runtime_canvas(matplotlib_canvas)
     primary_canvas_interaction_canvas = None
     primary_canvas_interaction_cids = ()
-
 
 
 def _legacy_main_matplotlib_interaction_active() -> bool:
@@ -2672,16 +2785,22 @@ def _suspend_legacy_main_matplotlib_overlays() -> None:
     )
 
 
-def _restore_legacy_main_matplotlib_overlays() -> bool:
+def _restore_legacy_main_matplotlib_overlays(*, redraw: bool = True) -> bool:
     if not _legacy_main_matplotlib_interaction_active():
         simulation_runtime_state.main_matplotlib_overlays_suspended = False
         return False
     return bool(
         gui_main_matplotlib_interaction.restore_main_matplotlib_overlays(
             simulation_runtime_state,
-            restore_callback=lambda: (
-                _refresh_settled_overlays(),
-                _request_legacy_main_matplotlib_redraw(force=True),
+            restore_callback=(
+                (
+                    lambda: (
+                        _refresh_settled_overlays(),
+                        _request_legacy_main_matplotlib_redraw(force=True),
+                    )
+                )
+                if bool(redraw)
+                else None
             ),
         )
     )
@@ -2713,9 +2832,28 @@ def _commit_legacy_main_matplotlib_preview_view() -> bool:
     simulation_runtime_state.interaction_drag_active = False
     simulation_runtime_state.interaction_drag_requires_settled_update = False
     _refresh_run_status_bar()
-    if not _restore_legacy_main_matplotlib_overlays():
+    if not _restore_legacy_main_matplotlib_overlays(redraw=True):
         _request_legacy_main_matplotlib_redraw(force=True)
     return True
+
+
+def _reset_main_figure_live_interaction_state(*, redraw: bool = True) -> None:
+    gui_controllers.clear_tk_after_token(
+        root,
+        getattr(simulation_runtime_state, "interaction_settle_token", None),
+    )
+    setattr(simulation_runtime_state, "interaction_settle_token", None)
+    setattr(simulation_runtime_state, "interaction_drag_active", False)
+    setattr(simulation_runtime_state, "interaction_drag_requires_settled_update", False)
+    restored_overlays = False
+    if bool(getattr(simulation_runtime_state, "main_matplotlib_overlays_suspended", False)):
+        try:
+            restored_overlays = bool(_restore_legacy_main_matplotlib_overlays(redraw=bool(redraw)))
+        except Exception:
+            restored_overlays = False
+    if not restored_overlays:
+        setattr(simulation_runtime_state, "main_matplotlib_overlays_suspended", False)
+    _maybe_refresh_run_status_bar()
 
 
 def _clear_legacy_main_matplotlib_preview_view(*, redraw: bool = True) -> bool:
@@ -2724,15 +2862,30 @@ def _clear_legacy_main_matplotlib_preview_view(*, redraw: bool = True) -> bool:
         return False
     cleared = bool(preview_controller.clear_preview_view(redraw=bool(redraw)))
     if cleared:
-        simulation_runtime_state.interaction_drag_active = False
-        simulation_runtime_state.interaction_drag_requires_settled_update = False
-        gui_controllers.clear_tk_after_token(
-            root,
-            simulation_runtime_state.interaction_settle_token,
-        )
-        simulation_runtime_state.interaction_settle_token = None
-        simulation_runtime_state.main_matplotlib_overlays_suspended = False
-        _refresh_run_status_bar()
+        _reset_main_figure_live_interaction_state(redraw=bool(redraw))
+    return cleared
+
+
+def _clear_pending_main_figure_preview_interaction() -> bool:
+    """Drop transient main-figure preview state without committing old limits."""
+
+    preview_cleared = bool(_clear_legacy_main_matplotlib_preview_view(redraw=False))
+    cleared = preview_cleared
+    runtime_state = globals().get("geometry_runtime_state")
+    if runtime_state is None:
+        return cleared
+
+    dropped_preview_state = False
+    if getattr(runtime_state, "_canvas_preview_limits", None) is not None:
+        setattr(runtime_state, "_canvas_preview_limits", None)
+        cleared = True
+        dropped_preview_state = True
+    if getattr(runtime_state, "_canvas_pan_session", None) is not None:
+        setattr(runtime_state, "_canvas_pan_session", None)
+        cleared = True
+        dropped_preview_state = True
+    if dropped_preview_state and not preview_cleared:
+        _reset_main_figure_live_interaction_state(redraw=False)
     return cleared
 
 
@@ -2789,8 +2942,24 @@ def _bind_primary_canvas_interactions(target_canvas) -> None:
 
 
 def _initialize_runtime_controls_block_01() -> None:
-    global geometry_fit_history_state, geometry_fit_dataset_cache_state, geometry_fit_parameter_controls_view_state, geometry_fit_constraints_view_state, geometry_tool_actions_view_state, GEOMETRY_MANUAL_UNDO_LIMIT, GEOMETRY_FIT_UNDO_LIMIT, GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX
-    global GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX, GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX, GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG, GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG, GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG, GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG, GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S, GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX
+    global \
+        geometry_fit_history_state, \
+        geometry_fit_dataset_cache_state, \
+        geometry_fit_parameter_controls_view_state, \
+        geometry_fit_constraints_view_state, \
+        geometry_tool_actions_view_state, \
+        GEOMETRY_MANUAL_UNDO_LIMIT, \
+        GEOMETRY_FIT_UNDO_LIMIT, \
+        GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX
+    global \
+        GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX, \
+        GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX, \
+        GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG, \
+        GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG, \
+        GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG, \
+        GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG, \
+        GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S, \
+        GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX
     global GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX
 
     _configure_primary_viewport_redraw_helpers()
@@ -2812,7 +2981,6 @@ def _initialize_runtime_controls_block_01() -> None:
     GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
     GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
     GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
-
 
 
 def _geometry_manual_position_error_px(
@@ -3018,10 +3186,9 @@ def _refine_geometry_manual_pair_entry_from_cache(
         )
     if not isinstance(resolved_source_entry, dict):
         return updated_entry
-    source_key: tuple[object, ...] | None = (
-        _geometry_manual_candidate_source_key(resolved_source_entry)
-        or _geometry_manual_candidate_source_key(updated_entry)
-    )
+    source_key: tuple[object, ...] | None = _geometry_manual_candidate_source_key(
+        resolved_source_entry
+    ) or _geometry_manual_candidate_source_key(updated_entry)
 
     try:
         seed_tth = float(
@@ -3263,10 +3430,9 @@ def _refine_current_geometry_manual_pairs() -> None:
             updated_entries.append(entry)
             skipped_count += 1
             continue
-        source_key = (
-            _geometry_manual_candidate_source_key(source_entry)
-            or _geometry_manual_candidate_source_key(entry)
-        )
+        source_key = _geometry_manual_candidate_source_key(
+            source_entry
+        ) or _geometry_manual_candidate_source_key(entry)
 
         try:
             seed_tth = float(source_entry.get("caked_x", source_entry.get("two_theta_deg", np.nan)))
@@ -3574,7 +3740,11 @@ def _draw_runtime_geometry_fit_initial_pairs_overlay(
 
 
 def _initialize_runtime_controls_block_02() -> None:
-    global _restore_geometry_fit_undo_state, _geometry_fit_history_callbacks, _undo_last_geometry_fit_base, _redo_last_geometry_fit_base
+    global \
+        _restore_geometry_fit_undo_state, \
+        _geometry_fit_history_callbacks, \
+        _undo_last_geometry_fit_base, \
+        _redo_last_geometry_fit_base
 
     _restore_geometry_fit_undo_state = (
         gui_geometry_fit.build_runtime_geometry_fit_undo_restore_callback(
@@ -3612,7 +3782,6 @@ def _initialize_runtime_controls_block_02() -> None:
     _redo_last_geometry_fit_base = _geometry_fit_history_callbacks.redo
 
 
-
 def _undo_last_geometry_fit_with_cache_invalidation() -> bool:
     """Undo one geometry fit and clear the reusable dataset cache on success."""
 
@@ -3636,7 +3805,6 @@ def _initialize_runtime_controls_block_03() -> None:
 
     _undo_last_geometry_fit = _undo_last_geometry_fit_with_cache_invalidation
     _redo_last_geometry_fit = _redo_last_geometry_fit_with_cache_invalidation
-
 
 
 def _geometry_manual_pair_entry_to_jsonable(
@@ -4052,16 +4220,12 @@ def _geometry_manual_refine_preview_point(
                 detector_to_caked = None
             if callable(detector_to_caked):
                 match_cfg = (
-                    dict(cache_data.get("match_config", {}))
-                    if isinstance(cache_data, dict)
-                    else {}
+                    dict(cache_data.get("match_config", {})) if isinstance(cache_data, dict) else {}
                 )
                 try:
-                    resolved_match_cfg, caked_background_context = (
-                        _auto_match_background_context(
-                            caked_background,
-                            match_cfg,
-                        )
+                    resolved_match_cfg, caked_background_context = _auto_match_background_context(
+                        caked_background,
+                        match_cfg,
                     )
                 except Exception:
                     resolved_match_cfg = dict(match_cfg)
@@ -4092,12 +4256,8 @@ def _geometry_manual_refine_preview_point(
                 )
                 if isinstance(refined_detector_pick, Mapping):
                     try:
-                        refined_col = float(
-                            refined_detector_pick["refined_display_col"]
-                        )
-                        refined_row = float(
-                            refined_detector_pick["refined_display_row"]
-                        )
+                        refined_col = float(refined_detector_pick["refined_display_col"])
+                        refined_row = float(refined_detector_pick["refined_display_row"])
                     except Exception:
                         refined_col = float("nan")
                         refined_row = float("nan")
@@ -4353,9 +4513,7 @@ def _current_geometry_fit_caked_roi_selection(
 
     snapshot = dict(simulation_runtime_state.source_row_snapshots.get(int(background_index)) or {})
     source_rows = [
-        dict(entry)
-        for entry in (snapshot.get("rows") or ())
-        if isinstance(entry, Mapping)
+        dict(entry) for entry in (snapshot.get("rows") or ()) if isinstance(entry, Mapping)
     ]
     if not source_rows:
         source_rows = [
@@ -4371,9 +4529,7 @@ def _current_geometry_fit_caked_roi_selection(
         required_pairs=required_pairs,
         image_shape=native_shape,
         fit_config=fit_config,
-        enabled_override=(
-            True if force_enabled else _current_geometry_fit_caked_roi_enabled()
-        ),
+        enabled_override=(True if force_enabled else _current_geometry_fit_caked_roi_enabled()),
         fit_space_to_detector_point=_geometry_fit_caked_roi_fit_space_to_detector_point(
             detector_shape=native_shape,
             radial_axis=simulation_runtime_state.last_caked_radial_values,
@@ -4522,11 +4678,7 @@ def _geometry_fit_detector_shape_2d(
         normalized_shape = tuple(int(v) for v in (detector_shape or ())[:2])
     except Exception:
         return None
-    if (
-        len(normalized_shape) < 2
-        or int(normalized_shape[0]) <= 0
-        or int(normalized_shape[1]) <= 0
-    ):
+    if len(normalized_shape) < 2 or int(normalized_shape[0]) <= 0 or int(normalized_shape[1]) <= 0:
         return None
     return int(normalized_shape[0]), int(normalized_shape[1])
 
@@ -4543,13 +4695,9 @@ def _normalize_geometry_fit_caked_view_payload(
     transform_bundle = payload.get("transform_bundle")
     normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
     if normalized_shape is None:
-        normalized_shape = _geometry_fit_detector_shape_2d(
-            payload.get("detector_shape")
-        )
+        normalized_shape = _geometry_fit_detector_shape_2d(payload.get("detector_shape"))
     if normalized_shape is None and isinstance(transform_bundle, CakeTransformBundle):
-        normalized_shape = _geometry_fit_detector_shape_2d(
-            transform_bundle.detector_shape
-        )
+        normalized_shape = _geometry_fit_detector_shape_2d(transform_bundle.detector_shape)
     if normalized_shape is None:
         return None
 
@@ -4575,9 +4723,7 @@ def _normalize_geometry_fit_caked_view_payload(
             raw_phi_to_gui_phi(transform_bundle.raw_azimuth_deg),
             dtype=np.float64,
         ).reshape(-1)
-        azimuth_source = bundle_gui_axis[
-            np.argsort(bundle_gui_axis, kind="stable")
-        ]
+        azimuth_source = bundle_gui_axis[np.argsort(bundle_gui_axis, kind="stable")]
     try:
         radial_axis = np.asarray(
             radial_source,
@@ -4631,9 +4777,8 @@ def _normalize_geometry_fit_caked_view_payload(
         ).reshape(-1)
     except Exception:
         raw_to_gui_row_permutation = canonical_row_permutation
-    if (
-        raw_to_gui_row_permutation.shape != canonical_row_permutation.shape
-        or not np.array_equal(raw_to_gui_row_permutation, canonical_row_permutation)
+    if raw_to_gui_row_permutation.shape != canonical_row_permutation.shape or not np.array_equal(
+        raw_to_gui_row_permutation, canonical_row_permutation
     ):
         raw_to_gui_row_permutation = canonical_row_permutation
 
@@ -4798,9 +4943,8 @@ def _geometry_fit_caked_roi_preview_display_sources(
         if isinstance(preview_background_image, np.ndarray)
         else background_image
     )
-    if (
-        _current_geometry_fit_caked_roi_preview_enabled()
-        and isinstance(preview_background_image, np.ndarray)
+    if _current_geometry_fit_caked_roi_preview_enabled() and isinstance(
+        preview_background_image, np.ndarray
     ):
         return np.asarray(preview_background_image), None
     return primary_source, secondary_source
@@ -5158,9 +5302,7 @@ def _geometry_fit_worker_caked_projection_view(
         return None
 
     radial_bins = (
-        int(max(1, npt_rad))
-        if npt_rad is not None
-        else int(max(1, DEFAULT_ANALYSIS_RADIAL_BINS))
+        int(max(1, npt_rad)) if npt_rad is not None else int(max(1, DEFAULT_ANALYSIS_RADIAL_BINS))
     )
     azimuth_bins = (
         int(max(1, npt_azim))
@@ -5262,9 +5404,30 @@ def _refine_caked_peak_center(
 
 
 def _initialize_runtime_controls_block_04() -> None:
-    global geometry_manual_projection_workflow, geometry_manual_projection_runtime, geometry_manual_projection_runtime_callbacks, _geometry_manual_pick_uses_caked_space, _current_geometry_manual_pick_background_image, _geometry_manual_entry_display_coords, _caked_angles_to_background_display_coords, _background_display_to_native_detector_coords
-    global _native_detector_coords_to_caked_display_coords, _project_geometry_manual_peaks_to_current_view, _geometry_manual_simulated_peaks_for_params, _geometry_manual_last_simulation_diagnostics, _geometry_manual_pick_candidates, _geometry_manual_simulated_lookup, geometry_manual_cache_workflow, geometry_manual_cache_runtime
-    global geometry_manual_cache_runtime_callbacks, _current_geometry_manual_match_config, _geometry_manual_pick_cache_signature, _get_geometry_manual_pick_cache, _build_geometry_manual_initial_pairs_display
+    global \
+        geometry_manual_projection_workflow, \
+        geometry_manual_projection_runtime, \
+        geometry_manual_projection_runtime_callbacks, \
+        _geometry_manual_pick_uses_caked_space, \
+        _current_geometry_manual_pick_background_image, \
+        _geometry_manual_entry_display_coords, \
+        _caked_angles_to_background_display_coords, \
+        _background_display_to_native_detector_coords
+    global \
+        _native_detector_coords_to_caked_display_coords, \
+        _project_geometry_manual_peaks_to_current_view, \
+        _geometry_manual_simulated_peaks_for_params, \
+        _geometry_manual_last_simulation_diagnostics, \
+        _geometry_manual_pick_candidates, \
+        _geometry_manual_simulated_lookup, \
+        geometry_manual_cache_workflow, \
+        geometry_manual_cache_runtime
+    global \
+        geometry_manual_cache_runtime_callbacks, \
+        _current_geometry_manual_match_config, \
+        _geometry_manual_pick_cache_signature, \
+        _get_geometry_manual_pick_cache, \
+        _build_geometry_manual_initial_pairs_display
 
     geometry_manual_projection_workflow = (
         gui_runtime_geometry_interaction.build_runtime_geometry_manual_projection_workflow(
@@ -5312,6 +5475,12 @@ def _initialize_runtime_controls_block_04() -> None:
             backend_detector_coords_to_native_detector_coords=(
                 _backend_background_to_native_detector_coords
             ),
+            native_detector_coords_to_bundle_detector_coords=(
+                _native_detector_coords_to_live_bundle_detector_coords
+            ),
+            bundle_detector_coords_to_background_display_coords=(
+                _live_bundle_detector_coords_to_background_display_coords
+            ),
             scattering_angles_to_detector_pixel=_scattering_angles_to_detector_pixel,
             filter_simulated_peaks=(
                 lambda *args, **kwargs: globals()["_filter_geometry_fit_simulated_peaks"](
@@ -5329,7 +5498,9 @@ def _initialize_runtime_controls_block_04() -> None:
     )
     geometry_manual_projection_runtime = geometry_manual_projection_workflow.runtime
     geometry_manual_projection_runtime_callbacks = geometry_manual_projection_workflow.callbacks
-    _geometry_manual_pick_uses_caked_space = geometry_manual_projection_workflow.pick_uses_caked_space
+    _geometry_manual_pick_uses_caked_space = (
+        geometry_manual_projection_workflow.pick_uses_caked_space
+    )
     _current_geometry_manual_pick_background_image = (
         geometry_manual_projection_workflow.current_background_image
     )
@@ -5355,19 +5526,22 @@ def _initialize_runtime_controls_block_04() -> None:
     _geometry_manual_pick_candidates = geometry_manual_projection_workflow.pick_candidates
     _geometry_manual_simulated_lookup = geometry_manual_projection_workflow.simulated_lookup
 
-
     geometry_manual_cache_workflow = (
         gui_runtime_geometry_interaction.build_runtime_geometry_manual_cache_workflow(
             bootstrap_module=gui_bootstrap,
             manual_geometry_module=gui_manual_geometry,
             fit_config=fit_config,
             last_simulation_signature=(lambda: simulation_runtime_state.last_simulation_signature),
-            current_background_index=(lambda: int(background_runtime_state.current_background_index)),
+            current_background_index=(
+                lambda: int(background_runtime_state.current_background_index)
+            ),
             current_background_image=_current_geometry_manual_pick_background_image,
             use_caked_space=_geometry_manual_pick_uses_caked_space,
             geometry_preview_excluded_q_groups=(lambda: geometry_preview_state.excluded_q_groups),
             geometry_q_group_cached_entries=(lambda: geometry_q_group_state.cached_entries),
-            stored_max_positions_local=(lambda: simulation_runtime_state.stored_max_positions_local),
+            stored_max_positions_local=(
+                lambda: simulation_runtime_state.stored_max_positions_local
+            ),
             stored_peak_table_lattice=(lambda: simulation_runtime_state.stored_peak_table_lattice),
             peak_records=(lambda: simulation_runtime_state.peak_records),
             current_cache_signature=(lambda: geometry_runtime_state.manual_pick_cache_signature),
@@ -5415,7 +5589,6 @@ def _initialize_runtime_controls_block_04() -> None:
     )
 
 
-
 def _clear_geometry_pick_artists(*, redraw: bool = True):
     """Remove geometry fit markers from the plot and reset the cache."""
 
@@ -5437,82 +5610,84 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
 
 
 def _initialize_runtime_controls_block_05() -> None:
-    global qr_cylinder_overlay_workflow, active_qr_cylinder_overlay_entries_factory, qr_cylinder_overlay_render_config_factory, qr_cylinder_overlay_runtime, qr_cylinder_overlay_runtime_bindings_factory, qr_cylinder_overlay_runtime_refresh, _qr_cylinder_overlay_runtime_toggle_impl
+    global \
+        qr_cylinder_overlay_workflow, \
+        active_qr_cylinder_overlay_entries_factory, \
+        qr_cylinder_overlay_render_config_factory, \
+        qr_cylinder_overlay_runtime, \
+        qr_cylinder_overlay_runtime_bindings_factory, \
+        qr_cylinder_overlay_runtime_refresh, \
+        _qr_cylinder_overlay_runtime_toggle_impl
 
-    qr_cylinder_overlay_workflow = (
-        gui_runtime_qr_cylinder_overlay.build_runtime_qr_cylinder_overlay_workflow(
-            bragg_qr_manager_module=gui_bragg_qr_manager,
-            qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
-            bootstrap_module=gui_bootstrap,
-            active_entry_factory_kwargs={
-                "simulation_runtime_state": simulation_runtime_state,
-                "primary_candidate": (lambda: a_var.get()),
-                "primary_fallback": float(av),
-                "secondary_candidate": (lambda: av2),
-                "primary_miller_all": (lambda: globals().get("SIM_MILLER1")),
-                "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
-            },
-            render_config_factory_kwargs={
-                "render_in_caked_space_factory": (lambda: _active_caked_primary_view()),
-                "image_size": int(image_size),
-                "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
-                "center_col_factory": (lambda: float(center_y_var.get())),
-                "center_row_factory": (lambda: float(center_x_var.get())),
-                "distance_cor_to_detector_factory": (lambda: float(corto_detector_var.get())),
-                "gamma_deg_factory": (lambda: float(gamma_var.get())),
-                "Gamma_deg_factory": (lambda: float(Gamma_var.get())),
-                "chi_deg_factory": (lambda: float(chi_var.get())),
-                "psi_deg_factory": (lambda: float(psi)),
-                "psi_z_deg_factory": (lambda: float(psi_z_var.get())),
-                "zs_factory": (lambda: float(zs_var.get())),
-                "zb_factory": (lambda: float(zb_var.get())),
-                "theta_initial_deg_factory": (
-                    lambda: float(_current_effective_theta_initial(strict_count=False))
-                ),
-                "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
-                "pixel_size_m": float(pixel_size_m),
-                "wavelength": float(lambda_),
-                "n2": n2,
-            },
-            overlay_bootstrap_kwargs={
-                "ax": ax,
-                "overlay_artists": geometry_runtime_state.qr_cylinder_overlay_artists,
-                "overlay_cache": geometry_runtime_state.qr_cylinder_overlay_cache,
-                "overlay_enabled_factory": (
-                    lambda: (
-                        (
-                            bool(
-                                geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get()
-                            )
-                            if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
-                            else False
-                        )
-                        or (
-                            bool(
-                                analysis_view_controls_view_state.show_qz_rods_var.get()
-                            )
-                            if analysis_view_controls_view_state.show_qz_rods_var is not None
-                            and _active_caked_primary_view()
-                            else False
-                        )
+    qr_cylinder_overlay_workflow = gui_runtime_qr_cylinder_overlay.build_runtime_qr_cylinder_overlay_workflow(
+        bragg_qr_manager_module=gui_bragg_qr_manager,
+        qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
+        bootstrap_module=gui_bootstrap,
+        active_entry_factory_kwargs={
+            "simulation_runtime_state": simulation_runtime_state,
+            "primary_candidate": (lambda: a_var.get()),
+            "primary_fallback": float(av),
+            "secondary_candidate": (lambda: av2),
+            "primary_miller_all": (lambda: globals().get("SIM_MILLER1")),
+            "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
+        },
+        render_config_factory_kwargs={
+            "render_in_caked_space_factory": (lambda: _active_caked_primary_view()),
+            "image_size": int(image_size),
+            "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
+            "center_col_factory": (lambda: float(center_y_var.get())),
+            "center_row_factory": (lambda: float(center_x_var.get())),
+            "distance_cor_to_detector_factory": (lambda: float(corto_detector_var.get())),
+            "gamma_deg_factory": (lambda: float(gamma_var.get())),
+            "Gamma_deg_factory": (lambda: float(Gamma_var.get())),
+            "chi_deg_factory": (lambda: float(chi_var.get())),
+            "psi_deg_factory": (lambda: float(psi)),
+            "psi_z_deg_factory": (lambda: float(psi_z_var.get())),
+            "zs_factory": (lambda: float(zs_var.get())),
+            "zb_factory": (lambda: float(zb_var.get())),
+            "theta_initial_deg_factory": (
+                lambda: float(_current_effective_theta_initial(strict_count=False))
+            ),
+            "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
+            "pixel_size_m": float(pixel_size_m),
+            "wavelength": float(lambda_),
+            "n2": n2,
+        },
+        overlay_bootstrap_kwargs={
+            "ax": ax,
+            "overlay_artists": geometry_runtime_state.qr_cylinder_overlay_artists,
+            "overlay_cache": geometry_runtime_state.qr_cylinder_overlay_cache,
+            "overlay_enabled_factory": (
+                lambda: (
+                    (
+                        bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
+                        if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
+                        is not None
+                        else False
                     )
-                ),
-                "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
-                "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
-                "get_caked_projection_context": (
-                    lambda: _current_qr_cylinder_caked_projection_context()
-                ),
-                "native_sim_to_display_coords": _native_sim_to_display_coords,
-                "draw_idle_factory": (lambda: canvas.draw_idle if "canvas" in globals() else None),
-                "set_status_text_factory": (
-                    lambda: (
-                        (lambda text: progress_label_positions.config(text=text))
-                        if "progress_label_positions" in globals()
-                        else None
+                    or (
+                        bool(analysis_view_controls_view_state.show_qz_rods_var.get())
+                        if analysis_view_controls_view_state.show_qz_rods_var is not None
+                        and _active_caked_primary_view()
+                        else False
                     )
-                ),
-            },
-        )
+                )
+            ),
+            "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
+            "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
+            "get_caked_projection_context": (
+                lambda: _current_qr_cylinder_caked_projection_context()
+            ),
+            "native_sim_to_display_coords": _native_sim_to_display_coords,
+            "draw_idle_factory": (lambda: canvas.draw_idle if "canvas" in globals() else None),
+            "set_status_text_factory": (
+                lambda: (
+                    (lambda text: progress_label_positions.config(text=text))
+                    if "progress_label_positions" in globals()
+                    else None
+                )
+            ),
+        },
     )
     active_qr_cylinder_overlay_entries_factory = qr_cylinder_overlay_workflow.active_entries_factory
     qr_cylinder_overlay_render_config_factory = qr_cylinder_overlay_workflow.render_config_factory
@@ -5520,7 +5695,6 @@ def _initialize_runtime_controls_block_05() -> None:
     qr_cylinder_overlay_runtime_bindings_factory = qr_cylinder_overlay_workflow.bindings_factory
     qr_cylinder_overlay_runtime_refresh = qr_cylinder_overlay_workflow.refresh
     _qr_cylinder_overlay_runtime_toggle_impl = qr_cylinder_overlay_workflow.toggle
-
 
 
 def qr_cylinder_overlay_runtime_toggle(*args, **kwargs):
@@ -5539,7 +5713,11 @@ QR_CYLINDER_DISPLAY_MODE_OPTIONS = (
 
 
 def _initialize_runtime_controls_block_06() -> None:
-    global QR_CYLINDER_DISPLAY_MODE_OFF, QR_CYLINDER_DISPLAY_MODE_ADD, QR_CYLINDER_DISPLAY_MODE_REPLACE, QR_CYLINDER_DISPLAY_MODE_OPTIONS
+    global \
+        QR_CYLINDER_DISPLAY_MODE_OFF, \
+        QR_CYLINDER_DISPLAY_MODE_ADD, \
+        QR_CYLINDER_DISPLAY_MODE_REPLACE, \
+        QR_CYLINDER_DISPLAY_MODE_OPTIONS
 
     QR_CYLINDER_DISPLAY_MODE_OFF = "Off"
     QR_CYLINDER_DISPLAY_MODE_ADD = "Add to Image"
@@ -5549,7 +5727,6 @@ def _initialize_runtime_controls_block_06() -> None:
         QR_CYLINDER_DISPLAY_MODE_ADD,
         QR_CYLINDER_DISPLAY_MODE_REPLACE,
     )
-
 
 
 def _qr_cylinder_display_mode(default=QR_CYLINDER_DISPLAY_MODE_OFF) -> str:
@@ -5670,9 +5847,29 @@ def _live_geometry_preview_signature() -> tuple[object, ...]:
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
 def _initialize_runtime_controls_block_07() -> None:
-    global hkl_lookup_view_state, bragg_qr_manager_view_state, hbn_geometry_debug_view_state, geometry_overlay_actions_view_state, analysis_view_controls_view_state, analysis_export_controls_view_state, analysis_peak_tools_view_state, analysis_popout_view_state
-    global integration_range_controls_view_state, analysis_peak_selection_state, display_controls_state, display_controls_view_state, primary_cif_controls_view_state, cif_weight_controls_view_state, structure_factor_pruning_controls_view_state, beam_mosaic_parameter_sliders_view_state
-    global sampling_optics_controls_view_state, finite_stack_controls_view_state, ordered_structure_fit_view_state, stacking_parameter_controls_view_state
+    global \
+        hkl_lookup_view_state, \
+        bragg_qr_manager_view_state, \
+        hbn_geometry_debug_view_state, \
+        geometry_overlay_actions_view_state, \
+        analysis_view_controls_view_state, \
+        analysis_export_controls_view_state, \
+        analysis_peak_tools_view_state, \
+        analysis_popout_view_state
+    global \
+        integration_range_controls_view_state, \
+        analysis_peak_selection_state, \
+        display_controls_state, \
+        display_controls_view_state, \
+        primary_cif_controls_view_state, \
+        cif_weight_controls_view_state, \
+        structure_factor_pruning_controls_view_state, \
+        beam_mosaic_parameter_sliders_view_state
+    global \
+        sampling_optics_controls_view_state, \
+        finite_stack_controls_view_state, \
+        ordered_structure_fit_view_state, \
+        stacking_parameter_controls_view_state
 
     hkl_lookup_view_state = app_state.hkl_lookup_view
     bragg_qr_manager_view_state = app_state.bragg_qr_manager_view
@@ -5696,7 +5893,6 @@ def _initialize_runtime_controls_block_07() -> None:
     stacking_parameter_controls_view_state = app_state.stacking_parameter_controls_view
 
 
-
 def _sync_peak_selection_state() -> None:
     """Normalize peak/HKL interaction flags stored in shared app state."""
 
@@ -5708,7 +5904,6 @@ def _sync_peak_selection_state() -> None:
 
 def _initialize_runtime_controls_block_08() -> None:
     _sync_peak_selection_state()
-
 
 
 def _update_geometry_preview_exclude_button_label():
@@ -5728,9 +5923,30 @@ def _process_peaks_parallel_safe_prefer_python_runner(*args, **kwargs):
 
 
 def _initialize_runtime_controls_block_09() -> None:
-    global pruning_workflow, bragg_qr_workflow_runtime, current_sf_prune_bias, current_solve_q_values, update_sf_prune_status_label, apply_bragg_qr_filters, on_sf_prune_bias_change, on_solve_q_steps_change
-    global on_solve_q_rel_tol_change, set_solve_q_control_states, on_solve_q_mode_change, structure_factor_pruning_controls_runtime, peak_selection_workflow, peak_selection_runtime, ensure_peak_overlay_data, peak_selection_runtime_callbacks
-    global peak_selection_runtime_maintenance, hkl_lookup_controls_runtime, _base_update_hkl_pick_button_label, _base_set_hkl_pick_mode, _base_toggle_hkl_pick_mode
+    global \
+        pruning_workflow, \
+        bragg_qr_workflow_runtime, \
+        current_sf_prune_bias, \
+        current_solve_q_values, \
+        update_sf_prune_status_label, \
+        apply_bragg_qr_filters, \
+        on_sf_prune_bias_change, \
+        on_solve_q_steps_change
+    global \
+        on_solve_q_rel_tol_change, \
+        set_solve_q_control_states, \
+        on_solve_q_mode_change, \
+        structure_factor_pruning_controls_runtime, \
+        peak_selection_workflow, \
+        peak_selection_runtime, \
+        ensure_peak_overlay_data, \
+        peak_selection_runtime_callbacks
+    global \
+        peak_selection_runtime_maintenance, \
+        hkl_lookup_controls_runtime, \
+        _base_update_hkl_pick_button_label, \
+        _base_set_hkl_pick_mode, \
+        _base_toggle_hkl_pick_mode
 
     pruning_workflow = gui_runtime_fit_analysis.build_runtime_pruning_workflow(
         bootstrap_module=gui_bootstrap,
@@ -5832,85 +6048,98 @@ def _initialize_runtime_controls_block_09() -> None:
     on_solve_q_mode_change = pruning_workflow.on_solve_q_mode_change
     structure_factor_pruning_controls_runtime = pruning_workflow.controls_runtime
 
-
-    peak_selection_workflow = gui_runtime_geometry_interaction.build_runtime_peak_selection_workflow(
-        bootstrap_module=gui_bootstrap,
-        peak_selection_module=gui_peak_selection,
-        views_module=gui_views,
-        hkl_lookup_view_state=hkl_lookup_view_state,
-        open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
-        simulation_runtime_state=simulation_runtime_state,
-        peak_selection_state=peak_selection_state,
-        image_size=int(image_size),
-        hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
-        selected_peak_marker_factory=lambda: selected_peak_marker,
-        current_primary_a_factory=lambda: float(av),
-        caked_view_enabled_factory=lambda: _active_caked_primary_view(),
-        primary_a_factory=lambda: float(av),
-        primary_c_factory=lambda: float(cv),
-        max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
-        min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-        image_shape_factory=lambda: (
-            tuple(int(v) for v in global_image_buffer.shape) if global_image_buffer.size else None
-        ),
-        center_col_factory=lambda: float(center_y_var.get()),
-        center_row_factory=lambda: float(center_x_var.get()),
-        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
-        gamma_deg_factory=lambda: float(gamma_var.get()),
-        Gamma_deg_factory=lambda: float(Gamma_var.get()),
-        chi_deg_factory=lambda: float(chi_var.get()),
-        psi_deg_factory=lambda: float(psi),
-        psi_z_deg_factory=lambda: float(psi_z_var.get()),
-        zs_factory=lambda: float(zs_var.get()),
-        zb_factory=lambda: float(zb_var.get()),
-        theta_initial_deg_factory=(lambda: float(_current_effective_theta_initial(strict_count=False))),
-        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
-        sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
-        gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
-        eta_factory=lambda: float(eta_var.get()),
-        wavelength_factory=lambda: float(lambda_),
-        sample_width_m_factory=lambda: float(sample_width_var.get()),
-        sample_length_m_factory=lambda: float(sample_length_var.get()),
-        pixel_size_m_factory=lambda: float(pixel_size_m),
-        debye_x_factory=lambda: float(debye_x_var.get()),
-        debye_y_factory=lambda: float(debye_y_var.get()),
-        detector_center_factory=lambda: (
-            float(center_x_var.get()),
-            float(center_y_var.get()),
-        ),
-        optics_mode_factory=_current_optics_mode_flag,
-        solve_q_values_factory=current_solve_q_values,
-        overlay_primary_a_factory=lambda: float(a_var.get()) if "a_var" in globals() else float(av),
-        overlay_primary_c_factory=lambda: float(c_var.get()) if "c_var" in globals() else float(cv),
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        native_detector_coords_to_caked_display_coords=(_native_detector_coords_to_live_caked_coords),
-        reflection_q_group_metadata=(gui_geometry_q_group_manager.reflection_q_group_metadata),
-        max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        schedule_update_factory=lambda: (
-            globals().get("schedule_update") if callable(globals().get("schedule_update")) else None
-        ),
-        set_status_text_factory=lambda: (
-            (lambda text: progress_label_positions.config(text=text))
-            if "progress_label_positions" in globals()
-            else None
-        ),
-        draw_idle_factory=lambda: (
-            _request_overlay_canvas_redraw
-            if callable(globals().get("_request_overlay_canvas_redraw"))
-            else None
-        ),
-        display_to_native_sim_coords=_display_to_native_sim_coords,
-        deactivate_conflicting_modes_factory=lambda: (
-            lambda: (
-                _set_geometry_manual_pick_mode(False),
-                _set_geometry_preview_exclude_mode(False),
-            )
-        ),
-        on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
-        n2=n2,
-        process_peaks_parallel=_process_peaks_parallel_safe_prefer_python_runner,
-        tcl_error_types=(tk.TclError,),
+    peak_selection_workflow = (
+        gui_runtime_geometry_interaction.build_runtime_peak_selection_workflow(
+            bootstrap_module=gui_bootstrap,
+            peak_selection_module=gui_peak_selection,
+            views_module=gui_views,
+            hkl_lookup_view_state=hkl_lookup_view_state,
+            open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
+            simulation_runtime_state=simulation_runtime_state,
+            peak_selection_state=peak_selection_state,
+            image_size=int(image_size),
+            hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
+            selected_peak_marker_factory=lambda: selected_peak_marker,
+            current_primary_a_factory=lambda: float(av),
+            caked_view_enabled_factory=lambda: _active_caked_primary_view(),
+            primary_a_factory=lambda: float(av),
+            primary_c_factory=lambda: float(cv),
+            max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
+            min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+            image_shape_factory=lambda: (
+                tuple(int(v) for v in global_image_buffer.shape)
+                if global_image_buffer.size
+                else None
+            ),
+            center_col_factory=lambda: float(center_y_var.get()),
+            center_row_factory=lambda: float(center_x_var.get()),
+            distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+            gamma_deg_factory=lambda: float(gamma_var.get()),
+            Gamma_deg_factory=lambda: float(Gamma_var.get()),
+            chi_deg_factory=lambda: float(chi_var.get()),
+            psi_deg_factory=lambda: float(psi),
+            psi_z_deg_factory=lambda: float(psi_z_var.get()),
+            zs_factory=lambda: float(zs_var.get()),
+            zb_factory=lambda: float(zb_var.get()),
+            theta_initial_deg_factory=(
+                lambda: float(_current_effective_theta_initial(strict_count=False))
+            ),
+            cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
+            sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
+            gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
+            eta_factory=lambda: float(eta_var.get()),
+            wavelength_factory=lambda: float(lambda_),
+            sample_width_m_factory=lambda: float(sample_width_var.get()),
+            sample_length_m_factory=lambda: float(sample_length_var.get()),
+            pixel_size_m_factory=lambda: float(pixel_size_m),
+            debye_x_factory=lambda: float(debye_x_var.get()),
+            debye_y_factory=lambda: float(debye_y_var.get()),
+            detector_center_factory=lambda: (
+                float(center_x_var.get()),
+                float(center_y_var.get()),
+            ),
+            optics_mode_factory=_current_optics_mode_flag,
+            solve_q_values_factory=current_solve_q_values,
+            overlay_primary_a_factory=lambda: (
+                float(a_var.get()) if "a_var" in globals() else float(av)
+            ),
+            overlay_primary_c_factory=lambda: (
+                float(c_var.get()) if "c_var" in globals() else float(cv)
+            ),
+            native_sim_to_display_coords=_native_sim_to_display_coords,
+            native_detector_coords_to_caked_display_coords=(
+                _native_detector_coords_to_live_caked_coords
+            ),
+            reflection_q_group_metadata=(gui_geometry_q_group_manager.reflection_q_group_metadata),
+            max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
+            sync_peak_selection_state=_sync_peak_selection_state,
+            schedule_update_factory=lambda: (
+                globals().get("schedule_update")
+                if callable(globals().get("schedule_update"))
+                else None
+            ),
+            set_status_text_factory=lambda: (
+                (lambda text: progress_label_positions.config(text=text))
+                if "progress_label_positions" in globals()
+                else None
+            ),
+            draw_idle_factory=lambda: (
+                _request_overlay_canvas_redraw
+                if callable(globals().get("_request_overlay_canvas_redraw"))
+                else None
+            ),
+            display_to_native_sim_coords=_display_to_native_sim_coords,
+            deactivate_conflicting_modes_factory=lambda: (
+                lambda: (
+                    _set_geometry_manual_pick_mode(False),
+                    _set_geometry_preview_exclude_mode(False),
+                )
+            ),
+            on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
+            n2=n2,
+            process_peaks_parallel=_process_peaks_parallel_safe_prefer_python_runner,
+            tcl_error_types=(tk.TclError,),
+        )
     )
     peak_selection_runtime = peak_selection_workflow.runtime
     ensure_peak_overlay_data = peak_selection_workflow.ensure_peak_overlay_data
@@ -5918,10 +6147,11 @@ def _initialize_runtime_controls_block_09() -> None:
     peak_selection_runtime_maintenance = peak_selection_workflow.maintenance_callbacks
     hkl_lookup_controls_runtime = peak_selection_workflow.hkl_lookup_controls_runtime
 
-    _base_update_hkl_pick_button_label = peak_selection_runtime_callbacks.update_hkl_pick_button_label
+    _base_update_hkl_pick_button_label = (
+        peak_selection_runtime_callbacks.update_hkl_pick_button_label
+    )
     _base_set_hkl_pick_mode = peak_selection_runtime_callbacks.set_hkl_pick_mode
     _base_toggle_hkl_pick_mode = peak_selection_runtime_callbacks.toggle_hkl_pick_mode
-
 
 
 def _handle_hkl_pick_mode_changed(_armed: bool) -> None:
@@ -5955,20 +6185,36 @@ def _toggle_hkl_pick_mode_with_mode_banner() -> None:
 
 
 def _initialize_runtime_controls_block_10() -> None:
-    global peak_selection_runtime_callbacks, analysis_peak_runtime_callbacks, hkl_lookup_controls_runtime, geometry_manual_workflow, geometry_manual_runtime, geometry_manual_runtime_callbacks, geometry_tool_action_workflow, geometry_tool_action_runtime
-    global geometry_tool_action_runtime_callbacks, _update_geometry_fit_undo_button_state, _update_geometry_manual_pick_button_label, _base_update_geometry_manual_pick_button_label
+    global \
+        peak_selection_runtime_callbacks, \
+        analysis_peak_runtime_callbacks, \
+        hkl_lookup_controls_runtime, \
+        geometry_manual_workflow, \
+        geometry_manual_runtime, \
+        geometry_manual_runtime_callbacks, \
+        geometry_tool_action_workflow, \
+        geometry_tool_action_runtime
+    global \
+        geometry_tool_action_runtime_callbacks, \
+        _update_geometry_fit_undo_button_state, \
+        _update_geometry_manual_pick_button_label, \
+        _base_update_geometry_manual_pick_button_label
 
     peak_selection_runtime_callbacks = gui_peak_selection.SelectedPeakRuntimeCallbacks(
         update_hkl_pick_button_label=_update_hkl_pick_button_label_with_mode_banner,
         set_hkl_pick_mode=_set_hkl_pick_mode_with_mode_banner,
         toggle_hkl_pick_mode=_toggle_hkl_pick_mode_with_mode_banner,
         reselect_current_peak=peak_selection_runtime_callbacks.reselect_current_peak,
-        select_peak_from_hkl_controls=(peak_selection_runtime_callbacks.select_peak_from_hkl_controls),
+        select_peak_from_hkl_controls=(
+            peak_selection_runtime_callbacks.select_peak_from_hkl_controls
+        ),
         clear_selected_peak=peak_selection_runtime_callbacks.clear_selected_peak,
         open_selected_peak_intersection_figure=(
             peak_selection_runtime_callbacks.open_selected_peak_intersection_figure
         ),
-        select_peak_from_canvas_click=(peak_selection_runtime_callbacks.select_peak_from_canvas_click),
+        select_peak_from_canvas_click=(
+            peak_selection_runtime_callbacks.select_peak_from_canvas_click
+        ),
     )
     analysis_peak_runtime_callbacks = SimpleNamespace(
         set_pick_mode=(
@@ -5991,70 +6237,76 @@ def _initialize_runtime_controls_block_10() -> None:
         open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
     )
 
-    geometry_manual_workflow = gui_runtime_geometry_interaction.build_runtime_geometry_manual_workflow(
-        bootstrap_module=gui_bootstrap,
-        manual_geometry_module=gui_manual_geometry,
-        background_visible=lambda: bool(background_runtime_state.visible),
-        current_background_index=(lambda: int(background_runtime_state.current_background_index)),
-        current_background_image=_current_geometry_manual_pick_background_image,
-        pick_session=lambda: geometry_manual_state.pick_session,
-        build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
-        session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
-        clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
-        update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
-        set_background_file_status_text=_refresh_background_status,
-        pair_group_count=_geometry_manual_pair_group_count,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
-            **kwargs,
-        ),
-        set_pairs_for_index=_set_geometry_manual_pairs_for_index,
-        pairs_for_index=_geometry_manual_pairs_for_index,
-        set_pick_session=_set_geometry_manual_pick_session,
-        restore_view=_restore_geometry_manual_pick_view,
-        clear_preview_artists=_clear_geometry_manual_preview_artists,
-        push_undo_state=_push_geometry_manual_undo_state,
-        listed_q_group_entries=(lambda: globals()["_listed_geometry_q_group_entries"]()),
-        format_q_group_line=(
-            lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
-                *args,
+    geometry_manual_workflow = (
+        gui_runtime_geometry_interaction.build_runtime_geometry_manual_workflow(
+            bootstrap_module=gui_bootstrap,
+            manual_geometry_module=gui_manual_geometry,
+            background_visible=lambda: bool(background_runtime_state.visible),
+            current_background_index=(
+                lambda: int(background_runtime_state.current_background_index)
+            ),
+            current_background_image=_current_geometry_manual_pick_background_image,
+            pick_session=lambda: geometry_manual_state.pick_session,
+            build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
+            session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
+            clear_geometry_pick_artists=_clear_geometry_pick_artists,
+            draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
+            update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
+            set_background_file_status_text=_refresh_background_status,
+            pair_group_count=_geometry_manual_pair_group_count,
+            set_status_text=lambda text: progress_label_geometry.config(text=text),
+            get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
+                param_set=_current_geometry_fit_params(),
+                prefer_cache=True,
                 **kwargs,
-            )
-        ),
-        use_caked_space=_geometry_manual_pick_uses_caked_space,
-        pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
-        caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
-        caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
-        set_suppress_drag_press_once=(
-            lambda enabled: setattr(
-                peak_selection_state,
-                "suppress_drag_press_once",
-                bool(enabled),
-            )
-        ),
-        sync_peak_selection_state=_sync_peak_selection_state,
-        refine_preview_point=_geometry_manual_refine_preview_point,
-        remaining_candidates=_geometry_manual_unassigned_group_candidates,
-        preview_due=_geometry_manual_preview_due,
-        nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
-        position_error_px=_geometry_manual_position_error_px,
-        position_sigma_px=_geometry_manual_position_sigma_px,
-        caked_angles_to_background_display_coords=(_caked_angles_to_background_display_coords),
-        caked_axis_to_image_index_fn=_caked_axis_to_image_index,
-        last_caked_radial_values=(lambda: simulation_runtime_state.last_caked_radial_values),
-        last_caked_azimuth_values=(lambda: simulation_runtime_state.last_caked_azimuth_values),
-        background_display_to_native_detector_coords=(_background_display_to_native_detector_coords),
-        refine_saved_pair_entry=(
-            lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
-                entry,
-                source_entry=candidate,
-            )
-        ),
-        show_preview=_show_geometry_manual_preview,
-        refresh_pick_session=_refresh_geometry_manual_pick_session,
+            ),
+            set_pairs_for_index=_set_geometry_manual_pairs_for_index,
+            pairs_for_index=_geometry_manual_pairs_for_index,
+            set_pick_session=_set_geometry_manual_pick_session,
+            restore_view=_restore_geometry_manual_pick_view,
+            clear_preview_artists=_clear_geometry_manual_preview_artists,
+            push_undo_state=_push_geometry_manual_undo_state,
+            listed_q_group_entries=(lambda: globals()["_listed_geometry_q_group_entries"]()),
+            format_q_group_line=(
+                lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
+                    *args,
+                    **kwargs,
+                )
+            ),
+            use_caked_space=_geometry_manual_pick_uses_caked_space,
+            pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
+            caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
+            caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
+            set_suppress_drag_press_once=(
+                lambda enabled: setattr(
+                    peak_selection_state,
+                    "suppress_drag_press_once",
+                    bool(enabled),
+                )
+            ),
+            sync_peak_selection_state=_sync_peak_selection_state,
+            refine_preview_point=_geometry_manual_refine_preview_point,
+            remaining_candidates=_geometry_manual_unassigned_group_candidates,
+            preview_due=_geometry_manual_preview_due,
+            nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
+            position_error_px=_geometry_manual_position_error_px,
+            position_sigma_px=_geometry_manual_position_sigma_px,
+            caked_angles_to_background_display_coords=(_caked_angles_to_background_display_coords),
+            caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+            last_caked_radial_values=(lambda: simulation_runtime_state.last_caked_radial_values),
+            last_caked_azimuth_values=(lambda: simulation_runtime_state.last_caked_azimuth_values),
+            background_display_to_native_detector_coords=(
+                _background_display_to_native_detector_coords
+            ),
+            refine_saved_pair_entry=(
+                lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
+                    entry,
+                    source_entry=candidate,
+                )
+            ),
+            show_preview=_show_geometry_manual_preview,
+            refresh_pick_session=_refresh_geometry_manual_pick_session,
+        )
     )
     geometry_manual_runtime = geometry_manual_workflow.runtime
     geometry_manual_runtime_callbacks = geometry_manual_workflow.callbacks
@@ -6071,7 +6323,9 @@ def _initialize_runtime_controls_block_10() -> None:
                     bool(enabled),
                 )
             ),
-            current_background_index=(lambda: int(background_runtime_state.current_background_index)),
+            current_background_index=(
+                lambda: int(background_runtime_state.current_background_index)
+            ),
             current_pick_session=lambda: geometry_manual_state.pick_session,
             manual_pick_session_active=_geometry_manual_pick_session_active,
             build_manual_pick_button_label=(gui_manual_geometry.geometry_manual_pick_button_label),
@@ -6135,7 +6389,6 @@ def _initialize_runtime_controls_block_10() -> None:
     _base_update_geometry_manual_pick_button_label = _update_geometry_manual_pick_button_label
 
 
-
 def _update_geometry_manual_pick_button_label() -> None:
     _base_update_geometry_manual_pick_button_label()
     refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
@@ -6144,13 +6397,16 @@ def _update_geometry_manual_pick_button_label() -> None:
 
 
 def _initialize_runtime_controls_block_11() -> None:
-    global _set_geometry_manual_pick_mode, _toggle_geometry_manual_pick_mode, _clear_current_geometry_manual_pairs, _render_current_geometry_manual_pairs_base
+    global \
+        _set_geometry_manual_pick_mode, \
+        _toggle_geometry_manual_pick_mode, \
+        _clear_current_geometry_manual_pairs, \
+        _render_current_geometry_manual_pairs_base
 
     _set_geometry_manual_pick_mode = geometry_tool_action_workflow.set_manual_pick_mode
     _toggle_geometry_manual_pick_mode = geometry_tool_action_workflow.toggle_manual_pick_mode
     _clear_current_geometry_manual_pairs = geometry_tool_action_workflow.clear_current_manual_pairs
     _render_current_geometry_manual_pairs_base = geometry_manual_workflow.render_current_pairs
-
 
 
 def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> bool:
@@ -6164,12 +6420,14 @@ def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> boo
 
 
 def _initialize_runtime_controls_block_12() -> None:
-    global _toggle_geometry_manual_selection_at, _place_geometry_manual_selection_at, _update_geometry_manual_pick_preview_base
+    global \
+        _toggle_geometry_manual_selection_at, \
+        _place_geometry_manual_selection_at, \
+        _update_geometry_manual_pick_preview_base
 
     _toggle_geometry_manual_selection_at = geometry_manual_workflow.toggle_selection_at
     _place_geometry_manual_selection_at = geometry_manual_workflow.place_selection_at
     _update_geometry_manual_pick_preview_base = geometry_manual_workflow.update_pick_preview
-
 
 
 def _update_geometry_manual_pick_preview(*args, **kwargs) -> None:
@@ -6182,7 +6440,14 @@ def _update_geometry_manual_pick_preview(*args, **kwargs) -> None:
 
 
 def _initialize_runtime_controls_block_13() -> None:
-    global _cancel_geometry_manual_pick_session, integration_range_workflow, integration_range_update_runtime, integration_range_update_runtime_callbacks, schedule_range_update, _toggle_1d_plots_impl, _toggle_caked_2d_impl
+    global \
+        _cancel_geometry_manual_pick_session, \
+        integration_range_workflow, \
+        integration_range_update_runtime, \
+        integration_range_update_runtime_callbacks, \
+        schedule_range_update, \
+        _toggle_1d_plots_impl, \
+        _toggle_caked_2d_impl
 
     _cancel_geometry_manual_pick_session = geometry_manual_workflow.cancel_pick_session
 
@@ -6243,7 +6508,6 @@ def _initialize_runtime_controls_block_13() -> None:
     schedule_range_update = integration_range_workflow.schedule_range_update
     _toggle_1d_plots_impl = integration_range_workflow.toggle_1d_plots
     _toggle_caked_2d_impl = integration_range_workflow.toggle_caked_2d
-
 
 
 def toggle_1d_plots() -> None:
@@ -6317,6 +6581,7 @@ def _apply_main_caked_view_toggle() -> None:
             lambda: False,
         )()
     )
+    _clear_pending_main_figure_preview_interaction()
     if show_caked_now or simulation_runtime_state.unscaled_image is None:
         schedule_update_fn = globals().get("schedule_update")
         if callable(schedule_update_fn):
@@ -6366,6 +6631,35 @@ def _normalize_app_shell_view_mode_request(
     return normalized
 
 
+def _toggle_caked_2d_requires_overlay_invalidation(target_view_mode: str) -> bool:
+    if str(target_view_mode).strip().lower() not in {"detector", "caked"}:
+        return True
+    geometry_overlay_view_state = globals().get("geometry_overlay_actions_view_state")
+    analysis_view_state = globals().get("analysis_view_controls_view_state")
+    show_geometry_overlays = bool(
+        getattr(
+            getattr(geometry_overlay_view_state, "show_geometry_overlays_var", None),
+            "get",
+            lambda: False,
+        )()
+    )
+    geometry_roi_preview_active = bool(_current_geometry_fit_caked_roi_preview_enabled())
+    show_qz_rods = bool(
+        getattr(
+            getattr(analysis_view_state, "show_qz_rods_var", None),
+            "get",
+            lambda: False,
+        )()
+    )
+    range_values = dict(_current_analysis_range_values() or {})
+    qz_rods_active = bool(
+        show_qz_rods
+        and bool(range_values.get("integrate_qz_rods", False))
+        and float(range_values.get("qr_half_width", 0.0)) > 0.0
+    )
+    return bool(show_geometry_overlays or geometry_roi_preview_active or qz_rods_active)
+
+
 def toggle_caked_2d(requested_mode: str | None = None) -> None:
     show_caked_now = bool(
         getattr(
@@ -6374,14 +6668,16 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
             lambda: False,
         )()
     )
+    target_view_mode = _normalize_app_shell_view_mode_request(
+        requested_mode,
+        fallback="caked" if show_caked_now else "detector",
+    )
     gui_views.set_app_shell_view_mode(
         app_shell_view_state,
-        _normalize_app_shell_view_mode_request(
-            requested_mode,
-            fallback="caked" if show_caked_now else "detector",
-        ),
+        target_view_mode,
     )
-    _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
+    if _toggle_caked_2d_requires_overlay_invalidation(target_view_mode):
+        _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
     _sync_center_marker(redraw=False)
     if bool(analysis_peak_selection_state.pick_armed):
@@ -6403,7 +6699,6 @@ def _initialize_runtime_controls_block_14() -> None:
     global toggle_log_display
 
     toggle_log_display = integration_range_workflow.toggle_log_display
-
 
 
 def _set_persistent_view_mode(mode: str) -> None:
@@ -6438,49 +6733,63 @@ def _set_persistent_view_mode(mode: str) -> None:
 
 
 def _initialize_runtime_controls_block_15() -> None:
-    global integration_range_drag_runtime, integration_range_drag_runtime_bindings_factory, integration_range_drag_runtime_callbacks, refresh_integration_region_visuals, canvas_interaction_workflow, canvas_interaction_runtime, canvas_interaction_runtime_bindings_factory, canvas_interaction_runtime_callbacks
+    global \
+        integration_range_drag_runtime, \
+        integration_range_drag_runtime_bindings_factory, \
+        integration_range_drag_runtime_callbacks, \
+        refresh_integration_region_visuals, \
+        canvas_interaction_workflow, \
+        canvas_interaction_runtime, \
+        canvas_interaction_runtime_bindings_factory, \
+        canvas_interaction_runtime_callbacks
 
-    integration_range_drag_runtime = gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
-        integration_range_drag_module=gui_integration_range_drag,
-        ax=ax,
-        drag_state=integration_range_drag_state,
-        peak_selection_state=peak_selection_state,
-        range_view_state_factory=lambda: globals().get("integration_range_controls_view_state"),
-        integration_region_overlay=integration_region_overlay,
-        image_display=image_display,
-        get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
-        range_visible_factory=lambda: (
-            bool(analysis_view_controls_view_state.show_1d_var.get())
-            if analysis_view_controls_view_state.show_1d_var is not None
-            else False
-        ),
-        caked_view_enabled_factory=lambda: _active_caked_primary_view(),
-        unscaled_image_present_factory=lambda: simulation_runtime_state.unscaled_image is not None,
-        ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
-        show_1d_var_factory=lambda: analysis_view_controls_view_state.show_1d_var,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        schedule_range_update_factory=lambda: (
-            integration_range_update_runtime_callbacks.schedule_range_update
-        ),
-        last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
-        draw_idle_factory=lambda: (
-            _request_main_canvas_redraw
-            if callable(globals().get("_request_main_canvas_redraw"))
-            else None
-        ),
-        set_integration_overlay_image_factory=lambda: _set_primary_integration_overlay_image,
-        caked_custom_mask_factory=lambda: (
-            (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
-            if callable(globals().get("_current_qr_cylinder_caked_band_masks", None))
-            else None
-        ),
-        set_status_text_factory=lambda: (
-            (lambda text: progress_label_positions.config(text=text))
-            if "progress_label_positions" in globals()
-            else None
-        ),
+    integration_range_drag_runtime = (
+        gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
+            integration_range_drag_module=gui_integration_range_drag,
+            ax=ax,
+            drag_state=integration_range_drag_state,
+            peak_selection_state=peak_selection_state,
+            range_view_state_factory=lambda: globals().get("integration_range_controls_view_state"),
+            integration_region_overlay=integration_region_overlay,
+            image_display=image_display,
+            get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
+            range_visible_factory=lambda: (
+                bool(analysis_view_controls_view_state.show_1d_var.get())
+                if analysis_view_controls_view_state.show_1d_var is not None
+                else False
+            ),
+            caked_view_enabled_factory=lambda: _active_caked_primary_view(),
+            unscaled_image_present_factory=lambda: (
+                simulation_runtime_state.unscaled_image is not None
+            ),
+            ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
+            show_1d_var_factory=lambda: analysis_view_controls_view_state.show_1d_var,
+            sync_peak_selection_state=_sync_peak_selection_state,
+            schedule_range_update_factory=lambda: (
+                integration_range_update_runtime_callbacks.schedule_range_update
+            ),
+            last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
+            draw_idle_factory=lambda: (
+                _request_main_canvas_redraw
+                if callable(globals().get("_request_main_canvas_redraw"))
+                else None
+            ),
+            set_integration_overlay_image_factory=lambda: _set_primary_integration_overlay_image,
+            caked_custom_mask_factory=lambda: (
+                (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
+                if callable(globals().get("_current_qr_cylinder_caked_band_masks", None))
+                else None
+            ),
+            set_status_text_factory=lambda: (
+                (lambda text: progress_label_positions.config(text=text))
+                if "progress_label_positions" in globals()
+                else None
+            ),
+        )
     )
-    integration_range_drag_runtime_bindings_factory = integration_range_drag_runtime.bindings_factory
+    integration_range_drag_runtime_bindings_factory = (
+        integration_range_drag_runtime.bindings_factory
+    )
     integration_range_drag_runtime_callbacks = integration_range_drag_runtime.callbacks
     refresh_integration_region_visuals = integration_range_drag_runtime.refresh_visuals
     canvas_interaction_workflow = (
@@ -6539,7 +6848,6 @@ def _initialize_runtime_controls_block_15() -> None:
     # 3)  Bind the handler
     # -----------------------------------------------------------
     _bind_primary_canvas_interactions(canvas)
-
 
 
 # ---------------------------------------------------------------------------
@@ -6683,7 +6991,12 @@ def _apply_intensity_display_range(image_artist, image, min_val, max_val) -> Non
 
 
 def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
-    image_source, _image_extent, _image_origin = _primary_raster_source_payload(image_display)
+    (
+        image_source,
+        _image_extent,
+        _image_origin,
+        _image_source_signature,
+    ) = _primary_raster_source_payload(image_display)
     if image_source is not None:
         image_min, image_max = image_display.get_clim()
         _apply_intensity_display_range(
@@ -6693,9 +7006,12 @@ def _refresh_current_intensity_display_scaling(*, redraw: bool = True) -> None:
             image_max,
         )
 
-    background_source, _background_extent, _background_origin = _primary_raster_source_payload(
-        background_display
-    )
+    (
+        background_source,
+        _background_extent,
+        _background_origin,
+        _background_source_signature,
+    ) = _primary_raster_source_payload(background_display)
     if background_source is not None:
         background_min, background_max = background_display.get_clim()
         _apply_intensity_display_range(
@@ -6751,8 +7067,20 @@ def _apply_simulation_limits():
 
 
 def _initialize_runtime_controls_block_16() -> None:
-    global background_display_defaults, background_vmin_default, background_vmax_default, background_slider_min, background_slider_max, background_slider_step, simulation_slider_min, simulation_slider_max
-    global simulation_slider_step, scale_factor_slider_min, scale_factor_slider_max, scale_factor_step
+    global \
+        background_display_defaults, \
+        background_vmin_default, \
+        background_vmax_default, \
+        background_slider_min, \
+        background_slider_max, \
+        background_slider_step, \
+        simulation_slider_min, \
+        simulation_slider_max
+    global \
+        simulation_slider_step, \
+        scale_factor_slider_min, \
+        scale_factor_slider_max, \
+        scale_factor_step
 
     background_display_defaults = gui_background_manager.resolve_background_display_defaults(
         background_runtime_state.current_background_display
@@ -6762,7 +7090,6 @@ def _initialize_runtime_controls_block_16() -> None:
     background_slider_min = background_display_defaults.slider_min
     background_slider_max = background_display_defaults.slider_max
     background_slider_step = background_display_defaults.slider_step
-
 
     simulation_slider_min = 0.0
     simulation_slider_max = max(background_slider_max, defaults["vmax"] * 5.0)
@@ -6806,7 +7133,6 @@ def _initialize_runtime_controls_block_16() -> None:
     _apply_background_transparency()
 
 
-
 def _get_scale_factor_value(default=1.0):
     simulation_scale_factor_var = display_controls_view_state.simulation_scale_factor_var
     if simulation_scale_factor_var is None:
@@ -6821,13 +7147,20 @@ def _get_scale_factor_value(default=1.0):
 
 
 def _initialize_runtime_controls_block_17() -> None:
-    global MAIN_DISPLAY_RASTER_MIN_SIZE, MAIN_DISPLAY_RASTER_MAX_SIZE, _MAIN_RASTER_SOURCE_ARRAY_ATTR, _MAIN_RASTER_SOURCE_EXTENT_ATTR, _MAIN_RASTER_SOURCE_ORIGIN_ATTR
+    global \
+        MAIN_DISPLAY_RASTER_MIN_SIZE, \
+        MAIN_DISPLAY_RASTER_MAX_SIZE, \
+        _MAIN_RASTER_SOURCE_ARRAY_ATTR, \
+        _MAIN_RASTER_SOURCE_EXTENT_ATTR, \
+        _MAIN_RASTER_SOURCE_ORIGIN_ATTR, \
+        _MAIN_RASTER_SOURCE_SIGNATURE_ATTR
 
     MAIN_DISPLAY_RASTER_MIN_SIZE = gui_display_projection.MIN_DISPLAY_RASTER_SIZE
     MAIN_DISPLAY_RASTER_MAX_SIZE = gui_display_projection.MAX_DISPLAY_RASTER_SIZE
     _MAIN_RASTER_SOURCE_ARRAY_ATTR = "_ra_sim_source_image"
     _MAIN_RASTER_SOURCE_EXTENT_ATTR = "_ra_sim_source_extent"
     _MAIN_RASTER_SOURCE_ORIGIN_ATTR = "_ra_sim_source_origin"
+    _MAIN_RASTER_SOURCE_SIGNATURE_ATTR = "_ra_sim_source_signature"
 
 
 MAIN_DISPLAY_RASTER_MIN_SIZE = gui_display_projection.MIN_DISPLAY_RASTER_SIZE
@@ -6835,7 +7168,7 @@ MAIN_DISPLAY_RASTER_MAX_SIZE = gui_display_projection.MAX_DISPLAY_RASTER_SIZE
 _MAIN_RASTER_SOURCE_ARRAY_ATTR = "_ra_sim_source_image"
 _MAIN_RASTER_SOURCE_EXTENT_ATTR = "_ra_sim_source_extent"
 _MAIN_RASTER_SOURCE_ORIGIN_ATTR = "_ra_sim_source_origin"
-
+_MAIN_RASTER_SOURCE_SIGNATURE_ATTR = "_ra_sim_source_signature"
 
 
 def _default_main_display_raster_size_limit() -> int:
@@ -6898,14 +7231,115 @@ def _current_main_display_raster_size_limit() -> int:
     return int(_normalize_main_display_raster_size_limit())
 
 
+def _display_scale_signature_value(scale: object | None) -> float:
+    try:
+        scale_value = round(float(scale), 9)
+    except Exception:
+        scale_value = 1.0
+    if not math.isfinite(scale_value):
+        scale_value = 1.0
+    return scale_value
+
+
+def _detector_display_raster_source_signature() -> object | None:
+    unscaled_signature = getattr(simulation_runtime_state, "last_unscaled_image_signature", None)
+    if unscaled_signature is None:
+        return None
+    return (
+        unscaled_signature,
+        _display_scale_signature_value(_get_scale_factor_value(default=1.0)),
+    )
+
+
+def _resolved_primary_raster_source_signature(
+    source: np.ndarray | None,
+    *,
+    explicit_source_signature: object | None = None,
+) -> object | None:
+    if explicit_source_signature is not None:
+        return explicit_source_signature
+    if source is None:
+        return None
+    detector_buffer = globals().get("global_image_buffer")
+    if source is detector_buffer:
+        detector_signature = _detector_display_raster_source_signature()
+        if detector_signature is not None:
+            return detector_signature
+    arr = np.asarray(source)
+    try:
+        data_ptr = int(arr.__array_interface__["data"][0])
+    except Exception:
+        data_ptr = id(arr)
+    return (
+        id(source),
+        data_ptr,
+        tuple(int(value) for value in arr.shape),
+        tuple(int(value) for value in arr.strides),
+        str(arr.dtype),
+    )
+
+
+def _analysis_view_payload_signature(view_mode: str) -> object | None:
+    if str(view_mode) == "q_space":
+        return getattr(simulation_runtime_state, "last_q_space_payload_signature", None)
+    if str(view_mode) == "caked":
+        return getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
+    return None
+
+
+def _analysis_display_raster_source_signature(
+    *,
+    view_mode: str,
+    role: str,
+    scale: object | None,
+    display_source: np.ndarray | None,
+    raw_source: np.ndarray | None,
+) -> object | None:
+    if display_source is None:
+        return None
+    payload_signature = _analysis_view_payload_signature(view_mode)
+    display_array = np.asarray(display_source)
+    raw_array = None if raw_source is None else np.asarray(raw_source)
+    if payload_signature is not None and raw_array is not None and display_array is raw_array:
+        return (
+            str(view_mode),
+            str(role),
+            payload_signature,
+            _display_scale_signature_value(scale),
+        )
+    return _resolved_primary_raster_source_signature(display_array)
+
+
+def _integration_overlay_raster_source_signature(
+    *,
+    parent_source_signature: object | None,
+    overlay_source: np.ndarray | None,
+) -> object | None:
+    return (
+        "integration_region_overlay",
+        parent_source_signature,
+        _resolved_primary_raster_source_signature(overlay_source),
+    )
+
+
 def _store_primary_raster_source(
     artist: object | None,
     image: np.ndarray | None,
+    *,
+    source_signature: object | None = None,
 ) -> np.ndarray | None:
     if artist is None:
         return None
     source = None if image is None else np.asarray(image)
     setattr(artist, _MAIN_RASTER_SOURCE_ARRAY_ATTR, source)
+    setattr(
+        artist,
+        _MAIN_RASTER_SOURCE_SIGNATURE_ATTR,
+        _resolved_primary_raster_source_signature(
+            source,
+            explicit_source_signature=source_signature,
+        ),
+    )
     return source
 
 
@@ -6929,9 +7363,9 @@ def _store_primary_raster_geometry(
 
 def _primary_raster_source_payload(
     artist: object | None,
-) -> tuple[np.ndarray | None, tuple[float, float, float, float] | None, str]:
+) -> tuple[np.ndarray | None, tuple[float, float, float, float] | None, str, object | None]:
     if artist is None:
-        return (None, None, "upper")
+        return (None, None, "upper", None)
 
     source = getattr(artist, _MAIN_RASTER_SOURCE_ARRAY_ATTR, None)
     if source is None:
@@ -6943,6 +7377,7 @@ def _primary_raster_source_payload(
                 current = None
             if current is not None:
                 source = np.asarray(current)
+    source_signature = getattr(artist, _MAIN_RASTER_SOURCE_SIGNATURE_ATTR, None)
 
     extent = getattr(artist, _MAIN_RASTER_SOURCE_EXTENT_ATTR, None)
     if not isinstance(extent, tuple) or len(extent) != 4:
@@ -6955,7 +7390,7 @@ def _primary_raster_source_payload(
             if isinstance(live_extent, tuple) and len(live_extent) == 4:
                 extent = live_extent
     origin = str(getattr(artist, _MAIN_RASTER_SOURCE_ORIGIN_ATTR, "upper") or "upper")
-    return (None if source is None else np.asarray(source), extent, origin)
+    return (None if source is None else np.asarray(source), extent, origin, source_signature)
 
 
 def _current_primary_axis_limits() -> tuple[tuple[float, float], tuple[float, float]] | None:
@@ -6994,7 +7429,7 @@ def _current_primary_axis_bbox_pixels() -> tuple[float | None, float | None]:
 
 
 def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
-    source, extent, origin = _primary_raster_source_payload(artist)
+    source, extent, origin, source_signature = _primary_raster_source_payload(artist)
     if artist is None or source is None or extent is None:
         return False
     if _legacy_main_matplotlib_interaction_active():
@@ -7012,6 +7447,7 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
         bbox_height = None
     projection = gui_display_projection.project_raster_to_view(
         source,
+        source_signature=source_signature,
         extent=extent,
         axis_xlim=axis_xlim,
         axis_ylim=axis_ylim,
@@ -7051,11 +7487,19 @@ def _set_primary_integration_overlay_image(image: object) -> None:
     if overlay_artist is None:
         return
     image_artist = globals().get("image_display")
+    _image_source, image_extent, image_origin, image_source_signature = (
+        _primary_raster_source_payload(image_artist)
+    )
+    overlay_source = None if image is None else np.asarray(image, dtype=float)
+    overlay_source_signature = _integration_overlay_raster_source_signature(
+        parent_source_signature=image_source_signature,
+        overlay_source=overlay_source,
+    )
     _store_primary_raster_source(
         overlay_artist,
-        None if image is None else np.asarray(image, dtype=float),
+        overlay_source,
+        source_signature=overlay_source_signature,
     )
-    _image_source, image_extent, image_origin = _primary_raster_source_payload(image_artist)
     if image_extent is not None:
         _store_primary_raster_geometry(
             overlay_artist,
@@ -7067,8 +7511,7 @@ def _set_primary_integration_overlay_image(image: object) -> None:
 
 def _refresh_main_display_raster_projection() -> None:
     _normalize_main_display_raster_size_limit()
-    if _legacy_main_matplotlib_interaction_active():
-        _clear_legacy_main_matplotlib_preview_view(redraw=False)
+    _clear_pending_main_figure_preview_interaction()
     _apply_current_primary_raster_projection()
     _request_main_canvas_redraw(force_matplotlib=False)
 
@@ -7086,7 +7529,6 @@ def _initialize_runtime_controls_block_18() -> None:
     _sync_primary_raster_geometry(show_caked_image=False)
 
 
-
 def _on_scale_factor_change(*args):
     if display_controls_state.suppress_scale_factor_callback:
         return
@@ -7101,7 +7543,6 @@ def _initialize_runtime_controls_block_19() -> None:
         display_controls_view_state.simulation_scale_factor_var.trace_add(
             "write", _on_scale_factor_change
         )
-
 
 
 def _update_background_slider_defaults(image, reset_override=False):
@@ -7211,7 +7652,6 @@ def _install_scale_factor_entry_bindings():
 
 def _initialize_runtime_controls_block_20() -> None:
     _install_scale_factor_entry_bindings()
-
 
 
 def _suggest_scale_factor(sim_image, bg_image):
@@ -7464,6 +7904,7 @@ def apply_scale_factor_to_existing_results(
             "last_text": "Chi-Squared: N/A",
         },
     )
+    _clear_pending_main_figure_preview_interaction()
     active_view_mode = _resolved_primary_analysis_display_mode()
     show_caked_image = active_view_mode == "caked"
     show_q_space_image = active_view_mode == "q_space"
@@ -7526,7 +7967,7 @@ def apply_scale_factor_to_existing_results(
     else:
         np.multiply(simulation_runtime_state.unscaled_image, float(scale), out=global_image_buffer)
     scaled_image = global_image_buffer
-    base_unscaled_sig = globals().get("last_unscaled_image_signature")
+    base_unscaled_sig = simulation_runtime_state.last_unscaled_image_signature
     chi_square_sig = (
         base_unscaled_sig,
         round(float(scale), 9),
@@ -7584,6 +8025,7 @@ def apply_scale_factor_to_existing_results(
     )
     if show_q_space_image:
         simulation_preview_source = simulation_source
+        background_preview_source = preview_background_source
     else:
         simulation_preview_source, background_preview_source = (
             _geometry_fit_caked_roi_preview_display_sources(
@@ -7595,6 +8037,39 @@ def apply_scale_factor_to_existing_results(
         if not isinstance(simulation_preview_source, np.ndarray):
             simulation_preview_source = simulation_source
 
+    analysis_primary_source_signature = None
+    analysis_background_source_signature = None
+    if show_q_space_image:
+        analysis_primary_source_signature = _analysis_display_raster_source_signature(
+            view_mode="q_space",
+            role="primary",
+            scale=scale,
+            display_source=simulation_preview_source,
+            raw_source=simulation_source,
+        )
+        analysis_background_source_signature = _analysis_display_raster_source_signature(
+            view_mode="q_space",
+            role="background",
+            scale=scale,
+            display_source=background_preview_source,
+            raw_source=preview_background_source,
+        )
+    elif show_caked_image:
+        analysis_primary_source_signature = _analysis_display_raster_source_signature(
+            view_mode="caked",
+            role="primary",
+            scale=scale,
+            display_source=simulation_preview_source,
+            raw_source=simulation_source,
+        )
+        analysis_background_source_signature = _analysis_display_raster_source_signature(
+            view_mode="caked",
+            role="background",
+            scale=scale,
+            display_source=background_preview_source,
+            raw_source=preview_background_source,
+        )
+
     if not show_analysis_image:
         _store_primary_raster_source(image_display, simulation_preview_source)
         _apply_intensity_display_range(
@@ -7604,7 +8079,11 @@ def apply_scale_factor_to_existing_results(
             display_controls_view_state.simulation_max_var.get(),
         )
     else:
-        _store_primary_raster_source(image_display, simulation_preview_source)
+        _store_primary_raster_source(
+            image_display,
+            simulation_preview_source,
+            source_signature=analysis_primary_source_signature,
+        )
     _sync_primary_raster_geometry(view_mode=active_view_mode)
 
     if show_analysis_image:
@@ -7637,7 +8116,11 @@ def apply_scale_factor_to_existing_results(
         else:
             background_display.set_visible(False)
     elif isinstance(background_preview_source, np.ndarray):
-        _store_primary_raster_source(background_display, background_preview_source)
+        _store_primary_raster_source(
+            background_display,
+            background_preview_source,
+            source_signature=analysis_background_source_signature,
+        )
         background_display.set_visible(True)
         _apply_intensity_display_range(
             background_display,
@@ -7694,12 +8177,15 @@ def apply_scale_factor_to_existing_results(
 
 
 def _initialize_runtime_controls_block_21() -> None:
-    global vmin_caked_var, vmax_caked_var, analysis_1d_interaction_bindings, analysis_surfaces_initialized
+    global \
+        vmin_caked_var, \
+        vmax_caked_var, \
+        analysis_1d_interaction_bindings, \
+        analysis_surfaces_initialized
 
     _update_background_slider_defaults(
         background_runtime_state.current_background_display, reset_override=True
     )
-
 
     # Track caked intensity limits without exposing separate sliders in the UI.
     simulation_runtime_state.caked_limits_user_override = False
@@ -7709,7 +8195,6 @@ def _initialize_runtime_controls_block_21() -> None:
 
     analysis_1d_interaction_bindings = None
     analysis_surfaces_initialized = False
-
 
 
 def _reset_analysis_figure_view() -> None:
@@ -7759,7 +8244,15 @@ def _mount_analysis_figure(parent) -> None:
 
 
 def _initialize_runtime_controls_block_22() -> None:
-    global fig_1d, ax_1d_radial, ax_1d_azim, canvas_1d, line_1d_rad, line_1d_rad_bg, line_1d_az, line_1d_az_bg
+    global \
+        fig_1d, \
+        ax_1d_radial, \
+        ax_1d_azim, \
+        canvas_1d, \
+        line_1d_rad, \
+        line_1d_rad_bg, \
+        line_1d_az, \
+        line_1d_az_bg
 
     fig_1d = None
     ax_1d_radial = None
@@ -7769,7 +8262,6 @@ def _initialize_runtime_controls_block_22() -> None:
     line_1d_rad_bg = None
     line_1d_az = None
     line_1d_az_bg = None
-
 
 
 def _ensure_analysis_figure() -> None:
@@ -7798,8 +8290,17 @@ def _ensure_analysis_figure() -> None:
     ax_1d_azim.set_ylabel("Intensity")
     ax_1d_azim.set_title("Azimuthal Integration (φ)")
 
+
 def _initialize_runtime_controls_block_23() -> None:
-    global tth_min_var, tth_max_var, phi_min_var, phi_max_var, tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
+    global \
+        tth_min_var, \
+        tth_max_var, \
+        phi_min_var, \
+        phi_max_var, \
+        tth_min_slider, \
+        tth_max_slider, \
+        phi_min_slider, \
+        phi_max_slider
     global PHI_ZERO_OFFSET_DEGREES, DEFAULT_ANALYSIS_RADIAL_BINS, DEFAULT_ANALYSIS_AZIMUTH_BINS
 
     tth_min_var = None
@@ -7814,7 +8315,6 @@ def _initialize_runtime_controls_block_23() -> None:
     PHI_ZERO_OFFSET_DEGREES = -90.0
     DEFAULT_ANALYSIS_RADIAL_BINS = 1000
     DEFAULT_ANALYSIS_AZIMUTH_BINS = 720
-
 
 
 DEFAULT_ANALYSIS_RADIAL_BINS = 1000
@@ -8181,7 +8681,7 @@ def _prepare_caked_intersection_cache(
         out_cols = max(int(arr.shape[1]), 16)
         out = np.full((arr.shape[0], out_cols), np.nan, dtype=float)
         if arr.shape[0] > 0 and arr.shape[1] > 0:
-            out[:, :arr.shape[1]] = arr
+            out[:, : arr.shape[1]] = arr
         if out.shape[1] >= 16:
             out[:, 14] = np.nan
             out[:, 15] = np.nan
@@ -8238,25 +8738,17 @@ def _initialize_runtime_controls_block_24() -> None:
         "simulated_2d_image": None,
     }
 
-    simulation_runtime_state.last_caked_image_unscaled = None
-    simulation_runtime_state.last_caked_extent = None
-    simulation_runtime_state.last_caked_background_image_unscaled = None
-    simulation_runtime_state.last_caked_radial_values = None
-    simulation_runtime_state.last_caked_azimuth_values = None
-    _set_live_caked_transform_bundle(None)
-    simulation_runtime_state.last_caked_intersection_cache = None
-    simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
-    simulation_runtime_state.last_q_space_image_unscaled = None
-    simulation_runtime_state.last_q_space_extent = None
-    simulation_runtime_state.last_q_space_background_image_unscaled = None
-    simulation_runtime_state.last_q_space_qr_values = None
-    simulation_runtime_state.last_q_space_qz_values = None
+    simulation_runtime_state.last_analysis_cache_sig = None
+    simulation_runtime_state.last_q_space_payload_signature = None
+    _invalidate_cached_analysis_space_payloads(
+        clear_caked=True,
+        clear_q_space=True,
+    )
 
     simulation_runtime_state.last_res2_background = None
     simulation_runtime_state.last_res2_sim = None
     simulation_runtime_state.ai_cache = {}
     simulation_runtime_state.geometry_fit_caking_ai_cache = {}
-
 
 
 def _clear_1d_plot_cache_and_lines():
@@ -8624,9 +9116,28 @@ def _scaled_bragg_qr_dict(qr_dict, scale: float):
 
 
 def _initialize_runtime_controls_block_25() -> None:
-    global line_rmin, line_rmax, line_amin, line_amax, FULL_UPDATE_DEBOUNCE_MS, PREVIEW_UPDATE_DEBOUNCE_MS, UPDATE_DEBOUNCE_MS, RANGE_UPDATE_DEBOUNCE_MS
-    global CHI_SQUARE_UPDATE_INTERVAL_S, SIMULATION_WORKER_POLL_MS, PREVIEW_CALCULATIONS_ENABLED, LIVE_DRAG_PREVIEW_ENABLED, INITIAL_PREVIEW_MAX_SAMPLES, LIVE_DRAG_PREVIEW_MAX_SAMPLES, LIVE_DRAG_ANALYSIS_RADIAL_BINS, LIVE_DRAG_ANALYSIS_AZIMUTH_BINS
-    global LIVE_DRAG_SETTLE_MS, MAIN_MATPLOTLIB_INTERACTION_REDRAW_INTERVAL_S, CAKING_CACHE_MAX_ENTRIES
+    global \
+        line_rmin, \
+        line_rmax, \
+        line_amin, \
+        line_amax, \
+        FULL_UPDATE_DEBOUNCE_MS, \
+        PREVIEW_UPDATE_DEBOUNCE_MS, \
+        UPDATE_DEBOUNCE_MS, \
+        RANGE_UPDATE_DEBOUNCE_MS
+    global \
+        CHI_SQUARE_UPDATE_INTERVAL_S, \
+        SIMULATION_WORKER_POLL_MS, \
+        PREVIEW_CALCULATIONS_ENABLED, \
+        LIVE_DRAG_PREVIEW_ENABLED, \
+        INITIAL_PREVIEW_MAX_SAMPLES, \
+        LIVE_DRAG_PREVIEW_MAX_SAMPLES, \
+        LIVE_DRAG_ANALYSIS_RADIAL_BINS, \
+        LIVE_DRAG_ANALYSIS_AZIMUTH_BINS
+    global \
+        LIVE_DRAG_SETTLE_MS, \
+        MAIN_MATPLOTLIB_INTERACTION_REDRAW_INTERVAL_S, \
+        CAKING_CACHE_MAX_ENTRIES
 
     (line_rmin,) = ax.plot([], [], color="white", linestyle="-", linewidth=2, zorder=5)
     (line_rmax,) = ax.plot([], [], color="white", linestyle="-", linewidth=2, zorder=5)
@@ -8653,7 +9164,6 @@ def _initialize_runtime_controls_block_25() -> None:
     simulation_runtime_state.integration_update_pending = None
     simulation_runtime_state.update_running = False
     simulation_runtime_state.update_trace_counter = 0
-
 
 
 INITIAL_PREVIEW_MAX_SAMPLES = 24
@@ -8684,13 +9194,15 @@ def _cached_hit_tables_reusable(
     return True
 
 
-def _analysis_job_key(payload: object) -> tuple[object, int, bool]:
+def _analysis_job_key(payload: object) -> tuple[object, int, bool, object, object]:
     if not isinstance(payload, dict):
-        return (None, -1, False)
+        return (None, -1, False, None, None)
     return (
         payload.get("signature"),
         int(payload.get("epoch", -1)),
         bool(payload.get("is_preview", False)),
+        payload.get("sim_cache_sig"),
+        payload.get("bg_cache_sig"),
     )
 
 
@@ -8820,9 +9332,11 @@ def _extract_fit_quality_text() -> str:
 
 
 def _current_app_shell_view_mode() -> str:
-    selected_mode = str(
-        getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")() or "detector"
-    ).strip().lower()
+    selected_mode = (
+        str(getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")() or "detector")
+        .strip()
+        .lower()
+    )
     if selected_mode not in {"detector", "caked", "q_space"}:
         selected_mode = "detector"
     show_caked = bool(
@@ -8875,9 +9389,7 @@ def _schedule_exact_cake_numba_warmup_once() -> None:
 
 
 def _schedule_forward_simulation_numba_warmup_once() -> None:
-    if bool(
-        getattr(simulation_runtime_state, "forward_simulation_numba_warmup_scheduled", False)
-    ):
+    if bool(getattr(simulation_runtime_state, "forward_simulation_numba_warmup_scheduled", False)):
         return
     simulation_runtime_state.forward_simulation_numba_warmup_scheduled = True
     try:
@@ -8887,9 +9399,7 @@ def _schedule_forward_simulation_numba_warmup_once() -> None:
 
 
 def _schedule_qr_rod_simulation_numba_warmup_once() -> None:
-    if bool(
-        getattr(simulation_runtime_state, "qr_rod_simulation_numba_warmup_scheduled", False)
-    ):
+    if bool(getattr(simulation_runtime_state, "qr_rod_simulation_numba_warmup_scheduled", False)):
         return
     simulation_runtime_state.qr_rod_simulation_numba_warmup_scheduled = True
     try:
@@ -8947,13 +9457,9 @@ def _default_primary_view_limits(
             if simulation_runtime_state.last_q_space_extent is not None
             else [0.0, 1.0, -1.0, 1.0]
         )
-        if not (
-            math.isfinite(qr_min) and math.isfinite(qr_max) and qr_max > qr_min
-        ):
+        if not (math.isfinite(qr_min) and math.isfinite(qr_max) and qr_max > qr_min):
             qr_min, qr_max = 0.0, 1.0
-        if not (
-            math.isfinite(qz_min) and math.isfinite(qz_max) and qz_max > qz_min
-        ):
+        if not (math.isfinite(qz_min) and math.isfinite(qz_max) and qz_max > qz_min):
             qz_min, qz_max = -1.0, 1.0
         return (
             float(qr_min),
@@ -8985,6 +9491,7 @@ def _default_primary_view_limits(
 
 
 def _reset_primary_figure_view() -> None:
+    _clear_pending_main_figure_preview_interaction()
     x0, x1, y0, y1 = _default_primary_view_limits()
     ax.set_xlim(float(x0), float(x1))
     ax.set_ylim(float(y0), float(y1))
@@ -9429,23 +9936,16 @@ def _refresh_run_status_bar() -> None:
 def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     _invalidate_qr_cylinder_band_cache()
     simulation_runtime_state.last_analysis_signature = None
+    simulation_runtime_state.last_analysis_cache_sig = None
     simulation_runtime_state.analysis_preview_active = False
     simulation_runtime_state.analysis_preview_bins = None
     simulation_runtime_state.last_res2_sim = None
     simulation_runtime_state.last_res2_background = None
-    simulation_runtime_state.last_caked_image_unscaled = None
-    simulation_runtime_state.last_caked_extent = None
-    simulation_runtime_state.last_caked_background_image_unscaled = None
-    simulation_runtime_state.last_caked_radial_values = None
-    simulation_runtime_state.last_caked_azimuth_values = None
-    _set_live_caked_transform_bundle(None)
-    simulation_runtime_state.last_caked_intersection_cache = None
-    simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
-    simulation_runtime_state.last_q_space_image_unscaled = None
-    simulation_runtime_state.last_q_space_extent = None
-    simulation_runtime_state.last_q_space_background_image_unscaled = None
-    simulation_runtime_state.last_q_space_qr_values = None
-    simulation_runtime_state.last_q_space_qz_values = None
+    simulation_runtime_state.last_q_space_payload_signature = None
+    _invalidate_cached_analysis_space_payloads(
+        clear_caked=True,
+        clear_q_space=True,
+    )
     simulation_runtime_state.last_1d_integration_data.update(
         {
             "radials_sim": None,
@@ -9998,7 +10498,7 @@ def _finish_live_interaction() -> None:
         simulation_runtime_state.main_matplotlib_overlays_suspended = False
         schedule_update()
         return
-    _restore_legacy_main_matplotlib_overlays()
+    _restore_legacy_main_matplotlib_overlays(redraw=True)
 
 
 def _begin_main_figure_live_interaction() -> None:
@@ -10052,7 +10552,6 @@ def _initialize_runtime_controls_block_26() -> None:
     root.bind_class("TScale", "<ButtonRelease-1>", _mark_live_interaction_release, add="+")
     root.bind_class("Scale", "<ButtonPress-1>", _mark_live_interaction_start, add="+")
     root.bind_class("Scale", "<ButtonRelease-1>", _mark_live_interaction_release, add="+")
-
 
 
 def _preview_sample_indices(sample_count: int, *, max_samples: int) -> np.ndarray:
@@ -11031,6 +11530,155 @@ def _store_q_space_display_payload(
         simulation_runtime_state.last_q_space_background_image_unscaled = None
 
 
+def _invalidate_cached_analysis_space_payloads(
+    *,
+    clear_caked: bool = False,
+    clear_q_space: bool = False,
+) -> None:
+    if clear_caked:
+        simulation_runtime_state.last_caked_image_unscaled = None
+        simulation_runtime_state.last_caked_extent = None
+        simulation_runtime_state.last_caked_background_image_unscaled = None
+        simulation_runtime_state.last_caked_radial_values = None
+        simulation_runtime_state.last_caked_azimuth_values = None
+        _set_live_caked_transform_bundle(None)
+        simulation_runtime_state.last_caked_intersection_cache = None
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
+    if clear_q_space:
+        _store_q_space_display_payload(sim_payload=None, bg_payload=None)
+        simulation_runtime_state.last_q_space_payload_signature = None
+
+
+def _hidden_analysis_space_payload_clear_flags(
+    *,
+    caked_analysis_requested: bool,
+    q_space_requested: bool,
+    current_analysis_cache_sig: object,
+    q_space_payload_geometry_sig: object,
+) -> tuple[bool, bool]:
+    has_hidden_caked_payload = bool(
+        simulation_runtime_state.last_caked_image_unscaled is not None
+        or simulation_runtime_state.last_caked_extent is not None
+        or simulation_runtime_state.last_caked_background_image_unscaled is not None
+        or simulation_runtime_state.last_caked_radial_values is not None
+        or simulation_runtime_state.last_caked_azimuth_values is not None
+        or simulation_runtime_state.last_caked_intersection_cache is not None
+        or simulation_runtime_state.last_caked_intersection_cache_transform_bundle is not None
+    )
+    has_hidden_q_space_payload = bool(
+        simulation_runtime_state.last_q_space_image_unscaled is not None
+        or simulation_runtime_state.last_q_space_qr_values is not None
+        or simulation_runtime_state.last_q_space_qz_values is not None
+        or simulation_runtime_state.last_q_space_extent is not None
+        or simulation_runtime_state.last_q_space_background_image_unscaled is not None
+    )
+    clear_hidden_caked_payload = bool(
+        not caked_analysis_requested
+        and has_hidden_caked_payload
+        and getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
+        != current_analysis_cache_sig
+    )
+    clear_hidden_q_space_payload = bool(
+        not q_space_requested
+        and has_hidden_q_space_payload
+        and getattr(simulation_runtime_state, "last_q_space_payload_signature", None)
+        != (current_analysis_cache_sig, q_space_payload_geometry_sig)
+    )
+    return (clear_hidden_caked_payload, clear_hidden_q_space_payload)
+
+
+def _invalidate_hidden_analysis_space_payloads_if_stale(
+    *,
+    caked_analysis_requested: bool,
+    q_space_requested: bool,
+    current_analysis_cache_sig: object,
+    q_space_payload_geometry_sig: object,
+) -> None:
+    clear_hidden_caked_payload, clear_hidden_q_space_payload = (
+        _hidden_analysis_space_payload_clear_flags(
+            caked_analysis_requested=caked_analysis_requested,
+            q_space_requested=q_space_requested,
+            current_analysis_cache_sig=current_analysis_cache_sig,
+            q_space_payload_geometry_sig=q_space_payload_geometry_sig,
+        )
+    )
+    if clear_hidden_caked_payload or clear_hidden_q_space_payload:
+        _invalidate_cached_analysis_space_payloads(
+            clear_caked=clear_hidden_caked_payload,
+            clear_q_space=clear_hidden_q_space_payload,
+        )
+
+
+def _analysis_display_payload_ready(
+    *,
+    show_caked_2d: bool,
+    q_space_requested: bool,
+    background_visible: bool,
+    caked_image: object,
+    caked_extent: object,
+    caked_background_image: object,
+    q_space_image: object,
+    q_space_extent: object,
+    q_space_background_image: object,
+) -> bool:
+    caked_ready = bool(
+        (not show_caked_2d)
+        or (
+            caked_image is not None
+            and caked_extent is not None
+            and (not background_visible or caked_background_image is not None)
+        )
+    )
+    q_space_ready = bool(
+        (not q_space_requested)
+        or (
+            q_space_image is not None
+            and q_space_extent is not None
+            and (not background_visible or q_space_background_image is not None)
+        )
+    )
+    return bool(caked_ready and q_space_ready)
+
+
+def _analysis_payload_ready_after_restore_attempt(
+    *,
+    analysis_result_current: bool,
+    show_caked_2d: bool,
+    q_space_requested: bool,
+    background_visible: bool,
+    restore_payload: Callable[[], None],
+) -> bool:
+    """Return final analysis payload readiness after one optional restore pass."""
+
+    analysis_payload_ready = _analysis_display_payload_ready(
+        show_caked_2d=show_caked_2d,
+        q_space_requested=q_space_requested,
+        background_visible=background_visible,
+        caked_image=simulation_runtime_state.last_caked_image_unscaled,
+        caked_extent=simulation_runtime_state.last_caked_extent,
+        caked_background_image=simulation_runtime_state.last_caked_background_image_unscaled,
+        q_space_image=simulation_runtime_state.last_q_space_image_unscaled,
+        q_space_extent=simulation_runtime_state.last_q_space_extent,
+        q_space_background_image=(simulation_runtime_state.last_q_space_background_image_unscaled),
+    )
+    if bool(analysis_result_current) and not analysis_payload_ready:
+        restore_payload()
+        analysis_payload_ready = _analysis_display_payload_ready(
+            show_caked_2d=show_caked_2d,
+            q_space_requested=q_space_requested,
+            background_visible=background_visible,
+            caked_image=simulation_runtime_state.last_caked_image_unscaled,
+            caked_extent=simulation_runtime_state.last_caked_extent,
+            caked_background_image=(simulation_runtime_state.last_caked_background_image_unscaled),
+            q_space_image=simulation_runtime_state.last_q_space_image_unscaled,
+            q_space_extent=simulation_runtime_state.last_q_space_extent,
+            q_space_background_image=(
+                simulation_runtime_state.last_q_space_background_image_unscaled
+            ),
+        )
+    return bool(analysis_payload_ready)
+
+
 def _restore_caked_display_payload_from_cached_results(
     *,
     background_visible: bool,
@@ -11038,6 +11686,7 @@ def _restore_caked_display_payload_from_cached_results(
 ) -> bool:
     """Rebuild caked display arrays from the current cached analysis results."""
     live_q_space_requested = bool(_current_app_shell_view_mode() == "q_space")
+    analysis_cache_sig = getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
 
     sim_caked = _prepare_caked_display_payload(
         simulation_runtime_state.last_res2_sim,
@@ -11047,10 +11696,7 @@ def _restore_caked_display_payload_from_cached_results(
     if isinstance(sim_caked, dict):
         resolved_bundle = sim_caked.get("transform_bundle")
         detector_shape = sim_caked.get("detector_shape")
-        if (
-            not isinstance(resolved_bundle, CakeTransformBundle)
-            and detector_shape is not None
-        ):
+        if not isinstance(resolved_bundle, CakeTransformBundle) and detector_shape is not None:
             resolved_bundle = resolve_cake_transform_bundle(
                 simulation_runtime_state.ai_cache.get("ai"),
                 detector_shape,
@@ -11082,17 +11728,9 @@ def _restore_caked_display_payload_from_cached_results(
             transform_bundle=resolved_bundle,
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
-        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (
-            resolved_bundle
-        )
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = resolved_bundle
     else:
-        simulation_runtime_state.last_caked_image_unscaled = None
-        simulation_runtime_state.last_caked_radial_values = None
-        simulation_runtime_state.last_caked_azimuth_values = None
-        _set_live_caked_transform_bundle(None)
-        simulation_runtime_state.last_caked_extent = None
-        simulation_runtime_state.last_caked_intersection_cache = None
-        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
+        _invalidate_cached_analysis_space_payloads(clear_caked=True)
 
     bg_caked = None
     if background_visible and simulation_runtime_state.last_res2_background is not None:
@@ -11169,11 +11807,31 @@ def _restore_caked_display_payload_from_cached_results(
                 zb=float(zb_var.get()),
             ),
         )
+        simulation_runtime_state.last_q_space_payload_signature = (
+            analysis_cache_sig,
+            _q_space_geometry_cache_signature(
+                distance_m=float(corto_detector_var.get()),
+                center_x=float(center_x_var.get()),
+                center_y=float(center_y_var.get()),
+                pixel_size_m=float(pixel_size_m),
+                wavelength_m=lambda_ * 1.0e-10,
+                gamma_deg=float(gamma_var.get()),
+                Gamma_deg=float(Gamma_var.get()),
+                chi_deg=float(chi_var.get()),
+                psi_deg=float(psi),
+                psi_z_deg=float(psi_z_var.get()),
+                theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
+                cor_angle_deg=float(cor_angle_var.get()),
+                zs=float(zs_var.get()),
+                zb=float(zb_var.get()),
+            ),
+        )
     else:
         _store_q_space_display_payload(
             sim_payload=None,
             bg_payload=None,
         )
+        simulation_runtime_state.last_q_space_payload_signature = None
     return bool(
         isinstance(sim_caked, dict)
         or (
@@ -11214,10 +11872,7 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     if isinstance(sim_caked, dict):
         resolved_bundle = sim_caked.get("transform_bundle")
         detector_shape = sim_caked.get("detector_shape")
-        if (
-            not isinstance(resolved_bundle, CakeTransformBundle)
-            and detector_shape is not None
-        ):
+        if not isinstance(resolved_bundle, CakeTransformBundle) and detector_shape is not None:
             resolved_bundle = resolve_cake_transform_bundle(
                 ai,
                 detector_shape,
@@ -11495,12 +12150,16 @@ def _consume_ready_analysis_result(
     signature: object,
     *,
     is_preview: bool,
+    sim_cache_sig: object,
+    bg_cache_sig: object,
 ) -> dict[str, object] | None:
     ready_result = simulation_runtime_state.analysis_ready_result
     if _analysis_job_key(ready_result) != (
         signature,
         int(simulation_runtime_state.analysis_epoch),
         bool(is_preview),
+        sim_cache_sig,
+        bg_cache_sig,
     ):
         if isinstance(ready_result, dict) and int(ready_result.get("epoch", -1)) < int(
             simulation_runtime_state.analysis_epoch
@@ -11515,6 +12174,10 @@ def _consume_ready_analysis_result(
 def _apply_ready_analysis_result(result: dict[str, object]) -> None:
     simulation_runtime_state.last_analysis_signature = result.get("signature")
     simulation_runtime_state.analysis_preview_active = bool(result.get("is_preview", False))
+    simulation_runtime_state.last_analysis_cache_sig = (
+        result.get("sim_cache_sig"),
+        result.get("bg_cache_sig"),
+    )
     analysis_bins = result.get("analysis_bins")
     if (
         isinstance(analysis_bins, (tuple, list))
@@ -11554,17 +12217,9 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
             result.get("sim_caked_intersection_cache", [])
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
-        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (
-            resolved_bundle
-        )
+        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = resolved_bundle
     else:
-        simulation_runtime_state.last_caked_image_unscaled = None
-        simulation_runtime_state.last_caked_radial_values = None
-        simulation_runtime_state.last_caked_azimuth_values = None
-        _set_live_caked_transform_bundle(None)
-        simulation_runtime_state.last_caked_extent = None
-        simulation_runtime_state.last_caked_intersection_cache = None
-        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
+        _invalidate_cached_analysis_space_payloads(clear_caked=True)
 
     bg_caked = result.get("bg_caked")
     if isinstance(bg_caked, dict):
@@ -11578,6 +12233,19 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         sim_payload=result.get("sim_q_space"),
         bg_payload=result.get("bg_q_space"),
     )
+    analysis_signature = result.get("signature")
+    q_space_geometry_sig = (
+        analysis_signature[2]
+        if isinstance(analysis_signature, tuple) and len(analysis_signature) >= 3
+        else None
+    )
+    if isinstance(result.get("sim_q_space"), Mapping):
+        simulation_runtime_state.last_q_space_payload_signature = (
+            simulation_runtime_state.last_analysis_cache_sig,
+            q_space_geometry_sig,
+        )
+    else:
+        simulation_runtime_state.last_q_space_payload_signature = None
 
     _store_cached_caking_entry(
         "sim",
@@ -11661,7 +12329,6 @@ def _initialize_runtime_controls_block_27() -> None:
         pass
 
 
-
 def _should_collect_hit_tables_for_update() -> bool:
     """Return whether the next redraw needs per-hit detector tables."""
     if _live_interaction_active():
@@ -11701,8 +12368,10 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.stored_hit_table_signature = None
     simulation_runtime_state.analysis_epoch = 0
     simulation_runtime_state.last_analysis_signature = None
+    simulation_runtime_state.last_analysis_cache_sig = None
     simulation_runtime_state.analysis_preview_active = False
     simulation_runtime_state.analysis_preview_bins = None
+    simulation_runtime_state.last_q_space_payload_signature = None
     simulation_runtime_state.stored_max_positions_local = None
     simulation_runtime_state.stored_source_reflection_indices_local = None
     simulation_runtime_state.stored_sim_image = None
@@ -11749,10 +12418,256 @@ def _initialize_runtime_controls_block_28() -> None:
     }
 
 
-
 ###############################################################################
 #                              MAIN UPDATE
 ###############################################################################
+def _apply_primary_figure_display_from_cached_results(
+    previous_primary_view_mode: str | None,
+    preserved_primary_limits: object,
+) -> str:
+    analysis_space_display_mode = _resolved_primary_analysis_display_mode()
+    analysis_space_display_available = analysis_space_display_mode in {"caked", "q_space"}
+    target_primary_view_mode = (
+        analysis_space_display_mode if analysis_space_display_available else "detector"
+    )
+
+    if analysis_space_display_available:
+        current_scale = _get_scale_factor_value(default=1.0)
+        primary_source_signature = None
+        secondary_source_signature = None
+        if analysis_space_display_mode == "q_space":
+            analysis_image = np.asarray(
+                simulation_runtime_state.last_q_space_image_unscaled,
+                dtype=float,
+            )
+            analysis_background_source = None
+            if (
+                background_runtime_state.visible
+                and simulation_runtime_state.last_q_space_background_image_unscaled is not None
+            ):
+                analysis_background_source = np.asarray(
+                    simulation_runtime_state.last_q_space_background_image_unscaled,
+                    dtype=float,
+                )
+            display_primary_source = analysis_image * current_scale
+            display_secondary_source = analysis_background_source
+            primary_source_signature = _analysis_display_raster_source_signature(
+                view_mode="q_space",
+                role="primary",
+                scale=current_scale,
+                display_source=display_primary_source,
+                raw_source=display_primary_source,
+            )
+            secondary_source_signature = _analysis_display_raster_source_signature(
+                view_mode="q_space",
+                role="background",
+                scale=current_scale,
+                display_source=display_secondary_source,
+                raw_source=analysis_background_source,
+            )
+            axis_extent = (
+                list(simulation_runtime_state.last_q_space_extent)
+                if simulation_runtime_state.last_q_space_extent is not None
+                else [0.0, 1.0, -1.0, 1.0]
+            )
+            x_label = "Qr (A^-1)"
+            y_label = "Qz (A^-1)"
+        else:
+            analysis_image = np.asarray(
+                simulation_runtime_state.last_caked_image_unscaled,
+                dtype=float,
+            )
+            analysis_background_source = None
+            if (
+                background_runtime_state.visible
+                and simulation_runtime_state.last_caked_background_image_unscaled is not None
+            ):
+                analysis_background_source = np.asarray(
+                    simulation_runtime_state.last_caked_background_image_unscaled,
+                    dtype=float,
+                )
+            scaled_analysis_for_limits = analysis_image * current_scale
+            display_primary_source, display_secondary_source = (
+                _geometry_fit_caked_roi_preview_display_sources(
+                    show_caked_image=True,
+                    simulation_image=scaled_analysis_for_limits,
+                    background_image=analysis_background_source,
+                )
+            )
+            if not isinstance(display_primary_source, np.ndarray):
+                display_primary_source = scaled_analysis_for_limits
+            primary_source_signature = _analysis_display_raster_source_signature(
+                view_mode="caked",
+                role="primary",
+                scale=current_scale,
+                display_source=display_primary_source,
+                raw_source=scaled_analysis_for_limits,
+            )
+            secondary_source_signature = _analysis_display_raster_source_signature(
+                view_mode="caked",
+                role="background",
+                scale=current_scale,
+                display_source=display_secondary_source,
+                raw_source=analysis_background_source,
+            )
+            axis_extent = (
+                list(simulation_runtime_state.last_caked_extent)
+                if simulation_runtime_state.last_caked_extent is not None
+                else [0.0, 90.0, -180.0, 180.0]
+            )
+            x_label = "2θ (degrees)"
+            y_label = "φ (degrees)"
+
+        _store_primary_raster_source(
+            image_display,
+            display_primary_source,
+            source_signature=primary_source_signature,
+        )
+        auto_vmin, auto_vmax = _auto_caked_limits(display_primary_source)
+
+        if not display_controls_state.simulation_limits_user_override:
+            _update_simulation_sliders_from_image(display_primary_source, reset_override=True)
+
+        if not simulation_runtime_state.caked_limits_user_override:
+            vmin_caked_var.set(auto_vmin)
+            vmax_caked_var.set(auto_vmax)
+
+        vmin_val = float(display_controls_view_state.simulation_min_var.get())
+        vmax_val = float(display_controls_view_state.simulation_max_var.get())
+        global_sim_max = vmax_val
+
+        if not math.isfinite(vmin_val):
+            vmin_val = auto_vmin
+        if not math.isfinite(vmax_val):
+            vmax_val = auto_vmax
+        vmin_val, vmax_val = _ensure_valid_range(vmin_val, vmax_val)
+        if not math.isfinite(global_sim_max) or global_sim_max <= vmin_val:
+            global_sim_max = auto_vmax
+
+        display_vmax = min(vmax_val, global_sim_max)
+        if not math.isfinite(display_vmax):
+            display_vmax = auto_vmax
+        if display_vmax <= vmin_val:
+            fallback_vmax = max(global_sim_max, auto_vmax, vmax_val)
+            if math.isfinite(fallback_vmax) and fallback_vmax > vmin_val:
+                display_vmax = fallback_vmax
+            else:
+                display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
+        _apply_intensity_display_range(
+            image_display,
+            display_primary_source,
+            vmin_val,
+            display_vmax,
+        )
+
+        background_analysis_available = False
+        if isinstance(display_secondary_source, np.ndarray):
+            _store_primary_raster_source(
+                background_display,
+                display_secondary_source,
+                source_signature=secondary_source_signature,
+            )
+            bg_display_vmax = vmax_val
+            if not math.isfinite(bg_display_vmax):
+                bg_display_vmax = auto_vmax
+            if not math.isfinite(bg_display_vmax):
+                bg_display_vmax = display_vmax
+            if bg_display_vmax <= vmin_val:
+                fallback_vmax = None
+                for candidate in (auto_vmax, display_vmax, vmax_val):
+                    if math.isfinite(candidate) and candidate > vmin_val:
+                        fallback_vmax = candidate
+                        break
+                if fallback_vmax is None:
+                    fallback_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
+                bg_display_vmax = fallback_vmax
+            background_display.set_clim(vmin_val, bg_display_vmax)
+            background_display.set_visible(True)
+            background_analysis_available = True
+        else:
+            background_display.set_visible(False)
+
+        axis_min_x, axis_max_x, axis_min_y, axis_max_y = axis_extent
+        if not background_analysis_available:
+            background_display.set_visible(False)
+        if not (
+            math.isfinite(axis_min_x) and math.isfinite(axis_max_x) and axis_max_x > axis_min_x
+        ):
+            axis_min_x, axis_max_x = (
+                (0.0, 1.0) if analysis_space_display_mode == "q_space" else (0.0, 90.0)
+            )
+        if not (
+            math.isfinite(axis_min_y) and math.isfinite(axis_max_y) and axis_max_y > axis_min_y
+        ):
+            axis_min_y, axis_max_y = (
+                (-1.0, 1.0) if analysis_space_display_mode == "q_space" else (-180.0, 180.0)
+            )
+
+        gui_canvas_interactions.restore_axis_view(
+            ax,
+            preserved_limits=preserved_primary_limits,
+            default_xlim=(axis_min_x, axis_max_x),
+            default_ylim=(axis_min_y, axis_max_y),
+            preserve=(previous_primary_view_mode == analysis_space_display_mode),
+        )
+        ax.set_aspect("auto")
+        gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title("")
+        _sync_primary_raster_geometry(view_mode=analysis_space_display_mode)
+    else:
+        detector_background_source = (
+            background_runtime_state.current_background_display
+            if (
+                background_runtime_state.visible
+                and background_runtime_state.current_background_display is not None
+            )
+            else None
+        )
+        display_primary_source, display_secondary_source = (
+            _geometry_fit_caked_roi_preview_display_sources(
+                show_caked_image=False,
+                simulation_image=global_image_buffer,
+                background_image=detector_background_source,
+            )
+        )
+        if not isinstance(display_primary_source, np.ndarray):
+            display_primary_source = global_image_buffer
+        _store_primary_raster_source(image_display, display_primary_source)
+        gui_canvas_interactions.restore_axis_view(
+            ax,
+            preserved_limits=preserved_primary_limits,
+            default_xlim=(0.0, float(image_size)),
+            default_ylim=(float(image_size), 0.0),
+            preserve=(previous_primary_view_mode == "detector"),
+        )
+        ax.set_aspect("auto")
+        gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
+        ax.set_xlabel("X (pixels)")
+        ax.set_ylabel("Y (pixels)")
+        ax.set_title("")
+        if isinstance(display_secondary_source, np.ndarray):
+            _store_primary_raster_source(
+                background_display,
+                display_secondary_source,
+            )
+            background_display.set_clim(
+                display_controls_view_state.background_min_var.get(),
+                display_controls_view_state.background_max_var.get(),
+            )
+            background_display.set_visible(True)
+        else:
+            background_display.set_visible(False)
+        _sync_primary_raster_geometry(view_mode="detector")
+
+    gui_main_figure_chrome.apply_main_figure_axes_chrome(
+        ax,
+        axes_visible=bool(analysis_space_display_available),
+    )
+    return target_primary_view_mode
+
+
 def do_update():
     global av2, cv2
 
@@ -12745,8 +13660,7 @@ def do_update():
     show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
     requested_view_mode = _current_app_shell_view_mode()
     q_space_requested = bool(
-        simulation_runtime_state.unscaled_image is not None
-        and requested_view_mode == "q_space"
+        simulation_runtime_state.unscaled_image is not None and requested_view_mode == "q_space"
     )
     show_1d_requested = bool(analysis_view_controls_view_state.show_1d_var.get())
     one_d_analysis_requested = bool(
@@ -12757,34 +13671,29 @@ def do_update():
     caked_analysis_requested = bool(
         show_caked_2d and simulation_runtime_state.unscaled_image is not None
     )
-    q_space_geometry_sig = (
-        _q_space_geometry_cache_signature(
-            distance_m=corto_det_up,
-            center_x=center_x_up,
-            center_y=center_y_up,
-            pixel_size_m=pixel_size_m,
-            wavelength_m=wave_m,
-            gamma_deg=gamma_updated,
-            Gamma_deg=Gamma_updated,
-            chi_deg=chi_updated,
-            psi_deg=psi,
-            psi_z_deg=psi_z_updated,
-            theta_initial_deg=theta_init_up,
-            cor_angle_deg=cor_angle_updated,
-            zs=zs_updated,
-            zb=zb_updated,
-        )
-        if q_space_requested
-        else None
+    q_space_payload_geometry_sig = _q_space_geometry_cache_signature(
+        distance_m=corto_det_up,
+        center_x=center_x_up,
+        center_y=center_y_up,
+        pixel_size_m=pixel_size_m,
+        wavelength_m=wave_m,
+        gamma_deg=gamma_updated,
+        Gamma_deg=Gamma_updated,
+        chi_deg=chi_updated,
+        psi_deg=psi,
+        psi_z_deg=psi_z_updated,
+        theta_initial_deg=theta_init_up,
+        cor_angle_deg=cor_angle_updated,
+        zs=zs_updated,
+        zb=zb_updated,
     )
+    q_space_geometry_sig = q_space_payload_geometry_sig if q_space_requested else None
     analysis_requested = bool(
         simulation_runtime_state.unscaled_image is not None
         and (caked_analysis_requested or one_d_analysis_requested or q_space_requested)
     )
     analysis_sig = (
-        (sim_caking_sig, bg_caking_sig, q_space_geometry_sig)
-        if analysis_requested
-        else None
+        (sim_caking_sig, bg_caking_sig, q_space_geometry_sig) if analysis_requested else None
     )
     if analysis_sig is not None:
         _schedule_exact_cake_numba_warmup_once()
@@ -12801,21 +13710,26 @@ def do_update():
         if desired_analysis_preview
         else (DEFAULT_ANALYSIS_RADIAL_BINS, DEFAULT_ANALYSIS_AZIMUTH_BINS)
     )
-    sim_cache_sig = (
-        (sim_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
-        if analysis_requested
-        else None
-    )
+    sim_cache_sig = (sim_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
     bg_cache_sig = (
         (bg_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
         if bg_caking_sig is not None
         else None
+    )
+    current_analysis_cache_sig = (sim_cache_sig, bg_cache_sig)
+    _invalidate_hidden_analysis_space_payloads_if_stale(
+        caked_analysis_requested=caked_analysis_requested,
+        q_space_requested=q_space_requested,
+        current_analysis_cache_sig=current_analysis_cache_sig,
+        q_space_payload_geometry_sig=q_space_payload_geometry_sig,
     )
     ready_analysis_result = None
     if analysis_sig is not None:
         ready_analysis_result = _consume_ready_analysis_result(
             analysis_sig,
             is_preview=desired_analysis_preview,
+            sim_cache_sig=sim_cache_sig,
+            bg_cache_sig=bg_cache_sig,
         )
         if ready_analysis_result is not None:
             _apply_ready_analysis_result(ready_analysis_result)
@@ -12829,27 +13743,22 @@ def do_update():
     analysis_result_current = bool(
         analysis_sig is not None
         and simulation_runtime_state.last_analysis_signature == analysis_sig
+        and getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
+        == current_analysis_cache_sig
         and simulation_runtime_state.last_res2_sim is not None
     )
-    missing_analysis_payload = bool(
-        analysis_result_current
-        and (
-            (
-                show_caked_2d
-                and (
-                    simulation_runtime_state.last_caked_image_unscaled is None
-                    or simulation_runtime_state.last_caked_extent is None
-                )
-            )
-            or (
-                q_space_requested
-                and (
-                    simulation_runtime_state.last_q_space_image_unscaled is None
-                    or simulation_runtime_state.last_q_space_extent is None
-                )
-            )
-        )
+    analysis_payload_ready = _analysis_display_payload_ready(
+        show_caked_2d=show_caked_2d,
+        q_space_requested=q_space_requested,
+        background_visible=bool(background_runtime_state.visible),
+        caked_image=simulation_runtime_state.last_caked_image_unscaled,
+        caked_extent=simulation_runtime_state.last_caked_extent,
+        caked_background_image=simulation_runtime_state.last_caked_background_image_unscaled,
+        q_space_image=simulation_runtime_state.last_q_space_image_unscaled,
+        q_space_extent=simulation_runtime_state.last_q_space_extent,
+        q_space_background_image=(simulation_runtime_state.last_q_space_background_image_unscaled),
     )
+    missing_analysis_payload = bool(analysis_result_current and not analysis_payload_ready)
     if missing_analysis_payload:
         _trace_live_cache_event(
             "analysis",
@@ -12858,53 +13767,27 @@ def do_update():
             reason="missing_analysis_payload",
             background_visible=bool(background_runtime_state.visible),
         )
-        _restore_caked_display_payload_from_cached_results(
-            background_visible=bool(background_runtime_state.visible),
+        analysis_payload_ready = _analysis_payload_ready_after_restore_attempt(
+            analysis_result_current=analysis_result_current,
+            show_caked_2d=show_caked_2d,
             q_space_requested=q_space_requested,
+            background_visible=bool(background_runtime_state.visible),
+            restore_payload=lambda: _restore_caked_display_payload_from_cached_results(
+                background_visible=bool(background_runtime_state.visible),
+                q_space_requested=q_space_requested,
+            ),
         )
         _trace_live_cache_event(
             "analysis",
             "restore_payload",
-            outcome=(
-                "restored"
-                if (
-                    (
-                        not show_caked_2d
-                        or (
-                            simulation_runtime_state.last_caked_image_unscaled is not None
-                            and simulation_runtime_state.last_caked_extent is not None
-                        )
-                    )
-                    and (
-                        not q_space_requested
-                        or (
-                            simulation_runtime_state.last_q_space_image_unscaled is not None
-                            and simulation_runtime_state.last_q_space_extent is not None
-                        )
-                    )
-                )
-                else "missing"
-            ),
+            outcome=("restored" if analysis_payload_ready else "missing"),
             reason="missing_analysis_payload",
             background_visible=bool(background_runtime_state.visible),
         )
     analysis_result_matches_target = bool(
         analysis_result_current
         and bool(simulation_runtime_state.analysis_preview_active) == desired_analysis_preview
-        and (
-            not show_caked_2d
-            or (
-                simulation_runtime_state.last_caked_image_unscaled is not None
-                and simulation_runtime_state.last_caked_extent is not None
-            )
-        )
-        and (
-            _current_app_shell_view_mode() != "q_space"
-            or (
-                simulation_runtime_state.last_q_space_image_unscaled is not None
-                and simulation_runtime_state.last_q_space_extent is not None
-            )
-        )
+        and analysis_payload_ready
     )
     analysis_request_in_flight = bool(
         analysis_sig is not None
@@ -12914,6 +13797,8 @@ def do_update():
                 analysis_sig,
                 int(simulation_runtime_state.analysis_epoch),
                 desired_analysis_preview,
+                sim_cache_sig,
+                bg_cache_sig,
             )
             for payload in (
                 simulation_runtime_state.analysis_ready_result,
@@ -12992,222 +13877,13 @@ def do_update():
 
     sim_res2 = simulation_runtime_state.last_res2_sim if analysis_result_current else None
     bg_res2 = simulation_runtime_state.last_res2_background if analysis_result_current else None
+    _clear_pending_main_figure_preview_interaction()
     previous_primary_view_mode = _current_primary_figure_mode()
     preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)
     defer_overlay_refresh = _defer_nonessential_redraw()
-    analysis_space_display_mode = _resolved_primary_analysis_display_mode()
-    analysis_space_display_available = analysis_space_display_mode in {"caked", "q_space"}
-    target_primary_view_mode = (
-        analysis_space_display_mode if analysis_space_display_available else "detector"
-    )
-
-    if analysis_space_display_available:
-        current_scale = _get_scale_factor_value(default=1.0)
-        if analysis_space_display_mode == "q_space":
-            analysis_image = np.asarray(
-                simulation_runtime_state.last_q_space_image_unscaled,
-                dtype=float,
-            )
-            analysis_background_source = None
-            if (
-                background_runtime_state.visible
-                and simulation_runtime_state.last_q_space_background_image_unscaled is not None
-            ):
-                analysis_background_source = np.asarray(
-                    simulation_runtime_state.last_q_space_background_image_unscaled,
-                    dtype=float,
-                )
-            scaled_analysis_for_limits = analysis_image * current_scale
-            display_primary_source = scaled_analysis_for_limits
-            display_secondary_source = analysis_background_source
-            axis_extent = (
-                list(simulation_runtime_state.last_q_space_extent)
-                if simulation_runtime_state.last_q_space_extent is not None
-                else [0.0, 1.0, -1.0, 1.0]
-            )
-            x_label = "Qr (A^-1)"
-            y_label = "Qz (A^-1)"
-        else:
-            analysis_image = np.asarray(
-                simulation_runtime_state.last_caked_image_unscaled,
-                dtype=float,
-            )
-            analysis_background_source = None
-            if (
-                background_runtime_state.visible
-                and simulation_runtime_state.last_caked_background_image_unscaled is not None
-            ):
-                analysis_background_source = np.asarray(
-                    simulation_runtime_state.last_caked_background_image_unscaled,
-                    dtype=float,
-                )
-            scaled_analysis_for_limits = analysis_image * current_scale
-            display_primary_source, display_secondary_source = (
-                _geometry_fit_caked_roi_preview_display_sources(
-                    show_caked_image=True,
-                    simulation_image=scaled_analysis_for_limits,
-                    background_image=analysis_background_source,
-                )
-            )
-            if not isinstance(display_primary_source, np.ndarray):
-                display_primary_source = scaled_analysis_for_limits
-            axis_extent = (
-                list(simulation_runtime_state.last_caked_extent)
-                if simulation_runtime_state.last_caked_extent is not None
-                else [0.0, 90.0, -180.0, 180.0]
-            )
-            x_label = "2θ (degrees)"
-            y_label = "φ (degrees)"
-
-        _store_primary_raster_source(image_display, display_primary_source)
-        auto_vmin, auto_vmax = _auto_caked_limits(display_primary_source)
-
-        if not display_controls_state.simulation_limits_user_override:
-            _update_simulation_sliders_from_image(display_primary_source, reset_override=True)
-
-        if not simulation_runtime_state.caked_limits_user_override:
-            vmin_caked_var.set(auto_vmin)
-            vmax_caked_var.set(auto_vmax)
-
-        vmin_val = float(display_controls_view_state.simulation_min_var.get())
-        vmax_val = float(display_controls_view_state.simulation_max_var.get())
-        global_sim_max = vmax_val
-
-        if not math.isfinite(vmin_val):
-            vmin_val = auto_vmin
-        if not math.isfinite(vmax_val):
-            vmax_val = auto_vmax
-        vmin_val, vmax_val = _ensure_valid_range(vmin_val, vmax_val)
-        if not math.isfinite(global_sim_max) or global_sim_max <= vmin_val:
-            global_sim_max = auto_vmax
-
-        display_vmax = min(vmax_val, global_sim_max)
-        if not math.isfinite(display_vmax):
-            display_vmax = auto_vmax
-        if display_vmax <= vmin_val:
-            fallback_vmax = max(global_sim_max, auto_vmax, vmax_val)
-            if math.isfinite(fallback_vmax) and fallback_vmax > vmin_val:
-                display_vmax = fallback_vmax
-            else:
-                display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
-        _apply_intensity_display_range(
-            image_display,
-            display_primary_source,
-            vmin_val,
-            display_vmax,
-        )
-
-        background_analysis_available = False
-        if isinstance(display_secondary_source, np.ndarray):
-            _store_primary_raster_source(background_display, display_secondary_source)
-            bg_display_vmax = vmax_val
-            if not math.isfinite(bg_display_vmax):
-                bg_display_vmax = auto_vmax
-            if not math.isfinite(bg_display_vmax):
-                bg_display_vmax = display_vmax
-            if bg_display_vmax <= vmin_val:
-                fallback_vmax = None
-                for candidate in (auto_vmax, display_vmax, vmax_val):
-                    if math.isfinite(candidate) and candidate > vmin_val:
-                        fallback_vmax = candidate
-                        break
-                if fallback_vmax is None:
-                    fallback_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
-                bg_display_vmax = fallback_vmax
-            background_display.set_clim(vmin_val, bg_display_vmax)
-            background_display.set_visible(True)
-            background_analysis_available = True
-        else:
-            background_display.set_visible(False)
-
-        axis_min_x, axis_max_x, axis_min_y, axis_max_y = axis_extent
-        if not background_analysis_available:
-            background_display.set_visible(False)
-        if not (
-            math.isfinite(axis_min_x) and math.isfinite(axis_max_x) and axis_max_x > axis_min_x
-        ):
-            axis_min_x, axis_max_x = (0.0, 1.0) if analysis_space_display_mode == "q_space" else (0.0, 90.0)
-        if not (
-            math.isfinite(axis_min_y) and math.isfinite(axis_max_y) and axis_max_y > axis_min_y
-        ):
-            axis_min_y, axis_max_y = (
-                (-1.0, 1.0) if analysis_space_display_mode == "q_space" else (-180.0, 180.0)
-            )
-
-        gui_canvas_interactions.restore_axis_view(
-            ax,
-            preserved_limits=preserved_primary_limits,
-            default_xlim=(axis_min_x, axis_max_x),
-            default_ylim=(axis_min_y, axis_max_y),
-            preserve=(previous_primary_view_mode == analysis_space_display_mode),
-        )
-        ax.set_aspect("auto")
-        gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.set_title("")
-        _sync_primary_raster_geometry(view_mode=analysis_space_display_mode)
-    else:
-        simulation_runtime_state.last_caked_image_unscaled = None
-        simulation_runtime_state.last_caked_extent = None
-        simulation_runtime_state.last_caked_background_image_unscaled = None
-        simulation_runtime_state.last_caked_radial_values = None
-        simulation_runtime_state.last_caked_azimuth_values = None
-        _set_live_caked_transform_bundle(None)
-        simulation_runtime_state.last_caked_intersection_cache = None
-        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
-        simulation_runtime_state.last_q_space_image_unscaled = None
-        simulation_runtime_state.last_q_space_extent = None
-        simulation_runtime_state.last_q_space_background_image_unscaled = None
-        simulation_runtime_state.last_q_space_qr_values = None
-        simulation_runtime_state.last_q_space_qz_values = None
-        detector_background_source = (
-            background_runtime_state.current_background_display
-            if (
-                background_runtime_state.visible
-                and background_runtime_state.current_background_display is not None
-            )
-            else None
-        )
-        display_primary_source, display_secondary_source = (
-            _geometry_fit_caked_roi_preview_display_sources(
-                show_caked_image=False,
-                simulation_image=global_image_buffer,
-                background_image=detector_background_source,
-            )
-        )
-        if not isinstance(display_primary_source, np.ndarray):
-            display_primary_source = global_image_buffer
-        _store_primary_raster_source(image_display, display_primary_source)
-        gui_canvas_interactions.restore_axis_view(
-            ax,
-            preserved_limits=preserved_primary_limits,
-            default_xlim=(0.0, float(image_size)),
-            default_ylim=(float(image_size), 0.0),
-            preserve=(previous_primary_view_mode == "detector"),
-        )
-        ax.set_aspect("auto")
-        gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
-        ax.set_xlabel("X (pixels)")
-        ax.set_ylabel("Y (pixels)")
-        ax.set_title("")
-        if isinstance(display_secondary_source, np.ndarray):
-            _store_primary_raster_source(
-                background_display,
-                display_secondary_source,
-            )
-            background_display.set_clim(
-                display_controls_view_state.background_min_var.get(),
-                display_controls_view_state.background_max_var.get(),
-            )
-            background_display.set_visible(True)
-        else:
-            background_display.set_visible(False)
-        _sync_primary_raster_geometry(view_mode="detector")
-
-    gui_main_figure_chrome.apply_main_figure_axes_chrome(
-        ax,
-        axes_visible=bool(analysis_space_display_available),
+    target_primary_view_mode = _apply_primary_figure_display_from_cached_results(
+        previous_primary_view_mode,
+        preserved_primary_limits,
     )
 
     # 1D integration
@@ -13306,8 +13982,20 @@ def do_update():
 
 
 def _initialize_runtime_controls_block_29() -> None:
-    global background_theta_workflow, background_theta_runtime, background_theta_runtime_callbacks, _current_geometry_fit_background_indices, _geometry_fit_uses_shared_theta_offset, _current_geometry_theta_offset, _current_background_theta_values, _background_theta_for_index
-    global _sync_background_theta_controls, _apply_background_theta_metadata_base, _apply_geometry_fit_background_selection, _sync_geometry_fit_background_selection
+    global \
+        background_theta_workflow, \
+        background_theta_runtime, \
+        background_theta_runtime_callbacks, \
+        _current_geometry_fit_background_indices, \
+        _geometry_fit_uses_shared_theta_offset, \
+        _current_geometry_theta_offset, \
+        _current_background_theta_values, \
+        _background_theta_for_index
+    global \
+        _sync_background_theta_controls, \
+        _apply_background_theta_metadata_base, \
+        _apply_geometry_fit_background_selection, \
+        _sync_geometry_fit_background_selection
 
     background_theta_workflow = gui_runtime_background.build_runtime_background_theta_workflow(
         bootstrap_module=gui_bootstrap,
@@ -13321,7 +14009,9 @@ def _initialize_runtime_controls_block_29() -> None:
         theta_initial=theta_initial,
         background_theta_list_var_factory=lambda: background_theta_list_var,
         geometry_theta_offset_var_factory=lambda: geometry_theta_offset_var,
-        geometry_fit_background_selection_var_factory=(lambda: geometry_fit_background_selection_var),
+        geometry_fit_background_selection_var_factory=(
+            lambda: geometry_fit_background_selection_var
+        ),
         fit_theta_checkbutton_factory=lambda: fit_theta_checkbutton,
         theta_controls_factory=lambda: geometry_fit_constraints_view_state.controls,
         set_background_file_status_text_factory=lambda: _refresh_background_status,
@@ -13343,14 +14033,15 @@ def _initialize_runtime_controls_block_29() -> None:
     _current_background_theta_values = background_theta_workflow.current_background_theta_values
     _background_theta_for_index = background_theta_workflow.background_theta_for_index
     _sync_background_theta_controls = background_theta_workflow.sync_background_theta_controls
-    _apply_background_theta_metadata_base = background_theta_workflow.apply_background_theta_metadata
+    _apply_background_theta_metadata_base = (
+        background_theta_workflow.apply_background_theta_metadata
+    )
     _apply_geometry_fit_background_selection = (
         background_theta_workflow.apply_geometry_fit_background_selection
     )
     _sync_geometry_fit_background_selection = (
         background_theta_workflow.sync_geometry_fit_background_selection
     )
-
 
 
 def _apply_background_theta_metadata(*args, **kwargs):
@@ -13371,7 +14062,6 @@ def _initialize_runtime_controls_block_30() -> None:
     _apply_geometry_fit_background_selection_base = _apply_geometry_fit_background_selection
 
 
-
 def _apply_geometry_fit_background_selection(*args, **kwargs):
     """Apply multi-background geometry selection and invalidate cached anchors."""
 
@@ -13388,7 +14078,6 @@ def _initialize_runtime_controls_block_31() -> None:
     global _sync_geometry_fit_background_selection_base
 
     _sync_geometry_fit_background_selection_base = _sync_geometry_fit_background_selection
-
 
 
 def _sync_geometry_fit_background_selection(*args, **kwargs):
@@ -13456,7 +14145,14 @@ def _sync_theta_initial_to_background(index: int) -> None:
 
 
 def _initialize_runtime_controls_block_32() -> None:
-    global background_workflow, background_runtime, background_runtime_bindings_factory, background_runtime_callbacks, background_controls_runtime, toggle_background, switch_background
+    global \
+        background_workflow, \
+        background_runtime, \
+        background_runtime_bindings_factory, \
+        background_runtime_callbacks, \
+        background_controls_runtime, \
+        toggle_background, \
+        switch_background
 
     background_workflow = gui_runtime_background.build_runtime_background_workflow(
         bootstrap_module=gui_bootstrap,
@@ -13468,8 +14164,12 @@ def _initialize_runtime_controls_block_32() -> None:
         image_size=image_size,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
-        current_background_theta_values=(lambda: _current_background_theta_values(strict_count=False)),
-        background_theta_for_index=(lambda idx: _background_theta_for_index(idx, strict_count=False)),
+        current_background_theta_values=(
+            lambda: _current_background_theta_values(strict_count=False)
+        ),
+        background_theta_for_index=(
+            lambda idx: _background_theta_for_index(idx, strict_count=False)
+        ),
         geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
         geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
         geometry_manual_pair_group_count=_geometry_manual_pair_group_count,
@@ -13510,9 +14210,13 @@ def _initialize_runtime_controls_block_32() -> None:
         mark_chi_square_dirty=_mark_chi_square_dirty,
         refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
         schedule_update_factory=lambda: schedule_update,
-        preempt_simulation_update_factory=(lambda: _preempt_simulation_update_for_background_switch),
+        preempt_simulation_update_factory=(
+            lambda: _preempt_simulation_update_for_background_switch
+        ),
         set_status_text_factory=lambda: (
-            (lambda text: progress_label.config(text=text)) if "progress_label" in globals() else None
+            (lambda text: progress_label.config(text=text))
+            if "progress_label" in globals()
+            else None
         ),
         file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
         askopenfilenames=filedialog.askopenfilenames,
@@ -13523,7 +14227,6 @@ def _initialize_runtime_controls_block_32() -> None:
     background_controls_runtime = background_workflow.controls_runtime
     toggle_background = background_workflow.toggle_visibility
     switch_background = background_workflow.switch_background
-
 
 
 def reset_to_defaults():
@@ -13668,7 +14371,11 @@ def reset_to_defaults():
 
 
 def _initialize_runtime_controls_block_33() -> None:
-    global background_theta_list_var, geometry_theta_offset_var, _theta_live_to_background_list_sync, _theta_initial_background_theta_trace
+    global \
+        background_theta_list_var, \
+        geometry_theta_offset_var, \
+        _theta_live_to_background_list_sync, \
+        _theta_initial_background_theta_trace
 
     background_controls_runtime.create_workspace_controls()
 
@@ -13687,7 +14394,6 @@ def _initialize_runtime_controls_block_33() -> None:
 
     _theta_live_to_background_list_sync = {"active": False}
     _theta_initial_background_theta_trace = {"attached": False}
-
 
 
 def _sync_live_theta_into_background_theta_list(*_args) -> None:
@@ -13724,7 +14430,6 @@ def _initialize_runtime_controls_block_34() -> None:
     global _geometry_fit_background_table_trace
 
     _geometry_fit_background_table_trace = {"attached": False}
-
 
 
 def _geometry_fit_background_current_index() -> int:
@@ -13894,7 +14599,6 @@ def _initialize_runtime_controls_block_35() -> None:
     hbn_geometry_debug_view_state.report_text = (
         "No hBN geometry debug report yet.\nImport an hBN bundle to generate one."
     )
-
 
 
 def _close_hbn_geometry_debug_window() -> None:
@@ -14125,9 +14829,7 @@ def _gui_state_variable_items() -> dict[str, object]:
                 geometry_overlay_actions_view_state.qr_cylinder_display_mode_var
             ),
             "show_qz_rods_var": analysis_view_controls_view_state.show_qz_rods_var,
-            "integrate_qz_rods_var": (
-                integration_range_controls_view_state.integrate_qz_rods_var
-            ),
+            "integrate_qz_rods_var": (integration_range_controls_view_state.integrate_qz_rods_var),
             "qr_half_width_var": integration_range_controls_view_state.qr_half_width_var,
         }
     )
@@ -14228,9 +14930,7 @@ def _replace_gui_state_peak_cache(
         projected_record: Mapping[str, object] | None = None
         if callable(_project_geometry_manual_peaks_to_current_view):
             try:
-                projected_rows = _project_geometry_manual_peaks_to_current_view(
-                    [normalized_record]
-                )
+                projected_rows = _project_geometry_manual_peaks_to_current_view([normalized_record])
             except Exception:
                 projected_rows = ()
             for raw_projected_record in projected_rows or ():
@@ -14485,13 +15185,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     peak_selection_runtime_callbacks.reselect_current_peak()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
-    toggle_caked_2d(
-        getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")()
-    )
+    toggle_caked_2d(getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")())
     toggle_log_display()
-    _sync_primary_raster_geometry(
-        view_mode=_resolved_primary_analysis_display_mode()
-    )
+    _sync_primary_raster_geometry(view_mode=_resolved_primary_analysis_display_mode())
     _sync_show_qz_rods_quick_control_state()
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
@@ -14650,8 +15346,24 @@ def _import_geometry_manual_pairs() -> None:
 
 
 def _initialize_runtime_controls_block_36() -> None:
-    global session_button_specs, fit_frame, fit_zb_var, fit_zs_var, fit_theta_var, fit_psi_z_var, fit_chi_var, fit_cor_var
-    global fit_gamma_var, fit_Gamma_var, fit_dist_var, fit_a_var, fit_c_var, fit_center_x_var, fit_center_y_var, fit_theta_checkbutton
+    global \
+        session_button_specs, \
+        fit_frame, \
+        fit_zb_var, \
+        fit_zs_var, \
+        fit_theta_var, \
+        fit_psi_z_var, \
+        fit_chi_var, \
+        fit_cor_var
+    global \
+        fit_gamma_var, \
+        fit_Gamma_var, \
+        fit_dist_var, \
+        fit_a_var, \
+        fit_c_var, \
+        fit_center_x_var, \
+        fit_center_y_var, \
+        fit_theta_checkbutton
     global GEOMETRY_FIT_PARAM_ORDER, geometry_fit_toggle_vars, geometry_fit_parameter_specs
 
     session_button_specs = [
@@ -14713,7 +15425,6 @@ def _initialize_runtime_controls_block_36() -> None:
     geometry_fit_parameter_specs = {}
 
 
-
 def _sync_geometry_fit_constraint_rows(*_args) -> None:
     controls = geometry_fit_constraints_view_state.controls
     for name in GEOMETRY_FIT_PARAM_ORDER:
@@ -14745,7 +15456,6 @@ def _initialize_runtime_controls_block_37() -> None:
             parent=workspace_panels_view_state.workspace_debug_frame.frame,
             view_state=background_backend_debug_view_state,
         )
-
 
 
 def _auto_match_console(cfg: dict[str, object] | None, text: str) -> None:
@@ -15265,9 +15975,30 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
 
 
 def _initialize_runtime_controls_block_38() -> None:
-    global geometry_q_group_runtime_value_callbacks, _build_live_preview_simulated_peaks_from_cache, _last_live_preview_cache_metadata, _filter_geometry_fit_simulated_peaks, _collapse_geometry_fit_simulated_peaks, _build_geometry_q_group_entries, _clone_geometry_q_group_entries, _listed_geometry_q_group_entries
-    global _listed_geometry_q_group_keys, _geometry_q_group_key_from_jsonable, _geometry_q_group_export_rows, _format_geometry_q_group_line, _current_geometry_auto_match_min_matches, _geometry_q_group_excluded_count, _build_geometry_q_group_window_status_text, _live_preview_match_key
-    global _live_preview_match_hkl, _live_preview_match_is_excluded, _filter_live_preview_matches, _apply_live_preview_match_exclusions, _geometry_manual_source_snapshot_diagnostics_state
+    global \
+        geometry_q_group_runtime_value_callbacks, \
+        _build_live_preview_simulated_peaks_from_cache, \
+        _last_live_preview_cache_metadata, \
+        _filter_geometry_fit_simulated_peaks, \
+        _collapse_geometry_fit_simulated_peaks, \
+        _build_geometry_q_group_entries, \
+        _clone_geometry_q_group_entries, \
+        _listed_geometry_q_group_entries
+    global \
+        _listed_geometry_q_group_keys, \
+        _geometry_q_group_key_from_jsonable, \
+        _geometry_q_group_export_rows, \
+        _format_geometry_q_group_line, \
+        _current_geometry_auto_match_min_matches, \
+        _geometry_q_group_excluded_count, \
+        _build_geometry_q_group_window_status_text, \
+        _live_preview_match_key
+    global \
+        _live_preview_match_hkl, \
+        _live_preview_match_is_excluded, \
+        _filter_live_preview_matches, \
+        _apply_live_preview_match_exclusions, \
+        _geometry_manual_source_snapshot_diagnostics_state
 
     geometry_q_group_runtime_value_callbacks = (
         gui_geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
@@ -15294,7 +16025,9 @@ def _initialize_runtime_controls_block_38() -> None:
     _collapse_geometry_fit_simulated_peaks = (
         geometry_q_group_runtime_value_callbacks.collapse_simulated_peaks
     )
-    _build_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.build_entries_snapshot
+    _build_geometry_q_group_entries = (
+        geometry_q_group_runtime_value_callbacks.build_entries_snapshot
+    )
     _clone_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.clone_entries
     _listed_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.listed_entries
     _listed_geometry_q_group_keys = geometry_q_group_runtime_value_callbacks.listed_keys
@@ -15313,14 +16046,14 @@ def _initialize_runtime_controls_block_38() -> None:
     _live_preview_match_is_excluded = (
         geometry_q_group_runtime_value_callbacks.live_preview_match_is_excluded
     )
-    _filter_live_preview_matches = geometry_q_group_runtime_value_callbacks.filter_live_preview_matches
+    _filter_live_preview_matches = (
+        geometry_q_group_runtime_value_callbacks.filter_live_preview_matches
+    )
     _apply_live_preview_match_exclusions = (
         geometry_q_group_runtime_value_callbacks.apply_live_preview_match_exclusions
     )
 
-
     _geometry_manual_source_snapshot_diagnostics_state = {}
-
 
 
 def _set_geometry_manual_source_snapshot_diagnostics(**kwargs) -> None:
@@ -15589,9 +16322,7 @@ def _capture_geometry_source_snapshot() -> None:
 def _geometry_manual_set_runtime_peak_cache_from_source_rows(
     source_rows: Sequence[object] | None,
 ) -> None:
-    projected_rows = [
-        dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)
-    ]
+    projected_rows = [dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)]
     if callable(_project_geometry_manual_peaks_to_current_view):
         try:
             projected_rows = [
@@ -15619,12 +16350,8 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
         if peak_record is None:
             continue
         try:
-            display_col = float(
-                peak_record.get("sim_col", peak_record.get("display_col", np.nan))
-            )
-            display_row = float(
-                peak_record.get("sim_row", peak_record.get("display_row", np.nan))
-            )
+            display_col = float(peak_record.get("sim_col", peak_record.get("display_col", np.nan)))
+            display_row = float(peak_record.get("sim_row", peak_record.get("display_row", np.nan)))
         except Exception:
             continue
         if not (np.isfinite(display_col) and np.isfinite(display_row)):
@@ -16213,7 +16940,15 @@ def _geometry_manual_source_rows_for_background(
 
 
 def _initialize_runtime_controls_block_39() -> None:
-    global geometry_q_group_workflow, geometry_q_group_runtime, geometry_q_group_runtime_bindings_factory, geometry_q_group_runtime_callbacks, _live_geometry_preview_enabled, _render_live_geometry_preview_state, _set_geometry_preview_exclude_mode_impl, _clear_live_geometry_preview_exclusions_impl
+    global \
+        geometry_q_group_workflow, \
+        geometry_q_group_runtime, \
+        geometry_q_group_runtime_bindings_factory, \
+        geometry_q_group_runtime_callbacks, \
+        _live_geometry_preview_enabled, \
+        _render_live_geometry_preview_state, \
+        _set_geometry_preview_exclude_mode_impl, \
+        _clear_live_geometry_preview_exclusions_impl
     global _toggle_live_geometry_preview_exclusion_at, _on_live_geometry_preview_toggle_impl
 
     geometry_q_group_workflow = gui_runtime_geometry_preview.build_runtime_geometry_q_group_workflow(
@@ -16253,7 +16988,9 @@ def _initialize_runtime_controls_block_39() -> None:
         has_cached_hit_tables_factory=lambda: (
             simulation_runtime_state.stored_max_positions_local is not None
         ),
-        build_live_preview_simulated_peaks_from_cache=(_build_live_preview_simulated_peaks_from_cache),
+        build_live_preview_simulated_peaks_from_cache=(
+            _build_live_preview_simulated_peaks_from_cache
+        ),
         miller_factory=lambda: miller,
         intensities_factory=lambda: intensities,
         image_size_value_factory=lambda: image_size,
@@ -16296,10 +17033,13 @@ def _initialize_runtime_controls_block_39() -> None:
     _live_geometry_preview_enabled = geometry_q_group_workflow.live_preview_enabled
     _render_live_geometry_preview_state = geometry_q_group_workflow.render_live_preview_state
     _set_geometry_preview_exclude_mode_impl = geometry_q_group_workflow.set_preview_exclude_mode
-    _clear_live_geometry_preview_exclusions_impl = geometry_q_group_workflow.clear_preview_exclusions
-    _toggle_live_geometry_preview_exclusion_at = geometry_q_group_workflow.toggle_preview_exclusion_at
+    _clear_live_geometry_preview_exclusions_impl = (
+        geometry_q_group_workflow.clear_preview_exclusions
+    )
+    _toggle_live_geometry_preview_exclusion_at = (
+        geometry_q_group_workflow.toggle_preview_exclusion_at
+    )
     _on_live_geometry_preview_toggle_impl = geometry_q_group_workflow.toggle_live_preview
-
 
 
 def _set_geometry_preview_exclude_mode(enabled: bool, message: str | None = None):
@@ -16326,7 +17066,10 @@ def _on_live_geometry_preview_toggle(*args, **kwargs):
 
 
 def _initialize_runtime_controls_block_40() -> None:
-    global geometry_fit_simulation_runtime_callbacks, _simulate_hit_tables_for_fit, _simulate_hkl_peak_centers_for_fit
+    global \
+        geometry_fit_simulation_runtime_callbacks, \
+        _simulate_hit_tables_for_fit, \
+        _simulate_hkl_peak_centers_for_fit
 
     geometry_fit_simulation_runtime_callbacks = (
         gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
@@ -16349,8 +17092,9 @@ def _initialize_runtime_controls_block_40() -> None:
         )
     )
     _simulate_hit_tables_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_hit_tables
-    _simulate_hkl_peak_centers_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
-
+    _simulate_hkl_peak_centers_for_fit = (
+        geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
+    )
 
 
 def _legacy_auto_match_on_fit_geometry_click():
@@ -20382,11 +21126,16 @@ def _show_geometry_fit_action_notice(action_result) -> None:
 
 
 def _initialize_runtime_controls_block_41() -> None:
-    global geometry_fit_action_bindings_factory, on_fit_geometry_click, fit_button_geometry, live_geometry_preview_var, geometry_tool_actions_runtime, qr_cylinder_display_mode_var
+    global \
+        geometry_fit_action_bindings_factory, \
+        on_fit_geometry_click, \
+        fit_button_geometry, \
+        live_geometry_preview_var, \
+        geometry_tool_actions_runtime, \
+        qr_cylinder_display_mode_var
 
     geometry_fit_action_bindings_factory = None
     on_fit_geometry_click = lambda: None
-
 
     fit_button_geometry = ttk.Button(
         app_shell_view_state.match_run_frame,
@@ -20431,9 +21180,10 @@ def _initialize_runtime_controls_block_41() -> None:
     qr_cylinder_display_mode_var = tk.StringVar(value=QR_CYLINDER_DISPLAY_MODE_OFF)
     geometry_overlay_actions_view_state.qr_cylinder_display_mode_var = qr_cylinder_display_mode_var
     if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is None:
-        geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var = tk.BooleanVar(value=False)
+        geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var = tk.BooleanVar(
+            value=False
+        )
     _sync_qr_cylinder_overlay_visibility_var()
-
 
 
 def _on_qr_cylinder_display_mode_change(*_args) -> None:
@@ -20791,7 +21541,6 @@ def _initialize_runtime_controls_block_43() -> None:
         _ANALYSIS_PEAK_PROFILE_LORENTZIAN: "#f4a261",
         _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT: "#d62828",
     }
-
 
 
 def _set_analysis_peak_selection_status_text(text: object) -> None:
@@ -21914,10 +22663,8 @@ def _initialize_runtime_controls_block_44() -> None:
     if callable(_analysis_tab_trace_add):
         _analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)
 
-
     _show_analysis_tab_lazy_placeholders()
     _set_analysis_popout_button_state(detached=False)
-
 
 
 def run_debug_simulation():
@@ -22000,7 +22747,15 @@ def run_debug_simulation():
 
 
 def _initialize_runtime_controls_block_45() -> None:
-    global geo_frame, debye_frame, detector_frame, lattice_frame, mosaic_frame, sampling_pruning_frame, legacy_resolution_options, initial_resolution
+    global \
+        geo_frame, \
+        debye_frame, \
+        detector_frame, \
+        lattice_frame, \
+        mosaic_frame, \
+        sampling_pruning_frame, \
+        legacy_resolution_options, \
+        initial_resolution
 
     gui_views.populate_stacked_button_group(
         (
@@ -22052,7 +22807,6 @@ def _initialize_runtime_controls_block_45() -> None:
     initial_resolution = str(defaults.get("sampling_resolution", CUSTOM_SAMPLING_OPTION))
     if initial_resolution not in legacy_resolution_options:
         initial_resolution = CUSTOM_SAMPLING_OPTION
-
 
 
 def _parse_sample_count(raw_value, fallback):
@@ -22307,7 +23061,15 @@ def ensure_valid_resolution_choice():
 
 
 def _initialize_runtime_controls_block_46() -> None:
-    global initial_sample_count, initial_rod_points_per_gz, custom_samples_var, resolution_var, sample_count_var, sample_count_scale, rod_points_per_gz_var, optics_mode_var
+    global \
+        initial_sample_count, \
+        initial_rod_points_per_gz, \
+        custom_samples_var, \
+        resolution_var, \
+        sample_count_var, \
+        sample_count_scale, \
+        rod_points_per_gz_var, \
+        optics_mode_var
 
     if initial_resolution != CUSTOM_SAMPLING_OPTION:
         initial_sample_count = _parse_sample_count(
@@ -22354,7 +23116,6 @@ def _initialize_runtime_controls_block_46() -> None:
     optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
 
 
-
 def on_resolution_option_change(*_):
     ensure_valid_resolution_choice()
 
@@ -22372,7 +23133,6 @@ def _initialize_runtime_controls_block_47() -> None:
         sample_count_trace_add("write", lambda *_args: _refresh_resolution_display())
 
 
-
 def on_optics_mode_change(*_):
     _refresh_resolution_display()
     _invalidate_simulation_cache()
@@ -22380,13 +23140,61 @@ def on_optics_mode_change(*_):
 
 
 def _initialize_runtime_controls_block_48() -> None:
-    global sf_prune_bias_var, sf_prune_bias_scale, sf_prune_status_var, solve_q_mode_var, solve_q_steps_var, solve_q_steps_scale, solve_q_rel_tol_var, solve_q_rel_tol_scale
-    global trace_add, center_frame, theta_initial_var, theta_initial_scale, cor_angle_var, cor_angle_scale, gamma_var, gamma_scale
+    global \
+        sf_prune_bias_var, \
+        sf_prune_bias_scale, \
+        sf_prune_status_var, \
+        solve_q_mode_var, \
+        solve_q_steps_var, \
+        solve_q_steps_scale, \
+        solve_q_rel_tol_var, \
+        solve_q_rel_tol_scale
+    global \
+        trace_add, \
+        center_frame, \
+        theta_initial_var, \
+        theta_initial_scale, \
+        cor_angle_var, \
+        cor_angle_scale, \
+        gamma_var, \
+        gamma_scale
     global Gamma_var, Gamma_scale, chi_var, chi_scale, psi_z_var, psi_z_scale, zs_var, zs_scale
-    global zb_var, zb_scale, sample_width_var, sample_width_scale, sample_length_var, sample_length_scale, sample_depth_var, sample_depth_scale
-    global debye_x_var, debye_x_scale, debye_y_var, debye_y_scale, corto_detector_var, corto_detector_scale, a_var, a_scale
-    global c_var, c_scale, sigma_mosaic_var, sigma_mosaic_scale, gamma_mosaic_var, gamma_mosaic_scale, eta_var, eta_scale
-    global center_x_var, center_x_scale, bandwidth_percent_var, bandwidth_percent_scale, center_y_var, center_y_scale, main_display_raster_size_var, _main_display_raster_size_scale_bounds
+    global \
+        zb_var, \
+        zb_scale, \
+        sample_width_var, \
+        sample_width_scale, \
+        sample_length_var, \
+        sample_length_scale, \
+        sample_depth_var, \
+        sample_depth_scale
+    global \
+        debye_x_var, \
+        debye_x_scale, \
+        debye_y_var, \
+        debye_y_scale, \
+        corto_detector_var, \
+        corto_detector_scale, \
+        a_var, \
+        a_scale
+    global \
+        c_var, \
+        c_scale, \
+        sigma_mosaic_var, \
+        sigma_mosaic_scale, \
+        gamma_mosaic_var, \
+        gamma_mosaic_scale, \
+        eta_var, \
+        eta_scale
+    global \
+        center_x_var, \
+        center_x_scale, \
+        bandwidth_percent_var, \
+        bandwidth_percent_scale, \
+        center_y_var, \
+        center_y_scale, \
+        main_display_raster_size_var, \
+        _main_display_raster_size_scale_bounds
 
     optics_mode_var.trace_add("write", on_optics_mode_change)
 
@@ -22490,7 +23298,9 @@ def _initialize_runtime_controls_block_48() -> None:
     bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
     center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
     center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
-    main_display_raster_size_var = tk.DoubleVar(value=float(_default_main_display_raster_size_limit()))
+    main_display_raster_size_var = tk.DoubleVar(
+        value=float(_default_main_display_raster_size_limit())
+    )
     _main_display_raster_size_scale_bounds = SimpleNamespace(
         cget=lambda key: (
             float(MAIN_DISPLAY_RASTER_MIN_SIZE)
@@ -22610,16 +23420,19 @@ def _initialize_runtime_controls_block_48() -> None:
         ],
     )
     analysis_view_controls_view_state.check_beam_center_spot = (
-        app_shell_view_state.quick_control_widgets.get("show_beam_center_spot", {}).get("checkbutton")
+        app_shell_view_state.quick_control_widgets.get("show_beam_center_spot", {}).get(
+            "checkbutton"
+        )
     )
     analysis_view_controls_view_state.show_qz_rods_checkbutton = (
         app_shell_view_state.quick_control_widgets.get("show_qz_rods", {}).get("checkbutton")
     )
     geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
-        app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get("checkbutton")
+        app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
+            "checkbutton"
+        )
     )
     _sync_show_qz_rods_quick_control_state()
-
 
 
 def _refresh_refine_section_summaries(*_args) -> None:
@@ -22695,7 +23508,6 @@ def _initialize_runtime_controls_block_49() -> None:
             trace_add("write", _refresh_refine_section_summaries)
 
     _refresh_refine_section_summaries()
-
 
 
 def _geometry_fit_live_update_manual_peak_cache(
@@ -23183,8 +23995,7 @@ def _build_geometry_fit_async_job(
                     ).copy(),
                     "transform_bundle": caked_view_payload.get("transform_bundle"),
                     "detector_shape": tuple(
-                        int(v)
-                        for v in tuple(caked_view_payload.get("detector_shape", ()))[:2]
+                        int(v) for v in tuple(caked_view_payload.get("detector_shape", ()))[:2]
                     ),
                 }
             except Exception:
@@ -23668,10 +24479,7 @@ def _run_async_geometry_fit_worker_job(
             # before the first caked payload exists, otherwise ROI projection drops
             # every angle-backed source row on the first pass.
             analysis_bins = job_data.get("analysis_bins")
-            if not (
-                isinstance(analysis_bins, (tuple, list))
-                and len(analysis_bins) >= 2
-            ):
+            if not (isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2):
                 analysis_bins = getattr(
                     simulation_runtime_state,
                     "analysis_preview_bins",
@@ -23680,8 +24488,7 @@ def _run_async_geometry_fit_worker_job(
             try:
                 precompute_npt_rad = (
                     int(max(1, analysis_bins[0]))
-                    if isinstance(analysis_bins, (tuple, list))
-                    and len(analysis_bins) >= 2
+                    if isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2
                     else int(max(1, job_data.get("npt_rad")))
                 )
             except Exception:
@@ -23689,8 +24496,7 @@ def _run_async_geometry_fit_worker_job(
             try:
                 precompute_npt_azim = (
                     int(max(1, analysis_bins[1]))
-                    if isinstance(analysis_bins, (tuple, list))
-                    and len(analysis_bins) >= 2
+                    if isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2
                     else int(max(1, job_data.get("npt_azim")))
                 )
             except Exception:
@@ -23761,9 +24567,7 @@ def _run_async_geometry_fit_worker_job(
         except Exception as exc:
             if roi_used_restricted_cake:
                 roi_used_restricted_cake = False
-                roi_fallback_reason = (
-                    f"restricted_cake_exception:{type(exc).__name__}"
-                )
+                roi_fallback_reason = f"restricted_cake_exception:{type(exc).__name__}"
                 with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
                     res2 = caking(backend_background, ai)
             else:
@@ -23806,8 +24610,7 @@ def _run_async_geometry_fit_worker_job(
                 ).copy(),
                 "transform_bundle": caked_payload.get("transform_bundle"),
                 "detector_shape": tuple(
-                    int(v)
-                    for v in tuple(caked_payload.get("detector_shape", ()))[:2]
+                    int(v) for v in tuple(caked_payload.get("detector_shape", ()))[:2]
                 ),
                 "roi_enabled": bool(roi_enabled),
                 "roi_used_restricted_cake": bool(roi_used_restricted_cake),
@@ -24671,7 +25474,15 @@ def _on_fit_geometry_click_async():
 
 
 def _initialize_runtime_controls_block_50() -> None:
-    global geometry_fit_runtime_workflow, _geometry_fit_runtime_value_callbacks, _geometry_fit_var_map, geometry_fit_manual_dataset_bindings_factory, geometry_fit_runtime_config_factory, geometry_fit_action_workflow, geometry_fit_action_runtime, geometry_fit_action_bindings_factory
+    global \
+        geometry_fit_runtime_workflow, \
+        _geometry_fit_runtime_value_callbacks, \
+        _geometry_fit_var_map, \
+        geometry_fit_manual_dataset_bindings_factory, \
+        geometry_fit_runtime_config_factory, \
+        geometry_fit_action_workflow, \
+        geometry_fit_action_runtime, \
+        geometry_fit_action_bindings_factory
     global on_fit_geometry_click
 
     geometry_fit_runtime_workflow = gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
@@ -24735,9 +25546,13 @@ def _initialize_runtime_controls_block_50() -> None:
             "backend_detector_coords_to_native_detector_coords": (
                 _backend_background_to_native_detector_coords
             ),
-            "geometry_manual_simulated_peaks_for_params": (_geometry_manual_simulated_peaks_for_params),
+            "geometry_manual_simulated_peaks_for_params": (
+                _geometry_manual_simulated_peaks_for_params
+            ),
             "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
-            "geometry_manual_source_rows_for_background": (_geometry_manual_source_rows_for_background),
+            "geometry_manual_source_rows_for_background": (
+                _geometry_manual_source_rows_for_background
+            ),
             "geometry_manual_rebuild_source_rows_for_background": (
                 _geometry_manual_rebuild_source_rows_for_background
             ),
@@ -24765,9 +25580,7 @@ def _initialize_runtime_controls_block_50() -> None:
             "current_constraint_state": _current_geometry_fit_constraint_state,
             "current_parameter_domains": _current_geometry_fit_parameter_domains,
             "current_candidate_param_names": _current_geometry_fit_candidate_param_names,
-            "current_caked_roi_enabled": (
-                lambda: bool(geometry_fit_caked_roi_enabled_var.get())
-            ),
+            "current_caked_roi_enabled": (lambda: bool(geometry_fit_caked_roi_enabled_var.get())),
         },
         action_bootstrap_kwargs={
             "value_callbacks_factory": _geometry_fit_runtime_values,
@@ -24852,7 +25665,6 @@ def _initialize_runtime_controls_block_50() -> None:
     geometry_fit_action_bindings_factory = geometry_fit_runtime_workflow.action_bindings_factory
     on_fit_geometry_click = _on_fit_geometry_click_async
     fit_button_geometry.config(command=on_fit_geometry_click)
-
 
 
 def _clamp_psi_z_var(*_):
@@ -24973,7 +25785,6 @@ def _initialize_runtime_controls_block_51() -> None:
         raise RuntimeError("CIF weight controls did not create slider variables.")
 
 
-
 def update_weights(*args):
     """Recompute intensities using the current CIF weights."""
     gui_structure_model.update_weighted_intensities(
@@ -25002,7 +25813,6 @@ def _initialize_runtime_controls_block_52() -> None:
         }
         for row in _atom_site_fractional_rows()
     ]
-
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
@@ -25229,8 +26039,20 @@ def _on_layer_slider(val):
 
 
 def _initialize_runtime_controls_block_53() -> None:
-    global ordered_structure_fit_cfg, ordered_structure_fit_solver_cfg, ordered_structure_fit_mask_cfg, ordered_structure_fit_defaults_cfg, ordered_structure_coord_window_default, ordered_structure_scale_var, ordered_structure_coord_window_var, ordered_structure_fit_debye_x_var
-    global ordered_structure_fit_debye_y_var, ordered_structure_fit_result_var, ordered_structure_fit_occ_toggle_vars, ordered_structure_fit_atom_toggle_vars
+    global \
+        ordered_structure_fit_cfg, \
+        ordered_structure_fit_solver_cfg, \
+        ordered_structure_fit_mask_cfg, \
+        ordered_structure_fit_defaults_cfg, \
+        ordered_structure_coord_window_default, \
+        ordered_structure_scale_var, \
+        ordered_structure_coord_window_var, \
+        ordered_structure_fit_debye_x_var
+    global \
+        ordered_structure_fit_debye_y_var, \
+        ordered_structure_fit_result_var, \
+        ordered_structure_fit_occ_toggle_vars, \
+        ordered_structure_fit_atom_toggle_vars
 
     ordered_structure_fit_cfg = (
         fit_config.get("ordered_structure", {}) if isinstance(fit_config, dict) else {}
@@ -25241,7 +26063,9 @@ def _initialize_runtime_controls_block_53() -> None:
         else {}
     )
     ordered_structure_fit_mask_cfg = (
-        ordered_structure_fit_cfg.get("mask", {}) if isinstance(ordered_structure_fit_cfg, dict) else {}
+        ordered_structure_fit_cfg.get("mask", {})
+        if isinstance(ordered_structure_fit_cfg, dict)
+        else {}
     )
     ordered_structure_fit_defaults_cfg = (
         ordered_structure_fit_cfg.get("defaults", {})
@@ -25263,7 +26087,6 @@ def _initialize_runtime_controls_block_53() -> None:
     ordered_structure_fit_result_var = tk.StringVar(value="No ordered-structure fit run yet.")
     ordered_structure_fit_occ_toggle_vars = []
     ordered_structure_fit_atom_toggle_vars = []
-
 
 
 def _set_ordered_structure_result_text(text: object) -> None:
@@ -25359,7 +26182,15 @@ def _rebuild_ordered_structure_fit_selection_controls() -> None:
 
 
 def _initialize_runtime_controls_block_54() -> None:
-    global finite_stack_var, stack_layers_var, phase_delta_expr_var, phi_l_divisor_var, p0_var, w0_var, p1_var, w1_var
+    global \
+        finite_stack_var, \
+        stack_layers_var, \
+        phase_delta_expr_var, \
+        phi_l_divisor_var, \
+        p0_var, \
+        w0_var, \
+        p1_var, \
+        w1_var
     global p2_var, w2_var
 
     gui_views.create_ordered_structure_fit_panel(
@@ -25376,7 +26207,6 @@ def _initialize_runtime_controls_block_54() -> None:
         on_commit_coord_window=_commit_ordered_structure_coord_window_entry,
     )
     _set_ordered_structure_revert_enabled(False)
-
 
     # Sliders for three disorder probabilities and weights inside a collapsible frame
     gui_views.create_stacking_parameter_panels(
@@ -25424,7 +26254,6 @@ def _initialize_runtime_controls_block_54() -> None:
     w1_var = stacking_parameter_controls_view_state.w1_var
     p2_var = stacking_parameter_controls_view_state.p2_var
     w2_var = stacking_parameter_controls_view_state.w2_var
-
 
 
 def _rebuild_occupancy_controls():
@@ -25475,7 +26304,6 @@ def _initialize_runtime_controls_block_55() -> None:
     global structure_model_controls_built
 
     structure_model_controls_built = False
-
 
 
 def _rebuild_structure_model_controls() -> None:
@@ -25758,10 +26586,12 @@ def _initialize_runtime_controls_block_56() -> None:
         on_export_diffuse_ht=_export_diffuse_ht_txt,
     )
 
+
 cif_file_var = None
 
 
 _RUNTIME_STATE_INITIALIZED = False
+
 
 def ensure_runtime_state_initialized() -> None:
     global _RUNTIME_STATE_INITIALIZED
@@ -25778,6 +26608,7 @@ def ensure_runtime_state_initialized() -> None:
 
 _RUNTIME_ROOT_INITIALIZED = False
 
+
 def ensure_runtime_root_initialized() -> None:
     global _RUNTIME_ROOT_INITIALIZED
     if _RUNTIME_ROOT_INITIALIZED:
@@ -25788,6 +26619,7 @@ def ensure_runtime_root_initialized() -> None:
 
 
 _RUNTIME_SHELL_INITIALIZED = False
+
 
 def ensure_runtime_shell_initialized() -> None:
     global _RUNTIME_SHELL_INITIALIZED
@@ -25800,6 +26632,7 @@ def ensure_runtime_shell_initialized() -> None:
 
 
 _RUNTIME_PLOT_INITIALIZED = False
+
 
 def ensure_runtime_plot_initialized() -> None:
     global _RUNTIME_PLOT_INITIALIZED
@@ -25814,6 +26647,7 @@ def ensure_runtime_plot_initialized() -> None:
 
 
 _RUNTIME_CONTROLS_INITIALIZED = False
+
 
 def ensure_runtime_controls_initialized() -> None:
     global _RUNTIME_CONTROLS_INITIALIZED, cif_file_var
@@ -26095,9 +26929,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
                     gui_views.set_finite_stack_phi_l_divisor_entry_text(
                         finite_stack_controls_view_state,
-                        gui_controllers.format_finite_stack_phi_l_divisor(
-                            _current_phi_l_divisor()
-                        ),
+                        gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
                     )
                 _apply_rod_points_per_gz(trigger_update=False)
                 ensure_valid_resolution_choice()
@@ -26108,9 +26940,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             sample_count = int(max(1, simulation_runtime_state.num_samples))
             cif_summary = Path(_current_primary_cif_path()).name
             if structure_model_state.cif_file2:
-                cif_summary = (
-                    f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
-                )
+                cif_summary = f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
             print(
                 "Startup ready: "
                 f"profile={'loaded' if profile_loaded else 'defaults'}; "

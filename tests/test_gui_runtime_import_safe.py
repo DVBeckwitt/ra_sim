@@ -315,7 +315,9 @@ def test_runtime_session_uses_lazy_structure_model_and_cif_reader_helpers() -> N
 
 def test_runtime_impl_prompts_from_root_only_before_full_runtime_bootstrap() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
+    main_start = source.index(
+        'def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):'
+    )
     prompt_line = "resolved_mode = gui_bootstrap.choose_startup_mode_dialog(root)"
     prompt_index = source.index(prompt_line, main_start)
     ensure_root_index = source.index("ensure_runtime_root_initialized()", main_start)
@@ -327,9 +329,15 @@ def test_runtime_impl_runtime_context_builders_gate_staged_initializers() -> Non
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     state_start = source.index("def build_runtime_state_context() -> RuntimeContext:")
-    window_start = source.index("def build_runtime_window_context(context: RuntimeContext) -> RuntimeContext:")
-    plot_start = source.index("def build_runtime_plot_context(context: RuntimeContext) -> RuntimeContext:")
-    controls_start = source.index("def build_runtime_controls_context(context: RuntimeContext) -> RuntimeContext:")
+    window_start = source.index(
+        "def build_runtime_window_context(context: RuntimeContext) -> RuntimeContext:"
+    )
+    plot_start = source.index(
+        "def build_runtime_plot_context(context: RuntimeContext) -> RuntimeContext:"
+    )
+    controls_start = source.index(
+        "def build_runtime_controls_context(context: RuntimeContext) -> RuntimeContext:"
+    )
     benchmark_start = source.index("_STARTUP_BENCHMARK_ENABLED = str(")
 
     state_block = source[state_start:window_start]
@@ -429,7 +437,10 @@ def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
 def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background" in source
+    assert (
+        "from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_background"
+        in source
+    )
     assert "start_exact_cake_geometry_warmup_in_background" in source
     assert "from ra_sim.simulation.exact_cake_portable import (" in source
     assert "FastAzimuthalIntegrator," in source
@@ -452,9 +463,7 @@ def test_runtime_impl_uses_fast_exact_cake_integrator_for_analysis() -> None:
     assert "source_entry=source_entry," in source
     assert "source_entry=raw_record," in source
     assert "root.after_idle(start_exact_cake_numba_warmup_in_background)" in source
-    assert (
-        "root.after_idle(start_forward_simulation_numba_warmup_in_background)" in source
-    )
+    assert "root.after_idle(start_forward_simulation_numba_warmup_in_background)" in source
     assert "root.after_idle(start_qr_rod_simulation_numba_warmup_in_background)" in source
 
 
@@ -511,20 +520,22 @@ def test_runtime_impl_warms_live_exact_cake_geometry_cache() -> None:
     assert "start_exact_cake_geometry_warmup_in_background(" in source
 
 
-def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_and_wavelength() -> None:
+def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_and_wavelength() -> (
+    None
+):
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "simulation_runtime_state.geometry_fit_caking_ai_cache = {}" in source
     assert "worker_geometry_fit_caking_sig" in source
     assert "requested_sig = _caked_geometry_cache_signature(" in source
     assert 'params_local.get("corto_detector", np.nan),' in source
-    assert 'center_value[0] if center_value.size > 0 else np.nan,' in source
-    assert 'center_value[1] if center_value.size > 1 else np.nan,' in source
+    assert "center_value[0] if center_value.size > 0 else np.nan," in source
+    assert "center_value[1] if center_value.size > 1 else np.nan," in source
     assert 'params_local.get("lambda", np.nan),' in source
-    assert 'persistent_cache = getattr(' in source
+    assert "persistent_cache = getattr(" in source
     assert '"geometry_fit_caking_ai_cache",' in source
     assert 'persistent_cache.get("sig") == requested_sig' in source
-    assert 'simulation_runtime_state.geometry_fit_caking_ai_cache = {' in source
+    assert "simulation_runtime_state.geometry_fit_caking_ai_cache = {" in source
     assert "and worker_geometry_fit_caking_sig == requested_sig" in source
     assert "np.asarray(simulation_runtime_state.unscaled_image).shape" in source
     assert "npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS" in source
@@ -987,12 +998,8 @@ def test_runtime_session_replace_gui_state_peak_cache_reprojects_detector_view_f
     assert simulation_runtime_state.peak_records[0]["native_col"] == 190.0
     assert simulation_runtime_state.peak_records[0]["native_row"] == 96.0
     assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
-    assert (
-        simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 190.0
-    )
-    assert (
-        simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 96.0
-    )
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 190.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 96.0
     assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert invalidated == [True]
 
@@ -1082,7 +1089,7 @@ def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projec
                 "source_table_index": 9,
                 "source_row_index": 1,
                 "source_branch_index": 0,
-            }
+            },
         ]
     )
 
@@ -1187,8 +1194,12 @@ def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_l
         "_get_geometry_manual_pick_cache",
         lambda **_kwargs: {
             "simulated_lookup": {
-                runtime_session._geometry_manual_candidate_source_key(left_source): dict(left_source),
-                runtime_session._geometry_manual_candidate_source_key(right_source): dict(right_source),
+                runtime_session._geometry_manual_candidate_source_key(left_source): dict(
+                    left_source
+                ),
+                runtime_session._geometry_manual_candidate_source_key(right_source): dict(
+                    right_source
+                ),
             },
             "match_config": {"search_radius_px": 6.0},
         },
@@ -1216,8 +1227,7 @@ def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_l
         runtime_session.gui_manual_geometry,
         "geometry_manual_refine_preview_point",
         lambda source_entry, *_args, **_kwargs: (
-            seen_source_branches.append(int(source_entry["source_branch_index"]))
-            or (30.25, -57.5)
+            seen_source_branches.append(int(source_entry["source_branch_index"])) or (30.25, -57.5)
         ),
     )
     monkeypatch.setattr(
@@ -1239,9 +1249,7 @@ def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_l
         raising=False,
     )
 
-    refined_entry = runtime_session._refine_geometry_manual_pair_entry_from_cache(
-        dict(right_entry)
-    )
+    refined_entry = runtime_session._refine_geometry_manual_pair_entry_from_cache(dict(right_entry))
 
     assert seen_source_branches == [1]
     assert refined_entry is not None
@@ -1348,7 +1356,9 @@ def test_runtime_session_refine_current_manual_pairs_uses_branch_aware_lookup(
     monkeypatch.setattr(
         runtime_session,
         "progress_label_geometry",
-        SimpleNamespace(config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))),
+        SimpleNamespace(
+            config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1390,7 +1400,10 @@ def test_runtime_session_refine_current_manual_pairs_uses_branch_aware_lookup(
         runtime_session,
         "_get_geometry_manual_pick_cache",
         lambda **_kwargs: {
-            "simulated_lookup": {key: dict(value) for key, value in source_lookup.items()},
+            "simulated_lookup": {
+                key: ([dict(entry) for entry in value] if isinstance(value, list) else dict(value))
+                for key, value in source_lookup.items()
+            },
             "match_config": {"search_radius_px": 6.0},
         },
         raising=False,
@@ -1417,9 +1430,7 @@ def test_runtime_session_refine_current_manual_pairs_uses_branch_aware_lookup(
         runtime_session.gui_manual_geometry,
         "geometry_manual_refine_preview_point",
         lambda source_entry, *_args, **_kwargs: (
-            (29.0, -58.5)
-            if int(source_entry["source_branch_index"]) == 0
-            else (30.25, -57.5)
+            (29.0, -58.5) if int(source_entry["source_branch_index"]) == 0 else (30.25, -57.5)
         ),
     )
     monkeypatch.setattr(
@@ -1563,6 +1574,8 @@ def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_
         runtime_session._geometry_manual_candidate_source_key(right_source_entry): dict(
             right_source_entry
         ),
+        ("source", 9, 0): [dict(left_source_entry), dict(right_source_entry)],
+        (9, 0): [dict(left_source_entry), dict(right_source_entry)],
     }
     peak_records = [
         {
@@ -1602,7 +1615,9 @@ def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_
     monkeypatch.setattr(
         runtime_session,
         "progress_label_geometry",
-        SimpleNamespace(config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))),
+        SimpleNamespace(
+            config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1635,6 +1650,16 @@ def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_lookup_source_entry",
+        lambda _lookup, entry, **_kwargs: (
+            dict(right_source_entry)
+            if int(entry.get("source_table_index", -1)) == 9
+            and int(entry.get("source_row_index", -1)) == 0
+            else None
+        ),
+    )
+    monkeypatch.setattr(
         runtime_session,
         "_geometry_manual_pairs_for_index",
         lambda index: [dict(saved_entry)] if int(index) == 0 else [],
@@ -1644,7 +1669,10 @@ def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_
         runtime_session,
         "_get_geometry_manual_pick_cache",
         lambda **_kwargs: {
-            "simulated_lookup": {key: dict(value) for key, value in source_lookup.items()},
+            "simulated_lookup": {
+                key: ([dict(entry) for entry in value] if isinstance(value, list) else dict(value))
+                for key, value in source_lookup.items()
+            },
             "match_config": {"search_radius_px": 6.0},
         },
         raising=False,
@@ -1672,11 +1700,7 @@ def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_
         "geometry_manual_refine_preview_point",
         lambda source_entry, *_args, **_kwargs: (
             seen_source_branches.append(int(source_entry["source_branch_index"]))
-            or (
-                (29.0, -58.5)
-                if int(source_entry["source_branch_index"]) == 0
-                else (30.25, -57.5)
-            )
+            or ((29.0, -58.5) if int(source_entry["source_branch_index"]) == 0 else (30.25, -57.5))
         ),
     )
     monkeypatch.setattr(
@@ -1832,10 +1856,16 @@ def test_runtime_impl_tracks_detector_source_geometry_for_projected_rasters() ->
 def test_runtime_impl_overlay_refresh_copies_image_source_geometry() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "_image_source, image_extent, image_origin = _primary_raster_source_payload(" in source
+    assert "_primary_raster_source_payload(" in source
+    assert "_image_source" in source
+    assert "image_source_signature" in source
     assert "if image_extent is not None:" in source
     assert "origin=image_origin," in source
     assert "extent=image_extent," in source
+    assert "_store_primary_raster_source(" in source
+    assert "_integration_overlay_raster_source_signature(" in source
+    assert "parent_source_signature=image_source_signature," in source
+    assert "source_signature=overlay_source_signature," in source
     assert "_apply_projected_primary_raster_to_artist(overlay_artist)" in source
 
 
@@ -1849,7 +1879,9 @@ def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
     assert "axes_visible=bool(analysis_space_display_available)" in source
     assert "axes_visible=bool(show_caked_image)" not in source
     assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=True)" in source
-    assert "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)" in source
+    assert (
+        "gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)" in source
+    )
     assert "ax.set_title('Simulated Diffraction Pattern')" not in source
 
 
@@ -1866,12 +1898,23 @@ def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing()
 def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
+    assert "def _analysis_display_payload_ready(" in source
+    assert "def _analysis_payload_ready_after_restore_attempt(" in source
     assert "def _restore_caked_display_payload_from_cached_results(" in source
     assert "missing_analysis_payload = bool(" in source
+    assert "and not analysis_payload_ready" in source
+    assert "analysis_payload_ready = _analysis_payload_ready_after_restore_attempt(" in source
     assert "_restore_caked_display_payload_from_cached_results(" in source
-    assert "simulation_runtime_state.last_caked_image_unscaled is None" in source
-    assert "simulation_runtime_state.last_caked_extent is None" in source
+    assert "caked_background_image is not None" in source
+    assert "q_space_background_image is not None" in source
     assert "_get_current_background_native()" in source
+    assert source.index(
+        "analysis_payload_ready = _analysis_payload_ready_after_restore_attempt("
+    ) < source.index("analysis_result_matches_target = bool(")
+    assert source.index("analysis_result_matches_target = bool(") < source.index(
+        "_request_async_analysis_job(",
+        source.index("analysis_result_matches_target = bool("),
+    )
 
 
 def test_runtime_impl_preserves_primary_axis_limits_across_same_mode_redraws() -> None:
@@ -1895,16 +1938,16 @@ def test_runtime_impl_reuses_cached_hit_tables_for_optics_and_mosaic_only_update
     assert "include_mosaic_shape=False," in source
     assert "collect_hit_tables_for_job = bool(" in source
     assert "and not _cached_hit_tables_reusable(" in source
-    assert "\"collected_hit_tables\": bool(job[\"collect_hit_tables\"])," in source
+    assert '"collected_hit_tables": bool(job["collect_hit_tables"]),' in source
     assert "intersection_cache_to_hit_tables," in source
     assert "def _resolved_peak_table_payload(" in source
     assert "primary_peak_tables = _resolved_peak_table_payload(cache1, raw_hit_tables1)" in source
-    assert "\"primary_max_positions\": list(primary_peak_tables)," in source
+    assert '"primary_max_positions": list(primary_peak_tables),' in source
     assert "stored_primary_intersection_cache = _copy_intersection_cache_tables(" in source
     assert "stored_secondary_intersection_cache = _copy_intersection_cache_tables(" in source
     assert "stored_primary_peak_table_lattice = list(" in source
     assert "stored_secondary_peak_table_lattice = list(" in source
-    assert "or \"primary_intersection_cache\" in result" in source
+    assert 'or "primary_intersection_cache" in result' in source
     assert "simulation_runtime_state.last_sim_signature = new_sim_image_sig" in source
     assert "need_hit_table_refresh = bool(" in source
     assert "do_update_refresh_hit_tables_in_background" in source
@@ -1946,8 +1989,10 @@ def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None
 def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")' in source
-    assert 'if allow_source_snapshot_rebuild:' in source
+    assert (
+        'allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")' in source
+    )
+    assert "if allow_source_snapshot_rebuild:" in source
 
 
 def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> None:
@@ -1992,7 +2037,9 @@ def test_runtime_impl_hides_aux_artists_while_roi_preview_is_enabled() -> None:
 def test_runtime_impl_invalidates_qr_overlay_before_view_mode_toggles() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:" in source
+    assert (
+        "def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:" in source
+    )
     assert "gui_qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(" in source
     assert "def toggle_caked_2d(requested_mode: str | None = None) -> None:" in source
     assert "_invalidate_qr_cylinder_overlay_view_state(clear_artists=True)" in source
@@ -2006,17 +2053,223 @@ def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() ->
     restore_start = source.index("def _restore_caked_display_payload_from_cached_results(")
     restore_end = source.index("def _run_analysis_job(", restore_start)
     restore_source = source[restore_start:restore_end]
-    apply_start = source.index("def _apply_ready_analysis_result(result: dict[str, object]) -> None:")
+    apply_start = source.index(
+        "def _apply_ready_analysis_result(result: dict[str, object]) -> None:"
+    )
     apply_end = source.index("def schedule_update():", apply_start)
     apply_source = source[apply_start:apply_end]
 
-    assert "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache" in restore_source
-    assert "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (" in restore_source
-    assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in restore_source
-    assert "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache" in apply_source
-    assert "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = (" in apply_source
-    assert "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache" not in apply_source
+    assert (
+        "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache"
+        in restore_source
+    )
+    assert (
+        "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = "
+        in restore_source
+    )
+    assert (
+        "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache"
+        not in restore_source
+    )
+    assert (
+        "simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache"
+        in apply_source
+    )
+    assert (
+        "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = " in apply_source
+    )
+    assert (
+        "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache"
+        not in apply_source
+    )
     assert "simulation_runtime_state.last_caked_transform_bundle = (" in source
+
+
+def test_runtime_impl_threads_primary_raster_source_signature_into_projection() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '_MAIN_RASTER_SOURCE_SIGNATURE_ATTR = "_ra_sim_source_signature"' in source
+    assert "def _detector_display_raster_source_signature() -> object | None:" in source
+    assert "def _resolved_primary_raster_source_signature(" in source
+    assert "_MAIN_RASTER_SOURCE_SIGNATURE_ATTR," in source
+    assert "source, extent, origin, source_signature" in source
+    assert "_primary_raster_source_payload(artist)" in source
+    assert "source_signature=source_signature," in source
+
+
+def test_runtime_impl_preserves_no_redraw_preview_cancel_contract_for_overlay_restore() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    restore_start = source.index("def _restore_legacy_main_matplotlib_overlays(")
+    restore_end = source.index("def _preview_legacy_main_matplotlib_view_limits(", restore_start)
+    restore_source = source[restore_start:restore_end]
+    reset_start = source.index("def _reset_main_figure_live_interaction_state(")
+    configure_start = source.index("def _configure_primary_viewport_redraw_helpers()", reset_start)
+    reset_source = source[reset_start:configure_start]
+
+    assert (
+        "def _restore_legacy_main_matplotlib_overlays(*, redraw: bool = True) -> bool:"
+        in restore_source
+    )
+    assert "if bool(redraw)" in restore_source
+    assert "else None" in restore_source
+    assert "_request_legacy_main_matplotlib_redraw(force=True)" in restore_source
+    assert (
+        "def _reset_main_figure_live_interaction_state(*, redraw: bool = True) -> None:"
+        in reset_source
+    )
+    assert "_restore_legacy_main_matplotlib_overlays(redraw=bool(redraw))" in reset_source
+    assert "preview_cleared = bool(_clear_legacy_main_matplotlib_preview_view(redraw=False))" in reset_source
+    assert "if dropped_preview_state and not preview_cleared:" in reset_source
+    assert "_reset_main_figure_live_interaction_state(redraw=bool(redraw))" in reset_source
+    assert "_reset_main_figure_live_interaction_state(redraw=False)" in reset_source
+
+
+def test_apply_projected_primary_raster_to_artist_passes_stored_source_signature(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    recorded_signatures: list[object] = []
+    set_data_calls: list[np.ndarray] = []
+
+    class _Artist:
+        def __init__(self) -> None:
+            self._extent = None
+
+        def set_extent(self, extent):
+            self._extent = list(extent)
+
+        def set_data(self, image):
+            set_data_calls.append(np.asarray(image, dtype=float).copy())
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_interaction_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_main_display_raster_size_limit",
+        lambda: 100,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_axes_image_origin",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_display_projection,
+        "project_raster_to_view",
+        lambda image, *, source_signature=None, **_kwargs: (
+            recorded_signatures.append(source_signature)
+            or runtime_session.gui_display_projection.RasterProjection(
+                image=np.asarray(image, dtype=float).copy(),
+                extent=(0.0, 2.0, 2.0, 0.0),
+            )
+        ),
+        raising=False,
+    )
+
+    artist = _Artist()
+    source_image = np.arange(4, dtype=float).reshape(2, 2)
+    runtime_session._store_primary_raster_source(
+        artist,
+        source_image,
+        source_signature=("sig", 7),
+    )
+    runtime_session._store_primary_raster_geometry(
+        artist,
+        origin="upper",
+        extent=(0.0, 2.0, 2.0, 0.0),
+    )
+
+    assert runtime_session._apply_projected_primary_raster_to_artist(artist) is True
+    assert recorded_signatures == [("sig", 7)]
+    assert len(set_data_calls) == 1
+    np.testing.assert_array_equal(set_data_calls[0], source_image)
+
+
+def test_store_primary_raster_source_uses_detector_buffer_signature_for_global_image_buffer(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    artist = SimpleNamespace()
+    detector_buffer = np.arange(4, dtype=float).reshape(2, 2)
+    detector_signature = ("detector-cache", 3)
+
+    monkeypatch.setattr(runtime_session, "global_image_buffer", detector_buffer, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(last_unscaled_image_signature=detector_signature),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: 2.5,
+        raising=False,
+    )
+
+    runtime_session._store_primary_raster_source(artist, detector_buffer)
+    source, _extent, _origin, source_signature = runtime_session._primary_raster_source_payload(
+        artist
+    )
+
+    assert source is detector_buffer
+    assert source_signature == (detector_signature, 2.5)
+
+
+def test_set_primary_integration_overlay_image_uses_distinct_overlay_source_signature(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    image_artist = SimpleNamespace()
+    overlay_artist = SimpleNamespace()
+    parent_signature = ("image", 5)
+    overlay_image = np.full((2, 2), 7.0, dtype=float)
+    applied_artists: list[object] = []
+
+    monkeypatch.setattr(runtime_session, "image_display", image_artist, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_region_overlay",
+        overlay_artist,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_projected_primary_raster_to_artist",
+        lambda artist: applied_artists.append(artist) or True,
+        raising=False,
+    )
+
+    runtime_session._store_primary_raster_source(
+        image_artist,
+        np.arange(4, dtype=float).reshape(2, 2),
+        source_signature=parent_signature,
+    )
+    runtime_session._store_primary_raster_geometry(
+        image_artist,
+        origin="upper",
+        extent=(0.0, 1.0, 1.0, 0.0),
+    )
+
+    runtime_session._set_primary_integration_overlay_image(overlay_image)
+    stored_source, extent, origin, overlay_signature = (
+        runtime_session._primary_raster_source_payload(overlay_artist)
+    )
+
+    np.testing.assert_array_equal(stored_source, overlay_image)
+    assert tuple(extent) == (0.0, 1.0, 1.0, 0.0)
+    assert origin == "upper"
+    assert overlay_signature != parent_signature
+    assert overlay_signature[0] == "integration_region_overlay"
+    assert overlay_signature[1] == parent_signature
+    assert applied_artists == [overlay_artist]
 
 
 def test_runtime_live_caked_projection_helper_uses_bound_callback(
@@ -2333,9 +2586,7 @@ def test_runtime_current_geometry_fit_roi_selection_does_not_call_legacy_project
         _fake_build_geometry_fit_caked_roi_selection,
     )
 
-    selection = runtime_session._current_geometry_fit_caked_roi_selection(
-        force_enabled=True
-    )
+    selection = runtime_session._current_geometry_fit_caked_roi_selection(force_enabled=True)
 
     assert selection == {
         "enabled": True,
@@ -2855,7 +3106,9 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
     assert out[0, 15] == 49.75
 
 
-def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> None:
+def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> (
+    None
+):
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     table = np.asarray(
@@ -2895,8 +3148,7 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_proje
         runtime_session,
         "detector_pixel_to_caked_bin",
         lambda transform_bundle, col, row: (
-            projector_calls.append((transform_bundle, float(col), float(row)))
-            or (None, None)
+            projector_calls.append((transform_bundle, float(col), float(row))) or (None, None)
         ),
     )
 
@@ -2941,14 +3193,31 @@ def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(
     monkeypatch.setattr(
         runtime_session,
         "_native_detector_coords_to_live_caked_coords",
-        lambda col, row: (
-            projector_calls.append((float(col), float(row))) or (91.0, -44.0)
-        ),
+        lambda col, row: projector_calls.append((float(col), float(row))) or (91.0, -44.0),
     )
 
     x_vals, y_vals = runtime_session._analysis_cache_overlay_coords(
         np.asarray(
-            [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
+            [
+                [
+                    1.5,
+                    2.5,
+                    40.0,
+                    50.0,
+                    8.0,
+                    0.375,
+                    1.0,
+                    0.0,
+                    2.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    17.5,
+                    -32.0,
+                ]
+            ],
             dtype=float,
         ),
         show_caked=True,
@@ -2996,9 +3265,7 @@ def test_analysis_cache_overlay_coords_ignores_detector_cache_caked_columns_even
     monkeypatch.setattr(
         runtime_session,
         "_native_detector_coords_to_live_caked_coords",
-        lambda col, row: (
-            projector_calls.append((float(col), float(row))) or (82.0, -41.0)
-        ),
+        lambda col, row: projector_calls.append((float(col), float(row))) or (82.0, -41.0),
     )
 
     x_vals, y_vals = runtime_session._analysis_cache_overlay_coords(
@@ -3011,19 +3278,782 @@ def test_analysis_cache_overlay_coords_ignores_detector_cache_caked_columns_even
     np.testing.assert_allclose(y_vals, [-41.0])
 
 
-def test_runtime_impl_detector_view_reset_clears_caked_cache_provenance() -> None:
-    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    branch_anchor = source.index(
-        "        ax.set_title(\"\")\n        _sync_primary_raster_geometry(view_mode=analysis_space_display_mode)\n    else:\n"
-    )
-    branch_end = source.index("        detector_background_source = (", branch_anchor)
-    branch_source = source[branch_anchor:branch_end]
+def test_invalidate_cached_analysis_space_payloads_clears_caked_cache_provenance(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    live_bundle_calls: list[object] = []
+    q_space_payload_calls: list[tuple[object, object]] = []
 
-    assert "simulation_runtime_state.last_caked_intersection_cache = None" in branch_source
-    assert (
-        "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None"
-        in branch_source
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_extent=[0.0, 1.0, -1.0, 1.0],
+            last_caked_background_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_radial_values=np.array([1.0, 2.0], dtype=np.float64),
+            last_caked_azimuth_values=np.array([-1.0, 1.0], dtype=np.float64),
+            last_caked_intersection_cache=("cache",),
+            last_caked_intersection_cache_transform_bundle="bundle",
+            last_q_space_payload_signature="q-space-sig",
+        ),
+        raising=False,
     )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_live_caked_transform_bundle",
+        lambda bundle: live_bundle_calls.append(bundle),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_q_space_display_payload",
+        lambda *, sim_payload=None, bg_payload=None: q_space_payload_calls.append(
+            (sim_payload, bg_payload)
+        ),
+        raising=False,
+    )
+
+    runtime_session._invalidate_cached_analysis_space_payloads(
+        clear_caked=True,
+        clear_q_space=False,
+    )
+
+    assert runtime_session.simulation_runtime_state.last_caked_image_unscaled is None
+    assert runtime_session.simulation_runtime_state.last_caked_extent is None
+    assert runtime_session.simulation_runtime_state.last_caked_background_image_unscaled is None
+    assert runtime_session.simulation_runtime_state.last_caked_radial_values is None
+    assert runtime_session.simulation_runtime_state.last_caked_azimuth_values is None
+    assert runtime_session.simulation_runtime_state.last_caked_intersection_cache is None
+    assert (
+        runtime_session.simulation_runtime_state.last_caked_intersection_cache_transform_bundle
+        is None
+    )
+    assert live_bundle_calls == [None]
+    assert q_space_payload_calls == []
+
+
+class _RuntimeVar:
+    def __init__(self, value: float | bool) -> None:
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value) -> None:
+        self._value = value
+
+
+def _install_idle_main_figure_preview_state(monkeypatch, runtime_session) -> None:
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(
+            _canvas_preview_limits=None,
+            _canvas_pan_session=None,
+        ),
+        raising=False,
+    )
+
+
+def _install_matching_hidden_analysis_payload_state(
+    monkeypatch,
+    runtime_session,
+    *,
+    include_do_update_state: bool,
+) -> dict[str, object]:
+    sim_signature = ("sim-sig",)
+    caked_geometry_sig = ("caked-geom",)
+    q_space_payload_geometry_sig = ("q-geom",)
+    sim_caking_sig = (sim_signature, caked_geometry_sig, 1.0)
+    current_analysis_cache_sig = (
+        (
+            sim_caking_sig,
+            int(runtime_session.DEFAULT_ANALYSIS_RADIAL_BINS),
+            int(runtime_session.DEFAULT_ANALYSIS_AZIMUTH_BINS),
+        ),
+        None,
+    )
+    caked_image = np.ones((2, 2), dtype=np.float64)
+    q_space_image = np.full((2, 2), 3.0, dtype=np.float64)
+    state_fields = {
+        "last_analysis_cache_sig": current_analysis_cache_sig,
+        "last_q_space_payload_signature": (
+            current_analysis_cache_sig,
+            q_space_payload_geometry_sig,
+        ),
+        "last_caked_image_unscaled": caked_image.copy(),
+        "last_caked_extent": [0.0, 1.0, -1.0, 1.0],
+        "last_caked_background_image_unscaled": np.full((2, 2), 2.0, dtype=np.float64),
+        "last_caked_radial_values": np.array([1.0, 2.0], dtype=np.float64),
+        "last_caked_azimuth_values": np.array([-1.0, 1.0], dtype=np.float64),
+        "last_caked_intersection_cache": ("cache",),
+        "last_caked_intersection_cache_transform_bundle": "bundle",
+        "last_q_space_image_unscaled": q_space_image.copy(),
+        "last_q_space_qr_values": np.array([0.1, 0.2], dtype=np.float64),
+        "last_q_space_qz_values": np.array([0.3, 0.4], dtype=np.float64),
+        "last_q_space_extent": [-1.0, 1.0, -2.0, 2.0],
+        "last_q_space_background_image_unscaled": np.full((2, 2), 4.0, dtype=np.float64),
+        "caked_limits_user_override": False,
+    }
+    if include_do_update_state:
+        state_fields.update(
+            update_trace_counter=0,
+            update_pending=None,
+            update_running=False,
+            update_phase="idle",
+            worker_active_job=None,
+            worker_queued_job=None,
+            analysis_active_job=None,
+            analysis_queued_job=None,
+            preview_active=False,
+            num_samples=0,
+            sim_primary_qr={},
+            sim_miller1=np.zeros((0, 3), dtype=np.float64),
+            sim_intens1=np.zeros((0,), dtype=np.float64),
+            sim_miller2=np.zeros((0, 3), dtype=np.float64),
+            sim_intens2=np.zeros((0,), dtype=np.float64),
+            primary_requested_source_mode="",
+            primary_requested_contribution_keys=(),
+            primary_requested_filter_signature=None,
+            sf_prune_stats={},
+            unscaled_image=np.ones((2, 2), dtype=np.float64),
+            stored_primary_sim_image=np.ones((2, 2), dtype=np.float64),
+            stored_secondary_sim_image=None,
+            last_sim_signature=sim_signature,
+            last_simulation_signature=sim_signature + (0,),
+            stored_primary_max_positions=None,
+            stored_secondary_max_positions=None,
+            stored_primary_source_reflection_indices=None,
+            stored_secondary_source_reflection_indices=None,
+            stored_primary_peak_table_lattice=None,
+            stored_secondary_peak_table_lattice=None,
+            stored_primary_intersection_cache=None,
+            stored_secondary_intersection_cache=None,
+            normalization_scale_cache={"sig": None, "value": 1.0},
+            peak_intensities=[],
+            peak_records=[],
+            last_1d_integration_data={},
+            ai_cache={"sig": caked_geometry_sig, "ai": object()},
+            stored_hit_table_signature=None,
+            stored_sim_image=None,
+            stored_max_positions_local=None,
+            stored_source_reflection_indices_local=None,
+            stored_peak_table_lattice=None,
+            stored_intersection_cache=None,
+            last_unscaled_image_signature=None,
+        )
+    state = SimpleNamespace(**state_fields)
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", state, raising=False)
+    return {
+        "simulation_runtime_state": state,
+        "sim_signature": sim_signature,
+        "caked_geometry_sig": caked_geometry_sig,
+        "q_space_payload_geometry_sig": q_space_payload_geometry_sig,
+        "current_analysis_cache_sig": current_analysis_cache_sig,
+        "caked_image": caked_image,
+        "q_space_image": q_space_image,
+    }
+
+
+def _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture) -> tuple:
+    _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(
+            current_background_index=0,
+            current_background_image=None,
+            backend_rotation_k=0,
+            backend_flip_x=False,
+            backend_flip_y=False,
+            visible=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(scale_factor_user_override=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(1.0),
+            simulation_min_var=_RuntimeVar(0.0),
+            simulation_max_var=_RuntimeVar(1.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=_RuntimeVar(False), show_1d_var=_RuntimeVar(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "gamma_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zs_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zb_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "sample_width_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "sample_length_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "sample_depth_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "cor_angle_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "a_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "c_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "debye_x_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "debye_y_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(0.5), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "weight1_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "weight2_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 2, raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
+    monkeypatch.setattr(runtime_session, "wave_m", 1.24e-10, raising=False)
+    monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
+    monkeypatch.setattr(runtime_session, "av2", None, raising=False)
+    monkeypatch.setattr(runtime_session, "cv2", None, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_q_group_state", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session, "peak_selection_runtime_maintenance", object(), raising=False
+    )
+    monkeypatch.setattr(runtime_session, "two_theta_range", (0.0, 2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "_last_a_for_ht", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "_last_c_for_ht", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "_last_iodine_z_for_ht", 0.0, raising=False)
+    monkeypatch.setattr(runtime_session, "_last_phi_l_divisor", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "_last_phase_delta_expression", "", raising=False)
+    monkeypatch.setattr(runtime_session, "_last_atom_site_fractional_signature", (), raising=False)
+    monkeypatch.setattr(runtime_session, "_ensure_runtime_update_trace_hooks", lambda: None)
+    monkeypatch.setattr(
+        runtime_session, "_append_runtime_update_trace", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(runtime_session, "_refresh_run_status_bar", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_initial_simulation_loading_overlay",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "detector_two_theta_max", lambda *_args, **_kwargs: 2.0)
+    monkeypatch.setattr(runtime_session, "_current_phase_delta_expression", lambda: "")
+    monkeypatch.setattr(runtime_session, "_current_phi_l_divisor", lambda: 1.0)
+    monkeypatch.setattr(runtime_session, "_current_iodine_z", lambda: 0.0)
+    monkeypatch.setattr(runtime_session, "_current_atom_site_fractional_values", lambda: ())
+    monkeypatch.setattr(runtime_session, "_atom_site_fractional_signature", lambda _values: ())
+    monkeypatch.setattr(
+        runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0
+    )
+    monkeypatch.setattr(runtime_session, "_current_ordered_structure_scale", lambda: 1.0)
+    monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+        },
+    )
+    monkeypatch.setattr(runtime_session, "_current_optics_mode_flag", lambda: 0)
+    monkeypatch.setattr(
+        runtime_session,
+        "_qr_cylinder_replace_simulation_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(runtime_session, "_should_collect_hit_tables_for_update", lambda: False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_source_snapshot_signature_from_params",
+        lambda *_args, **_kwargs: fixture["sim_signature"],
+    )
+    monkeypatch.setattr(runtime_session, "current_sf_prune_bias", lambda: 0.0, raising=False)
+    monkeypatch.setattr(
+        runtime_session, "_cached_hit_tables_reusable", lambda *_args, **_kwargs: True
+    )
+    monkeypatch.setattr(runtime_session, "_consume_ready_simulation_result", lambda _sig: None)
+    monkeypatch.setattr(
+        runtime_session, "_copy_intersection_cache_tables", lambda tables: list(tables)
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "consume_geometry_q_group_refresh_request",
+        lambda _state: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_geometry_interaction,
+        "refresh_runtime_peak_selection_after_update",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_geometry_preview_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_get_current_background_backend", lambda: None)
+    monkeypatch.setattr(runtime_session, "_trace_live_cache_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_live_cache_signature_summary", lambda sig: sig)
+    monkeypatch.setattr(runtime_session, "_set_scale_factor_value", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_geometry_cache_signature",
+        lambda *_args, **_kwargs: fixture["caked_geometry_sig"],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_q_space_geometry_cache_signature",
+        lambda **_kwargs: fixture["q_space_payload_geometry_sig"],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "start_exact_cake_geometry_warmup_in_background",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_primary_figure_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "LIVE_DRAG_PREVIEW_ENABLED", False, raising=False)
+    monkeypatch.setattr(runtime_session, "PREVIEW_CALCULATIONS_ENABLED", True, raising=False)
+    monkeypatch.setattr(runtime_session, "_analysis_integration_outputs_visible", lambda: False)
+    monkeypatch.setattr(runtime_session, "_live_interaction_active", lambda: False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "ax", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_canvas_interactions,
+        "capture_axis_limits",
+        lambda *_args, **_kwargs: ((0.0, 2.0), (2.0, 0.0)),
+        raising=False,
+    )
+    return ((0.0, 2.0), (2.0, 0.0))
+
+
+def test_do_update_routes_hidden_payload_guard_into_primary_display_helper(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _StopAtPrimaryDisplayHelper(RuntimeError):
+        pass
+
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    preserved_primary_limits = _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    helper_calls: list[dict[str, object]] = []
+    display_helper_calls: list[dict[str, object]] = []
+    real_invalidate_hidden_payloads = (
+        runtime_session._invalidate_hidden_analysis_space_payloads_if_stale
+    )
+
+    def _record_hidden_payload_guard(**kwargs) -> None:
+        helper_calls.append(dict(kwargs))
+        real_invalidate_hidden_payloads(**kwargs)
+
+    def _stop_at_primary_display_helper(
+        previous_primary_view_mode: str | None,
+        preserved_primary_limits_arg: object,
+    ) -> str:
+        display_helper_calls.append(
+            {
+                "previous_primary_view_mode": previous_primary_view_mode,
+                "preserved_primary_limits": preserved_primary_limits_arg,
+                "caked_image": np.asarray(
+                    runtime_session.simulation_runtime_state.last_caked_image_unscaled,
+                    dtype=np.float64,
+                ).copy(),
+                "q_space_image": np.asarray(
+                    runtime_session.simulation_runtime_state.last_q_space_image_unscaled,
+                    dtype=np.float64,
+                ).copy(),
+            }
+        )
+        raise _StopAtPrimaryDisplayHelper()
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_hidden_analysis_space_payloads_if_stale",
+        _record_hidden_payload_guard,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_primary_figure_display_from_cached_results",
+        _stop_at_primary_display_helper,
+        raising=False,
+    )
+
+    with pytest.raises(_StopAtPrimaryDisplayHelper):
+        runtime_session.do_update()
+
+    assert helper_calls == [
+        {
+            "caked_analysis_requested": False,
+            "q_space_requested": False,
+            "current_analysis_cache_sig": fixture["current_analysis_cache_sig"],
+            "q_space_payload_geometry_sig": fixture["q_space_payload_geometry_sig"],
+        }
+    ]
+    assert len(display_helper_calls) == 1
+    assert display_helper_calls[0]["previous_primary_view_mode"] == "detector"
+    assert display_helper_calls[0]["preserved_primary_limits"] == preserved_primary_limits
+    np.testing.assert_array_equal(
+        display_helper_calls[0]["caked_image"],
+        fixture["caked_image"],
+    )
+    np.testing.assert_array_equal(
+        display_helper_calls[0]["q_space_image"],
+        fixture["q_space_image"],
+    )
+
+
+def test_apply_primary_figure_display_from_cached_results_preserves_hidden_analysis_payloads_during_detector_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _StopAtDetectorRedrawBoundary(RuntimeError):
+        pass
+
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=False,
+    )
+    detector_redraw_states: list[dict[str, np.ndarray | str]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(visible=False, current_background_display=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(1.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 2, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            set_aspect=lambda *_args, **_kwargs: None,
+            set_xlabel=lambda *_args, **_kwargs: None,
+            set_ylabel=lambda *_args, **_kwargs: None,
+            set_title=lambda *_args, **_kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "image_display",
+        SimpleNamespace(set_visible=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_display",
+        SimpleNamespace(
+            set_visible=lambda *_args, **_kwargs: None,
+            set_clim=lambda *_args, **_kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "global_image_buffer",
+        np.zeros((2, 2), dtype=np.float64),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_canvas_interactions,
+        "restore_axis_view",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_roi_preview_display_sources",
+        lambda **kwargs: (kwargs["simulation_image"], kwargs["background_image"]),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_primary_raster_source",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "set_main_figure_axes_axis_visibility",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "apply_main_figure_axes_chrome",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    def _stop_at_detector_redraw(**kwargs) -> None:
+        if kwargs.get("view_mode") == "detector":
+            detector_redraw_states.append(
+                {
+                    "view_mode": str(kwargs["view_mode"]),
+                    "caked_image": np.asarray(
+                        runtime_session.simulation_runtime_state.last_caked_image_unscaled,
+                        dtype=np.float64,
+                    ).copy(),
+                    "q_space_image": np.asarray(
+                        runtime_session.simulation_runtime_state.last_q_space_image_unscaled,
+                        dtype=np.float64,
+                    ).copy(),
+                }
+            )
+            raise _StopAtDetectorRedrawBoundary()
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        _stop_at_detector_redraw,
+        raising=False,
+    )
+
+    with pytest.raises(_StopAtDetectorRedrawBoundary):
+        runtime_session._apply_primary_figure_display_from_cached_results(
+            "detector",
+            ((0.0, 2.0), (2.0, 0.0)),
+        )
+
+    assert len(detector_redraw_states) == 1
+    assert detector_redraw_states[0]["view_mode"] == "detector"
+    np.testing.assert_array_equal(
+        detector_redraw_states[0]["caked_image"],
+        fixture["caked_image"],
+    )
+    np.testing.assert_array_equal(
+        detector_redraw_states[0]["q_space_image"],
+        fixture["q_space_image"],
+    )
+
+
+@pytest.mark.parametrize("stale_target", ["caked", "q_space"])
+def test_invalidate_hidden_analysis_space_payloads_if_stale_clears_only_stale_hidden_payload(
+    monkeypatch,
+    stale_target: str,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    current_analysis_cache_sig = (("sim-cache", 1), ("bg-cache", 1))
+    q_space_payload_geometry_sig = ("geom", 1)
+    matching_q_space_signature = (current_analysis_cache_sig, q_space_payload_geometry_sig)
+    caked_image = np.ones((2, 2), dtype=np.float64)
+    q_space_image = np.full((2, 2), 3.0, dtype=np.float64)
+
+    if stale_target == "caked":
+        last_analysis_cache_sig = (("stale-sim", 0), ("stale-bg", 0))
+        last_q_space_payload_signature = matching_q_space_signature
+    else:
+        last_analysis_cache_sig = current_analysis_cache_sig
+        last_q_space_payload_signature = (current_analysis_cache_sig, ("old-geom", 0))
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_analysis_cache_sig=last_analysis_cache_sig,
+            last_q_space_payload_signature=last_q_space_payload_signature,
+            last_caked_image_unscaled=caked_image.copy(),
+            last_caked_extent=[0.0, 1.0, -1.0, 1.0],
+            last_caked_background_image_unscaled=np.full((2, 2), 2.0, dtype=np.float64),
+            last_caked_radial_values=np.array([1.0, 2.0], dtype=np.float64),
+            last_caked_azimuth_values=np.array([-1.0, 1.0], dtype=np.float64),
+            last_caked_intersection_cache=("cache",),
+            last_caked_intersection_cache_transform_bundle="bundle",
+            last_q_space_image_unscaled=q_space_image.copy(),
+            last_q_space_qr_values=np.array([0.1, 0.2], dtype=np.float64),
+            last_q_space_qz_values=np.array([0.3, 0.4], dtype=np.float64),
+            last_q_space_extent=[-1.0, 1.0, -2.0, 2.0],
+            last_q_space_background_image_unscaled=np.full((2, 2), 4.0, dtype=np.float64),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_live_caked_transform_bundle",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    runtime_session._invalidate_hidden_analysis_space_payloads_if_stale(
+        caked_analysis_requested=False,
+        q_space_requested=False,
+        current_analysis_cache_sig=current_analysis_cache_sig,
+        q_space_payload_geometry_sig=q_space_payload_geometry_sig,
+    )
+
+    if stale_target == "caked":
+        assert runtime_session.simulation_runtime_state.last_caked_image_unscaled is None
+        assert runtime_session.simulation_runtime_state.last_caked_extent is None
+        assert runtime_session.simulation_runtime_state.last_caked_background_image_unscaled is None
+        assert runtime_session.simulation_runtime_state.last_caked_radial_values is None
+        assert runtime_session.simulation_runtime_state.last_caked_azimuth_values is None
+        assert runtime_session.simulation_runtime_state.last_caked_intersection_cache is None
+        assert (
+            runtime_session.simulation_runtime_state.last_caked_intersection_cache_transform_bundle
+            is None
+        )
+        np.testing.assert_array_equal(
+            runtime_session.simulation_runtime_state.last_q_space_image_unscaled,
+            q_space_image,
+        )
+        assert runtime_session.simulation_runtime_state.last_q_space_payload_signature == (
+            current_analysis_cache_sig,
+            q_space_payload_geometry_sig,
+        )
+    else:
+        np.testing.assert_array_equal(
+            runtime_session.simulation_runtime_state.last_caked_image_unscaled,
+            caked_image,
+        )
+        assert runtime_session.simulation_runtime_state.last_q_space_image_unscaled is None
+        assert runtime_session.simulation_runtime_state.last_q_space_qr_values is None
+        assert runtime_session.simulation_runtime_state.last_q_space_qz_values is None
+        assert runtime_session.simulation_runtime_state.last_q_space_extent is None
+        assert (
+            runtime_session.simulation_runtime_state.last_q_space_background_image_unscaled is None
+        )
+        assert runtime_session.simulation_runtime_state.last_q_space_payload_signature is None
+
+
+@pytest.mark.parametrize(
+    ("stale_target", "expected_calls"),
+    [
+        ("caked", [(True, False)]),
+        ("q_space", [(False, True)]),
+    ],
+)
+def test_invalidate_hidden_analysis_space_payloads_if_stale_clears_each_payload_once(
+    monkeypatch,
+    stale_target: str,
+    expected_calls: list[tuple[bool, bool]],
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    current_analysis_cache_sig = (("sim-cache", 1), ("bg-cache", 1))
+    q_space_payload_geometry_sig = ("geom", 1)
+    matching_q_space_signature = (current_analysis_cache_sig, q_space_payload_geometry_sig)
+    invalidation_calls: list[tuple[bool, bool]] = []
+
+    if stale_target == "caked":
+        last_analysis_cache_sig = (("stale-sim", 0), ("stale-bg", 0))
+        last_q_space_payload_signature = matching_q_space_signature
+    else:
+        last_analysis_cache_sig = current_analysis_cache_sig
+        last_q_space_payload_signature = (current_analysis_cache_sig, ("old-geom", 0))
+
+    state = SimpleNamespace(
+        last_analysis_cache_sig=last_analysis_cache_sig,
+        last_q_space_payload_signature=last_q_space_payload_signature,
+        last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+        last_caked_extent=[0.0, 1.0, -1.0, 1.0],
+        last_caked_background_image_unscaled=np.full((2, 2), 2.0, dtype=np.float64),
+        last_caked_radial_values=np.array([1.0, 2.0], dtype=np.float64),
+        last_caked_azimuth_values=np.array([-1.0, 1.0], dtype=np.float64),
+        last_caked_intersection_cache=("cache",),
+        last_caked_intersection_cache_transform_bundle="bundle",
+        last_q_space_image_unscaled=np.full((2, 2), 3.0, dtype=np.float64),
+        last_q_space_qr_values=np.array([0.1, 0.2], dtype=np.float64),
+        last_q_space_qz_values=np.array([0.3, 0.4], dtype=np.float64),
+        last_q_space_extent=[-1.0, 1.0, -2.0, 2.0],
+        last_q_space_background_image_unscaled=np.full((2, 2), 4.0, dtype=np.float64),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        state,
+        raising=False,
+    )
+
+    def _record_invalidation(*, clear_caked=False, clear_q_space=False) -> None:
+        invalidation_calls.append((bool(clear_caked), bool(clear_q_space)))
+        if clear_caked:
+            state.last_caked_image_unscaled = None
+            state.last_caked_extent = None
+            state.last_caked_background_image_unscaled = None
+            state.last_caked_radial_values = None
+            state.last_caked_azimuth_values = None
+            state.last_caked_intersection_cache = None
+            state.last_caked_intersection_cache_transform_bundle = None
+        if clear_q_space:
+            state.last_q_space_image_unscaled = None
+            state.last_q_space_qr_values = None
+            state.last_q_space_qz_values = None
+            state.last_q_space_extent = None
+            state.last_q_space_background_image_unscaled = None
+            state.last_q_space_payload_signature = None
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_cached_analysis_space_payloads",
+        _record_invalidation,
+        raising=False,
+    )
+
+    runtime_session._invalidate_hidden_analysis_space_payloads_if_stale(
+        caked_analysis_requested=False,
+        q_space_requested=False,
+        current_analysis_cache_sig=current_analysis_cache_sig,
+        q_space_payload_geometry_sig=q_space_payload_geometry_sig,
+    )
+    runtime_session._invalidate_hidden_analysis_space_payloads_if_stale(
+        caked_analysis_requested=False,
+        q_space_requested=False,
+        current_analysis_cache_sig=current_analysis_cache_sig,
+        q_space_payload_geometry_sig=q_space_payload_geometry_sig,
+    )
+
+    assert invalidation_calls == expected_calls
 
 
 def test_runtime_impl_forces_canvas_redraw_when_primary_view_mode_changes() -> None:
@@ -3056,9 +4086,13 @@ def test_runtime_impl_run_analysis_job_builds_q_space_from_detector_images() -> 
 
     assert 'q_space_requested = bool(job.get("q_space_requested", False))' in helper_source
     assert "if q_space_requested:" in helper_source
-    assert "sim_q_space = _prepare_q_space_display_payload(\n            sim_image," in helper_source
+    assert (
+        "sim_q_space = _prepare_q_space_display_payload(\n            sim_image," in helper_source
+    )
     assert "bg_q_space = _prepare_q_space_display_payload(\n            bg_array," in helper_source
-    assert "sim_q_space = _prepare_q_space_display_payload(\n        sim_caked," not in helper_source
+    assert (
+        "sim_q_space = _prepare_q_space_display_payload(\n        sim_caked," not in helper_source
+    )
     assert "bg_q_space = _prepare_q_space_display_payload(\n        bg_caked," not in helper_source
 
 
@@ -3071,9 +4105,9 @@ def test_runtime_impl_analysis_job_payload_tracks_q_space_intent() -> None:
 def test_runtime_impl_resolves_live_view_mode_before_q_space_restore() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'requested_view_mode = _current_app_shell_view_mode()' in source
+    assert "requested_view_mode = _current_app_shell_view_mode()" in source
     assert 'and requested_view_mode == "q_space"' in source
-    assert 'q_space_requested=q_space_requested,' in source
+    assert "q_space_requested=q_space_requested," in source
     assert 'live_q_space_requested = bool(_current_app_shell_view_mode() == "q_space")' in source
 
 
@@ -3084,7 +4118,9 @@ def test_runtime_impl_q_space_view_mode_is_not_gated_on_caked_toggle() -> None:
     helper_source = source[helper_start:helper_end]
 
     assert 'if selected_mode == "q_space":\n        return "q_space"' in helper_source
-    assert helper_source.index('if selected_mode == "q_space":') < helper_source.index("if show_caked:")
+    assert helper_source.index('if selected_mode == "q_space":') < helper_source.index(
+        "if show_caked:"
+    )
 
 
 def test_runtime_impl_single_viewport_startup_uses_embedded_matplotlib_tk() -> None:
@@ -3165,7 +4201,9 @@ def test_initialize_runtime_plot_block_02_projects_startup_rasters_without_viewp
     )
     monkeypatch.setattr(runtime_session, "image_display", image_display, raising=False)
     monkeypatch.setattr(runtime_session, "background_display", background_display, raising=False)
-    monkeypatch.setattr(runtime_session, "integration_region_overlay", overlay_display, raising=False)
+    monkeypatch.setattr(
+        runtime_session, "integration_region_overlay", overlay_display, raising=False
+    )
 
     runtime_session._initialize_runtime_plot_block_02()
 
@@ -3305,6 +4343,84 @@ def test_toggle_caked_2d_legacy_path_overrides_stale_q_space_shell_mode(
     assert shell_mode_var.get() == "caked"
 
 
+def test_toggle_caked_2d_skips_qr_overlay_invalidation_when_overlays_are_off(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+        def set(self, value: object) -> None:
+            self._value = value
+
+    shell_mode_var = _Var("detector")
+    show_caked_var = _Var(True)
+    invalidations: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(
+            show_caked_2d_var=show_caked_var,
+            show_qz_rods_var=_Var(False),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_overlay_actions_view_state",
+        SimpleNamespace(show_geometry_overlays_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "app_shell_view_state",
+        SimpleNamespace(view_mode_var=shell_mode_var),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(pick_armed=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(
+            set_app_shell_view_mode=lambda view_state, mode: view_state.view_mode_var.set(mode)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_caked_roi_preview_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"integrate_qz_rods": False, "qr_half_width": 0.0},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_qr_cylinder_overlay_view_state",
+        lambda **kwargs: invalidations.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(runtime_session, "_apply_main_caked_view_toggle", lambda: None)
+    monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+
+    runtime_session.toggle_caked_2d()
+
+    assert shell_mode_var.get() == "caked"
+    assert invalidations == []
+
+
 def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(
     monkeypatch,
 ) -> None:
@@ -3362,7 +4478,9 @@ def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(
     monkeypatch.setattr(runtime_session, "_refresh_run_status_bar", lambda: None)
     monkeypatch.setattr(runtime_session, "_sync_center_marker", lambda **_kwargs: None)
     monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
-    monkeypatch.setattr(runtime_session, "schedule_update", lambda: schedule_calls.append("schedule"))
+    monkeypatch.setattr(
+        runtime_session, "schedule_update", lambda: schedule_calls.append("schedule")
+    )
 
     runtime_session._set_persistent_view_mode("q_space")
 
@@ -3395,6 +4513,7 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
         "simulation_runtime_state",
         SimpleNamespace(
             unscaled_image=np.ones((2, 2), dtype=np.float64),
+            last_unscaled_image_signature=("sim", 1),
             last_q_space_image_unscaled=None,
             last_q_space_background_image_unscaled=None,
             last_caked_image_unscaled=np.full((2, 2), 2.0, dtype=np.float64),
@@ -3487,6 +4606,11 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     )
     monkeypatch.setattr(
         runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
         "_ensure_global_image_buffer_shape",
         lambda _image: None,
     )
@@ -3509,7 +4633,9 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     monkeypatch.setattr(
         runtime_session,
         "_store_primary_raster_source",
-        lambda _artist, source: stored_sources.append(np.asarray(source, dtype=float).copy()),
+        lambda _artist, source, **_kwargs: stored_sources.append(
+            np.asarray(source, dtype=float).copy()
+        ),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -3538,6 +4664,604 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     assert synced_modes == ["caked"]
     assert redraw_calls == [True]
     assert len(stored_sources) >= 1
+
+
+@pytest.mark.parametrize(
+    ("view_mode", "payload_signature"),
+    [
+        ("caked", ("analysis", 3)),
+        ("q_space", ("q-space", 7)),
+    ],
+)
+def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_signatures(
+    monkeypatch,
+    view_mode: str,
+    payload_signature: tuple[str, int],
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: float | bool) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    stored_signatures: list[tuple[str, object | None]] = []
+    fake_image_artist = SimpleNamespace(set_visible=lambda *_args, **_kwargs: None)
+    fake_background_artist = SimpleNamespace(set_visible=lambda *_args, **_kwargs: None)
+    scale = 2.0
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            unscaled_image=np.ones((2, 2), dtype=np.float64),
+            last_unscaled_image_signature=("sim", 1),
+            last_q_space_image_unscaled=np.full((2, 2), 3.0, dtype=np.float64),
+            last_q_space_background_image_unscaled=np.full((2, 2), 4.0, dtype=np.float64),
+            last_q_space_payload_signature=(
+                payload_signature if view_mode == "q_space" else ("q-space", 99)
+            ),
+            last_caked_image_unscaled=np.full((2, 2), 2.0, dtype=np.float64),
+            last_caked_background_image_unscaled=np.full((2, 2), 5.0, dtype=np.float64),
+            last_analysis_cache_sig=(
+                payload_signature if view_mode == "caked" else ("analysis", 99)
+            ),
+            last_1d_integration_data={
+                "radials_sim": None,
+                "intensities_2theta_sim": None,
+                "azimuths_sim": None,
+                "intensities_azimuth_sim": None,
+                "radials_bg": None,
+                "intensities_2theta_bg": None,
+                "azimuths_bg": None,
+                "intensities_azimuth_bg": None,
+            },
+            caked_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(
+            visible=True,
+            current_background_index=0,
+            backend_rotation_k=0,
+            backend_flip_x=False,
+            backend_flip_y=False,
+            current_background_display=None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            simulation_min_var=_Var(0.0),
+            simulation_max_var=_Var(10.0),
+            background_min_var=_Var(0.0),
+            background_max_var=_Var(10.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(
+            simulation_limits_user_override=False,
+            background_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_1d_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "colorbar_main",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caked_colorbar",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_display", fake_image_artist, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_display",
+        fake_background_artist,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: view_mode,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: scale,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_ensure_global_image_buffer_shape",
+        lambda _image: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "global_image_buffer",
+        np.zeros((2, 2), dtype=np.float64),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_roi_preview_display_sources",
+        lambda **kwargs: (kwargs["simulation_image"], kwargs["background_image"]),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_simulation_sliders_from_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_primary_raster_source",
+        lambda artist, _source, **kwargs: stored_signatures.append(
+            (
+                "primary" if artist is fake_image_artist else "background",
+                kwargs.get("source_signature"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_intensity_display_range",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_update_chi_square_display", lambda: None)
+
+    runtime_session.apply_scale_factor_to_existing_results(
+        update_1d=False,
+        force_canvas_redraw=False,
+        update_chi_square=False,
+    )
+
+    assert stored_signatures == [
+        ("primary", (view_mode, "primary", payload_signature, scale)),
+        ("background", (view_mode, "background", payload_signature, scale)),
+    ]
+
+
+def test_apply_scale_factor_to_existing_results_uses_runtime_image_signature_for_chi_square(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: float | bool) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    chi_state = {"buffer_sig": ("stale",)}
+    dirty_calls: list[str] = []
+    runtime_signature = ("runtime-sig", 42)
+
+    monkeypatch.setattr(
+        runtime_session, "last_unscaled_image_signature", ("wrong", 999), raising=False
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            unscaled_image=np.ones((2, 2), dtype=np.float64),
+            last_unscaled_image_signature=runtime_signature,
+            last_q_space_image_unscaled=None,
+            last_q_space_background_image_unscaled=None,
+            last_caked_image_unscaled=None,
+            last_caked_background_image_unscaled=None,
+            last_1d_integration_data={
+                "radials_sim": None,
+                "intensities_2theta_sim": None,
+                "azimuths_sim": None,
+                "intensities_azimuth_sim": None,
+                "radials_bg": None,
+                "intensities_2theta_bg": None,
+                "azimuths_bg": None,
+                "intensities_azimuth_bg": None,
+            },
+            caked_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(
+            visible=False,
+            current_background_index=0,
+            backend_rotation_k=0,
+            backend_flip_x=False,
+            backend_flip_y=False,
+            current_background_display=None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            simulation_min_var=_Var(0.0),
+            simulation_max_var=_Var(10.0),
+            background_min_var=_Var(0.0),
+            background_max_var=_Var(1.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(
+            simulation_limits_user_override=False,
+            background_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_1d_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "colorbar_main",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caked_colorbar",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "image_display",
+        SimpleNamespace(set_visible=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_display",
+        SimpleNamespace(set_visible=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: 1.5,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_ensure_global_image_buffer_shape",
+        lambda _image: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "global_image_buffer",
+        np.zeros((2, 2), dtype=np.float64),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_simulation_sliders_from_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_primary_raster_source",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_intensity_display_range",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_update_chi_square_display", lambda: None)
+    monkeypatch.setattr(runtime_session, "chi_square_state", chi_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_mark_chi_square_dirty",
+        lambda: dirty_calls.append("dirty"),
+        raising=False,
+    )
+
+    runtime_session.apply_scale_factor_to_existing_results(
+        update_1d=False,
+        force_canvas_redraw=False,
+        update_chi_square=False,
+    )
+
+    assert chi_state["buffer_sig"][0] == runtime_signature
+    assert chi_state["buffer_sig"][1] == 1.5
+    assert dirty_calls == ["dirty"]
+
+
+def test_apply_scale_factor_to_existing_results_clears_pending_preview_before_sync_and_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: float | bool) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    geometry_runtime_state = SimpleNamespace(
+        _canvas_preview_limits=((4.0, 8.0), (9.0, 2.0)),
+        _canvas_pan_session={"drag": True},
+    )
+    sync_states: list[tuple[object, object, str | None]] = []
+    redraw_states: list[tuple[object, object, bool]] = []
+    cleared_tokens: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        geometry_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_legacy_main_matplotlib_preview_view",
+        lambda *, redraw=True: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            unscaled_image=np.ones((2, 2), dtype=np.float64),
+            last_unscaled_image_signature=("sim", 1),
+            last_q_space_image_unscaled=None,
+            last_q_space_background_image_unscaled=None,
+            last_caked_image_unscaled=np.full((2, 2), 2.0, dtype=np.float64),
+            last_caked_background_image_unscaled=None,
+            last_1d_integration_data={
+                "radials_sim": None,
+                "intensities_2theta_sim": None,
+                "azimuths_sim": None,
+                "intensities_azimuth_sim": None,
+                "radials_bg": None,
+                "intensities_2theta_bg": None,
+                "azimuths_bg": None,
+                "intensities_azimuth_bg": None,
+            },
+            caked_limits_user_override=False,
+            interaction_drag_active=True,
+            interaction_drag_requires_settled_update=True,
+            interaction_settle_token="pending-preview",
+            main_matplotlib_overlays_suspended=True,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(
+            visible=False,
+            current_background_index=0,
+            backend_rotation_k=0,
+            backend_flip_x=False,
+            backend_flip_y=False,
+            current_background_display=None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            simulation_min_var=_Var(0.0),
+            simulation_max_var=_Var(10.0),
+            background_min_var=_Var(0.0),
+            background_max_var=_Var(1.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(
+            simulation_limits_user_override=False,
+            background_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_1d_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "colorbar_main",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caked_colorbar",
+        SimpleNamespace(update_normal=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "image_display",
+        SimpleNamespace(set_visible=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_display",
+        SimpleNamespace(set_visible=lambda *_args, **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "caked",
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: float(default),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_ensure_global_image_buffer_shape",
+        lambda _image: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "global_image_buffer",
+        np.zeros((2, 2), dtype=np.float64),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_roi_preview_display_sources",
+        lambda **kwargs: (kwargs["simulation_image"], kwargs["background_image"]),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_simulation_sliders_from_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_primary_raster_source",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **kwargs: sync_states.append(
+            (
+                geometry_runtime_state._canvas_preview_limits,
+                geometry_runtime_state._canvas_pan_session,
+                kwargs.get("view_mode"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_intensity_display_range",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda *, force_matplotlib=False: redraw_states.append(
+            (
+                geometry_runtime_state._canvas_preview_limits,
+                geometry_runtime_state._canvas_pan_session,
+                bool(force_matplotlib),
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_update_chi_square_display", lambda: None)
+
+    runtime_session.apply_scale_factor_to_existing_results(
+        update_1d=False,
+        force_canvas_redraw=True,
+        update_chi_square=False,
+    )
+
+    assert cleared_tokens == ["pending-preview"]
+    assert geometry_runtime_state._canvas_preview_limits is None
+    assert geometry_runtime_state._canvas_pan_session is None
+    assert sync_states == [(None, None, "caked")]
+    assert redraw_states == [(None, None, True)]
 
 
 def test_run_analysis_job_skips_q_space_for_caked_only_requests(monkeypatch) -> None:
@@ -3791,7 +5515,9 @@ def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypat
         "_get_current_background_backend",
         lambda: (_ for _ in ()).throw(AssertionError("restore should use native background")),
     )
-    monkeypatch.setattr(runtime_session, "_get_current_background_native", lambda: background_native)
+    monkeypatch.setattr(
+        runtime_session, "_get_current_background_native", lambda: background_native
+    )
     monkeypatch.setattr(runtime_session, "center_x_var", _Var(2.0), raising=False)
     monkeypatch.setattr(runtime_session, "center_y_var", _Var(2.0), raising=False)
     monkeypatch.setattr(runtime_session, "corto_detector_var", _Var(0.5), raising=False)
@@ -3805,7 +5531,9 @@ def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypat
     monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
     monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
     monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
-    monkeypatch.setattr(runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0)
+    monkeypatch.setattr(
+        runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0
+    )
     monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
 
     restored = runtime_session._restore_caked_display_payload_from_cached_results(
@@ -3814,9 +5542,159 @@ def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypat
     )
 
     assert restored is True
+    np.testing.assert_array_equal(
+        runtime_session.simulation_runtime_state.last_caked_background_image_unscaled,
+        np.ones((2, 2), dtype=np.float64),
+    )
     assert len(q_space_inputs) == 2
     np.testing.assert_array_equal(q_space_inputs[1], background_native)
     assert len(stored_payloads) == 1
+
+
+def test_analysis_display_payload_ready_requires_visible_background_payload() -> None:
+    payload_ready = _load_runtime_session_function("_analysis_display_payload_ready")
+
+    assert (
+        payload_ready(
+            show_caked_2d=True,
+            q_space_requested=False,
+            background_visible=True,
+            caked_image=np.ones((2, 2), dtype=np.float64),
+            caked_extent=[0.0, 1.0, 0.0, 1.0],
+            caked_background_image=None,
+            q_space_image=None,
+            q_space_extent=None,
+            q_space_background_image=None,
+        )
+        is False
+    )
+    assert (
+        payload_ready(
+            show_caked_2d=True,
+            q_space_requested=False,
+            background_visible=True,
+            caked_image=np.ones((2, 2), dtype=np.float64),
+            caked_extent=[0.0, 1.0, 0.0, 1.0],
+            caked_background_image=np.ones((2, 2), dtype=np.float64),
+            q_space_image=None,
+            q_space_extent=None,
+            q_space_background_image=None,
+        )
+        is True
+    )
+    assert (
+        payload_ready(
+            show_caked_2d=False,
+            q_space_requested=True,
+            background_visible=True,
+            caked_image=None,
+            caked_extent=None,
+            caked_background_image=None,
+            q_space_image=np.ones((2, 2), dtype=np.float64),
+            q_space_extent=[0.0, 1.0, 0.0, 1.0],
+            q_space_background_image=None,
+        )
+        is False
+    )
+
+
+def test_analysis_payload_ready_after_restore_attempt_restores_once_when_needed(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    restore_calls: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_extent=[0.0, 1.0, 0.0, 1.0],
+            last_caked_background_image_unscaled=None,
+            last_q_space_image_unscaled=None,
+            last_q_space_extent=None,
+            last_q_space_background_image_unscaled=None,
+        ),
+    )
+
+    def _restore() -> None:
+        restore_calls.append("restore")
+        runtime_session.simulation_runtime_state.last_caked_background_image_unscaled = np.ones(
+            (2, 2), dtype=np.float64
+        )
+
+    ready = runtime_session._analysis_payload_ready_after_restore_attempt(
+        analysis_result_current=True,
+        show_caked_2d=True,
+        q_space_requested=False,
+        background_visible=True,
+        restore_payload=_restore,
+    )
+
+    assert ready is True
+    assert restore_calls == ["restore"]
+
+
+def test_analysis_payload_ready_after_restore_attempt_stays_false_when_restore_noops(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    restore_calls: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_extent=[0.0, 1.0, 0.0, 1.0],
+            last_caked_background_image_unscaled=None,
+            last_q_space_image_unscaled=None,
+            last_q_space_extent=None,
+            last_q_space_background_image_unscaled=None,
+        ),
+    )
+
+    ready = runtime_session._analysis_payload_ready_after_restore_attempt(
+        analysis_result_current=True,
+        show_caked_2d=True,
+        q_space_requested=False,
+        background_visible=True,
+        restore_payload=lambda: restore_calls.append("restore"),
+    )
+
+    assert ready is False
+    assert restore_calls == ["restore"]
+
+
+def test_analysis_payload_ready_after_restore_attempt_skips_restore_when_ready(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    restore_calls: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_extent=[0.0, 1.0, 0.0, 1.0],
+            last_caked_background_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_q_space_image_unscaled=None,
+            last_q_space_extent=None,
+            last_q_space_background_image_unscaled=None,
+        ),
+    )
+
+    ready = runtime_session._analysis_payload_ready_after_restore_attempt(
+        analysis_result_current=True,
+        show_caked_2d=True,
+        q_space_requested=False,
+        background_visible=True,
+        restore_payload=lambda: restore_calls.append("restore"),
+    )
+
+    assert ready is True
+    assert restore_calls == []
 
 
 def test_restore_caked_payload_clears_stale_q_space_outside_live_q_space_mode(
@@ -3899,7 +5777,7 @@ def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> No
 def test_runtime_impl_hkl_pick_refreshes_mode_banner_without_viewport_hooks() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'def _handle_hkl_pick_mode_changed(_armed: bool) -> None:' in source
+    assert "def _handle_hkl_pick_mode_changed(_armed: bool) -> None:" in source
     assert 'globals().get("_refresh_fast_viewer_runtime_mode")' not in source
     assert "on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed" in source
 
@@ -3920,10 +5798,7 @@ def test_runtime_impl_shares_pick_hkl_live_cache_with_manual_qr_picker() -> None
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "geometry_manual_cache_workflow = (" in source
-    assert (
-        "simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params"
-        in source
-    )
+    assert "simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params" in source
 
 
 def test_runtime_impl_allows_caked_preview_without_detector_accumulation() -> None:
@@ -3957,7 +5832,10 @@ def test_runtime_impl_enables_async_preview_calculations_in_runtime_update_paths
     assert "preview_result = _run_simulation_generation_job" not in source
     assert "desired_analysis_preview = bool(" in source
     assert "PREVIEW_CALCULATIONS_ENABLED\n        and analysis_requested" in source
-    assert "PREVIEW_CALCULATIONS_ENABLED\n                and bool(live_geometry_preview_var.get())" in source
+    assert (
+        "PREVIEW_CALCULATIONS_ENABLED\n                and bool(live_geometry_preview_var.get())"
+        in source
+    )
 
 
 def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> None:
@@ -3997,7 +5875,9 @@ def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
     assert "def _simulation_result_matches_signature(" in source
     assert "def _simulation_result_superseded_by_queued_job(" in source
     assert "superseded = _simulation_result_superseded_by_queued_job(result, queued_job)" in source
-    assert "if isinstance(ready_result, dict) and not _simulation_result_matches_signature(" in source
+    assert (
+        "if isinstance(ready_result, dict) and not _simulation_result_matches_signature(" in source
+    )
     assert '_promote_queued_simulation_job(reason="previous_ready_result_consumed")' in source
 
 
@@ -4010,32 +5890,36 @@ def test_runtime_impl_keeps_1d_updates_gated_on_intensity_accumulation() -> None
 def test_runtime_impl_places_qr_cylinder_mode_in_quick_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert '\"key\": \"qr_cylinder_mode\"' in source
-    assert '\"key\": \"display_raster_size\"' in source
-    assert '\"label\": \"display px\"' in source
+    assert '"key": "qr_cylinder_mode"' in source
+    assert '"key": "display_raster_size"' in source
+    assert '"label": "display px"' in source
     assert "_refresh_main_display_raster_projection" in source
     assert "QR_CYLINDER_DISPLAY_MODE_REPLACE" in source
-    assert 'parent=app_shell_view_state.match_peak_tools_frame' in source
+    assert "parent=app_shell_view_state.match_peak_tools_frame" in source
 
 
 def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert '\"key\": \"fast_viewer\"' not in source
-    assert '\"key\": \"log_display\"' in source
-    assert '\"key\": \"show_qz_rods\"' in source
-    assert '\"key\": \"clear_integration_region\"' in source
-    assert '\"key\": \"auto_match_scale\"' in source
-    assert "control_type\": \"check\"" in source
-    assert "control_type\": \"button\"" in source
+    assert '"key": "fast_viewer"' not in source
+    assert '"key": "log_display"' in source
+    assert '"key": "show_qz_rods"' in source
+    assert '"key": "clear_integration_region"' in source
+    assert '"key": "auto_match_scale"' in source
+    assert 'control_type": "check"' in source
+    assert 'control_type": "button"' in source
     assert "parent=None" in source
     assert "RA_SIM_FAST_VIEWER" not in source
     assert "control_locked=True" not in source
     assert "display_controls_view_state.fast_viewer_checkbutton = (" not in source
-    assert "display_controls_view_state.simulation_controls_frame" not in source[
-        source.index("def _auto_match_scale_factor_to_radial_peak("):
-        source.index("def _update_chi_square_display(")
-    ]
+    assert (
+        "display_controls_view_state.simulation_controls_frame"
+        not in source[
+            source.index("def _auto_match_scale_factor_to_radial_peak(") : source.index(
+                "def _update_chi_square_display("
+            )
+        ]
+    )
     assert "def _current_qr_cylinder_caked_band_masks() -> dict[str, object] | None:" in source
     assert "def _invalidate_qr_cylinder_band_cache() -> None:" in source
 
@@ -4243,7 +6127,9 @@ def test_runtime_impl_gates_1d_analysis_on_analyze_visibility() -> None:
     assert "gui_views.analysis_popout_window_open(analysis_popout_view_state)" in source
     assert "and _analysis_integration_outputs_visible()" in source
     assert "if not _analysis_integration_outputs_visible():" in source
-    assert '_analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)' in source
+    assert (
+        '_analysis_tab_trace_add("write", _handle_analysis_integration_visibility_change)' in source
+    )
 
 
 def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
@@ -4259,7 +6145,9 @@ def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
 
 def test_runtime_impl_builds_shell_before_deferred_runtime_state_load() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
+    main_start = source.index(
+        'def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):'
+    )
     startup_start = source.index("def _run_initial_startup_work():", main_start)
     startup_end = source.index("root.after_idle(_run_initial_startup_work)", startup_start)
     pre_startup_block = source[main_start:startup_start]
@@ -4310,11 +6198,17 @@ def test_runtime_impl_trims_tools_imports_from_startup_path() -> None:
     runtime_source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     file_parsing_source = FILE_PARSING_SOURCE_PATH.read_text(encoding="utf-8")
 
-    import_block_start = runtime_source.index("from ra_sim.io.file_parsing import parse_poni_file, Open_ASC")
-    import_block_end = runtime_source.index("from ra_sim.io.data_loading import (", import_block_start)
+    import_block_start = runtime_source.index(
+        "from ra_sim.io.file_parsing import parse_poni_file, Open_ASC"
+    )
+    import_block_end = runtime_source.index(
+        "from ra_sim.io.data_loading import (", import_block_start
+    )
     import_block = runtime_source[import_block_start:import_block_end]
     dataframe_helper_start = runtime_source.index("def _build_intensity_dataframes(")
-    dataframe_helper_end = runtime_source.index("def _current_primary_cif_path()", dataframe_helper_start)
+    dataframe_helper_end = runtime_source.index(
+        "def _current_primary_cif_path()", dataframe_helper_start
+    )
     dataframe_helper = runtime_source[dataframe_helper_start:dataframe_helper_end]
     azimuthal_helper_start = runtime_source.index("def _show_azimuthal_radial_plot_demo() -> None:")
     azimuthal_helper_end = runtime_source.index("app_shell_view_state = app_state.app_shell_view")
@@ -4325,7 +6219,9 @@ def test_runtime_impl_trims_tools_imports_from_startup_path() -> None:
     assert "build_intensity_dataframes," not in import_block
     assert "view_azimuthal_radial," not in import_block
     assert "detect_blobs," not in import_block
-    assert "from ra_sim.utils.diffraction_tools import build_intensity_dataframes" in dataframe_helper
+    assert (
+        "from ra_sim.utils.diffraction_tools import build_intensity_dataframes" in dataframe_helper
+    )
     assert "from ra_sim.utils.diffraction_tools import view_azimuthal_radial" in azimuthal_helper
     assert "from ra_sim.utils.tools import detect_blobs" not in file_parsing_source
 
@@ -4381,7 +6277,11 @@ def _expr_contains_len_range(expr: ast.AST | None) -> bool:
     if expr is None:
         return False
     for node in ast.walk(expr):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "range"
+        ):
             for arg in node.args:
                 for nested in ast.walk(arg):
                     if (
@@ -4475,8 +6375,6 @@ def test_runtime_trust_field_assignments_stay_in_manual_geometry() -> None:
         hits = _trust_field_assignment_lines(path)
         if hits:
             rel_path = path.relative_to(REPO_ROOT)
-            offenders.extend(
-                f"{rel_path}:{line}:{field_name}" for field_name, line in hits
-            )
+            offenders.extend(f"{rel_path}:{line}:{field_name}" for field_name, line in hits)
 
     assert offenders == []

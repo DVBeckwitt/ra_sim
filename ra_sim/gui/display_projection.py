@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import math
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,7 @@ MAX_DISPLAY_RASTER_SIZE = 3000
 DISPLAY_PROJECTION_OVERSCAN_FRACTION = 1.0
 DISPLAY_PROJECTION_VIEWPORT_OVERSAMPLE = 1.0
 _PROJECTION_EPSILON = 1.0e-12
+_PROJECTION_CACHE_MAX_ENTRIES = 8
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,73 @@ class RasterProjection:
 
     image: np.ndarray
     extent: tuple[float, float, float, float]
+
+
+_PROJECTION_CACHE: OrderedDict[tuple[object, ...], RasterProjection] = OrderedDict()
+
+
+def _projection_source_signature(image: object, arr: np.ndarray) -> tuple[object, ...]:
+    try:
+        data_ptr = int(arr.__array_interface__["data"][0])
+    except Exception:
+        data_ptr = id(arr)
+    return (
+        id(image),
+        data_ptr,
+        tuple(int(value) for value in arr.shape),
+        tuple(int(value) for value in arr.strides),
+        str(arr.dtype),
+    )
+
+
+def _projection_cache_key(
+    image: object,
+    arr: np.ndarray,
+    *,
+    source_signature: object | None,
+    extent: tuple[float, float, float, float],
+    axis_xlim: tuple[float, float] | None,
+    axis_ylim: tuple[float, float] | None,
+    max_size: Any,
+    bbox_width_px: Any,
+    bbox_height_px: Any,
+    overscan_fraction: float,
+) -> tuple[object, ...]:
+    return (
+        (
+            source_signature
+            if source_signature is not None
+            else _projection_source_signature(image, arr)
+        ),
+        tuple(float(value) for value in extent),
+        tuple(float(value) for value in axis_xlim) if axis_xlim is not None else None,
+        tuple(float(value) for value in axis_ylim) if axis_ylim is not None else None,
+        normalize_display_raster_size_limit(
+            max_size,
+            fallback=max(arr.shape[:2]) if arr.ndim >= 2 else MAX_DISPLAY_RASTER_SIZE,
+        ),
+        _positive_float(bbox_width_px),
+        _positive_float(bbox_height_px),
+        float(overscan_fraction),
+    )
+
+
+def _projection_cache_get(key: tuple[object, ...]) -> RasterProjection | None:
+    projection = _PROJECTION_CACHE.get(key)
+    if projection is not None:
+        _PROJECTION_CACHE.move_to_end(key)
+    return projection
+
+
+def _projection_cache_put(
+    key: tuple[object, ...],
+    projection: RasterProjection,
+) -> RasterProjection:
+    _PROJECTION_CACHE[key] = projection
+    _PROJECTION_CACHE.move_to_end(key)
+    while len(_PROJECTION_CACHE) > _PROJECTION_CACHE_MAX_ENTRIES:
+        _PROJECTION_CACHE.popitem(last=False)
+    return projection
 
 
 def normalize_display_raster_size_limit(
@@ -166,8 +235,7 @@ def _target_shape(
                     math.ceil(
                         min(
                             1.0,
-                            (bbox_width * DISPLAY_PROJECTION_VIEWPORT_OVERSAMPLE)
-                            / float(cols),
+                            (bbox_width * DISPLAY_PROJECTION_VIEWPORT_OVERSAMPLE) / float(cols),
                         )
                         * cols
                     )
@@ -183,8 +251,7 @@ def _target_shape(
                     math.ceil(
                         min(
                             1.0,
-                            (bbox_height * DISPLAY_PROJECTION_VIEWPORT_OVERSAMPLE)
-                            / float(rows),
+                            (bbox_height * DISPLAY_PROJECTION_VIEWPORT_OVERSAMPLE) / float(rows),
                         )
                         * rows
                     )
@@ -200,8 +267,7 @@ def _downsample_indices(length: int, target: int) -> np.ndarray | None:
         return None
     target_count = max(1, int(target))
     sample_positions = (
-        ((np.arange(target_count, dtype=np.float64) + 0.5) * float(length))
-        / float(target_count)
+        ((np.arange(target_count, dtype=np.float64) + 0.5) * float(length)) / float(target_count)
     ) - 0.5
     indices = np.asarray(np.floor(sample_positions + 0.5), dtype=np.int64)
     return np.clip(indices, 0, int(length) - 1)
@@ -236,6 +302,7 @@ def _stride_downsample(
 def project_raster_to_view(
     image: np.ndarray | None,
     *,
+    source_signature: object | None = None,
     extent: tuple[float, float, float, float] | list[float],
     axis_xlim: tuple[float, float] | list[float] | None,
     axis_ylim: tuple[float, float] | list[float] | None,
@@ -266,6 +333,22 @@ def project_raster_to_view(
         xlim = (full_extent[0], full_extent[1])
     if ylim is None:
         ylim = (full_extent[2], full_extent[3])
+
+    cache_key = _projection_cache_key(
+        image,
+        arr,
+        source_signature=source_signature,
+        extent=full_extent,
+        axis_xlim=xlim,
+        axis_ylim=ylim,
+        max_size=max_size,
+        bbox_width_px=bbox_width_px,
+        bbox_height_px=bbox_height_px,
+        overscan_fraction=overscan_fraction,
+    )
+    cached_projection = _projection_cache_get(cache_key)
+    if cached_projection is not None:
+        return cached_projection
 
     x_window = _expanded_window(
         xlim,
@@ -314,7 +397,7 @@ def project_raster_to_view(
         target_rows=target_rows,
         target_cols=target_cols,
     )
-    return RasterProjection(
+    projection = RasterProjection(
         image=projected,
         extent=(
             float(projected_x0),
@@ -323,6 +406,9 @@ def project_raster_to_view(
             float(projected_y1),
         ),
     )
+    if source_signature is None and not np.shares_memory(projection.image, arr):
+        return projection
+    return _projection_cache_put(cache_key, projection)
 
 
 def downsample_raster_for_display(

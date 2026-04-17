@@ -1,1018 +1,866 @@
+from __future__ import annotations
+
+from pathlib import Path
 from types import SimpleNamespace
+import importlib
 
 import numpy as np
-import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-from ra_sim.gui import tk_primary_viewport
+RUNTIME_SESSION_SOURCE_PATH = (
+    Path(__file__).resolve().parents[1] / "ra_sim" / "gui" / "_runtime" / "runtime_session.py"
+)
 
 
-class _FakeWidget:
-    def __init__(self):
-        self.bindings = {}
-        self.after_calls = []
-        self.after_cancelled = []
-        self.pack_calls = []
-        self.pack_forget_calls = 0
-        self.destroy_calls = 0
-        self.create_calls = []
-        self.itemconfigure_calls = []
-        self.delete_calls = []
-        self._next_item_id = 1
-        self._items = {}
+def test_primary_viewport_source_uses_embedded_matplotlib_tk_canvas_only() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    def bind(self, sequence, callback, add=None):
-        self.bindings[sequence] = (callback, add)
+    assert "FigureCanvasTkAgg" in source
+    assert "matplotlib_canvas = figure_canvas_cls(" in source
+    assert "master=app_shell_view_state.canvas_frame" in source
+    assert "canvas = matplotlib_canvas" in source
+    assert "_set_runtime_canvas(matplotlib_canvas)" in source
+    assert "activate_runtime_primary_viewport(" not in source
+    assert "PRIMARY_VIEWPORT_BACKEND" not in source
+    assert "tk_canvas" not in source
 
-    def after(self, delay_ms, callback):
-        token = len(self.after_calls) + 1
-        self.after_calls.append((token, delay_ms, callback))
-        return token
 
-    def after_cancel(self, token):
-        self.after_cancelled.append(token)
+def test_get_tk_figure_canvas_cls_returns_figure_canvas_tkagg(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    def pack(self, **kwargs):
+    monkeypatch.setattr(runtime_session, "_TK_FIGURE_CANVAS_CLS", None, raising=False)
+
+    cls = runtime_session._get_tk_figure_canvas_cls()
+
+    assert cls.__name__ == "FigureCanvasTkAgg"
+    assert cls.__module__ == "matplotlib.backends.backend_tkagg"
+    assert runtime_session._TK_FIGURE_CANVAS_CLS is cls
+
+
+def test_configure_primary_viewport_redraw_helpers_use_matplotlib_redraw(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    redraw_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda *, force=False: redraw_calls.append(bool(force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: True,
+        raising=False,
+    )
+
+    runtime_session._configure_primary_viewport_redraw_helpers()
+    runtime_session._request_main_canvas_redraw(force_matplotlib=False)
+    runtime_session._request_main_canvas_redraw(force_matplotlib=True)
+    runtime_session._request_overlay_canvas_redraw(force=False)
+    runtime_session._request_overlay_canvas_redraw(force=True)
+
+    assert redraw_calls == [False, True, True]
+
+
+def test_clear_pending_main_figure_preview_interaction_clears_canvas_preview_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_runtime_state = SimpleNamespace(
+        _canvas_preview_limits=((4.0, 8.0), (9.0, 2.0)),
+        _canvas_pan_session={"drag": True},
+    )
+    clear_calls: list[bool] = []
+    cleared_tokens: list[object] = []
+    refresh_calls: list[tuple[bool, bool, object, bool]] = []
+    restore_callback_flags: list[bool] = []
+    settled_overlay_calls: list[str] = []
+    redraw_calls: list[bool] = []
+    simulation_runtime_state = SimpleNamespace(
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="settle-token",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        geometry_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_legacy_main_matplotlib_preview_view",
+        lambda *, redraw=True: clear_calls.append(bool(redraw)) or False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: settled_overlay_calls.append("settled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda *, force=False: redraw_calls.append(bool(force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_matplotlib_interaction,
+        "restore_main_matplotlib_overlays",
+        lambda runtime_state, *, restore_callback: (
+            restore_callback_flags.append(callable(restore_callback))
+            or setattr(runtime_state, "main_matplotlib_overlays_suspended", False)
+            or (restore_callback() if callable(restore_callback) else None)
+            or True
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: refresh_calls.append(
+            (
+                bool(simulation_runtime_state.interaction_drag_active),
+                bool(simulation_runtime_state.interaction_drag_requires_settled_update),
+                simulation_runtime_state.interaction_settle_token,
+                bool(simulation_runtime_state.main_matplotlib_overlays_suspended),
+            )
+        ),
+        raising=False,
+    )
+
+    assert runtime_session._clear_pending_main_figure_preview_interaction() is True
+    assert clear_calls == [False]
+    assert cleared_tokens == ["settle-token"]
+    assert restore_callback_flags == [False]
+    assert settled_overlay_calls == []
+    assert redraw_calls == []
+    assert geometry_runtime_state._canvas_preview_limits is None
+    assert geometry_runtime_state._canvas_pan_session is None
+    assert simulation_runtime_state.interaction_drag_active is False
+    assert simulation_runtime_state.interaction_drag_requires_settled_update is False
+    assert simulation_runtime_state.interaction_settle_token is None
+    assert simulation_runtime_state.main_matplotlib_overlays_suspended is False
+    assert refresh_calls == [(False, False, None, False)]
+
+
+def test_clear_pending_main_figure_preview_interaction_uses_no_redraw_preview_clear_path(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_runtime_state = SimpleNamespace(
+        _canvas_preview_limits=((4.0, 8.0), (9.0, 2.0)),
+        _canvas_pan_session={"drag": True},
+    )
+    preview_clear_calls: list[bool] = []
+    cleared_tokens: list[object] = []
+    restore_callback_flags: list[bool] = []
+    settled_overlay_calls: list[str] = []
+    redraw_calls: list[bool] = []
+    refresh_calls: list[tuple[bool, bool, object, bool]] = []
+    simulation_runtime_state = SimpleNamespace(
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="preview-token",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    class _PreviewController:
+        def clear_preview_view(self, *, redraw=True) -> bool:
+            preview_clear_calls.append(bool(redraw))
+            return True
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        geometry_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_preview_controller",
+        lambda: _PreviewController(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: settled_overlay_calls.append("settled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda *, force=False: redraw_calls.append(bool(force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_matplotlib_interaction,
+        "restore_main_matplotlib_overlays",
+        lambda runtime_state, *, restore_callback: (
+            restore_callback_flags.append(callable(restore_callback))
+            or setattr(runtime_state, "main_matplotlib_overlays_suspended", False)
+            or (restore_callback() if callable(restore_callback) else None)
+            or True
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: refresh_calls.append(
+            (
+                bool(simulation_runtime_state.interaction_drag_active),
+                bool(simulation_runtime_state.interaction_drag_requires_settled_update),
+                simulation_runtime_state.interaction_settle_token,
+                bool(simulation_runtime_state.main_matplotlib_overlays_suspended),
+            )
+        ),
+        raising=False,
+    )
+
+    assert runtime_session._clear_pending_main_figure_preview_interaction() is True
+    assert preview_clear_calls == [False]
+    assert cleared_tokens == ["preview-token"]
+    assert restore_callback_flags == [False]
+    assert settled_overlay_calls == []
+    assert redraw_calls == []
+    assert geometry_runtime_state._canvas_preview_limits is None
+    assert geometry_runtime_state._canvas_pan_session is None
+    assert simulation_runtime_state.interaction_drag_active is False
+    assert simulation_runtime_state.interaction_drag_requires_settled_update is False
+    assert simulation_runtime_state.interaction_settle_token is None
+    assert simulation_runtime_state.main_matplotlib_overlays_suspended is False
+    assert refresh_calls == [(False, False, None, False)]
+
+
+def test_clear_legacy_main_matplotlib_preview_view_restores_overlays_when_preview_clears(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cleared_tokens: list[object] = []
+    restore_callback_flags: list[bool] = []
+    settled_overlay_calls: list[str] = []
+    redraw_calls: list[bool] = []
+    refresh_calls: list[tuple[bool, bool, object, bool]] = []
+    simulation_runtime_state = SimpleNamespace(
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="preview-token",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    class _PreviewController:
+        def clear_preview_view(self, *, redraw=True) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_preview_controller",
+        lambda: _PreviewController(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: settled_overlay_calls.append("settled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda *, force=False: redraw_calls.append(bool(force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_matplotlib_interaction,
+        "restore_main_matplotlib_overlays",
+        lambda runtime_state, *, restore_callback: (
+            restore_callback_flags.append(callable(restore_callback))
+            or setattr(runtime_state, "main_matplotlib_overlays_suspended", False)
+            or (restore_callback() if callable(restore_callback) else None)
+            or True
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: refresh_calls.append(
+            (
+                bool(simulation_runtime_state.interaction_drag_active),
+                bool(simulation_runtime_state.interaction_drag_requires_settled_update),
+                simulation_runtime_state.interaction_settle_token,
+                bool(simulation_runtime_state.main_matplotlib_overlays_suspended),
+            )
+        ),
+        raising=False,
+    )
+
+    assert runtime_session._clear_legacy_main_matplotlib_preview_view(redraw=False) is True
+    assert cleared_tokens == ["preview-token"]
+    assert restore_callback_flags == [False]
+    assert settled_overlay_calls == []
+    assert redraw_calls == []
+    assert simulation_runtime_state.interaction_drag_active is False
+    assert simulation_runtime_state.interaction_drag_requires_settled_update is False
+    assert simulation_runtime_state.interaction_settle_token is None
+    assert simulation_runtime_state.main_matplotlib_overlays_suspended is False
+    assert refresh_calls == [(False, False, None, False)]
+
+
+def test_reset_main_figure_live_interaction_state_clears_overlay_flag_when_restore_fails(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cleared_tokens: list[object] = []
+    settled_overlay_calls: list[str] = []
+    redraw_calls: list[bool] = []
+    refresh_calls: list[tuple[bool, bool, object, bool]] = []
+    simulation_runtime_state = SimpleNamespace(
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="preview-token",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_interaction_active",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: settled_overlay_calls.append("settled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda *, force=False: redraw_calls.append(bool(force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_matplotlib_interaction,
+        "restore_main_matplotlib_overlays",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: refresh_calls.append(
+            (
+                bool(simulation_runtime_state.interaction_drag_active),
+                bool(simulation_runtime_state.interaction_drag_requires_settled_update),
+                simulation_runtime_state.interaction_settle_token,
+                bool(simulation_runtime_state.main_matplotlib_overlays_suspended),
+            )
+        ),
+        raising=False,
+    )
+
+    runtime_session._reset_main_figure_live_interaction_state(redraw=False)
+
+    assert cleared_tokens == ["preview-token"]
+    assert settled_overlay_calls == []
+    assert redraw_calls == []
+    assert simulation_runtime_state.interaction_drag_active is False
+    assert simulation_runtime_state.interaction_drag_requires_settled_update is False
+    assert simulation_runtime_state.interaction_settle_token is None
+    assert simulation_runtime_state.main_matplotlib_overlays_suspended is False
+    assert refresh_calls == [(False, False, None, False)]
+
+
+def test_clear_legacy_main_matplotlib_preview_view_redraw_true_restores_overlays_with_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cleared_tokens: list[object] = []
+    restore_callback_flags: list[bool] = []
+    settled_overlay_calls: list[str] = []
+    redraw_calls: list[bool] = []
+    refresh_calls: list[tuple[bool, bool, object, bool]] = []
+    simulation_runtime_state = SimpleNamespace(
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="preview-token",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    class _PreviewController:
+        def clear_preview_view(self, *, redraw=True) -> bool:
+            return bool(redraw)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_preview_controller",
+        lambda: _PreviewController(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: settled_overlay_calls.append("settled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda *, force=False: redraw_calls.append(bool(force)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_matplotlib_interaction,
+        "restore_main_matplotlib_overlays",
+        lambda runtime_state, *, restore_callback: (
+            restore_callback_flags.append(callable(restore_callback))
+            or setattr(runtime_state, "main_matplotlib_overlays_suspended", False)
+            or (restore_callback() if callable(restore_callback) else None)
+            or True
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: refresh_calls.append(
+            (
+                bool(simulation_runtime_state.interaction_drag_active),
+                bool(simulation_runtime_state.interaction_drag_requires_settled_update),
+                simulation_runtime_state.interaction_settle_token,
+                bool(simulation_runtime_state.main_matplotlib_overlays_suspended),
+            )
+        ),
+        raising=False,
+    )
+
+    assert runtime_session._clear_legacy_main_matplotlib_preview_view(redraw=True) is True
+    assert cleared_tokens == ["preview-token"]
+    assert restore_callback_flags == [True]
+    assert settled_overlay_calls == ["settled"]
+    assert redraw_calls == [True]
+    assert simulation_runtime_state.interaction_drag_active is False
+    assert simulation_runtime_state.interaction_drag_requires_settled_update is False
+    assert simulation_runtime_state.interaction_settle_token is None
+    assert simulation_runtime_state.main_matplotlib_overlays_suspended is False
+    assert refresh_calls == [(False, False, None, False)]
+
+
+def test_apply_main_caked_view_toggle_clears_pending_preview_before_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_runtime_state = SimpleNamespace(
+        _canvas_preview_limits=((4.0, 8.0), (9.0, 2.0)),
+        _canvas_pan_session={"drag": True},
+    )
+    captured_states: list[tuple[object, object]] = []
+    redraw_states: list[tuple[object, object, bool, bool, dict[str, object]]] = []
+    simulation_runtime_state = SimpleNamespace(
+        unscaled_image=np.ones((1, 1), dtype=np.float64),
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="pending",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        geometry_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=SimpleNamespace(get=lambda: False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_legacy_main_matplotlib_preview_view",
+        lambda *, redraw=True: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_restore_combined_detector_intersection_cache",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_primary_figure_mode",
+        lambda: "caked",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_canvas_interactions,
+        "capture_axis_limits",
+        lambda axis: (
+            captured_states.append(
+                (
+                    geometry_runtime_state._canvas_preview_limits,
+                    geometry_runtime_state._canvas_pan_session,
+                )
+            )
+            or ((1.0, 7.0), (8.0, 2.0))
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_canvas_interactions,
+        "restore_axis_view",
+        lambda *args, **kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            set_aspect=lambda *_args, **_kwargs: None,
+            set_xlabel=lambda *_args, **_kwargs: None,
+            set_ylabel=lambda *_args, **_kwargs: None,
+            set_title=lambda *_args, **_kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "set_main_figure_axes_axis_visibility",
+        lambda axis, *, visible: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_states.append(
+            (
+                geometry_runtime_state._canvas_preview_limits,
+                geometry_runtime_state._canvas_pan_session,
+                bool(simulation_runtime_state.interaction_drag_active),
+                bool(simulation_runtime_state.main_matplotlib_overlays_suspended),
+                dict(kwargs),
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: None,
+        raising=False,
+    )
+
+    runtime_session._apply_main_caked_view_toggle()
+
+    assert geometry_runtime_state._canvas_preview_limits is None
+    assert geometry_runtime_state._canvas_pan_session is None
+    assert captured_states == [(None, None)]
+    assert simulation_runtime_state.interaction_drag_active is False
+    assert simulation_runtime_state.interaction_drag_requires_settled_update is False
+    assert simulation_runtime_state.interaction_settle_token is None
+    assert simulation_runtime_state.main_matplotlib_overlays_suspended is False
+    assert redraw_states == [(None, None, False, False, {"force_matplotlib": False})]
+
+
+def test_reset_primary_figure_view_forces_embedded_matplotlib_redraw(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    xlim_calls: list[tuple[float, float]] = []
+    ylim_calls: list[tuple[float, float]] = []
+    redraw_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_default_primary_view_limits",
+        lambda: (1.0, 8.0, 9.0, 2.0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            set_xlim=lambda left, right: xlim_calls.append((float(left), float(right))),
+            set_ylim=lambda bottom, top: ylim_calls.append((float(bottom), float(top))),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_calls.append(dict(kwargs)),
+        raising=False,
+    )
+
+    runtime_session._reset_primary_figure_view()
+
+    assert xlim_calls == [(1.0, 8.0)]
+    assert ylim_calls == [(9.0, 2.0)]
+    assert redraw_calls == [{"force_matplotlib": True}]
+
+
+def test_reset_primary_figure_view_clears_pending_preview_before_force_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_runtime_state = SimpleNamespace(
+        _canvas_preview_limits=((4.0, 8.0), (9.0, 2.0)),
+        _canvas_pan_session={"drag": True},
+    )
+    redraw_states: list[tuple[object, object, dict[str, object]]] = []
+    simulation_runtime_state = SimpleNamespace(
+        interaction_drag_active=True,
+        interaction_drag_requires_settled_update=True,
+        interaction_settle_token="reset-pending",
+        main_matplotlib_overlays_suspended=True,
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        geometry_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_legacy_main_matplotlib_preview_view",
+        lambda *, redraw=True: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_default_primary_view_limits",
+        lambda: (1.0, 8.0, 9.0, 2.0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            set_xlim=lambda *_args, **_kwargs: None,
+            set_ylim=lambda *_args, **_kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_states.append(
+            (
+                geometry_runtime_state._canvas_preview_limits,
+                geometry_runtime_state._canvas_pan_session,
+                dict(kwargs),
+            )
+        ),
+        raising=False,
+    )
+
+    runtime_session._reset_primary_figure_view()
+
+    assert geometry_runtime_state._canvas_preview_limits is None
+    assert geometry_runtime_state._canvas_pan_session is None
+    assert redraw_states == [(None, None, {"force_matplotlib": True})]
+
+
+class _FakeTkWidget:
+    def __init__(self) -> None:
+        self.manager = ""
+        self.pack_calls: list[dict[str, object]] = []
+
+    def winfo_manager(self) -> str:
+        return self.manager
+
+    def pack(self, **kwargs) -> None:
         self.pack_calls.append(dict(kwargs))
+        self.manager = "pack"
 
-    def pack_forget(self):
-        self.pack_forget_calls += 1
 
-    def destroy(self):
-        self.destroy_calls += 1
+class _FakeFigureCanvasTkAgg(FigureCanvasAgg):
+    def __init__(self, figure, master=None) -> None:
+        self.master = master
+        self.widget = _FakeTkWidget()
+        super().__init__(figure)
 
-    def _create_item(self, kind, **kwargs):
-        item_id = self._next_item_id
-        self._next_item_id += 1
-        record = {
-            "id": item_id,
-            "kind": kind,
-            **dict(kwargs),
-        }
-        self._items[item_id] = record
-        self.create_calls.append(record)
-        return item_id
+    def get_tk_widget(self):
+        return self.widget
 
-    def create_image(self, x, y, **kwargs):
-        return self._create_item("image", x=x, y=y, **kwargs)
 
-    def create_rectangle(self, *coords, **kwargs):
-        return self._create_item("rectangle", coords=tuple(coords), **kwargs)
+def test_initialize_runtime_plot_block_packs_embedded_canvas_widget(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    configured_widgets = []
 
-    def create_line(self, *coords, **kwargs):
-        return self._create_item("line", coords=tuple(coords), **kwargs)
-
-    def create_oval(self, *coords, **kwargs):
-        return self._create_item("oval", coords=tuple(coords), **kwargs)
-
-    def create_text(self, x, y, **kwargs):
-        return self._create_item("text", x=x, y=y, **kwargs)
-
-    def itemconfigure(self, item, **kwargs):
-        self.itemconfigure_calls.append((item, dict(kwargs)))
-        if item in self._items:
-            self._items[item].update(dict(kwargs))
-
-    def delete(self, target):
-        self.delete_calls.append(target)
-        if isinstance(target, str):
-            to_delete = [
-                item_id
-                for item_id, record in self._items.items()
-                if target in tuple(record.get("tags", ()))
-            ]
-            for item_id in to_delete:
-                self._items.pop(item_id, None)
-            return
-        self._items.pop(target, None)
-
-    def winfo_reqwidth(self):
-        return 640
-
-    def winfo_reqheight(self):
-        return 480
-
-    def winfo_width(self):
-        return 640
-
-    def winfo_height(self):
-        return 480
-
-
-class _FakeTkModule:
-    CENTER = "center"
-    NW = "nw"
-
-    @staticmethod
-    def Canvas(_parent, **_kwargs):
-        return _FakeWidget()
-
-
-class _FakeViewport:
-    def __init__(self, view_state):
-        self.widget = _FakeWidget()
-        self._view_state = view_state
-
-    def contains_screen_point(self, x_pixel, y_pixel):
-        left, top, width, height = tk_primary_viewport._plot_bounds(self._view_state)
-        return (
-            left <= float(x_pixel) <= left + width
-            and top <= float(y_pixel) <= top + height
-        )
-
-    def screen_to_world(self, x_pixel, y_pixel):
-        return tk_primary_viewport.screen_to_world(
-            self._view_state,
-            float(x_pixel),
-            float(y_pixel),
-        )
-
-
-class _FakeAxes:
-    def __init__(self, *, xlim, ylim, position=None, bbox=None):
-        self._xlim = tuple(xlim)
-        self._ylim = tuple(ylim)
-        self._position = None if position is None else tuple(position)
-        if bbox is None:
-            self.bbox = None
-        else:
-            x0, y0, width, height = (float(value) for value in bbox)
-            self.bbox = SimpleNamespace(
-                x0=x0,
-                y0=y0,
-                width=width,
-                height=height,
-                x1=x0 + width,
-                y1=y0 + height,
-            )
-
-    def get_xlim(self):
-        return self._xlim
-
-    def get_ylim(self):
-        return self._ylim
-
-    def get_position(self):
-        if self._position is None:
-            raise AttributeError("position unavailable")
-        return SimpleNamespace(bounds=self._position)
-
-
-class _FakePhotoImage:
-    instances = []
-
-    def __init__(self, image):
-        self.image = image
-        type(self).instances.append(self)
-
-    @classmethod
-    def reset(cls) -> None:
-        cls.instances = []
-
-
-def _make_layer(
-    name: str,
-    rgba: np.ndarray,
-    *,
-    extent: tuple[float, float, float, float] = (0.0, 2.0, 2.0, 0.0),
-    visible: bool = True,
-    origin: str = "upper",
-) -> tk_primary_viewport._ViewportImageLayer:
-    return tk_primary_viewport._ViewportImageLayer(
-        name=name,
-        visible=visible,
-        extent=extent,
-        interpolation="nearest",
-        source_rgba=np.asarray(rgba, dtype=np.uint8),
-        origin=origin,
-    )
-
-
-def _make_scene(
-    *,
-    view_state: tk_primary_viewport.ViewportViewState | None = None,
-    view_mode: str = "detector",
-    background_layer: tk_primary_viewport._ViewportImageLayer | None = None,
-    simulation_layer: tk_primary_viewport._ViewportImageLayer | None = None,
-    overlay_layer: tk_primary_viewport._ViewportImageLayer | None = None,
-    text_specs: tuple[tk_primary_viewport._ViewportTextSpec, ...] = (),
-) -> tk_primary_viewport.ViewportScene:
-    if view_state is None:
-        view_state = tk_primary_viewport.ViewportViewState(
-            width=4,
-            height=4,
-            xlim=(0.0, 2.0),
-            ylim=(2.0, 0.0),
-        )
-    overlay_model = tk_primary_viewport.fast_plot_viewer.FastViewerOverlayModel()
-    return tk_primary_viewport.ViewportScene(
-        view_state=view_state,
-        view_mode=view_mode,
-        background_layer=background_layer,
-        simulation_layer=simulation_layer,
-        overlay_layer=overlay_layer,
-        overlay_model=overlay_model,
-        text_specs=text_specs,
-        raster_signature=tk_primary_viewport._scene_raster_signature(
-            view_state,
-            view_mode=view_mode,
-            background_layer=background_layer,
-            simulation_layer=simulation_layer,
-        ),
-        overlay_signature=tk_primary_viewport._scene_overlay_signature(
-            view_state,
-            view_mode=view_mode,
-            overlay_layer=overlay_layer,
-            overlay_model=overlay_model,
-            text_specs=text_specs,
-        ),
-    )
-
-
-def test_primary_viewport_backend_parser_accepts_matplotlib_and_tk_canvas() -> None:
-    assert tk_primary_viewport.parse_primary_viewport_backend(None) == "matplotlib"
-    assert tk_primary_viewport.parse_primary_viewport_backend("matplotlib") == "matplotlib"
-    assert tk_primary_viewport.parse_primary_viewport_backend("tk_canvas") == "tk_canvas"
-    assert tk_primary_viewport.parse_primary_viewport_backend("tk-canvas") == "tk_canvas"
-    assert tk_primary_viewport.parse_primary_viewport_backend("something-unknown") == "matplotlib"
-
-
-def test_screen_and_world_transforms_round_trip_detector_view() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-
-    world = tk_primary_viewport.screen_to_world(view_state, 50.0, 25.0)
-    assert world == (25.0, 25.0)
-    assert tk_primary_viewport.world_to_screen(view_state, *world) == (50.0, 25.0)
-
-
-def test_screen_and_world_transforms_use_plot_bounds_when_present() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-        plot_bounds=(20.0, 10.0, 160.0, 80.0),
-    )
-
-    world = tk_primary_viewport.screen_to_world(view_state, 60.0, 30.0)
-    assert world == (25.0, 25.0)
-    assert tk_primary_viewport.world_to_screen(view_state, *world) == (60.0, 30.0)
-
-
-def test_screen_and_world_transforms_round_trip_caked_view() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=240,
-        height=120,
-        xlim=(10.0, 34.0),
-        ylim=(-30.0, 30.0),
-    )
-
-    world = tk_primary_viewport.screen_to_world(view_state, 120.0, 30.0)
-    assert world == (22.0, 15.0)
-    assert tk_primary_viewport.world_to_screen(view_state, *world) == (120.0, 30.0)
-
-
-def test_detector_view_y_transform_keeps_canvas_top_above_beam_center() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-
-    world = tk_primary_viewport.screen_to_world(view_state, 50.0, 25.0)
-
-    assert world == (25.0, 25.0)
-    assert tk_primary_viewport.world_to_screen(view_state, 25.0, 25.0) == (50.0, 25.0)
-
-
-def test_current_view_state_uses_axes_position_for_plot_bounds() -> None:
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(
-            xlim=(0.0, 100.0),
-            ylim=(100.0, 0.0),
-            position=(0.065, 0.075, 0.845, 0.90),
-        ),
-        initial_width=1,
-        initial_height=1,
-    )
-
-    view_state = viewport._current_view_state()
-
-    assert view_state.plot_bounds == pytest.approx((41.6, 12.0, 540.8, 432.0))
-
-
-def test_current_view_state_prefers_axes_bbox_for_plot_bounds() -> None:
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(
-            xlim=(0.0, 100.0),
-            ylim=(100.0, 0.0),
-            position=(0.0, 0.0, 1.0, 1.0),
-            bbox=(50.0, 36.0, 540.0, 432.0),
-        ),
-        initial_width=1,
-        initial_height=1,
-    )
-
-    view_state = viewport._current_view_state()
-
-    assert view_state.plot_bounds == pytest.approx((50.0, 12.0, 540.0, 432.0))
-
-
-def test_build_peak_cache_filters_visible_points_in_current_view() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-
-    cache = tk_primary_viewport._build_peak_cache(
-        [(10.0, 10.0), (50.0, 50.0), (125.0, 60.0), ("bad", 0.0)],
-        view_state,
-    )
-
-    assert cache.positions == ((10.0, 10.0), (50.0, 50.0), (125.0, 60.0))
-    assert cache.visible_positions == ((10.0, 10.0), (50.0, 50.0))
-
-
-def test_build_q_group_cache_uses_detector_display_points() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-    grouped_candidates = {
-        ("q", 1): [
-            {"display_col": 40.0, "display_row": 35.0, "label": "visible"},
-            {"display_col": 140.0, "display_row": 35.0, "label": "hidden"},
-        ]
-    }
-
-    cache = tk_primary_viewport._build_q_group_cache(
-        grouped_candidates,
-        view_state,
-        view_mode="detector",
-    )
-
-    assert len(cache.visible_entries) == 1
-    assert cache.visible_entries[0]["label"] == "visible"
-    assert cache.visible_entries[0]["q_group_key"] == ("q", 1)
-    assert cache.visible_entries[0]["_viewport_point"] == (40.0, 35.0)
-
-
-def test_build_q_group_cache_uses_caked_angles_when_present() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=240,
-        height=120,
-        xlim=(10.0, 34.0),
-        ylim=(-30.0, 30.0),
-    )
-    grouped_candidates = {
-        ("q", 2): [
-            {"two_theta_deg": 21.0, "phi_deg": -8.0, "display_col": 500.0, "display_row": 500.0}
-        ]
-    }
-
-    cache = tk_primary_viewport._build_q_group_cache(
-        grouped_candidates,
-        view_state,
-        view_mode="caked",
-    )
-
-    assert len(cache.visible_entries) == 1
-    assert cache.visible_entries[0]["_viewport_point"] == (21.0, -8.0)
-
-
-def test_normalize_view_mode_accepts_q_space() -> None:
-    assert tk_primary_viewport._normalize_view_mode(None) == "detector"
-    assert tk_primary_viewport._normalize_view_mode({"simulation": ("q_space", 1, 2, 3)}) == "q_space"
-
-
-def test_build_q_group_cache_prefers_q_space_coordinates_when_present() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=240,
-        height=120,
-        xlim=(0.0, 1.0),
-        ylim=(-0.5, 0.5),
-    )
-    grouped_candidates = {
-        ("q", 3): [
-            {
-                "qr": 0.2,
-                "qz": 0.1,
-                "display_col": 500.0,
-                "display_row": 500.0,
-            }
-        ]
-    }
-
-    cache = tk_primary_viewport._build_q_group_cache(
-        grouped_candidates,
-        view_state,
-        view_mode="q_space",
-    )
-
-    assert len(cache.visible_entries) == 1
-    assert cache.visible_entries[0]["_viewport_point"] == (0.2, 0.1)
-
-
-def test_render_layer_patch_matches_matplotlib_detector_orientation() -> None:
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.0, 1.0), ylim=(2.0, 0.0)),
-        initial_width=1,
-        initial_height=2,
-    )
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=1,
-        height=2,
-        xlim=(0.0, 1.0),
-        ylim=(2.0, 0.0),
-    )
-    layer = tk_primary_viewport._ViewportImageLayer(
-        name="simulation",
-        visible=True,
-        extent=(0.0, 1.0, 2.0, 0.0),
-        interpolation="nearest",
-        source_rgba=np.asarray(
-            [
-                [[255, 0, 0, 255]],
-                [[0, 0, 255, 255]],
-            ],
-            dtype=np.uint8,
-        ),
-    )
-
-    rendered = viewport._render_layer_patch(layer, view_state)
-
-    assert rendered is not None
-    patch_image, left, top = rendered
-    assert (left, top) == (0, 0)
-    assert patch_image.size == (1, 2)
-    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
-    assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
-
-
-def test_render_layer_patch_matches_matplotlib_caked_orientation() -> None:
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(10.0, 20.0), ylim=(-30.0, 30.0)),
-        initial_width=1,
-        initial_height=3,
-    )
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=1,
-        height=3,
-        xlim=(10.0, 20.0),
-        ylim=(-30.0, 30.0),
-    )
-    layer = _make_layer(
-        "simulation",
-        np.asarray(
-            [
-                [[255, 0, 0, 255]],
-                [[0, 255, 0, 255]],
-                [[0, 0, 255, 255]],
-            ],
-            dtype=np.uint8,
-        ),
-        extent=(10.0, 20.0, -30.0, 30.0),
-        origin="lower",
-    )
-
-    rendered = viewport._render_layer_patch(layer, view_state)
-
-    assert rendered is not None
-    patch_image, left, top = rendered
-    assert (left, top) == (0, 0)
-    assert patch_image.size == (1, 3)
-    assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
-    assert patch_image.getpixel((0, 1)) == (0, 255, 0, 255)
-    assert patch_image.getpixel((0, 2)) == (255, 0, 0, 255)
-
-
-def test_render_layer_patch_matches_matplotlib_detector_zoom_crop() -> None:
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.0, 1.0), ylim=(1.0, 0.0)),
-        initial_width=1,
-        initial_height=2,
-    )
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=1,
-        height=2,
-        xlim=(0.0, 1.0),
-        ylim=(1.0, 0.0),
-    )
-    layer = tk_primary_viewport._ViewportImageLayer(
-        name="simulation",
-        visible=True,
-        extent=(0.0, 1.0, 2.0, 0.0),
-        interpolation="nearest",
-        source_rgba=np.asarray(
-            [
-                [[255, 0, 0, 255]],
-                [[0, 0, 255, 255]],
-            ],
-            dtype=np.uint8,
-        ),
-        origin="upper",
-    )
-
-    rendered = viewport._render_layer_patch(layer, view_state)
-
-    assert rendered is not None
-    patch_image, left, top = rendered
-    assert (left, top) == (0, 0)
-    assert patch_image.size == (1, 2)
-    assert patch_image.getpixel((0, 0)) == (255, 0, 0, 255)
-    assert patch_image.getpixel((0, 1)) == (255, 0, 0, 255)
-
-
-def test_render_layer_patch_matches_matplotlib_caked_zoom_crop() -> None:
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(10.0, 20.0), ylim=(0.0, 30.0)),
-        initial_width=1,
-        initial_height=3,
-    )
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=1,
-        height=3,
-        xlim=(10.0, 20.0),
-        ylim=(0.0, 30.0),
-    )
-    layer = _make_layer(
-        "simulation",
-        np.asarray(
-            [
-                [[255, 0, 0, 255]],
-                [[0, 255, 0, 255]],
-                [[0, 0, 255, 255]],
-            ],
-            dtype=np.uint8,
-        ),
-        extent=(10.0, 20.0, -30.0, 30.0),
-        origin="lower",
-    )
-
-    rendered = viewport._render_layer_patch(layer, view_state)
-
-    assert rendered is not None
-    patch_image, left, top = rendered
-    assert (left, top) == (0, 0)
-    assert patch_image.size == (1, 3)
-    assert patch_image.getpixel((0, 0)) == (0, 0, 255, 255)
-    assert patch_image.getpixel((0, 1)) == (0, 0, 255, 255)
-    assert patch_image.getpixel((0, 2)) == (0, 255, 0, 255)
-
-
-def test_render_scene_preserves_horizontal_alignment_for_fractional_detector_zoom(
-    monkeypatch,
-) -> None:
-    if tk_primary_viewport.Image is None:
-        pytest.skip("Pillow is unavailable")
-    _FakePhotoImage.reset()
     monkeypatch.setattr(
-        tk_primary_viewport,
-        "ImageTk",
-        SimpleNamespace(PhotoImage=_FakePhotoImage),
+        runtime_session,
+        "_get_tk_figure_canvas_cls",
+        lambda: _FakeFigureCanvasTkAgg,
+        raising=False,
     )
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.25, 3.25), ylim=(1.0, 0.0)),
-        initial_width=12,
-        initial_height=1,
-    )
-    scene = _make_scene(
-        view_state=tk_primary_viewport.ViewportViewState(
-            width=12,
-            height=1,
-            xlim=(0.25, 3.25),
-            ylim=(1.0, 0.0),
-        ),
-        simulation_layer=_make_layer(
-            "simulation",
-            np.asarray(
-                [[
-                    [255, 0, 0, 255],
-                    [0, 255, 0, 255],
-                    [0, 0, 255, 255],
-                    [255, 255, 0, 255],
-                ]],
-                dtype=np.uint8,
-            ),
-            extent=(0.0, 4.0, 1.0, 0.0),
-            origin="upper",
-        ),
-    )
-
-    viewport.render_scene(scene)
-    rendered = viewport._photo_image.image
-
-    assert rendered.size == (12, 1)
-    assert rendered.getpixel((1, 0)) == (255, 0, 0, 255)
-    assert rendered.getpixel((6, 0)) == (0, 255, 0, 255)
-    assert rendered.getpixel((10, 0)) == (0, 0, 255, 255)
-    assert rendered.getpixel((11, 0)) == (255, 255, 0, 255)
-
-
-def test_render_scene_preserves_vertical_alignment_for_fractional_detector_zoom(
-    monkeypatch,
-) -> None:
-    if tk_primary_viewport.Image is None:
-        pytest.skip("Pillow is unavailable")
-    _FakePhotoImage.reset()
     monkeypatch.setattr(
-        tk_primary_viewport,
-        "ImageTk",
-        SimpleNamespace(PhotoImage=_FakePhotoImage),
+        runtime_session,
+        "app_shell_view_state",
+        SimpleNamespace(canvas_frame=object()),
+        raising=False,
     )
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.0, 1.0), ylim=(3.25, 0.25)),
-        initial_width=1,
-        initial_height=12,
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(main_display_raster_limit=8, unscaled_image="before"),
+        raising=False,
     )
-    scene = _make_scene(
-        view_state=tk_primary_viewport.ViewportViewState(
-            width=1,
-            height=12,
-            xlim=(0.0, 1.0),
-            ylim=(3.25, 0.25),
-        ),
-        simulation_layer=_make_layer(
-            "simulation",
-            np.asarray(
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_display=np.zeros((1, 1), dtype=np.float32)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "configure_matplotlib_canvas_widget",
+        lambda widget: configured_widgets.append(widget),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_integration_range_drag,
+        "create_integration_region_highlight_cmap",
+        lambda *, listed_colormap_cls: listed_colormap_cls(
+            np.array(
                 [
-                    [[255, 0, 0, 255]],
-                    [[0, 255, 0, 255]],
-                    [[0, 0, 255, 255]],
-                    [[255, 255, 0, 255]],
-                ],
-                dtype=np.uint8,
-            ),
-            extent=(0.0, 1.0, 4.0, 0.0),
-            origin="upper",
-        ),
-    )
-
-    viewport.render_scene(scene)
-    rendered = viewport._photo_image.image
-
-    assert rendered.size == (1, 12)
-    assert rendered.getpixel((0, 0)) == (255, 0, 0, 255)
-    assert rendered.getpixel((0, 3)) == (0, 255, 0, 255)
-    assert rendered.getpixel((0, 7)) == (0, 0, 255, 255)
-    assert rendered.getpixel((0, 11)) == (255, 255, 0, 255)
-
-
-def test_tk_canvas_proxy_dispatches_click_with_axis_space_coordinates() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-    viewport = _FakeViewport(view_state)
-    proxy = tk_primary_viewport.TkCanvasViewportProxy(viewport, event_axes="AX", draw_interval_s=0.0)
-    events = []
-    proxy.mpl_connect("button_press_event", lambda event: events.append(event))
-
-    proxy.dispatch_tk_event(
-        "button_press_event",
-        SimpleNamespace(x=60.0, y=25.0),
-        button=1,
-    )
-
-    assert len(events) == 1
-    assert events[0].button == 1
-    assert events[0].inaxes == "AX"
-    assert events[0].xdata == 30.0
-    assert events[0].ydata == 25.0
-
-
-def test_tk_canvas_proxy_dispatches_scroll_step_from_mousewheel_delta() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-    viewport = _FakeViewport(view_state)
-    proxy = tk_primary_viewport.TkCanvasViewportProxy(viewport, event_axes="AX", draw_interval_s=0.0)
-    events = []
-    proxy.mpl_connect("scroll_event", lambda event: events.append(event))
-
-    proxy._dispatch_mousewheel(SimpleNamespace(x=30.0, y=40.0, delta=120.0))
-
-    assert len(events) == 1
-    assert events[0].button == "up"
-    assert events[0].step == 1.0
-    assert events[0].xdata == 15.0
-    assert events[0].ydata == 40.0
-
-
-def test_tk_canvas_proxy_ignores_points_outside_plot_bounds() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-        plot_bounds=(20.0, 10.0, 160.0, 80.0),
-    )
-    viewport = _FakeViewport(view_state)
-    proxy = tk_primary_viewport.TkCanvasViewportProxy(viewport, event_axes="AX", draw_interval_s=0.0)
-    events = []
-    proxy.mpl_connect("button_press_event", lambda event: events.append(event))
-
-    proxy.dispatch_tk_event(
-        "button_press_event",
-        SimpleNamespace(x=10.0, y=30.0),
-        button=1,
-    )
-
-    assert len(events) == 1
-    assert events[0].inaxes is None
-    assert events[0].xdata is None
-    assert events[0].ydata is None
-
-
-def test_tk_canvas_proxy_draw_idle_schedules_one_sync() -> None:
-    view_state = tk_primary_viewport.ViewportViewState(
-        width=200,
-        height=100,
-        xlim=(0.0, 100.0),
-        ylim=(100.0, 0.0),
-    )
-    viewport = _FakeViewport(view_state)
-    sync_calls = []
-    proxy = tk_primary_viewport.TkCanvasViewportProxy(
-        viewport,
-        event_axes="AX",
-        draw_interval_s=0.0,
-        sync_callback=lambda: sync_calls.append("sync"),
-    )
-
-    proxy.draw_idle()
-    proxy.draw_idle()
-
-    assert len(viewport.widget.after_calls) == 1
-    _, _, callback = viewport.widget.after_calls[0]
-    callback()
-
-    assert sync_calls == ["sync"]
-
-
-def test_build_tk_primary_viewport_backend_swaps_widgets_on_activate_and_deactivate(
-    monkeypatch,
-) -> None:
-    viewport_widget = _FakeWidget()
-    matplotlib_widget = _FakeWidget()
-    sync_calls = []
-
-    class _FakeViewportRuntime:
-        def __init__(self):
-            self.widget = viewport_widget
-
-        def sync_from_matplotlib(
-            self,
-            *,
-            image_artist,
-            background_artist,
-            overlay_artist,
-            force_view_range=False,
-        ):
-            sync_calls.append(
-                {
-                    "image_artist": image_artist,
-                    "background_artist": background_artist,
-                    "overlay_artist": overlay_artist,
-                    "force_view_range": bool(force_view_range),
-                }
+                    [0.0, 0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0, 1.0],
+                ]
             )
-
-    monkeypatch.setattr(
-        tk_primary_viewport,
-        "_TkPrimaryViewport",
-        lambda **kwargs: _FakeViewportRuntime(),
+        ),
+        raising=False,
     )
 
-    backend = tk_primary_viewport.build_tk_primary_viewport_backend(
-        tk_module=SimpleNamespace(TOP="top", BOTH="both"),
-        canvas_frame="canvas-parent",
-        matplotlib_canvas=SimpleNamespace(get_tk_widget=lambda: matplotlib_widget),
-        ax="AX",
-        image_artist="image",
-        background_artist="background",
-        overlay_artist="overlay",
-    )
+    runtime_session._initialize_runtime_plot_block_01()
 
-    backend.activate()
-    backend.deactivate()
-    backend.shutdown()
-
-    assert matplotlib_widget.pack_forget_calls == 1
-    assert viewport_widget.pack_calls == [{"side": "top", "fill": "both", "expand": True}]
-    assert viewport_widget.pack_forget_calls == 1
-    assert matplotlib_widget.pack_calls == [{"side": "top", "fill": "both", "expand": True}]
-    assert viewport_widget.destroy_calls == 1
-    assert sync_calls == [
-        {
-            "image_artist": "image",
-            "background_artist": "background",
-            "overlay_artist": "overlay",
-            "force_view_range": True,
-        }
+    widget = runtime_session.matplotlib_canvas_widget
+    assert configured_widgets == [widget]
+    assert widget.pack_calls == [
+        {"side": runtime_session.tk.TOP, "fill": runtime_session.tk.BOTH, "expand": True}
     ]
-
-
-def test_render_scene_overlay_only_redraw_reuses_base_raster(monkeypatch) -> None:
-    if tk_primary_viewport.Image is None:
-        pytest.skip("Pillow is unavailable")
-    _FakePhotoImage.reset()
-    monkeypatch.setattr(
-        tk_primary_viewport,
-        "ImageTk",
-        SimpleNamespace(PhotoImage=_FakePhotoImage),
-    )
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.0, 2.0), ylim=(2.0, 0.0)),
-        initial_width=4,
-        initial_height=4,
-    )
-    background_layer = _make_layer(
-        "background",
-        np.full((2, 2, 4), [255, 255, 255, 255], dtype=np.uint8),
-    )
-    simulation_layer = _make_layer(
-        "simulation",
-        np.full((2, 2, 4), [255, 0, 0, 255], dtype=np.uint8),
-    )
-    scene_one = _make_scene(
-        background_layer=background_layer,
-        simulation_layer=simulation_layer,
-        text_specs=(
-            tk_primary_viewport._ViewportTextSpec(
-                x=0.5,
-                y=0.5,
-                text="A",
-                fill_rgba=(255, 255, 255, 255),
-                font_size=10,
-                zorder=5.0,
-            ),
-        ),
-    )
-    viewport.render_scene(scene_one)
-
-    base_photo = viewport._photo_image
-    base_itemconfigure_count = len(
-        [
-            call
-            for call in viewport.widget.itemconfigure_calls
-            if call[0] == viewport._photo_item
-        ]
-    )
-
-    scene_two = _make_scene(
-        background_layer=background_layer,
-        simulation_layer=simulation_layer,
-        text_specs=(
-            tk_primary_viewport._ViewportTextSpec(
-                x=1.0,
-                y=1.0,
-                text="B",
-                fill_rgba=(255, 255, 0, 255),
-                font_size=12,
-                zorder=5.0,
-            ),
-        ),
-    )
-    viewport.render_scene(scene_two)
-
-    assert viewport._photo_image is base_photo
-    assert len(
-        [
-            call
-            for call in viewport.widget.itemconfigure_calls
-            if call[0] == viewport._photo_item
-        ]
-    ) == base_itemconfigure_count
-
-
-def test_render_scene_noops_when_scene_signatures_match(monkeypatch) -> None:
-    if tk_primary_viewport.Image is None:
-        pytest.skip("Pillow is unavailable")
-    _FakePhotoImage.reset()
-    monkeypatch.setattr(
-        tk_primary_viewport,
-        "ImageTk",
-        SimpleNamespace(PhotoImage=_FakePhotoImage),
-    )
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.0, 2.0), ylim=(2.0, 0.0)),
-        initial_width=4,
-        initial_height=4,
-    )
-    scene = _make_scene(
-        background_layer=_make_layer(
-            "background",
-            np.full((2, 2, 4), [255, 255, 255, 255], dtype=np.uint8),
-        ),
-        simulation_layer=_make_layer(
-            "simulation",
-            np.full((2, 2, 4), [0, 0, 255, 255], dtype=np.uint8),
-        ),
-    )
-    viewport.render_scene(scene)
-    snapshot = (
-        len(viewport.widget.create_calls),
-        len(viewport.widget.itemconfigure_calls),
-        len(viewport.widget.delete_calls),
-        len(_FakePhotoImage.instances),
-    )
-
-    viewport.render_scene(scene)
-
-    assert (
-        len(viewport.widget.create_calls),
-        len(viewport.widget.itemconfigure_calls),
-        len(viewport.widget.delete_calls),
-        len(_FakePhotoImage.instances),
-    ) == snapshot
-
-
-def test_render_scene_rebuilds_raster_when_bounds_or_layer_change(monkeypatch) -> None:
-    if tk_primary_viewport.Image is None:
-        pytest.skip("Pillow is unavailable")
-    _FakePhotoImage.reset()
-    monkeypatch.setattr(
-        tk_primary_viewport,
-        "ImageTk",
-        SimpleNamespace(PhotoImage=_FakePhotoImage),
-    )
-    viewport = tk_primary_viewport._TkPrimaryViewport(
-        tk_module=_FakeTkModule(),
-        parent="canvas-parent",
-        ax=_FakeAxes(xlim=(0.0, 2.0), ylim=(2.0, 0.0)),
-        initial_width=4,
-        initial_height=4,
-    )
-    base_scene = _make_scene(
-        background_layer=_make_layer(
-            "background",
-            np.full((2, 2, 4), [255, 255, 255, 255], dtype=np.uint8),
-        ),
-        simulation_layer=_make_layer(
-            "simulation",
-            np.full((2, 2, 4), [255, 0, 0, 255], dtype=np.uint8),
-        ),
-    )
-    viewport.render_scene(base_scene)
-
-    initial_photo = viewport._photo_image
-    updated_bounds_scene = _make_scene(
-        view_state=tk_primary_viewport.ViewportViewState(
-            width=5,
-            height=4,
-            xlim=(0.0, 2.0),
-            ylim=(2.0, 0.0),
-        ),
-        background_layer=base_scene.background_layer,
-        simulation_layer=base_scene.simulation_layer,
-    )
-    viewport.render_scene(updated_bounds_scene)
-
-    assert viewport._photo_image is not initial_photo
-
-    bounds_photo = viewport._photo_image
-    updated_layer_scene = _make_scene(
-        background_layer=base_scene.background_layer,
-        simulation_layer=_make_layer(
-            "simulation",
-            np.full((2, 2, 4), [0, 255, 0, 255], dtype=np.uint8),
-        ),
-    )
-    viewport.render_scene(updated_layer_scene)
-
-    assert viewport._photo_image is not bounds_photo
+    assert runtime_session.canvas is runtime_session.matplotlib_canvas
