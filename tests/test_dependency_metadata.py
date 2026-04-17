@@ -23,7 +23,7 @@ JUSTIFIED_DECLARED_ONLY = {
     "openpyxl",
     "xlsxwriter",
 }
-OPTIONAL_RUNTIME_IMPORTS = set()
+OPTIONAL_RUNTIME_IMPORTS = {"pyqtgraph"}
 FORBIDDEN_BASE_DEPENDENCIES = {"fabio", "pyqtgraph"}
 
 
