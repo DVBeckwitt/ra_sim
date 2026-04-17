@@ -6,57 +6,23 @@ from collections.abc import Mapping, Sequence
 import copy
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ra_sim.config import get_dir, get_instrument_config, get_path
-from ra_sim.fitting.optimization import (
-    fit_geometry_parameters,
-    simulate_and_compare_hkl,
-)
-from ra_sim.gui import background as gui_background
-from ra_sim.fitting.background_peak_matching import (
-    build_background_peak_context,
-    match_simulated_peaks_to_peak_context,
-)
-from ra_sim.gui import background_theta as gui_background_theta
-from ra_sim.gui import controllers as gui_controllers
-from ra_sim.gui import geometry_fit as gui_geometry_fit
-from ra_sim.gui import geometry_overlay as gui_geometry_overlay
-from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
-from ra_sim.gui import manual_geometry as gui_manual_geometry
-from ra_sim.gui import structure_model as gui_structure_model
-from ra_sim.gui.state import AtomSiteOverrideState, BackgroundRuntimeState, SimulationRuntimeState
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
-from ra_sim.simulation.diffraction import (
-    DEFAULT_SOLVE_Q_MODE,
-    DEFAULT_SOLVE_Q_REL_TOL,
-    DEFAULT_SOLVE_Q_STEPS,
-    OPTICS_MODE_EXACT,
-    OPTICS_MODE_FAST,
-    get_last_intersection_cache,
-    hit_tables_to_max_positions,
-    intersection_cache_to_hit_tables,
-    load_most_recent_logged_intersection_cache,
-    process_peaks_parallel,
-)
-from ra_sim.utils.calculations import resolve_index_of_refraction
-from ra_sim.utils.diffraction_tools import DEFAULT_PIXEL_SIZE_M, detector_two_theta_max
-from ra_sim.utils.stacking_fault import (
-    DEFAULT_PHASE_DELTA_EXPRESSION,
-    DEFAULT_PHI_L_DIVISOR,
-    _infer_iodine_z_like_diffuse,
-    normalize_phi_l_divisor,
-    normalize_phase_delta_expression,
-    validate_phase_delta_expression,
-)
-from ra_sim.utils.tools import (
-    build_intensity_dataframes,
-    inject_fractional_reflections,
-    miller_generator,
-)
+
+if TYPE_CHECKING:
+    from ra_sim.gui.state import (
+        AtomSiteOverrideState,
+        BackgroundRuntimeState,
+        SimulationRuntimeState,
+    )
 
 
 DISPLAY_ROTATE_K = -1
@@ -118,6 +84,158 @@ def _read_first_cif_block(path: str) -> tuple[object, object]:
     return cf, cf[keys[0]]
 
 
+@lru_cache(maxsize=1)
+def _load_gui_background_module():
+    from ra_sim.gui import background
+
+    return background
+
+
+@lru_cache(maxsize=1)
+def _load_gui_background_theta_module():
+    from ra_sim.gui import background_theta
+
+    return background_theta
+
+
+@lru_cache(maxsize=1)
+def _load_gui_controllers_module():
+    from ra_sim.gui import controllers
+
+    return controllers
+
+
+@lru_cache(maxsize=1)
+def _load_gui_geometry_fit_module():
+    from ra_sim.gui import geometry_fit
+
+    return geometry_fit
+
+
+@lru_cache(maxsize=1)
+def _load_gui_geometry_overlay_module():
+    from ra_sim.gui import geometry_overlay
+
+    return geometry_overlay
+
+
+@lru_cache(maxsize=1)
+def _load_gui_geometry_q_group_manager_module():
+    from ra_sim.gui import geometry_q_group_manager
+
+    return geometry_q_group_manager
+
+
+@lru_cache(maxsize=1)
+def _load_gui_manual_geometry_module():
+    from ra_sim.gui import manual_geometry
+
+    return manual_geometry
+
+
+@lru_cache(maxsize=1)
+def _load_gui_structure_model_module():
+    from ra_sim.gui import structure_model
+
+    return structure_model
+
+
+@lru_cache(maxsize=1)
+def _load_gui_modules() -> SimpleNamespace:
+    return SimpleNamespace(
+        gui_background=_LazyModuleProxy(_load_gui_background_module),
+        gui_background_theta=_LazyModuleProxy(_load_gui_background_theta_module),
+        gui_controllers=_LazyModuleProxy(_load_gui_controllers_module),
+        gui_geometry_fit=_LazyModuleProxy(_load_gui_geometry_fit_module),
+        gui_geometry_overlay=_LazyModuleProxy(_load_gui_geometry_overlay_module),
+        gui_geometry_q_group_manager=_LazyModuleProxy(_load_gui_geometry_q_group_manager_module),
+        gui_manual_geometry=_LazyModuleProxy(_load_gui_manual_geometry_module),
+        gui_structure_model=_LazyModuleProxy(_load_gui_structure_model_module),
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_gui_state_types() -> SimpleNamespace:
+    from ra_sim.gui.state import (
+        AtomSiteOverrideState,
+        BackgroundRuntimeState,
+        SimulationRuntimeState,
+    )
+
+    return SimpleNamespace(
+        AtomSiteOverrideState=AtomSiteOverrideState,
+        BackgroundRuntimeState=BackgroundRuntimeState,
+        SimulationRuntimeState=SimulationRuntimeState,
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_fitting_runtime():
+    from ra_sim.fitting import optimization
+
+    return optimization
+
+
+@lru_cache(maxsize=1)
+def _load_simulation_diffraction():
+    from ra_sim.simulation import diffraction
+
+    return diffraction
+
+
+@lru_cache(maxsize=1)
+def _load_stacking_fault_runtime():
+    from ra_sim.utils import stacking_fault
+
+    return stacking_fault
+
+
+@lru_cache(maxsize=1)
+def _load_diffraction_tools():
+    from ra_sim.utils import diffraction_tools
+
+    return diffraction_tools
+
+
+@lru_cache(maxsize=1)
+def _load_calculation_runtime():
+    from ra_sim.utils import calculations
+
+    return calculations
+
+
+@lru_cache(maxsize=1)
+def _load_tools_runtime():
+    from ra_sim.utils import tools
+
+    return tools
+
+
+class _LazyModuleProxy:
+    """Resolve heavy module only when code touches it."""
+
+    def __init__(self, loader) -> None:
+        object.__setattr__(self, "_loader", loader)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(object.__getattribute__(self, "_loader")(), name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(object.__getattribute__(self, "_loader")(), name, value)
+
+
+gui_background = _LazyModuleProxy(lambda: _load_gui_modules().gui_background)
+gui_background_theta = _LazyModuleProxy(lambda: _load_gui_modules().gui_background_theta)
+gui_controllers = _LazyModuleProxy(lambda: _load_gui_modules().gui_controllers)
+gui_geometry_fit = _LazyModuleProxy(lambda: _load_gui_modules().gui_geometry_fit)
+gui_geometry_overlay = _LazyModuleProxy(lambda: _load_gui_modules().gui_geometry_overlay)
+gui_geometry_q_group_manager = _LazyModuleProxy(
+    lambda: _load_gui_modules().gui_geometry_q_group_manager
+)
+gui_manual_geometry = _LazyModuleProxy(lambda: _load_gui_modules().gui_manual_geometry)
+gui_structure_model = _LazyModuleProxy(lambda: _load_gui_modules().gui_structure_model)
+
+
 def _coerce_float(value: object, default: float) -> float:
     try:
         parsed = float(value)
@@ -167,6 +285,7 @@ def _ensure_triplet(raw_value: object, fallback: list[float]) -> list[float]:
 
 
 def _resolve_solve_q_mode(mode_raw: object) -> int:
+    diffraction = _load_simulation_diffraction()
     if isinstance(mode_raw, (int, np.integer, float, np.floating)):
         return 0 if int(round(float(mode_raw))) == 0 else 1
 
@@ -175,14 +294,15 @@ def _resolve_solve_q_mode(mode_raw: object) -> int:
         return 0
     if mode_txt in {"adaptive", "robust", "1"}:
         return 1
-    return int(DEFAULT_SOLVE_Q_MODE)
+    return int(diffraction.DEFAULT_SOLVE_Q_MODE)
 
 
 def _normalize_optics_mode_label(value: object) -> str:
+    diffraction = _load_simulation_diffraction()
     if value is None:
         return "fast"
     if isinstance(value, (int, np.integer, float, np.floating)):
-        return "exact" if int(round(float(value))) == OPTICS_MODE_EXACT else "fast"
+        return "exact" if int(round(float(value))) == diffraction.OPTICS_MODE_EXACT else "fast"
 
     text = " ".join(str(value).strip().lower().split())
     if text in {
@@ -219,7 +339,12 @@ def _normalize_optics_mode_label(value: object) -> str:
 
 
 def _resolve_optics_mode_flag(value: object) -> int:
-    return OPTICS_MODE_EXACT if _normalize_optics_mode_label(value) == "exact" else OPTICS_MODE_FAST
+    diffraction = _load_simulation_diffraction()
+    return (
+        diffraction.OPTICS_MODE_EXACT
+        if _normalize_optics_mode_label(value) == "exact"
+        else diffraction.OPTICS_MODE_FAST
+    )
 
 
 def _default_fit_toggle_values() -> dict[str, bool]:
@@ -241,6 +366,9 @@ def _default_fit_toggle_values() -> dict[str, bool]:
 
 
 def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
+    diffraction = _load_simulation_diffraction()
+    pixel_tools = _load_diffraction_tools()
+    stack = _load_stacking_fault_runtime()
     instrument = get_instrument_config().get("instrument", {})
     detector_cfg = instrument.get("detector", {})
     geometry_cfg = instrument.get("geometry_defaults", {})
@@ -275,7 +403,7 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
     current_background_index = min(current_background_index, len(osc_files) - 1)
 
     image_size = int(detector_cfg.get("image_size", 3000))
-    pixel_size_m = float(detector_cfg.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
+    pixel_size_m = float(detector_cfg.get("pixel_size_m", pixel_tools.DEFAULT_PIXEL_SIZE_M))
 
     poni = parse_poni_file(get_path("geometry_poni"))
     distance_m = float(poni.get("Dist", geometry_cfg.get("distance_m", 0.075)))
@@ -292,7 +420,7 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         float(poni2 / pixel_size_m),
         float(image_size - (poni1 / pixel_size_m)),
     ]
-    two_theta_max = detector_two_theta_max(
+    two_theta_max = pixel_tools.detector_two_theta_max(
         image_size,
         center_default,
         distance_m,
@@ -314,21 +442,21 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
     p_defaults = _ensure_triplet(ht_cfg.get("default_p"), [0.01, 0.99, 0.5])
     w_defaults = _ensure_triplet(ht_cfg.get("default_w"), [100.0, 0.0, 0.0])
     try:
-        iodine_z_default = float(_infer_iodine_z_like_diffuse(primary_cif_path))
+        iodine_z_default = float(stack._infer_iodine_z_like_diffuse(primary_cif_path))
     except Exception:
         iodine_z_default = 0.0
     if not np.isfinite(iodine_z_default):
         iodine_z_default = 0.0
     iodine_z_default = float(np.clip(iodine_z_default, 0.0, 1.0))
 
-    phase_delta_default = normalize_phase_delta_expression(
-        ht_cfg.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION),
-        fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
+    phase_delta_default = stack.normalize_phase_delta_expression(
+        ht_cfg.get("phase_delta_expression", stack.DEFAULT_PHASE_DELTA_EXPRESSION),
+        fallback=stack.DEFAULT_PHASE_DELTA_EXPRESSION,
     )
     try:
-        phase_delta_default = validate_phase_delta_expression(phase_delta_default)
+        phase_delta_default = stack.validate_phase_delta_expression(phase_delta_default)
     except ValueError:
-        phase_delta_default = DEFAULT_PHASE_DELTA_EXPRESSION
+        phase_delta_default = stack.DEFAULT_PHASE_DELTA_EXPRESSION
 
     defaults = {
         "theta_initial": float(sample_cfg.get("theta_initial_deg", 6.0)),
@@ -362,9 +490,9 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         "iodine_z": float(iodine_z_default),
         "phase_delta_expression": str(phase_delta_default),
         "phi_l_divisor": float(
-            normalize_phi_l_divisor(
-                ht_cfg.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR),
-                fallback=DEFAULT_PHI_L_DIVISOR,
+            stack.normalize_phi_l_divisor(
+                ht_cfg.get("phi_l_divisor", stack.DEFAULT_PHI_L_DIVISOR),
+                fallback=stack.DEFAULT_PHI_L_DIVISOR,
             )
         ),
         "center_x": float(center_default[0]),
@@ -372,9 +500,13 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         "bandwidth_percent": float(
             np.clip(float(beam_cfg.get("bandwidth_percent", 0.7)), 0.0, 10.0)
         ),
-        "solve_q_steps": int(beam_cfg.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
-        "solve_q_rel_tol": float(beam_cfg.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
-        "solve_q_mode": _resolve_solve_q_mode(beam_cfg.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
+        "solve_q_steps": int(beam_cfg.get("solve_q_steps", diffraction.DEFAULT_SOLVE_Q_STEPS)),
+        "solve_q_rel_tol": float(
+            beam_cfg.get("solve_q_rel_tol", diffraction.DEFAULT_SOLVE_Q_REL_TOL)
+        ),
+        "solve_q_mode": _resolve_solve_q_mode(
+            beam_cfg.get("solve_q_mode", diffraction.DEFAULT_SOLVE_Q_MODE)
+        ),
         "finite_stack": bool(ht_cfg.get("finite_stack", True)),
         "stack_layers": int(max(1, float(ht_cfg.get("stack_layers", 50)))),
         "optics_mode": "fast",
@@ -524,6 +656,10 @@ def _load_structure_model(
     var_store: dict[str, _HeadlessVar],
     simulation_runtime_state: SimulationRuntimeState,
 ) -> tuple[object, AtomSiteOverrideState, str, complex]:
+    calc_runtime = _load_calculation_runtime()
+    stack = _load_stacking_fault_runtime()
+    state_types = _load_gui_state_types()
+    tools_runtime = _load_tools_runtime()
     dynamic_lists = (
         saved_state.get("dynamic_lists", {})
         if isinstance(saved_state.get("dynamic_lists"), dict)
@@ -608,13 +744,13 @@ def _load_structure_model(
         defaults.defaults["stack_layers"],
         minimum=1,
     )
-    defaults_map["phase_delta_expression"] = validate_phase_delta_expression(
-        normalize_phase_delta_expression(
+    defaults_map["phase_delta_expression"] = stack.validate_phase_delta_expression(
+        stack.normalize_phase_delta_expression(
             var_store["phase_delta_expr_var"].get(),
             fallback=str(defaults.defaults["phase_delta_expression"]),
         )
     )
-    defaults_map["phi_l_divisor"] = normalize_phi_l_divisor(
+    defaults_map["phi_l_divisor"] = stack.normalize_phi_l_divisor(
         var_store["phi_l_divisor_var"].get(),
         fallback=float(defaults.defaults["phi_l_divisor"]),
     )
@@ -640,10 +776,10 @@ def _load_structure_model(
         two_theta_range=defaults.two_theta_range,
         include_rods_flag=defaults.include_rods_flag,
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
-        miller_generator=miller_generator,
-        inject_fractional_reflections=inject_fractional_reflections,
+        miller_generator=tools_runtime.miller_generator,
+        inject_fractional_reflections=tools_runtime.inject_fractional_reflections,
     )
-    atom_site_override_state = AtomSiteOverrideState()
+    atom_site_override_state = state_types.AtomSiteOverrideState()
     gui_structure_model.rebuild_diffraction_inputs(
         structure_state,
         new_occ=occ_values,
@@ -670,13 +806,13 @@ def _load_structure_model(
             defaults.defaults["stack_layers"],
             minimum=1,
         ),
-        phase_delta_expression_current=validate_phase_delta_expression(
-            normalize_phase_delta_expression(
+        phase_delta_expression_current=stack.validate_phase_delta_expression(
+            stack.normalize_phase_delta_expression(
                 var_store["phase_delta_expr_var"].get(),
                 fallback=str(defaults.defaults["phase_delta_expression"]),
             )
         ),
-        phi_l_divisor_current=normalize_phi_l_divisor(
+        phi_l_divisor_current=stack.normalize_phi_l_divisor(
             var_store["phi_l_divisor_var"].get(),
             fallback=float(defaults.defaults["phi_l_divisor"]),
         ),
@@ -689,7 +825,7 @@ def _load_structure_model(
         atom_site_override_state=atom_site_override_state,
         simulation_runtime_state=simulation_runtime_state,
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
-        build_intensity_dataframes=build_intensity_dataframes,
+        build_intensity_dataframes=tools_runtime.build_intensity_dataframes,
         apply_bragg_qr_filters=lambda **_kwargs: None,
         schedule_update=lambda: None,
         weight1=_coerce_float(var_store["weight1_var"].get(), defaults.defaults["weight1"]),
@@ -702,7 +838,7 @@ def _load_structure_model(
         atom_site_override_state,
         atom_site_values=atom_site_values,
     )
-    nominal_n2 = resolve_index_of_refraction(
+    nominal_n2 = calc_runtime.resolve_index_of_refraction(
         defaults.lambda_angstrom * 1.0e-10,
         cif_path=active_cif_path,
     )
@@ -1074,6 +1210,9 @@ def run_headless_geometry_fit(
     if not isinstance(saved_state, dict):
         raise ValueError("Saved GUI state must be a dictionary.")
 
+    diffraction = _load_simulation_diffraction()
+    fit_runtime = _load_fitting_runtime()
+    state_types = _load_gui_state_types()
     defaults = _build_runtime_defaults(saved_state)
     var_store = _build_var_store(saved_state, defaults)
     geometry_state = (
@@ -1084,7 +1223,7 @@ def run_headless_geometry_fit(
         geometry_state.get("manual_pairs", []),
     )
 
-    background_state = BackgroundRuntimeState(
+    background_state = state_types.BackgroundRuntimeState(
         osc_files=list(defaults.osc_files),
         background_images=[None] * len(defaults.osc_files),
         background_images_native=[None] * len(defaults.osc_files),
@@ -1095,7 +1234,7 @@ def run_headless_geometry_fit(
         backend_flip_x=bool(defaults.background_flags["backend_flip_x"]),
         backend_flip_y=bool(defaults.background_flags["backend_flip_y"]),
     )
-    simulation_runtime_state = SimulationRuntimeState()
+    simulation_runtime_state = state_types.SimulationRuntimeState()
     saved_peak_records = geometry_state.get("peak_records")
     if isinstance(saved_peak_records, list):
         _replace_gui_state_peak_cache(
@@ -1347,8 +1486,8 @@ def run_headless_geometry_fit(
 
     simulation_callbacks = (
         gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-            process_peaks_parallel=process_peaks_parallel,
-            hit_tables_to_max_positions=hit_tables_to_max_positions,
+            process_peaks_parallel=diffraction.process_peaks_parallel,
+            hit_tables_to_max_positions=diffraction.hit_tables_to_max_positions,
             native_sim_to_display_coords=lambda col, row, image_shape: (
                 gui_geometry_overlay.native_sim_to_display_coords(
                     col,
@@ -1710,7 +1849,9 @@ def run_headless_geometry_fit(
         if stored_rows:
             if rebuild_result.hit_tables is not None:
                 try:
-                    max_positions_local = hit_tables_to_max_positions(rebuild_result.hit_tables)
+                    max_positions_local = diffraction.hit_tables_to_max_positions(
+                        rebuild_result.hit_tables
+                    )
                 except Exception:
                     max_positions_local = np.empty((0, 6), dtype=np.float64)
                 simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
@@ -1790,7 +1931,7 @@ def run_headless_geometry_fit(
                 return [], [], []
             first_table = np.asarray(table_list[0], dtype=np.float64)
             if first_table.ndim == 2 and first_table.shape[1] >= 14:
-                hit_tables_local = intersection_cache_to_hit_tables(table_list)
+                hit_tables_local = diffraction.intersection_cache_to_hit_tables(table_list)
             else:
                 hit_tables_local = _copy_hit_tables(table_list)
             return _build_source_rows_from_hit_tables(
@@ -1820,8 +1961,8 @@ def run_headless_geometry_fit(
                 background_idx == int(background_state.current_background_index)
             ),
             build_live_rows=_build_live_preview_simulated_peaks_from_cache,
-            get_memory_intersection_cache=get_last_intersection_cache,
-            load_logged_intersection_cache=load_most_recent_logged_intersection_cache,
+            get_memory_intersection_cache=diffraction.get_last_intersection_cache,
+            load_logged_intersection_cache=diffraction.load_most_recent_logged_intersection_cache,
             logged_cache_matches_params=_logged_cache_matches_params,
             build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
             simulate_hit_tables=(
@@ -2028,9 +2169,7 @@ def run_headless_geometry_fit(
                     tuple(int(v) for v in tuple(native_shape)[:2])
                     if native_shape is not None
                     else np.asarray(
-                        _load_background_by_index(
-                            int(background_state.current_background_index)
-                        )[0]
+                        _load_background_by_index(int(background_state.current_background_index))[0]
                     ).shape[:2]
                 ),
                 flip_x=background_state.backend_flip_x,
@@ -2133,7 +2272,7 @@ def run_headless_geometry_fit(
         ),
         sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
         background_display_rotate_k=DISPLAY_ROTATE_K,
-        simulate_and_compare_hkl=simulate_and_compare_hkl,
+        simulate_and_compare_hkl=fit_runtime.simulate_and_compare_hkl,
         aggregate_match_centers=gui_geometry_overlay.aggregate_match_centers,
         build_overlay_records=gui_geometry_overlay.build_geometry_fit_overlay_records,
         compute_frame_diagnostics=lambda records: (
@@ -2148,7 +2287,7 @@ def run_headless_geometry_fit(
         prepared_run=preparation.prepared_run,
         var_names=var_names,
         preserve_live_theta=preserve_live_theta,
-        solve_fit=fit_geometry_parameters,
+        solve_fit=fit_runtime.fit_geometry_parameters,
         setup=setup,
     )
     if execution.error_text:

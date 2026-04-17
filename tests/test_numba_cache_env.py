@@ -62,6 +62,25 @@ def _assert_cli_heavy_modules_unloaded() -> None:
         assert not any(name.startswith(prefix + ".") for name in sys.modules)
 
 
+_HEADLESS_LAZY_PREFIXES = (
+    "ra_sim.gui",
+    "ra_sim.fitting.optimization",
+    "ra_sim.simulation",
+    "ra_sim.utils.stacking_fault",
+    "ra_sim.utils.diffraction_tools",
+    "ra_sim.utils.tools",
+)
+
+
+def _assert_module_prefix_absent(prefix: str) -> None:
+    assert prefix not in sys.modules
+    assert not any(name.startswith(prefix + ".") for name in sys.modules)
+
+
+def _assert_module_prefix_present(prefix: str) -> None:
+    assert prefix in sys.modules or any(name.startswith(prefix + ".") for name in sys.modules)
+
+
 def test_numba_cache_dir_defaults_to_stable_path(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
@@ -141,9 +160,104 @@ def test_cli_import_keeps_geometry_and_simulation_stack_lazy(monkeypatch, tmp_pa
         _restore_modules(previous)
 
 
-def test_runtime_session_import_stays_helper_only_without_optional_cif_deps(
-    monkeypatch, tmp_path
-):
+def test_headless_geometry_fit_import_keeps_heavy_runtime_modules_lazy(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        headless_geometry_fit = importlib.import_module("ra_sim.headless_geometry_fit")
+
+        for prefix in _HEADLESS_LAZY_PREFIXES:
+            _assert_module_prefix_absent(prefix)
+
+        assert headless_geometry_fit.gui_background.__name__ == "ra_sim.gui.background"
+        _assert_module_prefix_present("ra_sim.gui")
+        for prefix in _HEADLESS_LAZY_PREFIXES:
+            if prefix != "ra_sim.gui":
+                _assert_module_prefix_absent(prefix)
+
+        assert (
+            headless_geometry_fit._load_simulation_diffraction().__name__
+            == "ra_sim.simulation.diffraction"
+        )
+        _assert_module_prefix_present("ra_sim.simulation")
+        for prefix in (
+            "ra_sim.fitting.optimization",
+            "ra_sim.utils.stacking_fault",
+            "ra_sim.utils.diffraction_tools",
+            "ra_sim.utils.tools",
+        ):
+            _assert_module_prefix_absent(prefix)
+
+        assert headless_geometry_fit._load_stacking_fault_runtime().__name__ == (
+            "ra_sim.utils.stacking_fault"
+        )
+        _assert_module_prefix_present("ra_sim.utils.stacking_fault")
+        for prefix in (
+            "ra_sim.fitting.optimization",
+            "ra_sim.utils.diffraction_tools",
+            "ra_sim.utils.tools",
+        ):
+            _assert_module_prefix_absent(prefix)
+
+        assert headless_geometry_fit._load_diffraction_tools().__name__ == (
+            "ra_sim.utils.diffraction_tools"
+        )
+        _assert_module_prefix_present("ra_sim.utils.diffraction_tools")
+        _assert_module_prefix_absent("ra_sim.fitting.optimization")
+        _assert_module_prefix_absent("ra_sim.utils.tools")
+
+        assert headless_geometry_fit._load_tools_runtime().__name__ == "ra_sim.utils.tools"
+        _assert_module_prefix_present("ra_sim.utils.tools")
+        _assert_module_prefix_absent("ra_sim.fitting.optimization")
+
+        assert (
+            headless_geometry_fit._load_fitting_runtime().__name__ == "ra_sim.fitting.optimization"
+        )
+        _assert_module_prefix_present("ra_sim.fitting.optimization")
+    finally:
+        _restore_modules(previous)
+
+
+def test_headless_geometry_fit_public_gui_proxies_follow_current_loader(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        headless_geometry_fit = importlib.import_module("ra_sim.headless_geometry_fit")
+        original_loader = headless_geometry_fit._load_gui_modules
+
+        for prefix in _HEADLESS_LAZY_PREFIXES:
+            _assert_module_prefix_absent(prefix)
+
+        synthetic_background = SimpleNamespace(
+            __name__="synthetic.gui.background",
+            sentinel="synthetic-background",
+        )
+        monkeypatch.setattr(
+            headless_geometry_fit,
+            "_load_gui_modules",
+            lambda: SimpleNamespace(gui_background=synthetic_background),
+        )
+
+        assert original_loader is not None
+        assert headless_geometry_fit.gui_background.__name__ == "synthetic.gui.background"
+        assert headless_geometry_fit.gui_background.sentinel == "synthetic-background"
+        for prefix in _HEADLESS_LAZY_PREFIXES:
+            _assert_module_prefix_absent(prefix)
+    finally:
+        _restore_modules(previous)
+
+
+def test_runtime_session_import_stays_helper_only_without_optional_cif_deps(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
