@@ -1207,6 +1207,7 @@ def _sync_structure_model_aliases() -> None:
     global occupancy_site_labels, occupancy_site_count, occupancy_site_expanded_map
     global occ
     global av, cv, av2, cv2
+    global has_second_cif
     global defaults
     global ht_cache_multi, ht_curves_cache
     global miller, intensities, degeneracy, details
@@ -1230,6 +1231,7 @@ def _sync_structure_model_aliases() -> None:
     cv = float(structure_model_state.cv)
     av2 = structure_model_state.av2
     cv2 = structure_model_state.cv2
+    has_second_cif = bool(structure_model_state.has_second_cif)
     defaults = structure_model_state.defaults
     ht_cache_multi = structure_model_state.ht_cache_multi
     ht_curves_cache = structure_model_state.ht_curves_cache
@@ -15869,6 +15871,7 @@ def _import_full_gui_state() -> None:
         if finite_stack_controls_view_state.phase_delta_entry_var is not None:
             gui_views.set_finite_stack_phase_delta_entry_text(
                 finite_stack_controls_view_state,
+            apply_secondary_cif_path=_apply_secondary_cif_path,
                 _current_phase_delta_expression(),
             )
         if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
@@ -15881,6 +15884,11 @@ def _import_full_gui_state() -> None:
         ensure_valid_resolution_choice()
         schedule_update()
         progress_label.config(text=message)
+    if bool(structure_model_state.has_second_cif):
+        try:
+            update_weights()
+        except Exception as exc:
+            warnings.append(f"secondary CIF weights: {exc}")
         return
 
     try:
@@ -27351,6 +27359,175 @@ def build_runtime_state_context() -> RuntimeContext:
     globals()["simulation_runtime_state"] = context.simulation_runtime_state
     globals()["background_runtime_state"] = context.background_runtime_state
     return context
+def _apply_secondary_cif_path(raw_path):
+    """Load, replace, or clear secondary CIF, then rebuild diffraction inputs."""
+
+    text_path = "" if raw_path is None else str(raw_path).strip().strip('"').strip("'")
+    candidate = Path(text_path).expanduser() if text_path else None
+    if candidate is not None and not candidate.is_file():
+        progress_label.config(text=f"Secondary CIF file not found: {candidate}")
+        return
+    if candidate is None and not bool(structure_model_state.has_second_cif):
+        return
+
+    snapshot = SimpleNamespace(
+        cif_file2=structure_model_state.cif_file2,
+        cf2=structure_model_state.cf2,
+        blk2=structure_model_state.blk2,
+        has_second_cif=bool(structure_model_state.has_second_cif),
+        av2=structure_model_state.av2,
+        cv2=structure_model_state.cv2,
+        ht_cache_multi=dict(structure_model_state.ht_cache_multi),
+        ht_curves_cache=dict(structure_model_state.ht_curves_cache),
+        miller=structure_model_state.miller,
+        intensities=structure_model_state.intensities,
+        degeneracy=structure_model_state.degeneracy,
+        details=list(structure_model_state.details),
+        df_summary=structure_model_state.df_summary,
+        df_details=structure_model_state.df_details,
+        intensities_cif1=structure_model_state.intensities_cif1,
+        intensities_cif2=structure_model_state.intensities_cif2,
+        sim_miller1_all=structure_model_state.sim_miller1_all,
+        sim_intens1_all=structure_model_state.sim_intens1_all,
+        sim_miller2_all=structure_model_state.sim_miller2_all,
+        sim_intens2_all=structure_model_state.sim_intens2_all,
+        sim_primary_qr_all=copy.deepcopy(structure_model_state.sim_primary_qr_all),
+        last_occ_for_ht=list(structure_model_state.last_occ_for_ht),
+        last_p_triplet=list(structure_model_state.last_p_triplet),
+        last_weights=list(structure_model_state.last_weights),
+        last_a_for_ht=float(structure_model_state.last_a_for_ht),
+        last_c_for_ht=float(structure_model_state.last_c_for_ht),
+        last_iodine_z_for_ht=float(structure_model_state.last_iodine_z_for_ht),
+        last_phi_l_divisor=float(structure_model_state.last_phi_l_divisor),
+        last_phase_delta_expression=str(structure_model_state.last_phase_delta_expression),
+        last_finite_stack=bool(structure_model_state.last_finite_stack),
+        last_stack_layers=int(structure_model_state.last_stack_layers),
+        last_rod_points_per_gz=int(structure_model_state.last_rod_points_per_gz),
+        last_atom_site_fractional_signature=tuple(
+            structure_model_state.last_atom_site_fractional_signature
+        ),
+        runtime_sim_miller1_all=simulation_runtime_state.sim_miller1_all,
+        runtime_sim_intens1_all=simulation_runtime_state.sim_intens1_all,
+        runtime_sim_primary_qr_all=copy.deepcopy(simulation_runtime_state.sim_primary_qr_all),
+        runtime_sim_miller2_all=simulation_runtime_state.sim_miller2_all,
+        runtime_sim_intens2_all=simulation_runtime_state.sim_intens2_all,
+        runtime_last_sim_signature=simulation_runtime_state.last_sim_signature,
+        runtime_last_simulation_signature=simulation_runtime_state.last_simulation_signature,
+    )
+    try:
+        current_occ = _current_occupancy_values()
+        try:
+            p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+        except (tk.TclError, ValueError):
+            p_vals = [float(defaults["p0"]), float(defaults["p1"]), float(defaults["p2"])]
+        try:
+            w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+        except (tk.TclError, ValueError):
+            w_raw = [float(defaults["w0"]), float(defaults["w1"]), float(defaults["w2"])]
+        weights = gui_controllers.normalize_stacking_weight_values(w_raw)
+        try:
+            a_axis = float(a_var.get())
+        except (tk.TclError, ValueError):
+            a_axis = float(structure_model_state.av)
+        try:
+            c_axis = float(c_var.get())
+        except (tk.TclError, ValueError):
+            c_axis = float(structure_model_state.cv)
+
+        if candidate is None:
+            structure_model_state.cif_file2 = None
+            structure_model_state.cf2 = None
+            structure_model_state.blk2 = None
+            structure_model_state.has_second_cif = False
+            structure_model_state.av2 = None
+            structure_model_state.cv2 = None
+        else:
+            cf2_loaded, blk2_loaded = _read_cif_block(str(candidate))
+            if blk2_loaded is None:
+                raise ValueError("No CIF data blocks found.")
+            a2_text = blk2_loaded.get("_cell_length_a")
+            c2_text = blk2_loaded.get("_cell_length_c")
+            structure_model_state.cif_file2 = str(candidate)
+            structure_model_state.cf2 = cf2_loaded
+            structure_model_state.blk2 = blk2_loaded
+            structure_model_state.has_second_cif = True
+            structure_model_state.av2 = (
+                parse_cif_num(a2_text) if a2_text is not None else float(a_axis)
+            )
+            structure_model_state.cv2 = (
+                parse_cif_num(c2_text) if c2_text is not None else float(c_axis)
+            )
+
+        _rebuild_diffraction_inputs(
+            current_occ,
+            p_vals,
+            weights,
+            a_axis,
+            c_axis,
+            force=True,
+            trigger_update=True,
+        )
+        _sync_structure_model_aliases()
+        _invalidate_simulation_cache()
+        if candidate is None:
+            progress_label.config(text="Cleared secondary CIF.")
+        else:
+            progress_label.config(text=f"Loaded secondary CIF: {candidate.name}")
+        _refresh_session_summary_panel()
+    except Exception as exc:
+        structure_model_state.cif_file2 = snapshot.cif_file2
+        structure_model_state.cf2 = snapshot.cf2
+        structure_model_state.blk2 = snapshot.blk2
+        structure_model_state.has_second_cif = bool(snapshot.has_second_cif)
+        structure_model_state.av2 = snapshot.av2
+        structure_model_state.cv2 = snapshot.cv2
+        structure_model_state.ht_cache_multi = dict(snapshot.ht_cache_multi)
+        structure_model_state.ht_curves_cache = dict(snapshot.ht_curves_cache)
+        structure_model_state.miller = snapshot.miller
+        structure_model_state.intensities = snapshot.intensities
+        structure_model_state.degeneracy = snapshot.degeneracy
+        structure_model_state.details = list(snapshot.details)
+        structure_model_state.df_summary = snapshot.df_summary
+        structure_model_state.df_details = snapshot.df_details
+        structure_model_state.intensities_cif1 = snapshot.intensities_cif1
+        structure_model_state.intensities_cif2 = snapshot.intensities_cif2
+        structure_model_state.sim_miller1_all = snapshot.sim_miller1_all
+        structure_model_state.sim_intens1_all = snapshot.sim_intens1_all
+        structure_model_state.sim_miller2_all = snapshot.sim_miller2_all
+        structure_model_state.sim_intens2_all = snapshot.sim_intens2_all
+        structure_model_state.sim_primary_qr_all = copy.deepcopy(snapshot.sim_primary_qr_all)
+        structure_model_state.last_occ_for_ht = list(snapshot.last_occ_for_ht)
+        structure_model_state.last_p_triplet = list(snapshot.last_p_triplet)
+        structure_model_state.last_weights = list(snapshot.last_weights)
+        structure_model_state.last_a_for_ht = float(snapshot.last_a_for_ht)
+        structure_model_state.last_c_for_ht = float(snapshot.last_c_for_ht)
+        structure_model_state.last_iodine_z_for_ht = float(snapshot.last_iodine_z_for_ht)
+        structure_model_state.last_phi_l_divisor = float(snapshot.last_phi_l_divisor)
+        structure_model_state.last_phase_delta_expression = str(
+            snapshot.last_phase_delta_expression
+        )
+        structure_model_state.last_finite_stack = bool(snapshot.last_finite_stack)
+        structure_model_state.last_stack_layers = int(snapshot.last_stack_layers)
+        structure_model_state.last_rod_points_per_gz = int(snapshot.last_rod_points_per_gz)
+        structure_model_state.last_atom_site_fractional_signature = tuple(
+            snapshot.last_atom_site_fractional_signature
+        )
+        simulation_runtime_state.sim_miller1_all = snapshot.runtime_sim_miller1_all
+        simulation_runtime_state.sim_intens1_all = snapshot.runtime_sim_intens1_all
+        simulation_runtime_state.sim_primary_qr_all = copy.deepcopy(
+            snapshot.runtime_sim_primary_qr_all
+        )
+        simulation_runtime_state.sim_miller2_all = snapshot.runtime_sim_miller2_all
+        simulation_runtime_state.sim_intens2_all = snapshot.runtime_sim_intens2_all
+        simulation_runtime_state.last_sim_signature = snapshot.runtime_last_sim_signature
+        simulation_runtime_state.last_simulation_signature = (
+            snapshot.runtime_last_simulation_signature
+        )
+        _sync_structure_model_aliases()
+        progress_label.config(text=f"Failed to load secondary CIF: {exc}")
+        _refresh_session_summary_panel()
+
+
 
 
 def build_runtime_window_context(context: RuntimeContext) -> RuntimeContext:

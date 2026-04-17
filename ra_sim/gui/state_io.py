@@ -393,6 +393,7 @@ def apply_gui_state_files(
     files: Mapping[str, object] | None,
     *,
     apply_primary_cif_path: Callable[[str], None],
+    apply_secondary_cif_path: Callable[[str | None], None] | None = None,
     load_background_files: Callable[[list[str], int], None],
 ) -> list[str]:
     """Apply file-path portions of a GUI-state snapshot and return warnings."""
@@ -411,6 +412,32 @@ def apply_gui_state_files(
                 warnings.append(f"primary CIF: {exc}")
         else:
             warnings.append(f"primary CIF missing: {candidate}")
+
+    if "secondary_cif_path" in files:
+        raw_secondary_cif_path = files.get("secondary_cif_path")
+        secondary_text = (
+            ""
+            if raw_secondary_cif_path is None
+            else str(raw_secondary_cif_path).strip()
+        )
+        if not secondary_text:
+            if apply_secondary_cif_path is not None:
+                try:
+                    apply_secondary_cif_path(
+                        None if raw_secondary_cif_path is None else ""
+                    )
+                except Exception as exc:
+                    warnings.append(f"secondary CIF: {exc}")
+        else:
+            candidate = Path(str(raw_secondary_cif_path)).expanduser()
+            if candidate.is_file():
+                if apply_secondary_cif_path is not None:
+                    try:
+                        apply_secondary_cif_path(str(candidate))
+                    except Exception as exc:
+                        warnings.append(f"secondary CIF: {exc}")
+            else:
+                warnings.append(f"secondary CIF missing: {candidate}")
 
     raw_background_paths = files.get("background_files", [])
     background_paths: list[str] = []

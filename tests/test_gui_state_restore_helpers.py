@@ -196,6 +196,62 @@ def test_load_background_files_for_state_validates_expected_shape(tmp_path) -> N
         )
 
 
+def test_apply_gui_state_files_calls_primary_and_secondary_callbacks(tmp_path) -> None:
+    primary_path = tmp_path / "primary.cif"
+    secondary_path = tmp_path / "secondary.cif"
+    primary_path.write_text("data_primary", encoding="utf-8")
+    secondary_path.write_text("data_secondary", encoding="utf-8")
+    applied_primary: list[str] = []
+    applied_secondary: list[str | None] = []
+
+    warnings = state_io.apply_gui_state_files(
+        {
+            "primary_cif_path": str(primary_path),
+            "secondary_cif_path": str(secondary_path),
+        },
+        apply_primary_cif_path=applied_primary.append,
+        apply_secondary_cif_path=applied_secondary.append,
+        load_background_files=lambda *_args: None,
+    )
+
+    assert warnings == []
+    assert applied_primary == [str(primary_path)]
+    assert applied_secondary == [str(secondary_path)]
+
+
+def test_apply_gui_state_files_warns_when_secondary_cif_is_missing(tmp_path) -> None:
+    missing_secondary_path = tmp_path / "missing-secondary.cif"
+    applied_secondary: list[str | None] = []
+
+    warnings = state_io.apply_gui_state_files(
+        {
+            "secondary_cif_path": str(missing_secondary_path),
+        },
+        apply_primary_cif_path=lambda _path: None,
+        apply_secondary_cif_path=applied_secondary.append,
+        load_background_files=lambda *_args: None,
+    )
+
+    assert warnings == [f"secondary CIF missing: {missing_secondary_path}"]
+    assert applied_secondary == []
+
+
+def test_apply_gui_state_files_allows_explicit_secondary_clear() -> None:
+    applied_secondary: list[str | None] = []
+
+    warnings = state_io.apply_gui_state_files(
+        {
+            "secondary_cif_path": None,
+        },
+        apply_primary_cif_path=lambda _path: None,
+        apply_secondary_cif_path=applied_secondary.append,
+        load_background_files=lambda *_args: None,
+    )
+
+    assert warnings == []
+    assert applied_secondary == [None]
+
+
 def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> None:
     snapshot = state_io.collect_full_gui_state_snapshot(
         global_items={
