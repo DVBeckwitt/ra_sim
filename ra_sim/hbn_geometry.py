@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
 
 import numpy as np
@@ -435,6 +435,26 @@ def _load_paths_from_file(paths_file):
     return data or {}
 
 
+def _resolve_file_derived_path_value(value, *, base_dir):
+    """Resolve file-derived config values without affecting direct CLI args."""
+
+    if value is None:
+        return None
+
+    expanded = os.path.expanduser(value)
+    if not expanded:
+        return expanded
+    if PureWindowsPath(expanded).is_absolute():
+        return expanded
+    if expanded.startswith(("/", "\\")):
+        return expanded
+
+    path = Path(expanded)
+    if path.is_absolute():
+        return str(path)
+    return str((Path(base_dir) / path).resolve())
+
+
 def resolve_hbn_paths(
     osc_path=None,
     dark_path=None,
@@ -462,29 +482,50 @@ def resolve_hbn_paths(
     )
 
     search_file = paths_file
+    file_value_base_dir = None
     if search_file is None:
         from ra_sim import config as ra_sim_config
 
         config_dir = ra_sim_config.get_config_dir()
+        file_value_base_dir = config_dir.resolve()
+        if file_value_base_dir == ra_sim_config.DEFAULT_CONFIG_DIR.resolve():
+            file_value_base_dir = file_value_base_dir.parent
         for candidate_name in ("hbn_paths.yaml", "hbn_paths.example.yaml"):
             candidate_path = config_dir / candidate_name
             if candidate_path.exists():
                 search_file = str(candidate_path)
                 break
+    elif search_file:
+        file_value_base_dir = Path(search_file).resolve().parent
 
     file_data = None
     if search_file:
         file_data = _load_paths_from_file(search_file)
         if resolved["osc"] is None:
-            resolved["osc"] = _pick(["calibrant", "osc", "calibrant_path", "calibrant_file"], file_data)
+            resolved["osc"] = _resolve_file_derived_path_value(
+                _pick(["calibrant", "osc", "calibrant_path", "calibrant_file"], file_data),
+                base_dir=file_value_base_dir,
+            )
         if resolved["dark"] is None:
-            resolved["dark"] = _pick(["dark", "dark_file", "dark_path"], file_data)
+            resolved["dark"] = _resolve_file_derived_path_value(
+                _pick(["dark", "dark_file", "dark_path"], file_data),
+                base_dir=file_value_base_dir,
+            )
         if resolved["bundle"] is None:
-            resolved["bundle"] = _pick(["bundle", "npz", "bundle_path"], file_data)
+            resolved["bundle"] = _resolve_file_derived_path_value(
+                _pick(["bundle", "npz", "bundle_path"], file_data),
+                base_dir=file_value_base_dir,
+            )
         if resolved["click_profile"] is None:
-            resolved["click_profile"] = _pick(["click_profile", "profile", "click_profile_path"], file_data)
+            resolved["click_profile"] = _resolve_file_derived_path_value(
+                _pick(["click_profile", "profile", "click_profile_path"], file_data),
+                base_dir=file_value_base_dir,
+            )
         if resolved["fit_profile"] is None:
-            resolved["fit_profile"] = _pick(["fit_profile", "fit", "fit_profile_path"], file_data)
+            resolved["fit_profile"] = _resolve_file_derived_path_value(
+                _pick(["fit_profile", "fit", "fit_profile_path"], file_data),
+                base_dir=file_value_base_dir,
+            )
         if resolved["beam_center"] is None:
             beam_x = _pick(["beam_center_x", "beam_x", "center_x", "xc"], file_data)
             beam_y = _pick(["beam_center_y", "beam_y", "center_y", "yc"], file_data)

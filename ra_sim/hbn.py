@@ -775,19 +775,6 @@ def hbn_expected_peaks():
     return peaks
 
 
-# ------------------------------------------------------------
-# Path helpers
-# ------------------------------------------------------------
-def _load_paths_from_file(paths_file):
-    with open(paths_file, encoding="utf-8") as fh:
-        text = fh.read()
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError:
-            data = json.loads(text)
-    return data or {}
-
-
 def resolve_hbn_paths(
     osc_path=None,
     dark_path=None,
@@ -796,60 +783,16 @@ def resolve_hbn_paths(
     fit_profile_path=None,
     paths_file=None,
 ):
-    """Return resolved paths using CLI args or a YAML/JSON file."""
+    """Return resolved paths using shared hBN geometry helper semantics."""
 
-    def _pick(keys, data):
-        for key in keys:
-            value = data.get(key)
-            if value:
-                return os.path.expanduser(value)
-        return None
-
-    resolved = dict(
-        osc=os.path.expanduser(osc_path) if osc_path else None,
-        dark=os.path.expanduser(dark_path) if dark_path else None,
-        bundle=os.path.expanduser(bundle_path) if bundle_path else None,
-        click_profile=os.path.expanduser(click_profile_path) if click_profile_path else None,
-        fit_profile=os.path.expanduser(fit_profile_path) if fit_profile_path else None,
-        beam_center=None,
+    return _hbn_geometry.resolve_hbn_paths(
+        osc_path=osc_path,
+        dark_path=dark_path,
+        bundle_path=bundle_path,
+        click_profile_path=click_profile_path,
+        fit_profile_path=fit_profile_path,
+        paths_file=paths_file,
     )
-
-    search_file = paths_file
-    if search_file is None:
-        config_dir = Path(__file__).resolve().parents[1] / "config"
-        for candidate_name in ("hbn_paths.yaml", "hbn_paths.example.yaml"):
-            candidate_path = config_dir / candidate_name
-            if candidate_path.exists():
-                search_file = str(candidate_path)
-                break
-
-    file_data = None
-    if search_file:
-        file_data = _load_paths_from_file(search_file)
-        if resolved["osc"] is None:
-            resolved["osc"] = _pick(["calibrant", "osc", "calibrant_path", "calibrant_file"], file_data)
-        if resolved["dark"] is None:
-            resolved["dark"] = _pick(["dark", "dark_file", "dark_path"], file_data)
-        if resolved["bundle"] is None:
-            resolved["bundle"] = _pick(["bundle", "npz", "bundle_path"], file_data)
-        if resolved["click_profile"] is None:
-            resolved["click_profile"] = _pick(["click_profile", "profile", "click_profile_path"], file_data)
-        if resolved["fit_profile"] is None:
-            resolved["fit_profile"] = _pick(["fit_profile", "fit", "fit_profile_path"], file_data)
-        if resolved["beam_center"] is None:
-            beam_x = _pick(["beam_center_x", "beam_x", "center_x", "xc"], file_data)
-            beam_y = _pick(["beam_center_y", "beam_y", "center_y", "yc"], file_data)
-            beam_center_from_list = file_data.get("beam_center") if isinstance(file_data, dict) else None
-            if beam_center_from_list and isinstance(beam_center_from_list, (list, tuple)):
-                if len(beam_center_from_list) == 2:
-                    beam_x, beam_y = beam_center_from_list
-            if beam_x is not None and beam_y is not None:
-                try:
-                    resolved["beam_center"] = (float(beam_x), float(beam_y))
-                except (TypeError, ValueError):
-                    resolved["beam_center"] = None
-    resolved["paths_file"] = search_file if search_file else None
-    return resolved
 
 
 # ------------------------------------------------------------
