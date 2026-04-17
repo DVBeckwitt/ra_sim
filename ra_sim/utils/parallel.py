@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import concurrent.futures.thread as futures_thread
 from contextlib import contextmanager
 import os
+import threading
 from typing import Callable, Iterator, Optional
+import weakref
 
 
 AUTO_PARALLEL_WORKER_RESERVE = 2
@@ -15,6 +19,47 @@ try:
 except Exception:  # pragma: no cover - numba is optional in some test/runtime paths
     _numba_get_num_threads = None
     _numba_set_num_threads = None
+
+
+class _DetachedThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
+    """Thread pool whose workers do not register for interpreter-exit joins."""
+
+    def _adjust_thread_count(self) -> None:
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, q=self._work_queue):
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            thread_name = "%s_%d" % (self._thread_name_prefix or self, num_threads)
+            worker_thread = threading.Thread(
+                name=thread_name,
+                target=futures_thread._worker,
+                args=(
+                    weakref.ref(self, weakref_cb),
+                    self._work_queue,
+                    self._initializer,
+                    self._initargs,
+                ),
+                daemon=True,
+            )
+            worker_thread.start()
+            self._threads.add(worker_thread)
+
+
+def make_detached_thread_pool_executor(
+    *,
+    max_workers: int,
+    thread_name_prefix: str | None = None,
+) -> concurrent.futures.ThreadPoolExecutor:
+    """Return one thread pool whose workers will not keep the process alive."""
+
+    return _DetachedThreadPoolExecutor(
+        max_workers=max(int(max_workers), 1),
+        thread_name_prefix=thread_name_prefix,
+    )
 
 
 def system_cpu_worker_count() -> int:

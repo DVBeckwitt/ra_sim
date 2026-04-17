@@ -56,6 +56,7 @@ from ra_sim.utils.calculations import (
 )
 from ra_sim.utils.parallel import (
     default_reserved_cpu_worker_count,
+    make_detached_thread_pool_executor,
     temporary_numba_thread_limit,
 )
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
@@ -2199,6 +2200,13 @@ def _shutdown_gui():
     )
     gui_controllers.clear_tk_after_token(
         root,
+        simulation_runtime_state.integration_update_pending,
+    )
+    simulation_runtime_state.integration_update_pending = None
+    gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
+    simulation_runtime_state.update_pending = None
+    gui_controllers.clear_tk_after_token(
+        root,
         simulation_runtime_state.worker_poll_token,
     )
     simulation_runtime_state.worker_poll_token = None
@@ -2212,6 +2220,30 @@ def _shutdown_gui():
         simulation_runtime_state.interaction_settle_token,
     )
     simulation_runtime_state.interaction_settle_token = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.geometry_fit_poll_token,
+    )
+    simulation_runtime_state.geometry_fit_poll_token = None
+
+    worker_future = simulation_runtime_state.worker_future
+    if worker_future is not None:
+        try:
+            worker_future.cancel()
+        except Exception:
+            pass
+    analysis_future = simulation_runtime_state.analysis_future
+    if analysis_future is not None:
+        try:
+            analysis_future.cancel()
+        except Exception:
+            pass
+    geometry_fit_future = simulation_runtime_state.geometry_fit_future
+    if geometry_fit_future is not None:
+        try:
+            geometry_fit_future.cancel()
+        except Exception:
+            pass
 
     executor = simulation_runtime_state.worker_executor
     simulation_runtime_state.worker_executor = None
@@ -2225,6 +2257,12 @@ def _shutdown_gui():
     simulation_runtime_state.analysis_active_job = None
     simulation_runtime_state.analysis_queued_job = None
     simulation_runtime_state.analysis_ready_result = None
+    geometry_fit_executor = simulation_runtime_state.geometry_fit_executor
+    simulation_runtime_state.geometry_fit_executor = None
+    simulation_runtime_state.geometry_fit_future = None
+    simulation_runtime_state.geometry_fit_active_job = None
+    simulation_runtime_state.geometry_fit_ready_result = None
+    simulation_runtime_state.geometry_fit_error_text = None
     if executor is not None:
         try:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -2237,6 +2275,13 @@ def _shutdown_gui():
             analysis_executor.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             analysis_executor.shutdown(wait=False)
+        except Exception:
+            pass
+    if geometry_fit_executor is not None:
+        try:
+            geometry_fit_executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            geometry_fit_executor.shutdown(wait=False)
         except Exception:
             pass
     analysis_popout_state = globals().get("analysis_popout_view_state")
@@ -10262,7 +10307,7 @@ def _preempt_simulation_update_for_background_switch() -> None:
 def _ensure_simulation_worker_executor():
     executor = simulation_runtime_state.worker_executor
     if executor is None:
-        executor = concurrent.futures.ThreadPoolExecutor(
+        executor = make_detached_thread_pool_executor(
             # Keep GUI simulation updates in latest-request-wins mode:
             # one active job plus at most one replacement queued in runtime state.
             # The executor can still expose the full reserved CPU budget because
@@ -10277,7 +10322,7 @@ def _ensure_simulation_worker_executor():
 def _ensure_analysis_worker_executor():
     executor = simulation_runtime_state.analysis_executor
     if executor is None:
-        executor = concurrent.futures.ThreadPoolExecutor(
+        executor = make_detached_thread_pool_executor(
             # Keep GUI analysis updates in latest-request-wins mode:
             # one active job plus at most one replacement queued in runtime state.
             # The executor can still expose the full reserved CPU budget because
@@ -23823,7 +23868,7 @@ def _set_geometry_fit_button_running(running: bool) -> None:
 def _ensure_geometry_fit_worker_executor():
     executor = simulation_runtime_state.geometry_fit_executor
     if executor is None:
-        executor = concurrent.futures.ThreadPoolExecutor(
+        executor = make_detached_thread_pool_executor(
             max_workers=1,
             thread_name_prefix="ra-sim-geometry-fit",
         )

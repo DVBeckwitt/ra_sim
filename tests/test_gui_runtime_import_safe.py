@@ -1,4 +1,5 @@
 import ast
+import concurrent.futures.thread as futures_thread
 import contextlib
 import importlib
 import json
@@ -6,6 +7,7 @@ import os
 import py_compile
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -271,6 +273,355 @@ print(
         "ra_sim.gui.analysis_peak_tools": True,
         "ra_sim.gui.ordered_structure_fit": True,
     }
+
+
+def test_shutdown_gui_clears_geometry_fit_workers_and_pending_tokens(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cleared_tokens: list[object] = []
+    closed_popouts: list[object] = []
+
+    class _FakeFuture:
+        def __init__(self) -> None:
+            self.cancel_calls = 0
+
+        def cancel(self) -> bool:
+            self.cancel_calls += 1
+            return True
+
+    class _FakeExecutor:
+        def __init__(self) -> None:
+            self.shutdown_calls: list[tuple[bool, bool]] = []
+
+        def shutdown(
+            self,
+            *,
+            wait: bool = False,
+            cancel_futures: bool = False,
+        ) -> None:
+            self.shutdown_calls.append((bool(wait), bool(cancel_futures)))
+
+    class _FakeRoot:
+        def __init__(self) -> None:
+            self.destroy_calls = 0
+            self.quit_calls = 0
+
+        def winfo_exists(self) -> bool:
+            return True
+
+        def destroy(self) -> None:
+            self.destroy_calls += 1
+
+        def quit(self) -> None:
+            self.quit_calls += 1
+
+    worker_future = _FakeFuture()
+    analysis_future = _FakeFuture()
+    geometry_fit_future = _FakeFuture()
+    worker_executor = _FakeExecutor()
+    analysis_executor = _FakeExecutor()
+    geometry_fit_executor = _FakeExecutor()
+    fake_root = _FakeRoot()
+
+    monkeypatch.setattr(
+        runtime_session, "_append_runtime_update_trace", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(runtime_session, "root", fake_root, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_controllers",
+        SimpleNamespace(clear_tk_after_token=lambda _root, token: cleared_tokens.append(token)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(close_analysis_popout_window=lambda state: closed_popouts.append(state)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "tk",
+        SimpleNamespace(TclError=RuntimeError),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_popout_view_state",
+        "analysis-popout",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            update_phase="running",
+            update_running=True,
+            integration_update_pending="integration-token",
+            update_pending="update-token",
+            worker_poll_token="worker-poll-token",
+            analysis_poll_token="analysis-poll-token",
+            interaction_settle_token="settle-token",
+            geometry_fit_poll_token="geometry-fit-poll-token",
+            worker_executor=worker_executor,
+            worker_future=worker_future,
+            worker_active_job={"job_id": 1},
+            worker_queued_job={"job_id": 2},
+            worker_ready_result={"status": "ready"},
+            analysis_executor=analysis_executor,
+            analysis_future=analysis_future,
+            analysis_active_job={"job_id": 3},
+            analysis_queued_job={"job_id": 4},
+            analysis_ready_result={"status": "ready"},
+            geometry_fit_executor=geometry_fit_executor,
+            geometry_fit_future=geometry_fit_future,
+            geometry_fit_active_job={"job_id": 5},
+            geometry_fit_ready_result={"status": "ready"},
+            geometry_fit_error_text="stale-error",
+        ),
+        raising=False,
+    )
+
+    runtime_session._shutdown_gui()
+
+    assert cleared_tokens == [
+        "integration-token",
+        "update-token",
+        "worker-poll-token",
+        "analysis-poll-token",
+        "settle-token",
+        "geometry-fit-poll-token",
+    ]
+    assert worker_future.cancel_calls == 1
+    assert analysis_future.cancel_calls == 1
+    assert geometry_fit_future.cancel_calls == 1
+    assert worker_executor.shutdown_calls == [(False, True)]
+    assert analysis_executor.shutdown_calls == [(False, True)]
+    assert geometry_fit_executor.shutdown_calls == [(False, True)]
+    assert closed_popouts == ["analysis-popout"]
+    assert fake_root.destroy_calls == 1
+    assert fake_root.quit_calls == 1
+    assert runtime_session.simulation_runtime_state.integration_update_pending is None
+    assert runtime_session.simulation_runtime_state.update_pending is None
+    assert runtime_session.simulation_runtime_state.worker_poll_token is None
+    assert runtime_session.simulation_runtime_state.analysis_poll_token is None
+    assert runtime_session.simulation_runtime_state.interaction_settle_token is None
+    assert runtime_session.simulation_runtime_state.geometry_fit_poll_token is None
+    assert runtime_session.simulation_runtime_state.worker_executor is None
+    assert runtime_session.simulation_runtime_state.analysis_executor is None
+    assert runtime_session.simulation_runtime_state.geometry_fit_executor is None
+    assert runtime_session.simulation_runtime_state.worker_future is None
+    assert runtime_session.simulation_runtime_state.analysis_future is None
+    assert runtime_session.simulation_runtime_state.geometry_fit_future is None
+    assert runtime_session.simulation_runtime_state.geometry_fit_active_job is None
+    assert runtime_session.simulation_runtime_state.geometry_fit_ready_result is None
+    assert runtime_session.simulation_runtime_state.geometry_fit_error_text is None
+
+
+def test_gui_worker_executors_use_detached_daemon_threads(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    executors: list[object] = []
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            worker_executor=None,
+            analysis_executor=None,
+            geometry_fit_executor=None,
+        ),
+        raising=False,
+    )
+
+    try:
+        for helper_name, state_attr in (
+            ("_ensure_simulation_worker_executor", "worker_executor"),
+            ("_ensure_analysis_worker_executor", "analysis_executor"),
+            ("_ensure_geometry_fit_worker_executor", "geometry_fit_executor"),
+        ):
+            executor = getattr(runtime_session, helper_name)()
+            executors.append(executor)
+            daemon, registered = executor.submit(
+                lambda: (
+                    bool(threading.current_thread().daemon),
+                    bool(threading.current_thread() in futures_thread._threads_queues),
+                )
+            ).result(timeout=5.0)
+            assert daemon is True
+            assert registered is False
+            assert getattr(runtime_session.simulation_runtime_state, state_attr) is executor
+    finally:
+        for executor in executors:
+            try:
+                executor.shutdown(wait=True, cancel_futures=True)
+            except TypeError:
+                executor.shutdown(wait=True)
+
+
+def test_shutdown_gui_does_not_wait_on_nested_simulation_and_fit_thread_pools(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    exact_cake = importlib.import_module("ra_sim.simulation.exact_cake")
+    optimization_runtime = importlib.import_module("ra_sim.fitting.optimization_runtime")
+    cleared_tokens: list[object] = []
+    simulation_inner_threads: list[tuple[bool, bool]] = []
+    geometry_fit_inner_threads: list[tuple[bool, bool]] = []
+    simulation_started = threading.Event()
+    geometry_fit_started = threading.Event()
+    release_inner_workers = threading.Event()
+
+    class _FakeRoot:
+        def __init__(self) -> None:
+            self.destroy_calls = 0
+            self.quit_calls = 0
+
+        def winfo_exists(self) -> bool:
+            return True
+
+        def destroy(self) -> None:
+            self.destroy_calls += 1
+
+        def quit(self) -> None:
+            self.quit_calls += 1
+
+    def _thread_flags() -> tuple[bool, bool]:
+        current = threading.current_thread()
+        return bool(current.daemon), bool(current in futures_thread._threads_queues)
+
+    def _wait_for_release(started: threading.Event) -> None:
+        started.set()
+        if not release_inner_workers.wait(timeout=5.0):
+            raise RuntimeError("timed out waiting to release nested GUI worker")
+
+    def _fake_run_chunk_numba(
+        signal,
+        normalization,
+        mask,
+        has_mask,
+        row_edges,
+        col_edges,
+        distance,
+        radial,
+        azimuthal,
+        rows,
+        cols,
+        start,
+        stop,
+        use_selection,
+    ):
+        out_shape = (int(np.asarray(azimuthal).size), int(np.asarray(radial).size))
+        if int(start) != int(stop):
+            simulation_inner_threads.append(_thread_flags())
+            _wait_for_release(simulation_started)
+        zeros = np.zeros(out_shape, dtype=np.float64)
+        return zeros, zeros.copy(), zeros.copy()
+
+    def _geometry_fit_inner(item: object) -> object:
+        geometry_fit_inner_threads.append(_thread_flags())
+        _wait_for_release(geometry_fit_started)
+        return item
+
+    fake_root = _FakeRoot()
+    state = SimpleNamespace(
+        update_phase="running",
+        update_running=True,
+        integration_update_pending="integration-token",
+        update_pending="update-token",
+        worker_poll_token="worker-poll-token",
+        analysis_poll_token=None,
+        interaction_settle_token="settle-token",
+        geometry_fit_poll_token="geometry-fit-poll-token",
+        worker_executor=None,
+        worker_future=None,
+        worker_active_job={"job_id": 1},
+        worker_queued_job=None,
+        worker_ready_result=None,
+        analysis_executor=None,
+        analysis_future=None,
+        analysis_active_job=None,
+        analysis_queued_job=None,
+        analysis_ready_result=None,
+        geometry_fit_executor=None,
+        geometry_fit_future=None,
+        geometry_fit_active_job={"job_id": 2},
+        geometry_fit_ready_result=None,
+        geometry_fit_error_text=None,
+    )
+
+    monkeypatch.setattr(
+        runtime_session, "_append_runtime_update_trace", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(runtime_session, "root", fake_root, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_controllers",
+        SimpleNamespace(clear_tk_after_token=lambda _root, token: cleared_tokens.append(token)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_views",
+        SimpleNamespace(close_analysis_popout_window=lambda _state: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "tk",
+        SimpleNamespace(TclError=RuntimeError),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "analysis_popout_view_state", None, raising=False)
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", state, raising=False)
+    monkeypatch.setattr(exact_cake, "_run_chunk_numba", _fake_run_chunk_numba)
+
+    worker_executor = runtime_session._ensure_simulation_worker_executor()
+    geometry_fit_executor = runtime_session._ensure_geometry_fit_worker_executor()
+    worker_future = worker_executor.submit(
+        exact_cake._run_numba,
+        np.ones((2, 2), dtype=np.float32),
+        np.ones((2, 2), dtype=np.float32),
+        np.zeros((1, 1), dtype=np.int8),
+        False,
+        np.asarray([0.0, 1.0, 2.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 2.0], dtype=np.float64),
+        1.0,
+        np.asarray([0.0, 1.0], dtype=np.float64),
+        np.asarray([0.0, 1.0], dtype=np.float64),
+        np.empty(0, dtype=np.int64),
+        np.empty(0, dtype=np.int64),
+        False,
+        2,
+    )
+    geometry_fit_future = geometry_fit_executor.submit(
+        optimization_runtime.threaded_map,
+        _geometry_fit_inner,
+        [0, 1],
+        max_workers=2,
+    )
+    state.worker_future = worker_future
+    state.geometry_fit_future = geometry_fit_future
+
+    try:
+        assert simulation_started.wait(timeout=5.0)
+        assert geometry_fit_started.wait(timeout=5.0)
+
+        runtime_session._shutdown_gui()
+
+        assert simulation_inner_threads
+        assert geometry_fit_inner_threads
+        assert all(daemon and not registered for daemon, registered in simulation_inner_threads)
+        assert all(daemon and not registered for daemon, registered in geometry_fit_inner_threads)
+        assert fake_root.destroy_calls == 1
+        assert fake_root.quit_calls == 1
+        assert state.worker_executor is None
+        assert state.worker_future is None
+        assert state.geometry_fit_executor is None
+        assert state.geometry_fit_future is None
+    finally:
+        release_inner_workers.set()
+        worker_future.result(timeout=5.0)
+        geometry_fit_future.result(timeout=5.0)
 
 
 def test_runtime_session_defers_top_level_pycifrw_and_structure_model_imports() -> None:

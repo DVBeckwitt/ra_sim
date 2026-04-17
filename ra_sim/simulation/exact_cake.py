@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import math
 from threading import Lock, Thread
 
 import numpy as np
 
-from ra_sim.utils.parallel import system_cpu_worker_count
+from ra_sim.utils.parallel import (
+    make_detached_thread_pool_executor,
+    system_cpu_worker_count,
+)
 
 try:  # pragma: no cover - optional dependency
     from scipy import sparse as _scipy_sparse
@@ -1035,7 +1037,10 @@ def _run_numba(
     if workers <= 1 or len(chunks) <= 1:
         partials = [_worker(chunks[0])]
     else:
-        with ThreadPoolExecutor(max_workers=int(workers)) as executor:
+        with make_detached_thread_pool_executor(
+            max_workers=int(workers),
+            thread_name_prefix="ra-sim-exact-cake",
+        ) as executor:
             partials = list(executor.map(_worker, chunks))
     sum_signal = np.zeros((azimuthal.size, radial.size), dtype=np.float64)
     sum_normalization = np.zeros_like(sum_signal)

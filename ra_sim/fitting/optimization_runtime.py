@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -17,6 +16,7 @@ from ra_sim.simulation.diffraction import (
 from ra_sim.utils.parallel import (
     call_with_numba_thread_limit as _shared_call_with_numba_thread_limit,
     current_parallel_thread_budget,
+    make_detached_thread_pool_executor,
     numba_threads_per_worker as _shared_numba_threads_per_worker,
     reserved_worker_count,
 )
@@ -155,7 +155,10 @@ def threaded_map(
             numba_threads=numba_threads,
         )
 
-    with ThreadPoolExecutor(max_workers=int(max_workers)) as executor:
+    with make_detached_thread_pool_executor(
+        max_workers=int(max_workers),
+        thread_name_prefix="ra-sim-fit-runtime",
+    ) as executor:
         return list(executor.map(_run, items))
 
 
