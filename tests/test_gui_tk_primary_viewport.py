@@ -63,6 +63,146 @@ def test_configure_primary_viewport_redraw_helpers_use_matplotlib_redraw(monkeyp
     assert redraw_calls == [False, True, True]
 
 
+def test_schedule_post_idle_main_canvas_redraw_uses_after_idle(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scheduled_callbacks: list[object] = []
+    redraw_calls: list[dict[str, object]] = []
+    flush_calls: list[str] = []
+
+    class _Root:
+        def after_idle(self, callback) -> str:
+            scheduled_callbacks.append(callback)
+            return "idle-token"
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_calls.append(dict(kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: flush_calls.append("flush"),
+        raising=False,
+    )
+
+    runtime_session._schedule_post_idle_main_canvas_redraw()
+
+    assert redraw_calls == []
+    assert flush_calls == []
+    assert len(scheduled_callbacks) == 1
+    scheduled_callbacks[0]()
+    assert redraw_calls == [{"force_matplotlib": True}]
+    assert flush_calls == ["flush"]
+
+
+def test_schedule_post_idle_main_canvas_redraw_falls_back_to_immediate_force(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    redraw_calls: list[dict[str, object]] = []
+    flush_calls: list[str] = []
+
+    class _Root:
+        def after_idle(self, _callback) -> None:
+            raise RuntimeError("idle-unavailable")
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_calls.append(dict(kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: flush_calls.append("flush"),
+        raising=False,
+    )
+
+    runtime_session._schedule_post_idle_main_canvas_redraw()
+
+    assert redraw_calls == [{"force_matplotlib": True}]
+    assert flush_calls == ["flush"]
+
+
+def test_schedule_post_idle_main_canvas_redraw_falls_back_when_after_idle_missing(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    redraw_calls: list[dict[str, object]] = []
+    flush_calls: list[str] = []
+
+    class _Root:
+        after_idle = None
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_calls.append(dict(kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: flush_calls.append("flush"),
+        raising=False,
+    )
+
+    runtime_session._schedule_post_idle_main_canvas_redraw()
+
+    assert redraw_calls == [{"force_matplotlib": True}]
+    assert flush_calls == ["flush"]
+
+
+def test_flush_main_canvas_tk_present_prefers_canvas_widget(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    widget_calls: list[str] = []
+    root_calls: list[str] = []
+
+    class _Widget:
+        def update_idletasks(self) -> None:
+            widget_calls.append("widget")
+
+    class _Canvas:
+        def get_tk_widget(self):
+            return _Widget()
+
+    class _Root:
+        def update_idletasks(self) -> None:
+            root_calls.append("root")
+
+    monkeypatch.setattr(runtime_session, "matplotlib_canvas", _Canvas(), raising=False)
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+
+    runtime_session._flush_main_canvas_tk_present()
+
+    assert widget_calls == ["widget"]
+    assert root_calls == []
+
+
+def test_flush_main_canvas_tk_present_falls_back_to_root(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    root_calls: list[str] = []
+
+    class _Canvas:
+        def get_tk_widget(self):
+            raise RuntimeError("widget-unavailable")
+
+    class _Root:
+        def update_idletasks(self) -> None:
+            root_calls.append("root")
+
+    monkeypatch.setattr(runtime_session, "matplotlib_canvas", _Canvas(), raising=False)
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+
+    runtime_session._flush_main_canvas_tk_present()
+
+    assert root_calls == ["root"]
+
+
 def test_clear_pending_main_figure_preview_interaction_clears_canvas_preview_cache(
     monkeypatch,
 ) -> None:

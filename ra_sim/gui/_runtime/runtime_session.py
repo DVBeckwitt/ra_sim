@@ -3042,17 +3042,44 @@ def _configure_primary_viewport_redraw_helpers() -> None:
         _request_legacy_main_matplotlib_redraw(force=bool(force))
 
 
+def _flush_main_canvas_tk_present() -> None:
+    """Flush Tk idletasks so forced first-paint redraws reach visible canvas."""
+
+    widget = None
+    active_canvas = globals().get("matplotlib_canvas")
+    if active_canvas is not None:
+        get_tk_widget = getattr(active_canvas, "get_tk_widget", None)
+        if callable(get_tk_widget):
+            try:
+                widget = get_tk_widget()
+            except Exception:
+                widget = None
+    for candidate in (widget, globals().get("root")):
+        update_idletasks = getattr(candidate, "update_idletasks", None)
+        if not callable(update_idletasks):
+            continue
+        try:
+            update_idletasks()
+            return
+        except Exception:
+            continue
+
+
 def _schedule_post_idle_main_canvas_redraw() -> None:
     """Force one main-canvas redraw after Tk returns to the event loop."""
+
+    def _present_redraw() -> None:
+        _request_main_canvas_redraw(force_matplotlib=True)
+        _flush_main_canvas_tk_present()
 
     after_idle = getattr(root, "after_idle", None)
     if callable(after_idle):
         try:
-            after_idle(lambda: _request_main_canvas_redraw(force_matplotlib=True))
+            after_idle(_present_redraw)
             return
         except Exception:
             pass
-    _request_main_canvas_redraw(force_matplotlib=True)
+    _present_redraw()
 
 
 def _schedule_first_visible_simulation_settle_pass() -> None:
@@ -3117,6 +3144,7 @@ def _schedule_first_visible_simulation_settle_pass() -> None:
             )
             _refresh_settled_overlays()
             _request_legacy_main_matplotlib_redraw(force=True)
+            _flush_main_canvas_tk_present()
             simulation_runtime_state.first_visible_simulation_settled_signature = (
                 expected_signature
             )
@@ -3139,6 +3167,7 @@ def _schedule_first_visible_simulation_settle_pass() -> None:
                 retry_callback()
                 return
             _request_legacy_main_matplotlib_redraw(force=True)
+            _flush_main_canvas_tk_present()
 
     settle_delay_ms = int(globals().get("LIVE_DRAG_SETTLE_MS", 80))
     if _schedule_delayed_settle(
@@ -24653,6 +24682,9 @@ def _build_geometry_fit_async_job(
         "geometry_manual_refresh_pair_entry": (
             manual_dataset_bindings.geometry_manual_refresh_pair_entry
         ),
+        "geometry_manual_project_peaks_to_current_view": (
+            manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
+        ),
         "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
         "display_to_native_sim_coords": (manual_dataset_bindings.display_to_native_sim_coords),
         "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
@@ -25662,6 +25694,9 @@ def _run_async_geometry_fit_worker_job(
         geometry_manual_entry_display_coords=job_data.get("geometry_manual_entry_display_coords"),
         geometry_manual_refresh_pair_entry=job_data.get("geometry_manual_refresh_pair_entry"),
         geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
+        geometry_manual_project_peaks_to_current_view=job_data.get(
+            "geometry_manual_project_peaks_to_current_view"
+        ),
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
         select_fit_orientation=job_data.get("select_fit_orientation"),
@@ -26114,6 +26149,9 @@ def _initialize_runtime_controls_block_50() -> None:
             "geometry_manual_entry_display_coords": (_geometry_manual_entry_display_coords),
             "geometry_manual_refresh_pair_entry": (
                 geometry_manual_projection_workflow.refresh_entry_geometry
+            ),
+            "geometry_manual_project_peaks_to_current_view": (
+                geometry_manual_projection_workflow.project_peaks_to_current_view
             ),
             "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
             "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),

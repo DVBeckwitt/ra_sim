@@ -5121,6 +5121,12 @@ def test_schedule_first_visible_simulation_settle_pass_reapplies_display_applica
     )
     monkeypatch.setattr(
         runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: events.append(("flush", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
         "_resolved_primary_analysis_display_mode",
         lambda: "detector",
         raising=False,
@@ -5167,6 +5173,7 @@ def test_schedule_first_visible_simulation_settle_pass_reapplies_display_applica
         ),
         ("refresh", None),
         ("redraw", {"force": True}),
+        ("flush", None),
     ]
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
@@ -5211,6 +5218,12 @@ def test_schedule_first_visible_simulation_settle_pass_runs_immediately_when_aft
     )
     monkeypatch.setattr(
         runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: events.append(("flush", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
         "_resolved_primary_analysis_display_mode",
         lambda: "detector",
         raising=False,
@@ -5240,6 +5253,7 @@ def test_schedule_first_visible_simulation_settle_pass_runs_immediately_when_aft
         ),
         ("refresh", None),
         ("redraw", {"force": True}),
+        ("flush", None),
     ]
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
@@ -5285,6 +5299,12 @@ def test_schedule_first_visible_simulation_settle_pass_runs_immediately_when_aft
     )
     monkeypatch.setattr(
         runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: events.append(("flush", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
         "_resolved_primary_analysis_display_mode",
         lambda: "detector",
         raising=False,
@@ -5314,6 +5334,7 @@ def test_schedule_first_visible_simulation_settle_pass_runs_immediately_when_aft
         ),
         ("refresh", None),
         ("redraw", {"force": True}),
+        ("flush", None),
     ]
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
@@ -5357,6 +5378,12 @@ def test_schedule_first_visible_simulation_settle_pass_noops_for_stale_signature
         runtime_session,
         "_request_legacy_main_matplotlib_redraw",
         lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: events.append(("flush", None)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -5435,6 +5462,12 @@ def test_schedule_first_visible_simulation_settle_pass_replaces_pending_token_fo
     )
     monkeypatch.setattr(
         runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: events.append(("flush", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
         "_resolved_primary_analysis_display_mode",
         lambda: "detector",
         raising=False,
@@ -5482,6 +5515,7 @@ def test_schedule_first_visible_simulation_settle_pass_replaces_pending_token_fo
         ),
         ("refresh", None),
         ("redraw", {"force": True}),
+        ("flush", None),
     ]
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
     assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
@@ -5530,6 +5564,12 @@ def test_schedule_first_visible_simulation_settle_pass_retries_once_before_force
         runtime_session,
         "_request_legacy_main_matplotlib_redraw",
         lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_flush_main_canvas_tk_present",
+        lambda: events.append(("flush", None)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -5614,6 +5654,7 @@ def test_schedule_first_visible_simulation_settle_pass_retries_once_before_force
             },
         ),
         ("redraw", {"force": True}),
+        ("flush", None),
     ]
     assert exception_trace_calls == [
         {
