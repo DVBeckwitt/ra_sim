@@ -378,7 +378,7 @@ def geometry_reference_hit_rows(table: object) -> list[np.ndarray]:
             and np.isfinite(row_arr[6])
         ):
             continue
-        rows.append(np.asarray(row_arr[:7], dtype=float))
+        rows.append(np.asarray(row_arr, dtype=float))
     return rows
 
 
@@ -855,6 +855,29 @@ def build_geometry_fit_simulated_peaks(
             if not (np.isfinite(intensity) and np.isfinite(xpix) and np.isfinite(ypix)):
                 continue
 
+            source_table_index = int(table_idx)
+            source_row_index = int(row_idx)
+            best_sample_index = None
+            if row.shape[0] >= 10:
+                try:
+                    source_table_value = float(row[7])
+                except Exception:
+                    source_table_value = float("nan")
+                try:
+                    source_row_value = float(row[8])
+                except Exception:
+                    source_row_value = float("nan")
+                try:
+                    best_sample_value = float(row[9])
+                except Exception:
+                    best_sample_value = float("nan")
+                if np.isfinite(source_table_value):
+                    source_table_index = int(np.rint(source_table_value))
+                if np.isfinite(source_row_value):
+                    source_row_index = int(np.rint(source_row_value))
+                if np.isfinite(best_sample_value):
+                    best_sample_index = int(np.rint(best_sample_value))
+
             native_col = float(xpix)
             native_row = float(ypix)
             if round_pixel_centers:
@@ -880,8 +903,8 @@ def build_geometry_fit_simulated_peaks(
 
             try:
                 trusted_reflection_index = (
-                    int(source_reflection_indices_local[table_idx])
-                    if table_idx < len(source_reflection_indices_local)
+                    int(source_reflection_indices_local[source_table_index])
+                    if 0 <= int(source_table_index) < len(source_reflection_indices_local)
                     else None
                 )
             except Exception:
@@ -896,8 +919,8 @@ def build_geometry_fit_simulated_peaks(
                 "sim_row_raw": float(display_row),
                 "weight": max(0.0, float(abs(intensity))),
                 "source_label": str(source_label),
-                "source_table_index": int(table_idx),
-                "source_row_index": int(row_idx),
+                "source_table_index": int(source_table_index),
+                "source_row_index": int(source_row_index),
                 "hkl_raw": hkl_raw,
                 "phi": float(phi_deg),
                 "av": float(av_used),
@@ -906,6 +929,8 @@ def build_geometry_fit_simulated_peaks(
                 "qz": float(qz_val),
                 "q_group_key": q_group_key,
             }
+            if best_sample_index is not None:
+                peak_record["best_sample_index"] = int(best_sample_index)
             branch_index = (
                 int(row_peak_indices[row_idx])
                 if row_idx < len(row_peak_indices) and row_peak_indices[row_idx] in {0, 1}
@@ -1709,6 +1734,11 @@ def make_runtime_geometry_q_group_value_callbacks(
         [float, float, tuple[int, int]],
         tuple[float, float],
     ],
+    caked_view_enabled_factory: object = False,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
 ) -> GeometryQGroupRuntimeValueCallbacks:
     """Return live Qr/Qz selector value callbacks from runtime sources."""
 
@@ -1780,6 +1810,33 @@ def make_runtime_geometry_q_group_value_callbacks(
             native_point = _finite_point(entry, "native_col", "native_row")
             if native_point is None:
                 native_point = _finite_point(entry, "sim_native_x", "sim_native_y")
+            caked_point = _finite_point(entry, "caked_x", "caked_y")
+            if caked_point is None:
+                caked_point = _finite_point(entry, "raw_caked_x", "raw_caked_y")
+            if (
+                caked_point is None
+                and native_point is not None
+                and callable(native_detector_coords_to_caked_display_coords)
+            ):
+                try:
+                    projected_caked = native_detector_coords_to_caked_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                    )
+                except Exception:
+                    projected_caked = None
+                if (
+                    isinstance(projected_caked, tuple)
+                    and len(projected_caked) >= 2
+                    and projected_caked[0] is not None
+                    and projected_caked[1] is not None
+                    and np.isfinite(float(projected_caked[0]))
+                    and np.isfinite(float(projected_caked[1]))
+                ):
+                    caked_point = (
+                        float(projected_caked[0]),
+                        float(projected_caked[1]),
+                    )
             raw_detector_display = _finite_point(entry, "sim_col_raw", "sim_row_raw")
             if (
                 raw_detector_display is None
@@ -1819,6 +1876,11 @@ def make_runtime_geometry_q_group_value_callbacks(
                 entry["native_row"] = float(native_point[1])
                 entry["sim_native_x"] = float(native_point[0])
                 entry["sim_native_y"] = float(native_point[1])
+            if caked_point is not None:
+                entry["caked_x"] = float(caked_point[0])
+                entry["caked_y"] = float(caked_point[1])
+                entry.setdefault("raw_caked_x", float(caked_point[0]))
+                entry.setdefault("raw_caked_y", float(caked_point[1]))
             for stale_key in (
                 "sim_col_global",
                 "sim_row_global",
@@ -1848,53 +1910,13 @@ def make_runtime_geometry_q_group_value_callbacks(
                 return True
         return False
 
-    def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
-        max_positions_local = simulation_runtime_state.stored_max_positions_local
-        peak_record_count = int(len(getattr(simulation_runtime_state, "peak_records", ()) or ()))
-        max_positions_row_count = (
-            int(len(max_positions_local))
-            if isinstance(max_positions_local, Sequence)
-            and not isinstance(max_positions_local, (str, bytes))
-            else 0
-        )
-        if isinstance(max_positions_local, Sequence) and not isinstance(
-            max_positions_local,
-            (str, bytes),
-        ):
-            use_nominal_cache_grouping = _has_intersection_cache()
-            image_shape = _detector_preview_image_shape()
+    def _caked_view_enabled() -> bool:
+        try:
+            return bool(_resolve_runtime_value(caked_view_enabled_factory))
+        except Exception:
+            return False
 
-            peak_kwargs: dict[str, object] = {
-                "image_shape": image_shape,
-                "native_sim_to_display_coords": native_sim_to_display_coords,
-                "peak_table_lattice": simulation_runtime_state.stored_peak_table_lattice,
-                "primary_a": _primary_a(),
-                "primary_c": _primary_c(),
-                "default_source_label": "primary",
-                "round_pixel_centers": True,
-                "allow_nominal_hkl_indices": use_nominal_cache_grouping,
-            }
-            if simulation_runtime_state.stored_source_reflection_indices_local is not None:
-                peak_kwargs["source_reflection_indices"] = (
-                    simulation_runtime_state.stored_source_reflection_indices_local
-                )
-            simulated_peaks = build_geometry_fit_simulated_peaks(
-                max_positions_local,
-                **peak_kwargs,
-            )
-            if simulated_peaks:
-                _set_live_preview_cache_metadata(
-                    cache_source="max_positions",
-                    fallback_used=False,
-                    max_positions_row_count=int(max_positions_row_count),
-                    peak_record_count=int(peak_record_count),
-                    active_signature_matches=None,
-                    source_snapshot_row_count=0,
-                    source_snapshot_background_index=None,
-                    simulated_peak_count=int(len(simulated_peaks)),
-                )
-                return simulated_peaks
-
+    def _current_peak_record_context() -> tuple[object, object, dict[str, object]]:
         current_signature = getattr(
             simulation_runtime_state,
             "stored_hit_table_signature",
@@ -1919,22 +1941,163 @@ def make_runtime_geometry_q_group_value_callbacks(
                 )
             ),
         )
-        cached_peaks = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
-            getattr(simulation_runtime_state, "peak_records", None),
-            normalize_hkl_key=gui_geometry_overlay.normalize_hkl_key,
-            source_reflection_indices_local=(
-                getattr(
-                    simulation_runtime_state,
-                    "stored_source_reflection_indices_local",
-                    None,
-                )
-            ),
-            source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-            provenance_signature_matches=bool(provenance.get("active_signature_matches", False)),
-            provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
-            expected_table_count=provenance.get("expected_table_count"),
+        return current_signature, current_signature_summary, provenance
+
+    def _normalized_live_peak_record_candidates(
+        peak_records: Sequence[dict[str, object]] | None,
+        *,
+        provenance: Mapping[str, object],
+    ) -> list[dict[str, object]]:
+        normalized_candidates = (
+            gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
+                peak_records,
+                normalize_hkl_key=gui_geometry_overlay.normalize_hkl_key,
+                source_reflection_indices_local=(
+                    getattr(
+                        simulation_runtime_state,
+                        "stored_source_reflection_indices_local",
+                        None,
+                    )
+                ),
+                source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
+                provenance_signature_matches=bool(
+                    provenance.get("active_signature_matches", False)
+                ),
+                provenance_revision_matches=bool(
+                    provenance.get("active_revision_matches", False)
+                ),
+                expected_table_count=provenance.get("expected_table_count"),
+            )
         )
-        cached_peaks = _normalize_detector_peak_record_fallback_rows(cached_peaks)
+        normalized_candidates = _normalize_detector_peak_record_fallback_rows(
+            normalized_candidates
+        )
+        if _caked_view_enabled():
+            normalized_candidates = [
+                entry
+                for entry in normalized_candidates
+                if _finite_point(entry, "caked_x", "caked_y") is not None
+            ]
+        return normalized_candidates
+
+    def _indexed_peak_records(
+        peak_records: Sequence[object] | None,
+    ) -> list[dict[str, object]]:
+        indexed_records: list[dict[str, object]] = []
+        for record_index, record in enumerate(peak_records or ()):
+            if not isinstance(record, Mapping):
+                continue
+            indexed_record = dict(record)
+            indexed_record["__geometry_q_group_record_index__"] = int(record_index)
+            indexed_records.append(indexed_record)
+        return indexed_records
+
+    def _trusted_peak_records(
+        peak_records: Sequence[object] | None,
+        *,
+        provenance: Mapping[str, object],
+    ) -> list[dict[str, object]]:
+        indexed_records = _indexed_peak_records(peak_records)
+        if not indexed_records:
+            return []
+        normalized_candidates = _normalized_live_peak_record_candidates(
+            indexed_records,
+            provenance=provenance,
+        )
+        surviving_indices: set[int] = set()
+        for normalized_entry in normalized_candidates:
+            if not isinstance(normalized_entry, Mapping):
+                continue
+            try:
+                record_index = int(
+                    normalized_entry.get("__geometry_q_group_record_index__", -1)
+                )
+            except Exception:
+                continue
+            if record_index >= 0:
+                surviving_indices.add(int(record_index))
+        trusted_records: list[dict[str, object]] = []
+        for indexed_record in indexed_records:
+            try:
+                record_index = int(
+                    indexed_record.get("__geometry_q_group_record_index__", -1)
+                )
+            except Exception:
+                continue
+            if record_index not in surviving_indices:
+                continue
+            trusted_record = dict(indexed_record)
+            trusted_record.pop("__geometry_q_group_record_index__", None)
+            trusted_records.append(trusted_record)
+        return trusted_records
+
+    def _current_peak_records(
+        *,
+        provenance: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        if provenance is None:
+            _, _, provenance = _current_peak_record_context()
+        peak_records = getattr(simulation_runtime_state, "peak_records", None)
+        if isinstance(peak_records, Sequence) and not isinstance(
+            peak_records,
+            (str, bytes),
+        ):
+            trusted_records = _trusted_peak_records(
+                peak_records,
+                provenance=provenance,
+            )
+            if trusted_records:
+                return trusted_records
+        if (
+            not _has_intersection_cache()
+            or getattr(simulation_runtime_state, "stored_sim_image", None) is None
+            or not callable(native_sim_to_display_coords)
+        ):
+            return []
+        try:
+            from ra_sim.gui import peak_selection as gui_peak_selection
+        except Exception:
+            return []
+        try:
+            gui_peak_selection.ensure_runtime_peak_overlay_data(
+                simulation_runtime_state,
+                primary_a=_primary_a(),
+                primary_c=_primary_c(),
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                reflection_q_group_metadata=reflection_q_group_metadata,
+                caked_view_enabled_factory=caked_view_enabled_factory,
+                native_detector_coords_to_caked_display_coords=(
+                    native_detector_coords_to_caked_display_coords
+                ),
+            )
+        except Exception:
+            return []
+        refreshed_peak_records = getattr(simulation_runtime_state, "peak_records", None)
+        if not isinstance(refreshed_peak_records, Sequence) or isinstance(
+            refreshed_peak_records,
+            (str, bytes),
+        ):
+            return []
+        trusted_records = _trusted_peak_records(
+            refreshed_peak_records,
+            provenance=provenance,
+        )
+        if not trusted_records:
+            return []
+        return trusted_records
+
+    def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
+        current_signature, _current_signature_summary, provenance = (
+            _current_peak_record_context()
+        )
+        peak_records = _current_peak_records(provenance=provenance)
+        peak_record_count = int(len(peak_records))
+        max_positions_row_count = 0
+
+        cached_peaks = _normalized_live_peak_record_candidates(
+            peak_records,
+            provenance=provenance,
+        )
         for entry in cached_peaks:
             if _has_intersection_cache() and "q_group_nominal_hkl" not in entry:
                 entry["q_group_nominal_hkl"] = True
@@ -1946,8 +2109,8 @@ def make_runtime_geometry_q_group_value_callbacks(
                 if group_key is not None:
                     entry["q_group_key"] = group_key
         _set_live_preview_cache_metadata(
-            cache_source="peak_records_fallback",
-            fallback_used=True,
+            cache_source="peak_records",
+            fallback_used=False,
             max_positions_row_count=int(max_positions_row_count),
             peak_record_count=int(peak_record_count),
             active_signature_matches=bool(provenance.get("active_signature_matches", False)),
@@ -1960,7 +2123,7 @@ def make_runtime_geometry_q_group_value_callbacks(
 
         _set_live_preview_cache_metadata(
             cache_source="empty",
-            fallback_used=bool(max_positions_row_count > 0 or peak_record_count > 0),
+            fallback_used=bool(peak_record_count > 0),
             max_positions_row_count=int(max_positions_row_count),
             peak_record_count=int(peak_record_count),
             active_signature_matches=bool(provenance.get("active_signature_matches", False)),
@@ -1991,9 +2154,9 @@ def make_runtime_geometry_q_group_value_callbacks(
 
     def _build_entries_snapshot() -> list[dict[str, object]]:
         return build_geometry_q_group_entries(
-            simulation_runtime_state.stored_max_positions_local,
+            None,
             peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-            peak_records=getattr(simulation_runtime_state, "peak_records", None),
+            peak_records=_current_peak_records(),
             primary_a=_primary_a(),
             primary_c=_primary_c(),
             allow_nominal_hkl_indices=_has_intersection_cache(),
