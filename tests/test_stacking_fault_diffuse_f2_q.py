@@ -4,11 +4,9 @@ import numpy as np
 import pytest
 
 dif = pytest.importorskip("Dans_Diffraction")
-pytest.importorskip("Dans_Diffraction.functions_crystallography")
-from Dans_Diffraction.functions_crystallography import (
-    xray_dispersion_corrections,
-    xray_scattering_factor,
-)
+fc = pytest.importorskip("Dans_Diffraction.functions_crystallography")
+xray_dispersion_corrections = fc.xray_dispersion_corrections
+xray_scattering_factor = fc.xray_scattering_factor
 
 from ra_sim.utils.stacking_fault import (
     _F2,
