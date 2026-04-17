@@ -463,7 +463,9 @@ def resolve_hbn_paths(
 
     search_file = paths_file
     if search_file is None:
-        config_dir = Path(__file__).resolve().parents[1] / "config"
+        from ra_sim import config as ra_sim_config
+
+        config_dir = ra_sim_config.get_config_dir()
         for candidate_name in ("hbn_paths.yaml", "hbn_paths.example.yaml"):
             candidate_path = config_dir / candidate_name
             if candidate_path.exists():

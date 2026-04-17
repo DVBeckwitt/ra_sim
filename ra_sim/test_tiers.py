@@ -18,6 +18,7 @@ FAST_TEST_FILES = (
     "test_debug_utils.py",
     "test_dependency_metadata.py",
     "test_dev_cli.py",
+    "test_hbn_path_resolution.py",
     "test_import_smoke.py",
     "test_structure_factor_atomic_coordinates.py",
 )
