@@ -1,14 +1,22 @@
 # Simulated peak overlay recovery status
 
+Status: in-progress
+Type: bug
+Owner:
+Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
+Priority: p1
+Last updated: 2026-04-17
+
 This page tracks the unresolved simulated-peak overlay bug in the GUI. Use it
 as the short resume document if chat history is lost.
 
 See also:
 
-- [docs index](index.md)
-- [GUI workflow](gui-workflow.md)
-- [Architecture guide](architecture.md)
-- [Canonical simulation/fitting reference](simulation_and_fitting.md)
+- [tracking hub](../index.md)
+- [docs index](../../index.md)
+- [GUI workflow](../../gui-workflow.md)
+- [Architecture guide](../../architecture.md)
+- [Canonical simulation/fitting reference](../../simulation_and_fitting.md)
 
 ## Purpose
 

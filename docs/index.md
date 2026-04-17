@@ -12,11 +12,10 @@ you need implementation-level detail.
 
 ## Task-Focused Guides
 
+- [tracking/index.md](tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
 - [gui-workflow.md](gui-workflow.md): operator workflow through calibrant, GUI, and refinement stages
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
 - [debug-and-cache.md](debug-and-cache.md): debug controls, output locations, and cache retention
-- [grouped-pick-recovery.md](grouped-pick-recovery.md): current recovery status and acceptance plan for canonical grouped-pick identity
-- [sim-peak-overlay-recovery.md](sim-peak-overlay-recovery.md): current status for the unresolved simulated peak detector/caked overlay bug
 - [troubleshooting.md](troubleshooting.md): common setup, config, and workflow failures
 
 ## Quick Routing
@@ -26,8 +25,9 @@ If you need to:
 - run or launch the app: start with [README.md](../README.md#usage)
 - change simulation/fitting code: read [architecture.md](architecture.md) and then the code map in [simulation_and_fitting.md](simulation_and_fitting.md#code-map)
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
-- debug grouped-pick manual geometry identity/preflight: read [grouped-pick-recovery.md](grouped-pick-recovery.md) and then [geometry fitting from picked spots](simulation_and_fitting.md#geometry-fitting-from-picked-spots)
-- debug rotated or drifting simulated peak overlays: read [sim-peak-overlay-recovery.md](sim-peak-overlay-recovery.md)
+- inspect live recovery work or substantial investigations: start with [tracking/index.md](tracking/index.md)
+- debug grouped-pick manual geometry identity/preflight: start with [tracking/index.md](tracking/index.md)
+- debug rotated or drifting simulated peak overlays: start with [tracking/index.md](tracking/index.md)
 - debug logs or retained caches: read [debug-and-cache.md](debug-and-cache.md)
 - fix local setup or path issues: read [troubleshooting.md](troubleshooting.md)
 

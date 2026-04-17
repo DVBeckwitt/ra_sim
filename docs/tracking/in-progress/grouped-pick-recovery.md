@@ -1,15 +1,23 @@
 # Grouped-pick recovery status
 
+Status: in-progress
+Type: investigation
+Owner:
+Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
+Priority: p1
+Last updated: 2026-04-17
+
 This page tracks current recovery work for the grouped-pick manual geometry
 workflow. It explains what is already stable, what is currently broken, and
 what must be true before end-to-end geometry fitting is trusted again.
 
 See also:
 
-- [docs index](index.md)
-- [Architecture guide](architecture.md)
-- [Geometry fitting from picked spots](simulation_and_fitting.md#geometry-fitting-from-picked-spots)
-- [Automatic background peak matching](simulation_and_fitting.md#automatic-background-peak-matching)
+- [tracking hub](../index.md)
+- [docs index](../../index.md)
+- [Architecture guide](../../architecture.md)
+- [Geometry fitting from picked spots](../../simulation_and_fitting.md#geometry-fitting-from-picked-spots)
+- [Automatic background peak matching](../../simulation_and_fitting.md#automatic-background-peak-matching)
 
 ## Purpose
 
@@ -21,15 +29,12 @@ See also:
 ## Resume Here
 
 - Primary raw diagnostic inputs:
-  - `C:\Users\Kenpo\.local\share\ra_sim\new2.json`
-  - `C:\Users\Kenpo\.local\share\ra_sim\new3.json`
+  - local saved states named `new2.json` and `new3.json`
 - Primary fresh canonical exports:
-  - `C:\Users\Kenpo\.local\share\ra_sim\new2_fresh_all.json`
-  - `C:\Users\Kenpo\.local\share\ra_sim\new3_fresh_all.json`
+  - local exports named `new2_fresh_all.json` and `new3_fresh_all.json`
 - Sentinel one-pair artifacts:
-  - `C:\Users\Kenpo\.local\share\ra_sim\Sentinel.json`
-  - `C:\Users\Kenpo\.local\share\ra_sim\Sentinel_fresh_pair.json`
-  - `C:\Users\Kenpo\.local\share\ra_sim\Sentinel_fresh_slot0.json`
+  - local files named `Sentinel.json`, `Sentinel_fresh_pair.json`, and `Sentinel_fresh_slot0.json`
+- Keep machine-local absolute paths for these artifacts in untracked notes, not in this tracking doc.
 - Most relevant commits so far:
   - `de26d3b` add preflight rebind validator
   - `06a88f7` add fresh pair preflight rebind test coverage

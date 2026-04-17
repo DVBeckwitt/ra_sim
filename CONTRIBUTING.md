@@ -66,7 +66,8 @@ Helpful repo entry points:
 - `ra_sim/` for simulation, fitting, GUI, CLI, and IO code
 - `tests/` for regression coverage
 - `config/` for versioned defaults and example path templates
-- `docs/` for workflow, architecture, and debug guidance
+- `docs/` for durable workflow, architecture, and debug guidance
+- `docs/tracking/` for long-form notes tied to substantial live work
 
 ## Validation
 
@@ -121,6 +122,7 @@ Start with these docs depending on task:
 
 - [README.md](README.md) for setup and top-level usage
 - [docs/index.md](docs/index.md) for docs navigation
+- [docs/tracking/index.md](docs/tracking/index.md) for substantial live work notes
 - [docs/gui-workflow.md](docs/gui-workflow.md) for operator workflow
 - [docs/architecture.md](docs/architecture.md) for package layout and data flow
 - [docs/debug-and-cache.md](docs/debug-and-cache.md) for logging and cache policy

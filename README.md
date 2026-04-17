@@ -605,6 +605,7 @@ full image.
 Use these entry points depending on the question:
 
 - [docs/index.md](docs/index.md): short navigation hub
+- [docs/tracking/index.md](docs/tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
 - [docs/gui-workflow.md](docs/gui-workflow.md): operator workflow and headless equivalents
 - [docs/architecture.md](docs/architecture.md): package layout and edit routing
 - [docs/debug-and-cache.md](docs/debug-and-cache.md): logging, output locations, and cache policy
