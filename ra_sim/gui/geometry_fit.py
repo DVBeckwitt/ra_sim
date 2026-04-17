@@ -442,6 +442,10 @@ class GeometryFitRuntimeManualDatasetBindings:
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]]
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
     orient_image_for_fit: Callable[..., object]
+    geometry_manual_project_peaks_to_current_view: (
+        Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]]
+        | None
+    ) = None
     backend_detector_coords_to_native_detector_coords: (
         Callable[
             [float, float, Sequence[object] | None],
@@ -1711,13 +1715,6 @@ def rebuild_geometry_fit_source_rows(
                     live_rows,
                     rebuild_source="live_runtime_cache",
                 )
-            if (
-                str(live_runtime_cache_metadata.get("cache_source", "")).strip()
-                == "peak_records_fallback"
-            ):
-                rebuild_attempts.append(
-                    "live_runtime_cache_peak_records_fallback_rejected"
-                )
             rebuild_attempts.append("live_runtime_cache_validation_failed")
 
     if (
@@ -1874,6 +1871,10 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         [Mapping[str, object]],
         Sequence[object] | None,
     ],
+    geometry_manual_project_peaks_to_current_view: (
+        Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]]
+        | None
+    ) = None,
     unrotate_display_peaks: Callable[..., list[dict[str, object]]],
     display_to_native_sim_coords: Callable[..., tuple[float, float]],
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
@@ -1935,6 +1936,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         ),
         geometry_manual_match_config=geometry_manual_match_config,
         geometry_manual_entry_display_coords=geometry_manual_entry_display_coords,
+        geometry_manual_project_peaks_to_current_view=(
+            geometry_manual_project_peaks_to_current_view
+        ),
         unrotate_display_peaks=unrotate_display_peaks,
         display_to_native_sim_coords=display_to_native_sim_coords,
         select_fit_orientation=select_fit_orientation,
@@ -1964,6 +1968,10 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
         [Mapping[str, object]],
         Sequence[object] | None,
     ],
+    geometry_manual_project_peaks_to_current_view: (
+        Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]]
+        | None
+    ) = None,
     unrotate_display_peaks: Callable[..., list[dict[str, object]]],
     display_to_native_sim_coords: Callable[..., tuple[float, float]],
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
@@ -2029,6 +2037,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             geometry_manual_match_config=geometry_manual_match_config,
             geometry_manual_entry_display_coords=(
                 geometry_manual_entry_display_coords
+            ),
+            geometry_manual_project_peaks_to_current_view=(
+                geometry_manual_project_peaks_to_current_view
             ),
             unrotate_display_peaks=unrotate_display_peaks,
             display_to_native_sim_coords=display_to_native_sim_coords,
@@ -4353,6 +4364,37 @@ def build_geometry_manual_fit_dataset(
     reference_c = _finite_float(params_i.get("c"))
     reference_lambda = _finite_float(params_i.get("lambda"))
 
+    def _project_source_rows_for_current_view(
+        rows: object,
+    ) -> list[dict[str, object]]:
+        normalized_rows = [
+            dict(entry)
+            for entry in (rows or ())
+            if isinstance(entry, Mapping)
+        ]
+        projector = manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
+        if not callable(projector) or not normalized_rows:
+            return normalized_rows
+        try:
+            projected_rows = projector(normalized_rows)
+        except Exception:
+            return normalized_rows
+        return [
+            dict(entry)
+            for entry in (projected_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+
+    def _project_source_entry_for_current_view(
+        entry: Mapping[str, object] | None,
+    ) -> dict[str, object] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        projected_rows = _project_source_rows_for_current_view([dict(entry)])
+        if projected_rows:
+            return dict(projected_rows[0])
+        return dict(entry)
+
     def _current_simulation_diagnostics() -> dict[str, object]:
         if callable(
             manual_dataset_bindings.geometry_manual_last_source_snapshot_diagnostics
@@ -4385,6 +4427,7 @@ def build_geometry_manual_fit_dataset(
                 prefer_cache=True,
             )
         )
+    simulated_peaks = _project_source_rows_for_current_view(simulated_peaks)
     simulation_diagnostics = _current_simulation_diagnostics()
     if (
         not simulated_peaks
@@ -4410,6 +4453,7 @@ def build_geometry_manual_fit_dataset(
                 required_pairs=selected_entries,
             )
         )
+        simulated_peaks = _project_source_rows_for_current_view(simulated_peaks)
         simulation_diagnostics = _current_simulation_diagnostics()
     if not simulated_peaks:
         snapshot_status = str(simulation_diagnostics.get("status", "<unknown>"))
@@ -4544,16 +4588,24 @@ def build_geometry_manual_fit_dataset(
     ) -> tuple[float, float] | None:
         if not isinstance(entry, Mapping):
             return None
-        current_view_point = _entry_point(entry, "display_col", "display_row")
-        if current_view_point is not None:
-            return current_view_point
         if use_caked_display:
-            return _caked_angle_pair(
+            current_view_point = _caked_angle_pair(
                 entry,
                 x_keys=("caked_x", "two_theta_deg"),
                 y_keys=("caked_y", "phi_deg"),
             )
-        return _entry_point(entry, "sim_col", "sim_row")
+            if current_view_point is not None:
+                return current_view_point
+        else:
+            current_view_point = _entry_point(entry, "sim_col", "sim_row")
+            if current_view_point is not None:
+                return current_view_point
+        current_view_point = _entry_point(entry, "display_col", "display_row")
+        if current_view_point is not None:
+            return current_view_point
+        if use_caked_display:
+            return _entry_point(entry, "sim_col", "sim_row")
+        return None
 
     def _source_entry_branch_matches(
         entry: Mapping[str, object] | None,
@@ -5184,6 +5236,9 @@ def build_geometry_manual_fit_dataset(
             else None,
             prefer_caked_display=use_caked_display,
         )
+        overlay_source_entry = _project_source_entry_for_current_view(
+            overlay_source_entry
+        )
         overlay_kind = _resolved_source_kind(overlay_lookup_entry, overlay_source_entry)
         fit_source_entry = (
             dict(strict_source_entry)
@@ -5311,6 +5366,9 @@ def build_geometry_manual_fit_dataset(
             dict(record.get("overlay_source_entry"))
             if isinstance(record.get("overlay_source_entry"), Mapping)
             else _resolve_source_entry(measured_entry)
+        )
+        overlay_source_entry = _project_source_entry_for_current_view(
+            overlay_source_entry
         )
         row_candidate_status = str(record.get("row_candidate_status", "") or "")
         peak_candidate_status = str(record.get("peak_candidate_status", "") or "")
@@ -5560,34 +5618,51 @@ def build_geometry_manual_fit_dataset(
             if simulated_angles is not None:
                 initial_entry["simulated_two_theta_deg"] = float(simulated_angles[0])
                 initial_entry["simulated_phi_deg"] = float(simulated_angles[1])
-            try:
-                sim_col_raw = float(overlay_source_entry.get("sim_col_raw", sim_col))
-                sim_row_raw = float(overlay_source_entry.get("sim_row_raw", sim_row))
-            except Exception:
-                sim_col_raw = float("nan")
-                sim_row_raw = float("nan")
-            if np.isfinite(sim_col_raw) and np.isfinite(sim_row_raw):
+            sim_native_point = _entry_point(
+                overlay_source_entry,
+                "native_col",
+                "native_row",
+            )
+            if sim_native_point is None:
+                sim_native_point = _entry_point(
+                    overlay_source_entry,
+                    "sim_native_x",
+                    "sim_native_y",
+                )
+            if sim_native_point is None:
                 try:
-                    sim_native = manual_dataset_bindings.display_to_native_sim_coords(
-                        float(sim_col_raw),
-                        float(sim_row_raw),
-                        (
-                            int(manual_dataset_bindings.image_size),
-                            int(manual_dataset_bindings.image_size),
-                        ),
-                    )
+                    sim_col_raw = float(overlay_source_entry.get("sim_col_raw", sim_col))
+                    sim_row_raw = float(overlay_source_entry.get("sim_row_raw", sim_row))
                 except Exception:
-                    sim_native = None
-                if (
-                    isinstance(sim_native, tuple)
-                    and len(sim_native) >= 2
-                    and np.isfinite(float(sim_native[0]))
-                    and np.isfinite(float(sim_native[1]))
-                ):
-                    initial_entry["sim_native"] = (
-                        float(sim_native[0]),
-                        float(sim_native[1]),
-                    )
+                    sim_col_raw = float("nan")
+                    sim_row_raw = float("nan")
+                if np.isfinite(sim_col_raw) and np.isfinite(sim_row_raw):
+                    try:
+                        sim_native = manual_dataset_bindings.display_to_native_sim_coords(
+                            float(sim_col_raw),
+                            float(sim_row_raw),
+                            (
+                                int(manual_dataset_bindings.image_size),
+                                int(manual_dataset_bindings.image_size),
+                            ),
+                        )
+                    except Exception:
+                        sim_native = None
+                    if (
+                        isinstance(sim_native, tuple)
+                        and len(sim_native) >= 2
+                        and np.isfinite(float(sim_native[0]))
+                        and np.isfinite(float(sim_native[1]))
+                    ):
+                        sim_native_point = (
+                            float(sim_native[0]),
+                            float(sim_native[1]),
+                        )
+            if sim_native_point is not None:
+                initial_entry["sim_native"] = (
+                    float(sim_native_point[0]),
+                    float(sim_native_point[1]),
+                )
         initial_pairs_display.append(initial_entry)
 
     measured_native = manual_dataset_bindings.unrotate_display_peaks(

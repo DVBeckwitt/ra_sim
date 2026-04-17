@@ -1234,6 +1234,203 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
     assert calls["display_to_native"] == (9.0, 8.0, (64, 64))
 
 
+def test_build_geometry_manual_fit_dataset_projects_raw_sim_image_rows_into_background_frame() -> None:
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((5, 5), dtype=float),
+        current_background_native=lambda: np.ones((5, 5), dtype=float),
+        image_size=lambda: 5,
+        display_rotate_k=3,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+    expected_sim = manual_geometry._default_rotate_point(1.0, 2.0, (5, 5), 3)
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=5,
+        display_rotate_k=3,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": float(expected_sim[0]) + 0.25,
+                "y": float(expected_sim[1]) + 0.25,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((5, 5), dtype=np.float64),
+            np.zeros((5, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            {
+                "display_col": 400.0,
+                "display_row": -500.0,
+                "sim_col": 300.0,
+                "sim_row": -200.0,
+                "sim_col_raw": 1.0,
+                "sim_row_raw": 2.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("x", 0.0)),
+            float(entry.get("y", 0.0)),
+        ),
+        geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx", "label": "identity"},
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (
+        float(expected_sim[0]),
+        float(expected_sim[1]),
+    )
+    assert dataset["initial_pairs_display"][0]["sim_native"] == (1.0, 2.0)
+
+
+def test_build_geometry_manual_fit_dataset_reprojects_refined_detector_display_without_stale_native() -> None:
+    refined_native = (2.0, 1.0)
+    refined_display = manual_geometry._default_rotate_point(
+        float(refined_native[0]),
+        float(refined_native[1]),
+        (5, 5),
+        3,
+    )
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((5, 5), dtype=float),
+        current_background_native=lambda: np.ones((5, 5), dtype=float),
+        image_size=lambda: 5,
+        display_rotate_k=3,
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(
+                AssertionError("refined detector display should use background inverse")
+            )
+        ),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=5,
+        display_rotate_k=3,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": float(refined_display[0]) + 0.25,
+                "y": float(refined_display[1]) + 0.25,
+                "refined_sim_x": float(refined_display[0]),
+                "refined_sim_y": float(refined_display[1]),
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((5, 5), dtype=np.float64),
+            np.zeros((5, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            {
+                "display_col": 400.0,
+                "display_row": -500.0,
+                "sim_col": 300.0,
+                "sim_row": -200.0,
+                "sim_col_raw": 99.0,
+                "sim_row_raw": 88.0,
+                "native_col": 1.0,
+                "native_row": 2.0,
+                "sim_native_x": 1.0,
+                "sim_native_y": 2.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("x", 0.0)),
+            float(entry.get("y", 0.0)),
+        ),
+        geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(
+                AssertionError("fit fallback should not use sim-image inverse here")
+            )
+        ),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx", "label": "identity"},
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (
+        float(refined_display[0]),
+        float(refined_display[1]),
+    )
+    assert dataset["initial_pairs_display"][0]["sim_native"] == (
+        float(refined_native[0]),
+        float(refined_native[1]),
+    )
+
+
 def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_resolved() -> None:
     unrelated_source_row = {
         "q_group_key": ("other", 9),
@@ -3547,6 +3744,123 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
     assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["bg_caked_display"] == (150.0, 160.0)
+
+
+def test_build_geometry_manual_fit_dataset_projects_raw_detector_rows_into_caked_angles(
+    monkeypatch,
+) -> None:
+    bundle = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=np.linspace(10.0, 17.0, 8),
+        azimuth_axis=np.linspace(13.0, 20.0, 8),
+    )
+    monkeypatch.setattr(
+        manual_geometry,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (11.5, 13.5)
+            if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+            else (None, None)
+        ),
+    )
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(13.0, 20.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=8,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "caked_x": 12.0,
+                "caked_y": 14.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            {
+                "display_col": 400.0,
+                "display_row": -500.0,
+                "sim_col": 300.0,
+                "sim_row": -200.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "caked_x": 401.0,
+                "caked_y": -499.0,
+                "raw_caked_x": 402.0,
+                "raw_caked_y": -498.0,
+                "two_theta_deg": 403.0,
+                "phi_deg": -497.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("caked_x", 0.0)),
+            float(entry.get("caked_y", 0.0)),
+        ),
+        geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    initial_entry = dataset["initial_pairs_display"][0]
+    assert initial_entry["sim_display"] == (11.5, 13.5)
+    assert initial_entry["sim_caked_display"] == (11.5, 13.5)
+    assert initial_entry["simulated_two_theta_deg"] == 11.5
+    assert initial_entry["simulated_phi_deg"] == 13.5
+    assert initial_entry["sim_native"] == (3.0, 4.0)
 
 
 def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_caked_angles() -> None:

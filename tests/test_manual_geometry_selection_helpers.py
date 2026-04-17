@@ -1566,6 +1566,10 @@ def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_di
             "sim_row": 4.0,
             "display_col": 3.0,
             "display_row": 4.0,
+            "native_col": 99.0,
+            "native_row": 98.0,
+            "sim_native_x": 97.0,
+            "sim_native_y": 96.0,
             "caked_x": 11.0,
             "caked_y": 12.0,
         },
@@ -1578,6 +1582,10 @@ def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_di
     assert refined["display_col"] == 30.0
     assert refined["display_row"] == 40.0
     assert refined["x"] == 30.0
+    assert refined["refined_sim_x"] == 30.0
+    assert refined["refined_sim_y"] == 40.0
+    assert refined["refined_sim_caked_x"] == 13.0
+    assert refined["refined_sim_caked_y"] == 2.0
     assert refined["y"] == 40.0
     assert refined["caked_x"] == 13.0
     assert refined["caked_y"] == 2.0
@@ -1585,6 +1593,10 @@ def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_di
     assert refined["raw_caked_y"] == 2.0
     assert refined["two_theta_deg"] == 13.0
     assert refined["phi_deg"] == 2.0
+    assert "native_col" not in refined
+    assert "native_row" not in refined
+    assert "sim_native_x" not in refined
+    assert "sim_native_y" not in refined
 
 
 def test_detector_to_caked_to_detector_round_trips_through_same_transform_bundle(
@@ -5513,6 +5525,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
             "caked_y": 2.0,
             "raw_caked_x": 13.0,
             "raw_caked_y": 2.0,
+            "two_theta_deg": 13.0,
+            "phi_deg": 2.0,
             "display_col": 13.0,
             "display_row": 2.0,
             "sim_col_global": 13.0,
@@ -5597,6 +5611,8 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "caked_y": -9.0,
             "raw_caked_x": 17.0,
             "raw_caked_y": -9.0,
+            "two_theta_deg": 17.0,
+            "phi_deg": -9.0,
             "display_col": 17.0,
             "display_row": -9.0,
             "sim_col_global": 17.0,
@@ -5605,6 +5621,292 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "sim_row_local": 0.0,
         }
     ]
+
+
+def test_project_peaks_to_current_view_recomputes_detector_display_from_native_background_frame() -> None:
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((5, 5), dtype=float),
+        current_background_native=lambda: np.ones((5, 5), dtype=float),
+        image_size=lambda: 5,
+        display_rotate_k=3,
+        display_to_native_sim_coords=lambda col, row, _shape: (
+            (_ for _ in ()).throw(
+                AssertionError("native coordinates should be used directly")
+            )
+        ),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "native_col": 1.0,
+                "native_row": 2.0,
+                "sim_col": 99.0,
+                "sim_row": 88.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "display_col": 400.0,
+                "display_row": -500.0,
+                "caked_x": 91.0,
+                "caked_y": 82.0,
+            }
+        ]
+    )
+
+    expected_display = mg._default_rotate_point(1.0, 2.0, (5, 5), 3)
+
+    assert len(projected) == 1
+    projected_entry = projected[0]
+    assert projected_entry["native_col"] == 1.0
+    assert projected_entry["native_row"] == 2.0
+    assert projected_entry["sim_native_x"] == 1.0
+    assert projected_entry["sim_native_y"] == 2.0
+    assert projected_entry["sim_col_raw"] == float(expected_display[0])
+    assert projected_entry["sim_row_raw"] == float(expected_display[1])
+    assert projected_entry["sim_col"] == float(expected_display[0])
+    assert projected_entry["sim_row"] == float(expected_display[1])
+    assert projected_entry["display_col"] == float(expected_display[0])
+    assert projected_entry["display_row"] == float(expected_display[1])
+    assert "caked_x" not in projected_entry
+    assert "caked_y" not in projected_entry
+
+
+def test_project_peaks_to_current_view_uses_refined_detector_display_background_frame_when_native_is_stale() -> None:
+    refined_native = (2.0, 1.0)
+    refined_display = mg._default_rotate_point(
+        float(refined_native[0]),
+        float(refined_native[1]),
+        (5, 5),
+        3,
+    )
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((5, 5), dtype=float),
+        current_background_native=lambda: np.ones((5, 5), dtype=float),
+        image_size=lambda: 5,
+        display_rotate_k=3,
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(
+                AssertionError("refined detector display should use background inverse")
+            )
+        ),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+    refined_entry = mg.geometry_manual_apply_refined_simulated_override(
+        {
+            "refined_sim_x": float(refined_display[0]),
+            "refined_sim_y": float(refined_display[1]),
+        },
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "native_col": 1.0,
+            "native_row": 2.0,
+            "sim_native_x": 1.0,
+            "sim_native_y": 2.0,
+            "sim_col": 99.0,
+            "sim_row": 88.0,
+            "sim_col_raw": 77.0,
+            "sim_row_raw": 66.0,
+            "display_col": 55.0,
+            "display_row": 44.0,
+        },
+        prefer_caked_display=False,
+    )
+
+    projected = callbacks.project_peaks_to_current_view([refined_entry])
+
+    assert len(projected) == 1
+    projected_entry = projected[0]
+    assert projected_entry["refined_sim_x"] == float(refined_display[0])
+    assert projected_entry["refined_sim_y"] == float(refined_display[1])
+    assert projected_entry["native_col"] == float(refined_native[0])
+    assert projected_entry["native_row"] == float(refined_native[1])
+    assert projected_entry["sim_native_x"] == float(refined_native[0])
+    assert projected_entry["sim_native_y"] == float(refined_native[1])
+    assert projected_entry["sim_col_raw"] == float(refined_display[0])
+    assert projected_entry["sim_row_raw"] == float(refined_display[1])
+    assert projected_entry["sim_col"] == float(refined_display[0])
+    assert projected_entry["sim_row"] == float(refined_display[1])
+    assert projected_entry["display_col"] == float(refined_display[0])
+    assert projected_entry["display_row"] == float(refined_display[1])
+
+
+def test_project_peaks_to_current_view_keeps_refined_detector_display_on_non_square_background() -> None:
+    background_shape = (3, 5)
+    refined_native = (2.0, 1.0)
+    refined_display = mg._default_rotate_point(
+        float(refined_native[0]),
+        float(refined_native[1]),
+        background_shape,
+        3,
+    )
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros(background_shape, dtype=float),
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros(background_shape, dtype=float),
+        current_background_native=lambda: np.ones(background_shape, dtype=float),
+        image_size=lambda: 9,
+        display_rotate_k=3,
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(
+                AssertionError("non-square refined detector display should use background inverse")
+            )
+        ),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+    refined_entry = mg.geometry_manual_apply_refined_simulated_override(
+        {
+            "refined_sim_x": float(refined_display[0]),
+            "refined_sim_y": float(refined_display[1]),
+        },
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "native_col": 0.0,
+            "native_row": 0.0,
+            "sim_native_x": 0.0,
+            "sim_native_y": 0.0,
+            "sim_col": 99.0,
+            "sim_row": 88.0,
+            "sim_col_raw": 77.0,
+            "sim_row_raw": 66.0,
+            "display_col": 55.0,
+            "display_row": 44.0,
+        },
+        prefer_caked_display=False,
+    )
+
+    projected = callbacks.project_peaks_to_current_view([refined_entry])
+
+    assert len(projected) == 1
+    projected_entry = projected[0]
+    expected_native = mg._default_rotate_point(
+        float(refined_display[0]),
+        float(refined_display[1]),
+        background_shape,
+        -3,
+    )
+    assert projected_entry["native_col"] == float(expected_native[0])
+    assert projected_entry["native_row"] == float(expected_native[1])
+    assert projected_entry["sim_col_raw"] == float(refined_display[0])
+    assert projected_entry["sim_row_raw"] == float(refined_display[1])
+    assert projected_entry["sim_col"] == float(refined_display[0])
+    assert projected_entry["sim_row"] == float(refined_display[1])
+    assert projected_entry["display_col"] == float(refined_display[0])
+    assert projected_entry["display_row"] == float(refined_display[1])
+
+
+def test_project_peaks_to_current_view_recomputes_caked_angles_from_native_detector_coords(
+    monkeypatch,
+) -> None:
+    bundle = _dummy_transform_bundle(detector_shape=(8, 8))
+
+    monkeypatch.setattr(
+        mg,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (11.5, 13.5)
+            if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+            else (None, None)
+        ),
+    )
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(13.0, 20.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (
+            (_ for _ in ()).throw(
+                AssertionError("native coordinates should be used directly")
+            )
+        ),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "native_col": 3.0,
+                "native_row": 4.0,
+                "sim_col": 90.0,
+                "sim_row": 80.0,
+                "sim_col_raw": 30.0,
+                "sim_row_raw": 40.0,
+                "caked_x": 66.0,
+                "caked_y": 55.0,
+                "raw_caked_x": 65.0,
+                "raw_caked_y": 54.0,
+                "two_theta_deg": 64.0,
+                "phi_deg": 53.0,
+            }
+        ]
+    )
+
+    assert len(projected) == 1
+    projected_entry = projected[0]
+    assert projected_entry["native_col"] == 3.0
+    assert projected_entry["native_row"] == 4.0
+    assert projected_entry["sim_native_x"] == 3.0
+    assert projected_entry["sim_native_y"] == 4.0
+    assert projected_entry["caked_x"] == 11.5
+    assert projected_entry["caked_y"] == 13.5
+    assert projected_entry["raw_caked_x"] == 11.5
+    assert projected_entry["raw_caked_y"] == 13.5
+    assert projected_entry["display_col"] == 11.5
+    assert projected_entry["display_row"] == 13.5
+    assert projected_entry["sim_col_global"] == 11.5
+    assert projected_entry["sim_row_global"] == 13.5
+    assert projected_entry["sim_col_local"] == 1.5
+    assert projected_entry["sim_row_local"] == 0.5
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_clears_stale_caked_fields_when_reprojection_fails(

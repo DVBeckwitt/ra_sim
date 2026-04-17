@@ -1420,6 +1420,19 @@ def geometry_manual_apply_refined_simulated_override(
     refined_native = _pair("refined_sim_native_x", "refined_sim_native_y")
     refined_caked = _pair("refined_sim_caked_x", "refined_sim_caked_y")
 
+    if refined_raw is not None:
+        result["refined_sim_x"] = float(refined_raw[0])
+        result["refined_sim_y"] = float(refined_raw[1])
+    if refined_native is not None:
+        result["refined_sim_native_x"] = float(refined_native[0])
+        result["refined_sim_native_y"] = float(refined_native[1])
+    if refined_caked is not None:
+        result["refined_sim_caked_x"] = float(refined_caked[0])
+        result["refined_sim_caked_y"] = float(refined_caked[1])
+    elif refined_raw is not None:
+        result.pop("refined_sim_caked_x", None)
+        result.pop("refined_sim_caked_y", None)
+
     if prefer_caked_display is None:
         use_caked_display = False
         try:
@@ -1470,6 +1483,20 @@ def geometry_manual_apply_refined_simulated_override(
         result["native_row"] = float(refined_native[1])
         result["sim_native_x"] = float(refined_native[0])
         result["sim_native_y"] = float(refined_native[1])
+    elif refined_raw is not None or refined_caked is not None:
+        for stale_native_key in (
+            "native_col",
+            "native_row",
+            "sim_native_x",
+            "sim_native_y",
+            "detector_x",
+            "detector_y",
+            "background_detector_x",
+            "background_detector_y",
+            "simulated_detector_x",
+            "simulated_detector_y",
+        ):
+            result.pop(stale_native_key, None)
 
     if refined_caked is not None:
         result["caked_x"] = float(refined_caked[0])
@@ -4953,6 +4980,11 @@ def build_geometry_manual_initial_pairs_display(
         [Sequence[dict[str, object]] | None],
         GeometryManualLookupMap,
     ],
+    project_peaks_to_current_view: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     entry_display_coords: Callable[
         [dict[str, object] | None],
         tuple[float, float] | None,
@@ -5005,7 +5037,24 @@ def build_geometry_manual_initial_pairs_display(
                 ),
             )
         if source_rows:
-            simulated_lookup = build_simulated_lookup(source_rows)
+            normalized_source_rows = [
+                dict(entry)
+                for entry in source_rows
+                if isinstance(entry, Mapping)
+            ]
+            if callable(project_peaks_to_current_view):
+                try:
+                    projected_source_rows = project_peaks_to_current_view(
+                        normalized_source_rows
+                    )
+                except Exception:
+                    projected_source_rows = normalized_source_rows
+                normalized_source_rows = [
+                    dict(entry)
+                    for entry in (projected_source_rows or ())
+                    if isinstance(entry, Mapping)
+                ]
+            simulated_lookup = build_simulated_lookup(normalized_source_rows)
 
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
@@ -5033,6 +5082,21 @@ def build_geometry_manual_initial_pairs_display(
             sim_entry,
             prefer_caked_display=use_caked_display,
         )
+        if isinstance(sim_entry, dict) and callable(project_peaks_to_current_view):
+            try:
+                projected_sim_entries = project_peaks_to_current_view([sim_entry])
+            except Exception:
+                projected_sim_entries = [sim_entry]
+            projected_sim_entry = next(
+                (
+                    dict(candidate)
+                    for candidate in (projected_sim_entries or ())
+                    if isinstance(candidate, Mapping)
+                ),
+                None,
+            )
+            if isinstance(projected_sim_entry, dict):
+                sim_entry = projected_sim_entry
         if isinstance(sim_entry, dict):
             sim_display = _geometry_manual_entry_active_view_point(
                 sim_entry,
@@ -5205,6 +5269,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             source_rows_for_background=source_rows_for_background,
             simulated_peaks_for_params=simulated_peaks_for_params,
             build_simulated_lookup=build_simulated_lookup,
+            project_peaks_to_current_view=project_peaks_to_current_view,
             entry_display_coords=entry_display_coords,
         )
 
@@ -5495,21 +5560,55 @@ def make_runtime_geometry_manual_projection_callbacks(
             sim_shape = (int(_resolve_runtime_value(image_size)), int(_resolve_runtime_value(image_size)))
         except Exception:
             sim_shape = (0, 0)
+        try:
+            native_background = _resolve_runtime_value(current_background_native)
+            background_shape = tuple(
+                int(v) for v in np.asarray(native_background).shape[:2]
+            )
+        except Exception:
+            background_shape = ()
 
         for raw_entry in simulated_peaks or []:
             if not isinstance(raw_entry, dict):
                 continue
             entry = dict(raw_entry)
-            native_point = _entry_point(entry, "native_col", "native_row")
+            refined_detector_display = _entry_point(
+                entry,
+                "refined_sim_x",
+                "refined_sim_y",
+            )
+            refined_native_point = _entry_point(
+                entry,
+                "refined_sim_native_x",
+                "refined_sim_native_y",
+            )
+            refined_caked_point = _entry_point(
+                entry,
+                "refined_sim_caked_x",
+                "refined_sim_caked_y",
+            )
+
+            native_point = refined_native_point
+            if native_point is None:
+                native_point = _entry_point(entry, "native_col", "native_row")
             if native_point is None:
                 native_point = _entry_point(entry, "sim_native_x", "sim_native_y")
-            caked_point = _entry_point(entry, "caked_x", "caked_y")
+            if refined_native_point is None and (
+                refined_detector_display is not None or refined_caked_point is not None
+            ):
+                native_point = None
+
+            caked_point = refined_caked_point or _entry_point(entry, "caked_x", "caked_y")
             if caked_point is None:
                 caked_point = _entry_point(entry, "raw_caked_x", "raw_caked_y")
             if caked_point is None:
                 caked_point = _entry_point(entry, "two_theta_deg", "phi_deg")
 
             raw_detector_display = _entry_point(entry, "sim_col_raw", "sim_row_raw")
+            if refined_detector_display is not None:
+                raw_detector_display = refined_detector_display
+            elif refined_native_point is None and refined_caked_point is not None:
+                raw_detector_display = None
             for stale_key in (
                 "caked_x",
                 "caked_y",
@@ -5522,12 +5621,21 @@ def make_runtime_geometry_manual_projection_callbacks(
             ):
                 entry.pop(stale_key, None)
 
-            if native_point is not None and len(sim_shape) >= 2 and min(sim_shape) > 0:
+            detector_display_shape = (
+                background_shape
+                if len(background_shape) >= 2 and min(background_shape) > 0
+                else sim_shape
+            )
+            if (
+                native_point is not None
+                and len(detector_display_shape) >= 2
+                and min(detector_display_shape) > 0
+            ):
                 try:
                     rotated = rotate_point_for_display(
                         float(native_point[0]),
                         float(native_point[1]),
-                        sim_shape,
+                        detector_display_shape,
                         int(display_rotate_k),
                     )
                 except Exception:
@@ -5543,15 +5651,39 @@ def make_runtime_geometry_manual_projection_callbacks(
             if (
                 native_point is None
                 and raw_detector_display is not None
-                and callable(display_to_native_sim_coords)
             ):
-                try:
-                    derived_native = display_to_native_sim_coords(
-                        float(raw_detector_display[0]),
-                        float(raw_detector_display[1]),
-                        sim_shape,
+                use_background_display_inverse = (
+                    refined_detector_display is not None
+                    and abs(
+                        float(raw_detector_display[0])
+                        - float(refined_detector_display[0])
                     )
-                except Exception:
+                    <= 1.0e-9
+                    and abs(
+                        float(raw_detector_display[1])
+                        - float(refined_detector_display[1])
+                    )
+                    <= 1.0e-9
+                    and callable(_background_display_to_native_detector_coords)
+                )
+                if use_background_display_inverse:
+                    try:
+                        derived_native = _background_display_to_native_detector_coords(
+                            float(raw_detector_display[0]),
+                            float(raw_detector_display[1]),
+                        )
+                    except Exception:
+                        derived_native = None
+                elif callable(display_to_native_sim_coords):
+                    try:
+                        derived_native = display_to_native_sim_coords(
+                            float(raw_detector_display[0]),
+                            float(raw_detector_display[1]),
+                            sim_shape,
+                        )
+                    except Exception:
+                        derived_native = None
+                else:
                     derived_native = None
                 if (
                     isinstance(derived_native, tuple)
@@ -5632,6 +5764,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                 entry["caked_y"] = float(caked_point[1])
                 entry["raw_caked_x"] = float(caked_point[0])
                 entry["raw_caked_y"] = float(caked_point[1])
+                entry["two_theta_deg"] = float(caked_point[0])
+                entry["phi_deg"] = float(caked_point[1])
 
             if use_caked:
                 if caked_point is not None:

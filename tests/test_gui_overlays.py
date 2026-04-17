@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ra_sim.gui import manual_geometry, overlays
+from ra_sim.gui import geometry_fit, manual_geometry, overlays
 
 
 def test_clear_artists_removes_existing_plot_artists() -> None:
@@ -360,6 +360,96 @@ def test_draw_initial_geometry_pairs_overlay_ignores_stale_detector_sim_aliases(
         plt.close(fig)
 
 
+def test_draw_initial_geometry_pairs_overlay_projects_raw_sim_image_detector_rows_into_background_frame() -> None:
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((5, 5), dtype=float),
+        current_background_native=lambda: np.ones((5, 5), dtype=float),
+        image_size=lambda: 5,
+        display_rotate_k=3,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+    expected_sim = manual_geometry._default_rotate_point(1.0, 2.0, (5, 5), 3)
+    background_point = (float(expected_sim[0]) + 0.25, float(expected_sim[1]) + 0.25)
+
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={},
+            current_background_index=0,
+            prefer_cache=False,
+            use_caked_display=False,
+            pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "x": background_point[0],
+                    "y": background_point[1],
+                }
+            ],
+            get_cache_data=lambda **kwargs: {},
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [
+                {
+                    "display_col": 400.0,
+                    "display_row": -500.0,
+                    "sim_col": 300.0,
+                    "sim_row": -200.0,
+                    "sim_col_raw": 1.0,
+                    "sim_row_raw": 2.0,
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            build_simulated_lookup=lambda rows: {(1, 2): dict(rows[0])},
+            project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+            entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert expected_sim in marker_points
+        assert background_point in marker_points
+        assert (300.0, -200.0) not in marker_points
+        assert (400.0, -500.0) not in marker_points
+        assert np.hypot(
+            float(expected_sim[0]) - background_point[0],
+            float(expected_sim[1]) - background_point[1],
+        ) < 1.0
+    finally:
+        plt.close(fig)
+
+
 def test_draw_initial_geometry_pairs_overlay_uses_caked_reprojected_sim_point() -> None:
     fig, ax = plt.subplots()
     try:
@@ -425,6 +515,118 @@ def test_draw_initial_geometry_pairs_overlay_uses_caked_reprojected_sim_point() 
         assert (11.5, 13.5) in marker_points
         assert (12.0, 14.0) in marker_points
         assert (400.0, -500.0) not in marker_points
+        assert np.hypot(11.5 - 12.0, 13.5 - 14.0) < 1.0
+    finally:
+        plt.close(fig)
+
+
+def test_draw_initial_geometry_pairs_overlay_projects_raw_detector_rows_into_caked_angles(
+    monkeypatch,
+) -> None:
+    bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(8, 8),
+        radial_deg=np.linspace(10.0, 17.0, 8),
+        raw_azimuth_deg=np.linspace(13.0, 20.0, 8),
+        gui_azimuth_deg=np.linspace(13.0, 20.0, 8),
+        lut=object(),
+    )
+    monkeypatch.setattr(
+        manual_geometry,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (11.5, 13.5)
+            if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+            else (None, None)
+        ),
+    )
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(13.0, 20.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={},
+            current_background_index=0,
+            prefer_cache=False,
+            use_caked_display=True,
+            pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "caked_x": 12.0,
+                    "caked_y": 14.0,
+                }
+            ],
+            get_cache_data=lambda **kwargs: {},
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [
+                {
+                    "display_col": 400.0,
+                    "display_row": -500.0,
+                    "sim_col": 300.0,
+                    "sim_row": -200.0,
+                    "sim_col_raw": 3.0,
+                    "sim_row_raw": 4.0,
+                    "caked_x": 401.0,
+                    "caked_y": -499.0,
+                    "raw_caked_x": 402.0,
+                    "raw_caked_y": -498.0,
+                    "two_theta_deg": 403.0,
+                    "phi_deg": -497.0,
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            build_simulated_lookup=lambda rows: {(1, 2): dict(rows[0])},
+            project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+            entry_display_coords=lambda entry: (
+                float(entry["caked_x"]),
+                float(entry["caked_y"]),
+            ),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (11.5, 13.5) in marker_points
+        assert (12.0, 14.0) in marker_points
+        assert (300.0, -200.0) not in marker_points
+        assert (401.0, -499.0) not in marker_points
         assert np.hypot(11.5 - 12.0, 13.5 - 14.0) < 1.0
     finally:
         plt.close(fig)
