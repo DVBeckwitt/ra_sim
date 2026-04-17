@@ -129,7 +129,9 @@ from ra_sim.simulation.exact_cake_portable import (
     FastAzimuthalIntegrator,
     build_angle_axes,
     build_cake_transform_bundle,
+    build_geometry,
     caked_point_to_detector_pixel,
+    detector_points_to_angles,
     detector_two_theta_max_deg,
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
@@ -362,6 +364,7 @@ from ra_sim.config import (
     get_path_first,
     get_dir,
 )
+from ra_sim.user_paths import user_cache_root
 
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 # Search a 100x100 box centered on the click (±50 px along each axis).
@@ -369,6 +372,8 @@ HKL_PICK_MAX_DISTANCE_PX = 50.0
 
 _RUNTIME_UPDATE_TRACE_HANDLE = None
 _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = False
+_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS: bool | None = None
+_NUMBA_CACHE_WARM_MARKER_NAME = ".ra_sim_numba_cache_ready"
 
 
 def _all_logging_disabled() -> bool:
@@ -2222,6 +2227,11 @@ def _shutdown_gui():
     simulation_runtime_state.interaction_settle_token = None
     gui_controllers.clear_tk_after_token(
         root,
+        getattr(simulation_runtime_state, "first_visible_simulation_settle_token", None),
+    )
+    simulation_runtime_state.first_visible_simulation_settle_token = None
+    gui_controllers.clear_tk_after_token(
+        root,
         simulation_runtime_state.geometry_fit_poll_token,
     )
     simulation_runtime_state.geometry_fit_poll_token = None
@@ -2397,12 +2407,63 @@ def _clear_initial_simulation_loading_overlay(*, redraw: bool = False) -> None:
             pass
 
 
+def _numba_cache_dir() -> Path:
+    configured_root = str(os.environ.get("NUMBA_CACHE_DIR", "")).strip()
+    if configured_root:
+        return Path(configured_root).expanduser()
+    return user_cache_root() / "numba"
+
+
+def _numba_cache_warm_marker_path() -> Path:
+    return _numba_cache_dir() / _NUMBA_CACHE_WARM_MARKER_NAME
+
+
+def _mark_numba_cache_compiled_artifacts_available() -> None:
+    global _NUMBA_CACHE_HAS_COMPILED_ARTIFACTS
+
+    _NUMBA_CACHE_HAS_COMPILED_ARTIFACTS = True
+    marker_path = _numba_cache_warm_marker_path()
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.touch(exist_ok=True)
+    except Exception:
+        pass
+
+
+def _numba_cache_contains_compiled_artifacts() -> bool:
+    global _NUMBA_CACHE_HAS_COMPILED_ARTIFACTS
+
+    if _NUMBA_CACHE_HAS_COMPILED_ARTIFACTS is not None:
+        return bool(_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS)
+
+    marker_path = _numba_cache_warm_marker_path()
+    try:
+        has_compiled_artifacts = bool(marker_path.exists())
+    except Exception:
+        has_compiled_artifacts = False
+
+    _NUMBA_CACHE_HAS_COMPILED_ARTIFACTS = bool(has_compiled_artifacts)
+    return bool(has_compiled_artifacts)
+
+
+def _initial_simulation_loading_message() -> str:
+    if _numba_cache_contains_compiled_artifacts():
+        return "Loading simulation..."
+    return "Loading first simulation may take longer if this is the first run on this computer"
+
+
+def _initial_simulation_progress_text() -> str:
+    if _numba_cache_contains_compiled_artifacts():
+        return "Computing initial simulation..."
+    return "Computing initial simulation... First run on this computer may take longer."
+
+
 def _show_initial_simulation_loading_overlay() -> None:
     _clear_initial_simulation_loading_overlay(redraw=False)
     text_artist = ax.text(
         0.5,
         0.56,
-        "Loading first simulation may take longer",
+        _initial_simulation_loading_message(),
         transform=ax.transAxes,
         ha="center",
         va="center",
@@ -2979,6 +3040,118 @@ def _configure_primary_viewport_redraw_helpers() -> None:
                 except Exception:
                     pass
         _request_legacy_main_matplotlib_redraw(force=bool(force))
+
+
+def _schedule_post_idle_main_canvas_redraw() -> None:
+    """Force one main-canvas redraw after Tk returns to the event loop."""
+
+    after_idle = getattr(root, "after_idle", None)
+    if callable(after_idle):
+        try:
+            after_idle(lambda: _request_main_canvas_redraw(force_matplotlib=True))
+            return
+        except Exception:
+            pass
+    _request_main_canvas_redraw(force_matplotlib=True)
+
+
+def _schedule_first_visible_simulation_settle_pass() -> None:
+    """Delay one detector settle pass until Tk and Matplotlib have stabilized."""
+
+    expected_signature = getattr(
+        simulation_runtime_state,
+        "last_unscaled_image_signature",
+        None,
+    )
+    if expected_signature is None:
+        gui_controllers.clear_tk_after_token(
+            root,
+            getattr(simulation_runtime_state, "first_visible_simulation_settle_token", None),
+        )
+        simulation_runtime_state.first_visible_simulation_settle_token = None
+        simulation_runtime_state.first_visible_simulation_settled_signature = None
+        return
+
+    gui_controllers.clear_tk_after_token(
+        root,
+        getattr(simulation_runtime_state, "first_visible_simulation_settle_token", None),
+    )
+    simulation_runtime_state.first_visible_simulation_settle_token = None
+
+    def _schedule_delayed_settle(callback) -> bool:
+        after = getattr(root, "after", None)
+        if not callable(after):
+            return False
+        try:
+            simulation_runtime_state.first_visible_simulation_settle_token = after(
+                settle_delay_ms,
+                callback,
+            )
+            return True
+        except Exception:
+            simulation_runtime_state.first_visible_simulation_settle_token = None
+            return False
+
+    def _run_first_visible_simulation_settle(*, attempt: int, retry_allowed: bool) -> None:
+        simulation_runtime_state.first_visible_simulation_settle_token = None
+        if getattr(simulation_runtime_state, "last_unscaled_image_signature", None) != expected_signature:
+            return
+        if getattr(simulation_runtime_state, "unscaled_image", None) is None:
+            return
+        if _resolved_primary_analysis_display_mode() != "detector":
+            return
+        if bool(getattr(simulation_runtime_state, "preview_active", False)):
+            return
+        if simulation_runtime_state.worker_active_job is not None:
+            return
+        if simulation_runtime_state.worker_queued_job is not None:
+            return
+        if _live_interaction_active():
+            return
+        try:
+            apply_scale_factor_to_existing_results(
+                update_limits=False,
+                update_1d=False,
+                update_canvas=False,
+                update_chi_square=False,
+            )
+            _refresh_settled_overlays()
+            _request_legacy_main_matplotlib_redraw(force=True)
+            simulation_runtime_state.first_visible_simulation_settled_signature = (
+                expected_signature
+            )
+        except Exception as exc:
+            _append_runtime_update_exception_trace(
+                "first_visible_simulation_settle_failed",
+                type(exc),
+                exc,
+                exc.__traceback__,
+                attempt=int(attempt),
+                retry_allowed=bool(retry_allowed),
+            )
+            if retry_allowed:
+                retry_callback = lambda: _run_first_visible_simulation_settle(
+                    attempt=(int(attempt) + 1),
+                    retry_allowed=False,
+                )
+                if _schedule_delayed_settle(retry_callback):
+                    return
+                retry_callback()
+                return
+            _request_legacy_main_matplotlib_redraw(force=True)
+
+    settle_delay_ms = int(globals().get("LIVE_DRAG_SETTLE_MS", 80))
+    if _schedule_delayed_settle(
+        lambda: _run_first_visible_simulation_settle(
+            attempt=1,
+            retry_allowed=True,
+        )
+    ):
+        return
+    _run_first_visible_simulation_settle(
+        attempt=1,
+        retry_allowed=True,
+    )
 
 
 def _bind_primary_canvas_interactions(target_canvas) -> None:
@@ -4436,10 +4609,16 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
 def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
     _refresh_geometry_manual_pick_session()
+    refresh_entry_geometry = getattr(
+        globals().get("geometry_manual_projection_workflow"),
+        "refresh_entry_geometry",
+        None,
+    )
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
         geometry_manual_state.pick_session,
         current_background_index=background_runtime_state.current_background_index,
         use_caked_display=_geometry_manual_pick_uses_caked_space(),
+        refresh_entry_geometry=refresh_entry_geometry,
         candidate_source_key=_geometry_manual_candidate_source_key,
         entry_display_coords=_geometry_manual_entry_display_coords,
     )
@@ -6405,6 +6584,9 @@ def _initialize_runtime_controls_block_10() -> None:
             remaining_candidates=_geometry_manual_unassigned_group_candidates,
             preview_due=_geometry_manual_preview_due,
             nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
+            find_peak_record_for_click=(
+                peak_selection_runtime_callbacks.find_peak_record_for_canvas_click
+            ),
             position_error_px=_geometry_manual_position_error_px,
             position_sigma_px=_geometry_manual_position_sigma_px,
             caked_angles_to_background_display_coords=(_caked_angles_to_background_display_coords),
@@ -6930,7 +7112,9 @@ def _initialize_runtime_controls_block_15() -> None:
                 if getattr(geometry_runtime_state, "qr_cylinder_band_cache", None) is not None
                 else None
             ),
-            detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get("sig"),
+            detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get(
+                "sig"
+            ),
             set_status_text_factory=lambda: (
                 (lambda text: progress_label_positions.config(text=text))
                 if "progress_label_positions" in globals()
@@ -6971,6 +7155,14 @@ def _initialize_runtime_controls_block_15() -> None:
             restore_geometry_manual_pick_view=_restore_geometry_manual_pick_view,
             render_current_geometry_manual_pairs=_render_current_geometry_manual_pairs,
             caked_view_enabled_factory=lambda: _active_caked_primary_view(),
+            detector_view_limits_factory=lambda: (
+                (
+                    (0.0, float(image_size)),
+                    (float(image_size), 0.0),
+                )
+                if _resolved_primary_analysis_display_mode() == "detector"
+                else None
+            ),
             set_geometry_status_text_factory=lambda: (
                 (lambda text: progress_label_geometry.config(text=text))
                 if "progress_label_geometry" in globals()
@@ -8566,6 +8758,7 @@ def _store_primary_cache_payload(
     active_keys: Sequence[object],
     contribution_keys: Sequence[object],
     raw_hit_tables: Sequence[np.ndarray],
+    best_sample_indices: Sequence[object] | None,
 ) -> None:
     _primary_cache_helpers.store_primary_cache_payload(
         simulation_runtime_state,
@@ -8574,6 +8767,7 @@ def _store_primary_cache_payload(
         active_keys=active_keys,
         contribution_keys=contribution_keys,
         raw_hit_tables=raw_hit_tables,
+        best_sample_indices=best_sample_indices,
         retain_runtime_optional_cache=_retain_runtime_optional_cache,
         trace_live_cache_event=_trace_live_cache_event,
         live_cache_count=_live_cache_count,
@@ -8823,34 +9017,51 @@ def _prepare_caked_intersection_cache(
     intersection_cache,
     *,
     transform_bundle: CakeTransformBundle | None,
+    pixel_size_m,
+    distance_m,
+    center_row_px,
+    center_col_px,
 ):
     source_tables = _copy_intersection_cache_tables(intersection_cache)
     if not source_tables:
         return source_tables
+
+    portable_geometry = None
+    if isinstance(transform_bundle, CakeTransformBundle):
+        try:
+            portable_geometry = build_geometry(
+                pixel_size_m=float(pixel_size_m),
+                distance_m=float(distance_m),
+                center_row_px=float(center_row_px),
+                center_col_px=float(center_col_px),
+            )
+        except Exception:
+            portable_geometry = None
 
     transformed = []
     for table in source_tables:
         try:
             arr = np.asarray(table, dtype=float)
         except Exception:
-            arr = np.empty((0, 16), dtype=float)
+            arr = np.empty((0, 19), dtype=float)
 
         if arr.ndim != 2:
             transformed.append(arr.copy())
             continue
 
-        out_cols = max(int(arr.shape[1]), 16)
+        out_cols = max(int(arr.shape[1]), 19)
         out = np.full((arr.shape[0], out_cols), np.nan, dtype=float)
         if arr.shape[0] > 0 and arr.shape[1] > 0:
             out[:, : arr.shape[1]] = arr
-        if out.shape[1] >= 16:
-            out[:, 14] = np.nan
-            out[:, 15] = np.nan
+        if out.shape[1] >= 19:
+            out[:, 17] = np.nan
+            out[:, 18] = np.nan
 
         if (
             arr.shape[0] == 0
             or arr.shape[1] < 4
             or not isinstance(transform_bundle, CakeTransformBundle)
+            or portable_geometry is None
         ):
             transformed.append(out)
             continue
@@ -8858,26 +9069,28 @@ def _prepare_caked_intersection_cache(
         cols = np.asarray(arr[:, 2], dtype=float)
         rows = np.asarray(arr[:, 3], dtype=float)
         valid = np.isfinite(cols) & np.isfinite(rows)
-        detector_shape = getattr(transform_bundle, "detector_shape", None)
-
-        for idx in np.flatnonzero(valid):
-            bundle_col, bundle_row = _native_detector_coords_to_bundle_detector_coords(
-                float(cols[idx]),
-                float(rows[idx]),
-                detector_shape,
+        valid_indices = np.flatnonzero(valid)
+        if valid_indices.size == 0:
+            transformed.append(out)
+            continue
+        try:
+            two_theta, phi = detector_points_to_angles(
+                cols[valid_indices],
+                rows[valid_indices],
+                portable_geometry,
             )
-            if bundle_col is None or bundle_row is None:
-                continue
-            two_theta, phi = detector_pixel_to_caked_bin(
-                transform_bundle,
-                float(bundle_col),
-                float(bundle_row),
-            )
-            if two_theta is None or phi is None:
-                continue
-            if np.isfinite(two_theta) and np.isfinite(phi):
-                out[idx, 14] = float(two_theta)
-                out[idx, 15] = float(phi)
+        except Exception:
+            transformed.append(out)
+            continue
+        two_theta_arr = np.asarray(two_theta, dtype=float).reshape(-1)
+        phi_arr = np.asarray(phi, dtype=float).reshape(-1)
+        if two_theta_arr.shape != phi_arr.shape or two_theta_arr.size != valid_indices.size:
+            transformed.append(out)
+            continue
+        finite = np.isfinite(two_theta_arr) & np.isfinite(phi_arr)
+        if np.any(finite):
+            out[valid_indices[finite], 17] = two_theta_arr[finite]
+            out[valid_indices[finite], 18] = phi_arr[finite]
         transformed.append(out)
 
     return transformed
@@ -8912,11 +9125,14 @@ def _live_caked_intersection_cache_matches_active_bundle() -> bool:
 
 
 def _live_caked_intersection_cache_matches_active_source() -> bool:
-    return getattr(
-        simulation_runtime_state,
-        "last_caked_intersection_cache_source_signature",
-        None,
-    ) == _current_combined_detector_intersection_cache_signature()
+    return (
+        getattr(
+            simulation_runtime_state,
+            "last_caked_intersection_cache_source_signature",
+            None,
+        )
+        == _current_combined_detector_intersection_cache_signature()
+    )
 
 
 def _live_caked_intersection_cache_is_current() -> bool:
@@ -10881,7 +11097,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 )
             ),
             "primary_hit_tables_raw": [],
+            "primary_best_sample_indices": [],
             "projection_debug_log_path": None,
+            "numba_cache_compiled_artifacts_available": False,
             "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
         }
 
@@ -10993,45 +11211,49 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         request_collect_hit_tables = bool(collect_hit_tables or capture_raw_hit_tables)
         if isinstance(data, dict):
             if len(data) == 0:
-                return buf, [], []
-            result = simulate_qr_rods_request(
-                data,
-                build_request(
-                    np.empty((0, 3), dtype=np.float64),
-                    np.empty(0, dtype=np.float64),
-                    a_val=a_val,
-                    c_val=c_val,
-                    image_buffer=buf,
-                    collect_hit_tables=request_collect_hit_tables,
-                ),
-            )
-            return (
-                result.image,
-                _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
-                _copy_intersection_cache_tables(result.intersection_cache),
-            )
-
-        miller_arr = np.asarray(data, dtype=np.float64)
-        intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
-        if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
-            return buf, [], []
-        row_count = min(miller_arr.shape[0], intens_vals.shape[0])
-        if row_count <= 0:
-            return buf, [], []
-        result = simulate_request(
-            build_request(
-                miller_arr[:row_count, :],
-                intens_vals[:row_count],
+                return buf, [], [], np.empty((0,), dtype=np.int64), None
+            request = build_request(
+                np.empty((0, 3), dtype=np.float64),
+                np.empty(0, dtype=np.float64),
                 a_val=a_val,
                 c_val=c_val,
                 image_buffer=buf,
                 collect_hit_tables=request_collect_hit_tables,
             )
+            result = simulate_qr_rods_request(
+                data,
+                request,
+            )
+            return (
+                result.image,
+                _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
+                _copy_intersection_cache_tables(result.intersection_cache),
+                np.asarray(request.best_sample_indices_out, dtype=np.int64).copy(),
+                result.used_python_runner,
+            )
+
+        miller_arr = np.asarray(data, dtype=np.float64)
+        intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
+        if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
+            return buf, [], [], np.empty((0,), dtype=np.int64), None
+        row_count = min(miller_arr.shape[0], intens_vals.shape[0])
+        if row_count <= 0:
+            return buf, [], [], np.empty((0,), dtype=np.int64), None
+        request = build_request(
+            miller_arr[:row_count, :],
+            intens_vals[:row_count],
+            a_val=a_val,
+            c_val=c_val,
+            image_buffer=buf,
+            collect_hit_tables=request_collect_hit_tables,
         )
+        result = simulate_request(request)
         return (
             result.image,
             _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
             _copy_intersection_cache_tables(result.intersection_cache),
+            np.asarray(request.best_sample_indices_out, dtype=np.int64).copy(),
+            result.used_python_runner,
         )
 
     primary_data = job["primary_data"]
@@ -11052,10 +11274,20 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     raw_hit_tables2: list[object] = []
     cache1: list[object] = []
     cache2: list[object] = []
+    best_sample_indices1 = np.empty((0,), dtype=np.int64)
+    best_sample_indices2 = np.empty((0,), dtype=np.int64)
+    primary_used_python_runner: bool | None = None
+    secondary_used_python_runner: bool | None = None
 
     try:
         if bool(job["run_primary"]):
-            img1, raw_hit_tables1, cache1 = run_one(
+            (
+                img1,
+                raw_hit_tables1,
+                cache1,
+                best_sample_indices1,
+                primary_used_python_runner,
+            ) = run_one(
                 primary_data,
                 primary_intensities,
                 float(job["a_primary"]),
@@ -11065,7 +11297,13 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             )
 
         if bool(job["run_secondary"]):
-            img2, raw_hit_tables2, cache2 = run_one(
+            (
+                img2,
+                raw_hit_tables2,
+                cache2,
+                best_sample_indices2,
+                secondary_used_python_runner,
+            ) = run_one(
                 secondary_data,
                 secondary_intensities,
                 float(job["a_secondary"]),
@@ -11097,6 +11335,17 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             img2 = np.zeros((image_size, image_size), dtype=np.float64)
 
         projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
+        used_python_runner_flags = [
+            flag
+            for flag in (
+                primary_used_python_runner,
+                secondary_used_python_runner,
+            )
+            if flag is not None
+        ]
+        numba_cache_compiled_artifacts_available = bool(
+            used_python_runner_flags and not any(bool(flag) for flag in used_python_runner_flags)
+        )
         return {
             "job_id": int(job["job_id"]),
             "job_kind": job_kind,
@@ -11124,6 +11373,10 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "primary_hit_tables_raw": _copy_hit_tables(
                 raw_hit_tables1 if capture_primary_hit_tables_raw else []
             ),
+            "primary_best_sample_indices": np.asarray(
+                best_sample_indices1,
+                dtype=np.int64,
+            ).copy(),
             "primary_max_positions": list(primary_peak_tables),
             "secondary_max_positions": list(secondary_peak_tables),
             "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
@@ -11137,6 +11390,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 for _ in range(secondary_peak_table_count)
             ],
             "projection_debug_log_path": projection_debug_log_path,
+            "numba_cache_compiled_artifacts_available": numba_cache_compiled_artifacts_available,
             "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
         }
     except Exception:
@@ -11415,12 +11669,15 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             ),
             contribution_keys=result.get("primary_contribution_keys", []),
             raw_hit_tables=result.get("primary_hit_tables_raw", []),
+            best_sample_indices=result.get("primary_best_sample_indices", []),
         )
     _reset_combined_simulation_artifacts()
     simulation_runtime_state.last_image_generation_ms = float(
         result.get("image_generation_elapsed_ms", float("nan"))
     )
     simulation_runtime_state.preview_active = bool(result.get("is_preview", False))
+    if bool(result.get("numba_cache_compiled_artifacts_available", False)):
+        _mark_numba_cache_compiled_artifacts_available()
     preview_sample_count = result.get("preview_sample_count")
     simulation_runtime_state.preview_sample_count = (
         int(preview_sample_count) if preview_sample_count is not None else None
@@ -11927,6 +12184,10 @@ def _restore_caked_display_payload_from_cached_results(
         caked_intersection_cache = _prepare_caked_intersection_cache(
             getattr(simulation_runtime_state, "stored_intersection_cache", ()),
             transform_bundle=resolved_bundle,
+            pixel_size_m=float(pixel_size_m),
+            distance_m=float(corto_detector_var.get()),
+            center_row_px=float(center_x_var.get()),
+            center_col_px=float(center_y_var.get()),
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
         simulation_runtime_state.last_caked_intersection_cache_transform_bundle = resolved_bundle
@@ -12057,6 +12318,9 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     cached_bg_res2 = job.get("cached_bg_res2")
     cached_bg_caked = job.get("cached_bg_caked")
     intersection_cache = _copy_intersection_cache_tables(job.get("intersection_cache"))
+    job_center = np.asarray(job.get("center", ()), dtype=np.float64).reshape(-1)
+    job_center_row_px = float(job_center[0]) if job_center.size >= 2 else None
+    job_center_col_px = float(job_center[1]) if job_center.size >= 2 else None
 
     analysis_start_time = perf_counter()
     with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
@@ -12140,6 +12404,10 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     sim_caked_intersection_cache = _prepare_caked_intersection_cache(
         intersection_cache,
         transform_bundle=resolved_bundle,
+        pixel_size_m=job.get("pixel_size_m"),
+        distance_m=job.get("distance_m"),
+        center_row_px=job_center_row_px,
+        center_col_px=job_center_col_px,
     )
 
     return {
@@ -12621,6 +12889,8 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.interaction_drag_active = False
     simulation_runtime_state.interaction_settle_token = None
     simulation_runtime_state.interaction_drag_requires_settled_update = False
+    simulation_runtime_state.first_visible_simulation_settle_token = None
+    simulation_runtime_state.first_visible_simulation_settled_signature = None
     simulation_runtime_state.chi_square_update_token = 0
     simulation_runtime_state.chi_square_state = {
         "last_ts": 0.0,
@@ -12937,6 +13207,9 @@ def do_update():
 
     simulation_runtime_state.update_pending = None
     simulation_runtime_state.update_running = True
+    first_visible_simulation_before_update = bool(
+        simulation_runtime_state.stored_sim_image is not None
+    )
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "applying"
     _refresh_run_status_bar()
@@ -13260,6 +13533,10 @@ def do_update():
                     "primary_hit_tables_raw",
                     [],
                 ),
+                best_sample_indices=ready_simulation_result.get(
+                    "primary_best_sample_indices",
+                    [],
+                ),
             )
             rematerialized_primary = _rematerialize_primary_cache_artifacts(
                 image_size=int(image_size),
@@ -13569,7 +13846,11 @@ def do_update():
                 and simulation_runtime_state.worker_queued_job is None
             ):
                 if "progress_label" in globals() and progress_label is not None:
-                    progress_label.config(text="Computing initial simulation...")
+                    progress_label.config(text=_initial_simulation_progress_text())
+                    try:
+                        root.update_idletasks()
+                    except Exception:
+                        pass
                 sync_result = _run_simulation_generation_job(
                     {
                         **simulation_job,
@@ -14131,6 +14412,42 @@ def do_update():
             _clear_deferred_overlays(clear_qr_overlay=False)
     else:
         _refresh_settled_overlays()
+
+    first_visible_detector_simulation_after_update = bool(
+        (not first_visible_simulation_before_update)
+        and simulation_runtime_state.stored_sim_image is not None
+        and simulation_runtime_state.unscaled_image is not None
+        and target_primary_view_mode == "detector"
+    )
+    if first_visible_detector_simulation_after_update:
+        _schedule_post_idle_main_canvas_redraw()
+
+    current_unscaled_image_signature = getattr(
+        simulation_runtime_state,
+        "last_unscaled_image_signature",
+        None,
+    )
+    if current_unscaled_image_signature is None:
+        gui_controllers.clear_tk_after_token(
+            root,
+            getattr(simulation_runtime_state, "first_visible_simulation_settle_token", None),
+        )
+        simulation_runtime_state.first_visible_simulation_settle_token = None
+        simulation_runtime_state.first_visible_simulation_settled_signature = None
+    elif (
+        target_primary_view_mode == "detector"
+        and not bool(simulation_runtime_state.preview_active)
+        and simulation_runtime_state.worker_active_job is None
+        and simulation_runtime_state.worker_queued_job is None
+        and not _live_interaction_active()
+        and current_unscaled_image_signature
+        != getattr(
+            simulation_runtime_state,
+            "first_visible_simulation_settled_signature",
+            None,
+        )
+    ):
+        _schedule_first_visible_simulation_settle_pass()
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
     total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3
@@ -16229,6 +16546,13 @@ def _initialize_runtime_controls_block_38() -> None:
             primary_c_factory=lambda: float(c_var.get()) if "c_var" in globals() else float(cv),
             image_size_factory=lambda: int(image_size),
             native_sim_to_display_coords=_native_sim_to_display_coords,
+            caked_view_enabled_factory=lambda: _active_caked_primary_view(),
+            native_detector_coords_to_caked_display_coords=(
+                _native_detector_coords_to_live_caked_coords
+            ),
+            project_peaks_to_current_view=(
+                _project_geometry_manual_peaks_to_current_view
+            ),
         )
     )
     _build_live_preview_simulated_peaks_from_cache = (
@@ -22010,9 +22334,9 @@ def _analysis_cache_overlay_coords(
         use_cached_caked_coords = bool(_analysis_cache_overlay_table_uses_live_caked_cache(table))
         x_vals = np.full(arr.shape[0], np.nan, dtype=float)
         y_vals = np.full(arr.shape[0], np.nan, dtype=float)
-        if use_cached_caked_coords and arr.shape[1] >= 16:
-            x_vals[:] = arr[:, 14]
-            y_vals[:] = arr[:, 15]
+        if use_cached_caked_coords and arr.shape[1] >= 19:
+            x_vals[:] = arr[:, 17]
+            y_vals[:] = arr[:, 18]
         invalid = ~(np.isfinite(x_vals) & np.isfinite(y_vals))
         if np.any(invalid):
             for idx in np.flatnonzero(invalid):
@@ -27228,12 +27552,6 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             matplotlib_canvas.draw()
             root.update_idletasks()
             do_update()
-            if (
-                simulation_runtime_state.stored_sim_image is not None
-                and simulation_runtime_state.worker_active_job is None
-            ):
-                _request_main_canvas_redraw(force_matplotlib=True)
-                root.update_idletasks()
         except Exception as exc:
             progress_label.config(text=f"Startup initialization failed: {exc}")
             try:

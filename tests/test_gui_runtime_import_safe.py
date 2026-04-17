@@ -355,19 +355,20 @@ def test_shutdown_gui_clears_geometry_fit_workers_and_pending_tokens(
     monkeypatch.setattr(
         runtime_session,
         "simulation_runtime_state",
-        SimpleNamespace(
-            update_phase="running",
-            update_running=True,
-            integration_update_pending="integration-token",
-            update_pending="update-token",
-            worker_poll_token="worker-poll-token",
-            analysis_poll_token="analysis-poll-token",
-            interaction_settle_token="settle-token",
-            geometry_fit_poll_token="geometry-fit-poll-token",
-            worker_executor=worker_executor,
-            worker_future=worker_future,
-            worker_active_job={"job_id": 1},
-            worker_queued_job={"job_id": 2},
+            SimpleNamespace(
+                update_phase="running",
+                update_running=True,
+                integration_update_pending="integration-token",
+                update_pending="update-token",
+                worker_poll_token="worker-poll-token",
+                analysis_poll_token="analysis-poll-token",
+                interaction_settle_token="settle-token",
+                first_visible_simulation_settle_token="first-visible-settle-token",
+                geometry_fit_poll_token="geometry-fit-poll-token",
+                worker_executor=worker_executor,
+                worker_future=worker_future,
+                worker_active_job={"job_id": 1},
+                worker_queued_job={"job_id": 2},
             worker_ready_result={"status": "ready"},
             analysis_executor=analysis_executor,
             analysis_future=analysis_future,
@@ -391,6 +392,7 @@ def test_shutdown_gui_clears_geometry_fit_workers_and_pending_tokens(
         "worker-poll-token",
         "analysis-poll-token",
         "settle-token",
+        "first-visible-settle-token",
         "geometry-fit-poll-token",
     ]
     assert worker_future.cancel_calls == 1
@@ -2231,7 +2233,7 @@ def test_runtime_impl_wires_detector_geometry_signature_factory() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert (
-        'detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get("sig")'
+        "detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get("
         in source
     )
 
@@ -2450,8 +2452,7 @@ def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() ->
         "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = " in apply_source
     )
     assert (
-        "simulation_runtime_state.last_caked_intersection_cache_source_signature = "
-        in apply_source
+        "simulation_runtime_state.last_caked_intersection_cache_source_signature = " in apply_source
     )
     assert (
         "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache"
@@ -3478,24 +3479,49 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
         detector_shape = (64, 96)
 
     bundle = FakeBundle()
-    rotate_calls: list[tuple[float, float, tuple[int, int], int]] = []
-    projector_calls: list[tuple[object, float, float]] = []
+    geometry_token = object()
+    geometry_calls: list[dict[str, float]] = []
+    projector_calls: list[tuple[np.ndarray, np.ndarray, object]] = []
 
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(99.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(98.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(97.0), raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 9.9e-4, raising=False)
     monkeypatch.setattr(
         runtime_session,
-        "_rotate_point_for_display",
-        lambda col, row, shape, k: (
-            rotate_calls.append((float(col), float(row), tuple(shape), int(k)))
-            or (41.0, 49.0)
+        "_native_detector_coords_to_bundle_detector_coords",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("bundle-coordinate remap should not run")
         ),
     )
     monkeypatch.setattr(
         runtime_session,
         "detector_pixel_to_caked_bin",
-        lambda transform_bundle, col, row: (
-            projector_calls.append((transform_bundle, float(col), float(row)))
-            or (float(col) + 0.5, float(row) - 0.25)
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cake-bin projector should not run")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "build_geometry",
+        lambda **kwargs: geometry_calls.append({k: float(v) for k, v in kwargs.items()}) or geometry_token,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_points_to_angles",
+        lambda cols, rows, geometry: (
+            projector_calls.append(
+                (
+                    np.asarray(cols, dtype=float).copy(),
+                    np.asarray(rows, dtype=float).copy(),
+                    geometry,
+                )
+            )
+            or (
+                np.asarray(cols, dtype=float) + 0.5,
+                np.asarray(rows, dtype=float) - 0.25,
+            )
         ),
     )
 
@@ -3507,15 +3533,30 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
             )
         ],
         transform_bundle=bundle,
+        pixel_size_m=1.0e-4,
+        distance_m=0.5,
+        center_row_px=1.5,
+        center_col_px=2.5,
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert rotate_calls == [(40.0, 50.0, (64, 96), runtime_session.DISPLAY_ROTATE_K)]
-    assert projector_calls == [(bundle, 41.0, 49.0)]
-    assert out.shape == (1, 16)
+    assert geometry_calls == [
+        {
+            "pixel_size_m": 1.0e-4,
+            "distance_m": 0.5,
+            "center_row_px": 1.5,
+            "center_col_px": 2.5,
+        }
+    ]
+    assert len(projector_calls) == 1
+    cols_arg, rows_arg, geometry_arg = projector_calls[0]
+    np.testing.assert_allclose(cols_arg, [40.0])
+    np.testing.assert_allclose(rows_arg, [50.0])
+    assert geometry_arg is geometry_token
+    assert out.shape == (1, 19)
     np.testing.assert_allclose(out[0, :9], [1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0])
-    assert out[0, 14] == 41.5
-    assert out[0, 15] == 48.75
+    assert out[0, 17] == 40.5
+    assert out[0, 18] == 49.75
 
 
 def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> (
@@ -3531,16 +3572,20 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_va
     transformed = runtime_session._prepare_caked_intersection_cache(
         [table],
         transform_bundle=None,
+        pixel_size_m=1.0e-4,
+        distance_m=0.5,
+        center_row_px=1.5,
+        center_col_px=2.5,
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert out.shape == (1, 16)
-    np.testing.assert_allclose(out[0, :14], table[0, :14])
-    assert np.isnan(out[0, 14])
-    assert np.isnan(out[0, 15])
+    assert out.shape == (1, 19)
+    np.testing.assert_allclose(out[0, :16], table[0, :16])
+    assert np.isnan(out[0, 17])
+    assert np.isnan(out[0, 18])
 
 
-def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_projector_returns_none(
+def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact_angles_are_nan(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -3549,7 +3594,8 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_proje
         detector_shape = (64, 96)
 
     bundle = FakeBundle()
-    projector_calls: list[tuple[object, float, float]] = []
+    geometry_token = object()
+    projector_calls: list[tuple[np.ndarray, np.ndarray, object]] = []
     table = np.asarray(
         [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
         dtype=float,
@@ -3558,28 +3604,56 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_proje
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
     monkeypatch.setattr(
         runtime_session,
-        "_rotate_point_for_display",
-        lambda col, row, shape, k: (float(col) + 1.0, float(row) - 1.0),
+        "_native_detector_coords_to_bundle_detector_coords",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("bundle-coordinate remap should not run")
+        ),
     )
     monkeypatch.setattr(
         runtime_session,
         "detector_pixel_to_caked_bin",
-        lambda transform_bundle, col, row: (
-            projector_calls.append((transform_bundle, float(col), float(row))) or (None, None)
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cake-bin projector should not run")
+        ),
+    )
+    monkeypatch.setattr(runtime_session, "build_geometry", lambda **kwargs: geometry_token)
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_points_to_angles",
+        lambda cols, rows, geometry: (
+            projector_calls.append(
+                (
+                    np.asarray(cols, dtype=float).copy(),
+                    np.asarray(rows, dtype=float).copy(),
+                    geometry,
+                )
+            )
+            or (
+                np.asarray([np.nan], dtype=float),
+                np.asarray([np.nan], dtype=float),
+            )
         ),
     )
 
     transformed = runtime_session._prepare_caked_intersection_cache(
         [table],
         transform_bundle=bundle,
+        pixel_size_m=1.0e-4,
+        distance_m=0.5,
+        center_row_px=1.5,
+        center_col_px=2.5,
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert projector_calls == [(bundle, 41.0, 49.0)]
-    assert out.shape == (1, 16)
-    np.testing.assert_allclose(out[0, :14], table[0, :14])
-    assert np.isnan(out[0, 14])
-    assert np.isnan(out[0, 15])
+    assert len(projector_calls) == 1
+    cols_arg, rows_arg, geometry_arg = projector_calls[0]
+    np.testing.assert_allclose(cols_arg, [40.0])
+    np.testing.assert_allclose(rows_arg, [50.0])
+    assert geometry_arg is geometry_token
+    assert out.shape == (1, 19)
+    np.testing.assert_allclose(out[0, :16], table[0, :16])
+    assert np.isnan(out[0, 17])
+    assert np.isnan(out[0, 18])
 
 
 def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_columns(
@@ -3591,29 +3665,51 @@ def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_colum
         detector_shape = (32, 48)
 
     bundle = FakeBundle()
-    detector_cache = [
-        np.asarray([[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]], dtype=float)
-    ]
-    projector_calls: list[tuple[object, float, float]] = []
+    detector_cache = [np.asarray([[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]], dtype=float)]
+    geometry_token = object()
+    projector_calls: list[tuple[np.ndarray, np.ndarray, object]] = []
 
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
     monkeypatch.setattr(
         runtime_session,
-        "_rotate_point_for_display",
-        lambda col, row, shape, k: (float(col) + 1.0, float(row) - 1.0),
+        "_native_detector_coords_to_bundle_detector_coords",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("bundle-coordinate remap should not run")
+        ),
     )
     monkeypatch.setattr(
         runtime_session,
         "detector_pixel_to_caked_bin",
-        lambda transform_bundle, col, row: (
-            projector_calls.append((transform_bundle, float(col), float(row)))
-            or (12.25, -33.5)
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cake-bin projector should not run")
+        ),
+    )
+    monkeypatch.setattr(runtime_session, "build_geometry", lambda **kwargs: geometry_token)
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_points_to_angles",
+        lambda cols, rows, geometry: (
+            projector_calls.append(
+                (
+                    np.asarray(cols, dtype=float).copy(),
+                    np.asarray(rows, dtype=float).copy(),
+                    geometry,
+                )
+            )
+            or (
+                np.asarray([12.25], dtype=float),
+                np.asarray([-33.5], dtype=float),
+            )
         ),
     )
 
     prepared_cache = runtime_session._prepare_caked_intersection_cache(
         detector_cache,
         transform_bundle=bundle,
+        pixel_size_m=1.0e-4,
+        distance_m=0.5,
+        center_row_px=1.5,
+        center_col_px=2.5,
     )
 
     monkeypatch.setattr(
@@ -3659,9 +3755,83 @@ def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_colum
         show_caked=True,
     )
 
-    assert projector_calls == [(bundle, 41.0, 49.0)]
+    assert len(projector_calls) == 1
+    cols_arg, rows_arg, geometry_arg = projector_calls[0]
+    np.testing.assert_allclose(cols_arg, [40.0])
+    np.testing.assert_allclose(rows_arg, [50.0])
+    assert geometry_arg is geometry_token
     np.testing.assert_allclose(x_vals, [12.25])
     np.testing.assert_allclose(y_vals, [-33.5])
+
+
+def test_run_analysis_job_uses_job_geometry_for_caked_intersection_cache(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        detector_shape = (32, 48)
+
+    captured: dict[str, object] = {}
+    bundle = FakeBundle()
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(99.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(98.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(97.0), raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 9.9e-4, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _job: object())
+    monkeypatch.setattr(runtime_session, "caking", lambda image, *_args, **_kwargs: image)
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.zeros((2, 2), dtype=float),
+            "radial": np.zeros(2, dtype=float),
+            "azimuth": np.zeros(2, dtype=float),
+            "extent": [0.0, 1.0, 0.0, 1.0],
+            "transform_bundle": bundle,
+            "detector_shape": bundle.detector_shape,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda cache, **kwargs: captured.update(kwargs) or list(cache),
+    )
+
+    result = runtime_session._run_analysis_job(
+        {
+            "job_id": 1,
+            "signature": "sig",
+            "epoch": 2,
+            "image": np.zeros((2, 2), dtype=float),
+            "background_image": None,
+            "intersection_cache": [
+                np.asarray([[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]], dtype=float)
+            ],
+            "center": [1.25, 2.75],
+            "distance_m": 0.625,
+            "pixel_size_m": 1.5e-4,
+            "q_space_requested": False,
+            "is_preview": False,
+        }
+    )
+
+    assert captured["transform_bundle"] is bundle
+    assert captured["pixel_size_m"] == 1.5e-4
+    assert captured["distance_m"] == 0.625
+    assert captured["center_row_px"] == 1.25
+    assert captured["center_col_px"] == 2.75
+    assert len(result["sim_caked_intersection_cache"]) == 1
+    np.testing.assert_allclose(
+        np.asarray(result["sim_caked_intersection_cache"][0], dtype=float),
+        [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]],
+    )
 
 
 def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(
@@ -3928,7 +4098,7 @@ def test_runtime_impl_full_reset_invalidates_caked_intersection_cache() -> None:
 
     clear_start = reset_source.index("simulation_runtime_state.stored_intersection_cache = None")
     clear_end = reset_source.index(
-        'simulation_runtime_state.last_unscaled_image_signature = None',
+        "simulation_runtime_state.last_unscaled_image_signature = None",
         clear_start,
     )
     clear_source = reset_source[clear_start:clear_end]
@@ -4268,6 +4438,131 @@ def _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixtur
     return ((0.0, 2.0), (2.0, 0.0))
 
 
+def _patch_do_update_first_visible_simulation_finish_prereqs(
+    monkeypatch,
+    runtime_session,
+    *,
+    scheduled_post_idle_redraw_calls: list[str],
+    scheduled_settle_calls: list[str],
+    apply_scale_factor_calls: list[dict[str, object]],
+) -> None:
+    monkeypatch.setattr(
+        runtime_session,
+        "_capture_geometry_source_snapshot",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_primary_figure_display_from_cached_results",
+        lambda *_args, **_kwargs: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **kwargs: apply_scale_factor_calls.append(dict(kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_1d_plot_cache_and_lines",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_deferred_overlays",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "qr_cylinder_overlay_runtime_refresh",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_post_idle_main_canvas_redraw",
+        lambda: scheduled_post_idle_redraw_calls.append("scheduled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_first_visible_simulation_settle_pass",
+        lambda: scheduled_settle_calls.append("scheduled"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label",
+        SimpleNamespace(config=lambda **_kwargs: None, cget=lambda _name: ""),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "update_timing_label",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_exact_cake_numba_warmup_once",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_forward_simulation_numba_warmup_once",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_qr_rod_simulation_numba_warmup_once",
+        lambda: None,
+        raising=False,
+    )
+
+
+def _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+    monkeypatch,
+    runtime_session,
+) -> list[dict[str, object]]:
+    apply_ready_calls: list[dict[str, object]] = []
+
+    def _apply_ready(result: dict[str, object]) -> None:
+        apply_ready_calls.append(dict(result))
+        runtime_session.simulation_runtime_state.stored_primary_sim_image = np.asarray(
+            result["primary_image"],
+            dtype=np.float64,
+        )
+        runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+        runtime_session.simulation_runtime_state.stored_primary_max_positions = None
+        runtime_session.simulation_runtime_state.stored_secondary_max_positions = None
+        runtime_session.simulation_runtime_state.stored_primary_source_reflection_indices = None
+        runtime_session.simulation_runtime_state.stored_secondary_source_reflection_indices = None
+        runtime_session.simulation_runtime_state.stored_primary_peak_table_lattice = None
+        runtime_session.simulation_runtime_state.stored_secondary_peak_table_lattice = None
+        runtime_session.simulation_runtime_state.stored_primary_intersection_cache = None
+        runtime_session.simulation_runtime_state.stored_secondary_intersection_cache = None
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_ready_simulation_result",
+        _apply_ready,
+        raising=False,
+    )
+    return apply_ready_calls
+
+
 def test_do_update_routes_hidden_payload_guard_into_primary_display_helper(
     monkeypatch,
 ) -> None:
@@ -4351,6 +4646,993 @@ def test_do_update_routes_hidden_payload_guard_into_primary_display_helper(
         display_helper_calls[0]["q_space_image"],
         fixture["q_space_image"],
     )
+
+
+def test_do_update_schedules_post_idle_redraw_when_worker_result_creates_first_visible_simulation(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    ready_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 1.25,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = None
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    apply_ready_calls = _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: dict(ready_result),
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert len(apply_ready_calls) == 1
+    np.testing.assert_array_equal(
+        runtime_session.simulation_runtime_state.stored_sim_image,
+        ready_result["primary_image"],
+    )
+    assert apply_scale_factor_calls == [
+        {
+            "update_limits": False,
+            "update_1d": False,
+            "force_canvas_redraw": False,
+            "update_chi_square": True,
+        }
+    ]
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_schedules_post_idle_redraw_for_first_sync_simulation(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    run_simulation_calls: list[dict[str, object]] = []
+    sync_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 2.5,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = None
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.last_sim_signature = ("stale-sim",)
+    runtime_session.simulation_runtime_state.last_simulation_signature = ("stale-sim", 0)
+    runtime_session.simulation_runtime_state.simulation_epoch = 0
+    runtime_session.simulation_runtime_state.peak_positions = []
+    runtime_session.simulation_runtime_state.peak_millers = []
+    runtime_session.simulation_runtime_state.peak_records = []
+    runtime_session.simulation_runtime_state.selected_peak_record = None
+    runtime_session.simulation_runtime_state.primary_contribution_cache_signature = None
+    runtime_session.simulation_runtime_state.primary_source_mode = ""
+    runtime_session.simulation_runtime_state.primary_active_contribution_keys = []
+    runtime_session.simulation_runtime_state.primary_hit_table_cache = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    apply_ready_calls = _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "root",
+        SimpleNamespace(update_idletasks=lambda: None),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "lambda_", runtime_session.wave_m, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_primary_cache,
+        "resolve_incremental_sf_prune_action",
+        lambda **_kwargs: runtime_session.gui_runtime_primary_cache.IncrementalSfPruneAction(
+            mode="full",
+            added_keys=(),
+            removed_keys=(),
+            missing_keys=(),
+            reason="test",
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "beam_x_array": np.zeros((1,), dtype=np.float64),
+            "beam_y_array": np.zeros((1,), dtype=np.float64),
+            "theta_array": np.zeros((1,), dtype=np.float64),
+            "phi_array": np.zeros((1,), dtype=np.float64),
+            "wavelength_array": np.full((1,), runtime_session.wave_m, dtype=np.float64),
+            "sample_weights": np.ones((1,), dtype=np.float64),
+            "n2_sample_array": None,
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+            "solve_q_steps": 1,
+            "solve_q_rel_tol": 1.0e-6,
+            "solve_q_mode": 0,
+            "_sampling_signature": ("sync-test",),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_run_simulation_generation_job",
+        lambda job: run_simulation_calls.append(dict(job)) or dict(sync_result),
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert len(run_simulation_calls) == 1
+    assert len(apply_ready_calls) == 1
+    np.testing.assert_array_equal(
+        runtime_session.simulation_runtime_state.stored_sim_image,
+        sync_result["primary_image"],
+    )
+    assert apply_scale_factor_calls == [
+        {
+            "update_limits": False,
+            "update_1d": False,
+            "force_canvas_redraw": False,
+            "update_chi_square": True,
+        }
+    ]
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_defers_first_visible_simulation_settle_while_preview_active_then_schedules_when_preview_finishes(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    ready_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 1.25,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = None
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.preview_active = True
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: dict(ready_result),
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == []
+
+    runtime_session.simulation_runtime_state.preview_active = False
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: None,
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_still_schedules_first_visible_simulation_settle_while_analysis_preview_active(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    ready_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 1.25,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = None
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.preview_active = False
+    runtime_session.simulation_runtime_state.analysis_preview_active = True
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: dict(ready_result),
+        raising=False,
+    )
+    runtime_session.do_update()
+
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_defers_first_visible_simulation_settle_while_worker_job_pending_then_schedules_when_stable(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    ready_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 1.25,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = None
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.worker_queued_job = {"job_id": 17}
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: dict(ready_result),
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == []
+
+    runtime_session.simulation_runtime_state.worker_queued_job = None
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: None,
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_still_schedules_first_visible_simulation_settle_while_analysis_job_pending(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    ready_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 1.25,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = None
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.analysis_active_job = {"job_id": 23}
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: dict(ready_result),
+        raising=False,
+    )
+    runtime_session.do_update()
+
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_schedule_first_visible_simulation_settle_pass_reapplies_display_application_after_delay(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scheduled_callbacks: list[object] = []
+    cleared_tokens: list[object] = []
+    events: list[tuple[str, object]] = []
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((delay_ms, callback))
+            return f"after-token-{len(scheduled_callbacks)}"
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **kwargs: events.append(("apply", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: events.append(("refresh", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_interaction_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-a", 1.0)
+    runtime_session.simulation_runtime_state.preview_active = False
+    runtime_session.simulation_runtime_state.worker_active_job = None
+    runtime_session.simulation_runtime_state.worker_queued_job = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settle_token = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+
+    assert cleared_tokens == [None]
+    assert len(scheduled_callbacks) == 1
+    assert scheduled_callbacks[0][0] == getattr(runtime_session, "LIVE_DRAG_SETTLE_MS", 80)
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token == "after-token-1"
+    assert events == []
+
+    scheduled_callbacks[0][1]()
+
+    assert events == [
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        ),
+        ("refresh", None),
+        ("redraw", {"force": True}),
+    ]
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
+        "sig-a",
+        1.0,
+    )
+
+
+def test_schedule_first_visible_simulation_settle_pass_runs_immediately_when_after_missing(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    events: list[tuple[str, object]] = []
+
+    class _Root:
+        after = None
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **kwargs: events.append(("apply", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: events.append(("refresh", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-a", 1.0)
+    runtime_session.simulation_runtime_state.first_visible_simulation_settle_token = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+
+    assert events == [
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        ),
+        ("refresh", None),
+        ("redraw", {"force": True}),
+    ]
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
+        "sig-a",
+        1.0,
+    )
+
+
+def test_schedule_first_visible_simulation_settle_pass_runs_immediately_when_after_raises(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    events: list[tuple[str, object]] = []
+
+    class _Root:
+        def after(self, _delay_ms, _callback) -> None:
+            raise RuntimeError("after-unavailable")
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **kwargs: events.append(("apply", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: events.append(("refresh", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-a", 1.0)
+    runtime_session.simulation_runtime_state.first_visible_simulation_settle_token = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+
+    assert events == [
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        ),
+        ("refresh", None),
+        ("redraw", {"force": True}),
+    ]
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
+        "sig-a",
+        1.0,
+    )
+
+
+def test_schedule_first_visible_simulation_settle_pass_noops_for_stale_signature(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scheduled_callbacks: list[object] = []
+    events: list[tuple[str, object]] = []
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((delay_ms, callback))
+            return "after-token-1"
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **kwargs: events.append(("apply", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: events.append(("refresh", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_interaction_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-a", 1.0)
+    runtime_session.simulation_runtime_state.preview_active = False
+    runtime_session.simulation_runtime_state.worker_active_job = None
+    runtime_session.simulation_runtime_state.worker_queued_job = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settle_token = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-b", 1.0)
+
+    scheduled_callbacks[0][1]()
+
+    assert events == []
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature is None
+
+
+def test_schedule_first_visible_simulation_settle_pass_replaces_pending_token_for_new_signature(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scheduled_callbacks: list[object] = []
+    cleared_tokens: list[object] = []
+    events: list[tuple[str, object]] = []
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((delay_ms, callback))
+            return f"after-token-{len(scheduled_callbacks)}"
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda _root, token: cleared_tokens.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **kwargs: events.append(("apply", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: events.append(("refresh", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_interaction_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.preview_active = False
+    runtime_session.simulation_runtime_state.worker_active_job = None
+    runtime_session.simulation_runtime_state.worker_queued_job = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settle_token = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-a", 1.0)
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-b", 1.0)
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+
+    assert cleared_tokens == [None, "after-token-1"]
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token == "after-token-2"
+
+    scheduled_callbacks[0][1]()
+    assert events == []
+
+    scheduled_callbacks[1][1]()
+    assert events == [
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        ),
+        ("refresh", None),
+        ("redraw", {"force": True}),
+    ]
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature == (
+        "sig-b",
+        1.0,
+    )
+
+
+def test_schedule_first_visible_simulation_settle_pass_retries_once_before_force_redraw_fallback(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scheduled_callbacks: list[object] = []
+    events: list[tuple[str, object]] = []
+    exception_trace_calls: list[dict[str, object]] = []
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((delay_ms, callback))
+            return f"after-token-{len(scheduled_callbacks)}"
+
+    def _fail_apply(**kwargs) -> None:
+        events.append(("apply", dict(kwargs)))
+        raise RuntimeError("settle-failed")
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        _fail_apply,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: events.append(("refresh", None)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_legacy_main_matplotlib_redraw",
+        lambda **kwargs: events.append(("redraw", dict(kwargs))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_defer_nonessential_redraw",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_exception_trace",
+        lambda event, exc_type, exc_value, exc_tb, **fields: exception_trace_calls.append(
+            {
+                "event": event,
+                "exc_type": getattr(exc_type, "__name__", str(exc_type)),
+                "error": str(exc_value),
+                **dict(fields),
+            }
+        ),
+        raising=False,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("sig-a", 1.0)
+    runtime_session.simulation_runtime_state.first_visible_simulation_settle_token = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+
+    runtime_session._schedule_first_visible_simulation_settle_pass()
+
+    assert len(scheduled_callbacks) == 1
+    assert events == []
+    assert exception_trace_calls == []
+
+    scheduled_callbacks[0][1]()
+
+    assert len(scheduled_callbacks) == 2
+    assert events == [
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        )
+    ]
+    assert exception_trace_calls == [
+        {
+            "event": "first_visible_simulation_settle_failed",
+            "exc_type": "RuntimeError",
+            "error": "settle-failed",
+            "attempt": 1,
+            "retry_allowed": True,
+        }
+    ]
+
+    scheduled_callbacks[1][1]()
+
+    assert events == [
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        ),
+        (
+            "apply",
+            {
+                "update_limits": False,
+                "update_1d": False,
+                "update_canvas": False,
+                "update_chi_square": False,
+            },
+        ),
+        ("redraw", {"force": True}),
+    ]
+    assert exception_trace_calls == [
+        {
+            "event": "first_visible_simulation_settle_failed",
+            "exc_type": "RuntimeError",
+            "error": "settle-failed",
+            "attempt": 1,
+            "retry_allowed": True,
+        },
+        {
+            "event": "first_visible_simulation_settle_failed",
+            "exc_type": "RuntimeError",
+            "error": "settle-failed",
+            "attempt": 2,
+            "retry_allowed": False,
+        },
+    ]
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settle_token is None
+    assert runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature is None
 
 
 def test_apply_primary_figure_display_from_cached_results_preserves_hidden_analysis_payloads_during_detector_redraw(
@@ -5294,9 +6576,7 @@ def test_toggle_caked_2d_reselects_current_hkl_peak_for_new_view(
     monkeypatch.setattr(
         runtime_session,
         "peak_selection_runtime_callbacks",
-        SimpleNamespace(
-            reselect_current_peak=lambda: reselect_calls.append("reselect") or True
-        ),
+        SimpleNamespace(reselect_current_peak=lambda: reselect_calls.append("reselect") or True),
         raising=False,
     )
     monkeypatch.setattr(
@@ -6758,6 +8038,10 @@ def test_restore_caked_payload_clears_stale_q_space_outside_live_q_space_mode(
         "_store_q_space_display_payload",
         lambda **kwargs: stored_payloads.append(dict(kwargs)),
     )
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(0.5), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(1.0), raising=False)
     monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
 
     restored = runtime_session._restore_caked_display_payload_from_cached_results(
@@ -6847,25 +8131,126 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     block_start = source.index("has_cached_simulation = (")
     block_end = source.index("elif ready_simulation_result is None and need_hit_table_refresh:")
     block = source[block_start:block_end]
+    do_update_start = source.index("def do_update():")
+    do_update_block = source[do_update_start:]
     startup_start = source.index("def _run_initial_startup_work():")
     startup_end = source.index("root.after_idle(_run_initial_startup_work)")
     startup_block = source[startup_start:startup_end]
 
+    assert "def _schedule_post_idle_main_canvas_redraw() -> None:" in source
+    assert "def _schedule_first_visible_simulation_settle_pass() -> None:" in source
     assert "def _show_initial_simulation_loading_overlay() -> None:" in source
-    assert '"Loading first simulation may take longer"' in source
+    assert "Loading first simulation may take longer" in source
     assert "_show_initial_simulation_loading_overlay()" in startup_block
     assert "matplotlib_canvas.draw()" in startup_block
     assert "root.update_idletasks()" in startup_block
-    assert "_request_main_canvas_redraw(force_matplotlib=True)" in startup_block
-    assert startup_block.index("do_update()") < startup_block.index(
-        "_request_main_canvas_redraw(force_matplotlib=True)"
-    )
-    assert startup_block.rindex("root.update_idletasks()") > startup_block.index(
-        "_request_main_canvas_redraw(force_matplotlib=True)"
-    )
+    assert "_request_main_canvas_redraw(force_matplotlib=True)" not in startup_block
+    assert '"first_visible_simulation_settle_token"' in source
+    assert '"first_visible_simulation_settled_signature"' in source
+    assert "LIVE_DRAG_SETTLE_MS" in source
+    assert "first_visible_simulation_before_update" in do_update_block
+    assert "_schedule_post_idle_main_canvas_redraw()" in do_update_block
+    assert "_schedule_first_visible_simulation_settle_pass()" in do_update_block
+    assert 'and not bool(simulation_runtime_state.preview_active)' in do_update_block
+    assert "and simulation_runtime_state.worker_active_job is None" in do_update_block
+    assert "and simulation_runtime_state.worker_queued_job is None" in do_update_block
+    assert "and not _live_interaction_active()" in do_update_block
+    assert "update_canvas=False" in source
+    assert "retry_allowed" in source
+    assert "_request_legacy_main_matplotlib_redraw(force=True)" in source
     assert "start_exact_cake_numba_warmup_in_background()" not in startup_block
     assert "_run_simulation_generation_job(" in block
-    assert 'progress_label.config(text="Computing initial simulation...")' in block
+    assert "progress_label.config(text=_initial_simulation_progress_text())" in block
+
+
+def test_runtime_impl_uses_numba_cache_heuristic_for_initial_loading_message() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "from ra_sim.user_paths import user_cache_root" in source
+    assert "_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS: bool | None = None" in source
+    assert '_NUMBA_CACHE_WARM_MARKER_NAME = ".ra_sim_numba_cache_ready"' in source
+    assert "def _numba_cache_dir() -> Path:" in source
+    assert "NUMBA_CACHE_DIR" in source
+    assert 'return user_cache_root() / "numba"' in source
+    assert "def _numba_cache_warm_marker_path() -> Path:" in source
+    assert "def _mark_numba_cache_compiled_artifacts_available() -> None:" in source
+    assert "def _numba_cache_contains_compiled_artifacts() -> bool:" in source
+    assert "if _NUMBA_CACHE_HAS_COMPILED_ARTIFACTS is not None:" in source
+    assert "_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS = True" in source
+    assert "_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS = bool(has_compiled_artifacts)" in source
+    assert "def _numba_cache_has_compiled_artifact_files(cache_root: Path) -> bool:" not in source
+    assert "marker_path.exists()" in source
+    assert "marker_path.touch(exist_ok=True)" in source
+    assert "def _initial_simulation_loading_message() -> str:" in source
+    assert "Loading first simulation may take longer" in source
+    assert "if this is the first run on this computer" in source
+    assert "def _initial_simulation_progress_text() -> str:" in source
+    assert '"Computing initial simulation..."' in source
+    assert "First run on this computer may take longer." in source
+    assert "_initial_simulation_loading_message()," in source
+    assert "progress_label.config(text=_initial_simulation_progress_text())" in source
+
+
+def test_runtime_session_geometry_manual_session_overlay_uses_projection_refresh(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    refresh_entry_geometry = lambda entry: {"refreshed": True, **dict(entry or {})}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(runtime_session, "_refresh_geometry_manual_pick_session", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_projection_workflow",
+        SimpleNamespace(refresh_entry_geometry=refresh_entry_geometry),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_state",
+        SimpleNamespace(
+            pick_session={"group_key": ("q",), "group_entries": [], "pending_entries": []}
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_candidate_source_key",
+        lambda entry: ("source", 1, 2) if entry is not None else None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_entry_display_coords",
+        lambda _entry: (0.0, 0.0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_manual_geometry",
+        SimpleNamespace(
+            geometry_manual_session_initial_pairs_display=lambda *args, **kwargs: (
+                captured.update(kwargs) or []
+            )
+        ),
+        raising=False,
+    )
+
+    runtime_session._geometry_manual_session_initial_pairs_display()
+
+    assert captured["refresh_entry_geometry"] is refresh_entry_geometry
 
 
 def test_runtime_impl_defers_exact_cake_numba_warmup_until_after_startup_work() -> None:
@@ -6979,6 +8364,7 @@ def test_runtime_session_current_qr_cylinder_caked_band_masks_uses_cached_rod_co
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     build_calls: list[float] = []
+    monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: True)
 
     monkeypatch.setattr(
         runtime_session,
@@ -7066,6 +8452,105 @@ def test_runtime_session_current_qr_cylinder_caked_band_masks_uses_cached_rod_co
     np.testing.assert_array_equal(result["union_mask"], np.ones((2, 2), dtype=bool))
 
 
+def test_runtime_session_current_qr_cylinder_caked_band_masks_returns_none_outside_caked_view(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    build_calls: list[str] = []
+
+    monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: False)
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        SimpleNamespace(
+            integrate_qz_rods_value=True,
+            qr_half_width_value=0.03125,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_qr_cylinder_overlay,
+        "build_qr_cylinder_caked_band_masks",
+        lambda *args, **kwargs: build_calls.append("build"),
+    )
+    for name in ("integrate_qz_rods_var", "qr_half_width_var"):
+        monkeypatch.setitem(runtime_session.__dict__, name, None)
+
+    assert runtime_session._current_qr_cylinder_caked_band_masks() is None
+    assert build_calls == []
+
+
+def test_runtime_session_sync_qz_rod_controls_state_disables_non_caked_controls(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+        def set(self, value: object) -> None:
+            self._value = value
+
+    class _Widget:
+        def __init__(self) -> None:
+            self.state_value = "normal"
+
+        def configure(self, **kwargs) -> None:
+            self.state_value = str(kwargs.get("state", self.state_value))
+
+        def config(self, **kwargs) -> None:
+            self.configure(**kwargs)
+
+    show_widget = _Widget()
+    integrate_widget = _Widget()
+    width_slider = _Widget()
+    width_entry = _Widget()
+    integrate_var = _Var(True)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_qz_rods_checkbutton=show_widget),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        SimpleNamespace(
+            integrate_qz_rods_var=integrate_var,
+            integrate_qz_rods_value=True,
+            integrate_qz_rods_checkbutton=integrate_widget,
+            qr_half_width_slider=width_slider,
+            qr_half_width_entry=width_entry,
+        ),
+        raising=False,
+    )
+
+    monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: False)
+    runtime_session._sync_qz_rod_controls_state()
+    assert show_widget.state_value == "disabled"
+    assert integrate_widget.state_value == "disabled"
+    assert width_slider.state_value == "disabled"
+    assert width_entry.state_value == "disabled"
+
+    integrate_var.set(False)
+    monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: True)
+    runtime_session._sync_qz_rod_controls_state()
+    assert show_widget.state_value == "normal"
+    assert integrate_widget.state_value == "normal"
+    assert width_slider.state_value == "disabled"
+    assert width_entry.state_value == "disabled"
+
+    integrate_var.set(True)
+    runtime_session._sync_qz_rod_controls_state()
+    assert width_slider.state_value == "normal"
+    assert width_entry.state_value == "normal"
+
+
 def test_runtime_session_current_qr_cylinder_caked_projection_context_prefers_live_bundle_shape(
     monkeypatch,
 ) -> None:
@@ -7151,6 +8636,29 @@ def test_runtime_impl_stages_structure_bootstrap_after_first_paint() -> None:
     assert "_bootstrap_structure_model_state_for_startup()" in source
     assert "_set_structure_bootstrap_controls_enabled(True)" in source
     assert "root.after_idle(_run_initial_startup_work)" in source
+
+
+def test_runtime_impl_disables_simulation_tab_during_structure_bootstrap() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index(
+        "def _set_structure_bootstrap_controls_enabled(enabled: bool) -> None:"
+    )
+    helper_end = source.index("def _reset_structure_model_control_vars(", helper_start)
+    helper_block = source[helper_start:helper_end]
+
+    assert "app_shell_view_state.simulation_body" in helper_block
+    assert "app_shell_view_state.right_col" in helper_block
+    assert "app_shell_view_state.fit_body" in helper_block
+
+
+def test_runtime_impl_keeps_simulation_panel_always_expanded() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    panel_start = source.index("sampling_pruning_frame = CollapsibleFrame(")
+    panel_end = source.index("sampling_pruning_frame.pack(", panel_start)
+    panel_block = source[panel_start:panel_end]
+
+    assert "expanded=True" in panel_block
+    assert "collapsible=False" in panel_block
 
 
 def test_runtime_impl_builds_shell_before_deferred_runtime_state_load() -> None:
