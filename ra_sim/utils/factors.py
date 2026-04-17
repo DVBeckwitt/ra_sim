@@ -6,10 +6,32 @@ import re
 from typing import Dict
 
 import numpy as np
-from Dans_Diffraction.functions_crystallography import (
-    xray_scattering_factor,
-    xray_dispersion_corrections,
-)
+
+_OPTIONAL_IMPORT_UNSET = object()
+_XRAY_SCATTERING_FACTOR = _OPTIONAL_IMPORT_UNSET
+_XRAY_DISPERSION_CORRECTIONS = _OPTIONAL_IMPORT_UNSET
+
+
+def _get_crystallography_functions():
+    global _XRAY_SCATTERING_FACTOR, _XRAY_DISPERSION_CORRECTIONS
+
+    if (
+        _XRAY_SCATTERING_FACTOR is _OPTIONAL_IMPORT_UNSET
+        or _XRAY_DISPERSION_CORRECTIONS is _OPTIONAL_IMPORT_UNSET
+    ):
+        try:  # pragma: no cover - optional dependency used at runtime
+            from Dans_Diffraction.functions_crystallography import (
+                xray_dispersion_corrections,
+                xray_scattering_factor,
+            )
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Ionic form-factor utilities require Dans_Diffraction."
+            ) from exc
+        _XRAY_SCATTERING_FACTOR = xray_scattering_factor
+        _XRAY_DISPERSION_CORRECTIONS = xray_dispersion_corrections
+
+    return _XRAY_SCATTERING_FACTOR, _XRAY_DISPERSION_CORRECTIONS
 
 # Default ionic labels for a few common elements. Extend as needed.
 _DEFAULT_ION_MAP = {
@@ -45,6 +67,7 @@ def F_comp(el: str, Q: np.ndarray, energy_kev: float, ion_map: Dict[str, str] | 
         ``xray_scattering_factor``. If not provided, ``_DEFAULT_ION_MAP`` is
         consulted and falls back to the neutral symbol.
     """
+    xray_scattering_factor, xray_dispersion_corrections = _get_crystallography_functions()
     ion_map = ion_map or _DEFAULT_ION_MAP
     ion_label = ion_map.get(el, el)
     q = np.asarray(Q, dtype=float).reshape(-1)

@@ -2,7 +2,9 @@ import io
 from contextlib import redirect_stderr, redirect_stdout
 import numpy as np
 from pathlib import Path
-import Dans_Diffraction as dif
+import pytest
+
+dif = pytest.importorskip("Dans_Diffraction")
 from ra_sim.utils.stacking_fault import (
     _F2,
     _cell_c_from_cif,

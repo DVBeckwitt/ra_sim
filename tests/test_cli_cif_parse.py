@@ -232,6 +232,7 @@ def test_parse_cif_cell_a_c_fallback_accepts_split_line_scalars_after_tag_commen
 
 
 def test_write_xtl_uses_filename_and_derived_symmetry_by_default(tmp_path):
+    pytest.importorskip("spglib")
     xtl_path = tmp_path / "sodium.xtl"
 
     write_xtl(*_simple_cubic_structure(), filename=xtl_path)
@@ -301,6 +302,7 @@ def test_write_xtl_preserves_explicit_empty_metadata(tmp_path):
 
 
 def test_write_xtl_blanks_auto_derived_p1_metadata(tmp_path):
+    pytest.importorskip("spglib")
     xtl_path = tmp_path / "triclinic.xtl"
 
     write_xtl(*_low_symmetry_p1_structure(), filename=xtl_path)

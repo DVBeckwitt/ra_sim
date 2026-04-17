@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from ra_sim.simulation import diffraction
 from ra_sim.utils.calculations import IndexofRefraction, resolve_index_of_refraction
@@ -722,6 +723,8 @@ def test_calculate_phi_from_precomputed_samples_one_ring_point_using_total_ring_
 
 
 def test_resolve_index_of_refraction_uses_cif_when_available():
+    pytest.importorskip("Dans_Diffraction")
+    pytest.importorskip("xraydb")
     cif_n2 = resolve_index_of_refraction(1.54e-10, cif_path="tests/Diffuse/PbI2_2H.cif")
     default_n2 = IndexofRefraction(1.54e-10)
     assert not np.isclose(cif_n2.real, default_n2.real, rtol=1e-9, atol=0.0)

@@ -1,7 +1,10 @@
 from pathlib import Path
 
 import numpy as np
-import Dans_Diffraction as dif
+import pytest
+
+dif = pytest.importorskip("Dans_Diffraction")
+pytest.importorskip("Dans_Diffraction.functions_crystallography")
 from Dans_Diffraction.functions_crystallography import (
     xray_dispersion_corrections,
     xray_scattering_factor,
