@@ -8733,6 +8733,24 @@ def _prepare_caked_intersection_cache(
     return transformed
 
 
+def _detector_intersection_cache_signature(cache_tables: object) -> tuple[int, int]:
+    if not isinstance(cache_tables, (list, tuple)):
+        return (0, 0)
+    return (id(cache_tables), len(cache_tables))
+
+
+def _current_combined_detector_intersection_cache_signature() -> tuple[int, int]:
+    return _detector_intersection_cache_signature(
+        getattr(simulation_runtime_state, "stored_intersection_cache", None)
+    )
+
+
+def _clear_caked_intersection_cache() -> None:
+    simulation_runtime_state.last_caked_intersection_cache = None
+    simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
+    simulation_runtime_state.last_caked_intersection_cache_source_signature = None
+
+
 def _live_caked_intersection_cache_matches_active_bundle() -> bool:
     live_bundle = getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
     cache_bundle = getattr(
@@ -8741,6 +8759,21 @@ def _live_caked_intersection_cache_matches_active_bundle() -> bool:
         None,
     )
     return isinstance(live_bundle, CakeTransformBundle) and cache_bundle is live_bundle
+
+
+def _live_caked_intersection_cache_matches_active_source() -> bool:
+    return getattr(
+        simulation_runtime_state,
+        "last_caked_intersection_cache_source_signature",
+        None,
+    ) == _current_combined_detector_intersection_cache_signature()
+
+
+def _live_caked_intersection_cache_is_current() -> bool:
+    return bool(
+        _live_caked_intersection_cache_matches_active_bundle()
+        and _live_caked_intersection_cache_matches_active_source()
+    )
 
 
 def _initialize_runtime_controls_block_24() -> None:
@@ -11561,8 +11594,7 @@ def _invalidate_cached_analysis_space_payloads(
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
         _set_live_caked_transform_bundle(None)
-        simulation_runtime_state.last_caked_intersection_cache = None
-        simulation_runtime_state.last_caked_intersection_cache_transform_bundle = None
+        _clear_caked_intersection_cache()
     if clear_q_space:
         _store_q_space_display_payload(sim_payload=None, bg_payload=None)
         simulation_runtime_state.last_q_space_payload_signature = None
@@ -11748,6 +11780,9 @@ def _restore_caked_display_payload_from_cached_results(
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
         simulation_runtime_state.last_caked_intersection_cache_transform_bundle = resolved_bundle
+        simulation_runtime_state.last_caked_intersection_cache_source_signature = (
+            _current_combined_detector_intersection_cache_signature()
+        )
     else:
         _invalidate_cached_analysis_space_payloads(clear_caked=True)
 
@@ -11971,6 +12006,9 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         "bg_res2": bg_res2,
         "sim_caked": sim_caked,
         "sim_caked_intersection_cache": sim_caked_intersection_cache,
+        "sim_caked_intersection_cache_source_signature": _detector_intersection_cache_signature(
+            intersection_cache
+        ),
         "bg_caked": bg_caked,
         "sim_q_space": sim_q_space,
         "bg_q_space": bg_q_space,
@@ -12237,6 +12275,9 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
         simulation_runtime_state.last_caked_intersection_cache_transform_bundle = resolved_bundle
+        simulation_runtime_state.last_caked_intersection_cache_source_signature = result.get(
+            "sim_caked_intersection_cache_source_signature"
+        )
     else:
         _invalidate_cached_analysis_space_payloads(clear_caked=True)
 
@@ -12406,6 +12447,7 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.stored_primary_intersection_cache = None
     simulation_runtime_state.stored_secondary_intersection_cache = None
     simulation_runtime_state.stored_intersection_cache = None
+    _clear_caked_intersection_cache()
     simulation_runtime_state.last_unscaled_image_signature = None
     simulation_runtime_state.normalization_scale_cache = {"sig": None, "value": 1.0}
     simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
@@ -13509,6 +13551,7 @@ def do_update():
             )
         )
     simulation_runtime_state.stored_intersection_cache = intersection_cache_local
+    _clear_caked_intersection_cache()
     simulation_runtime_state.stored_sim_image = updated_image
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
@@ -16568,6 +16611,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
             simulation_runtime_state.stored_intersection_cache = _copy_intersection_cache_tables(
                 rebuild_result.intersection_cache
             )
+            _clear_caked_intersection_cache()
         simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature
         _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
 
@@ -21778,21 +21822,22 @@ def _analysis_peak_axis_value(
 
 
 def _analysis_cache_overlay_tables(show_caked: bool) -> list[object]:
-    cache_tables = (
-        simulation_runtime_state.last_caked_intersection_cache
-        if bool(show_caked)
-        else simulation_runtime_state.stored_intersection_cache
-    )
-    if not cache_tables:
-        cache_tables = (
-            simulation_runtime_state.stored_intersection_cache
-            if bool(show_caked)
-            else simulation_runtime_state.last_caked_intersection_cache
-        )
+    if bool(show_caked):
+        cache_tables = []
+        if _live_caked_intersection_cache_is_current():
+            cache_tables = simulation_runtime_state.last_caked_intersection_cache
+        if not cache_tables:
+            cache_tables = simulation_runtime_state.stored_intersection_cache
+    else:
+        cache_tables = simulation_runtime_state.stored_intersection_cache
+        if not cache_tables and _live_caked_intersection_cache_is_current():
+            cache_tables = simulation_runtime_state.last_caked_intersection_cache
     return list(cache_tables or [])
 
 
 def _analysis_cache_overlay_table_uses_live_caked_cache(table: object) -> bool:
+    if not _live_caked_intersection_cache_is_current():
+        return False
     cache_tables = getattr(simulation_runtime_state, "last_caked_intersection_cache", None)
     if not isinstance(cache_tables, (list, tuple)):
         return False
@@ -21812,10 +21857,7 @@ def _analysis_cache_overlay_coords(
         return None
 
     if bool(show_caked):
-        use_cached_caked_coords = bool(
-            _analysis_cache_overlay_table_uses_live_caked_cache(table)
-            and _live_caked_intersection_cache_matches_active_bundle()
-        )
+        use_cached_caked_coords = bool(_analysis_cache_overlay_table_uses_live_caked_cache(table))
         x_vals = np.full(arr.shape[0], np.nan, dtype=float)
         y_vals = np.full(arr.shape[0], np.nan, dtype=float)
         if use_cached_caked_coords and arr.shape[1] >= 16:

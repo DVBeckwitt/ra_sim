@@ -2084,6 +2084,10 @@ def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() ->
         in restore_source
     )
     assert (
+        "simulation_runtime_state.last_caked_intersection_cache_source_signature = "
+        in restore_source
+    )
+    assert (
         "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache"
         not in restore_source
     )
@@ -2093,6 +2097,10 @@ def test_runtime_impl_keeps_detector_and_caked_intersection_caches_separate() ->
     )
     assert (
         "simulation_runtime_state.last_caked_intersection_cache_transform_bundle = " in apply_source
+    )
+    assert (
+        "simulation_runtime_state.last_caked_intersection_cache_source_signature = "
+        in apply_source
     )
     assert (
         "simulation_runtime_state.stored_intersection_cache = caked_intersection_cache"
@@ -3271,6 +3279,69 @@ def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns(
     np.testing.assert_allclose(y_vals, [-44.0])
 
 
+def test_analysis_cache_overlay_coords_ignores_stale_cached_caked_columns_when_source_sig_mismatches(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        pass
+
+    live_bundle = FakeBundle()
+    caked_cache_table = np.asarray(
+        [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
+        dtype=float,
+    )
+    detector_cache = [np.asarray([[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]], dtype=float)]
+    projector_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_transform_bundle",
+        live_bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache_transform_bundle",
+        live_bundle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache",
+        [caked_cache_table],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "stored_intersection_cache",
+        detector_cache,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_caked_intersection_cache_source_signature",
+        (999, 1),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_detector_coords_to_live_caked_coords",
+        lambda col, row: projector_calls.append((float(col), float(row))) or (93.0, -46.0),
+    )
+
+    x_vals, y_vals = runtime_session._analysis_cache_overlay_coords(
+        caked_cache_table,
+        show_caked=True,
+    )
+
+    assert projector_calls == [(40.0, 50.0)]
+    np.testing.assert_allclose(x_vals, [93.0])
+    np.testing.assert_allclose(y_vals, [-46.0])
+
+
 def test_analysis_cache_overlay_coords_ignores_detector_cache_caked_columns_even_when_bundle_matches(
     monkeypatch,
 ) -> None:
@@ -3339,6 +3410,7 @@ def test_invalidate_cached_analysis_space_payloads_clears_caked_cache_provenance
             last_caked_azimuth_values=np.array([-1.0, 1.0], dtype=np.float64),
             last_caked_intersection_cache=("cache",),
             last_caked_intersection_cache_transform_bundle="bundle",
+            last_caked_intersection_cache_source_signature=(1, 1),
             last_q_space_payload_signature="q-space-sig",
         ),
         raising=False,
@@ -3373,8 +3445,61 @@ def test_invalidate_cached_analysis_space_payloads_clears_caked_cache_provenance
         runtime_session.simulation_runtime_state.last_caked_intersection_cache_transform_bundle
         is None
     )
+    assert (
+        runtime_session.simulation_runtime_state.last_caked_intersection_cache_source_signature
+        is None
+    )
     assert live_bundle_calls == [None]
     assert q_space_payload_calls == []
+
+
+def test_runtime_impl_combined_detector_cache_recomposition_invalidates_caked_intersection_cache() -> (
+    None
+):
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    update_start = source.index(
+        "simulation_runtime_state.stored_intersection_cache = intersection_cache_local"
+    )
+    update_end = source.index(
+        "simulation_runtime_state.stored_sim_image = updated_image",
+        update_start,
+    )
+    update_source = source[update_start:update_end]
+
+    assert "_clear_caked_intersection_cache()" in update_source
+
+
+def test_runtime_impl_full_reset_invalidates_caked_intersection_cache() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    reset_start = source.index("def _initialize_runtime_controls_block_28() -> None:")
+    reset_end = source.index(
+        "###############################################################################",
+        reset_start,
+    )
+    reset_source = source[reset_start:reset_end]
+
+    clear_start = reset_source.index("simulation_runtime_state.stored_intersection_cache = None")
+    clear_end = reset_source.index(
+        'simulation_runtime_state.last_unscaled_image_signature = None',
+        clear_start,
+    )
+    clear_source = reset_source[clear_start:clear_end]
+
+    assert "_clear_caked_intersection_cache()" in clear_source
+
+
+def test_runtime_impl_manual_rebuild_invalidates_caked_intersection_cache() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    rebuild_start = source.index(
+        "simulation_runtime_state.stored_intersection_cache = _copy_intersection_cache_tables("
+    )
+    rebuild_end = source.index(
+        "simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature",
+        rebuild_start,
+    )
+    rebuild_source = source[rebuild_start:rebuild_end]
+
+    assert "_clear_caked_intersection_cache()" in rebuild_source
 
 
 class _RuntimeVar:

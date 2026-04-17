@@ -1152,6 +1152,57 @@ def _clear_peak_overlay_lists(simulation_runtime_state) -> None:
     simulation_runtime_state.peak_records.clear()
 
 
+def _peak_overlay_live_lists_match_cache(
+    simulation_runtime_state,
+    *,
+    sig: object,
+    cache_sig_key: str = "sig",
+) -> bool:
+    """Return whether live overlay lists already match one cached signature."""
+
+    cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
+    if not isinstance(cache, Mapping) or cache.get(cache_sig_key) != sig:
+        return False
+
+    cached_positions = cache.get("positions")
+    cached_millers = cache.get("millers")
+    cached_intensities = cache.get("intensities")
+    cached_records = cache.get("records")
+    if not all(
+        isinstance(values, (list, tuple))
+        for values in (
+            cached_positions,
+            cached_millers,
+            cached_intensities,
+            cached_records,
+        )
+    ):
+        return False
+
+    return (
+        len(simulation_runtime_state.peak_positions) == len(cached_positions)
+        and len(simulation_runtime_state.peak_millers) == len(cached_millers)
+        and len(simulation_runtime_state.peak_intensities) == len(cached_intensities)
+        and len(simulation_runtime_state.peak_records) == len(cached_records)
+    )
+
+
+def _peak_overlay_restored_view_signature(
+    simulation_runtime_state,
+    *,
+    show_caked: bool,
+) -> tuple[object, ...]:
+    """Return one lightweight view signature for restored GUI-state overlays."""
+
+    return (
+        bool(show_caked),
+        id(getattr(simulation_runtime_state, "last_caked_transform_bundle", None)),
+        id(getattr(simulation_runtime_state, "last_caked_radial_values", None)),
+        id(getattr(simulation_runtime_state, "last_caked_azimuth_values", None)),
+        getattr(simulation_runtime_state, "last_analysis_signature", None),
+    )
+
+
 def _peak_overlay_has_restored_gui_state_cache(simulation_runtime_state) -> bool:
     """Return whether the overlay cache came from an imported GUI-state snapshot."""
 
@@ -1220,15 +1271,111 @@ def _peak_overlay_source_defaults(
     return av_used, cv_used, source_label
 
 
+def _peak_overlay_table_defaults(
+    lattice_entries: object,
+    *,
+    table_index: int,
+    fallback_a: float,
+    fallback_c: float,
+    default_label: str,
+) -> tuple[float, float, str]:
+    """Resolve one table's lattice defaults from aligned per-table metadata."""
+
+    if not isinstance(lattice_entries, (list, tuple)):
+        return _peak_overlay_source_defaults(
+            None,
+            fallback_a=fallback_a,
+            fallback_c=fallback_c,
+            default_label=default_label,
+        )
+    if int(table_index) < 0 or int(table_index) >= len(lattice_entries):
+        return _peak_overlay_source_defaults(
+            None,
+            fallback_a=fallback_a,
+            fallback_c=fallback_c,
+            default_label=default_label,
+        )
+    return _peak_overlay_source_defaults(
+        [lattice_entries[int(table_index)]],
+        fallback_a=fallback_a,
+        fallback_c=fallback_c,
+        default_label=default_label,
+    )
+
+
+def _peak_overlay_live_caked_cache_is_current(simulation_runtime_state) -> bool:
+    """Return whether cached caked rows match live bundle and detector cache."""
+
+    live_bundle = getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
+    cache_bundle = getattr(
+        simulation_runtime_state,
+        "last_caked_intersection_cache_transform_bundle",
+        None,
+    )
+    if live_bundle is None or cache_bundle is not live_bundle:
+        return False
+    cached_source_sig = getattr(
+        simulation_runtime_state,
+        "last_caked_intersection_cache_source_signature",
+        None,
+    )
+    current_source_sig = _peak_overlay_cache_signature(
+        getattr(simulation_runtime_state, "stored_intersection_cache", None)
+    )
+    return cached_source_sig == current_source_sig
+
+
 def _peak_overlay_intersection_entries(
     simulation_runtime_state,
     *,
     fallback_a: float,
     fallback_c: float,
+    show_caked: bool = False,
 ) -> list[tuple[np.ndarray, float, float, str, str]]:
     """Return intersection-cache tables with resolved source metadata."""
 
     entries: list[tuple[np.ndarray, float, float, str, str]] = []
+    live_caked_cache_current = _peak_overlay_live_caked_cache_is_current(
+        simulation_runtime_state
+    )
+
+    if bool(show_caked) and live_caked_cache_current:
+        combined_lattice_entries = getattr(
+            simulation_runtime_state,
+            "stored_peak_table_lattice",
+            None,
+        )
+        caked_tables = getattr(
+            simulation_runtime_state,
+            "last_caked_intersection_cache",
+            None,
+        )
+        if isinstance(caked_tables, (list, tuple)):
+            for table_index, table in enumerate(caked_tables):
+                try:
+                    table_arr = np.asarray(table, dtype=float)
+                except Exception:
+                    continue
+                if table_arr.ndim != 2 or table_arr.shape[0] <= 0:
+                    continue
+                av_used, cv_used, source_label = _peak_overlay_table_defaults(
+                    combined_lattice_entries,
+                    table_index=int(table_index),
+                    fallback_a=fallback_a,
+                    fallback_c=fallback_c,
+                    default_label="primary",
+                )
+                entries.append(
+                    (
+                        table_arr,
+                        float(av_used),
+                        float(cv_used),
+                        str(source_label),
+                        "last_caked_intersection_cache",
+                    )
+                )
+        if entries:
+            return entries
 
     primary_defaults = _peak_overlay_source_defaults(
         getattr(simulation_runtime_state, "stored_primary_peak_table_lattice", None),
@@ -1277,24 +1424,32 @@ def _peak_overlay_intersection_entries(
     if entries:
         return entries
 
-    fallback_defaults = _peak_overlay_source_defaults(
-        getattr(simulation_runtime_state, "stored_peak_table_lattice", None),
-        fallback_a=fallback_a,
-        fallback_c=fallback_c,
-        default_label="primary",
+    combined_lattice_entries = getattr(
+        simulation_runtime_state,
+        "stored_peak_table_lattice",
+        None,
     )
-    for attr_name in ("stored_intersection_cache", "last_caked_intersection_cache"):
+    cache_attr_names = ["stored_intersection_cache"]
+    if live_caked_cache_current and not bool(show_caked):
+        cache_attr_names.append("last_caked_intersection_cache")
+    for attr_name in cache_attr_names:
         cache_tables = getattr(simulation_runtime_state, attr_name, None)
         if not isinstance(cache_tables, (list, tuple)):
             continue
-        av_used, cv_used, source_label = fallback_defaults
-        for table in cache_tables:
+        for table_index, table in enumerate(cache_tables):
             try:
                 table_arr = np.asarray(table, dtype=float)
             except Exception:
                 continue
             if table_arr.ndim != 2 or table_arr.shape[0] <= 0:
                 continue
+            av_used, cv_used, source_label = _peak_overlay_table_defaults(
+                combined_lattice_entries,
+                table_index=int(table_index),
+                fallback_a=fallback_a,
+                fallback_c=fallback_c,
+                default_label="primary",
+            )
             entries.append(
                 (
                     table_arr,
@@ -1480,6 +1635,18 @@ def ensure_runtime_peak_overlay_data(
         )
     ):
         show_caked = _runtime_bool(caked_view_enabled_factory, False)
+        restored_view_sig = _peak_overlay_restored_view_signature(
+            simulation_runtime_state,
+            show_caked=bool(show_caked),
+        )
+        if _peak_overlay_has_restored_gui_state_cache(
+            simulation_runtime_state
+        ) and _peak_overlay_live_lists_match_cache(
+            simulation_runtime_state,
+            sig=restored_view_sig,
+            cache_sig_key="restored_view_sig",
+        ):
+            return True
         if _peak_overlay_has_restored_gui_state_cache(
             simulation_runtime_state
         ) and _restore_peak_overlay_lists_from_cached_records(
@@ -1490,6 +1657,7 @@ def ensure_runtime_peak_overlay_data(
             native_detector_coords_to_caked_display_coords=(
                 native_detector_coords_to_caked_display_coords
             ),
+            view_sig=restored_view_sig,
         ):
             return True
         _clear_peak_overlay_lists(simulation_runtime_state)
@@ -1513,10 +1681,8 @@ def ensure_runtime_peak_overlay_data(
     max_hits_raw = _runtime_int(max_hits_per_reflection, 0)
     min_separation_value = _runtime_float(min_separation_px, 0.0)
     show_caked = _runtime_bool(caked_view_enabled_factory, False)
-    last_caked_cache_current = (
-        getattr(simulation_runtime_state, "last_caked_intersection_cache_transform_bundle", None)
-        is getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
-        and getattr(simulation_runtime_state, "last_caked_transform_bundle", None) is not None
+    last_caked_cache_current = _peak_overlay_live_caked_cache_is_current(
+        simulation_runtime_state
     )
     peak_sig = (
         simulation_runtime_state.last_simulation_signature,
@@ -1548,6 +1714,11 @@ def ensure_runtime_peak_overlay_data(
                 None,
             )
         ),
+        getattr(
+            simulation_runtime_state,
+            "last_caked_intersection_cache_source_signature",
+            None,
+        ),
         getattr(simulation_runtime_state, "last_analysis_signature", None),
     )
     retain_cache = _retain_peak_overlay_cache()
@@ -1556,6 +1727,11 @@ def ensure_runtime_peak_overlay_data(
         and retain_cache
         and simulation_runtime_state.peak_overlay_cache.get("sig") == peak_sig
     )
+    if peak_cached and _peak_overlay_live_lists_match_cache(
+        simulation_runtime_state,
+        sig=peak_sig,
+    ):
+        return True
 
     _clear_peak_overlay_lists(simulation_runtime_state)
     source_reflection_indices_local = (
@@ -1591,6 +1767,7 @@ def ensure_runtime_peak_overlay_data(
         simulation_runtime_state,
         fallback_a=fallback_a,
         fallback_c=fallback_c,
+        show_caked=bool(show_caked),
     )
     if intersection_entries:
         row_lookup = _peak_overlay_hit_row_lookup(
@@ -2116,6 +2293,7 @@ def _restore_peak_overlay_lists_from_cached_records(
         [float, float], tuple[float, float] | None
     ]
     | None = None,
+    view_sig: object = None,
 ) -> bool:
     """Rebuild live overlay lists from imported cached peak records."""
 
@@ -2200,6 +2378,7 @@ def _restore_peak_overlay_lists_from_cached_records(
                 "millers": list(restored_millers),
                 "intensities": list(restored_intensities),
                 "records": [dict(record) for record in restored_records],
+                "restored_view_sig": view_sig,
                 "click_spatial_index": _build_peak_click_spatial_index(
                     restored_positions
                 ),
@@ -2747,12 +2926,12 @@ def select_peak_from_canvas_click(
     sync_peak_selection_state: Any,
     set_status_text: Any,
 ) -> bool:
-    """Select the nearest visible peak from one raw-image click."""
+    """Select the nearest visible peak from one detector or caked-view click."""
 
-    # Click picking should stay on the cached overlay path; only hydrate the
-    # overlay if the live lists are currently empty.
-    if not getattr(simulation_runtime_state, "peak_positions", ()):
-        ensure_peak_overlay_data(force=False)
+    # Always revalidate the overlay before resolving the click. Detector and
+    # caked views maintain distinct peak-position projections, so a view switch
+    # can leave the live lists stale even when they are non-empty.
+    ensure_peak_overlay_data(force=False)
     if not simulation_runtime_state.peak_positions:
         schedule_update()
         set_status_text("Preparing simulated peak map... click again after update.")

@@ -994,6 +994,7 @@ class SimulationRuntimeState:
     last_caked_transform_bundle: object = None
     last_caked_intersection_cache: list[Any] | None = None
     last_caked_intersection_cache_transform_bundle: object = None
+    last_caked_intersection_cache_source_signature: tuple[int, int] | None = None
     chi_square_update_token: int = 0
     chi_square_state: dict[str, object] = field(
         default_factory=lambda: {
