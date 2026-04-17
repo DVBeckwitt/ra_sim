@@ -103,6 +103,48 @@ def test_project_raster_to_view_limits_to_axes_pixel_budget() -> None:
     )
 
 
+def test_project_raster_to_view_preserve_bright_features_keeps_sparse_peak_visible() -> None:
+    image = np.zeros((300, 300), dtype=float)
+    image[149, 151] = 1000.0
+
+    projection = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 300.0, 300.0, 0.0),
+        axis_xlim=(0.0, 300.0),
+        axis_ylim=(300.0, 0.0),
+        max_size=3000,
+        bbox_width_px=60,
+        bbox_height_px=50,
+        overscan_fraction=0.0,
+        preserve_bright_features=True,
+    )
+
+    assert projection is not None
+    assert projection.image.shape == (50, 60)
+    assert float(np.max(projection.image)) == 1000.0
+
+
+def test_project_raster_to_view_without_bright_feature_preservation_can_drop_sparse_peak() -> None:
+    image = np.zeros((300, 300), dtype=float)
+    image[149, 151] = 1000.0
+
+    projection = display_projection.project_raster_to_view(
+        image,
+        extent=(0.0, 300.0, 300.0, 0.0),
+        axis_xlim=(0.0, 300.0),
+        axis_ylim=(300.0, 0.0),
+        max_size=3000,
+        bbox_width_px=60,
+        bbox_height_px=50,
+        overscan_fraction=0.0,
+        preserve_bright_features=False,
+    )
+
+    assert projection is not None
+    assert projection.image.shape == (50, 60)
+    assert float(np.max(projection.image)) == 0.0
+
+
 def test_project_raster_to_view_preserves_zoomed_detail_when_budget_is_large() -> None:
     image = np.arange(256 * 256, dtype=float).reshape(256, 256)
 
@@ -171,6 +213,57 @@ def test_project_raster_to_view_reuses_cached_projection_for_same_request(
     assert first is not None
     assert second is first
     assert stride_calls == [(6, 6)]
+
+
+def test_project_raster_to_view_cache_distinguishes_bright_feature_preservation() -> None:
+    image = np.zeros((300, 300), dtype=float)
+    image[149, 151] = 1000.0
+    display_projection._PROJECTION_CACHE.clear()
+
+    first = display_projection.project_raster_to_view(
+        image,
+        source_signature=1,
+        extent=(0.0, 300.0, 300.0, 0.0),
+        axis_xlim=(0.0, 300.0),
+        axis_ylim=(300.0, 0.0),
+        max_size=3000,
+        bbox_width_px=60,
+        bbox_height_px=50,
+        overscan_fraction=0.0,
+        preserve_bright_features=False,
+    )
+    second = display_projection.project_raster_to_view(
+        image,
+        source_signature=1,
+        extent=(0.0, 300.0, 300.0, 0.0),
+        axis_xlim=(0.0, 300.0),
+        axis_ylim=(300.0, 0.0),
+        max_size=3000,
+        bbox_width_px=60,
+        bbox_height_px=50,
+        overscan_fraction=0.0,
+        preserve_bright_features=True,
+    )
+    third = display_projection.project_raster_to_view(
+        image,
+        source_signature=1,
+        extent=(0.0, 300.0, 300.0, 0.0),
+        axis_xlim=(0.0, 300.0),
+        axis_ylim=(300.0, 0.0),
+        max_size=3000,
+        bbox_width_px=60,
+        bbox_height_px=50,
+        overscan_fraction=0.0,
+        preserve_bright_features=True,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first is not second
+    assert third is second
+    assert len(display_projection._PROJECTION_CACHE) == 2
+    assert float(np.max(first.image)) == 0.0
+    assert float(np.max(second.image)) == 1000.0
 
 
 def test_project_raster_to_view_busts_cache_when_source_signature_changes_after_in_place_update(

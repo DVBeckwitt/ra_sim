@@ -42,6 +42,7 @@ EPS32 = 1.0 + np.finfo(np.float32).eps
 BEAM_CENTER_CHI_DEG = 135.0
 _EXACT_CAKE_NUMBA_WARMUP_LOCK = Lock()
 _EXACT_CAKE_NUMBA_WARMED = False
+_EXACT_CAKE_NUMBA_WARMUP_FAILED = False
 _EXACT_CAKE_NUMBA_WARMUP_THREAD: Thread | None = None
 
 
@@ -162,13 +163,27 @@ def _row_col_edges(
 
 def _resolve_engine(engine: str) -> str:
     engine_name = str(engine).strip().lower()
+    numba_available = bool(_HAS_NUMBA) and not bool(_EXACT_CAKE_NUMBA_WARMUP_FAILED)
     if engine_name == "auto":
-        return "numba" if _HAS_NUMBA else "python"
+        return "numba" if numba_available else "python"
     if engine_name not in {"python", "numba"}:
         raise ValueError("engine must be one of: auto, python, numba.")
-    if engine_name == "numba" and not _HAS_NUMBA:
+    if engine_name == "numba" and not numba_available:
         raise RuntimeError("engine='numba' requested, but numba is unavailable.")
     return engine_name
+
+
+def _warmup_dummy_exact_cake_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray, DetectorCakeGeometry]:
+    dummy_image = np.ones((2, 2), dtype=np.float32)
+    dummy_radial = np.asarray([0.25, 0.75], dtype=np.float64)
+    dummy_azimuthal = np.asarray([-90.0, 90.0], dtype=np.float64)
+    geometry = DetectorCakeGeometry(
+        pixel_size_m=1.0e-4,
+        distance_m=0.1,
+        center_row_px=1.0,
+        center_col_px=1.0,
+    )
+    return dummy_image, dummy_radial, dummy_azimuthal, geometry
 
 
 def _resolve_workers(workers: int | str | None, work_items: int, engine: str) -> int:
@@ -1448,21 +1463,41 @@ def integrate_detector_to_cake_exact(
             use_selection,
         )
     else:
-        sum_signal, sum_normalization, count = _run_numba(
-            signal,
-            norm,
-            mask_array,
-            has_mask,
-            row_edges,
-            col_edges,
-            float(geometry.distance_m),
-            radial,
-            azimuthal,
-            rows_array,
-            cols_array,
-            use_selection,
-            worker_count,
-        )
+        try:
+            sum_signal, sum_normalization, count = _run_numba(
+                signal,
+                norm,
+                mask_array,
+                has_mask,
+                row_edges,
+                col_edges,
+                float(geometry.distance_m),
+                radial,
+                azimuthal,
+                rows_array,
+                cols_array,
+                use_selection,
+                worker_count,
+            )
+        except Exception:
+            if str(engine).strip().lower() != "auto":
+                raise
+            global _EXACT_CAKE_NUMBA_WARMUP_FAILED
+            _EXACT_CAKE_NUMBA_WARMUP_FAILED = True
+            sum_signal, sum_normalization, count = _run_python(
+                signal,
+                norm,
+                mask_array,
+                has_mask,
+                row_edges,
+                col_edges,
+                float(geometry.distance_m),
+                radial,
+                azimuthal,
+                rows_array,
+                cols_array,
+                use_selection,
+            )
     intensity = np.zeros_like(sum_signal, dtype=np.float32)
     valid = sum_normalization > 0.0
     intensity[valid] = (sum_signal[valid] / sum_normalization[valid]).astype(np.float32, copy=False)
@@ -1487,37 +1522,49 @@ def warmup_exact_cake_numba() -> bool:
     with _EXACT_CAKE_NUMBA_WARMUP_LOCK:
         if _EXACT_CAKE_NUMBA_WARMED:
             return False
-        dummy_image = np.ones((2, 2), dtype=np.float32)
-        dummy_radial = np.asarray([0.25, 0.75], dtype=np.float64)
-        dummy_azimuthal = np.asarray([-90.0, 90.0], dtype=np.float64)
+        dummy_image, dummy_radial, dummy_azimuthal, geometry = _warmup_dummy_exact_cake_inputs()
         integrate_detector_to_cake_exact(
             dummy_image,
             dummy_radial,
             dummy_azimuthal,
-            DetectorCakeGeometry(
-                pixel_size_m=1.0e-4,
-                distance_m=0.1,
-                center_row_px=1.0,
-                center_col_px=1.0,
-            ),
+            geometry,
             engine="numba",
             workers=1,
         )
         if _HAS_SCIPY:
-            build_detector_to_cake_lut(
-                dummy_image.shape,
-                dummy_radial,
-                dummy_azimuthal,
-                DetectorCakeGeometry(
-                    pixel_size_m=1.0e-4,
-                    distance_m=0.1,
-                    center_row_px=1.0,
-                    center_col_px=1.0,
-                ),
-                workers=1,
-            )
+            try:
+                build_detector_to_cake_lut(
+                    dummy_image.shape,
+                    dummy_radial,
+                    dummy_azimuthal,
+                    geometry,
+                    workers=1,
+                )
+            except Exception as exc:
+                try:
+                    print(f"[exact-cake] Detector-to-cake LUT warmup skipped: {exc}")
+                except Exception:
+                    pass
         _EXACT_CAKE_NUMBA_WARMED = True
         return True
+
+
+def _safe_warmup_exact_cake_numba() -> None:
+    global _EXACT_CAKE_NUMBA_WARMUP_FAILED
+    global _EXACT_CAKE_NUMBA_WARMUP_THREAD
+
+    try:
+        warmup_exact_cake_numba()
+    except Exception as exc:
+        _EXACT_CAKE_NUMBA_WARMUP_FAILED = True
+        try:
+            print(f"[exact-cake] Numba warmup disabled after compiler failure: {exc}")
+        except Exception:
+            pass
+    finally:
+        with _EXACT_CAKE_NUMBA_WARMUP_LOCK:
+            if not _EXACT_CAKE_NUMBA_WARMED:
+                _EXACT_CAKE_NUMBA_WARMUP_THREAD = None
 
 
 def start_exact_cake_numba_warmup_in_background() -> bool:
@@ -1525,17 +1572,17 @@ def start_exact_cake_numba_warmup_in_background() -> bool:
 
     global _EXACT_CAKE_NUMBA_WARMUP_THREAD
 
-    if not _HAS_NUMBA:
+    if not _HAS_NUMBA or _EXACT_CAKE_NUMBA_WARMUP_FAILED:
         return False
 
     with _EXACT_CAKE_NUMBA_WARMUP_LOCK:
         thread = _EXACT_CAKE_NUMBA_WARMUP_THREAD
-        if _EXACT_CAKE_NUMBA_WARMED:
+        if _EXACT_CAKE_NUMBA_WARMED or _EXACT_CAKE_NUMBA_WARMUP_FAILED:
             return False
         if thread is not None and thread.is_alive():
             return False
         thread = Thread(
-            target=warmup_exact_cake_numba,
+            target=_safe_warmup_exact_cake_numba,
             name="exact-cake-numba-warmup",
             daemon=True,
         )

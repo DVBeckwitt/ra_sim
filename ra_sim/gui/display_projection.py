@@ -53,6 +53,7 @@ def _projection_cache_key(
     bbox_width_px: Any,
     bbox_height_px: Any,
     overscan_fraction: float,
+    preserve_bright_features: bool,
 ) -> tuple[object, ...]:
     return (
         (
@@ -70,6 +71,7 @@ def _projection_cache_key(
         _positive_float(bbox_width_px),
         _positive_float(bbox_height_px),
         float(overscan_fraction),
+        bool(preserve_bright_features),
     )
 
 
@@ -299,6 +301,54 @@ def _stride_downsample(
     return image[row_indices][:, col_indices, ...]
 
 
+def _block_max_downsample(
+    image: np.ndarray,
+    *,
+    target_rows: int,
+    target_cols: int,
+) -> np.ndarray:
+    rows = int(image.shape[0])
+    cols = int(image.shape[1])
+    if rows <= target_rows and cols <= target_cols:
+        return image
+    if image.ndim != 2:
+        return _stride_downsample(
+            image,
+            target_rows=target_rows,
+            target_cols=target_cols,
+        )
+
+    reducer = np.fmax if np.issubdtype(image.dtype, np.floating) else np.maximum
+    reduced = image
+    if rows > target_rows:
+        row_edges = np.linspace(0, rows, max(1, int(target_rows)) + 1, dtype=np.int64)
+        reduced = reducer.reduceat(reduced, row_edges[:-1], axis=0)
+    if cols > target_cols:
+        col_edges = np.linspace(0, cols, max(1, int(target_cols)) + 1, dtype=np.int64)
+        reduced = reducer.reduceat(reduced, col_edges[:-1], axis=1)
+    return reduced
+
+
+def _downsample_raster(
+    image: np.ndarray,
+    *,
+    target_rows: int,
+    target_cols: int,
+    preserve_bright_features: bool,
+) -> np.ndarray:
+    if bool(preserve_bright_features):
+        return _block_max_downsample(
+            image,
+            target_rows=target_rows,
+            target_cols=target_cols,
+        )
+    return _stride_downsample(
+        image,
+        target_rows=target_rows,
+        target_cols=target_cols,
+    )
+
+
 def project_raster_to_view(
     image: np.ndarray | None,
     *,
@@ -310,6 +360,7 @@ def project_raster_to_view(
     bbox_width_px: Any = None,
     bbox_height_px: Any = None,
     overscan_fraction: float = DISPLAY_PROJECTION_OVERSCAN_FRACTION,
+    preserve_bright_features: bool = False,
 ) -> RasterProjection | None:
     """Crop the visible window plus overscan, then cap it to the screen budget."""
 
@@ -345,6 +396,7 @@ def project_raster_to_view(
         bbox_width_px=bbox_width_px,
         bbox_height_px=bbox_height_px,
         overscan_fraction=overscan_fraction,
+        preserve_bright_features=preserve_bright_features,
     )
     cached_projection = _projection_cache_get(cache_key)
     if cached_projection is not None:
@@ -392,10 +444,11 @@ def project_raster_to_view(
         bbox_width_px=bbox_width_px,
         bbox_height_px=bbox_height_px,
     )
-    projected = _stride_downsample(
+    projected = _downsample_raster(
         cropped,
         target_rows=target_rows,
         target_cols=target_cols,
+        preserve_bright_features=bool(preserve_bright_features),
     )
     projection = RasterProjection(
         image=projected,
@@ -415,6 +468,7 @@ def downsample_raster_for_display(
     image: np.ndarray | None,
     *,
     max_size: Any,
+    preserve_bright_features: bool = False,
 ) -> np.ndarray | None:
     """Backwards-compatible whole-image sampled-down projection helper."""
 
@@ -429,6 +483,7 @@ def downsample_raster_for_display(
         bbox_width_px=None,
         bbox_height_px=None,
         overscan_fraction=0.0,
+        preserve_bright_features=preserve_bright_features,
     )
     if projection is None:
         return None

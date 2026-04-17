@@ -882,6 +882,7 @@ def test_exact_cake_numba_warmup_runs_once(monkeypatch) -> None:
 
     monkeypatch.setattr(exact_cake, "_HAS_NUMBA", True)
     monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMED", False)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", False)
     monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_THREAD", None)
     monkeypatch.setattr(exact_cake, "integrate_detector_to_cake_exact", _fake_integrate)
     monkeypatch.setattr(exact_cake, "build_detector_to_cake_lut", lambda *args, **kwargs: None)
@@ -889,6 +890,132 @@ def test_exact_cake_numba_warmup_runs_once(monkeypatch) -> None:
     assert exact_cake.warmup_exact_cake_numba() is True
     assert exact_cake.warmup_exact_cake_numba() is False
     assert calls == [((2, 2), "numba", 1)]
+
+
+def test_exact_cake_auto_engine_retries_python_after_numba_failure(monkeypatch) -> None:
+    python_calls: list[tuple[tuple[int, int], bool]] = []
+
+    def _fake_numba(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    def _fake_python(
+        signal,
+        norm,
+        mask_array,
+        has_mask,
+        row_edges,
+        col_edges,
+        distance,
+        radial,
+        azimuthal,
+        rows,
+        cols,
+        use_selection,
+    ):
+        del norm, mask_array, has_mask, row_edges, col_edges, distance, radial, azimuthal, rows, cols
+        python_calls.append((tuple(np.asarray(signal).shape), bool(use_selection)))
+        return (
+            np.full((2, 2), 4.0, dtype=np.float64),
+            np.ones((2, 2), dtype=np.float64),
+            np.ones((2, 2), dtype=np.float64),
+        )
+
+    monkeypatch.setattr(exact_cake, "_HAS_NUMBA", True)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(exact_cake, "_run_numba", _fake_numba)
+    monkeypatch.setattr(exact_cake, "_run_python", _fake_python)
+
+    result = exact_cake.integrate_detector_to_cake_exact(
+        np.ones((2, 2), dtype=np.float32),
+        np.asarray([0.25, 0.75], dtype=np.float64),
+        np.asarray([-90.0, 90.0], dtype=np.float64),
+        exact_cake.DetectorCakeGeometry(
+            pixel_size_m=1.0e-4,
+            distance_m=0.1,
+            center_row_px=1.0,
+            center_col_px=1.0,
+        ),
+        engine="auto",
+        workers=1,
+    )
+
+    assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_FAILED is True
+    assert python_calls == [((2, 2), False)]
+    assert np.all(result.intensity == np.float32(4.0))
+
+
+def test_exact_cake_safe_numba_warmup_latches_failure_and_clears_thread(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMED", False)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_THREAD", threading.Thread())
+    monkeypatch.setattr(
+        exact_cake,
+        "warmup_exact_cake_numba",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    exact_cake._safe_warmup_exact_cake_numba()
+
+    assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_FAILED is True
+    assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_THREAD is None
+    assert "Numba warmup disabled after compiler failure: boom" in capsys.readouterr().out
+
+
+def test_exact_cake_safe_numba_warmup_does_not_disable_exact_numba_on_lut_failure(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(exact_cake, "_HAS_NUMBA", True)
+    monkeypatch.setattr(exact_cake, "_HAS_SCIPY", True)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMED", False)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", False)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_THREAD", threading.Thread())
+    monkeypatch.setattr(
+        exact_cake,
+        "integrate_detector_to_cake_exact",
+        lambda *args, **kwargs: exact_cake.DetectorCakeResult(
+            radial_deg=np.asarray([0.25, 0.75], dtype=np.float64),
+            azimuthal_deg=np.asarray([-90.0, 90.0], dtype=np.float64),
+            intensity=np.zeros((2, 2), dtype=np.float32),
+            sum_signal=np.zeros((2, 2), dtype=np.float64),
+            sum_normalization=np.ones((2, 2), dtype=np.float64),
+            count=np.ones((2, 2), dtype=np.float64),
+        ),
+    )
+    monkeypatch.setattr(
+        exact_cake,
+        "build_detector_to_cake_lut",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("lut boom")),
+    )
+
+    exact_cake._safe_warmup_exact_cake_numba()
+
+    assert exact_cake._EXACT_CAKE_NUMBA_WARMED is True
+    assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_FAILED is False
+    assert "Detector-to-cake LUT warmup skipped: lut boom" in capsys.readouterr().out
+
+
+def test_exact_cake_auto_engine_falls_back_to_python_after_warmup_failure(monkeypatch) -> None:
+    monkeypatch.setattr(exact_cake, "_HAS_NUMBA", True)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", True)
+
+    assert exact_cake._resolve_engine("auto") == "python"
+    assert exact_cake._resolve_engine("python") == "python"
+    with pytest.raises(RuntimeError, match="engine='numba' requested"):
+        exact_cake._resolve_engine("numba")
+
+
+def test_exact_cake_numba_warmup_does_not_restart_after_failure(monkeypatch) -> None:
+    monkeypatch.setattr(exact_cake, "_HAS_NUMBA", True)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMED", False)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", True)
+    monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_THREAD", None)
+
+    assert exact_cake.start_exact_cake_numba_warmup_in_background() is False
+    assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_THREAD is None
 
 
 def test_fast_azimuthal_integrator_integrate2d_builds_lut_cake_request(monkeypatch) -> None:

@@ -7467,6 +7467,7 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
         max_size=_current_main_display_raster_size_limit(),
         bbox_width_px=bbox_width,
         bbox_height_px=bbox_height,
+        preserve_bright_features=bool(artist is globals().get("image_display")),
     )
     if projection is None:
         return False
