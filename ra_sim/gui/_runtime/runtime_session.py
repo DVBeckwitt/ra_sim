@@ -27027,6 +27027,12 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             matplotlib_canvas.draw()
             root.update_idletasks()
             do_update()
+            if (
+                simulation_runtime_state.stored_sim_image is not None
+                and simulation_runtime_state.worker_active_job is None
+            ):
+                _request_main_canvas_redraw(force_matplotlib=True)
+                root.update_idletasks()
         except Exception as exc:
             progress_label.config(text=f"Startup initialization failed: {exc}")
             try:

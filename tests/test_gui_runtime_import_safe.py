@@ -6092,6 +6092,13 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert "_show_initial_simulation_loading_overlay()" in startup_block
     assert "matplotlib_canvas.draw()" in startup_block
     assert "root.update_idletasks()" in startup_block
+    assert "_request_main_canvas_redraw(force_matplotlib=True)" in startup_block
+    assert startup_block.index("do_update()") < startup_block.index(
+        "_request_main_canvas_redraw(force_matplotlib=True)"
+    )
+    assert startup_block.rindex("root.update_idletasks()") > startup_block.index(
+        "_request_main_canvas_redraw(force_matplotlib=True)"
+    )
     assert "start_exact_cake_numba_warmup_in_background()" not in startup_block
     assert "_run_simulation_generation_job(" in block
     assert 'progress_label.config(text="Computing initial simulation...")' in block
