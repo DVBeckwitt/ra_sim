@@ -7759,6 +7759,57 @@ def test_run_analysis_job_caked_only_request_ignores_q_space_failure(monkeypatch
     assert result["bg_q_space"] is None
 
 
+@pytest.mark.parametrize(
+    ("shape", "expected_method"),
+    [
+        ((128, 128), "lut"),
+        ((513, 512), "exact"),
+    ],
+)
+def test_prepare_q_space_display_payload_chooses_safe_conversion_method(
+    monkeypatch,
+    shape: tuple[int, int],
+    expected_method: str,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    methods: list[str] = []
+
+    def _convert_stub(_image, **kwargs):
+        methods.append(str(kwargs["method"]))
+        return SimpleNamespace(
+            qr=np.array([0.0, 1.0], dtype=np.float64),
+            qz=np.array([0.0, 1.0], dtype=np.float64),
+            intensity=np.ones((2, 2), dtype=np.float64),
+            sum_signal=np.ones((2, 2), dtype=np.float64),
+            sum_normalization=np.ones((2, 2), dtype=np.float64),
+            count=np.ones((2, 2), dtype=np.float64),
+        )
+
+    monkeypatch.setattr(runtime_session, "convert_image_to_q_space", _convert_stub)
+
+    payload = runtime_session._prepare_q_space_display_payload(
+        np.ones(shape, dtype=np.float64),
+        npt_rad=8,
+        npt_azim=6,
+        distance_m=0.5,
+        center=np.array([2.0, 2.0], dtype=np.float64),
+        pixel_size_m=1.0e-4,
+        wavelength_m=1.24e-10,
+        gamma_deg=0.0,
+        Gamma_deg=0.0,
+        chi_deg=0.0,
+        psi_deg=0.0,
+        psi_z_deg=0.0,
+        theta_initial_deg=0.0,
+        cor_angle_deg=0.0,
+        zs=0.0,
+        zb=0.0,
+    )
+
+    assert isinstance(payload, dict)
+    assert methods == [expected_method]
+
+
 def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
@@ -7873,6 +7924,109 @@ def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypat
     assert len(q_space_inputs) == 2
     np.testing.assert_array_equal(q_space_inputs[1], background_native)
     assert len(stored_payloads) == 1
+
+
+def test_restore_caked_payload_traps_live_q_space_rebuild_failures(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: float) -> None:
+            self._value = value
+
+        def get(self) -> float:
+            return float(self._value)
+
+    stored_payloads: list[dict[str, object]] = []
+    progress_updates: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            analysis_preview_bins=(8, 6),
+            last_analysis_cache_sig=("analysis", 4),
+            last_res2_sim=object(),
+            last_res2_background=object(),
+            ai_cache={"ai": None, "detector_shape": (4, 4)},
+            stored_intersection_cache=(),
+            unscaled_image=np.ones((4, 4), dtype=np.float64),
+            last_caked_image_unscaled=None,
+            last_caked_radial_values=None,
+            last_caked_azimuth_values=None,
+            last_caked_extent=None,
+            last_caked_intersection_cache=None,
+            last_caked_background_image_unscaled=None,
+            last_q_space_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_q_space_background_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_q_space_payload_signature=("stale", 1),
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.ones((2, 2), dtype=np.float64),
+            "radial": np.array([1.0, 2.0], dtype=np.float64),
+            "azimuth": np.array([-1.0, 1.0], dtype=np.float64),
+            "transform_bundle": None,
+            "extent": [0.0, 1.0, 0.0, 1.0],
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_live_caked_transform_bundle",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_intersection_cache",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_q_space_display_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("q-space failure")),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_q_space_display_payload",
+        lambda **kwargs: stored_payloads.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label",
+        SimpleNamespace(
+            config=lambda **kwargs: progress_updates.append(str(kwargs.get("text", "")))
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "center_x_var", _Var(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _Var(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _Var(0.5), raising=False)
+    monkeypatch.setattr(runtime_session, "gamma_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "cor_angle_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zs_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zb_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
+    monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
+    monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
+    monkeypatch.setattr(
+        runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0
+    )
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
+
+    restored = runtime_session._restore_caked_display_payload_from_cached_results(
+        background_visible=True,
+        q_space_requested=False,
+    )
+
+    assert restored is True
+    assert stored_payloads == [{"sim_payload": None, "bg_payload": None}]
+    assert runtime_session.simulation_runtime_state.last_q_space_payload_signature is None
+    assert progress_updates == ["Q-space refresh failed: q-space failure"]
 
 
 def test_analysis_display_payload_ready_requires_visible_background_payload() -> None:

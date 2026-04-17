@@ -11913,6 +11913,18 @@ def _prepare_caked_display_payload(
     }
 
 
+_Q_SPACE_DISPLAY_LUT_MAX_DETECTOR_PIXELS = 512 * 512
+
+
+# Large detector frames can spike memory because LUT builds first accumulate big
+# Python-side COO lists; use streaming exact accumulator instead.
+def _q_space_display_conversion_method(detector_shape: tuple[int, int]) -> str:
+    detector_pixels = int(detector_shape[0]) * int(detector_shape[1])
+    if detector_pixels > _Q_SPACE_DISPLAY_LUT_MAX_DETECTOR_PIXELS:
+        return "exact"
+    return "lut"
+
+
 def _prepare_q_space_display_payload(
     detector_image: np.ndarray | None,
     *,
@@ -11960,7 +11972,7 @@ def _prepare_q_space_display_payload(
         npt_rad=int(max(2, int(npt_rad))),
         npt_azim=int(max(2, int(npt_azim))),
         correct_solid_angle=True,
-        method="lut",
+        method=_q_space_display_conversion_method(detector_shape),
     )
     qr_axis = np.asarray(result.qr, dtype=np.float64)
     qz_axis = np.asarray(result.qz, dtype=np.float64)
@@ -12252,8 +12264,8 @@ def _restore_caked_display_payload_from_cached_results(
                 int(DEFAULT_ANALYSIS_RADIAL_BINS),
                 int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
             )
-        _store_q_space_display_payload(
-            sim_payload=_prepare_q_space_display_payload(
+        try:
+            sim_q_space_payload = _prepare_q_space_display_payload(
                 simulation_runtime_state.unscaled_image,
                 npt_rad=int(analysis_bins[0]),
                 npt_azim=int(analysis_bins[1]),
@@ -12273,8 +12285,8 @@ def _restore_caked_display_payload_from_cached_results(
                 cor_angle_deg=float(cor_angle_var.get()),
                 zs=float(zs_var.get()),
                 zb=float(zb_var.get()),
-            ),
-            bg_payload=_prepare_q_space_display_payload(
+            )
+            bg_q_space_payload = _prepare_q_space_display_payload(
                 (
                     _get_current_background_native()
                     if background_visible
@@ -12299,27 +12311,37 @@ def _restore_caked_display_payload_from_cached_results(
                 cor_angle_deg=float(cor_angle_var.get()),
                 zs=float(zs_var.get()),
                 zb=float(zb_var.get()),
-            ),
-        )
-        simulation_runtime_state.last_q_space_payload_signature = (
-            analysis_cache_sig,
-            _q_space_geometry_cache_signature(
-                distance_m=float(corto_detector_var.get()),
-                center_x=float(center_x_var.get()),
-                center_y=float(center_y_var.get()),
-                pixel_size_m=float(pixel_size_m),
-                wavelength_m=lambda_ * 1.0e-10,
-                gamma_deg=float(gamma_var.get()),
-                Gamma_deg=float(Gamma_var.get()),
-                chi_deg=float(chi_var.get()),
-                psi_deg=float(psi),
-                psi_z_deg=float(psi_z_var.get()),
-                theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
-                cor_angle_deg=float(cor_angle_var.get()),
-                zs=float(zs_var.get()),
-                zb=float(zb_var.get()),
-            ),
-        )
+            )
+        except Exception as exc:
+            _store_q_space_display_payload(sim_payload=None, bg_payload=None)
+            simulation_runtime_state.last_q_space_payload_signature = None
+            resolved_progress_label = globals().get("progress_label")
+            if resolved_progress_label is not None:
+                resolved_progress_label.config(text=f"Q-space refresh failed: {exc}")
+        else:
+            _store_q_space_display_payload(
+                sim_payload=sim_q_space_payload,
+                bg_payload=bg_q_space_payload,
+            )
+            simulation_runtime_state.last_q_space_payload_signature = (
+                analysis_cache_sig,
+                _q_space_geometry_cache_signature(
+                    distance_m=float(corto_detector_var.get()),
+                    center_x=float(center_x_var.get()),
+                    center_y=float(center_y_var.get()),
+                    pixel_size_m=float(pixel_size_m),
+                    wavelength_m=lambda_ * 1.0e-10,
+                    gamma_deg=float(gamma_var.get()),
+                    Gamma_deg=float(Gamma_var.get()),
+                    chi_deg=float(chi_var.get()),
+                    psi_deg=float(psi),
+                    psi_z_deg=float(psi_z_var.get()),
+                    theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
+                    cor_angle_deg=float(cor_angle_var.get()),
+                    zs=float(zs_var.get()),
+                    zb=float(zb_var.get()),
+                ),
+            )
     else:
         _store_q_space_display_payload(
             sim_payload=None,
