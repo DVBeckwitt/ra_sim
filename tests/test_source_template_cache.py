@@ -9,7 +9,7 @@ from ra_sim.simulation import diffraction
 from ra_sim.utils import stacking_fault
 
 
-def _call_safe(intensities, *, save_flag=0, theta_initial=6.0):
+def _call_safe(intensities, *, save_flag=0, theta_initial=6.0, **process_kwargs):
     image_size = 8
     image = np.zeros((image_size, image_size), dtype=np.float64)
     n_samp = 1
@@ -52,6 +52,7 @@ def _call_safe(intensities, *, save_flag=0, theta_initial=6.0):
         n_detector,
         save_flag=save_flag,
         sample_qr_ring_once=False,
+        **process_kwargs,
     )
 
 
@@ -280,6 +281,97 @@ def test_q_vector_cache_reuses_when_theta_i_returns(monkeypatch):
     # First 5deg builds cache, 10deg is distinct, returning to 5deg reuses.
     assert solve_calls == 2
     assert stats_last["rays_reused"] >= 1
+
+
+def test_q_vector_cache_bypasses_custom_trig_tables(monkeypatch):
+    diffraction._Q_VECTOR_CACHE.clear()
+    diffraction._PHASE_SPACE_CACHE.clear()
+    diffraction._SOURCE_TEMPLATE_CACHE.clear()
+    solve_calls = 0
+
+    def fake_solve_q(*_args, **_kwargs):
+        nonlocal solve_calls
+        solve_calls += 1
+        return np.zeros((0, 4), dtype=np.float64), 0
+
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    default_kwargs = diffraction.get_default_solve_q_trig_kwargs()
+    custom_cos = np.array(default_kwargs["default_solve_q_cos"], copy=True)
+    custom_sin = np.array(default_kwargs["default_solve_q_sin"], copy=True)
+    custom_cos[0] += 0.5
+    custom_sin[0] -= 0.5
+
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **default_kwargs)
+    _call_safe(
+        [2.0, 3.0],
+        save_flag=0,
+        theta_initial=5.0,
+        default_solve_q_dtheta=default_kwargs["default_solve_q_dtheta"],
+        default_solve_q_cos=custom_cos,
+        default_solve_q_sin=custom_sin,
+    )
+
+    assert solve_calls == 2
+    assert len(diffraction._Q_VECTOR_CACHE) == 1
+
+
+def test_q_vector_cache_reuses_copied_default_trig_tables(monkeypatch):
+    diffraction._Q_VECTOR_CACHE.clear()
+    diffraction._PHASE_SPACE_CACHE.clear()
+    diffraction._SOURCE_TEMPLATE_CACHE.clear()
+    solve_calls = 0
+
+    def fake_solve_q(*_args, **_kwargs):
+        nonlocal solve_calls
+        solve_calls += 1
+        return np.zeros((0, 4), dtype=np.float64), 0
+
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    default_kwargs = diffraction.get_default_solve_q_trig_kwargs()
+    copied_kwargs = {
+        "default_solve_q_dtheta": default_kwargs["default_solve_q_dtheta"],
+        "default_solve_q_cos": np.array(default_kwargs["default_solve_q_cos"], copy=True),
+        "default_solve_q_sin": np.array(default_kwargs["default_solve_q_sin"], copy=True),
+    }
+
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **copied_kwargs)
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **copied_kwargs)
+
+    assert solve_calls == 1
+    assert len(diffraction._Q_VECTOR_CACHE) == 1
+
+
+def test_q_vector_cache_reuses_readonly_helper_default_trig_views(monkeypatch):
+    diffraction._Q_VECTOR_CACHE.clear()
+    diffraction._PHASE_SPACE_CACHE.clear()
+    diffraction._SOURCE_TEMPLATE_CACHE.clear()
+    solve_calls = 0
+
+    def fake_solve_q(*_args, **_kwargs):
+        nonlocal solve_calls
+        solve_calls += 1
+        return np.zeros((0, 4), dtype=np.float64), 0
+
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    helper_kwargs_1 = diffraction.get_default_solve_q_trig_kwargs()
+    helper_kwargs_2 = diffraction.get_default_solve_q_trig_kwargs()
+    assert not np.shares_memory(
+        diffraction._CANONICAL_DEFAULT_SOLVE_Q_COS,
+        diffraction._DEFAULT_SOLVE_Q_COS,
+    )
+    assert not np.shares_memory(
+        diffraction._CANONICAL_DEFAULT_SOLVE_Q_SIN,
+        diffraction._DEFAULT_SOLVE_Q_SIN,
+    )
+
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **helper_kwargs_1)
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **helper_kwargs_2)
+
+    assert solve_calls == 1
+    assert len(diffraction._Q_VECTOR_CACHE) == 1
 
 
 def test_diffraction_safe_cache_can_be_disabled(

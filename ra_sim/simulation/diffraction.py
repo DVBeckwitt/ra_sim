@@ -48,6 +48,13 @@ _DEFAULT_SOLVE_Q_COS = np.cos(
 _DEFAULT_SOLVE_Q_SIN = np.sin(
     _DEFAULT_SOLVE_Q_DTHETA * np.arange(DEFAULT_SOLVE_Q_STEPS, dtype=np.float64)
 )
+_DEFAULT_SOLVE_Q_COS.setflags(write=False)
+_DEFAULT_SOLVE_Q_SIN.setflags(write=False)
+_CANONICAL_DEFAULT_SOLVE_Q_DTHETA = float(_DEFAULT_SOLVE_Q_DTHETA)
+_CANONICAL_DEFAULT_SOLVE_Q_COS = np.array(_DEFAULT_SOLVE_Q_COS, copy=True)
+_CANONICAL_DEFAULT_SOLVE_Q_SIN = np.array(_DEFAULT_SOLVE_Q_SIN, copy=True)
+_CANONICAL_DEFAULT_SOLVE_Q_COS.setflags(write=False)
+_CANONICAL_DEFAULT_SOLVE_Q_SIN.setflags(write=False)
 DEFAULT_SOLVE_Q_BASE_INTERVALS = 48
 MIN_SOLVE_Q_BASE_INTERVALS = 8
 DEFAULT_SOLVE_Q_REL_TOL = 5.0e-4
@@ -130,6 +137,92 @@ _PROJECTION_DEBUG_REJECT_RECORD_COLS = 10
 _PROJECTION_DEBUG_LARGE_EXIT_REMAP_RAD = 0.05 * (pi / 180.0)
 _PROJECTION_DEBUG_NEAR_CRITICAL_EPS_RAD = 0.01 * (pi / 180.0)
 
+
+def _readonly_array_view(array):
+    view = np.asarray(array).view()
+    view.setflags(write=False)
+    return view
+
+
+def get_default_solve_q_trig_kwargs():
+    """Return reusable default-step trig tables as runtime kwargs."""
+
+    return {
+        "default_solve_q_dtheta": float(_CANONICAL_DEFAULT_SOLVE_Q_DTHETA),
+        "default_solve_q_cos": _readonly_array_view(_CANONICAL_DEFAULT_SOLVE_Q_COS),
+        "default_solve_q_sin": _readonly_array_view(_CANONICAL_DEFAULT_SOLVE_Q_SIN),
+    }
+
+
+def get_process_peaks_runtime_kwargs(*, numba_thread_count=None):
+    """Return cache-friendly runtime kwargs for ``process_peaks_parallel``."""
+
+    kwargs = get_default_solve_q_trig_kwargs()
+    thread_count = numba_thread_count
+    if thread_count is None:
+        try:
+            thread_count = int(get_num_threads())
+        except Exception:
+            thread_count = 1
+    if int(thread_count) < 1:
+        thread_count = 1
+    kwargs["numba_thread_count"] = int(thread_count)
+    return kwargs
+
+
+def _resolve_process_peaks_runtime_values(
+    default_solve_q_dtheta,
+    default_solve_q_cos,
+    default_solve_q_sin,
+    numba_thread_count,
+):
+    runtime_kwargs = get_process_peaks_runtime_kwargs(
+        numba_thread_count=numba_thread_count
+    )
+    if (
+        default_solve_q_cos is None
+        and default_solve_q_sin is None
+        and float(default_solve_q_dtheta) <= 0.0
+    ):
+        default_solve_q_dtheta = runtime_kwargs["default_solve_q_dtheta"]
+        default_solve_q_cos = runtime_kwargs["default_solve_q_cos"]
+        default_solve_q_sin = runtime_kwargs["default_solve_q_sin"]
+    return (
+        float(default_solve_q_dtheta),
+        default_solve_q_cos,
+        default_solve_q_sin,
+        int(runtime_kwargs["numba_thread_count"]),
+    )
+
+
+def _uses_canonical_default_solve_q_trig_tables(
+    default_solve_q_dtheta,
+    default_solve_q_cos,
+    default_solve_q_sin,
+):
+    if default_solve_q_cos is None or default_solve_q_sin is None:
+        return False
+    cos_arr = np.asarray(default_solve_q_cos, dtype=np.float64)
+    sin_arr = np.asarray(default_solve_q_sin, dtype=np.float64)
+    if cos_arr.shape != _CANONICAL_DEFAULT_SOLVE_Q_COS.shape:
+        return False
+    if sin_arr.shape != _CANONICAL_DEFAULT_SOLVE_Q_SIN.shape:
+        return False
+    dtheta = float(default_solve_q_dtheta)
+    if dtheta <= 0.0:
+        dtheta = float(_CANONICAL_DEFAULT_SOLVE_Q_DTHETA)
+    return bool(
+        np.isclose(
+            dtheta,
+            float(_CANONICAL_DEFAULT_SOLVE_Q_DTHETA),
+            rtol=0.0,
+            atol=1e-15,
+        )
+        and np.array_equal(cos_arr, _CANONICAL_DEFAULT_SOLVE_Q_COS)
+        and np.array_equal(sin_arr, _CANONICAL_DEFAULT_SOLVE_Q_SIN)
+    )
+
+
 _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "miller",
     "intensities",
@@ -186,6 +279,10 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "projection_debug_row_hit_counts",
     "projection_debug_row_tthp_sums",
     "projection_debug_row_tth_sums",
+    "default_solve_q_dtheta",
+    "default_solve_q_cos",
+    "default_solve_q_sin",
+    "numba_thread_count",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -212,6 +309,10 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "projection_debug_row_hit_counts": None,
     "projection_debug_row_tthp_sums": None,
     "projection_debug_row_tth_sums": None,
+    "default_solve_q_dtheta": -1.0,
+    "default_solve_q_cos": None,
+    "default_solve_q_sin": None,
+    "numba_thread_count": None,
 }
 
 
@@ -2075,14 +2176,25 @@ def _solve_q_uniform_full_circle(
     gamma_pv,
     eta_pv,
     n_steps,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
 ):
     if n_steps <= 0:
         return np.zeros((0, 4), dtype=np.float64)
 
-    if n_steps == DEFAULT_SOLVE_Q_STEPS:
-        dtheta = _DEFAULT_SOLVE_Q_DTHETA
-        cth = _DEFAULT_SOLVE_Q_COS
-        sth = _DEFAULT_SOLVE_Q_SIN
+    if (
+        n_steps == DEFAULT_SOLVE_Q_STEPS
+        and default_solve_q_cos is not None
+        and default_solve_q_sin is not None
+        and default_solve_q_cos.shape[0] == n_steps
+        and default_solve_q_sin.shape[0] == n_steps
+    ):
+        dtheta = float(default_solve_q_dtheta)
+        if dtheta <= 0.0:
+            dtheta = 2.0 * np.pi / n_steps
+        cth = default_solve_q_cos
+        sth = default_solve_q_sin
     else:
         dtheta = 2.0 * np.pi / n_steps
         theta_arr = dtheta * np.arange(n_steps)
@@ -2128,6 +2240,9 @@ def _solve_q_uniform(
     gamma_pv,
     eta_pv,
     n_steps,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
 ):
     if n_steps <= 0:
         return np.zeros((0, 4), dtype=np.float64)
@@ -2166,6 +2281,9 @@ def _solve_q_uniform(
             gamma_pv,
             eta_pv,
             n_steps,
+            default_solve_q_dtheta,
+            default_solve_q_cos,
+            default_solve_q_sin,
         )
 
     target_dphi = (2.0 * pi) / float(n_steps)
@@ -2339,6 +2457,9 @@ def solve_q(
     base_intervals=DEFAULT_SOLVE_Q_BASE_INTERVALS,
     rel_err_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
 ):
     """
     Build a 'circle' in reciprocal space for the reflection G_vec, i.e. the
@@ -2444,6 +2565,9 @@ def solve_q(
             gamma_pv,
             eta_pv,
             int(N_steps),
+            default_solve_q_dtheta,
+            default_solve_q_cos,
+            default_solve_q_sin,
         )
     else:
         out = _solve_q_adaptive(
@@ -2555,24 +2679,41 @@ def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
     solve_q_steps = int(params.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
     solve_q_rel_tol = float(params.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
     solve_q_mode = int(params.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE))
+    default_solve_q_dtheta = float(params.get("default_solve_q_dtheta", -1.0))
+    default_solve_q_cos = params.get("default_solve_q_cos")
+    if default_solve_q_cos is not None:
+        default_solve_q_cos = np.asarray(default_solve_q_cos, dtype=np.float64)
+    default_solve_q_sin = params.get("default_solve_q_sin")
+    if default_solve_q_sin is not None:
+        default_solve_q_sin = np.asarray(default_solve_q_sin, dtype=np.float64)
     sigma = float(params.get("sigma_pv_deg", 0.0)) * (pi / 180.0)
     gamma_pv = float(params.get("gamma_pv_deg", 0.0)) * (pi / 180.0)
     eta_pv = float(params.get("eta_pv", 0.0))
-    q_cache_key = (
-        round(theta_initial_deg, 12),
-        round(lambda_angstrom, 12),
-        round(float(H), 12),
-        round(float(K), 12),
-        round(float(L), 12),
-        solve_q_steps,
-        round(solve_q_rel_tol, 12),
-        solve_q_mode,
+    canonical_default_trig = _uses_canonical_default_solve_q_trig_tables(
+        default_solve_q_dtheta,
+        default_solve_q_cos,
+        default_solve_q_sin,
     )
+    q_cache_key = None
+    if canonical_default_trig:
+        q_cache_key = (
+            round(theta_initial_deg, 12),
+            round(lambda_angstrom, 12),
+            round(float(H), 12),
+            round(float(K), 12),
+            round(float(L), 12),
+            solve_q_steps,
+            round(solve_q_rel_tol, 12),
+            solve_q_mode,
+            "canonical_default_trig",
+        )
     q_cache_hits = 0
     retain_safe_cache = _retain_diffraction_safe_cache()
     if not retain_safe_cache:
         _Q_VECTOR_CACHE.clear()
-    q_result = _Q_VECTOR_CACHE.get(q_cache_key) if retain_safe_cache else None
+    q_result = None
+    if retain_safe_cache and q_cache_key is not None:
+        q_result = _Q_VECTOR_CACHE.get(q_cache_key)
     if q_result is None:
         q_result = solve_q(
             k_in_crystal,
@@ -2587,8 +2728,11 @@ def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
             N_steps=solve_q_steps,
             rel_err_tol=solve_q_rel_tol,
             solve_q_mode=solve_q_mode,
+            default_solve_q_dtheta=default_solve_q_dtheta,
+            default_solve_q_cos=default_solve_q_cos,
+            default_solve_q_sin=default_solve_q_sin,
         )
-        if retain_safe_cache:
+        if retain_safe_cache and q_cache_key is not None:
             _Q_VECTOR_CACHE[q_cache_key] = q_result
     else:
         q_cache_hits = 1
@@ -2658,6 +2802,9 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
         "solve_q_steps": int(bound["solve_q_steps"]),
         "solve_q_rel_tol": float(bound["solve_q_rel_tol"]),
         "solve_q_mode": int(bound["solve_q_mode"]),
+        "default_solve_q_dtheta": float(bound["default_solve_q_dtheta"]),
+        "default_solve_q_cos": bound["default_solve_q_cos"],
+        "default_solve_q_sin": bound["default_solve_q_sin"],
     }
     phase_entry = _build_phase_space_entry(phase_params)
     if _retain_diffraction_safe_cache():
@@ -3768,6 +3915,9 @@ def _calculate_phi_from_precomputed(
     projection_debug_row_hit_counts=None,
     projection_debug_row_tthp_sums=None,
     projection_debug_row_tth_sums=None,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
 ):
     """Reflection core using precomputed sample-geometry terms."""
     gz0 = 2.0 * pi * (L / cv)
@@ -3946,6 +4096,9 @@ def _calculate_phi_from_precomputed(
             DEFAULT_SOLVE_Q_BASE_INTERVALS,
             solve_q_rel_tol,
             solve_q_mode,
+            default_solve_q_dtheta,
+            default_solve_q_cos,
+            default_solve_q_sin,
         )
 
         selected_sol_idx = np.full(2, -1, dtype=np.int64)
@@ -4572,7 +4725,7 @@ def calculate_phi(
 # =============================================================================
 
 @njit(parallel=True, fastmath=True, cache=True)
-def process_peaks_parallel(
+def _process_peaks_parallel_impl(
     miller, intensities, image_size,
     av, cv, lambda_, image,
     Distance_CoR_to_Detector, gamma_deg, Gamma_deg, chi_deg, psi_deg, psi_z_deg,
@@ -4609,6 +4762,10 @@ def process_peaks_parallel(
     projection_debug_row_hit_counts=None,
     projection_debug_row_tthp_sums=None,
     projection_debug_row_tth_sums=None,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
+    numba_thread_count=1,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an
@@ -4853,7 +5010,7 @@ def process_peaks_parallel(
                 source_count += 1
 
     # Decide whether to parallelize source-peak evaluation.
-    thread_count = get_num_threads()
+    thread_count = int(numba_thread_count)
     if thread_count < 1:
         thread_count = 1
     bytes_needed = (
@@ -5010,6 +5167,9 @@ def process_peaks_parallel(
                     peak_projection_debug_row_hit_counts,
                     peak_projection_debug_row_tthp_sums,
                     peak_projection_debug_row_tth_sums,
+                    default_solve_q_dtheta,
+                    default_solve_q_cos,
+                    default_solve_q_sin,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
@@ -5058,6 +5218,9 @@ def process_peaks_parallel(
                     peak_projection_debug_row_hit_counts,
                     peak_projection_debug_row_tthp_sums,
                     peak_projection_debug_row_tth_sums,
+                    default_solve_q_dtheta,
+                    default_solve_q_cos,
+                    default_solve_q_sin,
                 )
             if collect_tables:
                 nh = pixel_hits.shape[0]
@@ -5207,6 +5370,9 @@ def process_peaks_parallel(
                     peak_projection_debug_row_hit_counts,
                     peak_projection_debug_row_tthp_sums,
                     peak_projection_debug_row_tth_sums,
+                    default_solve_q_dtheta,
+                    default_solve_q_cos,
+                    default_solve_q_sin,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
@@ -5255,6 +5421,9 @@ def process_peaks_parallel(
                     peak_projection_debug_row_hit_counts,
                     peak_projection_debug_row_tthp_sums,
                     peak_projection_debug_row_tth_sums,
+                    default_solve_q_dtheta,
+                    default_solve_q_cos,
+                    default_solve_q_sin,
                 )
 
             if record_status:
@@ -5354,9 +5523,194 @@ def process_peaks_parallel(
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
-def _is_unexpected_keyword_error(exc: TypeError, keyword: str) -> bool:
+def process_peaks_parallel(
+    miller,
+    intensities,
+    image_size,
+    av,
+    cv,
+    lambda_,
+    image,
+    Distance_CoR_to_Detector,
+    gamma_deg,
+    Gamma_deg,
+    chi_deg,
+    psi_deg,
+    psi_z_deg,
+    zs,
+    zb,
+    n2,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    sigma_pv_deg,
+    gamma_pv_deg,
+    eta_pv,
+    wavelength_array,
+    debye_x,
+    debye_y,
+    center,
+    theta_initial_deg,
+    cor_angle_deg,
+    unit_x,
+    n_detector,
+    save_flag,
+    record_status=False,
+    thickness=50e-9,
+    optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    sample_weights=None,
+    single_sample_indices=None,
+    best_sample_indices_out=None,
+    collect_hit_tables=True,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    n2_sample_array_override=None,
+    accumulate_image=True,
+    sample_qr_ring_once=True,
+    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    projection_debug_counters=None,
+    projection_debug_reject_counts=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
+    numba_thread_count=None,
+):
+    """Inject runtime defaults before entering cached compiled kernel."""
+
+    (
+        default_solve_q_dtheta,
+        default_solve_q_cos,
+        default_solve_q_sin,
+        numba_thread_count,
+    ) = _resolve_process_peaks_runtime_values(
+        default_solve_q_dtheta,
+        default_solve_q_cos,
+        default_solve_q_sin,
+        numba_thread_count,
+    )
+    return _process_peaks_parallel_impl(
+        miller,
+        intensities,
+        image_size,
+        av,
+        cv,
+        lambda_,
+        image,
+        Distance_CoR_to_Detector,
+        gamma_deg,
+        Gamma_deg,
+        chi_deg,
+        psi_deg,
+        psi_z_deg,
+        zs,
+        zb,
+        n2,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        sigma_pv_deg,
+        gamma_pv_deg,
+        eta_pv,
+        wavelength_array,
+        debye_x,
+        debye_y,
+        center,
+        theta_initial_deg,
+        cor_angle_deg,
+        unit_x,
+        n_detector,
+        save_flag,
+        record_status,
+        thickness,
+        optics_mode,
+        solve_q_steps,
+        solve_q_rel_tol,
+        solve_q_mode,
+        sample_weights,
+        single_sample_indices,
+        best_sample_indices_out,
+        collect_hit_tables,
+        pixel_size_m,
+        sample_width_m,
+        sample_length_m,
+        n2_sample_array_override,
+        accumulate_image,
+        sample_qr_ring_once,
+        exit_projection_mode,
+        projection_debug_counters,
+        projection_debug_reject_counts,
+        projection_debug_reject_records,
+        projection_debug_row_hit_counts,
+        projection_debug_row_tthp_sums,
+        projection_debug_row_tth_sums,
+        default_solve_q_dtheta=default_solve_q_dtheta,
+        default_solve_q_cos=default_solve_q_cos,
+        default_solve_q_sin=default_solve_q_sin,
+        numba_thread_count=numba_thread_count,
+    )
+
+
+def _process_peaks_parallel_py_func(*args, **kwargs):
+    bound_result = _bind_process_peaks_parallel_call(args, kwargs)
+    if bound_result is None:
+        return _process_peaks_parallel_impl.py_func(*args, **kwargs)
+    bound, extra_kwargs = bound_result
+    (
+        bound["default_solve_q_dtheta"],
+        bound["default_solve_q_cos"],
+        bound["default_solve_q_sin"],
+        bound["numba_thread_count"],
+    ) = _resolve_process_peaks_runtime_values(
+        bound["default_solve_q_dtheta"],
+        bound["default_solve_q_cos"],
+        bound["default_solve_q_sin"],
+        bound["numba_thread_count"],
+    )
+    call_kwargs = dict(extra_kwargs)
+    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args):]:
+        call_kwargs[name] = bound[name]
+    return _process_peaks_parallel_impl.py_func(*args, **call_kwargs)
+
+
+process_peaks_parallel.py_func = _process_peaks_parallel_py_func
+
+
+_PROCESS_PEAKS_RUNTIME_KWARG_NAMES = (
+    "default_solve_q_dtheta",
+    "default_solve_q_cos",
+    "default_solve_q_sin",
+    "numba_thread_count",
+)
+
+
+def _get_unexpected_keyword_name(exc: TypeError):
     message = str(exc)
-    return keyword in message and "unexpected keyword" in message
+    marker = "unexpected keyword argument "
+    marker_index = message.find(marker)
+    if marker_index < 0:
+        return None
+    rest = message[marker_index + len(marker):].lstrip()
+    if not rest or rest[0] not in ("'", '"'):
+        return None
+    quote = rest[0]
+    end_index = rest.find(quote, 1)
+    if end_index < 0:
+        return None
+    return rest[1:end_index]
+
+
+def _is_unexpected_keyword_error(exc: TypeError, keyword: str) -> bool:
+    return _get_unexpected_keyword_name(exc) == keyword
 
 
 def _prepare_clustered_process_peaks_call(args, kwargs):
@@ -5483,6 +5837,8 @@ def process_peaks_parallel_safe(*args, **kwargs):
     enable_safe_cache = kwargs.pop("enable_safe_cache", None)
     sample_qr_ring_once = bool(kwargs.pop("sample_qr_ring_once", True))
     kwargs["sample_qr_ring_once"] = sample_qr_ring_once
+    for name, value in get_process_peaks_runtime_kwargs().items():
+        kwargs.setdefault(name, value)
     _set_last_process_peaks_safe_stats()
     if isinstance(safe_stats_out, dict):
         safe_stats_out.clear()
@@ -5540,37 +5896,48 @@ def process_peaks_parallel_safe(*args, **kwargs):
 
     last_exc = None
     for runner in runners:
-        for call_args, call_kwargs, call_meta in call_variants:
-            try:
-                result = runner(*call_args, **call_kwargs)
-                used_python_runner = bool(callable(py_runner) and runner is py_runner)
-                _set_last_process_peaks_safe_stats(
-                    used_python_runner=used_python_runner,
-                )
-                if isinstance(safe_stats_out, dict):
-                    safe_stats_out["used_python_runner"] = used_python_runner
-                _set_last_intersection_cache(
-                    build_intersection_cache(
-                        result[1],
-                        av,
-                        cv,
-                        beam_x_array=beam_x_array,
-                        beam_y_array=beam_y_array,
-                        theta_array=theta_array,
-                        phi_array=phi_array,
-                        wavelength_array=wavelength_array,
-                        single_sample_indices=single_sample_indices,
-                        best_sample_indices_out=best_sample_indices_out,
+        for call_args, base_call_kwargs, call_meta in call_variants:
+            call_kwargs = dict(base_call_kwargs)
+            while True:
+                try:
+                    result = runner(*call_args, **call_kwargs)
+                    used_python_runner = bool(callable(py_runner) and runner is py_runner)
+                    _set_last_process_peaks_safe_stats(
+                        used_python_runner=used_python_runner,
                     )
-                )
-                return _finalize_clustered_process_peaks_result(result, call_meta)
-            except TypeError as exc:
-                last_exc = exc
-                if call_meta is not None and _is_unexpected_keyword_error(exc, "sample_weights"):
-                    continue
-            except Exception as exc:
-                last_exc = exc
-                continue
+                    if isinstance(safe_stats_out, dict):
+                        safe_stats_out["used_python_runner"] = used_python_runner
+                    _set_last_intersection_cache(
+                        build_intersection_cache(
+                            result[1],
+                            av,
+                            cv,
+                            beam_x_array=beam_x_array,
+                            beam_y_array=beam_y_array,
+                            theta_array=theta_array,
+                            phi_array=phi_array,
+                            wavelength_array=wavelength_array,
+                            single_sample_indices=single_sample_indices,
+                            best_sample_indices_out=best_sample_indices_out,
+                        )
+                    )
+                    return _finalize_clustered_process_peaks_result(result, call_meta)
+                except TypeError as exc:
+                    last_exc = exc
+                    unexpected_keyword = _get_unexpected_keyword_name(exc)
+                    if (
+                        unexpected_keyword in _PROCESS_PEAKS_RUNTIME_KWARG_NAMES
+                        and unexpected_keyword in call_kwargs
+                    ):
+                        call_kwargs = dict(call_kwargs)
+                        call_kwargs.pop(unexpected_keyword, None)
+                        continue
+                    if call_meta is not None and unexpected_keyword == "sample_weights":
+                        break
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    break
 
     if last_exc is not None:
         raise last_exc

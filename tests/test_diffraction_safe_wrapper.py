@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+import pytest
 
 from ra_sim.simulation import diffraction
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
@@ -199,6 +202,248 @@ def test_process_peaks_parallel_safe_can_prefer_python_runner(monkeypatch) -> No
     assert stats["used_python_runner"] is True
 
 
+def test_process_peaks_parallel_safe_injects_default_solve_q_trig_kwargs(
+    monkeypatch,
+) -> None:
+    args = _build_process_args(8)
+    observed: dict[str, object] = {}
+
+    def fake_kernel(*_args, **kwargs):
+        observed["default_solve_q_dtheta"] = kwargs.get("default_solve_q_dtheta")
+        observed["default_solve_q_cos"] = kwargs.get("default_solve_q_cos")
+        observed["default_solve_q_sin"] = kwargs.get("default_solve_q_sin")
+        observed["numba_thread_count"] = kwargs.get("numba_thread_count")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
+
+    diffraction.process_peaks_parallel_safe(
+        *args,
+        save_flag=0,
+        sample_qr_ring_once=False,
+    )
+
+    expected = diffraction.get_default_solve_q_trig_kwargs()
+    assert observed["default_solve_q_dtheta"] == expected["default_solve_q_dtheta"]
+    np.testing.assert_allclose(
+        np.asarray(observed["default_solve_q_cos"], dtype=np.float64),
+        expected["default_solve_q_cos"],
+    )
+    np.testing.assert_allclose(
+        np.asarray(observed["default_solve_q_sin"], dtype=np.float64),
+        expected["default_solve_q_sin"],
+    )
+    assert int(observed["numba_thread_count"]) >= 1
+
+
+def test_get_default_solve_q_trig_kwargs_returns_readonly_views() -> None:
+    default_kwargs = diffraction.get_default_solve_q_trig_kwargs()
+    cos_view = np.asarray(default_kwargs["default_solve_q_cos"], dtype=np.float64)
+    sin_view = np.asarray(default_kwargs["default_solve_q_sin"], dtype=np.float64)
+
+    assert not np.shares_memory(
+        diffraction._CANONICAL_DEFAULT_SOLVE_Q_COS,
+        diffraction._DEFAULT_SOLVE_Q_COS,
+    )
+    assert not np.shares_memory(
+        diffraction._CANONICAL_DEFAULT_SOLVE_Q_SIN,
+        diffraction._DEFAULT_SOLVE_Q_SIN,
+    )
+    assert not np.shares_memory(cos_view, diffraction._DEFAULT_SOLVE_Q_COS)
+    assert not np.shares_memory(sin_view, diffraction._DEFAULT_SOLVE_Q_SIN)
+    assert cos_view.flags.writeable is False
+    assert sin_view.flags.writeable is False
+
+    with pytest.raises(ValueError):
+        cos_view[0] = cos_view[0] + 1.0
+
+    fresh_kwargs = diffraction.get_default_solve_q_trig_kwargs()
+    np.testing.assert_allclose(
+        np.asarray(fresh_kwargs["default_solve_q_cos"], dtype=np.float64),
+        np.asarray(default_kwargs["default_solve_q_cos"], dtype=np.float64),
+    )
+    np.testing.assert_allclose(
+        np.asarray(fresh_kwargs["default_solve_q_sin"], dtype=np.float64),
+        np.asarray(default_kwargs["default_solve_q_sin"], dtype=np.float64),
+    )
+
+
+def test_process_peaks_parallel_wrapper_injects_runtime_kwargs(monkeypatch) -> None:
+    args = _build_process_args(8)
+    observed: dict[str, object] = {}
+
+    def fake_impl(*_args, **kwargs):
+        observed["default_solve_q_dtheta"] = kwargs.get("default_solve_q_dtheta")
+        observed["default_solve_q_cos"] = kwargs.get("default_solve_q_cos")
+        observed["default_solve_q_sin"] = kwargs.get("default_solve_q_sin")
+        observed["numba_thread_count"] = kwargs.get("numba_thread_count")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    monkeypatch.setattr(diffraction, "_process_peaks_parallel_impl", fake_impl)
+
+    diffraction.process_peaks_parallel(
+        *args,
+        save_flag=0,
+        sample_qr_ring_once=False,
+    )
+
+    expected = diffraction.get_default_solve_q_trig_kwargs()
+    assert observed["default_solve_q_dtheta"] == expected["default_solve_q_dtheta"]
+    np.testing.assert_allclose(
+        np.asarray(observed["default_solve_q_cos"], dtype=np.float64),
+        expected["default_solve_q_cos"],
+    )
+    np.testing.assert_allclose(
+        np.asarray(observed["default_solve_q_sin"], dtype=np.float64),
+        expected["default_solve_q_sin"],
+    )
+    assert int(observed["numba_thread_count"]) >= 1
+
+
+def test_process_peaks_parallel_py_func_injects_runtime_kwargs(monkeypatch) -> None:
+    args = _build_process_args(8)
+    observed: dict[str, object] = {}
+
+    def fake_python_impl(*_args, **kwargs):
+        observed["default_solve_q_dtheta"] = kwargs.get("default_solve_q_dtheta")
+        observed["default_solve_q_cos"] = kwargs.get("default_solve_q_cos")
+        observed["default_solve_q_sin"] = kwargs.get("default_solve_q_sin")
+        observed["numba_thread_count"] = kwargs.get("numba_thread_count")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    class DummyImpl:
+        py_func = staticmethod(fake_python_impl)
+
+    monkeypatch.setattr(diffraction, "_process_peaks_parallel_impl", DummyImpl())
+
+    diffraction.process_peaks_parallel.py_func(
+        *args,
+        save_flag=0,
+        sample_qr_ring_once=False,
+    )
+
+    expected = diffraction.get_default_solve_q_trig_kwargs()
+    assert observed["default_solve_q_dtheta"] == expected["default_solve_q_dtheta"]
+    np.testing.assert_allclose(
+        np.asarray(observed["default_solve_q_cos"], dtype=np.float64),
+        expected["default_solve_q_cos"],
+    )
+    np.testing.assert_allclose(
+        np.asarray(observed["default_solve_q_sin"], dtype=np.float64),
+        expected["default_solve_q_sin"],
+    )
+    assert int(observed["numba_thread_count"]) >= 1
+
+
+def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_runner(
+    monkeypatch,
+) -> None:
+    args = _build_process_args(8)
+    forced_indices = np.array([0], dtype=np.int64)
+    runtime_kwargs = diffraction.get_process_peaks_runtime_kwargs(numba_thread_count=3)
+    observed: dict[str, object] = {}
+
+    def fake_old_runner(
+        *kernel_args,
+        save_flag=0,
+        sample_qr_ring_once=True,
+        single_sample_indices=None,
+    ):
+        observed["sample_qr_ring_once"] = sample_qr_ring_once
+        observed["single_sample_indices"] = (
+            None
+            if single_sample_indices is None
+            else np.asarray(single_sample_indices, dtype=np.int64).copy()
+        )
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(kernel_args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_old_runner)
+
+    diffraction.process_peaks_parallel_safe(
+        *args,
+        save_flag=0,
+        sample_qr_ring_once=False,
+        single_sample_indices=forced_indices,
+        **runtime_kwargs,
+    )
+
+    assert observed["sample_qr_ring_once"] is False
+    np.testing.assert_array_equal(observed["single_sample_indices"], forced_indices)
+
+
+def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_python_runner(
+    monkeypatch,
+) -> None:
+    args = _build_process_args(8)
+    forced_indices = np.array([0], dtype=np.int64)
+    runtime_kwargs = diffraction.get_process_peaks_runtime_kwargs(numba_thread_count=5)
+    call_order: list[str] = []
+
+    def fake_compiled(*_args, **_kwargs):
+        call_order.append("compiled")
+        raise AssertionError("compiled runner should be skipped")
+
+    def fake_old_python(
+        *kernel_args,
+        save_flag=0,
+        sample_qr_ring_once=True,
+        single_sample_indices=None,
+    ):
+        call_order.append("python")
+        assert sample_qr_ring_once is False
+        np.testing.assert_array_equal(single_sample_indices, forced_indices)
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(kernel_args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    fake_compiled.py_func = fake_old_python
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_compiled)
+
+    diffraction.process_peaks_parallel_safe(
+        *args,
+        save_flag=0,
+        prefer_python_runner=True,
+        sample_qr_ring_once=False,
+        single_sample_indices=forced_indices,
+        **runtime_kwargs,
+    )
+
+    assert call_order == ["python"]
+
+
 def test_process_peaks_parallel_safe_keeps_raw_beams_for_q_ring_sampling(monkeypatch) -> None:
     args = _build_process_args(128)
     observed: dict[str, object] = {}
@@ -226,6 +471,24 @@ def test_process_peaks_parallel_safe_keeps_raw_beams_for_q_ring_sampling(monkeyp
     assert observed["sample_count"] == int(np.asarray(args[16]).shape[0])
     assert observed["has_sample_weights"] is False
     assert observed["sample_qr_ring_once"] is True
+
+
+def test_process_peaks_parallel_compiles_without_dynamic_global_cache_warning() -> None:
+    args = _build_process_args(1)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        diffraction.process_peaks_parallel(
+            *args,
+            save_flag=0,
+            sample_qr_ring_once=False,
+        )
+
+    assert not any(
+        "Cannot cache compiled function" in str(w.message)
+        and "dynamic globals" in str(w.message)
+        for w in caught
+    )
 
 
 def test_process_qr_rods_parallel_safe_accepts_enable_safe_cache(monkeypatch) -> None:
