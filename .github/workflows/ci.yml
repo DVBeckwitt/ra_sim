@@ -23,6 +23,9 @@ jobs:
       - name: Bootstrap dev environment
         run: python -m ra_sim.dev bootstrap
 
+      - name: Verify spglib install
+        run: python -c "import spglib"
+
       - name: Fast checks
         run: python -m ra_sim.dev check
 

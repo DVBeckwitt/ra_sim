@@ -4346,9 +4346,11 @@ def create_analysis_view_controls(
     on_toggle_1d_plots: Callable[[], None],
     on_toggle_caked_2d: Callable[[], None],
     on_toggle_log_display: Callable[[], None],
+    on_toggle_show_qz_rods: Callable[[], None] | None = None,
     on_toggle_beam_center_spot: Callable[[], None] | None = None,
     show_1d: bool = False,
     show_caked_2d: bool = False,
+    show_qz_rods: bool = False,
     show_beam_center_spot: bool = False,
     log_display: bool = False,
 ) -> None:
@@ -4356,12 +4358,21 @@ def create_analysis_view_controls(
 
     show_1d_var = tk.BooleanVar(value=bool(show_1d or show_caked_2d))
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
+    show_qz_rods_var = tk.BooleanVar(value=bool(show_qz_rods))
     show_beam_center_spot_var = tk.BooleanVar(value=bool(show_beam_center_spot))
 
     check_beam_center_spot = None
     log_display_var = tk.BooleanVar(value=bool(log_display))
     check_log_display = None
     if parent is not None:
+        ttk.Checkbutton(
+            parent,
+            text="Show Qz rods",
+            variable=show_qz_rods_var,
+            command=(
+                on_toggle_show_qz_rods if callable(on_toggle_show_qz_rods) else None
+            ),
+        ).pack(side=tk.TOP, padx=5, pady=2)
         check_beam_center_spot = ttk.Checkbutton(
             parent,
             text="Show beam center spot",
@@ -4385,6 +4396,8 @@ def create_analysis_view_controls(
     view_state.check_1d = None
     view_state.show_caked_2d_var = show_caked_2d_var
     view_state.check_2d = None
+    view_state.show_qz_rods_var = show_qz_rods_var
+    view_state.show_qz_rods_checkbutton = None
     view_state.show_beam_center_spot_var = show_beam_center_spot_var
     view_state.check_beam_center_spot = check_beam_center_spot
     view_state.log_display_var = log_display_var
@@ -4404,12 +4417,29 @@ def create_integration_range_controls(
     on_phi_min_changed: Callable[[object], None],
     on_phi_max_changed: Callable[[object], None],
     on_apply_entry: Callable[[object, object, object], None],
+    integrate_qz_rods: bool = False,
+    qr_half_width: float = 0.01,
+    on_toggle_integrate_qz_rods: Callable[[], None] | None = None,
+    on_qr_half_width_changed: Callable[[object], None] | None = None,
 ) -> None:
     """Create the 1D integration-range controls and store their widget refs."""
 
     frame = CollapsibleFrame(parent, text="Integration Region", expanded=True)
     frame.pack(side=tk.TOP, fill=tk.X, pady=5)
     range_frame = frame.frame
+
+    integrate_qz_rods_var = tk.BooleanVar(value=bool(integrate_qz_rods))
+    integrate_qz_rods_checkbutton = ttk.Checkbutton(
+        range_frame,
+        text="Integrate Qz rods",
+        variable=integrate_qz_rods_var,
+        command=(
+            on_toggle_integrate_qz_rods
+            if callable(on_toggle_integrate_qz_rods)
+            else None
+        ),
+    )
+    integrate_qz_rods_checkbutton.pack(side=tk.TOP, anchor=tk.W, padx=5, pady=(0, 4))
 
     def _create_range_row(
         *,
@@ -4419,14 +4449,17 @@ def create_integration_range_controls(
         lower_bound: float,
         upper_bound: float,
         slider_command: Callable[[object], None],
+        label_format: str = "{:.1f}",
+        entry_format: str = "{:.4f}",
+        widget_state: str = tk.NORMAL,
     ) -> None:
         container = ttk.Frame(range_frame)
         container.pack(side=tk.TOP, fill=tk.X, pady=2)
         ttk.Label(container, text=label_text).pack(side=tk.LEFT, padx=5)
 
         value_var = tk.DoubleVar(value=float(initial_value))
-        label_var = tk.StringVar(value=f"{value_var.get():.1f}")
-        entry_var = tk.StringVar(value=f"{value_var.get():.4f}")
+        label_var = tk.StringVar(value=label_format.format(value_var.get()))
+        entry_var = tk.StringVar(value=entry_format.format(value_var.get()))
         setattr(view_state, f"{prefix}_container", container)
         setattr(view_state, f"{prefix}_var", value_var)
         setattr(view_state, f"{prefix}_label_var", label_var)
@@ -4439,6 +4472,7 @@ def create_integration_range_controls(
             orient=tk.HORIZONTAL,
             variable=value_var,
             command=slider_command,
+            state=widget_state,
         )
         slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         slider.bind(
@@ -4451,7 +4485,12 @@ def create_integration_range_controls(
         label = ttk.Label(container, textvariable=label_var, width=6)
         label.pack(side=tk.LEFT, padx=4)
 
-        entry = ttk.Entry(container, textvariable=entry_var, width=8)
+        entry = ttk.Entry(
+            container,
+            textvariable=entry_var,
+            width=8,
+            state=widget_state,
+        )
         entry.pack(side=tk.LEFT, padx=(0, 5))
         entry.bind(
             "<Return>",
@@ -4506,9 +4545,26 @@ def create_integration_range_controls(
         upper_bound=180.0,
         slider_command=on_phi_max_changed,
     )
+    _create_range_row(
+        prefix="qr_half_width",
+        label_text="ΔQr half-width:",
+        initial_value=qr_half_width,
+        lower_bound=0.0,
+        upper_bound=0.25,
+        slider_command=(
+            on_qr_half_width_changed
+            if callable(on_qr_half_width_changed)
+            else (lambda _value: None)
+        ),
+        label_format="{:.4f}",
+        entry_format="{:.4f}",
+        widget_state=(tk.NORMAL if integrate_qz_rods else tk.DISABLED),
+    )
 
     view_state.frame = frame
     view_state.range_frame = range_frame
+    view_state.integrate_qz_rods_var = integrate_qz_rods_var
+    view_state.integrate_qz_rods_checkbutton = integrate_qz_rods_checkbutton
 
 
 def create_analysis_export_controls(

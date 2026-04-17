@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from matplotlib.path import Path
 
 from ra_sim.debug_controls import retain_optional_cache
 from ra_sim.simulation.exact_cake_portable import (
@@ -757,6 +758,252 @@ def interpolate_trace_to_caked_coords(
             phi[jump_idx] = np.nan
 
     return tth, phi
+
+
+def build_qr_cylinder_caked_band_masks(
+    entries: Sequence[dict[str, object]],
+    *,
+    config: QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None,
+    radial_axis: object,
+    azimuth_axis: object,
+    delta_qr: float,
+    project_traces: Callable[..., Sequence[Any]] = project_qr_cylinder_to_detector,
+) -> dict[str, object] | None:
+    """Build caked-space band masks for active Qr cylinders from ``Qr0 ± ΔQr``."""
+
+    try:
+        delta_qr_value = float(delta_qr)
+    except Exception:
+        return None
+    if delta_qr_value <= 0.0 or not entries:
+        return None
+
+    try:
+        radial_values = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+        azimuth_values = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if (
+        radial_values.size <= 0
+        or azimuth_values.size <= 0
+        or not np.all(np.isfinite(radial_values))
+        or not np.all(np.isfinite(azimuth_values))
+    ):
+        return None
+
+    projection_signature = _projection_context_signature(projection_context)
+    radial_signature = _float64_axis_digest(radial_values)
+    azimuth_signature = _float64_axis_digest(azimuth_values)
+    if (
+        projection_signature is None
+        or radial_signature is None
+        or azimuth_signature is None
+    ):
+        return None
+
+    geometry = _trace_geometry(config)
+    union_mask = np.zeros((azimuth_values.size, radial_values.size), dtype=bool)
+    masks_by_key: dict[object, np.ndarray] = {}
+
+    def _stamp_boundary_points(
+        target_mask: np.ndarray,
+        boundary_tth: np.ndarray,
+        boundary_phi: np.ndarray,
+    ) -> None:
+        finite = np.isfinite(boundary_tth) & np.isfinite(boundary_phi)
+        if not np.any(finite):
+            return
+        tth_points = np.asarray(boundary_tth[finite], dtype=np.float64)
+        phi_points = np.asarray(boundary_phi[finite], dtype=np.float64)
+        radial_indices = np.abs(radial_values[None, :] - tth_points[:, None]).argmin(axis=1)
+        azimuth_indices = np.abs(azimuth_values[None, :] - phi_points[:, None]).argmin(axis=1)
+        target_mask[azimuth_indices, radial_indices] = True
+
+    def _rasterize_run(
+        target_mask: np.ndarray,
+        low_tth_run: np.ndarray,
+        low_phi_run: np.ndarray,
+        high_tth_run: np.ndarray,
+        high_phi_run: np.ndarray,
+    ) -> None:
+        if low_tth_run.size < 2 or high_tth_run.size < 2:
+            return
+        polygon_x = np.concatenate((low_tth_run, high_tth_run[::-1]))
+        polygon_y = np.concatenate((low_phi_run, high_phi_run[::-1]))
+        if polygon_x.size < 4:
+            return
+        finite_polygon = np.isfinite(polygon_x) & np.isfinite(polygon_y)
+        if int(np.count_nonzero(finite_polygon)) < 4:
+            return
+
+        x_min = float(np.min(polygon_x[finite_polygon]))
+        x_max = float(np.max(polygon_x[finite_polygon]))
+        y_min = float(np.min(polygon_y[finite_polygon]))
+        y_max = float(np.max(polygon_y[finite_polygon]))
+        radial_idx = np.flatnonzero((radial_values >= x_min) & (radial_values <= x_max))
+        azimuth_idx = np.flatnonzero((azimuth_values >= y_min) & (azimuth_values <= y_max))
+        if radial_idx.size > 0 and azimuth_idx.size > 0:
+            grid_x, grid_y = np.meshgrid(
+                radial_values[radial_idx],
+                azimuth_values[azimuth_idx],
+            )
+            points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+            path = Path(np.column_stack((polygon_x, polygon_y)))
+            contained = path.contains_points(points, radius=1.0e-12).reshape(
+                azimuth_idx.size,
+                radial_idx.size,
+            )
+            target_mask[np.ix_(azimuth_idx, radial_idx)] |= contained
+        _stamp_boundary_points(target_mask, low_tth_run, low_phi_run)
+        _stamp_boundary_points(target_mask, high_tth_run, high_phi_run)
+
+    def _paired_run_slices(
+        low_tth: np.ndarray,
+        low_phi: np.ndarray,
+        high_tth: np.ndarray,
+        high_phi: np.ndarray,
+    ) -> list[slice]:
+        finite = (
+            np.isfinite(low_tth)
+            & np.isfinite(low_phi)
+            & np.isfinite(high_tth)
+            & np.isfinite(high_phi)
+        )
+        finite_idx = np.flatnonzero(finite)
+        if finite_idx.size <= 0:
+            return []
+        runs: list[slice] = []
+        start = int(finite_idx[0])
+        previous = int(finite_idx[0])
+        for idx in (int(value) for value in finite_idx[1:]):
+            seam_break = (
+                abs(float(low_phi[idx]) - float(low_phi[previous])) > 180.0
+                or abs(float(high_phi[idx]) - float(high_phi[previous])) > 180.0
+            )
+            if idx != previous + 1 or seam_break:
+                runs.append(slice(start, previous + 1))
+                start = idx
+            previous = idx
+        runs.append(slice(start, previous + 1))
+        return runs
+
+    for entry in entries:
+        try:
+            qr0 = float(entry["qr"])
+        except Exception:
+            continue
+        qr_lo = max(0.0, qr0 - delta_qr_value)
+        qr_hi = qr0 + delta_qr_value
+        try:
+            low_traces = project_traces(
+                qr_value=qr_lo,
+                geometry=geometry,
+                wavelength=float(config.wavelength),
+                n2=config.n2,
+                phi_samples=int(config.phi_samples),
+            )
+            high_traces = project_traces(
+                qr_value=qr_hi,
+                geometry=geometry,
+                wavelength=float(config.wavelength),
+                n2=config.n2,
+                phi_samples=int(config.phi_samples),
+            )
+        except Exception:
+            continue
+
+        low_by_branch = {
+            int(trace.branch_sign): trace
+            for trace in low_traces
+            if getattr(trace, "branch_sign", None) is not None
+        }
+        high_by_branch = {
+            int(trace.branch_sign): trace
+            for trace in high_traces
+            if getattr(trace, "branch_sign", None) is not None
+        }
+        entry_mask = np.zeros_like(union_mask)
+        for branch_sign in sorted(set(low_by_branch) & set(high_by_branch)):
+            low_trace = low_by_branch[branch_sign]
+            high_trace = high_by_branch[branch_sign]
+            low_tth, low_phi = interpolate_trace_to_caked_coords(
+                detector_cols=np.asarray(low_trace.detector_col, dtype=np.float64),
+                detector_rows=np.asarray(low_trace.detector_row, dtype=np.float64),
+                valid_mask=np.asarray(low_trace.valid_mask, dtype=bool),
+                projection_context=projection_context,
+                two_theta_limits=config.two_theta_limits,
+            )
+            high_tth, high_phi = interpolate_trace_to_caked_coords(
+                detector_cols=np.asarray(high_trace.detector_col, dtype=np.float64),
+                detector_rows=np.asarray(high_trace.detector_row, dtype=np.float64),
+                valid_mask=np.asarray(high_trace.valid_mask, dtype=bool),
+                projection_context=projection_context,
+                two_theta_limits=config.two_theta_limits,
+            )
+            if (
+                low_tth.shape != high_tth.shape
+                or low_phi.shape != high_phi.shape
+                or low_tth.size <= 0
+            ):
+                continue
+            for run_slice in _paired_run_slices(low_tth, low_phi, high_tth, high_phi):
+                _rasterize_run(
+                    entry_mask,
+                    low_tth[run_slice],
+                    low_phi[run_slice],
+                    high_tth[run_slice],
+                    high_phi[run_slice],
+                )
+
+        if np.any(entry_mask):
+            masks_by_key[entry.get("key")] = entry_mask
+            union_mask |= entry_mask
+
+    if not np.any(union_mask):
+        return {
+            "union_mask": union_mask,
+            "masks_by_key": masks_by_key,
+            "signature": (
+                tuple(
+                    (
+                        entry.get("key"),
+                        round(float(entry.get("qr", 0.0)), 10),
+                    )
+                    for entry in entries
+                ),
+                round(delta_qr_value, 10),
+                build_qr_cylinder_overlay_signature(
+                    entries,
+                    config=config,
+                    projection_context=projection_context,
+                ),
+                radial_signature,
+                azimuth_signature,
+            ),
+        }
+
+    return {
+        "union_mask": union_mask,
+        "masks_by_key": masks_by_key,
+        "signature": (
+            tuple(
+                (
+                    entry.get("key"),
+                    round(float(entry.get("qr", 0.0)), 10),
+                )
+                for entry in entries
+            ),
+            round(delta_qr_value, 10),
+            build_qr_cylinder_overlay_signature(
+                entries,
+                config=config,
+                projection_context=projection_context,
+            ),
+            radial_signature,
+            azimuth_signature,
+        ),
+    }
 
 
 def make_runtime_qr_cylinder_overlay_bindings_factory(

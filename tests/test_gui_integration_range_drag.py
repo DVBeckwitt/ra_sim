@@ -1,7 +1,20 @@
+from pathlib import Path
 import numpy as np
 from types import SimpleNamespace
 
 from ra_sim.gui import integration_range_drag, state
+
+
+SOURCE_PATH = Path(integration_range_drag.__file__)
+
+
+def test_drag_module_removes_fast_viewer_overlay_state() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "_set_fast_viewer_overlay_state" not in source
+    assert "_fast_viewer_curve_specs" not in source
+    assert "_fast_viewer_suppress_overlay_image" not in source
+    assert "_fast_viewer_overlay_version" not in source
 
 
 class _FakeVar:
@@ -24,6 +37,7 @@ class _FakeSlider:
     def __init__(self, minimum, maximum):
         self.minimum = minimum
         self.maximum = maximum
+        self.state = "normal"
 
     def cget(self, key):
         if key == "from":
@@ -31,6 +45,24 @@ class _FakeSlider:
         if key == "to":
             return self.maximum
         raise KeyError(key)
+
+    def configure(self, **kwargs):
+        self.state = kwargs.get("state", self.state)
+
+    def config(self, **kwargs):
+        self.configure(**kwargs)
+
+
+class _FakeEntry:
+    def __init__(self, *, textvariable=None, state="normal"):
+        self.textvariable = textvariable
+        self.state = state
+
+    def configure(self, **kwargs):
+        self.state = kwargs.get("state", self.state)
+
+    def config(self, **kwargs):
+        self.configure(**kwargs)
 
 
 class _FakeRect:
@@ -384,14 +416,20 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].tth_max_label_var = _FakeVar("")
         kwargs["view_state"].phi_min_label_var = _FakeVar("")
         kwargs["view_state"].phi_max_label_var = _FakeVar("")
+        kwargs["view_state"].integrate_qz_rods_var = _FakeVar(kwargs["integrate_qz_rods"])
+        kwargs["view_state"].qr_half_width_var = _FakeVar(kwargs["qr_half_width"])
+        kwargs["view_state"].qr_half_width_label_var = _FakeVar("")
         kwargs["view_state"].tth_min_entry_var = _FakeVar("")
         kwargs["view_state"].tth_max_entry_var = _FakeVar("")
         kwargs["view_state"].phi_min_entry_var = _FakeVar("")
         kwargs["view_state"].phi_max_entry_var = _FakeVar("")
+        kwargs["view_state"].qr_half_width_entry_var = _FakeVar("")
         kwargs["view_state"].tth_min_slider = _FakeSlider(0.0, 60.0)
         kwargs["view_state"].tth_max_slider = _FakeSlider(0.0, 60.0)
         kwargs["view_state"].phi_min_slider = _FakeSlider(-15.0, 15.0)
         kwargs["view_state"].phi_max_slider = _FakeSlider(-15.0, 15.0)
+        kwargs["view_state"].qr_half_width_slider = _FakeSlider(0.0, 0.25)
+        kwargs["view_state"].qr_half_width_entry = _FakeEntry(state="disabled")
 
     integration_range_drag.create_runtime_integration_range_controls(
         parent="parent",
@@ -409,14 +447,34 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.tth_min_label_var.get() == "0.0"
     assert view_state.tth_max_entry_var.get() == "60.0000"
     assert view_state.phi_min_entry_var.get() == "-15.0000"
+    assert view_state.qr_half_width_label_var.get() == "0.0100"
+    assert view_state.qr_half_width_entry_var.get() == "0.0100"
+    assert view_state.qr_half_width_slider.state == "disabled"
+    assert view_state.qr_half_width_entry.state == "disabled"
     assert len(view_state.tth_min_var.trace_calls) == 1
     assert len(view_state.phi_max_var.trace_calls) == 1
+    assert len(view_state.qr_half_width_var.trace_calls) == 1
+    assert len(view_state.integrate_qz_rods_var.trace_calls) == 1
 
     callback_refs["on_tth_min_changed"]("12.5")
     assert view_state.tth_min_var.get() == 12.5
     assert show_1d_var.get() is True
     assert view_state.tth_min_label_var.get() == "12.5"
     assert view_state.tth_min_entry_var.get() == "12.5000"
+
+    show_1d_var.set(False)
+    callback_refs["on_qr_half_width_changed"]("0.125")
+    assert view_state.qr_half_width_var.get() == 0.125
+    assert show_1d_var.get() is True
+    assert view_state.qr_half_width_label_var.get() == "0.1250"
+    assert view_state.qr_half_width_entry_var.get() == "0.1250"
+
+    show_1d_var.set(False)
+    view_state.integrate_qz_rods_var.set(True)
+    callback_refs["on_toggle_integrate_qz_rods"]()
+    assert show_1d_var.get() is True
+    assert view_state.qr_half_width_slider.state == "normal"
+    assert view_state.qr_half_width_entry.state == "normal"
 
     show_1d_var.set(False)
     view_state.phi_max_entry_var.set("45.0")
@@ -429,13 +487,45 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.phi_max_label_var.get() == "15.0"
     assert view_state.phi_max_entry_var.get() == "15.0000"
-    assert schedule_calls == ["range", "range"]
+
+    show_1d_var.set(False)
+    view_state.qr_half_width_entry_var.set("9.0")
+    callback_refs["on_apply_entry"](
+        view_state.qr_half_width_entry_var,
+        view_state.qr_half_width_var,
+        view_state.qr_half_width_slider,
+    )
+    assert view_state.qr_half_width_var.get() == 0.25
+    assert show_1d_var.get() is True
+    assert view_state.qr_half_width_label_var.get() == "0.2500"
+    assert view_state.qr_half_width_entry_var.get() == "0.2500"
+    assert schedule_calls == ["range", "range", "range", "range", "range"]
 
     view_state.phi_min_var.set(-7.25)
     trace_callback = view_state.phi_min_var.trace_calls[0][1]
     trace_callback()
     assert view_state.phi_min_label_var.get() == "-7.2"
     assert view_state.phi_min_entry_var.get() == "-7.2500"
+
+
+def test_integration_range_drag_bindings_default_custom_mask_factory_is_none() -> None:
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+    )
+
+    assert bindings.caked_custom_mask_factory is None
 
 
 def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes() -> None:
@@ -633,6 +723,55 @@ def test_update_runtime_integration_region_visuals_updates_caked_rectangle() -> 
     assert overlay_rect.height == 8.0
 
 
+def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> None:
+    view_state = _range_view_state()
+    view_state.tth_min_var.set(1.0)
+    view_state.tth_max_var.set(3.0)
+    view_state.phi_min_var.set(-180.0)
+    view_state.phi_max_var.set(180.0)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    sim_res2 = SimpleNamespace(
+        radial=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuthal=np.asarray([10.0, 0.0, -10.0], dtype=float),
+    )
+    custom_mask = np.asarray(
+        [
+            [True, False, False],
+            [False, True, False],
+            [False, False, True],
+        ],
+        dtype=bool,
+    )
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        caked_custom_mask_factory=lambda: custom_mask,
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+
+    assert overlay.visible is True
+    assert overlay_rect.visible is False
+    np.testing.assert_allclose(overlay.data, custom_mask.astype(float))
+
+
 def test_update_runtime_integration_region_visuals_uses_cached_values_without_controls() -> None:
     view_state = state.IntegrationRangeControlsViewState(
         tth_min_value=8.0,
@@ -726,6 +865,165 @@ def test_update_runtime_integration_region_visuals_updates_raw_overlay() -> None
     assert overlay_rect.visible is False
     assert overlay.visible is True
     assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
+    assert int(np.sum(overlay.data)) == 6
+
+
+def test_update_runtime_integration_region_visuals_hides_detector_roi_for_active_rod_mask() -> None:
+    view_state = _range_view_state()
+    view_state.integrate_qz_rods_var = _FakeVar(True)
+    overlay = _FakeOverlay()
+    overlay.visible = True
+    overlay_rect = _FakeRect()
+    overlay_rect.visible = True
+    sim_res2 = SimpleNamespace(
+        radial=np.asarray([10.0, 20.0, 30.0], dtype=float),
+        azimuthal=np.asarray([-10.0, 0.0, 10.0], dtype=float),
+    )
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+        caked_custom_mask_factory=lambda: np.ones((3, 3), dtype=bool),
+        last_sim_res2_factory=lambda: sim_res2,
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=object(),
+        sim_res2=None,
+    )
+
+    assert overlay.visible is False
+    assert overlay_rect.visible is False
+
+
+def test_update_runtime_integration_region_visuals_keeps_detector_fallback_with_mismatched_rod_mask() -> None:
+    view_state = _range_view_state()
+    view_state.integrate_qz_rods_var = _FakeVar(True)
+    view_state.tth_min_var.set(10.0)
+    view_state.tth_max_var.set(22.0)
+    view_state.phi_min_var.set(-10.0)
+    view_state.phi_max_var.set(2.0)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    ai = object()
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [-10.0, -9.0, -8.0],
+            [0.0, 1.0, 2.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+    sim_res2 = SimpleNamespace(
+        radial=np.asarray([10.0, 20.0, 30.0], dtype=float),
+        azimuthal=np.asarray([-10.0, 0.0, 10.0], dtype=float),
+    )
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai_arg: (
+            (two_theta, phi_vals) if ai_arg is ai else (None, None)
+        ),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: ai,
+        caked_custom_mask_factory=lambda: np.ones((2, 2), dtype=bool),
+        last_sim_res2_factory=lambda: sim_res2,
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=ai,
+        sim_res2=None,
+    )
+
+    assert overlay_rect.visible is False
+    assert overlay.visible is True
+    assert int(np.sum(overlay.data)) == 6
+
+
+def test_update_runtime_integration_region_visuals_keeps_detector_fallback_without_rod_mask() -> None:
+    view_state = _range_view_state()
+    view_state.integrate_qz_rods_var = _FakeVar(True)
+    view_state.tth_min_var.set(10.0)
+    view_state.tth_max_var.set(22.0)
+    view_state.phi_min_var.set(-10.0)
+    view_state.phi_max_var.set(2.0)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    ai = object()
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [-10.0, -9.0, -8.0],
+            [0.0, 1.0, 2.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai_arg: (
+            (two_theta, phi_vals) if ai_arg is ai else (None, None)
+        ),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: ai,
+        caked_custom_mask_factory=lambda: None,
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=ai,
+        sim_res2=None,
+    )
+
+    assert overlay_rect.visible is False
+    assert overlay.visible is True
     assert int(np.sum(overlay.data)) == 6
 
 
@@ -852,9 +1150,6 @@ def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
     assert int(np.sum(overlay.data)) > 0
     assert draw_calls == [True]
-    assert drag_state._fast_viewer_suppress_overlay_image is False
-    assert drag_state._fast_viewer_curve_specs == ()
-    assert drag_state._fast_viewer_overlay_version >= 1
 
 
 def test_update_runtime_raw_drag_preview_prefers_source_extent_for_overlay_geometry() -> None:
@@ -1291,8 +1586,6 @@ def test_reset_runtime_integration_drag_hides_raw_preview_overlay() -> None:
     assert drag_state.mode is None
     assert drag_rect.visible is False
     assert overlay.visible is False
-    assert drag_state._fast_viewer_suppress_overlay_image is False
-    assert drag_state._fast_viewer_curve_specs == ()
 
 
 def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bundle(

@@ -22,6 +22,9 @@ RUNTIME_IMPL_WRAPPER_SOURCE_PATH = (
 RUNTIME_SESSION_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_session.py"
 )
+STRUCTURE_MODEL_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "structure_model.py"
+)
 FILE_PARSING_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "io" / "file_parsing.py"
 )
@@ -40,6 +43,18 @@ RAW_SOURCE_PEAK_READ_ALLOWLIST = {
 TRUST_FIELD_ASSIGNMENT_ALLOWLIST = {
     GUI_SOURCE_ROOT / "manual_geometry.py",
 }
+
+
+def _top_level_import_targets(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    targets: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            targets.extend(str(alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = "" if node.module is None else str(node.module)
+            targets.extend(f"{module}:{alias.name}" for alias in node.names)
+    return targets
 
 
 def test_runtime_import_is_lazy() -> None:
@@ -144,7 +159,7 @@ def test_runtime_impl_wrapper_import_is_lazy() -> None:
             sys.modules["ra_sim.gui._runtime.runtime_session"] = previous_session
 
 
-def test_runtime_session_import_stays_headless_until_tk_canvas_is_needed() -> None:
+def test_runtime_session_import_stays_headless_until_tk_backend_is_needed() -> None:
     script = """
 import importlib
 import json
@@ -162,7 +177,7 @@ print(
         {
             "backend": matplotlib.get_backend(),
             "tk_backend_loaded": "matplotlib.backends.backend_tkagg" in sys.modules,
-            "tk_canvas_cache_initialized": runtime_session._TK_FIGURE_CANVAS_CLS is not None,
+            "tk_canvas_cls_cached": runtime_session._TK_FIGURE_CANVAS_CLS is not None,
         }
     )
 )
@@ -181,7 +196,7 @@ print(
 
     assert payload["backend"].lower() == "agg"
     assert payload["tk_backend_loaded"] is False
-    assert payload["tk_canvas_cache_initialized"] is False
+    assert payload["tk_canvas_cls_cached"] is False
 
 
 def test_runtime_session_defers_scipy_gui_modules_until_first_use() -> None:
@@ -258,6 +273,46 @@ print(
     }
 
 
+def test_runtime_session_defers_top_level_pycifrw_and_structure_model_imports() -> None:
+    import_targets = _top_level_import_targets(RUNTIME_SESSION_SOURCE_PATH)
+
+    assert "CifFile" not in import_targets
+    assert "ra_sim.gui:structure_model" not in import_targets
+
+
+def test_structure_model_defers_top_level_optional_dependency_imports() -> None:
+    import_targets = _top_level_import_targets(STRUCTURE_MODEL_SOURCE_PATH)
+
+    assert "CifFile" not in import_targets
+    assert "Dans_Diffraction" not in import_targets
+
+
+def test_runtime_session_uses_lazy_structure_model_and_cif_reader_helpers() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "_STRUCTURE_MODEL_MODULE = None" in source
+    assert "def _get_structure_model_module():" in source
+    assert "gui_structure_model = _LazyModuleProxy(_get_structure_model_module)" in source
+
+    cif_helper_start = source.index("def _read_cif_block(cif_path):")
+    cif_helper_end = source.index("def _normalize_ordered_structure_scale(", cif_helper_start)
+    cif_helper_block = source[cif_helper_start:cif_helper_end]
+    assert "import CifFile" in cif_helper_block
+    assert "CifFile.ReadCif" in cif_helper_block
+
+    block_01_start = source.index("def _initialize_runtime_state_block_01() -> None:")
+    block_01_end = source.index("def _normalize_occupancy_label(", block_01_start)
+    block_01 = source[block_01_start:block_01_end]
+    assert "cf, blk = _read_cif_block(cif_file)" in block_01
+    assert "CifFile.ReadCif" not in block_01
+
+    block_05_start = source.index("def _initialize_runtime_state_block_05() -> None:")
+    block_05_end = source.index("def _initialize_runtime_state_block_06() -> None:", block_05_start)
+    block_05 = source[block_05_start:block_05_end]
+    assert "cf2, blk2 = _read_cif_block(cif_file2)" in block_05
+    assert "CifFile.ReadCif" not in block_05
+
+
 def test_runtime_impl_prompts_from_root_only_before_full_runtime_bootstrap() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     main_start = source.index('def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):')
@@ -311,13 +366,17 @@ def test_runtime_impl_gates_raster_projection_helpers_until_controls_stage() -> 
     assert "apply_projection(artist)" in helper_block
 
 
-def test_runtime_impl_defines_safe_fast_viewer_defaults_before_plot_init() -> None:
+def test_runtime_impl_removes_fast_viewer_and_viewport_selector_symbols() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    init_start = source.index("def _initialize_runtime_plot_block_03() -> None:")
 
-    assert source.index("def _fast_viewer_active() -> bool:") < init_start
-    assert source.index("def _fast_viewer_requested_enabled() -> bool:") < init_start
-    assert source.index("def _fast_viewer_suspend_reason() -> str | None:") < init_start
+    assert "RA_SIM_FAST_VIEWER" not in source
+    assert "RA_SIM_PRIMARY_VIEWPORT" not in source
+    assert "fast_viewer_workflow" not in source
+    assert "_fast_viewer_active" not in source
+    assert "runtime_display_acceleration" not in source
+    assert "fast_plot_viewer" not in source
+    assert "runtime_primary_viewport" not in source
+    assert "tk_canvas" not in source
 
 
 def test_runtime_impl_uses_tiny_startup_placeholder_rasters() -> None:
@@ -833,6 +892,214 @@ def test_runtime_session_live_manual_peak_cache_update_matches_branchless_saved_
     assert captured_saved_pairs[0][1]["refined_sim_y"] == 97.0
     assert captured_saved_pairs[0][1]["refined_sim_caked_x"] == 30.25
     assert captured_saved_pairs[0][1]["refined_sim_caked_y"] == -57.5
+
+
+def test_runtime_session_replace_gui_state_peak_cache_reprojects_detector_view_from_native_fields(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_millers=[],
+        peak_intensities=[],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={},
+    )
+    projection_calls: list[list[dict[str, object]]] = []
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+
+    def _project_to_detector(records):
+        projection_calls.append([dict(record) for record in records or ()])
+        projected: list[dict[str, object]] = []
+        for record in records or ():
+            if not isinstance(record, dict):
+                continue
+            native_col = float(record["native_col"])
+            native_row = float(record["native_row"])
+            projected.append(
+                {
+                    **dict(record),
+                    "sim_col": native_col,
+                    "sim_row": native_row,
+                    "display_col": native_col,
+                    "display_row": native_row,
+                }
+            )
+        return projected
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        _project_to_detector,
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache(
+        [
+            {
+                "display_col": 30.25,
+                "display_row": -57.5,
+                "native_col": 190.0,
+                "native_row": 96.0,
+                "hkl": [-1, 0, 5],
+                "intensity": 3.0,
+                "q_group_key": ["q_group", "primary", 1.0, 5],
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+            }
+        ]
+    )
+
+    assert projection_calls[0][0]["display_col"] == 30.25
+    assert projection_calls[0][0]["display_row"] == -57.5
+    assert projection_calls[0][0]["native_col"] == 190.0
+    assert projection_calls[0][0]["native_row"] == 96.0
+    assert simulation_runtime_state.peak_positions == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
+    assert simulation_runtime_state.peak_intensities == [3.0]
+    assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.peak_records[0]["sim_col"] == 190.0
+    assert simulation_runtime_state.peak_records[0]["sim_row"] == 96.0
+    assert simulation_runtime_state.peak_records[0]["display_col"] == 190.0
+    assert simulation_runtime_state.peak_records[0]["display_row"] == 96.0
+    assert simulation_runtime_state.peak_records[0]["native_col"] == 190.0
+    assert simulation_runtime_state.peak_records[0]["native_row"] == 96.0
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
+    assert (
+        simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 190.0
+    )
+    assert (
+        simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 96.0
+    )
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert invalidated == [True]
+
+
+def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projection_raises(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[{"stale": True}],
+        peak_positions=[(1.0, 2.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[4.0],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={"records": [{"stale": True}], "positions": [(1.0, 2.0)]},
+    )
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+
+    projection_calls: list[int] = []
+
+    def _project_per_row(records):
+        record = dict(records[0])
+        projection_calls.append(int(record["source_row_index"]))
+        if int(record["source_row_index"]) == 1:
+            raise RuntimeError("boom")
+        native_col = float(record["native_col"])
+        native_row = float(record["native_row"])
+        return [
+            {
+                **record,
+                "sim_col": native_col,
+                "sim_row": native_row,
+                "display_col": native_col,
+                "display_row": native_row,
+            }
+        ]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        _project_per_row,
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache(
+        [
+            {
+                "display_col": 30.25,
+                "display_row": -57.5,
+                "native_col": 190.0,
+                "native_row": 96.0,
+                "hkl": [-1, 0, 5],
+                "intensity": 3.0,
+                "q_group_key": ["q_group", "primary", 1.0, 5],
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+            },
+            {
+                "display_col": 31.25,
+                "display_row": -56.5,
+                "native_col": 191.0,
+                "native_row": 97.0,
+                "hkl": [-2, 0, 5],
+                "intensity": 4.0,
+                "q_group_key": ["q_group", "primary", 2.0, 5],
+                "source_table_index": 9,
+                "source_row_index": 1,
+                "source_branch_index": 0,
+            }
+        ]
+    )
+
+    assert projection_calls == [0, 1]
+    assert len(simulation_runtime_state.peak_records) == 1
+    assert simulation_runtime_state.peak_positions == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
+    assert simulation_runtime_state.peak_intensities == [3.0]
+    assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.peak_records[0]["sim_col"] == 190.0
+    assert simulation_runtime_state.peak_records[0]["sim_row"] == 96.0
+    assert simulation_runtime_state.peak_records[0]["display_col"] == 190.0
+    assert simulation_runtime_state.peak_records[0]["display_row"] == 96.0
+    assert len(simulation_runtime_state.peak_overlay_cache["records"]) == 1
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert invalidated == [True]
 
 
 def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_lookup(
@@ -2801,12 +3068,13 @@ def test_runtime_impl_analysis_job_payload_tracks_q_space_intent() -> None:
     assert '"q_space_requested": q_space_requested,' in source
 
 
-def test_runtime_impl_resolves_requested_view_mode_before_q_space_restore() -> None:
+def test_runtime_impl_resolves_live_view_mode_before_q_space_restore() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert 'requested_view_mode = _current_app_shell_view_mode()' in source
     assert 'and requested_view_mode == "q_space"' in source
     assert 'q_space_requested=q_space_requested,' in source
+    assert 'live_q_space_requested = bool(_current_app_shell_view_mode() == "q_space")' in source
 
 
 def test_runtime_impl_q_space_view_mode_is_not_gated_on_caked_toggle() -> None:
@@ -2819,19 +3087,16 @@ def test_runtime_impl_q_space_view_mode_is_not_gated_on_caked_toggle() -> None:
     assert helper_source.index('if selected_mode == "q_space":') < helper_source.index("if show_caked:")
 
 
-def test_runtime_impl_fast_viewer_layer_versions_report_q_space_extent() -> None:
+def test_runtime_impl_single_viewport_startup_uses_embedded_matplotlib_tk() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    helper_start = source.index("def _fast_viewer_layer_versions() -> dict[str, object]:")
-    helper_end = source.index("def _initialize_runtime_plot_block_03()", helper_start)
-    helper_source = source[helper_start:helper_end]
-
-    assert "active_mode = _resolved_primary_analysis_display_mode()" in helper_source
-    assert 'if active_mode == "q_space":' in helper_source
-    assert '"last_q_space_extent"' in helper_source
-    assert '"simulation": (\n            active_mode,' in helper_source
+    assert "figure_canvas_cls = _get_tk_figure_canvas_cls()" in source
+    assert "matplotlib_canvas = figure_canvas_cls(" in source
+    assert "master=app_shell_view_state.canvas_frame" in source
+    assert "_set_runtime_canvas(matplotlib_canvas)" in source
+    assert "_initialize_runtime_plot_block_03()" not in source
 
 
-def test_initialize_runtime_plot_block_02_projects_startup_rasters_without_fast_viewer_workflow(
+def test_initialize_runtime_plot_block_02_projects_startup_rasters_without_viewport_workflow(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -2869,8 +3134,6 @@ def test_initialize_runtime_plot_block_02_projects_startup_rasters_without_fast_
     overlay_display = _FakeArtist(np.zeros((2, 2), dtype=float), (0.0, 1.0, 1.0, 0.0))
 
     monkeypatch.setattr(runtime_session, "_RUNTIME_CONTROLS_INITIALIZED", True, raising=False)
-    monkeypatch.setattr(runtime_session, "PRIMARY_VIEWPORT_BACKEND", "matplotlib", raising=False)
-    monkeypatch.setattr(runtime_session, "_fast_viewer_active", lambda: False)
     monkeypatch.setattr(runtime_session, "image_size", 2, raising=False)
     monkeypatch.setattr(
         runtime_session,
@@ -3448,7 +3711,7 @@ def test_run_analysis_job_caked_only_request_ignores_q_space_failure(monkeypatch
     assert result["bg_q_space"] is None
 
 
-def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(monkeypatch) -> None:
+def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     class _Var:
@@ -3543,10 +3806,11 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
     monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
     monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
     monkeypatch.setattr(runtime_session, "_current_effective_theta_initial", lambda strict_count=False: 0.0)
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
 
     restored = runtime_session._restore_caked_display_payload_from_cached_results(
         background_visible=True,
-        q_space_requested=True,
+        q_space_requested=False,
     )
 
     assert restored is True
@@ -3555,7 +3819,7 @@ def test_restore_caked_payload_rebuilds_background_q_space_from_native_source(mo
     assert len(stored_payloads) == 1
 
 
-def test_restore_caked_payload_ignores_stale_shell_q_space_when_not_requested(
+def test_restore_caked_payload_clears_stale_q_space_outside_live_q_space_mode(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -3613,11 +3877,11 @@ def test_restore_caked_payload_ignores_stale_shell_q_space_when_not_requested(
         "_store_q_space_display_payload",
         lambda **kwargs: stored_payloads.append(dict(kwargs)),
     )
-    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "q_space")
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
 
     restored = runtime_session._restore_caked_display_payload_from_cached_results(
         background_visible=True,
-        q_space_requested=False,
+        q_space_requested=True,
     )
 
     assert restored is True
@@ -3632,23 +3896,22 @@ def test_runtime_impl_hkl_pick_disarms_manual_geometry_and_preview_modes() -> No
     assert "_set_geometry_preview_exclude_mode(False)" in source
 
 
-def test_runtime_impl_hkl_pick_pauses_fast_viewer_runtime() -> None:
+def test_runtime_impl_hkl_pick_refreshes_mode_banner_without_viewport_hooks() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert "hkl_pick_armed_factory=lambda: getattr(" in source
-    assert 'globals().get("peak_selection_state")' in source
     assert 'def _handle_hkl_pick_mode_changed(_armed: bool) -> None:' in source
-    assert 'globals().get("_refresh_fast_viewer_runtime_mode")' in source
-    assert "refresh_fast_viewer(announce=False)" in source
+    assert 'globals().get("_refresh_fast_viewer_runtime_mode")' not in source
     assert "on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed" in source
 
 
-def test_runtime_impl_defaults_primary_viewport_to_matplotlib_with_safe_activation() -> None:
+def test_runtime_impl_initializes_only_embedded_matplotlib_tk_primary_viewport() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert 'RA_SIM_PRIMARY_VIEWPORT", "matplotlib"' in source
-    assert "activate_runtime_primary_viewport(" in source
-    assert "PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend" in source
+    assert "figure_canvas_cls = _get_tk_figure_canvas_cls()" in source
+    assert "matplotlib_canvas = figure_canvas_cls(" in source
+    assert "canvas = matplotlib_canvas" in source
+    assert "_set_runtime_canvas(matplotlib_canvas)" in source
+    assert "activate_runtime_primary_viewport(" not in source
     assert '"key": "primary_viewport_backend"' not in source
     assert "set_background_alpha=background_display.set_alpha" in source
 
@@ -3760,18 +4023,190 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
 
     assert '\"key\": \"fast_viewer\"' not in source
     assert '\"key\": \"log_display\"' in source
+    assert '\"key\": \"show_qz_rods\"' in source
     assert '\"key\": \"clear_integration_region\"' in source
     assert '\"key\": \"auto_match_scale\"' in source
     assert "control_type\": \"check\"" in source
     assert "control_type\": \"button\"" in source
     assert "parent=None" in source
-    assert 'RA_SIM_FAST_VIEWER", "1"' in source
-    assert "control_locked=True" in source
+    assert "RA_SIM_FAST_VIEWER" not in source
+    assert "control_locked=True" not in source
     assert "display_controls_view_state.fast_viewer_checkbutton = (" not in source
     assert "display_controls_view_state.simulation_controls_frame" not in source[
         source.index("def _auto_match_scale_factor_to_radial_peak("):
         source.index("def _update_chi_square_display(")
     ]
+    assert "def _current_qr_cylinder_caked_band_masks() -> dict[str, object] | None:" in source
+    assert "def _invalidate_qr_cylinder_band_cache() -> None:" in source
+
+
+def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        SimpleNamespace(
+            tth_min_value=1.5,
+            tth_max_value=55.0,
+            phi_min_value=-12.0,
+            phi_max_value=18.0,
+            integrate_qz_rods_value=True,
+            qr_half_width_value=0.03125,
+        ),
+        raising=False,
+    )
+    for name in (
+        "tth_min_var",
+        "tth_max_var",
+        "phi_min_var",
+        "phi_max_var",
+        "integrate_qz_rods_var",
+        "qr_half_width_var",
+    ):
+        monkeypatch.setitem(runtime_session.__dict__, name, None)
+
+    values = runtime_session._current_analysis_range_values()
+
+    assert values == {
+        "tth_min": 1.5,
+        "tth_max": 55.0,
+        "phi_min": -12.0,
+        "phi_max": 18.0,
+        "integrate_qz_rods": True,
+        "qr_half_width": 0.03125,
+    }
+
+
+def test_runtime_session_current_qr_cylinder_caked_band_masks_uses_cached_rod_controls(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    build_calls: list[float] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        SimpleNamespace(
+            integrate_qz_rods_value=True,
+            qr_half_width_value=0.03125,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_radial_values=np.asarray([10.0, 20.0], dtype=float),
+            last_caked_azimuth_values=np.asarray([-5.0, 5.0], dtype=float),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(qr_cylinder_band_cache={"signature": None, "result": None}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_qr_cylinder_caked_projection_context",
+        lambda: {"projection": "ok"},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "active_qr_cylinder_overlay_entries_factory",
+        lambda: [{"key": "rod-a", "qr": 1.25}],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "qr_cylinder_overlay_render_config_factory",
+        lambda: runtime_session.gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+            render_in_caked_space=False,
+            image_size=64,
+            display_rotate_k=-1,
+            center_col=10.0,
+            center_row=11.0,
+            distance_cor_to_detector=123.0,
+            gamma_deg=1.5,
+            Gamma_deg=2.5,
+            chi_deg=3.5,
+            psi_deg=4.5,
+            psi_z_deg=5.5,
+            zs=6.5,
+            zb=7.5,
+            theta_initial_deg=8.5,
+            cor_angle_deg=9.5,
+            pixel_size_m=1.0e-4,
+            wavelength=1.54,
+            n2=1.1 + 0.0j,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_qr_cylinder_overlay,
+        "build_qr_cylinder_overlay_signature",
+        lambda entries, **kwargs: (
+            tuple(entry["key"] for entry in entries),
+            bool(kwargs["config"].render_in_caked_space),
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_qr_cylinder_overlay,
+        "build_qr_cylinder_caked_band_masks",
+        lambda entries, **kwargs: (
+            build_calls.append(float(kwargs["delta_qr"]))
+            or {"union_mask": np.ones((2, 2), dtype=bool)}
+        ),
+    )
+    for name in ("integrate_qz_rods_var", "qr_half_width_var"):
+        monkeypatch.setitem(runtime_session.__dict__, name, None)
+
+    result = runtime_session._current_qr_cylinder_caked_band_masks()
+
+    assert build_calls == [0.03125]
+    np.testing.assert_array_equal(result["union_mask"], np.ones((2, 2), dtype=bool))
+
+
+def test_runtime_session_current_qr_cylinder_caked_projection_context_prefers_live_bundle_shape(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class FakeBundle:
+        def __init__(self):
+            self.detector_shape = (9, 7)
+            self.raw_azimuth_deg = np.asarray([-90.0, 0.0], dtype=float)
+
+    bundle = FakeBundle()
+
+    monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
+    monkeypatch.setattr(runtime_session, "_current_live_caked_transform_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_radial_values=np.asarray([10.0, 20.0], dtype=float),
+            last_caked_azimuth_values=np.asarray([-5.0, 5.0], dtype=float),
+            ai_cache={"ai": None, "detector_shape": (99, 88)},
+            unscaled_image=np.ones((4, 4), dtype=np.float64),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_normalize_geometry_fit_caked_view_payload",
+        lambda payload, **kwargs: dict(payload),
+    )
+
+    context = runtime_session._current_qr_cylinder_caked_projection_context()
+
+    assert context["detector_shape"] == (9, 7)
+    np.testing.assert_allclose(context["raw_azimuth_axis"], [-90.0, 0.0])
 
 
 def test_runtime_impl_keeps_runtime_executors_in_latest_request_wins_mode() -> None:
@@ -3977,7 +4412,10 @@ def _trust_field_assignment_lines(path: Path) -> list[tuple[str, int]]:
         "source_reflection_is_full",
     }
     hits: set[tuple[str, int]] = set()
-    for node in ast.walk(tree):
+    pending: list[ast.AST] = [tree]
+    while pending:
+        node = pending.pop()
+        pending.extend(ast.iter_child_nodes(node))
         target_nodes: list[ast.AST] = []
         if isinstance(node, ast.Assign):
             target_nodes = list(node.targets)

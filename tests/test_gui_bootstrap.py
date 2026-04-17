@@ -1180,6 +1180,7 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
         integration_region_overlay="overlay",
         image_display="image-display",
         range_visible_factory="range-visible",
+        caked_custom_mask_factory="custom-mask",
     )
 
     assert bundle.bindings_factory == "bindings-factory"
@@ -1198,6 +1199,7 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
                 "integration_region_overlay": "overlay",
                 "image_display": "image-display",
                 "range_visible_factory": "range-visible",
+                "caked_custom_mask_factory": "custom-mask",
             },
         ),
         ("refresh", "bindings-factory"),
@@ -1268,6 +1270,8 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "tth_max": 60.0,
                 "phi_min": -15.0,
                 "phi_max": 15.0,
+                "integrate_qz_rods": False,
+                "qr_half_width": 0.01,
             },
         ),
         (
@@ -1280,6 +1284,7 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "on_toggle_log_display": "toggle-log-display",
                 "show_1d": False,
                 "show_caked_2d": False,
+                "show_qz_rods": False,
                 "log_display": False,
             },
         ),

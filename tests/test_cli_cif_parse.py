@@ -1,4 +1,7 @@
+import builtins
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -44,6 +47,18 @@ def _low_symmetry_p1_structure():
         ["Na", "Mg"],
         (1.0, 1.1, 1.2, 75.0, 80.0, 85.0),
     )
+
+
+def _block_spglib_import(monkeypatch):
+    original_import = builtins.__import__
+
+    def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "spglib":
+            raise ModuleNotFoundError("No module named 'spglib'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delitem(sys.modules, "spglib", raising=False)
+    monkeypatch.setattr(builtins, "__import__", _blocked_import)
 
 
 def test_parse_cif_cell_a_c_reads_raw_values():
@@ -99,6 +114,24 @@ def test_write_xtl_allows_explicit_legacy_metadata_override(tmp_path):
     assert "SYMMETRY LABEL  P1\n" in content
 
 
+def test_write_xtl_explicit_override_skips_spglib_requirement(tmp_path, monkeypatch):
+    xtl_path = tmp_path / "override-no-spglib.xtl"
+    _block_spglib_import(monkeypatch)
+
+    write_xtl(
+        *_simple_cubic_structure(),
+        filename=xtl_path,
+        title="Bi2 Se3",
+        symmetry_number=1,
+        symmetry_label="P1",
+    )
+
+    content = xtl_path.read_text(encoding="utf-8")
+    assert "TITLE Bi2 Se3\n" in content
+    assert "SYMMETRY NUMBER 1\n" in content
+    assert "SYMMETRY LABEL  P1\n" in content
+
+
 def test_write_xtl_preserves_explicit_empty_metadata(tmp_path):
     xtl_path = tmp_path / "ignored.xtl"
 
@@ -132,6 +165,49 @@ def test_write_xtl_blanks_auto_derived_p1_metadata(tmp_path):
     assert lines[4] == "SYMMETRY LABEL  "
     assert "SYMMETRY NUMBER 1\n" not in content
     assert "SYMMETRY LABEL  P1\n" not in content
+
+
+def test_write_xtl_missing_spglib_raises_clear_error(tmp_path, monkeypatch):
+    xtl_path = tmp_path / "missing-spglib.xtl"
+    _block_spglib_import(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="automatic symmetry derivation requires spglib"):
+        write_xtl(*_simple_cubic_structure(), filename=xtl_path)
+
+
+@pytest.mark.parametrize(
+    "metadata_override",
+    [
+        {"symmetry_number": "221"},
+        {"symmetry_label": "Pm-3m"},
+    ],
+)
+def test_write_xtl_partial_explicit_metadata_still_requires_spglib(
+    tmp_path,
+    monkeypatch,
+    metadata_override,
+):
+    xtl_path = tmp_path / "partial-metadata.xtl"
+    _block_spglib_import(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="automatic symmetry derivation requires spglib"):
+        write_xtl(*_simple_cubic_structure(), filename=xtl_path, **metadata_override)
+
+
+def test_write_xtl_spglib_dataset_errors_surface(tmp_path, monkeypatch):
+    xtl_path = tmp_path / "spglib-failure.xtl"
+
+    def _boom(_cell):
+        raise ValueError("bad symmetry dataset")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "spglib",
+        SimpleNamespace(get_symmetry_dataset=_boom),
+    )
+
+    with pytest.raises(ValueError, match="bad symmetry dataset"):
+        write_xtl(*_simple_cubic_structure(), filename=xtl_path)
 
 
 def test_get_atomic_coordinates_wraps_and_deduplicates_same_label_expansion_rows():

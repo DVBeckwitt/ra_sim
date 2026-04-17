@@ -21,7 +21,7 @@ import faulthandler
 import re
 import traceback
 from collections import defaultdict, namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -35,7 +35,6 @@ import matplotlib
 from matplotlib.colors import ListedColormap, LogNorm, Normalize
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-import CifFile
 
 from ra_sim.io.osc_reader import read_osc
 from ra_sim.utils.stacking_fault import (
@@ -101,6 +100,7 @@ from ra_sim.simulation.diffraction import (
     MIN_SOLVE_Q_STEPS,
     SOLVE_Q_MODE_ADAPTIVE,
     SOLVE_Q_MODE_UNIFORM,
+    get_process_peaks_runtime_kwargs,
     get_last_intersection_cache,
     hit_tables_to_max_positions,
     intersection_cache_to_hit_tables,
@@ -159,19 +159,18 @@ from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import integration_range_drag as gui_integration_range_drag
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import runtime_background as gui_runtime_background
-from ra_sim.gui import runtime_display_acceleration as gui_runtime_display_acceleration
 from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
-from ra_sim.gui import runtime_primary_viewport as gui_runtime_primary_viewport
 from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
 from ra_sim.gui._runtime import primary_cache_helpers as _primary_cache_helpers
 from ra_sim.gui._runtime.live_cache_helpers import (
+    empty_qr_cylinder_band_cache as _empty_qr_cylinder_band_cache,
     empty_peak_overlay_cache as _empty_peak_overlay_cache,
     empty_qr_cylinder_overlay_cache as _empty_qr_cylinder_overlay_cache,
     live_cache_count as _live_cache_count,
@@ -180,10 +179,8 @@ from ra_sim.gui._runtime.live_cache_helpers import (
     live_cache_short_text as _live_cache_short_text,
     live_cache_signature_summary as _live_cache_signature_summary,
 )
-from ra_sim.gui import tk_primary_viewport as gui_tk_primary_viewport
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
-from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compute_geometry_overlay_frame_diagnostics,
@@ -194,7 +191,6 @@ from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import display_projection as gui_display_projection
-from ra_sim.gui import fast_plot_viewer as gui_fast_plot_viewer
 from ra_sim.gui import main_matplotlib_interaction as gui_main_matplotlib_interaction
 from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome
 from ra_sim.gui import state as gui_state
@@ -253,9 +249,23 @@ _AZIMUTHAL_INTEGRATOR_CLS = None
 _TK_FIGURE_CANVAS_CLS = None
 _ANALYSIS_PEAK_TOOLS_MODULE = None
 _ORDERED_STRUCTURE_FIT_MODULE = None
+_STRUCTURE_MODEL_MODULE = None
 _ANALYSIS_PEAK_PROFILE_GAUSSIAN = "gaussian"
 _ANALYSIS_PEAK_PROFILE_LORENTZIAN = "lorentzian"
 _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT = "pseudo_voigt"
+
+
+class _LazyModuleProxy:
+    """Resolve a heavy module only when code actually touches it."""
+
+    def __init__(self, loader) -> None:
+        object.__setattr__(self, "_loader", loader)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(object.__getattribute__(self, "_loader")(), name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(object.__getattribute__(self, "_loader")(), name, value)
 
 
 def _get_azimuthal_integrator_cls():
@@ -297,6 +307,28 @@ def _get_ordered_structure_fit_module():
     return _ORDERED_STRUCTURE_FIT_MODULE
 
 
+def _get_structure_model_module():
+    global _STRUCTURE_MODEL_MODULE
+
+    if _STRUCTURE_MODEL_MODULE is None:
+        from ra_sim.gui import structure_model as structure_model_module
+
+        _STRUCTURE_MODEL_MODULE = structure_model_module
+    return _STRUCTURE_MODEL_MODULE
+
+
+gui_structure_model = _LazyModuleProxy(_get_structure_model_module)
+
+
+def _read_cif_block(cif_path):
+    """Read one CIF file through PyCifRW only when runtime state needs it."""
+
+    import CifFile
+
+    cf = CifFile.ReadCif(cif_path)
+    return cf, cf[list(cf.keys())[0]]
+
+
 def _normalize_ordered_structure_scale(raw_value: object, *, fallback: float = 1.0) -> float:
     """Keep ordered-structure scale validation SciPy-free until fit tools are needed."""
 
@@ -336,20 +368,6 @@ HKL_PICK_MAX_DISTANCE_PX = 50.0
 
 _RUNTIME_UPDATE_TRACE_HANDLE = None
 _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = False
-
-
-def _fast_viewer_active() -> bool:
-    """Keep startup redraw helpers safe until fast-viewer workflow exists."""
-
-    return False
-
-
-def _fast_viewer_requested_enabled() -> bool:
-    return False
-
-
-def _fast_viewer_suspend_reason() -> str | None:
-    return None
 
 
 def _all_logging_disabled() -> bool:
@@ -827,9 +845,8 @@ def _initialize_runtime_state_block_01() -> None:
     except KeyError:
         cif_file2 = None
 
-    # read with PyCifRW
-    cf = CifFile.ReadCif(cif_file)
-    blk = cf[list(cf.keys())[0]]
+    # read with PyCifRW only when runtime state initialization actually needs CIF data
+    cf, blk = _read_cif_block(cif_file)
 
 
 
@@ -995,8 +1012,7 @@ def _initialize_runtime_state_block_05() -> None:
     cv = parse_cif_num(c_text)
 
     if cif_file2:
-        cf2 = CifFile.ReadCif(cif_file2)
-        blk2 = cf2[list(cf2.keys())[0]]
+        cf2, blk2 = _read_cif_block(cif_file2)
         a2_text = blk2.get("_cell_length_a")
         c2_text = blk2.get("_cell_length_c")
         av2 = parse_cif_num(a2_text) if a2_text is not None else av
@@ -2088,18 +2104,6 @@ def _shutdown_gui():
             analysis_executor.shutdown(wait=False)
         except Exception:
             pass
-    fast_viewer_workflow = globals().get("fast_viewer_workflow")
-    if fast_viewer_workflow is not None:
-        try:
-            fast_viewer_workflow.shutdown()
-        except Exception:
-            pass
-    primary_viewport_backend = globals().get("primary_viewport_backend")
-    if primary_viewport_backend is not None:
-        try:
-            primary_viewport_backend.shutdown()
-        except Exception:
-            pass
     analysis_popout_state = globals().get("analysis_popout_view_state")
     if analysis_popout_state is not None:
         try:
@@ -2126,8 +2130,8 @@ def _initialize_runtime_shell_block_02() -> None:
 
 
 def _initialize_runtime_plot_block_01() -> None:
-    global fig, ax, matplotlib_canvas, matplotlib_canvas_widget, PRIMARY_VIEWPORT_BACKEND, canvas, primary_viewport_backend, FAST_VIEWER_DRAW_INTERVAL_S
-    global FAST_VIEWER_STARTUP_ENABLED, FAST_VIEWER_EMBEDDED_SURFACE_ENABLED, global_image_buffer, image_display, background_display, highlight_cmap, integration_region_overlay, _initial_simulation_loading_overlay_artists
+    global fig, ax, matplotlib_canvas, matplotlib_canvas_widget, canvas
+    global global_image_buffer, image_display, background_display, highlight_cmap, integration_region_overlay, _initial_simulation_loading_overlay_artists
 
     figure_canvas_cls = _get_tk_figure_canvas_cls()
     fig = Figure(figsize=(8, 8))
@@ -2139,16 +2143,13 @@ def _initialize_runtime_plot_block_01() -> None:
     )
     matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
     gui_main_figure_chrome.configure_matplotlib_canvas_widget(matplotlib_canvas_widget)
-    PRIMARY_VIEWPORT_BACKEND = gui_tk_primary_viewport.parse_primary_viewport_backend(
-        os.environ.get("RA_SIM_PRIMARY_VIEWPORT", "matplotlib")
-    )
+    try:
+        widget_manager = matplotlib_canvas_widget.winfo_manager()
+    except Exception:
+        widget_manager = ""
+    if not widget_manager:
+        matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
     canvas = matplotlib_canvas
-    primary_viewport_backend = None
-    FAST_VIEWER_DRAW_INTERVAL_S = 0.08
-    FAST_VIEWER_STARTUP_ENABLED = gui_runtime_display_acceleration.parse_fast_viewer_env_flag(
-        os.environ.get("RA_SIM_FAST_VIEWER", "1")
-    )
-    FAST_VIEWER_EMBEDDED_SURFACE_ENABLED = False
 
     # Seed imshow with a tiny placeholder; expand to detector size on first result.
     global_image_buffer = np.zeros((1, 1), dtype=np.float32)
@@ -2387,178 +2388,6 @@ def _set_runtime_canvas(target_canvas) -> None:
     canvas = target_canvas
 
 
-def _fast_viewer_transient_artist_groups() -> tuple[object, ...]:
-    runtime_state = globals().get("geometry_runtime_state")
-    drag_bindings_factory = globals().get("integration_range_drag_runtime_bindings_factory")
-    drag_artists: tuple[object, ...] = ()
-    if callable(drag_bindings_factory):
-        try:
-            drag_bindings = drag_bindings_factory()
-        except Exception:
-            drag_bindings = None
-        if drag_bindings is not None:
-            drag_artists = (
-                getattr(drag_bindings, "drag_select_rect", None),
-                getattr(drag_bindings, "integration_region_rect", None),
-            )
-    return (
-        drag_artists,
-        getattr(runtime_state, "pick_artists", ()),
-        getattr(runtime_state, "preview_artists", ()),
-        getattr(runtime_state, "manual_preview_artists", ()),
-        getattr(runtime_state, "qr_cylinder_overlay_artists", ()),
-    )
-
-
-def _fast_viewer_overlay_model():
-    drag_state = globals().get("integration_range_drag_state")
-    return gui_fast_plot_viewer.build_artist_overlay_model(
-        transient_artists=_fast_viewer_transient_artist_groups(),
-        transient_curve_specs=getattr(
-            drag_state,
-            "_fast_viewer_curve_specs",
-            (),
-        ),
-        suppress_overlay_image=bool(
-            getattr(drag_state, "_fast_viewer_suppress_overlay_image", False)
-        ),
-    )
-
-
-def _fast_viewer_layer_versions() -> dict[str, object]:
-    analysis_controls = globals().get("analysis_view_controls_view_state")
-    show_caked_var = getattr(analysis_controls, "show_caked_2d_var", None)
-    try:
-        show_caked = bool(show_caked_var.get()) if show_caked_var is not None else False
-    except Exception:
-        show_caked = False
-    active_mode = _resolved_primary_analysis_display_mode()
-    if active_mode == "q_space":
-        active_extent = tuple(getattr(simulation_runtime_state, "last_q_space_extent", ()) or ())
-    elif active_mode == "caked" or show_caked:
-        active_extent = tuple(getattr(simulation_runtime_state, "last_caked_extent", ()) or ())
-    else:
-        active_extent = ()
-
-    return {
-        "background": (
-            bool(getattr(background_runtime_state, "visible", False)),
-            int(getattr(background_runtime_state, "current_background_index", -1)),
-            int(getattr(background_runtime_state, "backend_rotation_k", 0)) % 4,
-            bool(getattr(background_runtime_state, "backend_flip_x", False)),
-            bool(getattr(background_runtime_state, "backend_flip_y", False)),
-            id(getattr(background_runtime_state, "current_background_display", None)),
-        ),
-        "simulation": (
-            active_mode,
-            getattr(simulation_runtime_state, "last_unscaled_image_signature", None),
-            getattr(simulation_runtime_state, "last_analysis_signature", None),
-            getattr(simulation_runtime_state, "last_simulation_signature", None),
-            active_extent,
-        ),
-        "overlay": getattr(
-            globals().get("integration_range_drag_state"),
-            "_fast_viewer_overlay_version",
-            None,
-        ),
-    }
-
-
-def _initialize_runtime_plot_block_03() -> None:
-    global fast_viewer_workflow, _fast_viewer_active, _fast_viewer_requested_enabled, _fast_viewer_suspend_reason, _set_fast_viewer_requested_enabled, _refresh_fast_viewer_runtime_mode, _request_main_canvas_redraw, _request_overlay_canvas_redraw
-    global _reset_fast_viewer_view, _toggle_fast_viewer
-
-    fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewer_workflow(
-        fast_plot_viewer_module=gui_fast_plot_viewer,
-        tk_module=tk,
-        ttk_module=ttk,
-        canvas_frame=app_shell_view_state.canvas_frame,
-        matplotlib_canvas=matplotlib_canvas,
-        ax=ax,
-        image_artist=image_display,
-        background_artist=background_display,
-        overlay_artist=integration_region_overlay,
-        marker_artist_factory=lambda: (
-            globals().get("center_marker"),
-            globals().get("selected_peak_marker"),
-        ),
-        overlay_model_factory=_fast_viewer_overlay_model,
-        layer_versions_factory=_fast_viewer_layer_versions,
-        display_controls_view_state_factory=lambda: globals().get("display_controls_view_state"),
-        canvas_interaction_callbacks_factory=lambda: globals().get(
-            "canvas_interaction_runtime_callbacks"
-        ),
-        bind_canvas_interactions=(
-            gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings
-        ),
-        set_canvas=_set_runtime_canvas,
-        set_progress_text=lambda text: progress_label.config(text=text),
-        refresh_run_status_bar=_maybe_refresh_run_status_bar,
-        manual_pick_armed_factory=lambda: getattr(
-            globals().get("geometry_runtime_state"),
-            "manual_pick_armed",
-            False,
-        ),
-        hkl_pick_armed_factory=lambda: getattr(
-            globals().get("peak_selection_state"),
-            "hkl_pick_armed",
-            False,
-        ),
-        manual_pick_session_active_factory=lambda: (
-            globals().get("_geometry_manual_pick_session_active")(require_current_background=False)
-            if callable(globals().get("_geometry_manual_pick_session_active"))
-            else False
-        ),
-        geometry_preview_exclude_armed_factory=lambda: getattr(
-            globals().get("geometry_preview_state"),
-            "exclude_armed",
-            False,
-        ),
-        live_geometry_preview_enabled_factory=lambda: (
-            globals().get("_live_geometry_preview_enabled")()
-            if callable(globals().get("_live_geometry_preview_enabled"))
-            else False
-        ),
-        qr_overlay_var_factory=lambda: getattr(
-            globals().get("geometry_overlay_actions_view_state"),
-            "show_qr_cylinder_overlay_var",
-            None,
-        ),
-        overlay_artist_groups_factory=lambda: (
-            getattr(globals().get("geometry_runtime_state"), "pick_artists", ()),
-            getattr(globals().get("geometry_runtime_state"), "preview_artists", ()),
-            getattr(globals().get("geometry_runtime_state"), "manual_preview_artists", ()),
-            getattr(
-                globals().get("geometry_runtime_state"),
-                "qr_cylinder_overlay_artists",
-                (),
-            ),
-        ),
-        defer_overlay_redraw_factory=lambda: (
-            globals().get("_defer_nonessential_redraw")()
-            if callable(globals().get("_defer_nonessential_redraw"))
-            else False
-        ),
-        integration_drag_active_factory=lambda: getattr(
-            globals().get("integration_range_drag_state"),
-            "active",
-            False,
-        ),
-        draw_interval_s=FAST_VIEWER_DRAW_INTERVAL_S,
-        requested_enabled=bool(FAST_VIEWER_STARTUP_ENABLED and FAST_VIEWER_EMBEDDED_SURFACE_ENABLED),
-        control_locked=True,
-    )
-    _fast_viewer_active = fast_viewer_workflow.active
-    _fast_viewer_requested_enabled = fast_viewer_workflow.requested_enabled
-    _fast_viewer_suspend_reason = fast_viewer_workflow.suspend_reason
-    _set_fast_viewer_requested_enabled = fast_viewer_workflow.set_requested_enabled
-    _refresh_fast_viewer_runtime_mode = fast_viewer_workflow.refresh_runtime_mode
-    _request_main_canvas_redraw = fast_viewer_workflow.request_main_canvas_redraw
-    _request_overlay_canvas_redraw = fast_viewer_workflow.request_overlay_canvas_redraw
-    _reset_fast_viewer_view = fast_viewer_workflow.reset_view
-    _toggle_fast_viewer = fast_viewer_workflow.toggle
-
-
 
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
@@ -2707,7 +2536,7 @@ def _current_optics_mode_flag() -> int:
 
 def _initialize_runtime_plot_block_04() -> None:
     global colorbar_main, caked_cbar_ax, caked_colorbar, center_marker, selected_peak_marker, _main_matplotlib_preview_controller, geometry_preview_state, geometry_q_group_view_state
-    global geometry_q_group_state, geometry_manual_state, primary_viewport_selection, PRIMARY_VIEWPORT_BACKEND, primary_viewport_backend, primary_canvas_interaction_canvas, primary_canvas_interaction_cids
+    global geometry_q_group_state, geometry_manual_state, primary_canvas_interaction_canvas, primary_canvas_interaction_cids
 
     colorbar_main, caked_cbar_ax, caked_colorbar = gui_main_figure_chrome.configure_main_figure_layout(
         fig,
@@ -2760,6 +2589,7 @@ def _initialize_runtime_plot_block_04() -> None:
     geometry_runtime_state.manual_preview_artists = []
     geometry_runtime_state.qr_cylinder_overlay_artists = []
     geometry_runtime_state.qr_cylinder_overlay_cache = _empty_qr_cylinder_overlay_cache()
+    geometry_runtime_state.qr_cylinder_band_cache = _empty_qr_cylinder_band_cache()
     geometry_preview_state = app_state.geometry_preview
     geometry_q_group_view_state = app_state.geometry_q_group_view
     geometry_q_group_state = app_state.geometry_q_groups
@@ -2767,58 +2597,14 @@ def _initialize_runtime_plot_block_04() -> None:
     geometry_runtime_state.manual_pick_armed = False
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
-    primary_viewport_selection = gui_runtime_primary_viewport.activate_runtime_primary_viewport(
-        requested_backend=PRIMARY_VIEWPORT_BACKEND,
-        tk_primary_viewport_module=gui_tk_primary_viewport,
-        tk_module=tk,
-        canvas_frame=app_shell_view_state.canvas_frame,
-        matplotlib_canvas=matplotlib_canvas,
-        ax=ax,
-        image_artist=image_display,
-        background_artist=background_display,
-        overlay_artist=integration_region_overlay,
-        marker_artist_factory=lambda: (
-            globals().get("center_marker"),
-            globals().get("selected_peak_marker"),
-        ),
-        overlay_model_factory=_fast_viewer_overlay_model,
-        overlay_artist_groups_factory=lambda: (
-            getattr(globals().get("geometry_runtime_state"), "pick_artists", ()),
-            getattr(globals().get("geometry_runtime_state"), "preview_artists", ()),
-            getattr(globals().get("geometry_runtime_state"), "manual_preview_artists", ()),
-            getattr(
-                globals().get("geometry_runtime_state"),
-                "qr_cylinder_overlay_artists",
-                (),
-            ),
-        ),
-        layer_versions_factory=_fast_viewer_layer_versions,
-        peak_cache_factory=lambda: getattr(
-            globals().get("simulation_runtime_state"),
-            "peak_positions",
-            (),
-        ),
-        qgroup_cache_factory=lambda: getattr(
-            globals().get("geometry_runtime_state"),
-            "manual_pick_cache_data",
-            {},
-        ).get("grouped_candidates", {}),
-        draw_interval_s=1.0 / 60.0,
-        set_progress_text=lambda text: progress_label.config(text=text),
-    )
-    PRIMARY_VIEWPORT_BACKEND = primary_viewport_selection.active_backend
-    primary_viewport_backend = primary_viewport_selection.backend
-    _set_runtime_canvas(primary_viewport_selection.canvas_proxy)
+    _set_runtime_canvas(matplotlib_canvas)
     primary_canvas_interaction_canvas = None
     primary_canvas_interaction_cids = ()
 
 
 
 def _legacy_main_matplotlib_interaction_active() -> bool:
-    return bool(
-        str(globals().get("PRIMARY_VIEWPORT_BACKEND", "matplotlib")) == "matplotlib"
-        and not _fast_viewer_active()
-    )
+    return True
 
 
 def _main_matplotlib_redraw_widget():
@@ -2953,66 +2739,11 @@ def _clear_legacy_main_matplotlib_preview_view(*, redraw: bool = True) -> bool:
 def _configure_primary_viewport_redraw_helpers() -> None:
     global _request_main_canvas_redraw
     global _request_overlay_canvas_redraw
-    global _reset_fast_viewer_view
-
-    if str(globals().get("PRIMARY_VIEWPORT_BACKEND", "matplotlib")) == "tk_canvas":
-
-        def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
-            active_canvas = globals().get("canvas", matplotlib_canvas)
-            draw_name = "draw" if bool(force_matplotlib) else "draw_idle"
-            projection_refresh = globals().get("_apply_current_primary_raster_projection")
-            if callable(projection_refresh):
-                projection_refresh()
-            try:
-                draw_fn = getattr(active_canvas, draw_name, None)
-                if callable(draw_fn):
-                    draw_fn()
-                    return
-            except Exception:
-                pass
-            fallback_draw = getattr(matplotlib_canvas, draw_name, None)
-            if callable(fallback_draw):
-                try:
-                    fallback_draw()
-                except Exception:
-                    pass
-
-        def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
-            if not force:
-                defer_redraw = globals().get("_defer_nonessential_redraw")
-                if callable(defer_redraw):
-                    try:
-                        if bool(defer_redraw()):
-                            return
-                    except Exception:
-                        pass
-            _request_main_canvas_redraw(force_matplotlib=bool(force))
-
-        def _reset_fast_viewer_view() -> None:
-            backend = globals().get("primary_viewport_backend")
-            if backend is None:
-                return
-            try:
-                backend.sync_from_matplotlib(force_view_range=True)
-            except Exception:
-                pass
-
-        return
 
     def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
-        if _fast_viewer_active():
-            _clear_legacy_main_matplotlib_preview_view(redraw=False)
-            _cancel_legacy_main_matplotlib_redraw()
-            fast_viewer_workflow.request_main_canvas_redraw(force_matplotlib=bool(force_matplotlib))
-            return
         _request_legacy_main_matplotlib_redraw(force=bool(force_matplotlib))
 
     def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
-        if _fast_viewer_active():
-            _clear_legacy_main_matplotlib_preview_view(redraw=False)
-            _cancel_legacy_main_matplotlib_redraw()
-            fast_viewer_workflow.request_overlay_canvas_redraw(force=bool(force))
-            return
         if not force:
             defer_redraw = globals().get("_defer_nonessential_redraw")
             if callable(defer_redraw):
@@ -3022,8 +2753,6 @@ def _configure_primary_viewport_redraw_helpers() -> None:
                 except Exception:
                     pass
         _request_legacy_main_matplotlib_redraw(force=bool(force))
-
-    _reset_fast_viewer_view = fast_viewer_workflow.reset_view
 
 
 def _bind_primary_canvas_interactions(target_canvas) -> None:
@@ -3178,7 +2907,6 @@ def _set_geometry_manual_pick_session(
         geometry_manual_state,
         pick_session,
     )
-    _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
 
@@ -5214,11 +4942,118 @@ def _native_detector_coords_to_live_caked_coords(
 
 def _current_qr_cylinder_caked_projection_context() -> Mapping[str, object] | None:
     try:
-        background_index = int(background_runtime_state.current_background_index)
+        radial_axis = np.asarray(
+            simulation_runtime_state.last_caked_radial_values,
+            dtype=np.float64,
+        ).reshape(-1)
+        azimuth_axis = np.asarray(
+            simulation_runtime_state.last_caked_azimuth_values,
+            dtype=np.float64,
+        ).reshape(-1)
     except Exception:
         return None
-    payload = _geometry_fit_caked_view_for_index(background_index)
-    return payload if isinstance(payload, Mapping) else None
+    if radial_axis.size <= 0 or azimuth_axis.size <= 0:
+        return None
+
+    transform_bundle = _current_live_caked_transform_bundle()
+    detector_shape = (
+        transform_bundle.detector_shape
+        if isinstance(transform_bundle, CakeTransformBundle)
+        else None
+    )
+    if detector_shape is None:
+        detector_shape = simulation_runtime_state.ai_cache.get("detector_shape")
+    if detector_shape is None:
+        detector_image = simulation_runtime_state.unscaled_image
+        if detector_image is not None:
+            detector_shape = np.asarray(detector_image).shape[:2]
+    if detector_shape is None:
+        native_background = _get_current_background_native()
+        if native_background is not None:
+            detector_shape = np.asarray(native_background).shape[:2]
+    if detector_shape is None:
+        return None
+
+    return _normalize_geometry_fit_caked_view_payload(
+        {
+            "background": np.zeros((azimuth_axis.size, radial_axis.size), dtype=np.float64),
+            "detector_shape": detector_shape,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": (
+                np.asarray(transform_bundle.raw_azimuth_deg, dtype=np.float64)
+                if isinstance(transform_bundle, CakeTransformBundle)
+                else None
+            ),
+            "transform_bundle": transform_bundle,
+        },
+        detector_shape=detector_shape,
+        ai=simulation_runtime_state.ai_cache.get("ai"),
+    )
+
+
+def _current_qr_cylinder_caked_band_masks() -> dict[str, object] | None:
+    range_values = _current_analysis_range_values()
+    if not bool(range_values.get("integrate_qz_rods", False)):
+        return None
+
+    qr_half_width_local = float(range_values.get("qr_half_width", 0.0))
+    if qr_half_width_local <= 0.0:
+        return None
+
+    active_entries_factory = globals().get("active_qr_cylinder_overlay_entries_factory")
+    if not callable(active_entries_factory):
+        return None
+    entries = list(active_entries_factory() or [])
+    if not entries:
+        return None
+
+    projection_context = _current_qr_cylinder_caked_projection_context()
+    radial_axis = simulation_runtime_state.last_caked_radial_values
+    azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
+    if projection_context is None or radial_axis is None or azimuth_axis is None:
+        return None
+
+    render_config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
+    if not callable(render_config_factory):
+        return None
+    render_config = render_config_factory()
+    if render_config is None:
+        return None
+    caked_render_config = replace(render_config, render_in_caked_space=True)
+
+    radial_signature = gui_qr_cylinder_overlay._float64_axis_digest(radial_axis)
+    azimuth_signature = gui_qr_cylinder_overlay._float64_axis_digest(azimuth_axis)
+    signature = (
+        tuple(
+            (
+                entry.get("key"),
+                round(float(entry.get("qr", 0.0)), 10),
+            )
+            for entry in entries
+        ),
+        round(float(qr_half_width_local), 10),
+        gui_qr_cylinder_overlay.build_qr_cylinder_overlay_signature(
+            entries,
+            config=caked_render_config,
+            projection_context=projection_context,
+        ),
+        radial_signature,
+        azimuth_signature,
+    )
+    cache = geometry_runtime_state.qr_cylinder_band_cache
+    if cache.get("signature") != signature:
+        result = gui_qr_cylinder_overlay.build_qr_cylinder_caked_band_masks(
+            entries,
+            config=caked_render_config,
+            projection_context=projection_context,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            delta_qr=float(qr_half_width_local),
+        )
+        cache["signature"] = signature
+        cache["result"] = result
+    return cache.get("result")
 
 
 def _scattering_angles_to_detector_pixel(
@@ -5618,9 +5453,7 @@ def _initialize_runtime_controls_block_05() -> None:
                 "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
             },
             render_config_factory_kwargs={
-                "render_in_caked_space_factory": (
-                    lambda: bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-                ),
+                "render_in_caked_space_factory": (lambda: _active_caked_primary_view()),
                 "image_size": int(image_size),
                 "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
                 "center_col_factory": (lambda: float(center_y_var.get())),
@@ -5647,9 +5480,21 @@ def _initialize_runtime_controls_block_05() -> None:
                 "overlay_cache": geometry_runtime_state.qr_cylinder_overlay_cache,
                 "overlay_enabled_factory": (
                     lambda: (
-                        bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
-                        if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
-                        else False
+                        (
+                            bool(
+                                geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get()
+                            )
+                            if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
+                            else False
+                        )
+                        or (
+                            bool(
+                                analysis_view_controls_view_state.show_qz_rods_var.get()
+                            )
+                            if analysis_view_controls_view_state.show_qz_rods_var is not None
+                            and _active_caked_primary_view()
+                            else False
+                        )
                     )
                 ),
                 "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
@@ -5680,7 +5525,6 @@ def _initialize_runtime_controls_block_05() -> None:
 
 def qr_cylinder_overlay_runtime_toggle(*args, **kwargs):
     result = _qr_cylinder_overlay_runtime_toggle_impl(*args, **kwargs)
-    _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
 
@@ -5741,6 +5585,33 @@ def _sync_qr_cylinder_overlay_visibility_var() -> None:
         overlay_var.set(_qr_cylinder_display_mode() != QR_CYLINDER_DISPLAY_MODE_OFF)
     except Exception:
         pass
+
+
+def _sync_show_qz_rods_quick_control_state() -> None:
+    widget = getattr(analysis_view_controls_view_state, "show_qz_rods_checkbutton", None)
+    if widget is None:
+        return
+    enabled = bool(_active_caked_primary_view())
+    state_method = getattr(widget, "state", None)
+    if callable(state_method):
+        try:
+            state_method(["!disabled"] if enabled else ["disabled"])
+            return
+        except Exception:
+            pass
+    configure = getattr(widget, "configure", None)
+    if callable(configure):
+        try:
+            configure(state=("normal" if enabled else "disabled"))
+            return
+        except Exception:
+            pass
+    config = getattr(widget, "config", None)
+    if callable(config):
+        try:
+            config(state=("normal" if enabled else "disabled"))
+        except Exception:
+            pass
 
 
 def _geometry_overlays_enabled() -> bool:
@@ -6054,9 +5925,6 @@ def _initialize_runtime_controls_block_09() -> None:
 
 
 def _handle_hkl_pick_mode_changed(_armed: bool) -> None:
-    refresh_fast_viewer = globals().get("_refresh_fast_viewer_runtime_mode")
-    if callable(refresh_fast_viewer):
-        refresh_fast_viewer(announce=False)
     refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
     if callable(refresh_mode_banner):
         refresh_mode_banner()
@@ -6384,7 +6252,12 @@ def toggle_1d_plots() -> None:
     _toggle_1d_plots_impl()
 
 
+def _invalidate_qr_cylinder_band_cache() -> None:
+    geometry_runtime_state.qr_cylinder_band_cache = _empty_qr_cylinder_band_cache()
+
+
 def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
+    _invalidate_qr_cylinder_band_cache()
     bindings_factory = globals().get("qr_cylinder_overlay_runtime_bindings_factory")
     if not callable(bindings_factory):
         return
@@ -6560,6 +6433,7 @@ def _set_persistent_view_mode(mode: str) -> None:
             schedule_update_fn = globals().get("schedule_update")
             if callable(schedule_update_fn):
                 schedule_update_fn()
+    _sync_show_qz_rods_quick_control_state()
     _refresh_run_status_bar()
 
 
@@ -6595,6 +6469,11 @@ def _initialize_runtime_controls_block_15() -> None:
             else None
         ),
         set_integration_overlay_image_factory=lambda: _set_primary_integration_overlay_image,
+        caked_custom_mask_factory=lambda: (
+            (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
+            if callable(globals().get("_current_qr_cylinder_caked_band_masks", None))
+            else None
+        ),
         set_status_text_factory=lambda: (
             (lambda text: progress_label_positions.config(text=text))
             if "progress_label_positions" in globals()
@@ -7332,7 +7211,6 @@ def _install_scale_factor_entry_bindings():
 
 def _initialize_runtime_controls_block_20() -> None:
     _install_scale_factor_entry_bindings()
-    _refresh_fast_viewer_runtime_mode(announce=False)
 
 
 
@@ -7391,21 +7269,40 @@ def _auto_match_scale_factor_to_radial_peak():
                 phi_min = float(phi_min_var.get())
                 phi_max = float(phi_max_var.get())
                 sim_res2 = caking(sim_img, ai)
-                i2t_sim, _, _, _ = caked_up(
-                    sim_res2,
-                    tth_min,
-                    tth_max,
-                    phi_min,
-                    phi_max,
-                )
                 bg_res2 = caking(bg_img, ai)
-                i2t_bg, _, _, _ = caked_up(
-                    bg_res2,
-                    tth_min,
-                    tth_max,
-                    phi_min,
-                    phi_max,
-                )
+                rod_band_mask = (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
+                if rod_band_mask is not None:
+                    i2t_sim, _, _, _ = _caked_profiles_from_sum_fields(
+                        sim_res2,
+                        tth_min=tth_min,
+                        tth_max=tth_max,
+                        phi_min=phi_min,
+                        phi_max=phi_max,
+                        rod_band_mask=rod_band_mask,
+                    )
+                    i2t_bg, _, _, _ = _caked_profiles_from_sum_fields(
+                        bg_res2,
+                        tth_min=tth_min,
+                        tth_max=tth_max,
+                        phi_min=phi_min,
+                        phi_max=phi_max,
+                        rod_band_mask=rod_band_mask,
+                    )
+                else:
+                    i2t_sim, _, _, _ = caked_up(
+                        sim_res2,
+                        tth_min,
+                        tth_max,
+                        phi_min,
+                        phi_max,
+                    )
+                    i2t_bg, _, _, _ = caked_up(
+                        bg_res2,
+                        tth_min,
+                        tth_max,
+                        phi_min,
+                        phi_max,
+                    )
                 sim_curve = i2t_sim
                 bg_curve = i2t_bg
                 simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = (
@@ -8119,6 +8016,88 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     return intensity_vs_2theta, intensity_vs_phi, azimuth_sub, radial_filtered
 
 
+def _caked_profiles_from_sum_fields(
+    res2,
+    *,
+    tth_min,
+    tth_max,
+    phi_min,
+    phi_max,
+    rod_band_mask=None,
+):
+    raw_intensity = np.asarray(getattr(res2, "intensity"), dtype=float)
+    raw_sum_signal = np.asarray(getattr(res2, "sum_signal"), dtype=float)
+    raw_sum_normalization = np.asarray(getattr(res2, "sum_normalization"), dtype=float)
+    radial_axis = np.asarray(getattr(res2, "radial"), dtype=float).reshape(-1)
+    raw_azimuth_axis = np.asarray(getattr(res2, "azimuthal"), dtype=float).reshape(-1)
+
+    if (
+        raw_intensity.ndim != 2
+        or raw_sum_signal.shape != raw_intensity.shape
+        or raw_sum_normalization.shape != raw_intensity.shape
+        or raw_intensity.shape[0] != raw_azimuth_axis.size
+        or raw_intensity.shape[1] != radial_axis.size
+    ):
+        raise ValueError("Caked sum-field arrays do not match caked axes.")
+
+    order = np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable")
+    gui_azimuth = np.asarray(raw_phi_to_gui_phi(raw_azimuth_axis), dtype=float)[order]
+    gui_sum_signal = raw_sum_signal[order, :]
+    gui_sum_normalization = raw_sum_normalization[order, :]
+
+    radial_mask = (radial_axis >= 0.0) & (radial_axis <= 90.0)
+    radial_axis_used = np.asarray(radial_axis[radial_mask], dtype=float)
+    gui_sum_signal = gui_sum_signal[:, radial_mask]
+    gui_sum_normalization = gui_sum_normalization[:, radial_mask]
+
+    tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
+    phi_min = float(phi_min)
+    phi_max = float(phi_max)
+
+    mask_rad = (radial_axis_used >= tth_min) & (radial_axis_used <= tth_max)
+    mask_az = gui_integration_range_drag.detector_phi_mask(gui_azimuth, phi_min, phi_max)
+    rect_mask = np.asarray(np.outer(mask_az, mask_rad), dtype=bool)
+
+    final_mask = rect_mask
+    if rod_band_mask is not None:
+        candidate_mask = np.asarray(rod_band_mask, dtype=bool)
+        if candidate_mask.shape == rect_mask.shape:
+            final_mask = rect_mask & candidate_mask
+
+    sig = gui_sum_signal * final_mask
+    nor = gui_sum_normalization * final_mask
+    sig_2theta = np.sum(sig, axis=0)
+    nor_2theta = np.sum(nor, axis=0)
+    intensity_vs_2theta = np.divide(
+        sig_2theta,
+        nor_2theta,
+        out=np.zeros_like(sig_2theta, dtype=float),
+        where=nor_2theta > 0.0,
+    )
+
+    sig_phi = np.sum(sig, axis=1)
+    nor_phi = np.sum(nor, axis=1)
+    intensity_vs_phi = np.divide(
+        sig_phi,
+        nor_phi,
+        out=np.zeros_like(sig_phi, dtype=float),
+        where=nor_phi > 0.0,
+    )
+
+    azimuth_axis_used = np.asarray(gui_azimuth, dtype=float)
+    if phi_max < phi_min and azimuth_axis_used.size:
+        azimuth_axis_used = np.where(
+            azimuth_axis_used < phi_min,
+            azimuth_axis_used + 360.0,
+            azimuth_axis_used,
+        )
+        azimuth_order = np.argsort(azimuth_axis_used, kind="stable")
+        azimuth_axis_used = azimuth_axis_used[azimuth_order]
+        intensity_vs_phi = intensity_vs_phi[azimuth_order]
+
+    return intensity_vs_2theta, intensity_vs_phi, azimuth_axis_used, radial_axis_used
+
+
 def _detector_angular_maps_for_shape(ai, detector_shape):
     if ai is None:
         return None, None
@@ -8306,13 +8285,24 @@ def _clear_1d_plot_cache_and_lines():
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
     _ensure_analysis_figure()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
-    i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
-        sim_res2,
-        tth_min_var.get(),
-        tth_max_var.get(),
-        phi_min_var.get(),
-        phi_max_var.get(),
-    )
+    rod_band_mask = (_current_qr_cylinder_caked_band_masks() or {}).get("union_mask")
+    if rod_band_mask is not None:
+        i2t_sim, i_phi_sim, az_sim, rad_sim = _caked_profiles_from_sum_fields(
+            sim_res2,
+            tth_min=tth_min_var.get(),
+            tth_max=tth_max_var.get(),
+            phi_min=phi_min_var.get(),
+            phi_max=phi_max_var.get(),
+            rod_band_mask=rod_band_mask,
+        )
+    else:
+        i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
+            sim_res2,
+            tth_min_var.get(),
+            tth_max_var.get(),
+            phi_min_var.get(),
+            phi_max_var.get(),
+        )
     simulation_runtime_state.last_1d_integration_data["radials_sim"] = rad_sim
     simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
     simulation_runtime_state.last_1d_integration_data["azimuths_sim"] = az_sim
@@ -8323,13 +8313,23 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
     line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
     if bg_res2 is not None:
-        i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
-            bg_res2,
-            tth_min_var.get(),
-            tth_max_var.get(),
-            phi_min_var.get(),
-            phi_max_var.get(),
-        )
+        if rod_band_mask is not None:
+            i2t_bg, i_phi_bg, az_bg, rad_bg = _caked_profiles_from_sum_fields(
+                bg_res2,
+                tth_min=tth_min_var.get(),
+                tth_max=tth_max_var.get(),
+                phi_min=phi_min_var.get(),
+                phi_max=phi_max_var.get(),
+                rod_band_mask=rod_band_mask,
+            )
+        else:
+            i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
+                bg_res2,
+                tth_min_var.get(),
+                tth_max_var.get(),
+                phi_min_var.get(),
+                phi_max_var.get(),
+            )
         simulation_runtime_state.last_1d_integration_data["radials_bg"] = rad_bg
         simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
         simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = az_bg
@@ -8988,11 +8988,7 @@ def _reset_primary_figure_view() -> None:
     x0, x1, y0, y1 = _default_primary_view_limits()
     ax.set_xlim(float(x0), float(x1))
     ax.set_ylim(float(y0), float(y1))
-    try:
-        _reset_fast_viewer_view()
-    except Exception:
-        pass
-    _request_main_canvas_redraw(force_matplotlib=not _fast_viewer_active())
+    _request_main_canvas_redraw(force_matplotlib=True)
 
 
 def _current_geometry_preview_gate_summary() -> str:
@@ -9340,16 +9336,6 @@ def _refresh_interaction_mode_banner() -> None:
     elif bool(getattr(geometry_preview_state, "exclude_armed", False)):
         title = "Preview exclusion active"
         detail = "Click peaks on the image to exclude or restore them from live geometry preview."
-    elif _fast_viewer_active():
-        title = "Fast viewer active"
-        detail = (
-            "Rendering is active in the separate fast-viewer window; the embedded canvas is paused."
-        )
-    else:
-        suspend_reason = _fast_viewer_suspend_reason()
-        if bool(_fast_viewer_requested_enabled()) and isinstance(suspend_reason, str):
-            title = "Fast viewer paused"
-            detail = f"Using the embedded canvas because {suspend_reason}."
 
     gui_views.set_app_shell_mode_banner_text(
         app_shell_view_state,
@@ -9429,13 +9415,6 @@ def _refresh_run_status_bar() -> None:
             parts.append("Caked Preview")
     if simulation_runtime_state.interaction_drag_active:
         parts.append("Dragging")
-    if _fast_viewer_active():
-        parts.append("Fast Viewer")
-    elif bool(_fast_viewer_requested_enabled()) and isinstance(
-        _fast_viewer_suspend_reason(),
-        str,
-    ):
-        parts.append("Fast Viewer Paused")
     last_total_ms = simulation_runtime_state.last_total_update_ms
     if isinstance(last_total_ms, (int, float)) and np.isfinite(float(last_total_ms)):
         parts.append(f"Last {float(last_total_ms):.0f} ms")
@@ -9448,6 +9427,7 @@ def _refresh_run_status_bar() -> None:
 
 
 def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
+    _invalidate_qr_cylinder_band_cache()
     simulation_runtime_state.last_analysis_signature = None
     simulation_runtime_state.analysis_preview_active = False
     simulation_runtime_state.analysis_preview_bins = None
@@ -11057,6 +11037,8 @@ def _restore_caked_display_payload_from_cached_results(
     q_space_requested: bool,
 ) -> bool:
     """Rebuild caked display arrays from the current cached analysis results."""
+    live_q_space_requested = bool(_current_app_shell_view_mode() == "q_space")
+
     sim_caked = _prepare_caked_display_payload(
         simulation_runtime_state.last_res2_sim,
         ai=simulation_runtime_state.ai_cache.get("ai"),
@@ -11127,7 +11109,7 @@ def _restore_caked_display_payload_from_cached_results(
     else:
         simulation_runtime_state.last_caked_background_image_unscaled = None
 
-    if q_space_requested:
+    if live_q_space_requested:
         analysis_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
         if (
             not isinstance(analysis_bins, tuple)
@@ -11195,7 +11177,7 @@ def _restore_caked_display_payload_from_cached_results(
     return bool(
         isinstance(sim_caked, dict)
         or (
-            q_space_requested
+            live_q_space_requested
             and simulation_runtime_state.last_q_space_image_unscaled is not None
         )
     )
@@ -14142,6 +14124,11 @@ def _gui_state_variable_items() -> dict[str, object]:
             "qr_cylinder_display_mode_var": (
                 geometry_overlay_actions_view_state.qr_cylinder_display_mode_var
             ),
+            "show_qz_rods_var": analysis_view_controls_view_state.show_qz_rods_var,
+            "integrate_qz_rods_var": (
+                integration_range_controls_view_state.integrate_qz_rods_var
+            ),
+            "qr_half_width_var": integration_range_controls_view_state.qr_half_width_var,
         }
     )
     return items
@@ -14203,22 +14190,11 @@ def _replace_gui_state_peak_cache(
 ) -> None:
     """Replace the live peak-overlay cache from imported GUI-state records."""
 
-    restored_records: list[dict[str, object]] = []
-    restored_positions: list[tuple[float, float]] = []
-    restored_millers: list[tuple[int, int, int]] = []
-    restored_intensities: list[float] = []
-
+    normalized_records: list[dict[str, object]] = []
     for raw_record in peak_records or ():
         record = _restore_gui_state_peak_record(raw_record)
         if record is None:
             continue
-
-        try:
-            display_col = float(record.get("display_col", np.nan))
-            display_row = float(record.get("display_row", np.nan))
-        except Exception:
-            display_col = float("nan")
-            display_row = float("nan")
 
         hkl_value = record.get("hkl")
         if not isinstance(hkl_value, tuple) or len(hkl_value) < 3:
@@ -14239,11 +14215,72 @@ def _replace_gui_state_peak_cache(
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        restored_records.append(record)
-        if np.isfinite(display_col) and np.isfinite(display_row):
-            restored_positions.append((float(display_col), float(display_row)))
-        else:
-            restored_positions.append((float("nan"), float("nan")))
+        record["hkl"] = hkl_triplet
+        record["intensity"] = float(intensity)
+        record["weight"] = float(intensity)
+        normalized_records.append(record)
+
+    restored_records: list[dict[str, object]] = []
+    restored_positions: list[tuple[float, float]] = []
+    restored_millers: list[tuple[int, int, int]] = []
+    restored_intensities: list[float] = []
+    for normalized_record in normalized_records:
+        projected_record: Mapping[str, object] | None = None
+        if callable(_project_geometry_manual_peaks_to_current_view):
+            try:
+                projected_rows = _project_geometry_manual_peaks_to_current_view(
+                    [normalized_record]
+                )
+            except Exception:
+                projected_rows = ()
+            for raw_projected_record in projected_rows or ():
+                if isinstance(raw_projected_record, Mapping):
+                    projected_record = dict(raw_projected_record)
+                    break
+        if projected_record is None:
+            continue
+
+        record = projected_record
+        if not isinstance(record, Mapping):
+            continue
+        try:
+            display_col = float(record.get("sim_col", record.get("display_col", np.nan)))
+            display_row = float(record.get("sim_row", record.get("display_row", np.nan)))
+        except Exception:
+            continue
+        if not (np.isfinite(display_col) and np.isfinite(display_row)):
+            continue
+
+        hkl_value = record.get("hkl")
+        if not isinstance(hkl_value, tuple) or len(hkl_value) < 3:
+            continue
+        try:
+            hkl_triplet = (
+                int(hkl_value[0]),
+                int(hkl_value[1]),
+                int(hkl_value[2]),
+            )
+        except Exception:
+            continue
+
+        try:
+            intensity = float(record.get("intensity", record.get("weight", 0.0)))
+        except Exception:
+            intensity = 0.0
+        if not np.isfinite(intensity):
+            intensity = 0.0
+
+        normalized_record = dict(record)
+        normalized_record["sim_col"] = float(display_col)
+        normalized_record["sim_row"] = float(display_row)
+        normalized_record["display_col"] = float(display_col)
+        normalized_record["display_row"] = float(display_row)
+        normalized_record["hkl"] = hkl_triplet
+        normalized_record["intensity"] = float(intensity)
+        normalized_record["weight"] = float(intensity)
+
+        restored_records.append(normalized_record)
+        restored_positions.append((float(display_col), float(display_row)))
         restored_millers.append(hkl_triplet)
         restored_intensities.append(float(intensity))
 
@@ -14268,7 +14305,7 @@ def _replace_gui_state_peak_cache(
 
 
 def _collect_full_gui_state_snapshot() -> dict[str, object]:
-    return gui_state_io.collect_full_gui_state_snapshot(
+    snapshot = gui_state_io.collect_full_gui_state_snapshot(
         global_items=_gui_state_variable_items(),
         tk_variable_type=tk.Variable,
         occ_vars=_occupancy_control_vars(),
@@ -14289,6 +14326,8 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         simulation_limits_user_override=(display_controls_state.simulation_limits_user_override),
         scale_factor_user_override=display_controls_state.scale_factor_user_override,
     )
+    snapshot["analysis_range"] = dict(_current_analysis_range_values())
+    return snapshot
 
 
 def _load_background_files_for_import_state(
@@ -14352,6 +14391,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             tk_variable_type=tk.Variable,
         )
     )
+    _apply_analysis_range_snapshot(snapshot.get("analysis_range", {}))
 
     gui_state_io.apply_gui_state_background_theta_compatibility(
         variables,
@@ -14452,6 +14492,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     _sync_primary_raster_geometry(
         view_mode=_resolved_primary_analysis_display_mode()
     )
+    _sync_show_qz_rods_quick_control_state()
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -15548,14 +15589,27 @@ def _capture_geometry_source_snapshot() -> None:
 def _geometry_manual_set_runtime_peak_cache_from_source_rows(
     source_rows: Sequence[object] | None,
 ) -> None:
+    projected_rows = [
+        dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)
+    ]
+    if callable(_project_geometry_manual_peaks_to_current_view):
+        try:
+            projected_rows = [
+                dict(entry)
+                for entry in (_project_geometry_manual_peaks_to_current_view(projected_rows) or ())
+                if isinstance(entry, Mapping)
+            ]
+        except Exception:
+            projected_rows = [
+                dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)
+            ]
+
     restored_records: list[dict[str, object]] = []
     restored_positions: list[tuple[float, float]] = []
     restored_millers: list[tuple[int, int, int]] = []
     restored_intensities: list[float] = []
 
-    for raw_entry in source_rows or ():
-        if not isinstance(raw_entry, Mapping):
-            continue
+    for raw_entry in projected_rows:
         peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
             raw_entry,
             normalize_hkl_key=_normalize_hkl_key,
@@ -15565,8 +15619,12 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
         if peak_record is None:
             continue
         try:
-            display_col = float(peak_record.get("sim_col", np.nan))
-            display_row = float(peak_record.get("sim_row", np.nan))
+            display_col = float(
+                peak_record.get("sim_col", peak_record.get("display_col", np.nan))
+            )
+            display_row = float(
+                peak_record.get("sim_row", peak_record.get("display_row", np.nan))
+            )
         except Exception:
             continue
         if not (np.isfinite(display_col) and np.isfinite(display_row)):
@@ -16246,13 +16304,11 @@ def _initialize_runtime_controls_block_39() -> None:
 
 def _set_geometry_preview_exclude_mode(enabled: bool, message: str | None = None):
     result = _set_geometry_preview_exclude_mode_impl(enabled, message=message)
-    _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
 
 def _clear_live_geometry_preview_exclusions(*args, **kwargs):
     result = _clear_live_geometry_preview_exclusions_impl(*args, **kwargs)
-    _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
 
@@ -16264,10 +16320,8 @@ def _on_live_geometry_preview_toggle(*args, **kwargs):
             pass
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_geometry_preview_artists(redraw=True)
-        _refresh_fast_viewer_runtime_mode(announce=False)
         return False
     result = _on_live_geometry_preview_toggle_impl(*args, **kwargs)
-    _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
 
@@ -18180,6 +18234,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                             sample_length_m=float(sample_length_var.get()),
                             sample_weights=mosaic.get("sample_weights"),
                             n2_sample_array_override=mosaic.get("n2_sample_array"),
+                            **get_process_peaks_runtime_kwargs(),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -18306,6 +18361,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                         sample_length_m=float(sample_length_var.get()),
                         sample_weights=mosaic.get("sample_weights"),
                         n2_sample_array_override=mosaic.get("n2_sample_array"),
+                        **get_process_peaks_runtime_kwargs(),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -20584,6 +20640,7 @@ def save_q_space_representation():
         sample_length_m=float(sample_length_var.get()),
         sample_weights=mosaic_params.get("sample_weights"),
         n2_sample_array_override=mosaic_params.get("n2_sample_array"),
+        **get_process_peaks_runtime_kwargs(),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -20639,7 +20696,64 @@ def _read_analysis_cached_range_value(attr_name: str, fallback: float) -> float:
         return float(fallback)
 
 
-def _current_analysis_range_values() -> dict[str, float]:
+def _read_analysis_bool_value(var, fallback: bool) -> bool:
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return bool(fallback)
+    try:
+        return bool(getter())
+    except Exception:
+        return bool(fallback)
+
+
+def _read_analysis_cached_bool_value(attr_name: str, fallback: bool) -> bool:
+    view_state = globals().get("integration_range_controls_view_state")
+    if view_state is None:
+        return bool(fallback)
+    try:
+        return bool(getattr(view_state, attr_name))
+    except Exception:
+        return bool(fallback)
+
+
+def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> None:
+    if not isinstance(snapshot, Mapping):
+        return
+
+    view_state = globals().get("integration_range_controls_view_state")
+    if view_state is None:
+        return
+
+    numeric_specs = (
+        ("tth_min", 0.0),
+        ("tth_max", 80.0),
+        ("phi_min", -15.0),
+        ("phi_max", 15.0),
+        ("qr_half_width", 0.01),
+    )
+    for key, fallback in numeric_specs:
+        if key not in snapshot:
+            continue
+        try:
+            numeric_value = float(snapshot.get(key, fallback))
+        except Exception:
+            numeric_value = float(fallback)
+        setattr(view_state, f"{key}_value", numeric_value)
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, f"{key}_var", None),
+            numeric_value,
+        )
+
+    if "integrate_qz_rods" in snapshot:
+        integrate_value = bool(snapshot.get("integrate_qz_rods"))
+        setattr(view_state, "integrate_qz_rods_value", integrate_value)
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "integrate_qz_rods_var", None),
+            integrate_value,
+        )
+
+
+def _current_analysis_range_values() -> dict[str, object]:
     return {
         "tth_min": _read_analysis_range_value(
             globals().get("tth_min_var"),
@@ -20656,6 +20770,14 @@ def _current_analysis_range_values() -> dict[str, float]:
         "phi_max": _read_analysis_range_value(
             globals().get("phi_max_var"),
             _read_analysis_cached_range_value("phi_max_value", 15.0),
+        ),
+        "integrate_qz_rods": _read_analysis_bool_value(
+            globals().get("integrate_qz_rods_var"),
+            _read_analysis_cached_bool_value("integrate_qz_rods_value", False),
+        ),
+        "qr_half_width": _read_analysis_range_value(
+            globals().get("qr_half_width_var"),
+            _read_analysis_cached_range_value("qr_half_width_value", 0.01),
         ),
     }
 
@@ -21185,11 +21307,12 @@ def _render_analysis_export_controls(parent) -> None:
 def _render_analysis_plot_controls(
     *,
     parent,
-    range_values: Mapping[str, float] | None = None,
+    range_values: Mapping[str, object] | None = None,
 ) -> None:
     global canvas_1d
     global analysis_1d_interaction_bindings
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
+    global integrate_qz_rods_var, qr_half_width_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
 
     values = dict(range_values or _current_analysis_range_values())
@@ -21212,6 +21335,8 @@ def _render_analysis_plot_controls(
         tth_max=float(values.get("tth_max", 80.0)),
         phi_min=float(values.get("phi_min", -15.0)),
         phi_max=float(values.get("phi_max", 15.0)),
+        integrate_qz_rods=bool(values.get("integrate_qz_rods", False)),
+        qr_half_width=float(values.get("qr_half_width", 0.01)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
     )
 
@@ -21219,6 +21344,8 @@ def _render_analysis_plot_controls(
     tth_max_var = integration_range_controls_view_state.tth_max_var
     phi_min_var = integration_range_controls_view_state.phi_min_var
     phi_max_var = integration_range_controls_view_state.phi_max_var
+    integrate_qz_rods_var = integration_range_controls_view_state.integrate_qz_rods_var
+    qr_half_width_var = integration_range_controls_view_state.qr_half_width_var
     tth_min_slider = integration_range_controls_view_state.tth_min_slider
     tth_max_slider = integration_range_controls_view_state.tth_max_slider
     phi_min_slider = integration_range_controls_view_state.phi_min_slider
@@ -22454,6 +22581,13 @@ def _initialize_runtime_controls_block_48() -> None:
                 "command": _toggle_beam_center_spot,
             },
             {
+                "key": "show_qz_rods",
+                "label": "Show Qz rods",
+                "control_type": "check",
+                "variable": analysis_view_controls_view_state.show_qz_rods_var,
+                "command": qr_cylinder_overlay_runtime_toggle,
+            },
+            {
                 "key": "log_display",
                 "label": "Log display",
                 "control_type": "check",
@@ -22478,13 +22612,13 @@ def _initialize_runtime_controls_block_48() -> None:
     analysis_view_controls_view_state.check_beam_center_spot = (
         app_shell_view_state.quick_control_widgets.get("show_beam_center_spot", {}).get("checkbutton")
     )
+    analysis_view_controls_view_state.show_qz_rods_checkbutton = (
+        app_shell_view_state.quick_control_widgets.get("show_qz_rods", {}).get("checkbutton")
+    )
     geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
         app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get("checkbutton")
     )
-    try:
-        fast_viewer_workflow.refresh_status_text()
-    except Exception:
-        pass
+    _sync_show_qz_rods_quick_control_state()
 
 
 
@@ -25571,6 +25705,10 @@ def _open_diffuse_cif_toggle():
                 phase_delta_expression=request.phase_delta_expression,
                 phi_l_divisor=request.phi_l_divisor,
                 rod_points_per_gz=request.rod_points_per_gz,
+                parent=root,
+                tk_module=tk,
+                ttk_module=ttk,
+                figure_canvas_cls=_get_tk_figure_canvas_cls(),
             )
         ),
         set_status_text=lambda text: progress_label.config(text=text),
@@ -25671,7 +25809,6 @@ def ensure_runtime_plot_initialized() -> None:
         return
     _initialize_runtime_plot_block_01()
     _initialize_runtime_plot_block_02()
-    _initialize_runtime_plot_block_03()
     _initialize_runtime_plot_block_04()
     _RUNTIME_PLOT_INITIALIZED = True
 

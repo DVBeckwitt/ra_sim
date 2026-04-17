@@ -10,16 +10,13 @@ from typing import Any
 import numpy as np
 from matplotlib.patches import Rectangle
 from ra_sim.gui import controllers as gui_controllers
-
-_FAST_VIEWER_DRAG_CURVE_PREVIEW_ENABLED = False
+from ra_sim.simulation.exact_cake_portable import raw_phi_to_gui_phi
 
 _ACTIVE_DRAG_EDGE_COLOR = "#ff7a00"
-_ACTIVE_DRAG_EDGE_RGBA = (255, 122, 0, 255)
 _ACTIVE_DRAG_FACE_RGBA = (1.0, 0.48, 0.0, 0.14)
 _ACTIVE_DRAG_LINEWIDTH = 2.8
 
 _SELECTED_REGION_EDGE_COLOR = "#ff00a8"
-_SELECTED_REGION_EDGE_RGBA = (255, 0, 168, 255)
 _SELECTED_REGION_FACE_RGBA = (1.0, 0.0, 0.66, 0.10)
 _SELECTED_REGION_OVERLAY_RGBA = (1.0, 0.0, 0.66, 0.46)
 _SELECTED_REGION_LINEWIDTH = 3.0
@@ -30,7 +27,15 @@ _DEFAULT_PHI_MIN = -15.0
 _DEFAULT_PHI_MAX = 15.0
 _TTH_SLIDER_BOUNDS = (0.0, 90.0)
 _PHI_SLIDER_BOUNDS = (-180.0, 180.0)
+_QR_HALF_WIDTH_SLIDER_BOUNDS = (0.0, 0.25)
 _DISPLAY_COORD_EPSILON = 1.0e-9
+_RUNTIME_RANGE_TEXT_FORMATS: dict[str, tuple[str, str]] = {
+    "tth_min": ("{:.1f}", "{:.4f}"),
+    "tth_max": ("{:.1f}", "{:.4f}"),
+    "phi_min": ("{:.1f}", "{:.4f}"),
+    "phi_max": ("{:.1f}", "{:.4f}"),
+    "qr_half_width": ("{:.4f}", "{:.4f}"),
+}
 
 
 @dataclass
@@ -57,6 +62,7 @@ class IntegrationRangeDragBindings:
     draw_idle: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
     set_integration_overlay_image: Callable[[object], None] | None = None
+    caked_custom_mask_factory: object = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,32 @@ def _coerce_float(value: object) -> float | None:
         return None
 
 
+def _set_widget_enabled(widget: object, enabled: bool) -> None:
+    if widget is None:
+        return
+    state_value = "normal" if bool(enabled) else "disabled"
+    state_method = getattr(widget, "state", None)
+    if callable(state_method):
+        try:
+            state_method(["!disabled"] if bool(enabled) else ["disabled"])
+            return
+        except Exception:
+            pass
+    configure = getattr(widget, "configure", None)
+    if callable(configure):
+        try:
+            configure(state=state_value)
+            return
+        except Exception:
+            pass
+    config = getattr(widget, "config", None)
+    if callable(config):
+        try:
+            config(state=state_value)
+        except Exception:
+            pass
+
+
 def _get_runtime_range_value(
     view_state: object,
     prefix: str,
@@ -164,6 +196,29 @@ def _set_runtime_range_value(
     setattr(view_state, f"{prefix}_value", numeric_value)
     _safe_var_set(getattr(view_state, f"{prefix}_var", None), numeric_value)
     return numeric_value
+
+
+def _runtime_range_boolean(
+    view_state: object,
+    prefix: str,
+    fallback: bool = False,
+) -> bool:
+    value_var = getattr(view_state, f"{prefix}_var", None)
+    value = _safe_var_get(value_var)
+    if value is not None:
+        normalized = bool(value)
+        setattr(view_state, f"{prefix}_value", normalized)
+        return normalized
+
+    cached_value = getattr(view_state, f"{prefix}_value", None)
+    if cached_value is not None:
+        normalized = bool(cached_value)
+        setattr(view_state, f"{prefix}_value", normalized)
+        return normalized
+
+    normalized = bool(fallback)
+    setattr(view_state, f"{prefix}_value", normalized)
+    return normalized
 
 
 def _get_runtime_slider_bounds(
@@ -260,6 +315,17 @@ def _runtime_last_sim_res2(bindings: IntegrationRangeDragBindings):
     return _resolve_runtime_value(bindings.last_sim_res2_factory)
 
 
+def _runtime_caked_custom_mask(bindings: IntegrationRangeDragBindings):
+    resolved = _resolve_runtime_value(bindings.caked_custom_mask_factory)
+    if resolved is None:
+        return None
+    try:
+        mask = np.asarray(resolved, dtype=bool)
+    except Exception:
+        return None
+    return mask if mask.ndim == 2 else None
+
+
 def create_integration_region_highlight_cmap(
     *,
     listed_colormap_cls: Callable[[list[tuple[float, float, float, float]]], Any],
@@ -300,37 +366,6 @@ def _clear_drag_coordinates(drag_state) -> None:
     drag_state.phi1 = None
     setattr(drag_state, "_raw_drag_preview_center", None)
     setattr(drag_state, "_raw_drag_preview_data", None)
-    _set_fast_viewer_overlay_state(
-        drag_state,
-        curve_specs=(),
-        suppress_overlay_image=False,
-    )
-
-
-def _set_fast_viewer_overlay_state(
-    drag_state: object,
-    *,
-    curve_specs: object = (),
-    suppress_overlay_image: bool,
-) -> None:
-    if not _FAST_VIEWER_DRAG_CURVE_PREVIEW_ENABLED:
-        curve_specs = ()
-        suppress_overlay_image = False
-    setattr(
-        drag_state,
-        "_fast_viewer_curve_specs",
-        tuple(curve_specs or ()),
-    )
-    setattr(
-        drag_state,
-        "_fast_viewer_suppress_overlay_image",
-        bool(suppress_overlay_image),
-    )
-    try:
-        version = int(getattr(drag_state, "_fast_viewer_overlay_version", 0))
-    except Exception:
-        version = 0
-    setattr(drag_state, "_fast_viewer_overlay_version", version + 1)
 
 
 def _wrap_angle_degrees(value: float) -> float:
@@ -431,12 +466,6 @@ def update_runtime_drag_rectangle(
     y1: float,
 ) -> None:
     """Refresh the visible drag rectangle for one caked-view drag."""
-
-    _set_fast_viewer_overlay_state(
-        bindings.drag_state,
-        curve_specs=(),
-        suppress_overlay_image=False,
-    )
     x_min, x_max = sorted((float(x0), float(x1)))
     y_min, y_max = sorted((float(y0), float(y1)))
     bindings.integration_region_overlay.set_visible(False)
@@ -785,56 +814,6 @@ def _update_detector_drag_arc_preview(
 
     bindings.integration_region_rect.set_visible(False)
     bindings.drag_select_rect.set_visible(False)
-    _set_fast_viewer_overlay_state(
-        drag_state,
-        curve_specs=(
-            {
-                "x_values": tuple(float(value) for value in outer_x),
-                "y_values": tuple(float(value) for value in outer_y),
-                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
-                "linewidth": 2.0,
-                "linestyle": "-",
-                "zorder": 9.0,
-            },
-            {
-                "x_values": tuple(float(value) for value in inner_x),
-                "y_values": tuple(float(value) for value in inner_y),
-                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
-                "linewidth": 2.0,
-                "linestyle": "-",
-                "zorder": 9.0,
-            },
-            {
-                "x_values": tuple(
-                    float(value)
-                    for value in start_x
-                ),
-                "y_values": tuple(
-                    float(value)
-                    for value in start_y
-                ),
-                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
-                "linewidth": 1.6,
-                "linestyle": "-",
-                "zorder": 9.0,
-            },
-            {
-                "x_values": tuple(
-                    float(value)
-                    for value in end_x
-                ),
-                "y_values": tuple(
-                    float(value)
-                    for value in end_y
-                ),
-                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
-                "linewidth": 1.6,
-                "linestyle": "-",
-                "zorder": 9.0,
-            },
-        ),
-        suppress_overlay_image=True,
-    )
     _set_integration_overlay_image(bindings, preview)
     bindings.integration_region_overlay.set_visible(True)
     return True
@@ -849,11 +828,6 @@ def _update_detector_integration_overlay(
     phi_min: float,
     phi_max: float,
 ) -> bool:
-    _set_fast_viewer_overlay_state(
-        bindings.drag_state,
-        curve_specs=(),
-        suppress_overlay_image=False,
-    )
     bindings.integration_region_rect.set_visible(False)
     if ai is None:
         bindings.integration_region_overlay.set_visible(False)
@@ -1014,6 +988,61 @@ def set_runtime_integration_range_from_drag(
     return True
 
 
+def _caked_rect_mask(
+    sim_res2: object,
+    *,
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+) -> np.ndarray | None:
+    radial_axis = np.asarray(getattr(sim_res2, "radial", ()), dtype=float).reshape(-1)
+    raw_azimuth_axis = np.asarray(getattr(sim_res2, "azimuthal", ()), dtype=float).reshape(-1)
+    if radial_axis.size <= 0 or raw_azimuth_axis.size <= 0:
+        return None
+
+    radial_mask = (radial_axis >= 0.0) & (radial_axis <= 90.0)
+    if not np.any(radial_mask):
+        return None
+
+    gui_azimuth = np.asarray(raw_phi_to_gui_phi(raw_azimuth_axis), dtype=float)
+    order = np.argsort(gui_azimuth, kind="stable")
+    gui_azimuth = gui_azimuth[order]
+    radial_axis = radial_axis[radial_mask]
+    azimuth_mask = detector_phi_mask(gui_azimuth, float(phi_min), float(phi_max))
+    radial_clip_mask = (radial_axis >= float(tth_min)) & (radial_axis <= float(tth_max))
+    return np.asarray(np.outer(azimuth_mask, radial_clip_mask), dtype=bool)
+
+
+def _validated_runtime_caked_custom_mask(
+    bindings: IntegrationRangeDragBindings,
+    sim_res2: object,
+    *,
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    custom_mask = _runtime_caked_custom_mask(bindings)
+    if custom_mask is None:
+        return None, None
+
+    caked_reference_res2 = sim_res2 if sim_res2 is not None else _runtime_last_sim_res2(bindings)
+    if caked_reference_res2 is None:
+        return None, None
+
+    rect_mask = _caked_rect_mask(
+        caked_reference_res2,
+        tth_min=tth_min,
+        tth_max=tth_max,
+        phi_min=phi_min,
+        phi_max=phi_max,
+    )
+    if rect_mask is None or custom_mask.shape != rect_mask.shape:
+        return None, rect_mask
+    return custom_mask, rect_mask
+
+
 def update_runtime_integration_region_visuals(
     bindings: IntegrationRangeDragBindings,
     ai: object,
@@ -1028,22 +1057,12 @@ def update_runtime_integration_region_visuals(
         bindings
     )
     if not show_region:
-        _set_fast_viewer_overlay_state(
-            bindings.drag_state,
-            curve_specs=(),
-            suppress_overlay_image=False,
-        )
         bindings.integration_region_overlay.set_visible(False)
         bindings.integration_region_rect.set_visible(False)
         return
 
     view_state = bindings.range_view_state
     if view_state is None:
-        _set_fast_viewer_overlay_state(
-            bindings.drag_state,
-            curve_specs=(),
-            suppress_overlay_image=False,
-        )
         bindings.integration_region_overlay.set_visible(False)
         bindings.integration_region_rect.set_visible(False)
         return
@@ -1056,21 +1075,40 @@ def update_runtime_integration_region_visuals(
     )
     phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
     phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
+    rod_mode_enabled = _runtime_range_boolean(view_state, "integrate_qz_rods", False)
+    custom_mask, rect_mask = _validated_runtime_caked_custom_mask(
+        bindings,
+        sim_res2,
+        tth_min=tth_min,
+        tth_max=tth_max,
+        phi_min=phi_min,
+        phi_max=phi_max,
+    )
 
     if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
-        _set_fast_viewer_overlay_state(
-            bindings.drag_state,
-            curve_specs=(),
-            suppress_overlay_image=False,
-        )
-        bindings.integration_region_overlay.set_visible(False)
-        if phi_max >= phi_min:
-            bindings.integration_region_rect.set_xy((tth_min, phi_min))
-            bindings.integration_region_rect.set_width(tth_max - tth_min)
-            bindings.integration_region_rect.set_height(phi_max - phi_min)
-            bindings.integration_region_rect.set_visible(True)
+        if custom_mask is not None and rect_mask is not None:
+            clipped_mask = custom_mask & rect_mask
+            if np.any(clipped_mask):
+                _set_integration_overlay_image(bindings, clipped_mask.astype(float))
+                bindings.integration_region_overlay.set_visible(True)
+                bindings.integration_region_rect.set_visible(False)
+            else:
+                bindings.integration_region_overlay.set_visible(False)
+                bindings.integration_region_rect.set_visible(False)
         else:
-            bindings.integration_region_rect.set_visible(False)
+            bindings.integration_region_overlay.set_visible(False)
+            if phi_max >= phi_min:
+                bindings.integration_region_rect.set_xy((tth_min, phi_min))
+                bindings.integration_region_rect.set_width(tth_max - tth_min)
+                bindings.integration_region_rect.set_height(phi_max - phi_min)
+                bindings.integration_region_rect.set_visible(True)
+            else:
+                bindings.integration_region_rect.set_visible(False)
+        return
+
+    if bool(rod_mode_enabled) and custom_mask is not None and rect_mask is not None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
         return
 
     _update_detector_integration_overlay(
@@ -1347,6 +1385,7 @@ def make_runtime_integration_range_drag_bindings_factory(
     draw_idle_factory: object = None,
     set_status_text_factory: object = None,
     set_integration_overlay_image_factory: object = None,
+    caked_custom_mask_factory: object = None,
 ):
     """Build a factory that resolves the live integration-range drag bindings."""
 
@@ -1374,6 +1413,7 @@ def make_runtime_integration_range_drag_bindings_factory(
             set_integration_overlay_image=_resolve_runtime_value(
                 set_integration_overlay_image_factory
             ),
+            caked_custom_mask_factory=caked_custom_mask_factory,
         )
 
     return _build
@@ -1525,46 +1565,35 @@ def _schedule_runtime_range_update(
 
 
 def _sync_runtime_range_text_vars(view_state: object) -> None:
-    specs = (
-        (
-            "tth_min",
-            getattr(view_state, "tth_min_var", None),
-            getattr(view_state, "tth_min_label_var", None),
-            getattr(view_state, "tth_min_entry_var", None),
-        ),
-        (
-            "tth_max",
-            getattr(view_state, "tth_max_var", None),
-            getattr(view_state, "tth_max_label_var", None),
-            getattr(view_state, "tth_max_entry_var", None),
-        ),
-        (
-            "phi_min",
-            getattr(view_state, "phi_min_var", None),
-            getattr(view_state, "phi_min_label_var", None),
-            getattr(view_state, "phi_min_entry_var", None),
-        ),
-        (
-            "phi_max",
-            getattr(view_state, "phi_max_var", None),
-            getattr(view_state, "phi_max_label_var", None),
-            getattr(view_state, "phi_max_entry_var", None),
-        ),
-    )
-    if any(
-        value_var is None or label_var is None or entry_var is None
-        for _prefix, value_var, label_var, entry_var in specs
-    ):
-        return
-    for prefix, value_var, label_var, entry_var in specs:
+    specs = []
+    for prefix, (label_format, entry_format) in _RUNTIME_RANGE_TEXT_FORMATS.items():
+        specs.append(
+            (
+                prefix,
+                getattr(view_state, f"{prefix}_var", None),
+                getattr(view_state, f"{prefix}_label_var", None),
+                getattr(view_state, f"{prefix}_entry_var", None),
+                label_format,
+                entry_format,
+            )
+        )
+    for prefix, value_var, label_var, entry_var, label_format, entry_format in specs:
+        if value_var is None or label_var is None or entry_var is None:
+            continue
         value = _safe_var_get(value_var)
         try:
             numeric_value = float(value)
         except Exception:
             continue
         setattr(view_state, f"{prefix}_value", numeric_value)
-        _safe_var_set(label_var, f"{numeric_value:.1f}")
-        _safe_var_set(entry_var, f"{numeric_value:.4f}")
+        _safe_var_set(label_var, label_format.format(numeric_value))
+        _safe_var_set(entry_var, entry_format.format(numeric_value))
+
+
+def _sync_runtime_qr_half_width_control_state(view_state: object) -> None:
+    enabled = _runtime_range_boolean(view_state, "integrate_qz_rods", False)
+    _set_widget_enabled(getattr(view_state, "qr_half_width_slider", None), enabled)
+    _set_widget_enabled(getattr(view_state, "qr_half_width_entry", None), enabled)
 
 
 def _apply_runtime_range_entry(
@@ -1622,6 +1651,19 @@ def _make_runtime_range_slider_callback(
     return _on_changed
 
 
+def _toggle_runtime_integrate_qz_rods(
+    *,
+    view_state: object,
+    show_1d_var: object,
+    schedule_range_update: Callable[..., object] | None,
+) -> None:
+    _activate_runtime_1d_analysis(show_1d_var)
+    _sync_runtime_qr_half_width_control_state(view_state)
+    _sync_runtime_range_text_vars(view_state)
+    if callable(schedule_range_update):
+        schedule_range_update()
+
+
 def create_runtime_integration_range_controls(
     *,
     parent: Any,
@@ -1632,6 +1674,8 @@ def create_runtime_integration_range_controls(
     tth_max: float,
     phi_min: float,
     phi_max: float,
+    integrate_qz_rods: bool = False,
+    qr_half_width: float = 0.01,
     schedule_range_update: Callable[..., object] | None,
 ) -> None:
     """Create the 1D integration-range controls and wire runtime callbacks."""
@@ -1640,6 +1684,9 @@ def create_runtime_integration_range_controls(
     _set_runtime_range_value(view_state, "tth_max", float(tth_max))
     _set_runtime_range_value(view_state, "phi_min", float(phi_min))
     _set_runtime_range_value(view_state, "phi_max", float(phi_max))
+    setattr(view_state, "integrate_qz_rods_value", bool(integrate_qz_rods))
+    _safe_var_set(getattr(view_state, "integrate_qz_rods_var", None), bool(integrate_qz_rods))
+    _set_runtime_range_value(view_state, "qr_half_width", float(qr_half_width))
 
     views_module.create_integration_range_controls(
         parent=parent,
@@ -1648,6 +1695,8 @@ def create_runtime_integration_range_controls(
         tth_max=tth_max,
         phi_min=phi_min,
         phi_max=phi_max,
+        integrate_qz_rods=bool(integrate_qz_rods),
+        qr_half_width=float(qr_half_width),
         on_tth_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="tth_min_var",
@@ -1672,6 +1721,17 @@ def create_runtime_integration_range_controls(
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
+        on_toggle_integrate_qz_rods=lambda: _toggle_runtime_integrate_qz_rods(
+            view_state=view_state,
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
+        ),
+        on_qr_half_width_changed=_make_runtime_range_slider_callback(
+            view_state=view_state,
+            value_var_name="qr_half_width_var",
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
+        ),
         on_apply_entry=lambda entry_var, value_var, slider: _apply_runtime_range_entry(
             view_state=view_state,
             entry_var=entry_var,
@@ -1687,22 +1747,41 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "tth_max_var", None),
         getattr(view_state, "phi_min_var", None),
         getattr(view_state, "phi_max_var", None),
+        getattr(view_state, "integrate_qz_rods_var", None),
+        getattr(view_state, "qr_half_width_var", None),
         getattr(view_state, "tth_min_slider", None),
         getattr(view_state, "tth_max_slider", None),
         getattr(view_state, "phi_min_slider", None),
         getattr(view_state, "phi_max_slider", None),
+        getattr(view_state, "qr_half_width_slider", None),
+        getattr(view_state, "qr_half_width_entry", None),
     )
     if any(ref is None for ref in refs):
         raise RuntimeError("Integration-range controls did not create the expected widgets.")
 
-    for value_var in refs[:4]:
+    for value_var in (
+        getattr(view_state, "tth_min_var", None),
+        getattr(view_state, "tth_max_var", None),
+        getattr(view_state, "phi_min_var", None),
+        getattr(view_state, "phi_max_var", None),
+        getattr(view_state, "qr_half_width_var", None),
+    ):
+        if value_var is None:
+            continue
         _safe_var_trace_add(
             value_var,
             lambda *_args, _view_state=view_state: _sync_runtime_range_text_vars(
                 _view_state
             ),
         )
+    _safe_var_trace_add(
+        getattr(view_state, "integrate_qz_rods_var", None),
+        lambda *_args, _view_state=view_state: _sync_runtime_qr_half_width_control_state(
+            _view_state
+        ),
+    )
     _sync_runtime_range_text_vars(view_state)
+    _sync_runtime_qr_half_width_control_state(view_state)
 
 
 def _toggle_runtime_1d_plots(

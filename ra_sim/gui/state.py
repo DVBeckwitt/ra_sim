@@ -459,6 +459,8 @@ class AnalysisViewControlsViewState:
     check_1d: Any = None
     show_caked_2d_var: Any = None
     check_2d: Any = None
+    show_qz_rods_var: Any = None
+    show_qz_rods_checkbutton: Any = None
     show_beam_center_spot_var: Any = None
     check_beam_center_spot: Any = None
     log_display_var: Any = None
@@ -547,6 +549,16 @@ class IntegrationRangeControlsViewState:
     phi_max_slider: Any = None
     phi_max_entry_var: Any = None
     phi_max_entry: Any = None
+    integrate_qz_rods_var: Any = None
+    integrate_qz_rods_checkbutton: Any = None
+    qr_half_width_value: float = 0.01
+    qr_half_width_container: Any = None
+    qr_half_width_var: Any = None
+    qr_half_width_label_var: Any = None
+    qr_half_width_label: Any = None
+    qr_half_width_slider: Any = None
+    qr_half_width_entry_var: Any = None
+    qr_half_width_entry: Any = None
 
 
 @dataclass
@@ -836,6 +848,12 @@ class GeometryRuntimeState:
         default_factory=lambda: {
             "signature": None,
             "paths": [],
+        }
+    )
+    qr_cylinder_band_cache: dict[str, object] = field(
+        default_factory=lambda: {
+            "signature": None,
+            "result": None,
         }
     )
 

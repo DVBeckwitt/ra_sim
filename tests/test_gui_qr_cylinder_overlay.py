@@ -283,6 +283,230 @@ def test_qr_cylinder_overlay_path_builder_projects_caked_space_paths() -> None:
     np.testing.assert_allclose(paths[0]["rows"], [10.0, 60.0, 110.0], equal_nan=True)
 
 
+def test_build_qr_cylinder_caked_band_masks_clamps_specular_low_qr() -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-1.0, 0.0, 1.0], dtype=float)
+    qr_values = []
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        qr_values.append(float(qr_value))
+        return []
+
+    result = qr_cylinder_overlay.build_qr_cylinder_caked_band_masks(
+        [{"key": "rod-1", "source": "primary", "m": 1, "qr": 0.02}],
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=0.05,
+        project_traces=_project_traces,
+    )
+
+    assert qr_values == [0.0, 0.07]
+    assert result is not None
+    assert result["union_mask"].shape == (3, 3)
+    assert not np.any(result["union_mask"])
+
+
+def test_build_qr_cylinder_caked_band_masks_pairs_boundaries_by_branch_sign(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    interpolate_codes: list[int] = []
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        if float(qr_value) < 0.25:
+            return [
+                SimpleNamespace(
+                    branch_sign=1,
+                    detector_col=np.asarray([11.0, 11.5], dtype=float),
+                    detector_row=np.asarray([0.0, 1.0], dtype=float),
+                    valid_mask=np.asarray([True, True], dtype=bool),
+                ),
+                SimpleNamespace(
+                    branch_sign=-1,
+                    detector_col=np.asarray([99.0, 99.5], dtype=float),
+                    detector_row=np.asarray([0.0, 1.0], dtype=float),
+                    valid_mask=np.asarray([True, True], dtype=bool),
+                ),
+            ]
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.asarray([12.0, 12.5], dtype=float),
+                detector_row=np.asarray([0.0, 1.0], dtype=float),
+                valid_mask=np.asarray([True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.asarray(detector_cols, dtype=float)[0])
+        interpolate_codes.append(code)
+        if code == 11:
+            return (
+                np.asarray([1.0, 1.0], dtype=float),
+                np.asarray([-1.0, 1.0], dtype=float),
+            )
+        if code == 12:
+            return (
+                np.asarray([3.0, 3.0], dtype=float),
+                np.asarray([-1.0, 1.0], dtype=float),
+            )
+        raise AssertionError(f"unexpected branch code {code}")
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_qr_cylinder_caked_band_masks(
+        [{"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25}],
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([-1.0, 0.0, 1.0], dtype=float),
+        delta_qr=0.05,
+        project_traces=_project_traces,
+    )
+
+    assert interpolate_codes == [11, 12]
+    assert result is not None
+    assert np.any(result["union_mask"])
+
+
+def test_build_qr_cylinder_caked_band_masks_does_not_fill_across_phi_seam(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        code = 1.0 if float(qr_value) < 0.25 else 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.asarray([code, code + 0.1, code + 0.2], dtype=float),
+                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                valid_mask=np.asarray([True, True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        if code == 1:
+            return (
+                np.asarray([1.0, 2.0, 3.0], dtype=float),
+                np.asarray([178.0, 179.0, -179.0], dtype=float),
+            )
+        if code == 2:
+            return (
+                np.asarray([3.0, 4.0, 5.0], dtype=float),
+                np.asarray([178.0, 179.0, -179.0], dtype=float),
+            )
+        raise AssertionError(f"unexpected seam code {code}")
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_qr_cylinder_caked_band_masks(
+        [{"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25}],
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0, 4.0, 5.0], dtype=float),
+        azimuth_axis=np.asarray([-179.0, 0.0, 179.0], dtype=float),
+        delta_qr=0.05,
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    assert not np.any(result["union_mask"][1])
+
+
+def test_build_qr_cylinder_caked_band_masks_rasterizes_union_and_stamps_edges(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        code = 1.0 if float(qr_value) < 0.25 else 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.asarray([code, code + 0.1, code + 0.2], dtype=float),
+                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                valid_mask=np.asarray([True, True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        if code == 1:
+            return (
+                np.asarray([1.0, 1.0, 1.0], dtype=float),
+                np.asarray([-1.0, 0.0, 1.0], dtype=float),
+            )
+        if code == 2:
+            return (
+                np.asarray([3.0, 3.0, 3.0], dtype=float),
+                np.asarray([-1.0, 0.0, 1.0], dtype=float),
+            )
+        raise AssertionError(f"unexpected rectangle code {code}")
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_qr_cylinder_caked_band_masks(
+        [{"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25}],
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([-1.0, 0.0, 1.0], dtype=float),
+        delta_qr=0.05,
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    np.testing.assert_array_equal(
+        result["union_mask"],
+        result["masks_by_key"]["rod-1"],
+    )
+    assert result["union_mask"][1, 1]
+    assert result["union_mask"][:, 0].any()
+    assert result["union_mask"][:, 2].any()
+
+
 def test_refresh_runtime_qr_cylinder_overlay_clears_when_disabled(
     monkeypatch,
 ) -> None:

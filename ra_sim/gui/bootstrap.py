@@ -1433,12 +1433,15 @@ def build_runtime_integration_range_update_bootstrap(
         "tth_max": 60.0,
         "phi_min": -15.0,
         "phi_max": 15.0,
+        "integrate_qz_rods": False,
+        "qr_half_width": 0.01,
     }
     if range_defaults:
         normalized_range_defaults.update(range_defaults)
     normalized_analysis_defaults = {
         "show_1d": False,
         "show_caked_2d": False,
+        "show_qz_rods": False,
         "log_display": False,
     }
     if analysis_defaults:

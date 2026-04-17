@@ -84,6 +84,13 @@ def empty_qr_cylinder_overlay_cache() -> dict[str, object]:
     }
 
 
+def empty_qr_cylinder_band_cache() -> dict[str, object]:
+    return {
+        "signature": None,
+        "result": None,
+    }
+
+
 def live_cache_inventory_snapshot(simulation_runtime_state: object) -> dict[str, object]:
     source_snapshots_raw = getattr(
         simulation_runtime_state,
@@ -142,6 +149,7 @@ def live_cache_inventory_snapshot(simulation_runtime_state: object) -> dict[str,
 
 
 __all__ = [
+    "empty_qr_cylinder_band_cache",
     "empty_peak_overlay_cache",
     "empty_qr_cylinder_overlay_cache",
     "live_cache_count",

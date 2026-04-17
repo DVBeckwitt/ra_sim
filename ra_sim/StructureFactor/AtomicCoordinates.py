@@ -55,16 +55,19 @@ def _resolve_xtl_title(filename):
 def _derive_xtl_symmetry_metadata(lattice, positions, numbers):
     try:
         import spglib
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "automatic symmetry derivation requires spglib, or the caller must pass "
+            "symmetry_number/symmetry_label explicitly."
+        ) from exc
 
-        dataset = spglib.get_symmetry_dataset(
-            (
-                np.asarray(lattice, dtype=float),
-                np.asarray(positions, dtype=float),
-                np.asarray(numbers, dtype=int),
-            )
+    dataset = spglib.get_symmetry_dataset(
+        (
+            np.asarray(lattice, dtype=float),
+            np.asarray(positions, dtype=float),
+            np.asarray(numbers, dtype=int),
         )
-    except Exception:
-        return "", ""
+    )
 
     if dataset is None:
         return "", ""
