@@ -2571,6 +2571,181 @@ def test_apply_projected_primary_raster_to_artist_passes_stored_source_signature
     np.testing.assert_array_equal(set_data_calls[0], source_image)
 
 
+def test_apply_projected_primary_raster_to_artist_detector_view_ignores_live_window_projection(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    recorded_kwargs: list[dict[str, object]] = []
+
+    class _Artist:
+        def set_extent(self, _extent):
+            return None
+
+        def set_data(self, _image):
+            return None
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_interaction_active",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_main_display_raster_size_limit",
+        lambda: 128,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_axes_image_origin",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            get_xlim=lambda: (10.0, 20.0),
+            get_ylim=lambda: (30.0, 5.0),
+            bbox=SimpleNamespace(width=640.0, height=480.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_display_projection,
+        "project_raster_to_view",
+        lambda image, **kwargs: (
+            recorded_kwargs.append(dict(kwargs))
+            or runtime_session.gui_display_projection.RasterProjection(
+                image=np.asarray(image, dtype=float).copy(),
+                extent=(0.0, 4.0, 4.0, 0.0),
+            )
+        ),
+        raising=False,
+    )
+
+    artist = _Artist()
+    runtime_session._store_primary_raster_source(artist, np.arange(16, dtype=float).reshape(4, 4))
+    runtime_session._store_primary_raster_geometry(
+        artist,
+        origin="upper",
+        extent=(0.0, 4.0, 4.0, 0.0),
+    )
+
+    assert runtime_session._apply_projected_primary_raster_to_artist(artist) is True
+    assert recorded_kwargs == [
+        {
+            "source_signature": getattr(
+                artist,
+                runtime_session._MAIN_RASTER_SOURCE_SIGNATURE_ATTR,
+            ),
+            "extent": (0.0, 4.0, 4.0, 0.0),
+            "axis_xlim": None,
+            "axis_ylim": None,
+            "max_size": 128,
+            "bbox_width_px": None,
+            "bbox_height_px": None,
+            "preserve_bright_features": False,
+        }
+    ]
+
+
+
+@pytest.mark.parametrize("view_mode", ["caked", "q_space"])
+def test_apply_projected_primary_raster_to_artist_analysis_view_uses_live_window_projection(
+    monkeypatch,
+    view_mode: str,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    recorded_kwargs: list[dict[str, object]] = []
+
+    class _Artist:
+        def set_extent(self, _extent):
+            return None
+
+        def set_data(self, _image):
+            return None
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_interaction_active",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: view_mode,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_main_display_raster_size_limit",
+        lambda: 256,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_axes_image_origin",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            get_xlim=lambda: (1.0, 2.0),
+            get_ylim=lambda: (-3.0, 7.0),
+            bbox=SimpleNamespace(width=320.0, height=240.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_display_projection,
+        "project_raster_to_view",
+        lambda image, **kwargs: (
+            recorded_kwargs.append(dict(kwargs))
+            or runtime_session.gui_display_projection.RasterProjection(
+                image=np.asarray(image, dtype=float).copy(),
+                extent=(0.0, 4.0, 4.0, 0.0),
+            )
+        ),
+        raising=False,
+    )
+
+    artist = _Artist()
+    runtime_session._store_primary_raster_source(artist, np.arange(16, dtype=float).reshape(4, 4))
+    runtime_session._store_primary_raster_geometry(
+        artist,
+        origin="lower",
+        extent=(0.0, 4.0, 4.0, 0.0),
+    )
+
+    assert runtime_session._apply_projected_primary_raster_to_artist(artist) is True
+    assert recorded_kwargs == [
+        {
+            "source_signature": getattr(
+                artist,
+                runtime_session._MAIN_RASTER_SOURCE_SIGNATURE_ATTR,
+            ),
+            "extent": (0.0, 4.0, 4.0, 0.0),
+            "axis_xlim": (1.0, 2.0),
+            "axis_ylim": (-3.0, 7.0),
+            "max_size": 256,
+            "bbox_width_px": 320.0,
+            "bbox_height_px": 240.0,
+            "preserve_bright_features": False,
+        }
+    ]
+
+
 def test_store_primary_raster_source_uses_detector_buffer_signature_for_global_image_buffer(
     monkeypatch,
 ) -> None:
@@ -6375,6 +6550,10 @@ def test_initialize_runtime_plot_block_02_projects_startup_rasters_without_viewp
     runtime_session._initialize_runtime_plot_block_02()
 
     assert len(projection_calls) == 3
+    assert all(call["axis_xlim"] is None for call in projection_calls)
+    assert all(call["axis_ylim"] is None for call in projection_calls)
+    assert all(call["bbox_width_px"] is None for call in projection_calls)
+    assert all(call["bbox_height_px"] is None for call in projection_calls)
     assert image_display.get_extent() == (0.0, 2.0, 2.0, 0.0)
     assert background_display.get_extent() == (0.0, 2.0, 2.0, 0.0)
     assert overlay_display.get_extent() == (0.0, 2.0, 2.0, 0.0)

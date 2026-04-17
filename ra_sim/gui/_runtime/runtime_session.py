@@ -7983,7 +7983,14 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
     source, extent, origin, source_signature = _primary_raster_source_payload(artist)
     if artist is None or source is None or extent is None:
         return False
-    if _legacy_main_matplotlib_interaction_active():
+    try:
+        projection_mode = str(_resolved_primary_analysis_display_mode() or "detector").strip().lower()
+    except Exception:
+        projection_mode = "detector"
+    use_live_viewport_projection = bool(
+        _legacy_main_matplotlib_interaction_active() and projection_mode != "detector"
+    )
+    if use_live_viewport_projection:
         axis_limits = _current_primary_axis_limits()
         if axis_limits is None:
             axis_xlim = None
