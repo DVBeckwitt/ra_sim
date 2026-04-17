@@ -331,10 +331,9 @@ def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch
     monkeypatch.setattr(
         views.window_affinity,
         "apply_window_launch_context",
-        lambda window, *, context=None, width=None, height=None: affinity_calls.append(
-            (window, context, width, height)
-        )
-        or True,
+        lambda window, *, context=None, width=None, height=None: (
+            affinity_calls.append((window, context, width, height)) or True
+        ),
     )
 
     root = views.create_root_window("Readable Sections")
@@ -1269,26 +1268,14 @@ def test_create_app_shell_adds_fit2d_help_preference_when_var_is_supplied(
         view_state.fit2d_error_sound_checkbutton.kwargs["text"]
         == "Enable Fit2D mode (theme + error noise)"
     )
-    assert (
-        view_state.geometry_fit_caked_roi_enabled_checkbutton
-        is _FakeCheckbutton.created[1]
-    )
-    assert (
-        view_state.geometry_fit_caked_roi_enabled_checkbutton.variable
-        is roi_enabled_var
-    )
+    assert view_state.geometry_fit_caked_roi_enabled_checkbutton is _FakeCheckbutton.created[1]
+    assert view_state.geometry_fit_caked_roi_enabled_checkbutton.variable is roi_enabled_var
     assert (
         view_state.geometry_fit_caked_roi_enabled_checkbutton.kwargs["text"]
         == "Use branch-restricted geometry-fit caking"
     )
-    assert (
-        view_state.geometry_fit_caked_roi_preview_checkbutton
-        is _FakeCheckbutton.created[2]
-    )
-    assert (
-        view_state.geometry_fit_caked_roi_preview_checkbutton.variable
-        is roi_preview_var
-    )
+    assert view_state.geometry_fit_caked_roi_preview_checkbutton is _FakeCheckbutton.created[2]
+    assert view_state.geometry_fit_caked_roi_preview_checkbutton.variable is roi_preview_var
     assert (
         view_state.geometry_fit_caked_roi_preview_checkbutton.kwargs["text"]
         == "Preview branch ROI on detector/caked view"
@@ -2573,7 +2560,9 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
         "Undo Placement",
         "Export Placements...",
     ]
-    assert _FakeButton.created[2].kwargs["textvariable"] is view_state.geometry_manual_pick_button_var
+    assert (
+        _FakeButton.created[2].kwargs["textvariable"] is view_state.geometry_manual_pick_button_var
+    )
     assert view_state.geometry_manual_refine_button is None
     assert _FakeButton.created[6].kwargs["textvariable"] is (
         view_state.geometry_preview_exclude_button_var
@@ -2718,7 +2707,9 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
     assert view_state.show_qr_cylinder_overlay_checkbutton is None
     assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit_button_mosaic is _FakeButton.created[0]
-    assert view_state.mosaic_fit_toggle_checkbuttons["fit_gamma_mosaic"] is _FakeCheckbutton.created[2]
+    assert (
+        view_state.mosaic_fit_toggle_checkbuttons["fit_gamma_mosaic"] is _FakeCheckbutton.created[2]
+    )
     assert view_state.mosaic_fit_toggle_checkbuttons["fit_theta_i"] is _FakeCheckbutton.created[4]
     assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Geometry Overlays"
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
@@ -2935,7 +2926,9 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.qr_half_width_entry_var.get() == "0.0100"
     assert view_state.tth_min_label.kwargs["textvariable"] is view_state.tth_min_label_var
     assert view_state.phi_max_label.kwargs["textvariable"] is view_state.phi_max_label_var
-    assert view_state.qr_half_width_label.kwargs["textvariable"] is view_state.qr_half_width_label_var
+    assert (
+        view_state.qr_half_width_label.kwargs["textvariable"] is view_state.qr_half_width_label_var
+    )
     assert view_state.tth_min_entry.textvariable is view_state.tth_min_entry_var
     assert view_state.phi_max_entry.textvariable is view_state.phi_max_entry_var
     assert view_state.qr_half_width_entry.textvariable is view_state.qr_half_width_entry_var
@@ -3224,9 +3217,7 @@ def test_geometry_fit_constraints_scroll_registration_preempts_outer_fit_canvas(
     constraints_view_state.canvas.height = 120
 
     dispatch = next(
-        callback
-        for sequence, callback, _add in root.bind_all_calls
-        if sequence == "<MouseWheel>"
+        callback for sequence, callback, _add in root.bind_all_calls if sequence == "<MouseWheel>"
     )
     event = type("Event", (), {"delta": 120, "num": None, "x_root": 80, "y_root": 60})()
 
@@ -3329,10 +3320,7 @@ def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(
     )
 
     assert isinstance(view_state.geometry_fit_background_controls, _FakeFrame)
-    assert (
-        view_state.geometry_fit_background_controls.kwargs["text"]
-        == "Geometry Fit Backgrounds"
-    )
+    assert view_state.geometry_fit_background_controls.kwargs["text"] == "Geometry Fit Backgrounds"
     assert isinstance(view_state.geometry_fit_background_entry, _FakeEntry)
     assert isinstance(view_state.geometry_fit_background_shortcuts_frame, _FakeFrame)
     assert isinstance(view_state.geometry_fit_background_rows_frame, _FakeFrame)

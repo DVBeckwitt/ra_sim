@@ -34,6 +34,7 @@ class CanvasInteractionBindings:
     restore_geometry_manual_pick_view: Callable[..., None]
     render_current_geometry_manual_pairs: Callable[..., object]
     caked_view_enabled_factory: object
+    detector_view_limits: tuple[tuple[float, float], tuple[float, float]] | None = None
     analysis_peak_state: Any = None
     analysis_peak_callbacks: Any = None
     set_geometry_status_text: Callable[[str], None] | None = None
@@ -622,6 +623,56 @@ def _zoom_limits_about_anchor(
     )
 
 
+def _visible_content_center(
+    live_limits: tuple[float, float],
+    content_limits: tuple[float, float],
+) -> float | None:
+    live = _coerce_limits(live_limits)
+    content = _coerce_limits(content_limits)
+    if live is None or content is None:
+        return None
+
+    live_lo = min(float(live[0]), float(live[1]))
+    live_hi = max(float(live[0]), float(live[1]))
+    content_lo = min(float(content[0]), float(content[1]))
+    content_hi = max(float(content[0]), float(content[1]))
+    if (
+        not np.isfinite(live_lo)
+        or not np.isfinite(live_hi)
+        or not np.isfinite(content_lo)
+        or not np.isfinite(content_hi)
+    ):
+        return None
+
+    visible_lo = float(np.clip(live_lo, content_lo, content_hi))
+    visible_hi = float(np.clip(live_hi, content_lo, content_hi))
+    if visible_hi < visible_lo:
+        visible_lo, visible_hi = visible_hi, visible_lo
+    return 0.5 * (visible_lo + visible_hi)
+
+
+def _detector_view_zoom_anchor(
+    bindings: CanvasInteractionBindings,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> tuple[float, float] | None:
+    detector_limits = getattr(bindings, "detector_view_limits", None)
+    if not isinstance(detector_limits, tuple) or len(detector_limits) != 2:
+        return None
+
+    detector_xlim = _coerce_limits(detector_limits[0])
+    detector_ylim = _coerce_limits(detector_limits[1])
+    if detector_xlim is None or detector_ylim is None:
+        return None
+
+    anchor_x = _visible_content_center(xlim, detector_xlim)
+    anchor_y = _visible_content_center(ylim, detector_ylim)
+    if anchor_x is None or anchor_y is None:
+        return None
+    return (float(anchor_x), float(anchor_y))
+
+
 def handle_runtime_canvas_click(
     bindings: CanvasInteractionBindings,
     event: Any,
@@ -953,10 +1004,21 @@ def handle_runtime_canvas_scroll(
     center_x = 0.5 * (float(xlim[0]) + float(xlim[1]))
     center_y = 0.5 * (float(ylim[0]) + float(ylim[1]))
     if not _runtime_caked_view_enabled(bindings):
-        # Detector view keeps Y inverted. Cursor-anchored wheel zoom on that axis
-        # reads like a vertical drift in screen space, so keep scroll zoom centered.
-        anchor_x = center_x
-        anchor_y = center_y
+        # Detector pans can leave blank margins around the raster. When that happens,
+        # zooming about the raw axis midpoint makes the detector image appear to drift
+        # because the visible detector content is no longer centered within the axes.
+        # Anchor detector zoom to the center of the currently visible detector content
+        # instead of the full view window.
+        detector_anchor = _detector_view_zoom_anchor(
+            bindings,
+            xlim=xlim,
+            ylim=ylim,
+        )
+        if detector_anchor is not None:
+            anchor_x, anchor_y = detector_anchor
+        else:
+            anchor_x = center_x
+            anchor_y = center_y
     elif preview_limits is not None:
         # Legacy Matplotlib preview keeps event.xdata/ydata stale until commit.
         anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
@@ -1030,6 +1092,7 @@ def make_runtime_canvas_interaction_bindings_factory(
     restore_geometry_manual_pick_view: Callable[..., None],
     render_current_geometry_manual_pairs: Callable[..., object],
     caked_view_enabled_factory: object,
+    detector_view_limits_factory: object | None = None,
     analysis_peak_state: Any = None,
     analysis_peak_callbacks: Any = None,
     set_geometry_status_text_factory: object | None = None,
@@ -1065,6 +1128,7 @@ def make_runtime_canvas_interaction_bindings_factory(
             restore_geometry_manual_pick_view=restore_geometry_manual_pick_view,
             render_current_geometry_manual_pairs=render_current_geometry_manual_pairs,
             caked_view_enabled_factory=caked_view_enabled_factory,
+            detector_view_limits=_resolve_runtime_value(detector_view_limits_factory),
             analysis_peak_state=analysis_peak_state,
             analysis_peak_callbacks=analysis_peak_callbacks,
             set_geometry_status_text=_resolve_runtime_value(

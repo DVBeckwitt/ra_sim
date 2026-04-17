@@ -19,7 +19,7 @@ def copy_intersection_cache_tables(cache: object) -> list[np.ndarray]:
         try:
             copied.append(np.asarray(table, dtype=np.float64).copy())
         except Exception:
-            copied.append(np.empty((0, 14), dtype=np.float64))
+            copied.append(np.empty((0, 17), dtype=np.float64))
     return copied
 
 
@@ -54,6 +54,7 @@ def clear_primary_contribution_cache(simulation_runtime_state: object) -> None:
     simulation_runtime_state.primary_contribution_cache_signature = None
     simulation_runtime_state.primary_active_contribution_keys = []
     simulation_runtime_state.primary_hit_table_cache = {}
+    simulation_runtime_state.primary_best_sample_index_cache = {}
     simulation_runtime_state.primary_filter_signature = None
 
 
@@ -87,6 +88,7 @@ def store_primary_cache_payload(
     active_keys: Sequence[object],
     contribution_keys: Sequence[object],
     raw_hit_tables: Sequence[np.ndarray],
+    best_sample_indices: Sequence[object] | None,
     retain_runtime_optional_cache: Callable[..., bool],
     trace_live_cache_event: Callable[..., None],
     live_cache_count: Callable[[object], int],
@@ -118,6 +120,7 @@ def store_primary_cache_payload(
     )
     if reset_required:
         simulation_runtime_state.primary_hit_table_cache = {}
+        simulation_runtime_state.primary_best_sample_index_cache = {}
 
     simulation_runtime_state.primary_contribution_cache_signature = cache_signature
     simulation_runtime_state.primary_source_mode = normalized_mode
@@ -127,15 +130,23 @@ def store_primary_cache_payload(
     overwritten_count = 0
     if retain_cache:
         copied_tables = copy_hit_tables(raw_hit_tables)
-        for key, table in zip(contribution_keys or (), copied_tables):
+        for idx, (key, table) in enumerate(zip(contribution_keys or (), copied_tables)):
             if key in simulation_runtime_state.primary_hit_table_cache:
                 overwritten_count += 1
             simulation_runtime_state.primary_hit_table_cache[key] = np.asarray(
                 table,
                 dtype=np.float64,
             ).copy()
+            if isinstance(best_sample_indices, Sequence) and idx < len(best_sample_indices):
+                try:
+                    simulation_runtime_state.primary_best_sample_index_cache[key] = int(
+                        best_sample_indices[idx]
+                    )
+                except Exception:
+                    pass
     else:
         simulation_runtime_state.primary_hit_table_cache = {}
+        simulation_runtime_state.primary_best_sample_index_cache = {}
     trace_live_cache_event(
         "primary_contribution",
         "store",
@@ -170,6 +181,7 @@ def rematerialize_primary_cache_artifacts(
 ) -> dict[str, object]:
     payload = gui_runtime_primary_cache.rematerialize_primary_artifacts(
         primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
+        primary_best_sample_index_cache=simulation_runtime_state.primary_best_sample_index_cache,
         active_keys=simulation_runtime_state.primary_active_contribution_keys,
         image_size=int(image_size),
         a_primary=float(a_primary),

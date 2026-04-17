@@ -1304,6 +1304,67 @@ def test_geometry_q_group_manager_rebuilds_stale_peak_records_from_overlay_build
     assert entries[0]["key"] == ("q_group", "primary", 1, 0)
 
 
+def test_geometry_q_group_manager_reprojects_peak_records_into_current_view() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 300.25,
+                "display_row": -500.5,
+                "native_col": 4.0,
+                "native_row": 5.0,
+                "sim_col_raw": 4.0,
+                "sim_row_raw": 5.0,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_sim_image=np.zeros((20, 30), dtype=float),
+    )
+    projection_inputs: list[list[dict[str, object]]] = []
+
+    def _project(entries):
+        copied_entries = [dict(entry) for entry in (entries or ()) if isinstance(entry, dict)]
+        projection_inputs.append(copied_entries)
+        return [
+            dict(
+                entry,
+                sim_col=104.0,
+                sim_row=205.0,
+                display_col=104.0,
+                display_row=205.0,
+            )
+            for entry in copied_entries
+        ]
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 7.0,
+        primary_c_factory=lambda: 9.0,
+        image_size_factory=lambda: 64,
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        project_peaks_to_current_view=_project,
+    )
+
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+
+    assert projection_inputs
+    assert projection_inputs[0][0]["display_col"] == 4.0
+    assert projection_inputs[0][0]["native_col"] == 4.0
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["sim_col"] == 104.0
+    assert cached_preview_peaks[0]["sim_row"] == 205.0
+    assert cached_preview_peaks[0]["display_col"] == 104.0
+    assert cached_preview_peaks[0]["display_row"] == 205.0
+
+
 def test_geometry_q_group_manager_filters_stale_rows_from_mixed_peak_records() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_records=[

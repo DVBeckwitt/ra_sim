@@ -7,6 +7,7 @@ from pathlib import Path
 from time import perf_counter
 
 import numpy as np
+from matplotlib.figure import Figure
 
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.utils.stacking_fault import (
@@ -392,17 +393,34 @@ def open_diffuse_cif_toggle_algebraic(
     phase_delta_expression=None,
     phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
     rod_points_per_gz=0,
+    parent=None,
+    tk_module=None,
+    ttk_module=None,
+    figure_canvas_cls=None,
 ):
     """Open an interactive diffuse viewer using algebraic HT only."""
 
-    import matplotlib.pyplot as plt
     from matplotlib.widgets import Button, CheckButtons, RangeSlider, Slider
+    import tkinter as tk
+    from tkinter import ttk
 
     cif_path = str(Path(str(cif_path)).expanduser())
     if not Path(cif_path).is_file():
         raise FileNotFoundError(f"CIF file not found: {cif_path}")
     if lambda_angstrom is None or mx is None:
         raise ValueError("lambda_angstrom and mx are required.")
+    if tk_module is None:
+        tk_module = tk
+    if ttk_module is None:
+        ttk_module = ttk
+    if figure_canvas_cls is None:
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+        figure_canvas_cls = FigureCanvasTkAgg
+    if parent is None:
+        parent = getattr(tk_module, "_default_root", None)
+    if parent is None:
+        raise ValueError("parent is required for the embedded diffuse HT viewer")
 
     p_triplet = _as_triplet(p_values, [0.01, 0.99, 0.5])
     w_triplet = _as_triplet(w_values, [100.0, 0.0, 0.0])
@@ -517,391 +535,439 @@ def open_diffuse_cif_toggle_algebraic(
         "N_layers": int(max(1, stack_layers)),
     }
 
-    fig, ax = plt.subplots(figsize=(8.2, 6.1))
-    fig.subplots_adjust(left=0.25, bottom=0.42, top=0.88)
-    ax.set_xlabel("l")
-    ax.set_ylabel("I (a.u.)")
-    ax.set_yscale("log")
-
-    try:
-        fig.canvas.manager.set_window_title(
-            f"Diffuse HT (algebraic) - {Path(cif_path).name}"
-        )
-    except Exception:
-        pass
-
-    (line_total,) = ax.plot([], [], lw=2.2, label="Total (algebraic)")
-    (line_p0,) = ax.plot([], [], ls="--", label="I_alg(p~0)", visible=False)
-    (line_p1,) = ax.plot([], [], ls="--", label="I_alg(p~1)", visible=False)
-    (line_p2,) = ax.plot([], [], ls="--", label="I_alg(p)", visible=False)
-    title = ax.set_title("")
-
-    cache = {"key": None, "components": None, "elapsed_ms": 0.0}
-
-    def active_pairs():
-        pairs_by_m_current = curve_store["pairs_by_m"]
-        curve_map_current = curve_store["curve_map"]
-        if state["mode"] == "m":
-            return list(pairs_by_m_current.get(int(state["m"]), []))
-        pair = (int(state["h"]), int(state["k"]))
-        return [pair] if pair in curve_map_current else []
-
-    def _compute_components():
-        pairs = active_pairs()
-        curve_map_current = curve_store["curve_map"]
-        finite_layers = int(state["N_layers"]) if state["finite_N"] else None
-        start = perf_counter()
-
-        def _component_for_p(p_val):
-            x_acc = np.array([], dtype=float)
-            y_acc = np.array([], dtype=float)
-            for h, k in pairs:
-                item = curve_map_current[(h, k)]
-                L_vals = item["L"]
-                F2_vals = item["F2"]
-                I_vals = analytical_ht_intensity_for_pair(
-                    L_vals,
-                    F2_vals,
-                    h,
-                    k,
-                    p_val,
-                    phase_delta_expression=phase_expr,
-                    phi_l_divisor=phi_div,
-                    finite_layers=finite_layers,
-                    f2_only=bool(state["f2_only"]),
-                )
-                x_acc, y_acc = _merge_curves(x_acc, y_acc, L_vals, I_vals)
-            return x_acc, y_acc
-
-        comp0 = _component_for_p(state["p0"])
-        comp1 = _component_for_p(state["p1"])
-        comp2 = _component_for_p(state["p2"])
-        cache["elapsed_ms"] = (perf_counter() - start) * 1e3
-        return (comp0, comp1, comp2)
-
-    def _curve_key():
-        return (
-            state["mode"],
-            int(state["m"]),
-            int(state["h"]),
-            int(state["k"]),
-            round(float(state["p0"]), 6),
-            round(float(state["p1"]), 6),
-            round(float(state["p2"]), 6),
-            bool(state["f2_only"]),
-            bool(state["finite_N"]),
-            int(state["N_layers"]),
-        )
-
-    def _line_data(x_vals, y_vals):
-        if x_vals.size == 0 or y_vals.size == 0:
-            return np.array([], dtype=float), np.array([], dtype=float)
-
-        lo = float(min(state["L_lo"], state["L_hi"]))
-        hi = float(max(state["L_lo"], state["L_hi"]))
-        mask = (x_vals >= lo) & (x_vals <= hi)
-        if not np.any(mask):
-            return np.array([], dtype=float), np.array([], dtype=float)
-
-        x_sel = x_vals[mask]
-        y_sel = np.asarray(y_vals[mask], dtype=float)
-        if state["qz_axis"]:
-            x_plot = (2.0 * np.pi / c_axis_for_recip) * x_sel
-        else:
-            x_plot = x_sel
-
-        if ax.get_yscale() == "log":
-            y_sel = np.maximum(y_sel, 1e-20)
-        return x_plot, y_sel
-
-    def refresh(_event=None):
-        key = _curve_key()
-        if key != cache["key"]:
-            cache["components"] = _compute_components()
-            cache["key"] = key
-
-        components = cache["components"] or (
-            (np.array([], dtype=float), np.array([], dtype=float)),
-            (np.array([], dtype=float), np.array([], dtype=float)),
-            (np.array([], dtype=float), np.array([], dtype=float)),
-        )
-        weights = _normalize_weights([state["w0"], state["w1"], state["w2"]])
-        total = _weighted_total(components, weights)
-
-        x_total, y_total = _line_data(*total)
-        line_total.set_data(x_total, y_total)
-
-        show_components = bool(state["show_components"])
-        for line, component, weight in (
-            (line_p0, components[0], weights[0]),
-            (line_p1, components[1], weights[1]),
-            (line_p2, components[2], weights[2]),
-        ):
-            visible = show_components and float(weight) > 0.0
-            line.set_visible(visible)
-            if visible:
-                xx, yy = _line_data(*component)
-                line.set_data(xx, yy)
-            else:
-                line.set_data([], [])
-
-        lo = float(min(state["L_lo"], state["L_hi"]))
-        hi = float(max(state["L_lo"], state["L_hi"]))
-        l_tick_start = int(np.ceil(lo))
-        l_tick_stop = int(np.floor(hi))
-        if l_tick_stop >= l_tick_start:
-            l_ticks = np.arange(l_tick_start, l_tick_stop + 1, dtype=float)
-        else:
-            l_ticks = np.array([], dtype=float)
-
-        if state["qz_axis"]:
-            ax.set_xlabel("qz (A^-1)")
-            ax.set_xlim(
-                (2.0 * np.pi / c_axis_for_recip) * lo,
-                (2.0 * np.pi / c_axis_for_recip) * hi,
-            )
-            if l_ticks.size:
-                ax.set_xticks((2.0 * np.pi / c_axis_for_recip) * l_ticks)
-            else:
-                ax.set_xticks([])
-        else:
-            ax.set_xlabel("l")
-            ax.set_xlim(lo, hi)
-            if l_ticks.size:
-                ax.set_xticks(l_ticks)
-            else:
-                ax.set_xticks([])
-
-        if state["mode"] == "m":
-            m_val = int(state["m"])
-            q_r = (
-                2.0 * np.pi / a_axis_for_recip * np.sqrt(4.0 * m_val / 3.0)
-                if m_val > 0
-                else 0.0
-            )
-            caption = f"m={m_val}, Qr={q_r:.3f} A^-1"
-        else:
-            h_val = int(state["h"])
-            k_val = int(state["k"])
-            m_val = h_val * h_val + h_val * k_val + k_val * k_val
-            q_r = 2.0 * np.pi / a_axis_for_recip * np.sqrt(4.0 * m_val / 3.0)
-            caption = f"(h,k)=({h_val},{k_val}), m={m_val}, Qr={q_r:.3f} A^-1"
-
-        title.set_text(
-            f"{Path(cif_path).name} | {caption} | dt_alg={cache['elapsed_ms']:.1f} ms"
-        )
-
-        handles = [line_total]
-        for line in (line_p0, line_p1, line_p2):
-            if line.get_visible():
-                handles.append(line)
-        ax.legend(handles, [h.get_label() for h in handles], loc="upper right")
-
-        ax.relim()
-        ax.autoscale_view(scaley=True)
-        fig.canvas.draw_idle()
-
-    sliders = []
-
-    def _make_slider(rect, label, vmin, vmax, valinit, valstep, on_change):
-        axis = plt.axes(rect)
-        slider = Slider(axis, "", vmin, vmax, valinit=valinit, valstep=valstep)
-        axis.text(0.5, 1.2, label, transform=axis.transAxes, ha="center")
-        slider.on_changed(on_change)
-        sliders.append(slider)
-        return slider
-
-    range_ax = plt.axes([0.25, 0.05, 0.65, 0.03])
-    l_range = RangeSlider(
-        range_ax,
-        "l range",
-        0.0,
-        float(L_max),
-        valinit=(state["L_lo"], state["L_hi"]),
-        valstep=0.01,
-    )
-    l_range.on_changed(lambda vals: (state.update(L_lo=float(vals[0]), L_hi=float(vals[1])), refresh()))
-    sliders.append(l_range)
-
-    rows = [0.34, 0.28, 0.22, 0.16]
-
-    m_slider = _make_slider(
-        [0.25, rows[0], 0.65, 0.03],
-        "m index",
-        int(min(allowed_m)),
-        int(max(allowed_m)),
-        int(state["m"]),
-        allowed_m,
-        lambda value: (state.update(m=int(round(value))), refresh()),
-    )
-
-    hk_sliders = []
-
-    hk_slider_limit = int(max(1, hk_limit - 1))
-
-    h_slider = _make_slider(
-        [0.25, rows[0], 0.30, 0.03],
-        "H",
-        -hk_slider_limit,
-        hk_slider_limit,
-        int(state["h"]),
-        1,
-        lambda value: (state.update(h=int(round(value))), refresh()),
-    )
-    k_slider = _make_slider(
-        [0.60, rows[0], 0.30, 0.03],
-        "K",
-        -hk_slider_limit,
-        hk_slider_limit,
-        int(state["k"]),
-        1,
-        lambda value: (state.update(k=int(round(value))), refresh()),
-    )
-    hk_sliders.extend([h_slider, k_slider])
-    for slider in hk_sliders:
-        slider.ax.set_visible(False)
-
-    _make_slider(
-        [0.25, rows[1], 0.45, 0.03],
-        "p~0",
-        0.0,
-        0.2,
-        state["p0"],
-        1e-3,
-        lambda value: (state.update(p0=float(value)), refresh()),
-    )
-    _make_slider(
-        [0.72, rows[1], 0.20, 0.03],
-        "w(p~0)%",
-        0.0,
-        100.0,
-        state["w0"],
-        0.1,
-        lambda value: (state.update(w0=float(value)), refresh()),
-    )
-    _make_slider(
-        [0.25, rows[2], 0.45, 0.03],
-        "p~1",
-        0.8,
-        1.0,
-        state["p1"],
-        1e-3,
-        lambda value: (state.update(p1=float(value)), refresh()),
-    )
-    _make_slider(
-        [0.72, rows[2], 0.20, 0.03],
-        "w(p~1)%",
-        0.0,
-        100.0,
-        state["w1"],
-        0.1,
-        lambda value: (state.update(w1=float(value)), refresh()),
-    )
-    _make_slider(
-        [0.25, rows[3], 0.45, 0.03],
-        "p",
-        0.0,
-        1.0,
-        state["p2"],
-        1e-3,
-        lambda value: (state.update(p2=float(value)), refresh()),
-    )
-    _make_slider(
-        [0.72, rows[3], 0.20, 0.03],
-        "w(p)%",
-        0.0,
-        100.0,
-        state["w2"],
-        0.1,
-        lambda value: (state.update(w2=float(value)), refresh()),
-    )
-
-    finite_axis = plt.axes([0.92, 0.10, 0.06, 0.03])
-    finite_slider = Slider(
-        finite_axis,
-        "N",
-        1,
-        1000,
-        valinit=int(state["N_layers"]),
-        valstep=1,
-    )
-    finite_axis.text(0.5, 1.2, "Layers", transform=finite_axis.transAxes, ha="center")
-    finite_slider.on_changed(lambda value: (state.update(N_layers=int(round(value))), refresh()))
-
-    def _sync_finite_visibility():
-        visible = bool(state["finite_N"])
-        finite_slider.ax.set_visible(visible)
-        finite_slider.label.set_visible(visible)
-        finite_slider.valtext.set_visible(visible)
-
-    _sync_finite_visibility()
-
-    scale_button = Button(plt.axes([0.25, 0.01, 0.16, 0.03]), "Toggle scale")
-    scale_button.on_clicked(
-        lambda _event: (
-            ax.set_yscale("linear" if ax.get_yscale() == "log" else "log"),
-            refresh(),
-        )
-    )
-
-    def _toggle_mode(_event):
-        state["mode"] = "hk" if state["mode"] == "m" else "m"
-        m_slider.ax.set_visible(state["mode"] == "m")
-        for slider in hk_sliders:
-            slider.ax.set_visible(state["mode"] == "hk")
-        refresh()
-
-    mode_button = Button(plt.axes([0.43, 0.01, 0.16, 0.03]), "H/K panel")
-    mode_button.on_clicked(_toggle_mode)
-
-    checks_axis = plt.axes([0.05, 0.01, 0.18, 0.18])
-    checks = CheckButtons(
-        checks_axis,
-        ["F^2 only", "qz axis", "Components", "Finite N"],
-        [
-            bool(state["f2_only"]),
-            bool(state["qz_axis"]),
-            bool(state["show_components"]),
-            bool(state["finite_N"]),
-        ],
-    )
-
-    def _on_check(label):
-        if label == "F^2 only":
-            state["f2_only"] = not state["f2_only"]
-        elif label == "qz axis":
-            state["qz_axis"] = not state["qz_axis"]
-        elif label == "Components":
-            state["show_components"] = not state["show_components"]
-        elif label == "Finite N":
-            state["finite_N"] = not state["finite_N"]
-            _sync_finite_visibility()
-        refresh()
-
-    checks.on_clicked(_on_check)
-
-    # Keep widget instances/callback closures alive for the life of the window.
-    fig._ra_sim_diffuse_ui = {  # type: ignore[attr-defined]
-        "state": state,
-        "refresh": refresh,
-        "sliders": sliders,
-        "range_slider": l_range,
-        "m_slider": m_slider,
-        "hk_sliders": hk_sliders,
-        "finite_slider": finite_slider,
-        "scale_button": scale_button,
-        "mode_button": mode_button,
-        "checks": checks,
-        "cache": cache,
-        "curve_store": curve_store,
-    }
-
-    refresh()
-    manager = getattr(fig.canvas, "manager", None)
-    if manager is not None:
+    def _safe_destroy(target) -> None:
+        if target is None:
+            return
         try:
-            manager.show()
+            target.destroy()
         except Exception:
             pass
-    fig.canvas.draw_idle()
-    return fig
+
+    window = None
+    canvas_widget = None
+    try:
+        window = tk_module.Toplevel(parent)
+        window.title(f"Diffuse HT (algebraic) - {Path(cif_path).name}")
+        try:
+            window.transient(parent)
+        except Exception:
+            pass
+        host_frame = ttk_module.Frame(window)
+        host_frame.pack(fill=tk_module.BOTH, expand=True)
+
+        fig = Figure(figsize=(8.2, 6.1))
+        ax = fig.add_subplot(111)
+        fig.subplots_adjust(left=0.25, bottom=0.42, top=0.88)
+        ax.set_xlabel("l")
+        ax.set_ylabel("I (a.u.)")
+        ax.set_yscale("log")
+        canvas = figure_canvas_cls(fig, master=host_frame)
+        canvas_widget = canvas.get_tk_widget()
+        try:
+            widget_manager = canvas_widget.winfo_manager()
+        except Exception:
+            widget_manager = ""
+        if not widget_manager:
+            canvas_widget.pack(fill=tk_module.BOTH, expand=True)
+
+        (line_total,) = ax.plot([], [], lw=2.2, label="Total (algebraic)")
+        (line_p0,) = ax.plot([], [], ls="--", label="I_alg(p~0)", visible=False)
+        (line_p1,) = ax.plot([], [], ls="--", label="I_alg(p~1)", visible=False)
+        (line_p2,) = ax.plot([], [], ls="--", label="I_alg(p)", visible=False)
+        title = ax.set_title("")
+
+        cache = {"key": None, "components": None, "elapsed_ms": 0.0}
+
+        def active_pairs():
+            pairs_by_m_current = curve_store["pairs_by_m"]
+            curve_map_current = curve_store["curve_map"]
+            if state["mode"] == "m":
+                return list(pairs_by_m_current.get(int(state["m"]), []))
+            pair = (int(state["h"]), int(state["k"]))
+            return [pair] if pair in curve_map_current else []
+
+        def _compute_components():
+            pairs = active_pairs()
+            curve_map_current = curve_store["curve_map"]
+            finite_layers = int(state["N_layers"]) if state["finite_N"] else None
+            start = perf_counter()
+
+            def _component_for_p(p_val):
+                x_acc = np.array([], dtype=float)
+                y_acc = np.array([], dtype=float)
+                for h, k in pairs:
+                    item = curve_map_current[(h, k)]
+                    L_vals = item["L"]
+                    F2_vals = item["F2"]
+                    I_vals = analytical_ht_intensity_for_pair(
+                        L_vals,
+                        F2_vals,
+                        h,
+                        k,
+                        p_val,
+                        phase_delta_expression=phase_expr,
+                        phi_l_divisor=phi_div,
+                        finite_layers=finite_layers,
+                        f2_only=bool(state["f2_only"]),
+                    )
+                    x_acc, y_acc = _merge_curves(x_acc, y_acc, L_vals, I_vals)
+                return x_acc, y_acc
+
+            comp0 = _component_for_p(state["p0"])
+            comp1 = _component_for_p(state["p1"])
+            comp2 = _component_for_p(state["p2"])
+            cache["elapsed_ms"] = (perf_counter() - start) * 1e3
+            return (comp0, comp1, comp2)
+
+        def _curve_key():
+            return (
+                state["mode"],
+                int(state["m"]),
+                int(state["h"]),
+                int(state["k"]),
+                round(float(state["p0"]), 6),
+                round(float(state["p1"]), 6),
+                round(float(state["p2"]), 6),
+                bool(state["f2_only"]),
+                bool(state["finite_N"]),
+                int(state["N_layers"]),
+            )
+
+        def _line_data(x_vals, y_vals):
+            if x_vals.size == 0 or y_vals.size == 0:
+                return np.array([], dtype=float), np.array([], dtype=float)
+
+            lo = float(min(state["L_lo"], state["L_hi"]))
+            hi = float(max(state["L_lo"], state["L_hi"]))
+            mask = (x_vals >= lo) & (x_vals <= hi)
+            if not np.any(mask):
+                return np.array([], dtype=float), np.array([], dtype=float)
+
+            x_sel = x_vals[mask]
+            y_sel = np.asarray(y_vals[mask], dtype=float)
+            if state["qz_axis"]:
+                x_plot = (2.0 * np.pi / c_axis_for_recip) * x_sel
+            else:
+                x_plot = x_sel
+
+            if ax.get_yscale() == "log":
+                y_sel = np.maximum(y_sel, 1e-20)
+            return x_plot, y_sel
+
+        def refresh(_event=None):
+            key = _curve_key()
+            if key != cache["key"]:
+                cache["components"] = _compute_components()
+                cache["key"] = key
+
+            components = cache["components"] or (
+                (np.array([], dtype=float), np.array([], dtype=float)),
+                (np.array([], dtype=float), np.array([], dtype=float)),
+                (np.array([], dtype=float), np.array([], dtype=float)),
+            )
+            weights = _normalize_weights([state["w0"], state["w1"], state["w2"]])
+            total = _weighted_total(components, weights)
+
+            x_total, y_total = _line_data(*total)
+            line_total.set_data(x_total, y_total)
+
+            show_components = bool(state["show_components"])
+            for line, component, weight in (
+                (line_p0, components[0], weights[0]),
+                (line_p1, components[1], weights[1]),
+                (line_p2, components[2], weights[2]),
+            ):
+                visible = show_components and float(weight) > 0.0
+                line.set_visible(visible)
+                if visible:
+                    xx, yy = _line_data(*component)
+                    line.set_data(xx, yy)
+                else:
+                    line.set_data([], [])
+
+            lo = float(min(state["L_lo"], state["L_hi"]))
+            hi = float(max(state["L_lo"], state["L_hi"]))
+            l_tick_start = int(np.ceil(lo))
+            l_tick_stop = int(np.floor(hi))
+            if l_tick_stop >= l_tick_start:
+                l_ticks = np.arange(l_tick_start, l_tick_stop + 1, dtype=float)
+            else:
+                l_ticks = np.array([], dtype=float)
+
+            if state["qz_axis"]:
+                ax.set_xlabel("qz (A^-1)")
+                ax.set_xlim(
+                    (2.0 * np.pi / c_axis_for_recip) * lo,
+                    (2.0 * np.pi / c_axis_for_recip) * hi,
+                )
+                if l_ticks.size:
+                    ax.set_xticks((2.0 * np.pi / c_axis_for_recip) * l_ticks)
+                else:
+                    ax.set_xticks([])
+            else:
+                ax.set_xlabel("l")
+                ax.set_xlim(lo, hi)
+                if l_ticks.size:
+                    ax.set_xticks(l_ticks)
+                else:
+                    ax.set_xticks([])
+
+            if state["mode"] == "m":
+                m_val = int(state["m"])
+                q_r = (
+                    2.0 * np.pi / a_axis_for_recip * np.sqrt(4.0 * m_val / 3.0)
+                    if m_val > 0
+                    else 0.0
+                )
+                caption = f"m={m_val}, Qr={q_r:.3f} A^-1"
+            else:
+                h_val = int(state["h"])
+                k_val = int(state["k"])
+                m_val = h_val * h_val + h_val * k_val + k_val * k_val
+                q_r = 2.0 * np.pi / a_axis_for_recip * np.sqrt(4.0 * m_val / 3.0)
+                caption = f"(h,k)=({h_val},{k_val}), m={m_val}, Qr={q_r:.3f} A^-1"
+
+            title.set_text(
+                f"{Path(cif_path).name} | {caption} | dt_alg={cache['elapsed_ms']:.1f} ms"
+            )
+
+            handles = [line_total]
+            for line in (line_p0, line_p1, line_p2):
+                if line.get_visible():
+                    handles.append(line)
+            ax.legend(handles, [h.get_label() for h in handles], loc="upper right")
+
+            ax.relim()
+            ax.autoscale_view(scaley=True)
+            fig.canvas.draw_idle()
+
+        sliders = []
+
+        def _make_slider(rect, label, vmin, vmax, valinit, valstep, on_change):
+            axis = fig.add_axes(rect)
+            slider = Slider(axis, "", vmin, vmax, valinit=valinit, valstep=valstep)
+            axis.text(0.5, 1.2, label, transform=axis.transAxes, ha="center")
+            slider.on_changed(on_change)
+            sliders.append(slider)
+            return slider
+
+        range_ax = fig.add_axes([0.25, 0.05, 0.65, 0.03])
+        l_range = RangeSlider(
+            range_ax,
+            "l range",
+            0.0,
+            float(L_max),
+            valinit=(state["L_lo"], state["L_hi"]),
+            valstep=0.01,
+        )
+        l_range.on_changed(
+            lambda vals: (
+                state.update(L_lo=float(vals[0]), L_hi=float(vals[1])),
+                refresh(),
+            )
+        )
+        sliders.append(l_range)
+
+        rows = [0.34, 0.28, 0.22, 0.16]
+
+        m_slider = _make_slider(
+            [0.25, rows[0], 0.65, 0.03],
+            "m index",
+            int(min(allowed_m)),
+            int(max(allowed_m)),
+            int(state["m"]),
+            allowed_m,
+            lambda value: (state.update(m=int(round(value))), refresh()),
+        )
+
+        hk_sliders = []
+
+        hk_slider_limit = int(max(1, hk_limit - 1))
+
+        h_slider = _make_slider(
+            [0.25, rows[0], 0.30, 0.03],
+            "H",
+            -hk_slider_limit,
+            hk_slider_limit,
+            int(state["h"]),
+            1,
+            lambda value: (state.update(h=int(round(value))), refresh()),
+        )
+        k_slider = _make_slider(
+            [0.60, rows[0], 0.30, 0.03],
+            "K",
+            -hk_slider_limit,
+            hk_slider_limit,
+            int(state["k"]),
+            1,
+            lambda value: (state.update(k=int(round(value))), refresh()),
+        )
+        hk_sliders.extend([h_slider, k_slider])
+        for slider in hk_sliders:
+            slider.ax.set_visible(False)
+
+        _make_slider(
+            [0.25, rows[1], 0.45, 0.03],
+            "p~0",
+            0.0,
+            0.2,
+            state["p0"],
+            1e-3,
+            lambda value: (state.update(p0=float(value)), refresh()),
+        )
+        _make_slider(
+            [0.72, rows[1], 0.20, 0.03],
+            "w(p~0)%",
+            0.0,
+            100.0,
+            state["w0"],
+            0.1,
+            lambda value: (state.update(w0=float(value)), refresh()),
+        )
+        _make_slider(
+            [0.25, rows[2], 0.45, 0.03],
+            "p~1",
+            0.8,
+            1.0,
+            state["p1"],
+            1e-3,
+            lambda value: (state.update(p1=float(value)), refresh()),
+        )
+        _make_slider(
+            [0.72, rows[2], 0.20, 0.03],
+            "w(p~1)%",
+            0.0,
+            100.0,
+            state["w1"],
+            0.1,
+            lambda value: (state.update(w1=float(value)), refresh()),
+        )
+        _make_slider(
+            [0.25, rows[3], 0.45, 0.03],
+            "p",
+            0.0,
+            1.0,
+            state["p2"],
+            1e-3,
+            lambda value: (state.update(p2=float(value)), refresh()),
+        )
+        _make_slider(
+            [0.72, rows[3], 0.20, 0.03],
+            "w(p)%",
+            0.0,
+            100.0,
+            state["w2"],
+            0.1,
+            lambda value: (state.update(w2=float(value)), refresh()),
+        )
+
+        finite_axis = fig.add_axes([0.92, 0.10, 0.06, 0.03])
+        finite_slider = Slider(
+            finite_axis,
+            "N",
+            1,
+            1000,
+            valinit=int(state["N_layers"]),
+            valstep=1,
+        )
+        finite_axis.text(
+            0.5,
+            1.2,
+            "Layers",
+            transform=finite_axis.transAxes,
+            ha="center",
+        )
+        finite_slider.on_changed(
+            lambda value: (state.update(N_layers=int(round(value))), refresh())
+        )
+
+        def _sync_finite_visibility():
+            visible = bool(state["finite_N"])
+            finite_slider.ax.set_visible(visible)
+            finite_slider.label.set_visible(visible)
+            finite_slider.valtext.set_visible(visible)
+
+        _sync_finite_visibility()
+
+        scale_button = Button(fig.add_axes([0.25, 0.01, 0.16, 0.03]), "Toggle scale")
+        scale_button.on_clicked(
+            lambda _event: (
+                ax.set_yscale("linear" if ax.get_yscale() == "log" else "log"),
+                refresh(),
+            )
+        )
+
+        def _toggle_mode(_event):
+            state["mode"] = "hk" if state["mode"] == "m" else "m"
+            m_slider.ax.set_visible(state["mode"] == "m")
+            for slider in hk_sliders:
+                slider.ax.set_visible(state["mode"] == "hk")
+            refresh()
+
+        mode_button = Button(fig.add_axes([0.43, 0.01, 0.16, 0.03]), "H/K panel")
+        mode_button.on_clicked(_toggle_mode)
+
+        checks_axis = fig.add_axes([0.05, 0.01, 0.18, 0.18])
+        checks = CheckButtons(
+            checks_axis,
+            ["F^2 only", "qz axis", "Components", "Finite N"],
+            [
+                bool(state["f2_only"]),
+                bool(state["qz_axis"]),
+                bool(state["show_components"]),
+                bool(state["finite_N"]),
+            ],
+        )
+
+        def _on_check(label):
+            if label == "F^2 only":
+                state["f2_only"] = not state["f2_only"]
+            elif label == "qz axis":
+                state["qz_axis"] = not state["qz_axis"]
+            elif label == "Components":
+                state["show_components"] = not state["show_components"]
+            elif label == "Finite N":
+                state["finite_N"] = not state["finite_N"]
+                _sync_finite_visibility()
+            refresh()
+
+        checks.on_clicked(_on_check)
+
+        closed = False
+
+        def _close_window() -> None:
+            nonlocal closed
+            if closed:
+                return
+            closed = True
+            _safe_destroy(canvas_widget)
+            _safe_destroy(window)
+
+        # Keep widget instances/callback closures alive for the life of the window.
+        fig._ra_sim_diffuse_ui = {  # type: ignore[attr-defined]
+            "state": state,
+            "refresh": refresh,
+            "sliders": sliders,
+            "range_slider": l_range,
+            "m_slider": m_slider,
+            "hk_sliders": hk_sliders,
+            "finite_slider": finite_slider,
+            "scale_button": scale_button,
+            "mode_button": mode_button,
+            "checks": checks,
+            "cache": cache,
+            "curve_store": curve_store,
+            "window": window,
+            "canvas": canvas,
+            "canvas_widget": canvas_widget,
+            "close": _close_window,
+        }
+
+        window.protocol("WM_DELETE_WINDOW", _close_window)
+        refresh()
+        fig.canvas.draw_idle()
+        return fig
+    except Exception:
+        _safe_destroy(canvas_widget)
+        _safe_destroy(window)
+        raise

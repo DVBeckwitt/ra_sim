@@ -57,9 +57,7 @@ _GEOMETRY_FIT_CONSTRAINTS_HELP_TEXT = (
     "Stay-close adds a soft pull back to the starting guess."
 )
 _BACKGROUND_THETA_HELP_TEXT = "Per-background theta_i values (deg, in load order)"
-_GEOMETRY_FIT_BACKGROUND_HELP_TEXT = (
-    "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
-)
+_GEOMETRY_FIT_BACKGROUND_HELP_TEXT = "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
 _PROJECT_GITHUB_URL = "https://github.com/DVBeckwitt/ra_sim"
 _WORKFLOW_CHECKLIST_ITEMS = (
     ("backgrounds", "Backgrounds"),
@@ -128,6 +126,8 @@ def _attach_tooltip(widget: object, text: str) -> None:
     bind("<Enter>", _show)
     bind("<Leave>", _hide)
     bind("<ButtonPress>", _hide)
+
+
 _FIT2D_THEME_PALETTE = {
     "root_bg": "#f5b500",
     "panel_bg": "#ffd11a",
@@ -1200,12 +1200,12 @@ def create_app_shell(
     refine_advanced_tab = ttk.Frame(parameter_notebook)
     parameter_notebook.add(refine_basic_tab, text="Setup")
     parameter_notebook.add(refine_advanced_tab, text="Sample Structure")
-    refine_basic_scroll, refine_basic_body, refine_basic_canvas = (
-        _create_scrolled_frame(refine_basic_tab)
+    refine_basic_scroll, refine_basic_body, refine_basic_canvas = _create_scrolled_frame(
+        refine_basic_tab
     )
     refine_basic_scroll.pack(fill=tk.BOTH, expand=True)
-    refine_advanced_scroll, refine_advanced_body, refine_advanced_canvas = (
-        _create_scrolled_frame(refine_advanced_tab)
+    refine_advanced_scroll, refine_advanced_body, refine_advanced_canvas = _create_scrolled_frame(
+        refine_advanced_tab
     )
     refine_advanced_scroll.pack(fill=tk.BOTH, expand=True)
 
@@ -1913,8 +1913,8 @@ def populate_app_shell_quick_controls(
             ttk.Label(row, text=label_text).pack(anchor=tk.W)
             menu_kwargs: dict[str, object] = {}
             if callable(control.get("command")):
-                menu_kwargs["command"] = (
-                    lambda _selection, callback=control.get("command"): callback()
+                menu_kwargs["command"] = lambda _selection, callback=control.get("command"): (
+                    callback()
                 )
             menu = ttk.OptionMenu(
                 row,
@@ -1939,11 +1939,7 @@ def populate_app_shell_quick_controls(
                 row,
                 text=label_text,
                 variable=variable,
-                command=(
-                    control.get("command")
-                    if callable(control.get("command"))
-                    else None
-                ),
+                command=(control.get("command") if callable(control.get("command")) else None),
             )
             checkbutton.pack(anchor=tk.W)
             view_state.quick_control_widgets[key] = {
@@ -1977,15 +1973,11 @@ def populate_app_shell_quick_controls(
             orient=tk.HORIZONTAL,
             variable=variable,
             command=(
-                (lambda _value, callback=on_change: callback())
-                if callable(on_change)
-                else None
+                (lambda _value, callback=on_change: callback()) if callable(on_change) else None
             ),
         )
         scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        entry_var = tk.StringVar(
-            value=_format_quick_control_value(current_value, step)
-        )
+        entry_var = tk.StringVar(value=_format_quick_control_value(current_value, step))
         entry = ttk.Entry(
             slider_row,
             textvariable=entry_var,
@@ -2826,7 +2818,16 @@ def create_beam_mosaic_parameter_sliders(
 ) -> None:
     """Create the main beam/geometry/mosaic parameter sliders."""
 
-    def _standard(attr_prefix: str, label: str, min_val: float, max_val: float, initial_val: float, step_size: float, parent: tk.Misc, **slider_kwargs) -> None:
+    def _standard(
+        attr_prefix: str,
+        label: str,
+        min_val: float,
+        max_val: float,
+        initial_val: float,
+        step_size: float,
+        parent: tk.Misc,
+        **slider_kwargs,
+    ) -> None:
         _create_stored_slider(
             view_state=view_state,
             attr_prefix=attr_prefix,
@@ -2840,7 +2841,16 @@ def create_beam_mosaic_parameter_sliders(
             **slider_kwargs,
         )
 
-    def _mosaic(attr_prefix: str, label: str, min_val: float, max_val: float, initial_val: float, step_size: float, parent: tk.Misc, **slider_kwargs) -> None:
+    def _mosaic(
+        attr_prefix: str,
+        label: str,
+        min_val: float,
+        max_val: float,
+        initial_val: float,
+        step_size: float,
+        parent: tk.Misc,
+        **slider_kwargs,
+    ) -> None:
         _create_stored_slider(
             view_state=view_state,
             attr_prefix=attr_prefix,
@@ -4031,9 +4041,7 @@ def create_geometry_tool_action_controls(
     view_state.geometry_manual_import_button = geometry_manual_import_button
     view_state.geometry_preview_exclude_button_var = geometry_preview_exclude_button_var
     view_state.geometry_preview_exclude_button = geometry_preview_exclude_button
-    view_state.clear_geometry_preview_exclusions_button = (
-        clear_geometry_preview_exclusions_button
-    )
+    view_state.clear_geometry_preview_exclusions_button = clear_geometry_preview_exclusions_button
 
 
 def create_geometry_fit_history_controls(
@@ -4295,9 +4303,7 @@ def create_geometry_overlay_action_controls(
         )
         show_geometry_overlays_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
         view_state.show_geometry_overlays_var = show_geometry_overlays_var
-        view_state.show_geometry_overlays_checkbutton = (
-            show_geometry_overlays_checkbutton
-        )
+        view_state.show_geometry_overlays_checkbutton = show_geometry_overlays_checkbutton
 
     if include_fit_button:
         toggle_defaults = dict(mosaic_fit_initial_values or {})
@@ -4353,9 +4359,7 @@ def create_geometry_overlay_action_controls(
                 setattr(view_state, var_attr, toggle_var)
                 setattr(view_state, checkbutton_attr, toggle_checkbutton)
                 view_state.mosaic_fit_toggle_vars[toggle_key] = toggle_var
-                view_state.mosaic_fit_toggle_checkbuttons[toggle_key] = (
-                    toggle_checkbutton
-                )
+                view_state.mosaic_fit_toggle_checkbuttons[toggle_key] = toggle_checkbutton
 
         fit_button_mosaic = ttk.Button(
             parent,
@@ -4397,20 +4401,14 @@ def create_analysis_view_controls(
             parent,
             text="Show Qz rods",
             variable=show_qz_rods_var,
-            command=(
-                on_toggle_show_qz_rods if callable(on_toggle_show_qz_rods) else None
-            ),
+            command=(on_toggle_show_qz_rods if callable(on_toggle_show_qz_rods) else None),
         )
         show_qz_rods_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
         check_beam_center_spot = ttk.Checkbutton(
             parent,
             text="Show beam center spot",
             variable=show_beam_center_spot_var,
-            command=(
-                on_toggle_beam_center_spot
-                if callable(on_toggle_beam_center_spot)
-                else None
-            ),
+            command=(on_toggle_beam_center_spot if callable(on_toggle_beam_center_spot) else None),
         )
         check_beam_center_spot.pack(side=tk.TOP, padx=5, pady=2)
         check_log_display = ttk.Checkbutton(
@@ -4462,11 +4460,7 @@ def create_integration_range_controls(
         range_frame,
         text="Integrate Qz rods",
         variable=integrate_qz_rods_var,
-        command=(
-            on_toggle_integrate_qz_rods
-            if callable(on_toggle_integrate_qz_rods)
-            else None
-        ),
+        command=(on_toggle_integrate_qz_rods if callable(on_toggle_integrate_qz_rods) else None),
     )
     integrate_qz_rods_checkbutton.pack(side=tk.TOP, anchor=tk.W, padx=5, pady=(0, 4))
 
@@ -4623,11 +4617,7 @@ def create_analysis_export_controls(
 
     save_1d_grid_button = ttk.Button(
         parent,
-        text=(
-            "Save 1D Grid"
-            if save_1d_grid_available
-            else "Save 1D Grid (Unavailable)"
-        ),
+        text=("Save 1D Grid" if save_1d_grid_available else "Save 1D Grid (Unavailable)"),
         command=on_save_1d_grid,
         state=(tk.NORMAL if save_1d_grid_available else tk.DISABLED),
     )
@@ -5633,8 +5623,7 @@ def refresh_geometry_q_group_window(
         make_bool_var = lambda included: tk.BooleanVar(value=included)
 
     excluded_keys = {
-        tuple(raw_key) if isinstance(raw_key, list) else raw_key
-        for raw_key in excluded_q_groups
+        tuple(raw_key) if isinstance(raw_key, list) else raw_key for raw_key in excluded_q_groups
     }
     for entry in entries:
         key = entry.get("key")

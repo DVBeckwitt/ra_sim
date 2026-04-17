@@ -91,7 +91,7 @@ def test_process_peaks_parallel_safe_reuses_source_template_cache(monkeypatch):
         phase_build_calls += 1
         return {"n_samp": 1}
 
-    def fake_build_source(_params, _phase_entry, H, K, L, forced_idx):
+    def fake_build_source(_params, _phase_entry, H, K, L):
         nonlocal source_build_calls
         source_build_calls += 1
         return {
@@ -100,7 +100,7 @@ def test_process_peaks_parallel_safe_reuses_source_template_cache(monkeypatch):
             "hit_template": np.array([[1.0, 5.0, 6.0, 0.2, H, K, L]], dtype=np.float64),
             "miss_template": np.empty((0, 3), dtype=np.float64),
             "status_template": np.zeros(1, dtype=np.int64),
-            "best_sample_idx": int(forced_idx),
+            "best_sample_idx": -1,
         }
 
     def fake_kernel(*_args, **_kwargs):
@@ -159,7 +159,7 @@ def test_process_peaks_parallel_safe_reports_reused_rays(monkeypatch):
     def fake_build_phase(_params):
         return {"n_samp": 3}
 
-    def fake_build_source(_params, _phase_entry, H, K, L, forced_idx):
+    def fake_build_source(_params, _phase_entry, H, K, L):
         nonlocal call_count
         call_count += 1
         q_hits = 0 if call_count == 1 else 3
@@ -169,7 +169,7 @@ def test_process_peaks_parallel_safe_reports_reused_rays(monkeypatch):
             "hit_template": np.array([[1.0, 5.0, 6.0, 0.2, H, K, L]], dtype=np.float64),
             "miss_template": np.empty((0, 3), dtype=np.float64),
             "status_template": np.zeros(3, dtype=np.int64),
-            "best_sample_idx": int(forced_idx),
+            "best_sample_idx": -1,
             "q_cache_hits": q_hits,
         }
 

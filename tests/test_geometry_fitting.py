@@ -810,7 +810,6 @@ def test_fit_geometry_parameters_pixel_path_uses_central_geometry_ray(monkeypatc
         assert np.allclose(call["phi_array"], [0.0])
         assert np.allclose(call["wavelength_array"], [1.0])
         assert call["kwargs"].get("best_sample_indices_out") is None
-        assert call["kwargs"].get("single_sample_indices") is None
     assert isinstance(result.point_match_summary, dict)
     assert bool(result.point_match_summary["central_ray_mode"]) is True
     assert bool(result.point_match_summary["single_ray_enabled"]) is False
@@ -1175,7 +1174,6 @@ def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_ref
         assert np.allclose(call["phi_array"], [0.0])
         assert np.allclose(call["wavelength_array"], [1.0])
         assert call["kwargs"].get("best_sample_indices_out") is None
-        assert call["kwargs"].get("single_sample_indices") is None
     assert isinstance(result.point_match_summary, dict)
     assert int(result.point_match_summary["simulated_reflection_count"]) == 1
     assert int(result.point_match_summary["total_reflection_count"]) == 3

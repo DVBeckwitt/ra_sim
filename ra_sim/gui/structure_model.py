@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import CifFile
-import Dans_Diffraction as dif
 import numpy as np
 
 from ra_sim.gui import controllers as gui_controllers
@@ -24,6 +22,53 @@ from ra_sim.utils.stacking_fault import (
     ht_dict_to_arrays,
     ht_dict_to_qr_dict,
 )
+
+_CIF_MODULE = None
+_DANS_DIFFRACTION_MODULE = None
+
+
+def _get_ciffile_module():
+    global _CIF_MODULE
+
+    if _CIF_MODULE is None:
+        import CifFile as ciffile_module
+
+        _CIF_MODULE = ciffile_module
+    return _CIF_MODULE
+
+
+def _get_dans_diffraction_module():
+    global _DANS_DIFFRACTION_MODULE
+
+    if _DANS_DIFFRACTION_MODULE is None:
+        import Dans_Diffraction as dans_diffraction_module
+
+        _DANS_DIFFRACTION_MODULE = dans_diffraction_module
+    return _DANS_DIFFRACTION_MODULE
+
+
+def _read_cif_block(cif_path, *, suppress_stdout=False):
+    ciffile_module = _get_ciffile_module()
+    if suppress_stdout:
+        with redirect_stdout(io.StringIO()):
+            cf = ciffile_module.ReadCif(str(cif_path))
+    else:
+        cf = ciffile_module.ReadCif(str(cif_path))
+
+    keys = list(cf.keys())
+    blk = None if not keys else cf[keys[0]]
+    return cf, blk
+
+
+def _write_cif_file(cf, output_path):
+    ciffile_module = _get_ciffile_module()
+    try:
+        with redirect_stdout(io.StringIO()):
+            ciffile_module.WriteCif(cf, output_path)
+    except AttributeError:
+        with open(output_path, "w", encoding="utf-8") as fh:
+            with redirect_stdout(io.StringIO()):
+                fh.write(cf.WriteOut())
 
 
 def _ensure_numeric_vector(values, fallback, length):
@@ -95,6 +140,7 @@ def extract_occupancy_site_metadata(cif_block, cif_path, *, expand_structure=Fal
     if not bool(expand_structure):
         return raw_unique_labels, []
 
+    dif = _get_dans_diffraction_module()
     try:
         xtl = dif.Crystal(str(cif_path))
         xtl.Symmetry.generate_matrices()
@@ -605,11 +651,9 @@ def prepare_primary_cif_reload_plan(
     if not candidate.is_file():
         raise FileNotFoundError(f"CIF file not found: {candidate}")
 
-    new_cf = CifFile.ReadCif(str(candidate))
-    keys = list(new_cf.keys())
-    if not keys:
+    new_cf, new_blk = _read_cif_block(str(candidate))
+    if new_blk is None:
         raise ValueError("No CIF data blocks found.")
-    new_blk = new_cf[keys[0]]
 
     new_a_text = new_blk.get("_cell_length_a")
     new_c_text = new_blk.get("_cell_length_c")
@@ -777,12 +821,9 @@ def active_primary_cif_path(
     ):
         return atom_site_override_state.temp_path
 
-    with redirect_stdout(io.StringIO()):
-        cf_local = CifFile.ReadCif(abs_source)
-    keys = list(cf_local.keys())
-    if not keys:
+    cf_local, block = _read_cif_block(abs_source, suppress_stdout=True)
+    if block is None:
         return source_path
-    block = cf_local[keys[0]]
 
     x_vals = as_cif_list(block.get("_atom_site_fract_x"))
     y_vals = as_cif_list(block.get("_atom_site_fract_y"))
@@ -821,13 +862,7 @@ def active_primary_cif_path(
         tmp.close()
         atom_site_override_state.temp_path = tmp.name
 
-    try:
-        with redirect_stdout(io.StringIO()):
-            CifFile.WriteCif(cf_local, atom_site_override_state.temp_path)
-    except AttributeError:
-        with open(atom_site_override_state.temp_path, "w", encoding="utf-8") as fh:
-            with redirect_stdout(io.StringIO()):
-                fh.write(cf_local.WriteOut())
+    _write_cif_file(cf_local, atom_site_override_state.temp_path)
 
     atom_site_override_state.source_path = abs_source
     atom_site_override_state.signature = signature
@@ -1293,8 +1328,9 @@ def build_initial_structure_model_state(
     )
 
     if state.has_second_cif:
-        state.cf2 = CifFile.ReadCif(state.cif_file2)
-        state.blk2 = state.cf2[list(state.cf2.keys())[0]]
+        state.cf2, state.blk2 = _read_cif_block(state.cif_file2)
+        if state.blk2 is None:
+            raise ValueError("No CIF data blocks found.")
 
     default_a_axis = float(state.defaults["a"])
     default_c_axis = float(state.defaults["c"])

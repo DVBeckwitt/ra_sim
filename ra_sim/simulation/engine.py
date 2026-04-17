@@ -13,6 +13,7 @@ from ra_sim.utils.parallel import (
 )
 
 from .diffraction import (
+    get_process_peaks_runtime_kwargs,
     build_intersection_cache,
     process_peaks_parallel_safe,
     process_qr_rods_parallel_safe,
@@ -61,6 +62,31 @@ def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
         return request.image_buffer
     size = int(request.geometry.image_size)
     return np.zeros((size, size), dtype=np.float64)
+
+
+def _ensure_best_sample_buffer(
+    request: SimulationRequest,
+    *,
+    peak_count: int,
+    auto_allocate: bool,
+) -> np.ndarray | None:
+    if request.best_sample_indices_out is not None:
+        normalized = np.asarray(
+            request.best_sample_indices_out,
+            dtype=np.int64,
+        ).reshape(-1)
+        if normalized.shape[0] != int(peak_count):
+            raise ValueError(
+                "best_sample_indices_out length "
+                f"{normalized.shape[0]} does not match peak_count {int(peak_count)}"
+            )
+        if request.best_sample_indices_out is not normalized:
+            request.best_sample_indices_out = normalized
+        return normalized
+    if not auto_allocate:
+        return None
+    request.best_sample_indices_out = np.full(int(peak_count), -1, dtype=np.int64)
+    return request.best_sample_indices_out
 
 
 def _capture_hit_tables_for_intersection_cache(
@@ -204,6 +230,11 @@ def _run_simulation_request(
         if projection_debug_active
         else None
     )
+    best_sample_indices_out = _ensure_best_sample_buffer(
+        request,
+        peak_count=int(np.asarray(request.miller, dtype=np.float64).shape[0]),
+        auto_allocate=True,
+    )
 
     peak_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -227,15 +258,18 @@ def _run_simulation_request(
         peak_kwargs["sample_weights"] = request.beam.sample_weights
     if request.beam.n2_sample_array is not None:
         peak_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
-    if request.single_sample_indices is not None:
-        peak_kwargs["single_sample_indices"] = request.single_sample_indices
-    if request.best_sample_indices_out is not None:
-        peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
+    if best_sample_indices_out is not None:
+        peak_kwargs["best_sample_indices_out"] = best_sample_indices_out
     if peak_runner is process_peaks_parallel_safe and projection_debug_active:
         peak_kwargs["enable_safe_cache"] = False
     if peak_runner is process_peaks_parallel_safe and _FORWARD_SIMULATION_NUMBA_DISABLED:
         peak_kwargs["prefer_python_runner"] = True
+    if peak_runner is process_peaks_parallel_safe:
+        peak_kwargs.update(
+            get_process_peaks_runtime_kwargs(numba_thread_count=worker_count)
+        )
     safe_run_stats_out: dict[str, Any] | None = None
+    used_python_runner: bool | None = None
     if peak_runner is process_peaks_parallel_safe:
         safe_run_stats_out = {}
         peak_kwargs["_safe_stats_out"] = safe_run_stats_out
@@ -283,6 +317,8 @@ def _run_simulation_request(
             _set_last_forward_simulation_safe_run_used_python_runner(
                 safe_run_stats_out.get("used_python_runner")
             )
+            if "used_python_runner" in safe_run_stats_out:
+                used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
             peak_kwargs.pop("_safe_stats_out", None)
         cache_hit_tables = _capture_hit_tables_for_intersection_cache(
             hit_tables=hit_tables,
@@ -328,8 +364,7 @@ def _run_simulation_request(
         theta_array=request.beam.theta_array,
         phi_array=request.beam.phi_array,
         wavelength_array=request.beam.wavelength_array,
-        best_sample_indices_out=request.best_sample_indices_out,
-        single_sample_indices=request.single_sample_indices,
+        best_sample_indices_out=best_sample_indices_out,
     )
 
     return SimulationResult(
@@ -345,6 +380,7 @@ def _run_simulation_request(
             "log_path": projection_debug_log_path,
             "background": projection_debug_background,
         },
+        used_python_runner=used_python_runner,
     )
 
 
@@ -655,6 +691,11 @@ def simulate_qr_rods(
         if projection_debug_active
         else None
     )
+    best_sample_indices_out = _ensure_best_sample_buffer(
+        request,
+        peak_count=int(np.asarray(debug_miller, dtype=np.float64).shape[0]),
+        auto_allocate=True,
+    )
 
     rod_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -678,9 +719,12 @@ def simulate_qr_rods(
         rod_kwargs["sample_weights"] = request.beam.sample_weights
     if request.beam.n2_sample_array is not None:
         rod_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
+    if best_sample_indices_out is not None:
+        rod_kwargs["best_sample_indices_out"] = best_sample_indices_out
     if peak_runner is process_qr_rods_parallel_safe and projection_debug_active:
         rod_kwargs["enable_safe_cache"] = False
     safe_run_stats_out: dict[str, Any] | None = None
+    used_python_runner: bool | None = None
     if peak_runner is process_qr_rods_parallel_safe:
         safe_run_stats_out = {}
         rod_kwargs["_safe_stats_out"] = safe_run_stats_out
@@ -727,6 +771,8 @@ def simulate_qr_rods(
             _set_last_qr_rod_simulation_safe_run_used_python_runner(
                 safe_run_stats_out.get("used_python_runner")
             )
+            if "used_python_runner" in safe_run_stats_out:
+                used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
             rod_kwargs.pop("_safe_stats_out", None)
         cache_hit_tables = _capture_hit_tables_for_intersection_cache(
             hit_tables=hit_tables,
@@ -772,8 +818,7 @@ def simulate_qr_rods(
         theta_array=request.beam.theta_array,
         phi_array=request.beam.phi_array,
         wavelength_array=request.beam.wavelength_array,
-        best_sample_indices_out=request.best_sample_indices_out,
-        single_sample_indices=request.single_sample_indices,
+        best_sample_indices_out=best_sample_indices_out,
     )
 
     return SimulationResult(
@@ -789,4 +834,5 @@ def simulate_qr_rods(
             "log_path": projection_debug_log_path,
             "background": projection_debug_background,
         },
+        used_python_runner=used_python_runner,
     )

@@ -150,6 +150,9 @@ def test_nominal_reflection_visible_culls_far_off_projection() -> None:
     sample_terms[0, diffraction._SAMPLE_COL_N2_REAL] = 1.0
 
     visible, nominal_idx, no_valid = diffraction._nominal_reflection_visible.py_func(
+        0.0,
+        1.0,
+        0.0,
         np.array([0.0, 1.0, 0.0], dtype=np.float64),
         64,
         np.array([32.0, 32.0], dtype=np.float64),
@@ -163,7 +166,11 @@ def test_nominal_reflection_visible_culls_far_off_projection() -> None:
         0.002,
         0.001,
         diffraction.OPTICS_MODE_FAST,
-        -1,
+        diffraction.EXIT_PROJECTION_INTERNAL,
+        False,
+        None,
+        None,
+        None,
     )
 
     assert not visible
@@ -185,6 +192,9 @@ def test_nominal_reflection_visible_keeps_central_projection() -> None:
     sample_terms[0, diffraction._SAMPLE_COL_N2_REAL] = 1.0
 
     visible, nominal_idx, no_valid = diffraction._nominal_reflection_visible.py_func(
+        0.0,
+        0.0,
+        0.0,
         np.array([0.0, 0.0, 0.0], dtype=np.float64),
         64,
         np.array([32.0, 32.0], dtype=np.float64),
@@ -198,7 +208,11 @@ def test_nominal_reflection_visible_keeps_central_projection() -> None:
         0.002,
         0.001,
         diffraction.OPTICS_MODE_FAST,
-        -1,
+        diffraction.EXIT_PROJECTION_INTERNAL,
+        False,
+        None,
+        None,
+        None,
     )
 
     assert visible

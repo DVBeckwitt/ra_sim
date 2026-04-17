@@ -1739,6 +1739,11 @@ def make_runtime_geometry_q_group_value_callbacks(
         [float, float], tuple[float, float] | None
     ]
     | None = None,
+    project_peaks_to_current_view: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
 ) -> GeometryQGroupRuntimeValueCallbacks:
     """Return live Qr/Qz selector value callbacks from runtime sources."""
 
@@ -1972,6 +1977,17 @@ def make_runtime_geometry_q_group_value_callbacks(
         normalized_candidates = _normalize_detector_peak_record_fallback_rows(
             normalized_candidates
         )
+        if callable(project_peaks_to_current_view) and normalized_candidates:
+            try:
+                normalized_candidates = [
+                    dict(entry)
+                    for entry in (
+                        project_peaks_to_current_view(normalized_candidates) or ()
+                    )
+                    if isinstance(entry, Mapping)
+                ]
+            except Exception:
+                normalized_candidates = []
         if _caked_view_enabled():
             normalized_candidates = [
                 entry

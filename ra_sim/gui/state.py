@@ -604,9 +604,7 @@ class GeometryPreviewState:
     excluded_keys: set[tuple[object, ...]] = field(default_factory=set)
     excluded_q_groups: set[tuple[object, ...]] = field(default_factory=set)
     exclude_armed: bool = False
-    overlay: GeometryPreviewOverlayState = field(
-        default_factory=GeometryPreviewOverlayState
-    )
+    overlay: GeometryPreviewOverlayState = field(default_factory=GeometryPreviewOverlayState)
     skip_once: bool = False
     auto_match_background_cache_key: object = None
     auto_match_background_cache_data: dict[str, object] | None = None
@@ -907,8 +905,12 @@ class SimulationRuntimeState:
     main_matplotlib_last_draw_ts: float | None = None
     main_matplotlib_overlays_suspended: bool = False
     main_matplotlib_preview_active: bool = False
-    main_matplotlib_preview_base_limits: tuple[tuple[float, float], tuple[float, float]] | None = None
-    main_matplotlib_preview_target_limits: tuple[tuple[float, float], tuple[float, float]] | None = None
+    main_matplotlib_preview_base_limits: tuple[tuple[float, float], tuple[float, float]] | None = (
+        None
+    )
+    main_matplotlib_preview_target_limits: (
+        tuple[tuple[float, float], tuple[float, float]] | None
+    ) = None
     main_matplotlib_preview_background_valid: bool = False
     main_display_raster_limit: int | None = None
     unscaled_image: np.ndarray | None = None
@@ -966,6 +968,7 @@ class SimulationRuntimeState:
     primary_contribution_cache_signature: object = None
     primary_active_contribution_keys: list[object] = field(default_factory=list)
     primary_hit_table_cache: dict[object, np.ndarray] = field(default_factory=dict)
+    primary_best_sample_index_cache: dict[object, int] = field(default_factory=dict)
     primary_source_mode: str = "miller"
     primary_filter_signature: object = None
     primary_requested_contribution_keys: list[object] = field(default_factory=list)
@@ -1006,31 +1009,15 @@ class SimulationRuntimeState:
             "last_text": "Chi-Squared: N/A",
         }
     )
-    sim_miller1_all: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
-    )
-    sim_intens1_all: np.ndarray = field(
-        default_factory=lambda: np.empty((0,), dtype=np.float64)
-    )
-    sim_miller2_all: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
-    )
-    sim_intens2_all: np.ndarray = field(
-        default_factory=lambda: np.empty((0,), dtype=np.float64)
-    )
+    sim_miller1_all: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float64))
+    sim_intens1_all: np.ndarray = field(default_factory=lambda: np.empty((0,), dtype=np.float64))
+    sim_miller2_all: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float64))
+    sim_intens2_all: np.ndarray = field(default_factory=lambda: np.empty((0,), dtype=np.float64))
     sim_primary_qr_all: dict[object, object] = field(default_factory=dict)
-    sim_miller1: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
-    )
-    sim_intens1: np.ndarray = field(
-        default_factory=lambda: np.empty((0,), dtype=np.float64)
-    )
-    sim_miller2: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
-    )
-    sim_intens2: np.ndarray = field(
-        default_factory=lambda: np.empty((0,), dtype=np.float64)
-    )
+    sim_miller1: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float64))
+    sim_intens1: np.ndarray = field(default_factory=lambda: np.empty((0,), dtype=np.float64))
+    sim_miller2: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float64))
+    sim_intens2: np.ndarray = field(default_factory=lambda: np.empty((0,), dtype=np.float64))
     sim_primary_qr: dict[object, object] = field(default_factory=dict)
     sf_prune_stats: dict[str, int] = field(
         default_factory=lambda: {
@@ -1051,24 +1038,16 @@ class AppState:
     instrument_config: dict[str, Any] = field(default_factory=dict)
     file_paths: dict[str, Any] = field(default_factory=dict)
     image_size: int = 3000
-    background_runtime: BackgroundRuntimeState = field(
-        default_factory=BackgroundRuntimeState
-    )
+    background_runtime: BackgroundRuntimeState = field(default_factory=BackgroundRuntimeState)
     peak_selection: PeakSelectionState = field(default_factory=PeakSelectionState)
     integration_range_drag: IntegrationRangeDragState = field(
         default_factory=IntegrationRangeDragState
     )
-    atom_site_override: AtomSiteOverrideState = field(
-        default_factory=AtomSiteOverrideState
-    )
+    atom_site_override: AtomSiteOverrideState = field(default_factory=AtomSiteOverrideState)
     geometry_runtime: GeometryRuntimeState = field(default_factory=GeometryRuntimeState)
-    simulation_runtime: SimulationRuntimeState = field(
-        default_factory=SimulationRuntimeState
-    )
+    simulation_runtime: SimulationRuntimeState = field(default_factory=SimulationRuntimeState)
     manual_geometry: ManualGeometryState = field(default_factory=ManualGeometryState)
-    geometry_fit_history: GeometryFitHistoryState = field(
-        default_factory=GeometryFitHistoryState
-    )
+    geometry_fit_history: GeometryFitHistoryState = field(default_factory=GeometryFitHistoryState)
     geometry_fit_dataset_cache: GeometryFitDatasetCacheState = field(
         default_factory=GeometryFitDatasetCacheState
     )
@@ -1093,9 +1072,7 @@ class AppState:
     cif_weight_controls_view: CifWeightControlsViewState = field(
         default_factory=CifWeightControlsViewState
     )
-    display_controls_state: DisplayControlsState = field(
-        default_factory=DisplayControlsState
-    )
+    display_controls_state: DisplayControlsState = field(default_factory=DisplayControlsState)
     display_controls_view: DisplayControlsViewState = field(
         default_factory=DisplayControlsViewState
     )
@@ -1121,9 +1098,7 @@ class AppState:
     geometry_tool_actions_view: GeometryToolActionsViewState = field(
         default_factory=GeometryToolActionsViewState
     )
-    hkl_lookup_view: HklLookupViewState = field(
-        default_factory=HklLookupViewState
-    )
+    hkl_lookup_view: HklLookupViewState = field(default_factory=HklLookupViewState)
     geometry_overlay_actions_view: GeometryOverlayActionsViewState = field(
         default_factory=GeometryOverlayActionsViewState
     )
@@ -1136,9 +1111,7 @@ class AppState:
     analysis_peak_tools_view: AnalysisPeakToolsViewState = field(
         default_factory=AnalysisPeakToolsViewState
     )
-    analysis_popout_view: AnalysisPopoutViewState = field(
-        default_factory=AnalysisPopoutViewState
-    )
+    analysis_popout_view: AnalysisPopoutViewState = field(default_factory=AnalysisPopoutViewState)
     integration_range_controls_view: IntegrationRangeControlsViewState = field(
         default_factory=IntegrationRangeControlsViewState
     )
@@ -1147,17 +1120,11 @@ class AppState:
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)
-    geometry_q_group_view: GeometryQGroupViewState = field(
-        default_factory=GeometryQGroupViewState
-    )
+    geometry_q_group_view: GeometryQGroupViewState = field(default_factory=GeometryQGroupViewState)
     bragg_qr_manager: BraggQrManagerState = field(default_factory=BraggQrManagerState)
-    bragg_qr_manager_view: BraggQrManagerViewState = field(
-        default_factory=BraggQrManagerViewState
-    )
+    bragg_qr_manager_view: BraggQrManagerViewState = field(default_factory=BraggQrManagerViewState)
     hbn_geometry_debug_view: HbnGeometryDebugViewState = field(
         default_factory=HbnGeometryDebugViewState
     )
     app_shell_view: AppShellViewState = field(default_factory=AppShellViewState)
-    status_panel_view: StatusPanelViewState = field(
-        default_factory=StatusPanelViewState
-    )
+    status_panel_view: StatusPanelViewState = field(default_factory=StatusPanelViewState)

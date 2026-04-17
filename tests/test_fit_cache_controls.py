@@ -5,16 +5,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from scipy.optimize import OptimizeResult
 
 from ra_sim.config import loader
+from ra_sim.fitting import optimization
 from ra_sim.fitting.optimization import SimulationCache
-
-OPTIMIZATION_SOURCE_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "ra_sim"
-    / "fitting"
-    / "optimization.py"
-)
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -84,11 +79,182 @@ def test_simulation_cache_discards_entries_when_disabled(
     assert cache.images == {}
     assert cache.max_positions == {}
 
+def test_retain_fit_simulation_cache_shim_delegates_to_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
 
-def test_optimization_source_gates_fit_image_cache_with_retention_policy() -> None:
-    source = OPTIMIZATION_SOURCE_PATH.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        optimization._runtime,
+        "retain_fit_simulation_cache",
+        lambda: calls.append("called") or False,
+    )
 
-    assert "from ra_sim.debug_controls import retain_optional_cache" in source
-    assert "def _retain_fit_simulation_cache() -> bool:" in source
-    assert "retain_image_cache = _retain_fit_simulation_cache()" in source
-    assert "if not retain_image_cache:" in source
+    assert optimization._retain_fit_simulation_cache() is False
+    assert calls == ["called"]
+
+
+def _make_profile_roi(
+    *,
+    reflection_index: int,
+    hkl: tuple[int, int, int],
+    family: str,
+    axis_name: str,
+    measured_profile: np.ndarray,
+) -> optimization.MosaicProfileROI:
+    profile = np.asarray(measured_profile, dtype=np.float64)
+    measured_area = float(np.sum(profile))
+    return optimization.MosaicProfileROI(
+        dataset_index=0,
+        dataset_label="bg0",
+        reflection_index=int(reflection_index),
+        hkl=tuple(int(v) for v in hkl),
+        family=str(family),
+        axis_name=str(axis_name),
+        center_row=0.5,
+        center_col=0.5,
+        row_bounds=(0, 2),
+        col_bounds=(0, 2),
+        flat_indices=np.array([0, 1], dtype=np.int64),
+        axis_bin_indices=np.array([0, 1], dtype=np.int64),
+        signal_mask=np.array([True, True], dtype=bool),
+        side_mask=np.array([False, False], dtype=bool),
+        signal_counts=np.array([1.0, 1.0], dtype=np.float64),
+        side_counts=np.array([0.0, 0.0], dtype=np.float64),
+        axis_bin_centers=np.array([-0.1, 0.1], dtype=np.float64),
+        axis_half_span_deg=0.1,
+        orthogonal_half_window_deg=0.1,
+        measured_two_theta_deg=0.1,
+        measured_phi_deg=0.1,
+        measured_profile=profile,
+        measured_area=measured_area,
+        measured_shape_profile=profile / measured_area,
+    )
+
+
+def _make_prepared_mosaic_profile_dataset() -> optimization.MosaicProfileDatasetContext:
+    in_plane_roi = _make_profile_roi(
+        reflection_index=0,
+        hkl=(1, 1, 0),
+        family="in_plane",
+        axis_name="phi",
+        measured_profile=np.array([1.0, 3.0], dtype=np.float64),
+    )
+    specular_roi = _make_profile_roi(
+        reflection_index=1,
+        hkl=(0, 0, 1),
+        family="specular",
+        axis_name="two_theta",
+        measured_profile=np.array([2.0, 4.0], dtype=np.float64),
+    )
+    return optimization.MosaicProfileDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        experimental_image=np.ones((2, 2), dtype=np.float64),
+        miller=np.array([[1.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64),
+        intensities=np.array([1.0, 1.0], dtype=np.float64),
+        rois=[in_plane_roi, specular_roi],
+        measured_peak_count=2,
+        in_plane_roi_count=1,
+        specular_roi_count=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("retain_cache", "expected_process_calls"),
+    [
+        (True, 1),
+        (False, 4),
+    ],
+)
+def test_optimization_mosaic_image_cache_respects_retention_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    retain_cache: bool,
+    expected_process_calls: int,
+) -> None:
+    prepared_dataset = _make_prepared_mosaic_profile_dataset()
+    process_calls: list[int] = []
+
+    monkeypatch.setattr(
+        optimization,
+        "_build_mosaic_profile_dataset_contexts",
+        lambda *args, **kwargs: ([prepared_dataset], []),
+    )
+    monkeypatch.setattr(
+        optimization,
+        "_retain_fit_simulation_cache",
+        lambda: bool(retain_cache),
+    )
+    monkeypatch.setattr(
+        optimization,
+        "_extract_profile_from_flat_image",
+        lambda flat_image, roi: np.asarray(
+            [float(flat_image[0]), float(flat_image[1])],
+            dtype=np.float64,
+        ),
+    )
+
+    def fake_process_peaks_parallel_safe(*args, **kwargs):
+        process_calls.append(len(process_calls) + 1)
+        return (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64),)
+
+    monkeypatch.setattr(
+        optimization,
+        "_process_peaks_parallel_safe",
+        fake_process_peaks_parallel_safe,
+    )
+
+    def fake_least_squares(fun, x0, **kwargs):
+        x = np.asarray(x0, dtype=np.float64)
+        fun(x)
+        return OptimizeResult(
+            x=x,
+            fun=fun(x),
+            success=True,
+            message="stub-cache-gate",
+            nfev=2,
+        )
+
+    monkeypatch.setattr(optimization, "least_squares", fake_least_squares)
+
+    result = optimization._fit_mosaic_shape_parameters_profiles(
+        miller=np.array([[1.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64),
+        intensities=np.array([1.0, 1.0], dtype=np.float64),
+        image_size=2,
+        params={
+            "a": 1.0,
+            "c": 1.0,
+            "lambda": 1.0,
+            "corto_detector": 1.0,
+            "gamma": 0.0,
+            "Gamma": 0.0,
+            "chi": 0.0,
+            "zs": 0.0,
+            "zb": 0.0,
+            "n2": 1.0,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+            "center": [0.0, 0.0],
+            "pixel_size_m": 1.0e-4,
+            "mosaic_params": {
+                "beam_x_array": np.array([0.0], dtype=np.float64),
+                "beam_y_array": np.array([0.0], dtype=np.float64),
+                "theta_array": np.array([0.0], dtype=np.float64),
+                "phi_array": np.array([0.0], dtype=np.float64),
+                "wavelength_array": np.array([1.0], dtype=np.float64),
+                "sigma_mosaic_deg": 0.4,
+                "gamma_mosaic_deg": 0.3,
+                "eta": 0.2,
+            },
+        },
+        dataset_specs=[{"dataset_index": 0, "label": "bg0", "theta_initial": 0.0}],
+        roi_half_width=1,
+        min_total_rois=2,
+        min_per_dataset_rois=2,
+        fit_theta_i=False,
+        max_restarts=0,
+    )
+
+    assert result.success is True
+    assert len(process_calls) == expected_process_calls

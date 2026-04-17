@@ -1024,7 +1024,6 @@ def simulate_ideal_hkl_native_center(
         wavelength_arr: np.ndarray,
         *,
         sample_weights_arr: np.ndarray | None = None,
-        forced_sample_indices: np.ndarray | None = None,
     ) -> tuple[float, float] | None:
         image_buf = np.zeros(
             (int(config.image_size), int(config.image_size)),
@@ -1075,7 +1074,6 @@ def simulate_ideal_hkl_native_center(
                 solve_q_rel_tol=float(config.solve_q_rel_tol),
                 solve_q_mode=int(config.solve_q_mode),
                 sample_weights=sample_weights_arr,
-                single_sample_indices=forced_sample_indices,
                 **get_process_peaks_runtime_kwargs(),
             )
         except Exception:
@@ -1131,13 +1129,6 @@ def simulate_ideal_hkl_native_center(
     if sample_weights_arr is not None and sample_weights_arr.size != n_samp:
         sample_weights_arr = None
 
-    metric = theta_arr * theta_arr + phi_arr * phi_arr
-    valid_metric = np.where(np.isfinite(metric), metric, np.inf)
-    best_idx = int(np.argmin(valid_metric))
-    if not np.isfinite(valid_metric[best_idx]):
-        return None
-
-    forced = np.array([best_idx], dtype=np.int64)
     return _run_single(
         beam_x,
         beam_y,
@@ -1145,7 +1136,6 @@ def simulate_ideal_hkl_native_center(
         phi_arr,
         wavelength_arr,
         sample_weights_arr=sample_weights_arr,
-        forced_sample_indices=forced,
     )
 
 
@@ -1468,107 +1458,6 @@ def _peak_overlay_intersection_entries(
     return entries
 
 
-def _peak_overlay_hit_row_lookup(
-    hit_tables: object,
-    peak_table_lattice_local: Sequence[object] | None,
-) -> dict[tuple[str, tuple[int, int, int]], list[tuple[int, int, float, float]]]:
-    """Index valid hit-table rows by source label and rounded HKL."""
-
-    lookup: dict[tuple[str, tuple[int, int, int]], list[tuple[int, int, float, float]]] = {}
-    if not isinstance(hit_tables, (list, tuple)):
-        return lookup
-
-    for table_idx, table in enumerate(hit_tables):
-        try:
-            table_arr = np.asarray(table, dtype=float)
-        except Exception:
-            continue
-        if table_arr.ndim != 2 or table_arr.shape[0] <= 0 or table_arr.shape[1] < 7:
-            continue
-
-        source_label = "primary"
-        if peak_table_lattice_local is not None and table_idx < len(peak_table_lattice_local):
-            lattice_entry = peak_table_lattice_local[table_idx]
-            if isinstance(lattice_entry, (list, tuple)) and len(lattice_entry) >= 3:
-                source_label = _peak_overlay_source_label(
-                    lattice_entry[2],
-                    default=source_label,
-                )
-
-        for row_idx, row in enumerate(table_arr):
-            try:
-                col_val = float(row[1])
-                row_val = float(row[2])
-                hkl_key = (
-                    int(np.rint(float(row[4]))),
-                    int(np.rint(float(row[5]))),
-                    int(np.rint(float(row[6]))),
-                )
-            except Exception:
-                continue
-            if not (np.isfinite(col_val) and np.isfinite(row_val)):
-                continue
-            lookup.setdefault((source_label, hkl_key), []).append(
-                (int(table_idx), int(row_idx), float(col_val), float(row_val))
-            )
-    return lookup
-
-
-def _peak_overlay_cache_row_source_indices(
-    row_lookup: Mapping[tuple[str, tuple[int, int, int]], Sequence[tuple[int, int, float, float]]],
-    *,
-    source_label: str,
-    hkl: tuple[int, int, int],
-    native_col: float,
-    native_row: float,
-) -> tuple[int | None, int | None]:
-    """Resolve one cache-row identity back to the nearest stored hit-table row."""
-
-    candidates = list(row_lookup.get((str(source_label), hkl), ()))
-    if not candidates:
-        for fallback_label in ("primary", "secondary"):
-            if fallback_label == str(source_label):
-                continue
-            candidates = list(row_lookup.get((fallback_label, hkl), ()))
-            if candidates:
-                break
-    if not candidates:
-        return None, None
-
-    best_table_idx, best_row_idx, *_ = min(
-        candidates,
-        key=lambda item: (
-            (float(item[2]) - float(native_col)) ** 2
-            + (float(item[3]) - float(native_row)) ** 2,
-            int(item[0]),
-            int(item[1]),
-        ),
-    )
-    return int(best_table_idx), int(best_row_idx)
-
-
-def _peak_overlay_hit_row_peak_indices(
-    rows: Sequence[np.ndarray] | None,
-) -> list[int | None]:
-    """Assign each cached hit row to stable branch ``0`` or ``1``."""
-
-    if rows is None:
-        filtered_rows: list[np.ndarray] = []
-    else:
-        filtered_rows = [np.asarray(row, dtype=float) for row in rows]
-    if not filtered_rows:
-        return []
-    assignments: list[int | None] = []
-    for row in filtered_rows:
-        try:
-            phi_deg = float(row[3])
-        except Exception:
-            assignments.append(None)
-            continue
-        assignments.append(source_branch_index_from_phi_deg(phi_deg))
-    return assignments
-
-
 def _peak_overlay_cache_row_caked_coords(
     row: np.ndarray,
     *,
@@ -1582,10 +1471,16 @@ def _peak_overlay_cache_row_caked_coords(
 ) -> tuple[float, float] | None:
     """Return cached or projected ``(2theta, phi)`` display coordinates for one row."""
 
-    if prefer_cached_coords and row.shape[0] >= 16:
+    if prefer_cached_coords:
+        cached_two_theta = float("nan")
+        cached_phi = float("nan")
         try:
-            cached_two_theta = float(row[14])
-            cached_phi = float(row[15])
+            if row.shape[0] >= 19:
+                cached_two_theta = float(row[17])
+                cached_phi = float(row[18])
+            elif row.shape[0] >= 16:
+                cached_two_theta = float(row[14])
+                cached_phi = float(row[15])
         except Exception:
             cached_two_theta = float("nan")
             cached_phi = float("nan")
@@ -1633,10 +1528,7 @@ def ensure_runtime_peak_overlay_data(
 
     if (
         simulation_runtime_state.stored_sim_image is None
-        or (
-            simulation_runtime_state.stored_max_positions_local is None
-            and not _peak_overlay_has_intersection_cache(simulation_runtime_state)
-        )
+        or not _peak_overlay_has_intersection_cache(simulation_runtime_state)
     ):
         show_caked = _runtime_bool(caked_view_enabled_factory, False)
         restored_view_sig = _peak_overlay_restored_view_signature(
@@ -1667,31 +1559,21 @@ def ensure_runtime_peak_overlay_data(
         _clear_peak_overlay_lists(simulation_runtime_state)
         return False
 
-    max_positions_local = simulation_runtime_state.stored_max_positions_local
     updated_image = simulation_runtime_state.stored_sim_image
-    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
 
     fallback_a = _runtime_float(primary_a, float("nan"))
     fallback_c = _runtime_float(primary_c, float("nan"))
-    if isinstance(max_positions_local, (list, tuple)) and (
-        not peak_table_lattice_local
-        or len(peak_table_lattice_local) != len(max_positions_local)
-    ):
-        peak_table_lattice_local = [
-            (fallback_a, fallback_c, "primary")
-            for _ in max_positions_local
-        ]
 
     max_hits_raw = _runtime_int(max_hits_per_reflection, 0)
     min_separation_value = _runtime_float(min_separation_px, 0.0)
+    max_hits_limit = max_hits_raw if max_hits_raw > 0 else None
+    min_sep_sq = float(min_separation_value) ** 2
     show_caked = _runtime_bool(caked_view_enabled_factory, False)
     last_caked_cache_current = _peak_overlay_live_caked_cache_is_current(
         simulation_runtime_state
     )
     peak_sig = (
         simulation_runtime_state.last_simulation_signature,
-        id(max_positions_local),
-        len(max_positions_local) if isinstance(max_positions_local, (list, tuple)) else 0,
         tuple(updated_image.shape),
         int(max_hits_raw),
         float(min_separation_value),
@@ -1746,6 +1628,24 @@ def ensure_runtime_peak_overlay_data(
         )
         else []
     )
+    source_reflection_indices_by_label = {
+        "primary": list(
+            getattr(
+                simulation_runtime_state,
+                "stored_primary_source_reflection_indices",
+                (),
+            )
+            or ()
+        ),
+        "secondary": list(
+            getattr(
+                simulation_runtime_state,
+                "stored_secondary_source_reflection_indices",
+                (),
+            )
+            or ()
+        ),
+    }
 
     if peak_cached:
         simulation_runtime_state.peak_positions.extend(
@@ -1763,9 +1663,6 @@ def ensure_runtime_peak_overlay_data(
         )
         return True
 
-    use_nominal_cache_grouping = _peak_overlay_has_intersection_cache(
-        simulation_runtime_state
-    )
     image_shape = tuple(int(v) for v in updated_image.shape)
     intersection_entries = _peak_overlay_intersection_entries(
         simulation_runtime_state,
@@ -1774,15 +1671,27 @@ def ensure_runtime_peak_overlay_data(
         show_caked=bool(show_caked),
     )
     if intersection_entries:
-        row_lookup = _peak_overlay_hit_row_lookup(
-            max_positions_local,
-            peak_table_lattice_local if isinstance(peak_table_lattice_local, (list, tuple)) else None,
-        )
-        for tbl_arr, av_used, cv_used, source_label, cache_attr_name in intersection_entries:
+        for cache_table_idx, (
+            tbl_arr,
+            av_used,
+            cv_used,
+            source_label,
+            cache_attr_name,
+        ) in enumerate(intersection_entries):
             if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0 or tbl_arr.shape[1] < 9:
                 continue
 
-            for row in tbl_arr:
+            chosen_rows: list[
+                tuple[int, np.ndarray, float, float, float, float, tuple[float, float] | None]
+            ] = []
+            row_order: Sequence[int]
+            if max_hits_limit is None and min_sep_sq <= 0.0:
+                row_order = list(range(int(tbl_arr.shape[0])))
+            else:
+                row_order = list(np.argsort(np.asarray(tbl_arr[:, 4], dtype=float))[::-1])
+
+            for row_idx in row_order:
+                row = np.asarray(tbl_arr[int(row_idx)], dtype=float).reshape(-1)
                 try:
                     qr_hint = float(row[0])
                     qz_hint = float(row[1])
@@ -1823,7 +1732,40 @@ def ensure_runtime_peak_overlay_data(
                         float(cy),
                         image_shape,
                     )
+                too_close = False
+                if min_sep_sq > 0.0:
+                    for _, _, _, _, prev_col, prev_row, _ in chosen_rows:
+                        d2 = (float(disp_cx) - float(prev_col)) ** 2 + (
+                            float(disp_cy) - float(prev_row)
+                        ) ** 2
+                        if d2 < min_sep_sq:
+                            too_close = True
+                            break
+                if too_close:
+                    continue
+                chosen_rows.append(
+                    (
+                        int(row_idx),
+                        row,
+                        float(cx),
+                        float(cy),
+                        float(disp_cx),
+                        float(disp_cy),
+                        caked_coords,
+                    )
+                )
+                if max_hits_limit is not None and len(chosen_rows) >= max_hits_limit:
+                    break
 
+            for row_idx, row, cx, cy, disp_cx, disp_cy, caked_coords in chosen_rows:
+                try:
+                    qr_hint = float(row[0])
+                    qz_hint = float(row[1])
+                    intensity = float(row[4])
+                    phi_val = float(row[5])
+                    hkl_raw = (float(row[6]), float(row[7]), float(row[8]))
+                except Exception:
+                    continue
                 hkl = tuple(int(np.rint(val)) for val in hkl_raw)
                 m_val = float(hkl_raw[0] * hkl_raw[0] + hkl_raw[0] * hkl_raw[1] + hkl_raw[1] * hkl_raw[1])
                 qr_val = float(qr_hint)
@@ -1844,22 +1786,45 @@ def ensure_runtime_peak_overlay_data(
                     allow_nominal_hkl_indices=True,
                 )
                 qz_val = float(qz_hint) if np.isfinite(qz_hint) else float(qz_meta)
-                source_table_index, source_row_index = _peak_overlay_cache_row_source_indices(
-                    row_lookup,
-                    source_label=str(source_label),
-                    hkl=hkl,
-                    native_col=float(cx),
-                    native_row=float(cy),
-                )
+                source_table_index = None
+                source_row_index = None
+                best_sample_index = None
+                if row.shape[0] >= 17:
+                    try:
+                        source_table_value = float(row[14])
+                    except Exception:
+                        source_table_value = float("nan")
+                    try:
+                        source_row_value = float(row[15])
+                    except Exception:
+                        source_row_value = float("nan")
+                    try:
+                        best_sample_value = float(row[16])
+                    except Exception:
+                        best_sample_value = float("nan")
+                    if np.isfinite(source_table_value):
+                        source_table_index = int(np.rint(source_table_value))
+                    if np.isfinite(source_row_value):
+                        source_row_index = int(np.rint(source_row_value))
+                    if np.isfinite(best_sample_value):
+                        best_sample_index = int(np.rint(best_sample_value))
+                if source_table_index is None:
+                    source_table_index = int(cache_table_idx)
+                if source_row_index is None:
+                    source_row_index = int(row_idx)
                 source_branch_index = source_branch_index_from_phi_deg(phi_val)
                 source_reflection_index = None
+                source_reflection_indices = source_reflection_indices_by_label.get(
+                    str(source_label),
+                    source_reflection_indices_local,
+                )
                 if (
                     source_table_index is not None
-                    and 0 <= int(source_table_index) < len(source_reflection_indices_local)
+                    and 0 <= int(source_table_index) < len(source_reflection_indices)
                 ):
                     try:
                         source_reflection_index = int(
-                            source_reflection_indices_local[int(source_table_index)]
+                            source_reflection_indices[int(source_table_index)]
                         )
                     except Exception:
                         source_reflection_index = None
@@ -1895,6 +1860,8 @@ def ensure_runtime_peak_overlay_data(
                     record["source_table_index"] = int(source_table_index)
                 if source_row_index is not None:
                     record["source_row_index"] = int(source_row_index)
+                if best_sample_index is not None:
+                    record["best_sample_index"] = int(best_sample_index)
                 if source_branch_index in {0, 1}:
                     record["source_branch_index"] = int(source_branch_index)
                     record["source_peak_index"] = int(source_branch_index)
@@ -1925,181 +1892,8 @@ def ensure_runtime_peak_overlay_data(
         else:
             simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
         return True
-
-    if (
-        simulation_runtime_state.stored_max_positions_local is None
-        or simulation_runtime_state.stored_sim_image is None
-    ):
-        _clear_peak_overlay_lists(simulation_runtime_state)
-        return False
-
-    max_hits_limit = max_hits_raw if max_hits_raw > 0 else None
-    min_sep_sq = float(min_separation_value) ** 2
-
-    for table_idx, tbl in enumerate(max_positions_local):
-        tbl_arr = np.asarray(tbl, dtype=float)
-        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0 or tbl_arr.shape[1] < 7:
-            continue
-
-        lattice_entry = peak_table_lattice_local[table_idx]
-        try:
-            av_used = float(lattice_entry[0])
-        except Exception:
-            av_used = float(fallback_a)
-        try:
-            cv_used = float(lattice_entry[1])
-        except Exception:
-            cv_used = float(fallback_c)
-        try:
-            source_label = str(lattice_entry[2])
-        except Exception:
-            source_label = "primary"
-
-        row_order = np.argsort(tbl_arr[:, 0])[::-1]
-        chosen_rows: list[tuple[int, np.ndarray, float, float, float, float]] = []
-
-        for row_idx in row_order:
-            row = tbl_arr[row_idx]
-            I, xpix, ypix, phi_val, H, K, L = row[:7]
-            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
-                continue
-            cx = float(xpix)
-            cy = float(ypix)
-            caked_coords = None
-            if show_caked and callable(native_detector_coords_to_caked_display_coords):
-                try:
-                    caked_coords = native_detector_coords_to_caked_display_coords(cx, cy)
-                except Exception:
-                    caked_coords = None
-            if (
-                isinstance(caked_coords, tuple)
-                and len(caked_coords) >= 2
-                and np.isfinite(float(caked_coords[0]))
-                and np.isfinite(float(caked_coords[1]))
-            ):
-                disp_cx = float(caked_coords[0])
-                disp_cy = float(caked_coords[1])
-            else:
-                disp_cx, disp_cy = native_sim_to_display_coords(cx, cy, image_shape)
-            too_close = False
-            for _, _, _, _, prev_col, prev_row in chosen_rows:
-                d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
-                if d2 < min_sep_sq:
-                    too_close = True
-                    break
-            if too_close:
-                continue
-            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
-            if max_hits_limit is not None and len(chosen_rows) >= max_hits_limit:
-                break
-
-        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
-            I, _xpix, _ypix, phi_val, H, K, L = row[:7]
-            two_theta_deg = float("nan")
-            phi_deg = float("nan")
-            if show_caked and callable(native_detector_coords_to_caked_display_coords):
-                try:
-                    caked_coords = native_detector_coords_to_caked_display_coords(
-                        float(cx),
-                        float(cy),
-                    )
-                except Exception:
-                    caked_coords = None
-                if (
-                    isinstance(caked_coords, tuple)
-                    and len(caked_coords) >= 2
-                    and np.isfinite(float(caked_coords[0]))
-                    and np.isfinite(float(caked_coords[1]))
-                ):
-                    two_theta_deg = float(caked_coords[0])
-                    phi_deg = float(caked_coords[1])
-            simulation_runtime_state.peak_positions.append((disp_cx, disp_cy))
-            simulation_runtime_state.peak_intensities.append(float(I))
-            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
-            hkl_raw = (float(H), float(K), float(L))
-            m_val = float(H * H + H * K + K * K)
-            qr_val = (
-                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
-                if float(av_used) > 0.0
-                and np.isfinite(float(av_used))
-                and m_val >= 0.0
-                else float("nan")
-            )
-            q_group_kwargs = {
-                "source_label": source_label,
-                "a_value": av_used,
-                "c_value": cv_used,
-                "qr_value": qr_val,
-            }
-            if use_nominal_cache_grouping:
-                q_group_kwargs["allow_nominal_hkl_indices"] = True
-            q_group_key, _, qz_val = reflection_q_group_metadata(
-                hkl_raw,
-                **q_group_kwargs,
-            )
-            simulation_runtime_state.peak_millers.append(hkl)
-            source_branch_index = source_branch_index_from_phi_deg(phi_val)
-            record = {
-                "display_col": float(disp_cx),
-                "display_row": float(disp_cy),
-                "native_col": float(cx),
-                "native_row": float(cy),
-                "hkl": hkl,
-                "hkl_raw": hkl_raw,
-                "intensity": float(I),
-                "qr": float(qr_val),
-                "qz": float(qz_val),
-                "q_group_key": q_group_key,
-                "phi": float(phi_val),
-                "two_theta_deg": float(two_theta_deg),
-                "phi_deg": float(phi_deg),
-                "source_table_index": int(table_idx),
-                "source_row_index": int(row_idx),
-                "source_label": str(source_label),
-                "av": float(av_used),
-                "cv": float(cv_used),
-            }
-            if 0 <= int(table_idx) < len(source_reflection_indices_local):
-                try:
-                    source_reflection_index = int(source_reflection_indices_local[int(table_idx)])
-                except Exception:
-                    source_reflection_index = -1
-            else:
-                source_reflection_index = -1
-            if source_branch_index in {0, 1}:
-                record["source_branch_index"] = int(source_branch_index)
-                record["source_peak_index"] = int(source_branch_index)
-            if use_nominal_cache_grouping:
-                record["q_group_nominal_hkl"] = True
-            record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
-                record,
-                allow_legacy_peak_fallback=False,
-                preserve_existing_trusted_identity=False,
-                trusted_reflection_index=(
-                    int(source_reflection_index) if int(source_reflection_index) >= 0 else None
-                ),
-            )
-            if record is None:
-                continue
-            simulation_runtime_state.peak_records.append(record)
-
-    if retain_cache:
-        simulation_runtime_state.peak_overlay_cache.update(
-            {
-                "sig": peak_sig,
-                "positions": list(simulation_runtime_state.peak_positions),
-                "millers": list(simulation_runtime_state.peak_millers),
-                "intensities": list(simulation_runtime_state.peak_intensities),
-                "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
-                "click_spatial_index": _build_peak_click_spatial_index(
-                    simulation_runtime_state.peak_positions
-                ),
-                "restored_from_gui_state": False,
-            }
-        )
-    else:
-        simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
-    return True
+    _clear_peak_overlay_lists(simulation_runtime_state)
+    return False
 
 
 def make_runtime_peak_overlay_data_callback(

@@ -43,7 +43,7 @@ non-interactive path:
 
 - Geometry-fit-cached mosaic fitting depends on the latest successful manual geometry dataset.
 - Detector-space agreement comes first; 1D views are validation tools, not the primary fitting target.
-- The default main viewport is the Tk-native canvas path, with a Matplotlib fallback available through `RA_SIM_PRIMARY_VIEWPORT=matplotlib`.
+- Main viewport stays embedded in Tk through Matplotlib.
 
 For deeper physical and implementation detail, use:
 

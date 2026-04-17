@@ -317,6 +317,185 @@ def test_runtime_session_import_stays_helper_only_without_optional_cif_deps(monk
         _restore_modules(previous)
 
 
+def test_runtime_session_numba_cache_heuristic_uses_warm_marker_without_scanning(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+        marker_path = runtime_session._numba_cache_warm_marker_path()
+
+        monkeypatch.setattr(
+            runtime_session,
+            "_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS",
+            None,
+            raising=False,
+        )
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.touch()
+
+        def _unexpected_rglob(self, pattern):
+            raise AssertionError(f"unexpected recursive scan: {self} {pattern}")
+
+        monkeypatch.setattr(Path, "rglob", _unexpected_rglob, raising=True)
+
+        assert runtime_session._numba_cache_contains_compiled_artifacts() is True
+    finally:
+        _restore_modules(previous)
+
+
+def test_runtime_session_numba_cache_heuristic_returns_false_without_marker_or_scan(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+        marker_path = runtime_session._numba_cache_warm_marker_path()
+
+        if marker_path.exists():
+            marker_path.unlink()
+        monkeypatch.setattr(
+            runtime_session,
+            "_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS",
+            None,
+            raising=False,
+        )
+
+        def _unexpected_rglob(self, pattern):
+            raise AssertionError(f"unexpected recursive scan: {self} {pattern}")
+
+        monkeypatch.setattr(Path, "rglob", _unexpected_rglob, raising=True)
+
+        assert runtime_session._numba_cache_contains_compiled_artifacts() is False
+        assert not marker_path.exists()
+    finally:
+        _restore_modules(previous)
+
+
+def test_runtime_session_numba_cache_heuristic_marks_warm_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+        marker_path = runtime_session._numba_cache_warm_marker_path()
+
+        monkeypatch.setattr(
+            runtime_session,
+            "_NUMBA_CACHE_HAS_COMPILED_ARTIFACTS",
+            None,
+            raising=False,
+        )
+        runtime_session._mark_numba_cache_compiled_artifacts_available()
+        assert marker_path.exists()
+        assert runtime_session._NUMBA_CACHE_HAS_COMPILED_ARTIFACTS is True
+    finally:
+        _restore_modules(previous)
+
+
+@pytest.mark.parametrize(
+    ("compiled_artifacts_available", "expected_mark_calls"),
+    [
+        (False, []),
+        (True, ["mark"]),
+    ],
+)
+def test_runtime_session_apply_ready_result_marks_warm_cache_only_for_compiled_runs(
+    monkeypatch,
+    tmp_path,
+    compiled_artifacts_available,
+    expected_mark_calls,
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    previous = _snapshot_ra_sim_modules()
+
+    try:
+        _clear_ra_sim_modules()
+        runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+        mark_calls: list[str] = []
+
+        monkeypatch.setattr(
+            runtime_session,
+            "_copy_intersection_cache_tables",
+            lambda tables: list(tables or []),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            runtime_session,
+            "_resolved_peak_table_payload",
+            lambda cache_tables, fallback_tables: list(cache_tables or fallback_tables or []),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            runtime_session.gui_geometry_q_group_manager,
+            "audited_full_order_source_reflection_index_groups",
+            lambda *_args, **_kwargs: ([], []),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            runtime_session,
+            "_store_primary_cache_payload",
+            lambda **_kwargs: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            runtime_session,
+            "_reset_combined_simulation_artifacts",
+            lambda: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            runtime_session,
+            "_trace_live_cache_event",
+            lambda *_args, **_kwargs: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            runtime_session,
+            "_mark_numba_cache_compiled_artifacts_available",
+            lambda: mark_calls.append("mark"),
+            raising=False,
+        )
+
+        runtime_session._apply_ready_simulation_result(
+            {
+                "primary_image": np.zeros((2, 2), dtype=np.float64),
+                "secondary_image": np.zeros((2, 2), dtype=np.float64),
+                "primary_intersection_cache": [],
+                "secondary_intersection_cache": [],
+                "primary_max_positions": [],
+                "secondary_max_positions": [],
+                "primary_peak_table_lattice": [],
+                "secondary_peak_table_lattice": [],
+                "image_generation_elapsed_ms": 1.25,
+                "numba_cache_compiled_artifacts_available": compiled_artifacts_available,
+            }
+        )
+
+        assert mark_calls == expected_mark_calls
+    finally:
+        _restore_modules(previous)
+
+
 def test_structure_model_import_keeps_pure_helpers_available_without_optional_cif_deps(
     monkeypatch, tmp_path
 ):

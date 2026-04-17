@@ -910,7 +910,6 @@ class GeometryFitDatasetContext:
     theta_initial: float
     subset: ReflectionSimulationSubset
     experimental_image: Optional[np.ndarray] = None
-    single_ray_indices: Optional[np.ndarray] = None
     dynamic_reanchor_enabled: bool = False
     dynamic_reanchor_callback: Optional[Callable[..., Mapping[str, object] | None]] = None
 
@@ -1431,11 +1430,6 @@ def _apply_discrete_mode_to_dataset_contexts(
                 experimental_image=_apply_discrete_mode_to_image(
                     dataset_ctx.experimental_image,
                     mode=mode,
-                ),
-                single_ray_indices=(
-                    None
-                    if dataset_ctx.single_ray_indices is None
-                    else np.asarray(dataset_ctx.single_ray_indices, dtype=np.int64)
                 ),
                 dynamic_reanchor_enabled=bool(
                     preserve_dynamic_reanchor
@@ -2714,13 +2708,9 @@ def _build_greedy_point_matches(
 
 def _uses_central_geometry_ray(
     mosaic_params: Mapping[str, object] | None,
-    *,
-    single_ray_indices: np.ndarray | None = None,
 ) -> bool:
     """Return whether one fit is effectively using only central geometry ray."""
 
-    if isinstance(single_ray_indices, np.ndarray) and np.any(single_ray_indices >= 0):
-        return False
     if not isinstance(mosaic_params, Mapping):
         return True
 
@@ -2763,7 +2753,6 @@ def _evaluate_geometry_fit_dataset_point_matches(
     weighted_matching: bool,
     solver_f_scale: float,
     missing_pair_penalty: float,
-    use_single_ray: bool,
     theta_value: float,
     use_measurement_uncertainty: bool = False,
     anisotropic_uncertainty: bool = False,
@@ -2781,7 +2770,6 @@ def _evaluate_geometry_fit_dataset_point_matches(
         for entry in (simulation_subset.measured_entries or [])
         if isinstance(entry, Mapping)
     ]
-    single_ray_indices = dataset_ctx.single_ray_indices
     try:
         hk0_peak_priority_weight = float(local.get("_hk0_peak_priority_weight", 1.0))
     except Exception:
@@ -2812,10 +2800,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         or q_group_line_missing_penalty_scale < 0.0
     ):
         q_group_line_missing_penalty_scale = 0.35
-    central_ray_mode = _uses_central_geometry_ray(
-        local.get("mosaic_params"),
-        single_ray_indices=single_ray_indices,
-    )
+    central_ray_mode = _uses_central_geometry_ray(local.get("mosaic_params"))
 
     if not normalized_measured:
         return (
@@ -2833,7 +2818,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 "total_reflection_count": int(simulation_subset.total_reflection_count),
                 "subset_reduced": bool(simulation_subset.reduced),
                 "central_ray_mode": bool(central_ray_mode),
-                "single_ray_enabled": bool(use_single_ray),
+                "single_ray_enabled": False,
                 "single_ray_forced_count": 0,
                 "line_group_count": 0,
                 "resolved_line_group_count": 0,
@@ -2885,7 +2870,6 @@ def _evaluate_geometry_fit_dataset_point_matches(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
         **_simulation_kernel_kwargs(local, mosaic),
-        single_sample_indices=single_ray_indices,
     )
 
     def _point_radius_px(point: Tuple[float, float]) -> float:
@@ -3388,10 +3372,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
         "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
         "subset_reduced": bool(simulation_subset.reduced),
         "central_ray_mode": bool(central_ray_mode),
-        "single_ray_enabled": bool(use_single_ray),
-        "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
-        if isinstance(single_ray_indices, np.ndarray)
-        else 0,
+        "single_ray_enabled": False,
+        "single_ray_forced_count": 0,
         "center_row": float(local["center"][0])
         if len(local.get("center", [])) >= 2
         else float("nan"),
@@ -3461,7 +3443,6 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         dict(entry) if isinstance(entry, Mapping) else entry
         for entry in (simulation_subset.measured_entries or [])
     ]
-    single_ray_indices = dataset_ctx.single_ray_indices
     try:
         hk0_peak_priority_weight = float(local.get("_hk0_peak_priority_weight", 1.0))
     except Exception:
@@ -3494,10 +3475,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         q_group_line_missing_penalty_scale = 0.35
 
     fit_space_summary_defaults = _fit_space_provenance_summary(local)
-    central_ray_mode = _uses_central_geometry_ray(
-        local.get("mosaic_params"),
-        single_ray_indices=single_ray_indices,
-    )
+    central_ray_mode = _uses_central_geometry_ray(local.get("mosaic_params"))
 
     if not normalized_measured:
         return (
@@ -3572,7 +3550,6 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
         **_simulation_kernel_kwargs(local, mosaic),
-        single_sample_indices=single_ray_indices,
     )
 
     def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
@@ -4032,9 +4009,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "subset_reduced": bool(simulation_subset.reduced),
         "central_ray_mode": bool(central_ray_mode),
         "single_ray_enabled": False,
-        "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
-        if isinstance(single_ray_indices, np.ndarray)
-        else 0,
+        "single_ray_forced_count": 0,
         "center_row": float(local["center"][0])
         if len(local.get("center", [])) >= 2
         else float("nan"),
@@ -6411,7 +6386,6 @@ def _fit_mosaic_shape_parameters_legacy(
                     weighted_matching=bool(point_match_weighted_matching),
                     solver_f_scale=float(point_match_f_scale),
                     missing_pair_penalty=float(point_match_missing_pair_penalty),
-                    use_single_ray=False,
                     theta_value=float(theta_value),
                     collect_diagnostics=bool(collect_diagnostics),
                 )
@@ -11302,8 +11276,6 @@ def fit_geometry_parameters(
     dataset_spec_entries = _coerce_sequence_items(dataset_specs)
     point_match_mode = experimental_image is not None or bool(dataset_spec_entries)
 
-    use_single_ray = False
-
     optimizer_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
         optimizer_cfg = (
@@ -12138,7 +12110,7 @@ def fit_geometry_parameters(
                     "subset_fallback_hkl_count": 0,
                     "subset_reduced": False,
                     "central_ray_mode": False,
-                    "single_ray_enabled": bool(use_single_ray),
+                    "single_ray_enabled": False,
                     "single_ray_forced_count": 0,
                 },
             )
@@ -12159,7 +12131,7 @@ def fit_geometry_parameters(
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
             "central_ray_mode": False,
-            "single_ray_enabled": bool(use_single_ray),
+            "single_ray_enabled": False,
             "single_ray_forced_count": 0,
             "center_row": float(local["center"][0])
             if len(local.get("center", [])) >= 2
@@ -12189,7 +12161,6 @@ def fit_geometry_parameters(
                 weighted_matching=bool(weighted_matching),
                 solver_f_scale=float(solver_f_scale),
                 missing_pair_penalty=float(missing_pair_penalty),
-                use_single_ray=bool(use_single_ray),
                 theta_value=float(theta_value),
                 use_measurement_uncertainty=bool(use_measurement_uncertainty),
                 anisotropic_uncertainty=bool(anisotropic_uncertainty_enabled),
@@ -18679,7 +18650,7 @@ def fit_geometry_parameters(
             )
             point_match_summary = _public_point_match_summary(point_match_summary)
             point_match_summary["metric_name"] = str(result.final_metric_name)
-            point_match_summary["single_ray_coarse_enabled"] = bool(use_single_ray)
+            point_match_summary["single_ray_coarse_enabled"] = False
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)
             )

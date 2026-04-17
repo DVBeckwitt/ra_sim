@@ -38,11 +38,11 @@ def test_extract_atom_site_fractional_metadata_handles_duplicate_labels_and_frac
 
 
 def test_extract_occupancy_site_metadata_defaults_to_raw_cif_labels(monkeypatch) -> None:
-    class _CrystalShouldNotRun:
-        def __init__(self, *_args, **_kwargs):
-            raise AssertionError("unexpected Crystal expansion")
-
-    monkeypatch.setattr(structure_model.dif, "Crystal", _CrystalShouldNotRun)
+    monkeypatch.setattr(
+        structure_model,
+        "_get_dans_diffraction_module",
+        lambda: _raise(AssertionError("unexpected Crystal expansion")),
+    )
 
     labels, expanded_map = structure_model.extract_occupancy_site_metadata(
         {

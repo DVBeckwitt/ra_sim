@@ -263,7 +263,6 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "solve_q_rel_tol",
     "solve_q_mode",
     "sample_weights",
-    "single_sample_indices",
     "best_sample_indices_out",
     "collect_hit_tables",
     "pixel_size_m",
@@ -293,7 +292,6 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "solve_q_rel_tol": DEFAULT_SOLVE_Q_REL_TOL,
     "solve_q_mode": DEFAULT_SOLVE_Q_MODE,
     "sample_weights": None,
-    "single_sample_indices": None,
     "best_sample_indices_out": None,
     "collect_hit_tables": True,
     "pixel_size_m": 100e-6,
@@ -397,7 +395,7 @@ def _write_intersection_cache_log(
     for idx, table in enumerate(cache):
         table_arr = np.asarray(table, dtype=np.float64)
         if table_arr.ndim != 2:
-            table_arr = np.empty((0, 14), dtype=np.float64)
+            table_arr = np.empty((0, 17), dtype=np.float64)
         table_name = f"table_{int(idx):04d}.npy"
         row_counts.append(int(table_arr.shape[0]))
         table_arrays.append(np.asarray(table_arr, dtype=np.float64).copy())
@@ -422,9 +420,7 @@ def _write_intersection_cache_log(
         "cache_provenance": {
             "grouping": "nominal_bragg_family",
             "collapse": "detector_branch_representative_rows",
-            "beam_context": (
-                "best_sample_indices_out_then_single_sample_indices_then_central_mean"
-            ),
+            "beam_context": "best_sample_indices_out_only",
         },
         "av": float(av) if isinstance(av, (int, float, np.floating)) else None,
         "cv": float(cv) if isinstance(cv, (int, float, np.floating)) else None,
@@ -2641,17 +2637,6 @@ def _get_phase_entry_n_samp(phase_entry, fallback_n_samp):
     return n_samp_i
 
 
-def _get_forced_sample_idx(single_sample_indices, peak_index):
-    if single_sample_indices is None:
-        return -1
-    try:
-        if peak_index < len(single_sample_indices):
-            return int(single_sample_indices[peak_index])
-    except (TypeError, ValueError):
-        return -1
-    return -1
-
-
 def _build_phase_space_entry(params):
     beam_x_array = np.asarray(params.get("beam_x_array", np.zeros(0, dtype=np.float64)))
     return {
@@ -2660,7 +2645,7 @@ def _build_phase_space_entry(params):
     }
 
 
-def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
+def _build_source_unit_template(params, phase_entry, H, K, L):
     theta_initial_deg = float(params.get("theta_initial_deg", 0.0))
     lambda_angstrom = float(params.get("lambda_", 1.0))
     if not np.isfinite(lambda_angstrom) or lambda_angstrom <= 0.0:
@@ -2748,7 +2733,7 @@ def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
         "hit_template": np.empty((0, 7), dtype=np.float64),
         "miss_template": np.empty((0, 3), dtype=np.float64),
         "status_template": np.full(n_samp, int(status), dtype=np.int64),
-        "best_sample_idx": int(forced_idx),
+        "best_sample_idx": -1,
         "q_cache_hits": int(q_cache_hits),
         "q_count": int(np.asarray(q_points).shape[0]),
     }
@@ -2833,14 +2818,12 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
         H = float(miller[source_peak_index, 0])
         K = float(miller[source_peak_index, 1])
         L = float(miller[source_peak_index, 2])
-        forced_idx = _get_forced_sample_idx(bound["single_sample_indices"], source_peak_index)
         source_template = _build_source_unit_template(
             source_params,
             phase_entry,
             H,
             K,
             L,
-            forced_idx,
         )
         if _retain_diffraction_safe_cache():
             _SOURCE_TEMPLATE_CACHE.clear()
@@ -3562,17 +3545,13 @@ def _nominal_reflection_visible(
     sigma_rad,
     gamma_pv,
     optics_mode,
-    forced_sample_idx,
     exit_projection_mode,
     projection_debug_enabled,
     projection_debug_counters,
     projection_debug_reject_count,
     projection_debug_reject_records,
 ):
-    preferred_idx = best_idx
-    if forced_sample_idx >= 0:
-        preferred_idx = forced_sample_idx
-    nominal_idx = _choose_nominal_sample_index(sample_terms, preferred_idx)
+    nominal_idx = _choose_nominal_sample_index(sample_terms, best_idx)
     if nominal_idx < 0:
         if projection_debug_enabled:
             projection_debug_counters[_PROJECTION_DEBUG_COUNTER_NO_VALID_SAMPLE] += 1
@@ -3639,13 +3618,22 @@ def _nominal_reflection_visible(
 
     kf = np.empty(3, dtype=np.float64)
     kf_prime = np.empty(3, dtype=np.float64)
+    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
     if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
         k_norm = sqrt(
             k_tx_prime * k_tx_prime
             + k_ty_prime * k_ty_prime
             + k_tz_prime * k_tz_prime
         )
-        if k_norm <= 1.0e-30:
+        if k_norm > 1.0e-30:
+            kf[0] = k_tx_prime / k_norm
+            kf[1] = k_ty_prime / k_norm
+            kf[2] = k_tz_prime / k_norm
+        elif k_out_mag > 1.0e-30:
+            kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+            kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+            kf[2] = k_out_mag * np.sin(twotheta_t)
+        else:
             if projection_debug_enabled:
                 projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
                 _projection_debug_record_reject(
@@ -3662,11 +3650,7 @@ def _nominal_reflection_visible(
                     _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
                 )
             return False, nominal_idx, False
-        kf[0] = k_tx_prime / k_norm
-        kf[1] = k_ty_prime / k_norm
-        kf[2] = k_tz_prime / k_norm
     else:
-        phi_f = np.arctan2(k_tx_prime, k_ty_prime)
         kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
         kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
         kf[2] = k_out_mag * np.sin(twotheta_t)
@@ -3904,7 +3888,6 @@ def _calculate_phi_from_precomputed(
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     pixel_size_m=100e-6,
-    forced_sample_idx=-1,
     sample_qr_ring_once=True,
     sample_weights=None,
     exit_projection_mode=EXIT_PROJECTION_INTERNAL,
@@ -4007,7 +3990,6 @@ def _calculate_phi_from_precomputed(
         sigma_rad,
         gamma_pv,
         optics_mode,
-        forced_sample_idx,
         exit_projection_mode,
         projection_debug_enabled,
         projection_debug_counters,
@@ -4035,14 +4017,9 @@ def _calculate_phi_from_precomputed(
             nominal_sample_idx,
         )
 
+    record_sample_idx = best_idx
     loop_start = 0
     loop_stop = n_samp
-    if 0 <= forced_sample_idx < n_samp:
-        loop_start = forced_sample_idx
-        loop_stop = forced_sample_idx + 1
-    record_sample_idx = best_idx
-    if 0 <= forced_sample_idx < n_samp:
-        record_sample_idx = forced_sample_idx
 
     can_reuse_q_solutions = False
     if loop_start == 0 and loop_stop == n_samp and n_samp > 1:
@@ -4311,7 +4288,15 @@ def _calculate_phi_from_precomputed(
                         + k_ty_prime * k_ty_prime
                         + k_tz_prime * k_tz_prime
                     )
-                    if k_norm <= 1.0e-30:
+                    if k_norm > 1.0e-30:
+                        kf[0] = k_tx_prime / k_norm
+                        kf[1] = k_ty_prime / k_norm
+                        kf[2] = k_tz_prime / k_norm
+                    elif k_out_mag > 1.0e-30:
+                        kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+                        kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+                        kf[2] = k_out_mag * np.sin(twotheta_t)
+                    else:
                         if projection_debug_enabled:
                             projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
                             _projection_debug_record_reject(
@@ -4328,9 +4313,6 @@ def _calculate_phi_from_precomputed(
                                 _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
                             )
                         continue
-                    kf[0] = k_tx_prime / k_norm
-                    kf[1] = k_ty_prime / k_norm
-                    kf[2] = k_tz_prime / k_norm
                 else:
                     kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
                     kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
@@ -4617,7 +4599,6 @@ def calculate_phi(
     pixel_size_m=100e-6,
     sample_width_m=0.0,
     sample_length_m=0.0,
-    forced_sample_idx=-1,
     sample_qr_ring_once=True,
 ):
     """
@@ -4705,7 +4686,6 @@ def calculate_phi(
         solve_q_rel_tol,
         solve_q_mode,
         pixel_size_m,
-        forced_sample_idx,
         sample_qr_ring_once,
         None,
         EXIT_PROJECTION_INTERNAL,
@@ -4746,7 +4726,6 @@ def _process_peaks_parallel_impl(
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     sample_weights=None,
-    single_sample_indices=None,
     best_sample_indices_out=None,
     collect_hit_tables=True,
     pixel_size_m=100e-6,
@@ -4946,13 +4925,12 @@ def _process_peaks_parallel_impl(
         P0,
     )
 
-    # Group reflections by identical (Gr, Gz, forced sample). We run each
+    # Group reflections by identical (Gr, Gz). We run each
     # source group once with the summed SF, then scale per-peak outputs.
     source_index_for_peak = np.full(num_peaks, -1, dtype=np.int64)
     source_total_sf = np.zeros(num_peaks, dtype=np.float64)
     group_gr = np.empty(num_peaks, dtype=np.float64)
     group_gz = np.empty(num_peaks, dtype=np.float64)
-    group_forced_idx = np.empty(num_peaks, dtype=np.int64)
     group_src_idx = np.empty(num_peaks, dtype=np.int64)
     group_total_sf = np.empty(num_peaks, dtype=np.float64)
     group_count = 0
@@ -4965,18 +4943,12 @@ def _process_peaks_parallel_impl(
             continue
 
         reflI = intensities[i_pk]
-        forced_idx = -1
-        if single_sample_indices is not None:
-            if i_pk < single_sample_indices.shape[0]:
-                forced_idx = int(single_sample_indices[i_pk])
 
         gz_key = 2.0 * pi * (L / cv)
         gr_key = 4.0 * pi / av * sqrt((H * H + H * K + K * K) / 3.0)
 
         group_idx = -1
         for i_grp in range(group_count):
-            if group_forced_idx[i_grp] != forced_idx:
-                continue
             if abs(gr_key - group_gr[i_grp]) > (1.0e-12 * (1.0 + abs(gr_key))):
                 continue
             if abs(gz_key - group_gz[i_grp]) > (1.0e-12 * (1.0 + abs(gz_key))):
@@ -4990,7 +4962,6 @@ def _process_peaks_parallel_impl(
         else:
             group_gr[group_count] = gr_key
             group_gz[group_count] = gz_key
-            group_forced_idx[group_count] = forced_idx
             group_src_idx[group_count] = i_pk
             group_total_sf[group_count] = reflI
             source_index_for_peak[i_pk] = i_pk
@@ -5084,11 +5055,6 @@ def _process_peaks_parallel_impl(
             K = float(miller[i_pk, 1])
             L = float(miller[i_pk, 2])
 
-            forced_idx = -1
-            if single_sample_indices is not None:
-                if i_pk < single_sample_indices.shape[0]:
-                    forced_idx = int(single_sample_indices[i_pk])
-
             reflI_eff = source_total_sf[i_pk]
             if reflI_eff <= 0.0:
                 if collect_tables:
@@ -5156,7 +5122,6 @@ def _process_peaks_parallel_impl(
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
                     pixel_size_m,
-                    forced_idx,
                     sample_qr_ring_once,
                     None,
                     exit_projection_mode,
@@ -5207,7 +5172,6 @@ def _process_peaks_parallel_impl(
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
                     pixel_size_m,
-                    forced_idx,
                     sample_qr_ring_once,
                     sample_weight_array,
                     exit_projection_mode,
@@ -5288,11 +5252,6 @@ def _process_peaks_parallel_impl(
             K = float(miller[i_pk, 1])
             L = float(miller[i_pk, 2])
 
-            forced_idx = -1
-            if single_sample_indices is not None:
-                if i_pk < single_sample_indices.shape[0]:
-                    forced_idx = int(single_sample_indices[i_pk])
-
             reflI_eff = source_total_sf[i_pk]
             if reflI_eff <= 0.0:
                 if collect_tables:
@@ -5359,7 +5318,6 @@ def _process_peaks_parallel_impl(
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
                     pixel_size_m,
-                    forced_idx,
                     sample_qr_ring_once,
                     None,
                     exit_projection_mode,
@@ -5410,7 +5368,6 @@ def _process_peaks_parallel_impl(
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
                     pixel_size_m,
-                    forced_idx,
                     sample_qr_ring_once,
                     sample_weight_array,
                     exit_projection_mode,
@@ -5563,7 +5520,6 @@ def process_peaks_parallel(
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     sample_weights=None,
-    single_sample_indices=None,
     best_sample_indices_out=None,
     collect_hit_tables=True,
     pixel_size_m=100e-6,
@@ -5637,7 +5593,6 @@ def process_peaks_parallel(
         solve_q_rel_tol,
         solve_q_mode,
         sample_weights,
-        single_sample_indices,
         best_sample_indices_out,
         collect_hit_tables,
         pixel_size_m,
@@ -5724,8 +5679,6 @@ def _prepare_clustered_process_peaks_call(args, kwargs):
     if save_flag == 1:
         return args, call_kwargs, None
     if call_kwargs.get("sample_weights") is not None:
-        return args, call_kwargs, None
-    if call_kwargs.get("single_sample_indices") is not None:
         return args, call_kwargs, None
 
     beam_x = np.asarray(args[16], dtype=np.float64).reshape(-1)
@@ -5850,7 +5803,6 @@ def process_peaks_parallel_safe(*args, **kwargs):
         theta_array,
         phi_array,
         wavelength_array,
-        single_sample_indices,
         best_sample_indices_out,
     ) = _extract_process_peaks_context(args, kwargs)
     _set_last_intersection_cache([])
@@ -5872,7 +5824,6 @@ def process_peaks_parallel_safe(*args, **kwargs):
                 theta_array=theta_array,
                 phi_array=phi_array,
                 wavelength_array=wavelength_array,
-                single_sample_indices=single_sample_indices,
                 best_sample_indices_out=best_sample_indices_out,
             )
         )
@@ -5917,7 +5868,6 @@ def process_peaks_parallel_safe(*args, **kwargs):
                             theta_array=theta_array,
                             phi_array=phi_array,
                             wavelength_array=wavelength_array,
-                            single_sample_indices=single_sample_indices,
                             best_sample_indices_out=best_sample_indices_out,
                         )
                     )
@@ -6221,8 +6171,9 @@ def intersection_cache_to_hit_tables(intersection_cache):
 
     Cache tables store columns ``[Qr, Qz, detector_col, detector_row, intensity,
     phi, H, K, L, ...]``. Downstream geometry and selection paths still expect
-    hit-table rows shaped ``[intensity, col, row, phi, H, K, L]``. Preserve the
-    input table count so existing table-to-lattice alignment remains stable.
+    hit-table-leading rows shaped ``[intensity, col, row, phi, H, K, L]``.
+    Preserve the input table count and append cache provenance columns when
+    present: ``[source_table_index, source_row_index, best_sample_index]``.
     """
 
     hit_tables = []
@@ -6245,7 +6196,7 @@ def intersection_cache_to_hit_tables(intersection_cache):
             hit_tables.append(np.empty((0, 7), dtype=np.float64))
             continue
 
-        hit_table = np.empty((cache_arr.shape[0], 7), dtype=np.float64)
+        hit_table = np.full((cache_arr.shape[0], 10), np.nan, dtype=np.float64)
         hit_table[:, 0] = cache_arr[:, 4]
         hit_table[:, 1] = cache_arr[:, 2]
         hit_table[:, 2] = cache_arr[:, 3]
@@ -6253,6 +6204,10 @@ def intersection_cache_to_hit_tables(intersection_cache):
         hit_table[:, 4] = cache_arr[:, 6]
         hit_table[:, 5] = cache_arr[:, 7]
         hit_table[:, 6] = cache_arr[:, 8]
+        if cache_arr.shape[1] >= 17:
+            hit_table[:, 7] = cache_arr[:, 14]
+            hit_table[:, 8] = cache_arr[:, 15]
+            hit_table[:, 9] = cache_arr[:, 16]
 
         finite_rows = np.isfinite(hit_table[:, 0])
         finite_rows &= np.isfinite(hit_table[:, 1])
@@ -6269,74 +6224,6 @@ def _copy_intersection_cache(cache):
     """Return one detached copy of the mosaic-ring intersection cache."""
 
     return [np.asarray(table, dtype=np.float64).copy() for table in cache]
-
-
-def _central_sample_index(
-    beam_x_array=None,
-    beam_y_array=None,
-    theta_array=None,
-    phi_array=None,
-    wavelength_array=None,
-):
-    """Return index of source sample closest to central (mean) values."""
-
-    if (
-        beam_x_array is None
-        or beam_y_array is None
-        or theta_array is None
-        or phi_array is None
-        or wavelength_array is None
-    ):
-        return -1
-
-    beam_x_arr = np.asarray(beam_x_array, dtype=np.float64)
-    beam_y_arr = np.asarray(beam_y_array, dtype=np.float64)
-    theta_arr = np.asarray(theta_array, dtype=np.float64)
-    phi_arr = np.asarray(phi_array, dtype=np.float64)
-    wavelength_arr = np.asarray(wavelength_array, dtype=np.float64)
-
-    n = min(
-        beam_x_arr.size,
-        beam_y_arr.size,
-        theta_arr.size,
-        phi_arr.size,
-        wavelength_arr.size,
-    )
-    if n <= 0:
-        return -1
-
-    beam_x_arr = beam_x_arr[:n]
-    beam_y_arr = beam_y_arr[:n]
-    theta_arr = theta_arr[:n]
-    phi_arr = phi_arr[:n]
-    wavelength_arr = wavelength_arr[:n]
-
-    beam_x_center = np.nanmean(beam_x_arr)
-    beam_y_center = np.nanmean(beam_y_arr)
-    theta_center = np.nanmean(theta_arr)
-    phi_center = np.nanmean(phi_arr)
-    wavelength_center = np.nanmean(wavelength_arr)
-
-    deltas = [
-        beam_x_arr - beam_x_center,
-        beam_y_arr - beam_y_center,
-        theta_arr - theta_center,
-        phi_arr - phi_center,
-        wavelength_arr - wavelength_center,
-    ]
-
-    valid_mask = np.ones(n, dtype=np.bool_)
-    dist_sq = np.zeros(n, dtype=np.float64)
-    for delta in deltas:
-        finite = np.isfinite(delta)
-        valid_mask &= finite
-        dist_sq[finite] += delta[finite] * delta[finite]
-
-    if not np.any(valid_mask):
-        return -1
-
-    dist_sq[~valid_mask] = np.inf
-    return int(np.argmin(dist_sq))
 
 
 def _set_last_intersection_cache(cache):
@@ -6357,7 +6244,8 @@ def get_last_intersection_cache():
 
     Each table aligns with one simulated reflection and stores
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
-    beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset, wavelength_offset]``.
+    beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset,
+    wavelength_offset, source_table_index, source_row_index, best_sample_index]``.
     """
 
     return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
@@ -6751,14 +6639,14 @@ def build_intersection_cache(
     theta_array=None,
     phi_array=None,
     wavelength_array=None,
-    single_sample_indices=None,
     best_sample_indices_out=None,
 ):
     """Convert hit tables into a per-Bragg-peak detector intersection cache.
 
     Columns are:
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
-    beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset, wavelength_offset]``.
+    beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset,
+    wavelength_offset, source_table_index, source_row_index, best_sample_index]``.
     Hit tables are merged by nominal Bragg family before reduction, then the
     final cache keeps one one-row table for each ``00L`` peak and one one-row
     table per detector-side branch for non-specular peaks.
@@ -6777,21 +6665,6 @@ def build_intersection_cache(
         if best_sample_indices_out is None
         else np.asarray(best_sample_indices_out, dtype=np.int64).reshape(-1)
     )
-    single_sample_arr = (
-        None
-        if single_sample_indices is None
-        else np.asarray(single_sample_indices, dtype=np.int64).reshape(-1)
-    )
-    # Keep API compatibility with previous positional/named arguments, but
-    # cache context is now always derived from the source sample nearest the
-    # central (mean) beam/divergence/wavelength values.
-    central_sample_idx = _central_sample_index(
-        beam_x_array=beam_x_arr,
-        beam_y_array=beam_y_arr,
-        theta_array=theta_arr,
-        phi_array=phi_arr,
-        wavelength_array=wavelength_arr,
-    )
 
     av_val = float(av)
     cv_val = float(cv)
@@ -6805,6 +6678,7 @@ def build_intersection_cache(
     grouped_cache_tables: dict[tuple[object, ...], list[np.ndarray]] = {}
     cache_group_summaries: list[dict[str, object]] = []
     cache_table_summaries: list[dict[str, object]] = []
+    dropped_missing_best_sample_tables: list[int] = []
     beam_x_center = float("nan")
     beam_y_center = float("nan")
     theta_center = float("nan")
@@ -6820,6 +6694,13 @@ def build_intersection_cache(
         phi_center = float(np.mean(phi_arr))
     if wavelength_arr is not None and wavelength_arr.size > 0:
         wavelength_center = float(np.mean(wavelength_arr))
+    has_beam_context_arrays = (
+        beam_x_arr is not None
+        and beam_y_arr is not None
+        and theta_arr is not None
+        and phi_arr is not None
+        and wavelength_arr is not None
+    )
 
     for table_idx, hits in enumerate(hit_tables):
         hits_arr = np.asarray(hits, dtype=np.float64)
@@ -6834,8 +6715,25 @@ def build_intersection_cache(
         )
         qz_vals = qz_scale * l_vals
 
+        sample_idx = -1
+        if best_sample_arr is not None and table_idx < best_sample_arr.shape[0]:
+            sample_idx = int(best_sample_arr[table_idx])
+
+        if has_beam_context_arrays:
+            has_valid_sample_idx = (
+                sample_idx >= 0
+                and sample_idx < beam_x_arr.shape[0]
+                and sample_idx < beam_y_arr.shape[0]
+                and sample_idx < theta_arr.shape[0]
+                and sample_idx < phi_arr.shape[0]
+                and sample_idx < wavelength_arr.shape[0]
+            )
+            if not has_valid_sample_idx:
+                dropped_missing_best_sample_tables.append(int(table_idx))
+                continue
+
         n_rows = hits_arr.shape[0]
-        cache_table = np.empty((n_rows, 14), dtype=np.float64)
+        cache_table = np.empty((n_rows, 17), dtype=np.float64)
         cache_table[:, 0] = qr_vals
         cache_table[:, 1] = qz_vals
         cache_table[:, 2] = hits_arr[:, 1]
@@ -6843,42 +6741,21 @@ def build_intersection_cache(
         cache_table[:, 4] = hits_arr[:, 0]
         cache_table[:, 5] = hits_arr[:, 3]
         cache_table[:, 6:9] = hits_arr[:, 4:7]
-
-        sample_idx = central_sample_idx
-        if best_sample_arr is not None and table_idx < best_sample_arr.shape[0]:
-            candidate_idx = int(best_sample_arr[table_idx])
-            if candidate_idx >= 0:
-                sample_idx = candidate_idx
-        if (
-            sample_idx == central_sample_idx
-            and single_sample_arr is not None
-            and table_idx < single_sample_arr.shape[0]
-        ):
-            candidate_idx = int(single_sample_arr[table_idx])
-            if candidate_idx >= 0:
-                sample_idx = candidate_idx
-
-        has_beam_ctx = (
-            sample_idx >= 0
-            and beam_x_arr is not None
-            and beam_y_arr is not None
-            and theta_arr is not None
-            and phi_arr is not None
-            and wavelength_arr is not None
-            and sample_idx < beam_x_arr.shape[0]
-            and sample_idx < beam_y_arr.shape[0]
-            and sample_idx < theta_arr.shape[0]
-            and sample_idx < phi_arr.shape[0]
-            and sample_idx < wavelength_arr.shape[0]
-        )
-        if has_beam_ctx:
+        if has_beam_context_arrays:
             cache_table[:, 9] = beam_x_arr[sample_idx] - beam_x_center
             cache_table[:, 10] = beam_y_arr[sample_idx] - beam_y_center
             cache_table[:, 11] = theta_arr[sample_idx] - theta_center
             cache_table[:, 12] = phi_arr[sample_idx] - phi_center
             cache_table[:, 13] = wavelength_arr[sample_idx] - wavelength_center
         else:
-            cache_table[:, 9:] = np.nan
+            cache_table[:, 9:14] = np.nan
+        cache_table[:, 14] = float(table_idx)
+        cache_table[:, 15] = np.arange(n_rows, dtype=np.float64)
+        cache_table[:, 16] = (
+            float(sample_idx)
+            if sample_idx >= 0
+            else np.nan
+        )
 
         group_key = _intersection_cache_group_key(cache_table)
         if group_key is None:
@@ -6909,6 +6786,10 @@ def build_intersection_cache(
             phi_center=phi_center,
             wavelength_center=wavelength_center,
             cache_metadata={
+                "dropped_missing_best_sample_table_count": int(
+                    len(dropped_missing_best_sample_tables)
+                ),
+                "dropped_missing_best_sample_tables": dropped_missing_best_sample_tables,
                 "group_summary_count": int(len(cache_group_summaries)),
                 "group_summaries": cache_group_summaries,
                 "table_summaries": cache_table_summaries,
@@ -6943,7 +6824,6 @@ def _extract_process_peaks_context(args, kwargs):
     if len(args) >= 24:
         wavelength_array = args[23]
 
-    single_sample_indices = kwargs.get("single_sample_indices", None)
     best_sample_indices_out = kwargs.get("best_sample_indices_out", None)
     return (
         av,
@@ -6953,7 +6833,6 @@ def _extract_process_peaks_context(args, kwargs):
         theta_array,
         phi_array,
         wavelength_array,
-        single_sample_indices,
         best_sample_indices_out,
     )
 
@@ -6996,6 +6875,7 @@ def process_qr_rods_parallel(
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    best_sample_indices_out=None,
     collect_hit_tables=True,
     pixel_size_m=100e-6,
     sample_width_m=0.0,
@@ -7067,6 +6947,7 @@ def process_qr_rods_parallel(
         solve_q_steps,
         solve_q_rel_tol,
         solve_q_mode,
+        best_sample_indices_out=best_sample_indices_out,
         collect_hit_tables=collect_hit_tables,
         pixel_size_m=pixel_size_m,
         sample_width_m=sample_width_m,

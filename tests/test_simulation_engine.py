@@ -7,7 +7,7 @@ import threading
 import numpy as np
 import pytest
 
-from ra_sim.simulation import engine
+from ra_sim.simulation import diffraction, engine
 from ra_sim.simulation.engine import simulate, simulate_qr_rods
 from ra_sim.simulation.types import (
     BeamSamples,
@@ -103,7 +103,6 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     request.optics_mode = 7
     request.collect_hit_tables = False
     request.accumulate_image = False
-    request.single_sample_indices = np.array([0], dtype=np.int64)
     request.best_sample_indices_out = np.array([-1], dtype=np.int64)
     request.geometry.pixel_size_m = 172e-6
     request.geometry.sample_width_m = 2.5e-3
@@ -128,12 +127,76 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     assert seen["optics_mode"] == 7
     assert seen["collect_hit_tables"] is False
     assert seen["accumulate_image"] is False
-    assert np.array_equal(seen["single_sample_indices"], request.single_sample_indices)
+    assert "single_sample_indices" not in seen
     assert np.array_equal(seen["best_sample_indices_out"], request.best_sample_indices_out)
     assert seen["pixel_size_m"] == request.geometry.pixel_size_m
     assert seen["sample_width_m"] == request.geometry.sample_width_m
     assert seen["sample_length_m"] == request.geometry.sample_length_m
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
+
+
+def test_ensure_best_sample_buffer_normalizes_request_storage() -> None:
+    request = _build_request()
+    request.best_sample_indices_out = [-1]
+
+    buffer = engine._ensure_best_sample_buffer(
+        request,
+        peak_count=1,
+        auto_allocate=True,
+    )
+
+    assert isinstance(request.best_sample_indices_out, np.ndarray)
+    assert request.best_sample_indices_out is buffer
+    assert request.best_sample_indices_out.dtype == np.int64
+
+
+def test_ensure_best_sample_buffer_rejects_length_mismatch() -> None:
+    request = _build_request()
+    request.best_sample_indices_out = np.array([-1], dtype=np.int64)
+
+    with pytest.raises(
+        ValueError,
+        match="best_sample_indices_out length 1 does not match peak_count 2",
+    ):
+        engine._ensure_best_sample_buffer(
+            request,
+            peak_count=2,
+            auto_allocate=True,
+        )
+
+
+def test_simulate_forwards_default_solve_q_trig_kwargs_for_safe_runner(
+    monkeypatch,
+) -> None:
+    request = _build_request()
+    seen: dict[str, object] = {}
+
+    def fake_safe_runner(*args, **kwargs):
+        seen.update(kwargs)
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    monkeypatch.setattr(engine, "process_peaks_parallel_safe", fake_safe_runner)
+
+    simulate(request, peak_runner=fake_safe_runner)
+
+    expected = diffraction.get_default_solve_q_trig_kwargs()
+    assert seen["default_solve_q_dtheta"] == expected["default_solve_q_dtheta"]
+    np.testing.assert_allclose(
+        np.asarray(seen["default_solve_q_cos"], dtype=np.float64),
+        expected["default_solve_q_cos"],
+    )
+    np.testing.assert_allclose(
+        np.asarray(seen["default_solve_q_sin"], dtype=np.float64),
+        expected["default_solve_q_sin"],
+    )
 
 
 def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped() -> None:
@@ -148,6 +211,8 @@ def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped
                 "accumulate_image": kwargs["accumulate_image"],
             }
         )
+        if kwargs.get("best_sample_indices_out") is not None:
+            kwargs["best_sample_indices_out"][:] = 0
         image = np.array(args[6], copy=True)
         hit_tables = []
         if kwargs["collect_hit_tables"]:
@@ -176,11 +241,12 @@ def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped
     assert result.intersection_cache is not None
     assert len(result.intersection_cache) == 1
     table = np.asarray(result.intersection_cache[0], dtype=np.float64)
-    assert table.shape == (1, 14)
+    assert table.shape == (1, 17)
     assert np.isclose(float(table[0, 0]), np.pi / np.sqrt(3.0))
     assert np.isclose(float(table[0, 1]), 2.0 * np.pi / 7.0)
     assert np.isclose(float(table[0, 2]), 4.0)
     assert np.isclose(float(table[0, 3]), 5.0)
+    assert np.isclose(float(table[0, 16]), 0.0)
 
 
 def test_simulate_uses_reserved_cpu_worker_count_for_numba_thread_limit(monkeypatch) -> None:
@@ -718,6 +784,8 @@ def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are
                 "accumulate_image": kwargs["accumulate_image"],
             }
         )
+        if kwargs.get("best_sample_indices_out") is not None:
+            kwargs["best_sample_indices_out"][:] = 0
         image = np.array(args[5], copy=True)
         hit_tables = []
         if kwargs["collect_hit_tables"]:
@@ -747,9 +815,10 @@ def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are
     assert result.intersection_cache is not None
     assert len(result.intersection_cache) == 1
     table = np.asarray(result.intersection_cache[0], dtype=np.float64)
-    assert table.shape == (1, 14)
+    assert table.shape == (1, 17)
     assert np.isclose(float(table[0, 2]), 7.0)
     assert np.isclose(float(table[0, 3]), 8.0)
+    assert np.isclose(float(table[0, 16]), 0.0)
     assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
 
 

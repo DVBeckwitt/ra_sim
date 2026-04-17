@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 from ra_sim import install_prereqs
 from ra_sim.config import get_config_dir
-from ra_sim.debug_controls import start_run_bundle, temporary_startup_debug_override
+from ra_sim.debug_controls import (
+    env_flag_enabled,
+    finalize_run_bundle,
+    start_run_bundle,
+    temporary_startup_debug_override,
+)
 from ra_sim.gui import bootstrap as gui_bootstrap
 
 _MOSAIC_MODULE = "mosaic_sim.unified_app"
+_FORCE_EXIT_ON_GUI_CLOSE_ENV = "RA_SIM_FORCE_EXIT_ON_GUI_CLOSE"
 
 
 def _simulation_gui_startup_error_message(exc: FileNotFoundError) -> str:
@@ -167,6 +175,75 @@ def launch_startup_mode(
     )
 
 
+def _forced_exit_status_from_pending_exception(
+    pending_exc_info: tuple[object, object, object] | None,
+) -> int:
+    """Mirror normal Python process exit semantics for one pending exception."""
+
+    if pending_exc_info is None:
+        return 0
+
+    _exc_type, exc_value, exc_tb = pending_exc_info
+    if isinstance(exc_value, SystemExit):
+        code = exc_value.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        try:
+            print(code, file=sys.stderr)
+        except Exception:
+            pass
+        return 1
+
+    try:
+        traceback.print_exception(
+            pending_exc_info[0],
+            exc_value,
+            exc_tb,
+            file=sys.stderr,
+        )
+    except Exception:
+        try:
+            print(f"{type(exc_value).__name__}: {exc_value}", file=sys.stderr)
+        except Exception:
+            pass
+    return 1
+
+
+def _force_exit_after_launcher_close(
+    startup_mode: str | None,
+    *,
+    pending_exc_info: tuple[object, object, object] | None = None,
+) -> None:
+    """Finalize artifacts and hard-exit for batch-owned simulation GUI runs."""
+
+    if startup_mode != "simulation" or not env_flag_enabled(
+        _FORCE_EXIT_ON_GUI_CLOSE_ENV
+    ):
+        return
+
+    exit_code = _forced_exit_status_from_pending_exception(pending_exc_info)
+    try:
+        finalize_run_bundle()
+    except Exception as exc:
+        try:
+            print(
+                "RA-SIM warning: run bundle finalization failed during forced "
+                f"GUI shutdown: {exc}",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+    finally:
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+        os._exit(exit_code)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the lightweight packaged GUI launcher."""
 
@@ -184,8 +261,18 @@ def main(argv: list[str] | None = None) -> None:
 
     if startup_mode is not None:
         start_run_bundle(entrypoint=f"launcher:{startup_mode}")
-    launch_startup_mode(
-        startup_mode,
-        write_excel_flag=False if args.no_excel else None,
-        calibrant_bundle=args.bundle,
-    )
+    pending_exc_info: tuple[object, object, object] | None = None
+    try:
+        launch_startup_mode(
+            startup_mode,
+            write_excel_flag=False if args.no_excel else None,
+            calibrant_bundle=args.bundle,
+        )
+    except BaseException:
+        pending_exc_info = sys.exc_info()
+        raise
+    finally:
+        _force_exit_after_launcher_close(
+            startup_mode,
+            pending_exc_info=pending_exc_info,
+        )

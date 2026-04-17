@@ -89,7 +89,6 @@ The repository is shaped around three core workflows:
 - **Detector-angle backend**: in-repo flat exact-cake integrator with sparse LUT reuse
 - **GUI**: Tkinter + Matplotlib
 - **Image/data tools**: Pillow, OpenCV, scikit-image, pandas, openpyxl
-- **Optional acceleration**: Qt + PyQtGraph fast viewer path
 - **Packaging**: setuptools with console scripts for `ra-sim` and `ra-sim-dev`
 - **Validation**: pytest, ruff, mypy
 - **CI**: GitHub Actions on Python 3.11, 3.12, and 3.13
@@ -106,7 +105,6 @@ The repository is shaped around three core workflows:
 - Tkinter for GUI entry points
   - Windows and macOS Python builds usually include it
   - Linux often needs a system package such as `python3-tk` or `python3.11-tk`
-- Optional Qt binding plus `pyqtgraph` if you want the fast-viewer acceleration path
 
 ## Getting Started
 
@@ -415,8 +413,6 @@ The GUI manual geometry-fit workflow keeps one objective throughout the solve:
 | Variable | What it does | Notes |
 | --- | --- | --- |
 | `RA_SIM_CONFIG_DIR` | Use an external config directory | Relative paths resolve from that directory |
-| `RA_SIM_PRIMARY_VIEWPORT` | Choose the primary 2D viewport backend | Current default is `matplotlib`; set `tk_canvas` to request the Tk-native viewport |
-| `RA_SIM_FAST_VIEWER` | Request the Qt/PyQtGraph fast-viewer path | Defaults to enabled when available; set `0` to keep it off |
 | `RA_SIM_DEBUG` | Enable verbose diagnostics | Does not override the global logging kill switch |
 | `RA_SIM_DISABLE_ALL_LOGGING` | Disable user-facing logging/debug output | Preferred master kill switch |
 | `RA_SIM_DISABLE_LOGGING` | Legacy logging disable switch | Still honored for compatibility |

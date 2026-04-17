@@ -139,35 +139,6 @@ def test_process_peaks_parallel_safe_clusters_and_expands_outputs(monkeypatch) -
     assert 0 <= int(best_indices[0]) < raw_n
 
 
-def test_process_peaks_parallel_safe_keeps_raw_samples_for_forced_indices(monkeypatch) -> None:
-    args = _build_process_args(128)
-    observed: dict[str, object] = {}
-
-    def fake_kernel(*kernel_args, **kernel_kwargs):
-        observed["sample_count"] = int(np.asarray(kernel_args[16]).shape[0])
-        observed["has_sample_weights"] = "sample_weights" in kernel_kwargs
-        return (
-            np.zeros((8, 8), dtype=np.float64),
-            [],
-            np.zeros((1, 1, 5), dtype=np.float64),
-            np.zeros(1, dtype=np.int64),
-            np.zeros((1, int(np.asarray(kernel_args[16]).shape[0])), dtype=np.int64),
-            [],
-        )
-
-    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
-
-    diffraction.process_peaks_parallel_safe(
-        *args,
-        save_flag=0,
-        single_sample_indices=np.array([17], dtype=np.int64),
-        sample_qr_ring_once=False,
-    )
-
-    assert observed["sample_count"] == int(np.asarray(args[16]).shape[0])
-    assert observed["has_sample_weights"] is False
-
-
 def test_process_peaks_parallel_safe_can_prefer_python_runner(monkeypatch) -> None:
     args = _build_process_args(8)
     call_order: list[str] = []
@@ -360,7 +331,6 @@ def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_runner(
     monkeypatch,
 ) -> None:
     args = _build_process_args(8)
-    forced_indices = np.array([0], dtype=np.int64)
     runtime_kwargs = diffraction.get_process_peaks_runtime_kwargs(numba_thread_count=3)
     observed: dict[str, object] = {}
 
@@ -368,14 +338,8 @@ def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_runner(
         *kernel_args,
         save_flag=0,
         sample_qr_ring_once=True,
-        single_sample_indices=None,
     ):
         observed["sample_qr_ring_once"] = sample_qr_ring_once
-        observed["single_sample_indices"] = (
-            None
-            if single_sample_indices is None
-            else np.asarray(single_sample_indices, dtype=np.int64).copy()
-        )
         return (
             np.zeros((8, 8), dtype=np.float64),
             [],
@@ -391,19 +355,16 @@ def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_runner(
         *args,
         save_flag=0,
         sample_qr_ring_once=False,
-        single_sample_indices=forced_indices,
         **runtime_kwargs,
     )
 
     assert observed["sample_qr_ring_once"] is False
-    np.testing.assert_array_equal(observed["single_sample_indices"], forced_indices)
 
 
 def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_python_runner(
     monkeypatch,
 ) -> None:
     args = _build_process_args(8)
-    forced_indices = np.array([0], dtype=np.int64)
     runtime_kwargs = diffraction.get_process_peaks_runtime_kwargs(numba_thread_count=5)
     call_order: list[str] = []
 
@@ -415,11 +376,9 @@ def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_python_runn
         *kernel_args,
         save_flag=0,
         sample_qr_ring_once=True,
-        single_sample_indices=None,
     ):
         call_order.append("python")
         assert sample_qr_ring_once is False
-        np.testing.assert_array_equal(single_sample_indices, forced_indices)
         return (
             np.zeros((8, 8), dtype=np.float64),
             [],
@@ -437,7 +396,6 @@ def test_process_peaks_parallel_safe_strips_runtime_kwargs_for_older_python_runn
         save_flag=0,
         prefer_python_runner=True,
         sample_qr_ring_once=False,
-        single_sample_indices=forced_indices,
         **runtime_kwargs,
     )
 

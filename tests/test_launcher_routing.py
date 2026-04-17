@@ -63,6 +63,252 @@ def test_root_launcher_forwards_non_launcher_commands_to_cli(monkeypatch) -> Non
     assert calls == [["simulate", "--out", "output.png"]]
 
 
+def test_root_launcher_force_exits_after_flagged_gui_close(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class _StreamRecorder:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        def write(self, text: str) -> int:
+            calls.append(("write", self._label, text))
+            return len(text)
+
+        def flush(self) -> None:
+            calls.append(("flush", self._label))
+
+    monkeypatch.setenv("RA_SIM_FORCE_EXIT_ON_GUI_CLOSE", "1")
+    monkeypatch.setattr(launcher, "start_run_bundle", lambda *, entrypoint: calls.append(("bundle", entrypoint)))
+    monkeypatch.setattr(
+        launcher,
+        "launch_startup_mode",
+        lambda startup_mode, *, write_excel_flag=None, calibrant_bundle=None: calls.append(
+            ("launch", startup_mode, write_excel_flag, calibrant_bundle)
+        ),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "finalize_run_bundle",
+        lambda: calls.append(("finalize",)) or Path("bundle.zip"),
+    )
+    monkeypatch.setattr(launcher.sys, "stdout", _StreamRecorder("stdout"))
+    monkeypatch.setattr(launcher.sys, "stderr", _StreamRecorder("stderr"))
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: calls.append(("exit", code)))
+
+    launcher.main(["gui"])
+
+    assert calls == [
+        ("bundle", "launcher:simulation"),
+        ("launch", "simulation", None, None),
+        ("finalize",),
+        ("flush", "stdout"),
+        ("flush", "stderr"),
+        ("exit", 0),
+    ]
+
+
+def test_root_launcher_force_exit_survives_finalize_failure(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class _StreamRecorder:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        def write(self, text: str) -> int:
+            calls.append(("write", self._label, text))
+            return len(text)
+
+        def flush(self) -> None:
+            calls.append(("flush", self._label))
+
+    monkeypatch.setenv("RA_SIM_FORCE_EXIT_ON_GUI_CLOSE", "1")
+    monkeypatch.setattr(launcher, "start_run_bundle", lambda *, entrypoint: calls.append(("bundle", entrypoint)))
+    monkeypatch.setattr(
+        launcher,
+        "launch_startup_mode",
+        lambda startup_mode, *, write_excel_flag=None, calibrant_bundle=None: calls.append(
+            ("launch", startup_mode, write_excel_flag, calibrant_bundle)
+        ),
+    )
+
+    def _raise_finalize() -> None:
+        calls.append(("finalize",))
+        raise OSError("zip failed")
+
+    monkeypatch.setattr(launcher, "finalize_run_bundle", _raise_finalize)
+    monkeypatch.setattr(launcher.sys, "stdout", _StreamRecorder("stdout"))
+    monkeypatch.setattr(launcher.sys, "stderr", _StreamRecorder("stderr"))
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: calls.append(("exit", code)))
+
+    launcher.main(["gui"])
+
+    assert calls[0:3] == [
+        ("bundle", "launcher:simulation"),
+        ("launch", "simulation", None, None),
+        ("finalize",),
+    ]
+    assert ("flush", "stdout") in calls
+    assert ("flush", "stderr") in calls
+    assert ("exit", 0) in calls
+    assert any(
+        entry[0] == "write"
+        and entry[1] == "stderr"
+        and "run bundle finalization failed" in entry[2]
+        for entry in calls
+    )
+
+
+def test_root_launcher_force_exit_runs_on_simulation_startup_error(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class _StreamRecorder:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        def write(self, text: str) -> int:
+            calls.append(("write", self._label, text))
+            return len(text)
+
+        def flush(self) -> None:
+            calls.append(("flush", self._label))
+
+    monkeypatch.setenv("RA_SIM_FORCE_EXIT_ON_GUI_CLOSE", "1")
+    monkeypatch.setattr(launcher, "start_run_bundle", lambda *, entrypoint: calls.append(("bundle", entrypoint)))
+
+    def _raise_launch(
+        startup_mode, *, write_excel_flag=None, calibrant_bundle=None
+    ) -> None:
+        calls.append(("launch", startup_mode, write_excel_flag, calibrant_bundle))
+        raise SystemExit("gui boom")
+
+    monkeypatch.setattr(launcher, "launch_startup_mode", _raise_launch)
+    monkeypatch.setattr(
+        launcher,
+        "finalize_run_bundle",
+        lambda: calls.append(("finalize",)) or Path("bundle.zip"),
+    )
+    monkeypatch.setattr(launcher.sys, "stdout", _StreamRecorder("stdout"))
+    monkeypatch.setattr(launcher.sys, "stderr", _StreamRecorder("stderr"))
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+
+    with pytest.raises(SystemExit) as excinfo:
+        launcher.main(["gui"])
+
+    assert excinfo.value.code == 1
+    assert calls[0:3] == [
+        ("bundle", "launcher:simulation"),
+        ("launch", "simulation", None, None),
+        ("write", "stderr", "gui boom"),
+    ]
+    assert ("finalize",) in calls
+    assert ("flush", "stdout") in calls
+    assert ("flush", "stderr") in calls
+
+
+def test_root_launcher_force_exit_prints_traceback_for_unexpected_startup_error(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class _StreamRecorder:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        def write(self, text: str) -> int:
+            calls.append(("write", self._label, text))
+            return len(text)
+
+        def flush(self) -> None:
+            calls.append(("flush", self._label))
+
+    monkeypatch.setenv("RA_SIM_FORCE_EXIT_ON_GUI_CLOSE", "1")
+    monkeypatch.setattr(launcher, "start_run_bundle", lambda *, entrypoint: calls.append(("bundle", entrypoint)))
+
+    def _raise_launch(
+        startup_mode, *, write_excel_flag=None, calibrant_bundle=None
+    ) -> None:
+        calls.append(("launch", startup_mode, write_excel_flag, calibrant_bundle))
+        raise RuntimeError("gui boom")
+
+    monkeypatch.setattr(launcher, "launch_startup_mode", _raise_launch)
+    monkeypatch.setattr(
+        launcher,
+        "finalize_run_bundle",
+        lambda: calls.append(("finalize",)) or Path("bundle.zip"),
+    )
+    monkeypatch.setattr(launcher.sys, "stdout", _StreamRecorder("stdout"))
+    monkeypatch.setattr(launcher.sys, "stderr", _StreamRecorder("stderr"))
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+
+    with pytest.raises(SystemExit) as excinfo:
+        launcher.main(["gui"])
+
+    assert excinfo.value.code == 1
+    assert calls[0:2] == [
+        ("bundle", "launcher:simulation"),
+        ("launch", "simulation", None, None),
+    ]
+    assert ("finalize",) in calls
+    assert ("flush", "stdout") in calls
+    assert ("flush", "stderr") in calls
+    assert any(
+        entry[0] == "write" and entry[1] == "stderr" and "RuntimeError: gui boom" in entry[2]
+        for entry in calls
+    )
+
+
+@pytest.mark.parametrize("startup_mode", ["calibrant", "mosaic"])
+def test_root_launcher_flag_does_not_force_exit_for_non_simulation_launcher_modes(
+    monkeypatch,
+    startup_mode: str,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setenv("RA_SIM_FORCE_EXIT_ON_GUI_CLOSE", "1")
+    monkeypatch.setattr(launcher, "start_run_bundle", lambda *, entrypoint: calls.append(("bundle", entrypoint)))
+    monkeypatch.setattr(
+        launcher,
+        "launch_startup_mode",
+        lambda selected_mode, *, write_excel_flag=None, calibrant_bundle=None: calls.append(
+            ("launch", selected_mode, write_excel_flag, calibrant_bundle)
+        ),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "finalize_run_bundle",
+        lambda: calls.append(("finalize",)) or Path("bundle.zip"),
+    )
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: calls.append(("exit", code)))
+
+    launcher.main([startup_mode])
+
+    assert calls == [
+        ("bundle", f"launcher:{startup_mode}"),
+        ("launch", startup_mode, None, None),
+    ]
+
+
+def test_root_launcher_flag_does_not_force_exit_for_forwarded_cli(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setenv("RA_SIM_FORCE_EXIT_ON_GUI_CLOSE", "1")
+    monkeypatch.setattr(
+        cli,
+        "main",
+        lambda argv=None: calls.append(("cli", list(argv or []))),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "finalize_run_bundle",
+        lambda: calls.append(("finalize",)) or Path("bundle.zip"),
+    )
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: calls.append(("exit", code)))
+
+    launcher.main(["simulate", "--out", "output.png"])
+
+    assert calls == [("cli", ["simulate", "--out", "output.png"])]
+
+
 def test_launch_startup_mode_uses_mosaic_visualizer(monkeypatch) -> None:
     calls: list[str] = []
 

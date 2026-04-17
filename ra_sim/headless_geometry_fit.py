@@ -928,7 +928,7 @@ def _copy_intersection_cache_tables(
         try:
             copied.append(np.asarray(table, dtype=np.float64).copy())
         except Exception:
-            copied.append(np.empty((0, 14), dtype=np.float64))
+            copied.append(np.empty((0, 17), dtype=np.float64))
     return copied
 
 
@@ -1706,102 +1706,6 @@ def run_headless_geometry_fit(
             and not isinstance(max_positions_local, (str, bytes))
             else 0
         )
-        if not isinstance(max_positions_local, Sequence) or isinstance(
-            max_positions_local,
-            (str, bytes),
-        ):
-            provenance = gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
-                simulation_runtime_state,
-                signature=current_signature,
-                signature_summary=current_signature_summary,
-                background_index=int(background_state.current_background_index),
-                source_reflection_indices_local=source_reflection_indices_local,
-            )
-            live_rows = gui_manual_geometry.geometry_manual_live_peak_candidates_from_records(
-                simulation_runtime_state.peak_records,
-                source_reflection_indices_local=source_reflection_indices_local,
-                source_row_hkl_lookup=provenance.get("source_row_hkl_lookup"),
-                provenance_signature_matches=bool(
-                    provenance.get("active_signature_matches", False)
-                ),
-                provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
-                expected_table_count=provenance.get("expected_table_count"),
-            )
-            return {
-                "rows": [dict(entry) for entry in live_rows if isinstance(entry, Mapping)],
-                "cache_metadata": {
-                    "cache_source": "peak_records_fallback",
-                    "fallback_used": True,
-                    "max_positions_row_count": int(max_positions_row_count),
-                    "peak_record_count": int(peak_record_count),
-                    "active_signature_matches": bool(
-                        provenance.get("active_signature_matches", False)
-                    ),
-                    "source_snapshot_row_count": int(
-                        provenance.get("source_snapshot_row_count", 0) or 0
-                    ),
-                    "source_snapshot_background_index": provenance.get(
-                        "source_snapshot_background_index"
-                    ),
-                },
-            }
-
-        stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
-        if stored_sim_image is not None:
-            image_shape = tuple(int(v) for v in np.asarray(stored_sim_image).shape[:2])
-        else:
-            image_shape = (int(defaults.image_size), int(defaults.image_size))
-        allow_nominal = bool(
-            isinstance(
-                getattr(simulation_runtime_state, "stored_intersection_cache", None),
-                Sequence,
-            )
-            and not isinstance(
-                getattr(simulation_runtime_state, "stored_intersection_cache", None),
-                (str, bytes),
-            )
-            and len(getattr(simulation_runtime_state, "stored_intersection_cache", None) or ()) > 0
-        )
-        peak_kwargs: dict[str, object] = {
-            "image_shape": image_shape,
-            "native_sim_to_display_coords": (
-                lambda col, row, image_shape_local: (
-                    gui_geometry_overlay.native_sim_to_display_coords(
-                        col,
-                        row,
-                        image_shape_local,
-                        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-                    )
-                )
-            ),
-            "peak_table_lattice": simulation_runtime_state.stored_peak_table_lattice,
-            "primary_a": _coerce_float(var_store["a_var"].get(), defaults.defaults["a"]),
-            "primary_c": _coerce_float(var_store["c_var"].get(), defaults.defaults["c"]),
-            "default_source_label": "primary",
-            "round_pixel_centers": True,
-            "allow_nominal_hkl_indices": allow_nominal,
-        }
-        if simulation_runtime_state.stored_source_reflection_indices_local is not None:
-            peak_kwargs["source_reflection_indices"] = (
-                simulation_runtime_state.stored_source_reflection_indices_local
-            )
-        rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
-            max_positions_local,
-            **peak_kwargs,
-        )
-        if rows:
-            return {
-                "rows": [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)],
-                "cache_metadata": {
-                    "cache_source": "max_positions",
-                    "fallback_used": False,
-                    "max_positions_row_count": int(max_positions_row_count),
-                    "peak_record_count": int(peak_record_count),
-                    "active_signature_matches": None,
-                    "source_snapshot_row_count": 0,
-                    "source_snapshot_background_index": None,
-                },
-            }
         provenance = gui_geometry_q_group_manager._resolve_live_peak_record_fallback_provenance(
             simulation_runtime_state,
             signature=current_signature,
@@ -1817,11 +1721,29 @@ def run_headless_geometry_fit(
             provenance_revision_matches=bool(provenance.get("active_revision_matches", False)),
             expected_table_count=provenance.get("expected_table_count"),
         )
+        rows = [dict(entry) for entry in live_rows if isinstance(entry, Mapping)]
+        if rows:
+            return {
+                "rows": rows,
+                "cache_metadata": {
+                    "cache_source": "peak_records",
+                    "fallback_used": False,
+                    "max_positions_row_count": int(max_positions_row_count),
+                    "peak_record_count": int(peak_record_count),
+                    "active_signature_matches": bool(provenance.get("active_signature_matches", False)),
+                    "source_snapshot_row_count": int(
+                        provenance.get("source_snapshot_row_count", 0) or 0
+                    ),
+                    "source_snapshot_background_index": provenance.get(
+                        "source_snapshot_background_index"
+                    ),
+                },
+            }
         return {
-            "rows": [dict(entry) for entry in live_rows if isinstance(entry, Mapping)],
+            "rows": [],
             "cache_metadata": {
-                "cache_source": "peak_records_fallback",
-                "fallback_used": True,
+                "cache_source": "empty",
+                "fallback_used": bool(peak_record_count > 0),
                 "max_positions_row_count": int(max_positions_row_count),
                 "peak_record_count": int(peak_record_count),
                 "active_signature_matches": bool(provenance.get("active_signature_matches", False)),

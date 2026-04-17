@@ -538,17 +538,16 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
 def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cache() -> None:
     runtime_state = state.SimulationRuntimeState(
         last_simulation_signature=("sig",),
-        stored_max_positions_local=[
+        stored_primary_intersection_cache=[
             np.asarray(
                 [
-                    [8.0, 10.0, 20.0, 0.125, 1.0, 0.0, 2.0],
-                    [5.0, 11.0, 21.0, 0.25, 2.0, 0.0, 3.0],
+                    [np.nan, np.nan, 10.0, 20.0, 8.0, 0.125, 1.0, 0.0, 2.0, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, 1.0],
+                    [np.nan, np.nan, 11.0, 21.0, 5.0, 0.25, 2.0, 0.0, 3.0, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 1.0, 1.0],
                 ],
                 dtype=float,
             )
         ],
         stored_sim_image=np.zeros((64, 64), dtype=float),
-        stored_peak_table_lattice=None,
     )
     coord_calls = []
     q_group_calls = []
@@ -603,6 +602,7 @@ def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cach
                 "a_value": 4.0,
                 "c_value": 6.0,
                 "qr_value": runtime_state.peak_records[0]["qr"],
+                "allow_nominal_hkl_indices": True,
             },
         )
     ]
@@ -653,9 +653,9 @@ def test_peak_selection_runtime_peak_overlay_cache_can_be_disabled(
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
     runtime_state = state.SimulationRuntimeState(
         last_simulation_signature=("sig",),
-        stored_max_positions_local=[
+        stored_primary_intersection_cache=[
             np.asarray(
-                [[8.0, 10.0, 20.0, 0.125, 1.0, 0.0, 2.0]],
+                [[np.nan, np.nan, 10.0, 20.0, 8.0, 0.125, 1.0, 0.0, 2.0, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, 1.0]],
                 dtype=float,
             )
         ],
@@ -845,8 +845,8 @@ def test_peak_selection_runtime_peak_overlay_data_uses_cached_caked_coords() -> 
     assert record["label"] == "1,0,2"
     assert record["av"] == 4.0
     assert record["cv"] == 6.0
-    assert "source_table_index" not in record
-    assert "source_row_index" not in record
+    assert record["source_table_index"] == 0
+    assert record["source_row_index"] == 0
 
 
 def test_peak_selection_runtime_peak_overlay_data_prefers_live_caked_cache_over_detector_cache() -> (
@@ -1356,7 +1356,6 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
                 "lattice_a": args[3],
                 "lattice_c": args[4],
                 "optics_mode": kwargs["optics_mode"],
-                "single_sample_indices": kwargs["single_sample_indices"],
             }
         )
         return None, [np.array([[5.0, 12.5, 23.5]], dtype=float)]
@@ -1376,7 +1375,6 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
             "lattice_a": 4.5,
             "lattice_c": 6.5,
             "optics_mode": 2,
-            "single_sample_indices": None,
         }
     ]
 
@@ -1390,11 +1388,8 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
     fallback_calls = []
 
     def fake_process_fallback(*args, **kwargs):
-        forced = kwargs["single_sample_indices"]
-        fallback_calls.append(
-            None if forced is None else tuple(int(v) for v in forced.tolist())
-        )
-        if forced is None:
+        fallback_calls.append(int(np.asarray(args[16], dtype=float).size))
+        if len(fallback_calls) == 1:
             return None, []
         return None, [np.array([[1.0, 44.0, 55.0]], dtype=float)]
 
@@ -1408,7 +1403,7 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
         process_peaks_parallel=fake_process_fallback,
     )
     assert fallback_center == (44.0, 55.0)
-    assert fallback_calls == [None, (1,)]
+    assert fallback_calls == [1, 2]
 
 
 def test_peak_selection_degenerate_hkls_and_qr_helpers_use_source_tables() -> None:

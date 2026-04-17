@@ -314,7 +314,7 @@ def test_process_peaks_parallel_compiled_allows_missing_n2_override():
     assert result[0].shape == (image_size, image_size)
 
 
-def test_build_intersection_cache_prefers_per_peak_sample_indices(monkeypatch):
+def test_build_intersection_cache_uses_best_sample_only_and_drops_invalid_rows(monkeypatch):
     monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
 
     hit_tables = [
@@ -330,15 +330,14 @@ def test_build_intersection_cache_prefers_per_peak_sample_indices(monkeypatch):
         theta_array=np.array([0.0, 1.0, 2.0], dtype=np.float64),
         phi_array=np.array([0.0, 2.0, 4.0], dtype=np.float64),
         wavelength_array=np.array([1.0, 1.5, 2.0], dtype=np.float64),
-        single_sample_indices=np.array([2, 2], dtype=np.int64),
         best_sample_indices_out=np.array([0, -1], dtype=np.int64),
     )
 
+    assert len(cache) == 1
     first = np.asarray(cache[0], dtype=np.float64)
-    second = np.asarray(cache[1], dtype=np.float64)
 
-    np.testing.assert_allclose(first[:, 9:], np.array([[-5.0, -10.0, -1.0, -2.0, -0.5]]))
-    np.testing.assert_allclose(second[:, 9:], np.array([[5.0, 10.0, 1.0, 2.0, 0.5]]))
+    np.testing.assert_allclose(first[:, 9:14], np.array([[-5.0, -10.0, -1.0, -2.0, -0.5]]))
+    np.testing.assert_allclose(first[:, 14:], np.array([[0.0, 0.0, 0.0]]))
 
 
 def test_build_intersection_cache_keeps_one_specular_representative(monkeypatch):
@@ -357,7 +356,7 @@ def test_build_intersection_cache_keeps_one_specular_representative(monkeypatch)
     cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
 
     table = np.asarray(cache[0], dtype=np.float64)
-    assert table.shape == (1, 14)
+    assert table.shape == (1, 17)
     np.testing.assert_allclose(table[0, 2:4], np.array([20.0, 21.0]))
 
 
@@ -406,7 +405,7 @@ def test_build_intersection_cache_merges_specular_tables_by_nominal_l(monkeypatc
 
     assert len(cache) == 1
     table = np.asarray(cache[0], dtype=np.float64)
-    assert table.shape == (1, 14)
+    assert table.shape == (1, 17)
     np.testing.assert_allclose(table[0, 2:4], np.array([21.0, 21.0]))
     assert int(np.rint(float(table[0, 8]))) == 3
 
@@ -427,7 +426,7 @@ def test_build_intersection_cache_merges_non_specular_tables_by_nominal_peak_and
 
     assert len(cache) == 2
     for table in cache:
-        assert np.asarray(table, dtype=np.float64).shape == (1, 14)
+        assert np.asarray(table, dtype=np.float64).shape == (1, 17)
     np.testing.assert_allclose(
         np.vstack([np.asarray(table, dtype=np.float64)[0, 2:4] for table in cache]),
         np.array(
@@ -455,7 +454,7 @@ def test_build_intersection_cache_skips_empty_tables(monkeypatch):
 
     assert len(cache) == 1
     table = np.asarray(cache[0], dtype=np.float64)
-    assert table.shape == (1, 14)
+    assert table.shape == (1, 17)
     np.testing.assert_allclose(table[0, 2:4], np.array([20.0, 21.0]))
 
 

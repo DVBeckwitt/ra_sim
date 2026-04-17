@@ -2,6 +2,7 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
+set "RA_SIM_FORCE_EXIT_ON_GUI_CLOSE=1"
 
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (

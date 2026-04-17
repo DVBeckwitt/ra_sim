@@ -15,7 +15,6 @@ IMPORT_TO_DISTRIBUTION = {
     "cv2": "opencv-python",
     "dans_diffraction": "dans_diffraction",
     "pil": "pillow",
-    "pyqtgraph": "pyqtgraph",
     "skimage": "scikit-image",
     "yaml": "pyyaml",
 }
@@ -24,7 +23,7 @@ JUSTIFIED_DECLARED_ONLY = {
     "openpyxl",
     "xlsxwriter",
 }
-OPTIONAL_RUNTIME_IMPORTS = {"pyqtgraph"}
+OPTIONAL_RUNTIME_IMPORTS = set()
 FORBIDDEN_BASE_DEPENDENCIES = {"fabio", "pyqtgraph"}
 
 

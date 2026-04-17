@@ -259,6 +259,7 @@ def rasterize_hit_tables_to_image(
 def rematerialize_primary_artifacts(
     *,
     primary_hit_table_cache: Mapping[object, np.ndarray],
+    primary_best_sample_index_cache: Mapping[object, int] | None = None,
     active_keys: Sequence[object],
     image_size: int,
     a_primary: float,
@@ -277,6 +278,16 @@ def rematerialize_primary_artifacts(
         for key in active_keys
         if key in primary_hit_table_cache
     ]
+    best_sample_indices = np.asarray(
+        [
+            int(primary_best_sample_index_cache.get(key, -1))
+            if isinstance(primary_best_sample_index_cache, Mapping)
+            else -1
+            for key in active_keys
+            if key in primary_hit_table_cache
+        ],
+        dtype=np.int64,
+    )
     image = rasterize_hit_tables_to_image(raw_hit_tables, image_size=int(image_size))
     intersection_cache = build_intersection_cache(
         raw_hit_tables,
@@ -287,6 +298,7 @@ def rematerialize_primary_artifacts(
         theta_array=theta_array,
         phi_array=phi_array,
         wavelength_array=wavelength_array,
+        best_sample_indices_out=best_sample_indices,
     )
     peak_tables = intersection_cache_to_hit_tables(intersection_cache)
     if not peak_tables:
