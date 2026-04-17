@@ -950,7 +950,14 @@ def handle_runtime_canvas_scroll(
         event_xdata = np.nan
         event_ydata = np.nan
 
-    if preview_limits is not None:
+    center_x = 0.5 * (float(xlim[0]) + float(xlim[1]))
+    center_y = 0.5 * (float(ylim[0]) + float(ylim[1]))
+    if not _runtime_caked_view_enabled(bindings):
+        # Detector view keeps Y inverted. Cursor-anchored wheel zoom on that axis
+        # reads like a vertical drift in screen space, so keep scroll zoom centered.
+        anchor_x = center_x
+        anchor_y = center_y
+    elif preview_limits is not None:
         # Legacy Matplotlib preview keeps event.xdata/ydata stale until commit.
         anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
             bindings.axis,
@@ -970,8 +977,8 @@ def handle_runtime_canvas_scroll(
         anchor_x = float(event_xdata)
         anchor_y = float(event_ydata)
     else:
-        anchor_x = 0.5 * (float(xlim[0]) + float(xlim[1]))
-        anchor_y = 0.5 * (float(ylim[0]) + float(ylim[1]))
+        anchor_x = center_x
+        anchor_y = center_y
 
     zoom_base = 1.2
     if step > 0.0:
