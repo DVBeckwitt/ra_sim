@@ -1100,32 +1100,43 @@ def detector_pixel_angular_maps(
 
 
 def detector_points_to_angles(
-    cols: np.ndarray | list[float] | tuple[float, ...],
-    rows: np.ndarray | list[float] | tuple[float, ...],
+    cols: np.ndarray | list[float] | tuple[float, ...] | float,
+    rows: np.ndarray | list[float] | tuple[float, ...] | float,
     geometry: PortableGeometry,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return flat-detector GUI-style ``(2theta_deg, phi_deg)`` for detector points."""
+) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
+    """Return flat-detector GUI-style ``(2theta_deg, phi_deg)`` for detector points.
+
+    Scalar ``(col, row)`` inputs return scalar ``(2theta_deg, phi_deg)`` floats.
+    Array-like inputs keep the existing vectorized ``(np.ndarray, np.ndarray)`` output.
+    """
+
+    scalar_mode = np.asarray(cols).ndim == 0 and np.asarray(rows).ndim == 0
 
     cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
     rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
     two_theta = np.full(cols_arr.shape, np.nan, dtype=np.float64)
     phi = np.full(cols_arr.shape, np.nan, dtype=np.float64)
 
+    def _finalize_outputs() -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
+        if not scalar_mode:
+            return two_theta, phi
+        return float(two_theta[0]), float(phi[0])
+
     if cols_arr.shape != rows_arr.shape:
-        return two_theta, phi
+        return _finalize_outputs()
     if not np.isfinite(float(geometry.distance_m)) or float(geometry.distance_m) <= 0.0:
-        return two_theta, phi
+        return _finalize_outputs()
     if not np.isfinite(float(geometry.pixel_size_m)) or float(geometry.pixel_size_m) <= 0.0:
-        return two_theta, phi
+        return _finalize_outputs()
 
     center_row = float(geometry.center_row_px)
     center_col = float(geometry.center_col_px)
     if not np.isfinite(center_row) or not np.isfinite(center_col):
-        return two_theta, phi
+        return _finalize_outputs()
 
     valid_mask = np.isfinite(cols_arr) & np.isfinite(rows_arr)
     if not np.any(valid_mask):
-        return two_theta, phi
+        return _finalize_outputs()
 
     dx = (cols_arr[valid_mask] - center_col) * float(geometry.pixel_size_m)
     raw_dy = (rows_arr[valid_mask] - center_row) * float(geometry.pixel_size_m)
@@ -1138,7 +1149,7 @@ def detector_points_to_angles(
 
     two_theta[valid_mask] = two_theta_valid
     phi[valid_mask] = phi_valid
-    return two_theta, phi
+    return _finalize_outputs()
 
 
 def caked_point_to_detector_pixel(

@@ -215,6 +215,115 @@ def test_fast_azimuthal_integrator_warm_geometry_cache_prebuilds_common_caches(
     assert lut_calls == [((4, 4), 8, 6)]
 
 
+def test_detector_points_to_angles_returns_scalars_for_one_detector_point() -> None:
+    geometry = exact_cake_portable.build_geometry(
+        pixel_size_m=1.0,
+        distance_m=10.0,
+        center_row_px=5.0,
+        center_col_px=7.0,
+    )
+
+    two_theta, phi = exact_cake_portable.detector_points_to_angles(
+        8.0,
+        4.0,
+        geometry,
+    )
+
+    assert isinstance(two_theta, float)
+    assert isinstance(phi, float)
+    assert two_theta == pytest.approx(np.degrees(np.arctan2(np.sqrt(2.0), 10.0)))
+    assert phi == pytest.approx(-45.0)
+
+
+def test_detector_points_to_angles_returns_nan_scalars_for_invalid_point_or_geometry() -> None:
+    geometry = exact_cake_portable.build_geometry(
+        pixel_size_m=1.0,
+        distance_m=10.0,
+        center_row_px=5.0,
+        center_col_px=7.0,
+    )
+    bad_geometry = exact_cake_portable.build_geometry(
+        pixel_size_m=1.0,
+        distance_m=0.0,
+        center_row_px=5.0,
+        center_col_px=7.0,
+    )
+
+    invalid_point_two_theta, invalid_point_phi = exact_cake_portable.detector_points_to_angles(
+        np.array(np.nan),
+        np.array(4.0),
+        geometry,
+    )
+    invalid_geometry_two_theta, invalid_geometry_phi = (
+        exact_cake_portable.detector_points_to_angles(
+            8.0,
+            4.0,
+            bad_geometry,
+        )
+    )
+
+    assert np.isnan(invalid_point_two_theta)
+    assert np.isnan(invalid_point_phi)
+    assert np.isnan(invalid_geometry_two_theta)
+    assert np.isnan(invalid_geometry_phi)
+
+
+def test_detector_points_to_angles_keeps_vectorized_outputs_for_array_inputs() -> None:
+    geometry = exact_cake_portable.build_geometry(
+        pixel_size_m=1.0,
+        distance_m=10.0,
+        center_row_px=5.0,
+        center_col_px=7.0,
+    )
+
+    two_theta, phi = exact_cake_portable.detector_points_to_angles(
+        np.array([8.0, 7.0], dtype=np.float64),
+        np.array([4.0, 4.0], dtype=np.float64),
+        geometry,
+    )
+
+    assert isinstance(two_theta, np.ndarray)
+    assert isinstance(phi, np.ndarray)
+    np.testing.assert_allclose(
+        two_theta,
+        np.array(
+            [
+                np.degrees(np.arctan2(np.sqrt(2.0), 10.0)),
+                np.degrees(np.arctan2(1.0, 10.0)),
+            ],
+            dtype=np.float64,
+        ),
+        rtol=0.0,
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        phi,
+        np.array([-45.0, 0.0], dtype=np.float64),
+        rtol=0.0,
+        atol=1.0e-12,
+    )
+
+
+def test_detector_points_to_angles_treats_zero_dim_numpy_inputs_as_scalar_mode() -> None:
+    geometry = exact_cake_portable.build_geometry(
+        pixel_size_m=1.0,
+        distance_m=10.0,
+        center_row_px=5.0,
+        center_col_px=7.0,
+    )
+
+    two_theta, phi = exact_cake_portable.detector_points_to_angles(
+        np.array(8.0),
+        np.array(4.0),
+        geometry,
+    )
+
+    assert isinstance(two_theta, float)
+    assert isinstance(phi, float)
+    assert two_theta == pytest.approx(np.degrees(np.arctan2(np.sqrt(2.0), 10.0)))
+    assert phi == pytest.approx(-45.0)
+
+
 def test_detector_pixel_to_caked_bin_bilinearly_blends_lut_projection() -> None:
     matrix = np.eye(4, dtype=np.float32)
     bundle = _make_transform_bundle(
