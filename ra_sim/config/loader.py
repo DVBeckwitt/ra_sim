@@ -255,11 +255,13 @@ def get_path_first(*keys: str, config_dir: Path | None = None) -> Any:
 def get_dir(key: str, *, config_dir: Path | None = None) -> Path:
     """Return the configured directory for ``key`` and ensure it exists."""
 
-    bundle = get_config_bundle(config_dir)
+    resolved_dir = (config_dir or get_config_dir()).resolve()
+    bundle = get_config_bundle(resolved_dir)
     value = {**DEFAULT_DIRS, **bundle.dir_paths}.get(key)
     if value is None:
         raise KeyError(f"No directory configured for {key!r}")
-    path = Path(os.path.expanduser(str(value)))
+    resolved_value = _resolve_path_value(value, config_dir=resolved_dir)
+    path = Path(str(resolved_value))
     path.mkdir(parents=True, exist_ok=True)
     return path
 
