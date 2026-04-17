@@ -5213,6 +5213,9 @@ def _current_qr_cylinder_caked_projection_context() -> Mapping[str, object] | No
 
 
 def _current_qr_cylinder_caked_band_masks() -> dict[str, object] | None:
+    if not _active_caked_primary_view():
+        return None
+
     range_values = _current_analysis_range_values()
     if not bool(range_values.get("integrate_qz_rods", False)):
         return None
@@ -5840,31 +5843,65 @@ def _sync_qr_cylinder_overlay_visibility_var() -> None:
         pass
 
 
-def _sync_show_qz_rods_quick_control_state() -> None:
-    widget = getattr(analysis_view_controls_view_state, "show_qz_rods_checkbutton", None)
+def _set_runtime_widget_enabled(widget: object, enabled: bool) -> None:
     if widget is None:
         return
-    enabled = bool(_active_caked_primary_view())
+    state_value = "normal" if bool(enabled) else "disabled"
     state_method = getattr(widget, "state", None)
     if callable(state_method):
         try:
-            state_method(["!disabled"] if enabled else ["disabled"])
+            state_method(["!disabled"] if bool(enabled) else ["disabled"])
             return
         except Exception:
             pass
     configure = getattr(widget, "configure", None)
     if callable(configure):
         try:
-            configure(state=("normal" if enabled else "disabled"))
+            configure(state=state_value)
             return
         except Exception:
             pass
     config = getattr(widget, "config", None)
     if callable(config):
         try:
-            config(state=("normal" if enabled else "disabled"))
+            config(state=state_value)
         except Exception:
             pass
+
+
+def _sync_qz_rod_controls_state() -> None:
+    analysis_view_state = globals().get("analysis_view_controls_view_state")
+    range_view_state = globals().get("integration_range_controls_view_state")
+    caked_active = bool(_active_caked_primary_view())
+    _set_runtime_widget_enabled(
+        getattr(analysis_view_state, "show_qz_rods_checkbutton", None),
+        caked_active,
+    )
+    _set_runtime_widget_enabled(
+        getattr(
+            range_view_state,
+            "integrate_qz_rods_checkbutton",
+            None,
+        ),
+        caked_active,
+    )
+    integrate_enabled = _read_analysis_bool_value(
+        getattr(range_view_state, "integrate_qz_rods_var", None),
+        bool(getattr(range_view_state, "integrate_qz_rods_value", False)),
+    )
+    width_controls_enabled = bool(caked_active and integrate_enabled)
+    _set_runtime_widget_enabled(
+        getattr(range_view_state, "qr_half_width_slider", None),
+        width_controls_enabled,
+    )
+    _set_runtime_widget_enabled(
+        getattr(range_view_state, "qr_half_width_entry", None),
+        width_controls_enabled,
+    )
+
+
+def _sync_show_qz_rods_quick_control_state() -> None:
+    _sync_qz_rod_controls_state()
 
 
 def _geometry_overlays_enabled() -> bool:
@@ -6758,6 +6795,7 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
     if _toggle_caked_2d_requires_overlay_invalidation(target_view_mode):
         _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
+    _sync_qz_rod_controls_state()
     _sync_center_marker(redraw=False)
     reselect_current_peak = getattr(
         globals().get("peak_selection_runtime_callbacks"),
@@ -22245,6 +22283,9 @@ def _render_analysis_plot_controls(
 
     values = dict(range_values or _current_analysis_range_values())
     _clear_widget_children(parent)
+    refresh_region_visuals_callback = globals().get("refresh_integration_region_visuals")
+    if not callable(refresh_region_visuals_callback):
+        refresh_region_visuals_callback = None
 
     analysis_1d_interaction_bindings = None
     plot_host = ttk.Frame(parent)
@@ -22266,6 +22307,7 @@ def _render_analysis_plot_controls(
         integrate_qz_rods=bool(values.get("integrate_qz_rods", False)),
         qr_half_width=float(values.get("qr_half_width", 0.01)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
+        refresh_region_visuals=refresh_region_visuals_callback,
     )
 
     tth_min_var = integration_range_controls_view_state.tth_min_var
@@ -22278,6 +22320,7 @@ def _render_analysis_plot_controls(
     tth_max_slider = integration_range_controls_view_state.tth_max_slider
     phi_min_slider = integration_range_controls_view_state.phi_min_slider
     phi_max_slider = integration_range_controls_view_state.phi_max_slider
+    _sync_qz_rod_controls_state()
 
     if any(
         ref is None

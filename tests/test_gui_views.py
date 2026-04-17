@@ -2801,7 +2801,7 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
     ]
     assert view_state.check_1d is None
     assert view_state.check_2d is None
-    assert view_state.show_qz_rods_checkbutton is None
+    assert view_state.show_qz_rods_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.check_beam_center_spot is _FakeCheckbutton.created[1]
     assert view_state.check_log_display is _FakeCheckbutton.created[2]
 

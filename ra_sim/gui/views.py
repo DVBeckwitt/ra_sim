@@ -4388,18 +4388,20 @@ def create_analysis_view_controls(
     show_qz_rods_var = tk.BooleanVar(value=bool(show_qz_rods))
     show_beam_center_spot_var = tk.BooleanVar(value=bool(show_beam_center_spot))
 
+    show_qz_rods_checkbutton = None
     check_beam_center_spot = None
     log_display_var = tk.BooleanVar(value=bool(log_display))
     check_log_display = None
     if parent is not None:
-        ttk.Checkbutton(
+        show_qz_rods_checkbutton = ttk.Checkbutton(
             parent,
             text="Show Qz rods",
             variable=show_qz_rods_var,
             command=(
                 on_toggle_show_qz_rods if callable(on_toggle_show_qz_rods) else None
             ),
-        ).pack(side=tk.TOP, padx=5, pady=2)
+        )
+        show_qz_rods_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
         check_beam_center_spot = ttk.Checkbutton(
             parent,
             text="Show beam center spot",
@@ -4424,7 +4426,7 @@ def create_analysis_view_controls(
     view_state.show_caked_2d_var = show_caked_2d_var
     view_state.check_2d = None
     view_state.show_qz_rods_var = show_qz_rods_var
-    view_state.show_qz_rods_checkbutton = None
+    view_state.show_qz_rods_checkbutton = show_qz_rods_checkbutton
     view_state.show_beam_center_spot_var = show_beam_center_spot_var
     view_state.check_beam_center_spot = check_beam_center_spot
     view_state.log_display_var = log_display_var

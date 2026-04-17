@@ -1193,7 +1193,6 @@ def update_runtime_integration_region_visuals(
     )
     phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
     phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
-    rod_mode_enabled = _runtime_range_boolean(view_state, "integrate_qz_rods", False)
     custom_mask, rect_mask = _validated_runtime_caked_custom_mask(
         bindings,
         sim_res2,
@@ -1233,11 +1232,6 @@ def update_runtime_integration_region_visuals(
                 bindings.integration_region_rect.set_visible(True)
             else:
                 bindings.integration_region_rect.set_visible(False)
-        return
-
-    if bool(rod_mode_enabled) and custom_mask is not None and rect_mask is not None:
-        bindings.integration_region_overlay.set_visible(False)
-        bindings.integration_region_rect.set_visible(False)
         return
 
     _update_detector_integration_overlay(
@@ -1729,6 +1723,17 @@ def _sync_runtime_qr_half_width_control_state(view_state: object) -> None:
     _set_widget_enabled(getattr(view_state, "qr_half_width_entry", None), enabled)
 
 
+def _refresh_runtime_region_visuals(
+    refresh_region_visuals: Callable[[], object] | None,
+) -> None:
+    if not callable(refresh_region_visuals):
+        return
+    try:
+        refresh_region_visuals()
+    except Exception:
+        pass
+
+
 def _apply_runtime_range_entry(
     *,
     view_state: object,
@@ -1737,6 +1742,7 @@ def _apply_runtime_range_entry(
     slider: object,
     show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
 ) -> None:
     entry_value = _safe_var_get(entry_var)
     try:
@@ -1758,6 +1764,7 @@ def _apply_runtime_range_entry(
     _sync_runtime_range_text_vars(view_state)
     if callable(schedule_range_update):
         schedule_range_update()
+    _refresh_runtime_region_visuals(refresh_region_visuals)
 
 
 def _make_runtime_range_slider_callback(
@@ -1766,6 +1773,7 @@ def _make_runtime_range_slider_callback(
     value_var_name: str,
     show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
 ) -> Callable[[object], None]:
     def _on_changed(value: object) -> None:
         value_var = getattr(view_state, value_var_name, None)
@@ -1780,6 +1788,7 @@ def _make_runtime_range_slider_callback(
         _sync_runtime_range_text_vars(view_state)
         if callable(schedule_range_update):
             schedule_range_update()
+        _refresh_runtime_region_visuals(refresh_region_visuals)
 
     return _on_changed
 
@@ -1789,12 +1798,14 @@ def _toggle_runtime_integrate_qz_rods(
     view_state: object,
     show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
 ) -> None:
     _activate_runtime_1d_analysis(show_1d_var)
     _sync_runtime_qr_half_width_control_state(view_state)
     _sync_runtime_range_text_vars(view_state)
     if callable(schedule_range_update):
         schedule_range_update()
+    _refresh_runtime_region_visuals(refresh_region_visuals)
 
 
 def create_runtime_integration_range_controls(
@@ -1810,6 +1821,7 @@ def create_runtime_integration_range_controls(
     integrate_qz_rods: bool = False,
     qr_half_width: float = 0.01,
     schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
 ) -> None:
     """Create the 1D integration-range controls and wire runtime callbacks."""
 
@@ -1858,12 +1870,14 @@ def create_runtime_integration_range_controls(
             view_state=view_state,
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
+            refresh_region_visuals=refresh_region_visuals,
         ),
         on_qr_half_width_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="qr_half_width_var",
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
+            refresh_region_visuals=refresh_region_visuals,
         ),
         on_apply_entry=lambda entry_var, value_var, slider: _apply_runtime_range_entry(
             view_state=view_state,
@@ -1872,6 +1886,11 @@ def create_runtime_integration_range_controls(
             slider=slider,
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
+            refresh_region_visuals=(
+                refresh_region_visuals
+                if value_var is getattr(view_state, "qr_half_width_var", None)
+                else None
+            ),
         ),
     )
 
