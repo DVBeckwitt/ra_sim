@@ -6783,6 +6783,12 @@ def _initialize_runtime_controls_block_15() -> None:
                 if callable(globals().get("_current_qr_cylinder_caked_band_masks", None))
                 else None
             ),
+            caked_custom_mask_signature_factory=lambda: (
+                ((geometry_runtime_state.qr_cylinder_band_cache or {}).get("signature"))
+                if getattr(geometry_runtime_state, "qr_cylinder_band_cache", None) is not None
+                else None
+            ),
+            detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get("sig"),
             set_status_text_factory=lambda: (
                 (lambda text: progress_label_positions.config(text=text))
                 if "progress_label_positions" in globals()

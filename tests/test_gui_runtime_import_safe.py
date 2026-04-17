@@ -1869,6 +1869,22 @@ def test_runtime_impl_overlay_refresh_copies_image_source_geometry() -> None:
     assert "_apply_projected_primary_raster_to_artist(overlay_artist)" in source
 
 
+def test_runtime_impl_wires_caked_custom_mask_signature_factory() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "caked_custom_mask_signature_factory=lambda: (" in source
+    assert 'geometry_runtime_state.qr_cylinder_band_cache or {}).get("signature")' in source
+
+
+def test_runtime_impl_wires_detector_geometry_signature_factory() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get("sig")'
+        in source
+    )
+
+
 def test_runtime_impl_routes_main_figure_chrome_through_shared_helper() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
@@ -2119,7 +2135,10 @@ def test_runtime_impl_preserves_no_redraw_preview_cancel_contract_for_overlay_re
         in reset_source
     )
     assert "_restore_legacy_main_matplotlib_overlays(redraw=bool(redraw))" in reset_source
-    assert "preview_cleared = bool(_clear_legacy_main_matplotlib_preview_view(redraw=False))" in reset_source
+    assert (
+        "preview_cleared = bool(_clear_legacy_main_matplotlib_preview_view(redraw=False))"
+        in reset_source
+    )
     assert "if dropped_preview_state and not preview_cleared:" in reset_source
     assert "_reset_main_figure_live_interaction_state(redraw=bool(redraw))" in reset_source
     assert "_reset_main_figure_live_interaction_state(redraw=False)" in reset_source
@@ -2230,6 +2249,7 @@ def test_set_primary_integration_overlay_image_uses_distinct_overlay_source_sign
     image_artist = SimpleNamespace()
     overlay_artist = SimpleNamespace()
     parent_signature = ("image", 5)
+    explicit_overlay_signature = ("raw_drag_preview", (2, 2), 3)
     overlay_image = np.full((2, 2), 7.0, dtype=float)
     applied_artists: list[object] = []
 
@@ -2258,7 +2278,10 @@ def test_set_primary_integration_overlay_image_uses_distinct_overlay_source_sign
         extent=(0.0, 1.0, 1.0, 0.0),
     )
 
-    runtime_session._set_primary_integration_overlay_image(overlay_image)
+    runtime_session._set_primary_integration_overlay_image(
+        overlay_image,
+        source_signature=explicit_overlay_signature,
+    )
     stored_source, extent, origin, overlay_signature = (
         runtime_session._primary_raster_source_payload(overlay_artist)
     )
@@ -2269,7 +2292,27 @@ def test_set_primary_integration_overlay_image_uses_distinct_overlay_source_sign
     assert overlay_signature != parent_signature
     assert overlay_signature[0] == "integration_region_overlay"
     assert overlay_signature[1] == parent_signature
+    assert overlay_signature[2] == explicit_overlay_signature
     assert applied_artists == [overlay_artist]
+
+
+def test_integration_overlay_raster_source_signature_prefers_explicit_overlay_signature() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    parent_signature = ("image", 5)
+    explicit_overlay_signature = ("raw_drag_preview", (2, 2), 4)
+    overlay_image = np.full((2, 2), 7.0, dtype=float)
+
+    overlay_signature = runtime_session._integration_overlay_raster_source_signature(
+        parent_source_signature=parent_signature,
+        overlay_source=overlay_image,
+        overlay_source_signature=explicit_overlay_signature,
+    )
+
+    assert overlay_signature == (
+        "integration_region_overlay",
+        parent_signature,
+        explicit_overlay_signature,
+    )
 
 
 def test_runtime_live_caked_projection_helper_uses_bound_callback(
@@ -3877,6 +3920,214 @@ def test_apply_primary_figure_display_from_cached_results_preserves_hidden_analy
         detector_redraw_states[0]["q_space_image"],
         fixture["q_space_image"],
     )
+
+
+@pytest.mark.parametrize(
+    ("view_mode", "payload_signature"),
+    [
+        ("caked", ("analysis", 3)),
+        ("q_space", ("q-space", 7)),
+    ],
+)
+def test_apply_primary_figure_display_from_cached_results_scales_cached_background_payload(
+    monkeypatch,
+    view_mode: str,
+    payload_signature: tuple[str, int],
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    stored_sources: list[tuple[str, np.ndarray, object | None]] = []
+    preview_calls: list[dict[str, np.ndarray | None]] = []
+    scale = 2.5
+    q_space_image = np.full((2, 2), 3.0, dtype=np.float64)
+    q_space_background = np.full((2, 2), 4.0, dtype=np.float64)
+    caked_image = np.full((2, 2), 2.0, dtype=np.float64)
+    caked_background = np.full((2, 2), 5.0, dtype=np.float64)
+    image_artist = SimpleNamespace()
+    background_artist = SimpleNamespace(
+        set_visible=lambda *_args, **_kwargs: None,
+        set_clim=lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_q_space_image_unscaled=q_space_image,
+            last_q_space_background_image_unscaled=q_space_background,
+            last_q_space_extent=[-1.0, 1.0, -2.0, 2.0],
+            last_q_space_payload_signature=(
+                payload_signature if view_mode == "q_space" else ("q-space", 99)
+            ),
+            last_caked_image_unscaled=caked_image,
+            last_caked_background_image_unscaled=caked_background,
+            last_caked_extent=[0.0, 90.0, -180.0, 180.0],
+            last_analysis_cache_sig=(
+                payload_signature if view_mode == "caked" else ("analysis", 99)
+            ),
+            caked_limits_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(visible=True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(simulation_limits_user_override=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            simulation_min_var=_RuntimeVar(0.0),
+            simulation_max_var=_RuntimeVar(20.0),
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(20.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "image_display", image_artist, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_display",
+        background_artist,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            set_aspect=lambda *_args, **_kwargs: None,
+            set_xlabel=lambda *_args, **_kwargs: None,
+            set_ylabel=lambda *_args, **_kwargs: None,
+            set_title=lambda *_args, **_kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: view_mode,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: scale,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_caked_limits",
+        lambda image: (float(np.min(image)), float(np.max(image))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_simulation_sliders_from_image",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_intensity_display_range",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_store_primary_raster_source",
+        lambda artist, source, **kwargs: stored_sources.append(
+            (
+                "primary" if artist is image_artist else "background",
+                np.asarray(source, dtype=float).copy(),
+                kwargs.get("source_signature"),
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_canvas_interactions,
+        "restore_axis_view",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "set_main_figure_axes_axis_visibility",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "apply_main_figure_axes_chrome",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    def _record_preview_sources(**kwargs):
+        preview_calls.append(
+            {
+                "simulation_image": np.asarray(kwargs["simulation_image"], dtype=float).copy(),
+                "background_image": (
+                    None
+                    if kwargs["background_image"] is None
+                    else np.asarray(kwargs["background_image"], dtype=float).copy()
+                ),
+            }
+        )
+        return (kwargs["simulation_image"], kwargs["background_image"])
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_roi_preview_display_sources",
+        _record_preview_sources,
+        raising=False,
+    )
+
+    target_mode = runtime_session._apply_primary_figure_display_from_cached_results(
+        "detector",
+        ((0.0, 2.0), (2.0, 0.0)),
+    )
+
+    expected_primary = caked_image * scale if view_mode == "caked" else q_space_image * scale
+    expected_background = (
+        caked_background * scale if view_mode == "caked" else q_space_background * scale
+    )
+
+    assert target_mode == view_mode
+    assert len(stored_sources) == 2
+    assert stored_sources[0][0] == "primary"
+    np.testing.assert_array_equal(stored_sources[0][1], expected_primary)
+    assert stored_sources[0][2] == (view_mode, "primary", payload_signature, scale)
+    assert stored_sources[1][0] == "background"
+    np.testing.assert_array_equal(stored_sources[1][1], expected_background)
+    assert stored_sources[1][2] == (view_mode, "background", payload_signature, scale)
+    if view_mode == "caked":
+        assert len(preview_calls) == 1
+        np.testing.assert_array_equal(
+            preview_calls[0]["simulation_image"],
+            expected_primary,
+        )
+        np.testing.assert_array_equal(
+            preview_calls[0]["background_image"],
+            expected_background,
+        )
+    else:
+        assert preview_calls == []
 
 
 @pytest.mark.parametrize("stale_target", ["caked", "q_space"])

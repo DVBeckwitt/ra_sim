@@ -61,8 +61,10 @@ class IntegrationRangeDragBindings:
     last_sim_res2_factory: object = None
     draw_idle: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
-    set_integration_overlay_image: Callable[[object], None] | None = None
+    set_integration_overlay_image: Callable[..., None] | None = None
     caked_custom_mask_factory: object = None
+    caked_custom_mask_signature_factory: object = None
+    detector_geometry_signature_factory: object = None
 
 
 @dataclass(frozen=True)
@@ -278,9 +280,17 @@ def _sync_peak_selection_state(bindings: IntegrationRangeDragBindings) -> None:
 def _set_integration_overlay_image(
     bindings: IntegrationRangeDragBindings,
     image: object,
+    *,
+    source_signature: object | None = None,
 ) -> None:
     if callable(bindings.set_integration_overlay_image):
-        bindings.set_integration_overlay_image(image)
+        if source_signature is None:
+            bindings.set_integration_overlay_image(image)
+        else:
+            bindings.set_integration_overlay_image(
+                image,
+                source_signature=source_signature,
+            )
         return
     bindings.integration_region_overlay.set_data(image)
     extent = _detector_display_extent(bindings)
@@ -324,6 +334,82 @@ def _runtime_caked_custom_mask(bindings: IntegrationRangeDragBindings):
     except Exception:
         return None
     return mask if mask.ndim == 2 else None
+
+
+def _runtime_caked_custom_mask_signature(
+    bindings: IntegrationRangeDragBindings,
+) -> object | None:
+    return _resolve_runtime_value(getattr(bindings, "caked_custom_mask_signature_factory", None))
+
+
+def _runtime_detector_geometry_signature(
+    bindings: IntegrationRangeDragBindings,
+) -> object | None:
+    return _resolve_runtime_value(
+        getattr(bindings, "detector_geometry_signature_factory", None)
+    )
+
+
+def _rounded_overlay_bounds_signature(
+    *,
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+) -> tuple[float, float, float, float]:
+    return tuple(
+        round(float(value), 10)
+        for value in (tth_min, tth_max, phi_min, phi_max)
+    )
+
+
+def _detector_overlay_source_signature(
+    *,
+    detector_shape: tuple[int, int],
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+    detector_geometry_signature: object | None,
+) -> tuple[
+    str,
+    tuple[int, int],
+    tuple[float, float, float, float],
+    object | None,
+]:
+    return (
+        "detector_integration_overlay",
+        tuple(int(value) for value in detector_shape),
+        _rounded_overlay_bounds_signature(
+            tth_min=tth_min,
+            tth_max=tth_max,
+            phi_min=phi_min,
+            phi_max=phi_max,
+        ),
+        detector_geometry_signature,
+    )
+
+
+def _caked_overlay_source_signature(
+    *,
+    rect_mask_shape: tuple[int, int],
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+    custom_mask_signature: object | None,
+) -> tuple[str, tuple[int, int], tuple[float, float, float, float], object | None]:
+    return (
+        "caked_integration_overlay",
+        tuple(int(value) for value in rect_mask_shape),
+        _rounded_overlay_bounds_signature(
+            tth_min=tth_min,
+            tth_max=tth_max,
+            phi_min=phi_min,
+            phi_max=phi_max,
+        ),
+        custom_mask_signature,
+    )
 
 
 def create_integration_region_highlight_cmap(
@@ -662,6 +748,20 @@ def _preview_buffer(
     return buffer
 
 
+def _next_drag_preview_source_signature(
+    drag_state: object,
+    *,
+    detector_shape: tuple[int, int],
+) -> tuple[str, tuple[int, int], int]:
+    revision = getattr(drag_state, "_raw_drag_preview_revision", None)
+    try:
+        next_revision = int(revision) + 1
+    except Exception:
+        next_revision = 1
+    setattr(drag_state, "_raw_drag_preview_revision", next_revision)
+    return ("raw_drag_preview", tuple(int(value) for value in detector_shape), next_revision)
+
+
 def _stamp_preview_points(
     preview: np.ndarray,
     *,
@@ -814,7 +914,14 @@ def _update_detector_drag_arc_preview(
 
     bindings.integration_region_rect.set_visible(False)
     bindings.drag_select_rect.set_visible(False)
-    _set_integration_overlay_image(bindings, preview)
+    _set_integration_overlay_image(
+        bindings,
+        preview,
+        source_signature=_next_drag_preview_source_signature(
+            drag_state,
+            detector_shape=detector_shape,
+        ),
+    )
     bindings.integration_region_overlay.set_visible(True)
     return True
 
@@ -847,7 +954,18 @@ def _update_detector_integration_overlay(
         bindings.integration_region_overlay.set_visible(False)
         return False
 
-    _set_integration_overlay_image(bindings, mask.astype(float))
+    _set_integration_overlay_image(
+        bindings,
+        mask.astype(float),
+        source_signature=_detector_overlay_source_signature(
+            detector_shape=tuple(int(value) for value in mask.shape),
+            tth_min=tth_min,
+            tth_max=tth_max,
+            phi_min=phi_min,
+            phi_max=phi_max,
+            detector_geometry_signature=_runtime_detector_geometry_signature(bindings),
+        ),
+    )
     bindings.integration_region_overlay.set_visible(True)
     return True
 
@@ -1089,7 +1207,18 @@ def update_runtime_integration_region_visuals(
         if custom_mask is not None and rect_mask is not None:
             clipped_mask = custom_mask & rect_mask
             if np.any(clipped_mask):
-                _set_integration_overlay_image(bindings, clipped_mask.astype(float))
+                _set_integration_overlay_image(
+                    bindings,
+                    clipped_mask.astype(float),
+                    source_signature=_caked_overlay_source_signature(
+                        rect_mask_shape=tuple(int(value) for value in rect_mask.shape),
+                        tth_min=tth_min,
+                        tth_max=tth_max,
+                        phi_min=phi_min,
+                        phi_max=phi_max,
+                        custom_mask_signature=_runtime_caked_custom_mask_signature(bindings),
+                    ),
+                )
                 bindings.integration_region_overlay.set_visible(True)
                 bindings.integration_region_rect.set_visible(False)
             else:
@@ -1386,6 +1515,8 @@ def make_runtime_integration_range_drag_bindings_factory(
     set_status_text_factory: object = None,
     set_integration_overlay_image_factory: object = None,
     caked_custom_mask_factory: object = None,
+    caked_custom_mask_signature_factory: object = None,
+    detector_geometry_signature_factory: object = None,
 ):
     """Build a factory that resolves the live integration-range drag bindings."""
 
@@ -1414,6 +1545,8 @@ def make_runtime_integration_range_drag_bindings_factory(
                 set_integration_overlay_image_factory
             ),
             caked_custom_mask_factory=caked_custom_mask_factory,
+            caked_custom_mask_signature_factory=caked_custom_mask_signature_factory,
+            detector_geometry_signature_factory=detector_geometry_signature_factory,
         )
 
     return _build

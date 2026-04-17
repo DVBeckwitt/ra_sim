@@ -319,6 +319,8 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
         last_sim_res2_factory=lambda: "res2",
         draw_idle_factory=build_draw,
         set_status_text_factory=build_status,
+        caked_custom_mask_signature_factory=lambda: ("mask-sig", 1),
+        detector_geometry_signature_factory=lambda: ("geom-sig", 1),
     )
 
     assert factory()["drag_state"] == "drag-state"
@@ -330,6 +332,8 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
     assert callable(calls[0]["schedule_range_update"])
     assert callable(calls[0]["draw_idle"])
     assert callable(calls[0]["set_status_text"])
+    assert calls[0]["caked_custom_mask_signature_factory"]() == ("mask-sig", 1)
+    assert calls[0]["detector_geometry_signature_factory"]() == ("geom-sig", 1)
     assert "update_integration_region_visuals" not in calls[0]
     assert calls[0]["schedule_range_update"] is not calls[1]["schedule_range_update"]
     assert calls[0]["draw_idle"] is not calls[1]["draw_idle"]
@@ -526,6 +530,8 @@ def test_integration_range_drag_bindings_default_custom_mask_factory_is_none() -
     )
 
     assert bindings.caked_custom_mask_factory is None
+    assert bindings.caked_custom_mask_signature_factory is None
+    assert bindings.detector_geometry_signature_factory is None
 
 
 def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes() -> None:
@@ -770,6 +776,86 @@ def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> N
     assert overlay.visible is True
     assert overlay_rect.visible is False
     np.testing.assert_allclose(overlay.data, custom_mask.astype(float))
+
+
+def test_update_runtime_integration_region_visuals_emits_caked_overlay_source_signature() -> None:
+    view_state = _range_view_state()
+    view_state.tth_min_var.set(1.0)
+    view_state.tth_max_var.set(3.0)
+    view_state.phi_min_var.set(-180.0)
+    view_state.phi_max_var.set(180.0)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    sim_res2 = SimpleNamespace(
+        radial=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuthal=np.asarray([10.0, 0.0, -10.0], dtype=float),
+    )
+    custom_mask = np.asarray(
+        [
+            [True, False, False],
+            [False, True, False],
+            [False, False, True],
+        ],
+        dtype=bool,
+    )
+    custom_mask_signature = [("mask-sig", 1)]
+    projected: list[tuple[np.ndarray, object | None]] = []
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        set_integration_overlay_image=lambda image, *, source_signature=None: projected.append(
+            (np.asarray(image, dtype=float), source_signature)
+        ),
+        caked_custom_mask_factory=lambda: custom_mask,
+        caked_custom_mask_signature_factory=lambda: custom_mask_signature[0],
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+    custom_mask_signature[0] = ("mask-sig", 2)
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+
+    assert overlay.visible is True
+    assert overlay_rect.visible is False
+    assert len(projected) == 3
+    np.testing.assert_allclose(projected[0][0], custom_mask.astype(float))
+    assert projected[0][1] == (
+        "caked_integration_overlay",
+        (3, 3),
+        (1.0, 3.0, -180.0, 180.0),
+        ("mask-sig", 1),
+    )
+    assert projected[1][1] == projected[0][1]
+    assert projected[2][1] == (
+        "caked_integration_overlay",
+        (3, 3),
+        (1.0, 3.0, -180.0, 180.0),
+        ("mask-sig", 2),
+    )
 
 
 def test_update_runtime_integration_region_visuals_uses_cached_values_without_controls() -> None:
@@ -1052,7 +1138,8 @@ def test_update_runtime_integration_region_visuals_uses_overlay_projection_callb
         ],
         dtype=float,
     )
-    projected = []
+    projected: list[tuple[np.ndarray, object | None]] = []
+    detector_geometry_signature = [("geom", 1)]
 
     bindings = integration_range_drag.IntegrationRangeDragBindings(
         drag_state=state.IntegrationRangeDragState(),
@@ -1070,8 +1157,9 @@ def test_update_runtime_integration_region_visuals_uses_overlay_projection_callb
         caked_view_enabled_factory=lambda: False,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: ai,
-        set_integration_overlay_image=lambda image: projected.append(
-            np.asarray(image, dtype=float)
+        detector_geometry_signature_factory=lambda: detector_geometry_signature[0],
+        set_integration_overlay_image=lambda image, *, source_signature=None: projected.append(
+            (np.asarray(image, dtype=float), source_signature)
         ),
     )
 
@@ -1080,11 +1168,47 @@ def test_update_runtime_integration_region_visuals_uses_overlay_projection_callb
         ai=ai,
         sim_res2=None,
     )
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=ai,
+        sim_res2=None,
+    )
+    detector_geometry_signature[0] = ("geom", 2)
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=ai,
+        sim_res2=None,
+    )
+    view_state.tth_max_var.set(12.0)
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=ai,
+        sim_res2=None,
+    )
 
     assert overlay_rect.visible is False
     assert overlay.visible is True
-    assert len(projected) == 1
-    assert int(np.sum(projected[0])) == 6
+    assert len(projected) == 4
+    assert int(np.sum(projected[0][0])) == 6
+    assert projected[0][1] == (
+        "detector_integration_overlay",
+        (3, 3),
+        (10.0, 22.0, -10.0, 2.0),
+        ("geom", 1),
+    )
+    assert projected[1][1] == projected[0][1]
+    assert projected[2][1] == (
+        "detector_integration_overlay",
+        (3, 3),
+        (10.0, 22.0, -10.0, 2.0),
+        ("geom", 2),
+    )
+    assert projected[3][1] == (
+        "detector_integration_overlay",
+        (3, 3),
+        (10.0, 12.0, -10.0, 2.0),
+        ("geom", 2),
+    )
     assert overlay.data is None
 
 
@@ -1150,6 +1274,92 @@ def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
     assert int(np.sum(overlay.data)) > 0
     assert draw_calls == [True]
+
+
+def test_update_runtime_raw_drag_preview_reuses_buffer_with_new_source_signature() -> None:
+    overlay = _FakeOverlay()
+    drag_rect = _FakeRect()
+    overlay_rect = _FakeRect()
+    ai = object()
+    two_theta = np.asarray(
+        [
+            [10.0, 11.0, 12.0],
+            [20.0, 21.0, 22.0],
+            [30.0, 31.0, 32.0],
+        ],
+        dtype=float,
+    )
+    phi_vals = np.asarray(
+        [
+            [-10.0, -9.0, -8.0],
+            [0.0, 1.0, 2.0],
+            [10.0, 11.0, 12.0],
+        ],
+        dtype=float,
+    )
+    drag_state = state.IntegrationRangeDragState(
+        active=True,
+        mode="raw",
+        x0=0.2,
+        y0=1.1,
+        x1=1.8,
+        y1=2.0,
+        tth0=20.0,
+        phi0=0.0,
+        tth1=32.0,
+        phi1=12.0,
+    )
+    projected: list[tuple[np.ndarray, object | None]] = []
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(),
+        drag_select_rect=drag_rect,
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai_arg: (
+            (two_theta, phi_vals) if ai_arg is ai else (None, None)
+        ),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: ai,
+        set_integration_overlay_image=lambda image, *, source_signature=None: projected.append(
+            (image, source_signature)
+        ),
+    )
+
+    assert integration_range_drag.update_runtime_raw_drag_preview(bindings, ai) is True
+
+    drag_state.x1 = 1.5
+    drag_state.y1 = 0.5
+    drag_state.tth1 = 22.0
+    drag_state.phi1 = 2.0
+
+    assert integration_range_drag.update_runtime_raw_drag_preview(bindings, ai) is True
+    assert len(projected) == 2
+    assert projected[0][0] is projected[1][0]
+    assert projected[0][1] == ("raw_drag_preview", (3, 3), 1)
+    assert projected[1][1] == ("raw_drag_preview", (3, 3), 2)
+
+    integration_range_drag.reset_runtime_integration_drag(bindings, redraw=False)
+    assert getattr(drag_state, "_raw_drag_preview_revision", None) == 2
+
+    drag_state.active = True
+    drag_state.mode = "raw"
+    drag_state.x0 = 0.2
+    drag_state.y0 = 1.1
+    drag_state.x1 = 1.8
+    drag_state.y1 = 2.0
+    drag_state.tth0 = 20.0
+    drag_state.phi0 = 0.0
+    drag_state.tth1 = 32.0
+    drag_state.phi1 = 12.0
+
+    assert integration_range_drag.update_runtime_raw_drag_preview(bindings, ai) is True
+    assert projected[2][1] == ("raw_drag_preview", (3, 3), 3)
 
 
 def test_update_runtime_raw_drag_preview_prefers_source_extent_for_overlay_geometry() -> None:
