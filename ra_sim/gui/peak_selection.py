@@ -1957,6 +1957,154 @@ def _copy_selected_peak_record(
     return dict(raw_record)
 
 
+def _finite_record_pair(
+    record: Mapping[str, object] | None,
+    x_key: str,
+    y_key: str,
+) -> tuple[float, float] | None:
+    """Return one finite coordinate pair from a cached peak record."""
+
+    if not isinstance(record, Mapping):
+        return None
+    try:
+        col = float(record.get(x_key, np.nan))
+        row = float(record.get(y_key, np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _record_display_pair(
+    record: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return the active-view display point carried by a cached peak record."""
+
+    for x_key, y_key in (
+        ("display_col", "display_row"),
+        ("selected_display_col", "selected_display_row"),
+        ("sim_col", "sim_row"),
+        ("sim_col_raw", "sim_row_raw"),
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+        ("two_theta_deg", "phi_deg"),
+    ):
+        point = _finite_record_pair(record, x_key, y_key)
+        if point is not None:
+            return point
+    return None
+
+
+def _record_native_pair(
+    record: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return the native detector point carried by a cached peak record."""
+
+    return _finite_record_pair(record, "native_col", "native_row") or _finite_record_pair(
+        record,
+        "sim_native_x",
+        "sim_native_y",
+    )
+
+
+def _normalize_record_hkl(value: object) -> tuple[int, int, int] | None:
+    """Return one rounded HKL triplet from a record/list value."""
+
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 3:
+        return None
+    try:
+        hkl = tuple(int(np.rint(float(value[idx]))) for idx in range(3))
+    except Exception:
+        return None
+    return hkl  # type: ignore[return-value]
+
+
+def _record_hkl_triplet(
+    record: Mapping[str, object] | None,
+) -> tuple[int, int, int] | None:
+    """Return the HKL encoded in a cached peak record."""
+
+    if not isinstance(record, Mapping):
+        return None
+    return _normalize_record_hkl(record.get("hkl")) or _normalize_record_hkl(
+        record.get("hkl_raw")
+    )
+
+
+def _peak_record_for_index(
+    simulation_runtime_state,
+    idx: int,
+    record_override: Mapping[str, object] | None = None,
+) -> dict[str, object] | None:
+    """Return the authoritative peak record for a selected index."""
+
+    if isinstance(record_override, Mapping):
+        return dict(record_override)
+    return _copy_selected_peak_record(simulation_runtime_state, int(idx))
+
+
+def _peak_hkl_for_index(
+    simulation_runtime_state,
+    idx: int,
+    record_override: Mapping[str, object] | None = None,
+) -> tuple[int, int, int] | None:
+    """Return the HKL for one peak, preferring the cached record over parallel lists."""
+
+    record = _peak_record_for_index(simulation_runtime_state, int(idx), record_override)
+    hkl = _record_hkl_triplet(record)
+    if hkl is not None:
+        return hkl
+    try:
+        return _normalize_record_hkl(simulation_runtime_state.peak_millers[int(idx)])
+    except Exception:
+        return None
+
+
+def _peak_intensity_for_index(
+    simulation_runtime_state,
+    idx: int,
+    record_override: Mapping[str, object] | None = None,
+) -> float:
+    """Return one peak intensity, preferring the cached record value."""
+
+    record = _peak_record_for_index(simulation_runtime_state, int(idx), record_override)
+    if isinstance(record, Mapping):
+        try:
+            val = float(record.get("intensity", np.nan))
+        except Exception:
+            val = float("nan")
+        if np.isfinite(val):
+            return float(val)
+    try:
+        val = float(simulation_runtime_state.peak_intensities[int(idx)])
+    except Exception:
+        return float("nan")
+    return float(val) if np.isfinite(val) else float("nan")
+
+
+def _peak_display_pair_for_index(
+    simulation_runtime_state,
+    idx: int,
+    record_override: Mapping[str, object] | None = None,
+) -> tuple[float, float] | None:
+    """Return the active-view display point for one peak index."""
+
+    record = _peak_record_for_index(simulation_runtime_state, int(idx), record_override)
+    point = _record_display_pair(record)
+    if point is not None:
+        return point
+    try:
+        px, py = simulation_runtime_state.peak_positions[int(idx)]
+        px = float(px)
+        py = float(py)
+    except Exception:
+        return None
+    if not (np.isfinite(px) and np.isfinite(py)):
+        return None
+    return float(px), float(py)
+
+
 def _apply_selected_peak_record_coordinates(
     record: dict[str, object] | None,
     *,
@@ -1983,8 +2131,10 @@ def _apply_selected_peak_record_coordinates(
         record["selected_native_col"] = float(clicked_native[0])
         record["selected_native_row"] = float(clicked_native[1])
     else:
-        record["selected_native_col"] = float(record["native_col"])
-        record["selected_native_row"] = float(record["native_row"])
+        native_point = _record_native_pair(record)
+        if native_point is not None:
+            record["selected_native_col"] = float(native_point[0])
+            record["selected_native_row"] = float(native_point[1])
     return record
 
 
@@ -2308,20 +2458,38 @@ def select_peak_by_index(
     clicked_native: tuple[float, float] | None = None,
     selected_display: tuple[float, float] | None = None,
     selected_native: tuple[float, float] | None = None,
+    record_override: Mapping[str, object] | None = None,
 ) -> bool:
     """Select one simulated peak by cached index and update GUI state."""
 
     if idx < 0 or idx >= len(simulation_runtime_state.peak_positions):
         return False
 
-    px, py = simulation_runtime_state.peak_positions[idx]
-    H, K, L = simulation_runtime_state.peak_millers[idx]
-    intensity = simulation_runtime_state.peak_intensities[idx]
-    disp_col, disp_row = (
-        (float(selected_display[0]), float(selected_display[1]))
-        if selected_display is not None
-        else (float(px), float(py))
+    hkl = _peak_hkl_for_index(
+        simulation_runtime_state,
+        int(idx),
+        record_override=record_override,
     )
+    if hkl is None:
+        return False
+    H, K, L = hkl
+
+    intensity = _peak_intensity_for_index(
+        simulation_runtime_state,
+        int(idx),
+        record_override=record_override,
+    )
+    display_point = _peak_display_pair_for_index(
+        simulation_runtime_state,
+        int(idx),
+        record_override=record_override,
+    )
+    if selected_display is not None:
+        disp_col, disp_row = (float(selected_display[0]), float(selected_display[1]))
+    elif display_point is not None:
+        disp_col, disp_row = (float(display_point[0]), float(display_point[1]))
+    else:
+        return False
 
     selected_peak_marker.set_data([disp_col], [disp_row])
     selected_peak_marker.set_visible(True)
@@ -2329,12 +2497,16 @@ def select_peak_by_index(
     peak_selection_state.selected_hkl_target = (int(H), int(K), int(L))
     sync_peak_selection_state()
 
-    selected_record = _copy_selected_peak_record(simulation_runtime_state, idx)
+    selected_record = _peak_record_for_index(
+        simulation_runtime_state,
+        int(idx),
+        record_override=record_override,
+    )
     selected_record = _apply_selected_peak_record_coordinates(
         selected_record,
         clicked_display=clicked_display,
         clicked_native=clicked_native,
-        selected_display=selected_display,
+        selected_display=(float(disp_col), float(disp_row)),
         selected_native=selected_native,
     )
     simulation_runtime_state.selected_peak_record = selected_record
@@ -2416,34 +2588,31 @@ def select_peak_by_hkl(
             set_status_text("Preparing simulated peak map... try again after update.")
         return False
 
+    def _visible_peak_index(idx_value: int) -> bool:
+        point = _peak_display_pair_for_index(simulation_runtime_state, int(idx_value))
+        return bool(point is not None and float(point[0]) >= 0.0)
+
     matches = [
         idx
-        for idx, hkl_triplet in enumerate(simulation_runtime_state.peak_millers)
-        if (
-            tuple(int(np.rint(v)) for v in hkl_triplet) == target
-            and simulation_runtime_state.peak_positions[idx][0] >= 0
-        )
+        for idx in range(len(simulation_runtime_state.peak_positions))
+        if _visible_peak_index(idx)
+        and _peak_hkl_for_index(simulation_runtime_state, idx) == target
     ]
 
     if not matches:
         m_target = _m_index(target)
         l_target = int(target[2])
-        matches = [
-            idx
-            for idx, hkl_triplet in enumerate(simulation_runtime_state.peak_millers)
-            if (
-                simulation_runtime_state.peak_positions[idx][0] >= 0
-                and int(np.rint(hkl_triplet[2])) == l_target
-                and _m_index(
-                    (
-                        int(np.rint(hkl_triplet[0])),
-                        int(np.rint(hkl_triplet[1])),
-                        int(np.rint(hkl_triplet[2])),
-                    )
-                )
-                == m_target
-            )
-        ]
+        matches = []
+        for idx in range(len(simulation_runtime_state.peak_positions)):
+            if not _visible_peak_index(idx):
+                continue
+            hkl_triplet = _peak_hkl_for_index(simulation_runtime_state, idx)
+            if hkl_triplet is None:
+                continue
+            if int(hkl_triplet[2]) != l_target:
+                continue
+            if _m_index(hkl_triplet) == m_target:
+                matches.append(idx)
 
     if not matches:
         if not silent_if_missing:
@@ -2456,7 +2625,7 @@ def select_peak_by_hkl(
         return False
 
     def _score(idx_value: int) -> float:
-        val = simulation_runtime_state.peak_intensities[idx_value]
+        val = _peak_intensity_for_index(simulation_runtime_state, int(idx_value))
         return float(val) if np.isfinite(val) else float("-inf")
 
     best_idx = max(matches, key=_score)
@@ -2639,7 +2808,7 @@ def _nearest_peak_index_for_click(
             ):
                 continue
             d2 = (px - float(click_col)) ** 2 + (py - float(click_row)) ** 2
-            val = peak_intensities[i] if i < len(peak_intensities) else float("nan")
+            val = _peak_intensity_for_index(simulation_runtime_state, int(i))
             score_val = float(val) if np.isfinite(val) else float("-inf")
             if d2 < best_d2 - 1e-9 or (
                 abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val
@@ -2859,16 +3028,11 @@ def select_peak_from_canvas_click(
             cy,
             image_shape,
         )
-    selected_native = None
-    if isinstance(peak_record, Mapping):
-        try:
-            native_col = float(peak_record.get("native_col"))
-            native_row = float(peak_record.get("native_row"))
-        except Exception:
-            native_col = float("nan")
-            native_row = float("nan")
-        if np.isfinite(native_col) and np.isfinite(native_row):
-            selected_native = (float(native_col), float(native_row))
+    selected_native = _record_native_pair(peak_record)
+    selected_display = _record_display_pair(peak_record)
+    clicked_native_for_record = (float(clicked_native_col), float(clicked_native_row))
+    if bool(caked_view_enabled) and selected_native is not None:
+        clicked_native_for_record = (float(selected_native[0]), float(selected_native[1]))
 
     picked = bool(
         select_peak_by_index(
@@ -2876,9 +3040,10 @@ def select_peak_from_canvas_click(
             prefix=f"Nearest peak (Δ={best_dist:.1f}px)",
             sync_hkl_vars=True,
             clicked_display=(float(click_col), float(click_row)),
-            clicked_native=(float(clicked_native_col), float(clicked_native_row)),
-            selected_display=None,
+            clicked_native=clicked_native_for_record,
+            selected_display=selected_display,
             selected_native=selected_native,
+            record_override=peak_record,
         )
     )
     if picked:

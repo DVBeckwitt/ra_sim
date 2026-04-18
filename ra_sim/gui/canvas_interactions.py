@@ -749,11 +749,8 @@ def handle_runtime_canvas_click(
         return bool(click_handler(float(event.xdata), float(event.ydata)))
 
     if bool(bindings.peak_selection_state.hkl_pick_armed):
-        if (
-            getattr(event, "inaxes", None) is not bindings.axis
-            or getattr(event, "xdata", None) is None
-            or getattr(event, "ydata", None) is None
-        ):
+        hkl_pick_coords = _manual_pick_click_coords(bindings, event)
+        if hkl_pick_coords is None:
             return False
         click_handler = getattr(
             bindings.peak_selection_callbacks,
@@ -762,7 +759,7 @@ def handle_runtime_canvas_click(
         )
         if not callable(click_handler):
             return False
-        return bool(click_handler(float(event.xdata), float(event.ydata)))
+        return bool(click_handler(float(hkl_pick_coords[0]), float(hkl_pick_coords[1])))
 
     if _runtime_caked_view_enabled(bindings):
         return False

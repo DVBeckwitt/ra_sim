@@ -100,7 +100,10 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
         nonlocal call_count
         call_count += 1
         return (
-            np.array([[10.0, 5.0, 6.0, 0.2, H, K, L]], dtype=np.float64),
+            np.array(
+                [[10.0, 5.0, 6.0, 0.2, H, K, L, np.nan, np.nan, 0.0]],
+                dtype=np.float64,
+            ),
             np.empty(0, dtype=np.int64),
             np.empty((0, 3), dtype=np.float64),
             0,
@@ -121,8 +124,10 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
     assert call_count == 1
     first = np.asarray(hit_tables[0])
     second = np.asarray(hit_tables[1])
-    assert first.shape == (1, 7)
-    assert second.shape == (1, 7)
+    assert first.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert second.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert int(np.rint(float(first[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
+    assert int(np.rint(float(second[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
 
     # Cached hit keeps geometry/intensity columns but updates HKL for the row.
     np.testing.assert_allclose(first[0, 0:4], second[0, 0:4])
@@ -179,7 +184,7 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_even_with_different_sf(mo
         # scaling can be asserted exactly.
         return (
             np.array(
-                [[reflection_intensity, 5.0, 6.0, 0.2, H, K, L]],
+                [[reflection_intensity, 5.0, 6.0, 0.2, H, K, L, np.nan, np.nan, 0.0]],
                 dtype=np.float64,
             ),
             np.empty(0, dtype=np.int64),
@@ -202,6 +207,10 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_even_with_different_sf(mo
     assert call_count == 1
     first = np.asarray(hit_tables[0])
     second = np.asarray(hit_tables[1])
+    assert first.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert second.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert int(np.rint(float(first[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
+    assert int(np.rint(float(second[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
     np.testing.assert_allclose(first[0, 0], 2.0)
     np.testing.assert_allclose(second[0, 0], 4.0)
     np.testing.assert_allclose(first[0, 4:7], [1.0, 0.0, 1.0])
@@ -260,7 +269,7 @@ def test_process_peaks_parallel_marks_matching_sphere_samples_for_reuse(monkeypa
             dtype=np.float64,
         ).copy()
         return (
-            np.empty((0, 7), dtype=np.float64),
+            np.empty((0, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64),
             np.empty(0, dtype=np.int64),
             np.empty((0, 3), dtype=np.float64),
             0,

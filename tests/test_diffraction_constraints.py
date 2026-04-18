@@ -392,6 +392,40 @@ def test_build_intersection_cache_keeps_two_non_specular_representatives(monkeyp
     )
 
 
+def test_build_intersection_cache_prefers_top_mosaic_row_per_branch(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    nan = np.nan
+    hit_tables = [
+        np.array(
+            [
+                [1.0, 9.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 3.0],
+                [1.0, 13.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 1.0],
+                [1.0, 47.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 4.0],
+                [1.0, 53.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 2.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    cache = diffraction.build_intersection_cache(
+        hit_tables,
+        4.0,
+        7.0,
+        beam_x_array=np.zeros(5, dtype=np.float64),
+        beam_y_array=np.zeros(5, dtype=np.float64),
+        theta_array=np.array([0.20, 0.01, 0.02, 0.30, 0.40], dtype=np.float64),
+        phi_array=np.array([0.20, 0.00, 0.01, 0.30, 0.40], dtype=np.float64),
+        wavelength_array=np.ones(5, dtype=np.float64),
+        best_sample_indices_out=np.array([-1], dtype=np.int64),
+    )
+
+    assert len(cache) == 2
+    selected = np.vstack([np.asarray(table, dtype=np.float64)[0, :] for table in cache])
+    np.testing.assert_allclose(selected[:, 2:4], np.array([[13.0, 10.0], [53.0, 10.0]]))
+    np.testing.assert_allclose(selected[:, 16], np.array([1.0, 2.0]))
+
+
 def test_build_intersection_cache_merges_specular_tables_by_nominal_l(monkeypatch):
     monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
 
@@ -635,8 +669,10 @@ def test_calculate_phi_from_precomputed_uses_pixel_size(monkeypatch):
         pixel_size_m=200e-6,
     )
 
-    assert hits_100.shape == (1, 7)
-    assert hits_200.shape == (1, 7)
+    assert hits_100.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert hits_200.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert int(np.rint(float(hits_100[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
+    assert int(np.rint(float(hits_200[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
     assert float(hits_100[0, 1]) > float(hits_200[0, 1])
     np.testing.assert_allclose(float(hits_100[0, 1]), 10.0, atol=1.0e-12, rtol=0.0)
     np.testing.assert_allclose(float(hits_200[0, 1]), 9.0, atol=1.0e-12, rtol=0.0)
@@ -718,7 +754,8 @@ def test_calculate_phi_from_precomputed_samples_one_ring_point_using_total_ring_
         sample_qr_ring_once=True,
     )
 
-    assert hits.shape == (1, 7)
+    assert hits.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert int(np.rint(float(hits[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
     np.testing.assert_allclose(float(hits[0, 0]), 8.0, atol=1.0e-12, rtol=0.0)
 
 

@@ -15,6 +15,8 @@ from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_SOURCE_ROW_INDEX,
     CACHE_COL_SOURCE_TABLE_INDEX,
     CURRENT_DETECTOR_CACHE_WIDTH,
+    HIT_ROW_COL_BEST_SAMPLE_INDEX,
+    HIT_ROW_WITH_PROVENANCE_WIDTH,
     cache_table_to_hit_table,
     coerce_float64_table,
 )
@@ -428,8 +430,8 @@ def _write_intersection_cache_log(
         "cache_source": source_label or "build_intersection_cache",
         "cache_provenance": {
             "grouping": "nominal_bragg_family",
-            "collapse": "detector_branch_representative_rows",
-            "beam_context": "best_sample_indices_out_only",
+            "collapse": "detector_branch_top_mosaic_rows",
+            "beam_context": "per_hit_sample_index_preferred",
         },
         "av": float(av) if isinstance(av, (int, float, np.floating)) else None,
         "cv": float(cv) if isinstance(cv, (int, float, np.floating)) else None,
@@ -1294,14 +1296,17 @@ def _merge_thread_local_images(image, image_partials):
 @njit(cache=True)
 def _copy_scaled_hit_table(src_hits, scale, H, K, L):
     n_src_hits = src_hits.shape[0]
-    pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+    src_width = src_hits.shape[1]
+    pixel_hits = np.empty((n_src_hits, src_width), dtype=np.float64)
     if n_src_hits <= 0:
         return pixel_hits
-    pixel_hits[:, :] = src_hits
-    pixel_hits[:, 0] *= scale
-    pixel_hits[:, 4] = H
-    pixel_hits[:, 5] = K
-    pixel_hits[:, 6] = L
+    for row_idx in range(n_src_hits):
+        for col_idx in range(src_width):
+            pixel_hits[row_idx, col_idx] = src_hits[row_idx, col_idx]
+        pixel_hits[row_idx, 0] *= scale
+        pixel_hits[row_idx, 4] = H
+        pixel_hits[row_idx, 5] = K
+        pixel_hits[row_idx, 6] = L
     return pixel_hits
 
 
@@ -2739,7 +2744,7 @@ def _build_source_unit_template(params, phase_entry, H, K, L):
     return {
         "flat_indices": np.empty(0, dtype=np.int64),
         "flat_values": np.empty(0, dtype=np.float64),
-        "hit_template": np.empty((0, 7), dtype=np.float64),
+        "hit_template": np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64),
         "miss_template": np.empty((0, 3), dtype=np.float64),
         "status_template": np.full(n_samp, int(status), dtype=np.int64),
         "best_sample_idx": -1,
@@ -2859,7 +2864,7 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
 
         if source_template is None or L < 0.0:
             status_template = np.zeros(n_samp, dtype=np.int64)
-            hit_table = np.empty((0, 7), dtype=np.float64)
+            hit_table = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
             miss_table = np.empty((0, 3), dtype=np.float64)
         else:
             flat_indices = np.asarray(
@@ -2875,7 +2880,7 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
                 np.add.at(image_flat, flat_indices[:n_values], refl_intensity * flat_values[:n_values])
 
             hit_template = np.asarray(
-                source_template.get("hit_template", np.empty((0, 7), dtype=np.float64)),
+                source_template.get("hit_template", np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)),
                 dtype=np.float64,
             )
             if collect_hit_tables and hit_template.size > 0:
@@ -2886,7 +2891,7 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
                     hit_table[:, 5] = K
                     hit_table[:, 6] = L
             else:
-                hit_table = np.empty((0, 7), dtype=np.float64)
+                hit_table = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
 
             miss_template = np.asarray(
                 source_template.get("miss_template", np.empty((0, 3), dtype=np.float64)),
@@ -3934,16 +3939,16 @@ def _calculate_phi_from_precomputed(
         capture_aux = False
     if capture_aux:
         max_hits = max(n_samp * 2, 16)
-        pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
+        pixel_hits = np.empty((max_hits, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
         missed_kf = np.empty((max_hits, 3), dtype=np.float64)
     else:
         max_hits = 0
-        pixel_hits = np.empty((0, 7), dtype=np.float64)
+        pixel_hits = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
         missed_kf = np.empty((0, 3), dtype=np.float64)
     n_hits = 0
     n_missed = 0
 
-    best_candidate = np.empty(7, dtype=np.float64)
+    best_candidate = np.empty(HIT_ROW_WITH_PROVENANCE_WIDTH, dtype=np.float64)
     best_candidate_val = -1.0
     have_candidate = False
     recorded_nominal_hit = False
@@ -4502,6 +4507,9 @@ def _calculate_phi_from_precomputed(
                         best_candidate[4] = H
                         best_candidate[5] = K
                         best_candidate[6] = L
+                        best_candidate[7] = np.nan
+                        best_candidate[8] = np.nan
+                        best_candidate[9] = float(chain_idx)
                     have_candidate = True
                     best_candidate_sample_idx = chain_idx
 
@@ -4514,6 +4522,9 @@ def _calculate_phi_from_precomputed(
                         pixel_hits[n_hits, 4] = H
                         pixel_hits[n_hits, 5] = K
                         pixel_hits[n_hits, 6] = L
+                        pixel_hits[n_hits, 7] = np.nan
+                        pixel_hits[n_hits, 8] = np.nan
+                        pixel_hits[n_hits, 9] = float(chain_idx)
                         n_hits += 1
                     recorded_nominal_hit = True
 
@@ -4876,7 +4887,7 @@ def _process_peaks_parallel_impl(
     miss_tables = List.empty_list(types.float64[:, ::1])
     if collect_tables:
         for _ in range(num_peaks):
-            hit_tables.append(np.empty((0, 7), dtype=np.float64))
+            hit_tables.append(np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64))
             miss_tables.append(np.empty((0, 3), dtype=np.float64))
     n_samp = beam_x_array.size
     all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
@@ -5043,13 +5054,13 @@ def _process_peaks_parallel_impl(
         if collect_tables:
             max_hits = max(n_samp * 2, 16)
             src_hit_counts = np.zeros(source_count, dtype=np.int64)
-            src_hits = np.zeros((source_count, max_hits, 7), dtype=np.float64)
+            src_hits = np.zeros((source_count, max_hits, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
             src_miss_counts = np.zeros(source_count, dtype=np.int64)
             src_miss = np.zeros((source_count, max_hits, 3), dtype=np.float64)
         else:
             max_hits = 1
             src_hit_counts = np.zeros(1, dtype=np.int64)
-            src_hits = np.zeros((1, 1, 7), dtype=np.float64)
+            src_hits = np.zeros((1, 1, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
             src_miss_counts = np.zeros(1, dtype=np.int64)
             src_miss = np.zeros((1, 1, 3), dtype=np.float64)
         src_best_sample = np.full(source_count, -1, dtype=np.int64)
@@ -5201,13 +5212,8 @@ def _process_peaks_parallel_impl(
                     nh = max_hits
                 src_hit_counts[i_src] = nh
                 for j in range(nh):
-                    src_hits[i_src, j, 0] = pixel_hits[j, 0]
-                    src_hits[i_src, j, 1] = pixel_hits[j, 1]
-                    src_hits[i_src, j, 2] = pixel_hits[j, 2]
-                    src_hits[i_src, j, 3] = pixel_hits[j, 3]
-                    src_hits[i_src, j, 4] = pixel_hits[j, 4]
-                    src_hits[i_src, j, 5] = pixel_hits[j, 5]
-                    src_hits[i_src, j, 6] = pixel_hits[j, 6]
+                    for hit_col in range(HIT_ROW_WITH_PROVENANCE_WIDTH):
+                        src_hits[i_src, j, hit_col] = pixel_hits[j, hit_col]
 
                 nm = missed_arr.shape[0]
                 if nm > max_hits:
@@ -5229,15 +5235,10 @@ def _process_peaks_parallel_impl(
             i_pk = source_indices[i_src]
             if collect_tables:
                 nh = int(src_hit_counts[i_src])
-                pixel_hits = np.empty((nh, 7), dtype=np.float64)
+                pixel_hits = np.empty((nh, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
                 for j in range(nh):
-                    pixel_hits[j, 0] = src_hits[i_src, j, 0]
-                    pixel_hits[j, 1] = src_hits[i_src, j, 1]
-                    pixel_hits[j, 2] = src_hits[i_src, j, 2]
-                    pixel_hits[j, 3] = src_hits[i_src, j, 3]
-                    pixel_hits[j, 4] = src_hits[i_src, j, 4]
-                    pixel_hits[j, 5] = src_hits[i_src, j, 5]
-                    pixel_hits[j, 6] = src_hits[i_src, j, 6]
+                    for hit_col in range(HIT_ROW_WITH_PROVENANCE_WIDTH):
+                        pixel_hits[j, hit_col] = src_hits[i_src, j, hit_col]
                 hit_tables[i_pk] = pixel_hits
 
                 nm = int(src_miss_counts[i_src])
@@ -5264,7 +5265,7 @@ def _process_peaks_parallel_impl(
             reflI_eff = source_total_sf[i_pk]
             if reflI_eff <= 0.0:
                 if collect_tables:
-                    hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+                    hit_tables[i_pk] = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
                     miss_tables[i_pk] = np.empty((0, 3), dtype=np.float64)
                 if record_status:
                     all_status[i_pk, :] = 0
@@ -5432,7 +5433,7 @@ def _process_peaks_parallel_impl(
                     pixel_hits = _copy_scaled_hit_table(src_hits, scale, H, K, L)
                     hit_tables[i_pk] = pixel_hits
                 else:
-                    hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+                    hit_tables[i_pk] = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
 
                 src_miss = miss_tables[src_idx]
                 miss_tables[i_pk] = _copy_miss_table(src_miss)
@@ -5472,7 +5473,7 @@ def _process_peaks_parallel_impl(
 
             if scale <= 0.0:
                 if collect_tables:
-                    hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+                    hit_tables[i_pk] = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
                 if save_flag == 1:
                     q_count[i_pk] = 0
                 continue
@@ -6143,9 +6144,12 @@ def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
 def hit_tables_to_max_positions(hit_tables):
     """Extract up to two subpixel peak centers per reflection from ``hit_tables``.
 
-    ``process_peaks_parallel`` returns a list of pixel-hit tables, each with
-    columns ``[intensity, col, row, phi, H, K, L]``.  The ``col``/``row``
-    coordinates are stored in floating detector-pixel units.  Older callers
+    ``process_peaks_parallel`` returns a list of pixel-hit tables whose first
+    seven columns are ``[intensity, col, row, phi, H, K, L]``. Current kernel
+    rows may also carry ``[source_table_index, source_row_index,
+    best_sample_index]`` so the intersection cache can recover the detector ray
+    closest to the mosaic top. The ``col``/``row`` coordinates are stored in
+    floating detector-pixel units. Older callers
     expect a ``max_positions`` array shaped ``(N, 6)`` containing the two
     strongest candidate peak centers per reflection:
     ``(I0, x0, y0, I1, x1, y1)``.  Nearby hit-table rows are merged into
@@ -6329,7 +6333,7 @@ def _intersection_cache_target_row_count(table: np.ndarray) -> int:
 
 
 def _intersection_cache_representative_local_index(coords: np.ndarray) -> int:
-    """Return the row index nearest the unweighted mean detector position."""
+    """Return the local row index nearest the unweighted mean detector position."""
 
     if coords.ndim != 2 or coords.shape[0] <= 0:
         return 0
@@ -6337,6 +6341,147 @@ def _intersection_cache_representative_local_index(coords: np.ndarray) -> int:
     deltas = coords - center
     dist_sq = np.sum(deltas * deltas, axis=1)
     return int(np.argmin(dist_sq))
+
+
+def _intersection_cache_row_sample_index(table: np.ndarray, row_idx: int) -> int | None:
+    """Return the beam-sample index carried by one cache row when present."""
+
+    if table.ndim != 2 or table.shape[1] <= CACHE_COL_BEST_SAMPLE_INDEX:
+        return None
+    value = table[int(row_idx), CACHE_COL_BEST_SAMPLE_INDEX]
+    if not np.isfinite(value):
+        return None
+    sample_idx = int(np.rint(float(value)))
+    if sample_idx < 0:
+        return None
+    return sample_idx
+
+
+def _array_value(arr: np.ndarray | None, index: int) -> float:
+    if arr is None or index < 0 or index >= arr.shape[0]:
+        return float("nan")
+    value = float(arr[index])
+    return value if np.isfinite(value) else float("nan")
+
+
+def _intersection_cache_top_mosaic_key(
+    table: np.ndarray,
+    row_idx: int,
+    detector_center: np.ndarray,
+    beam_x_array: np.ndarray | None = None,
+    beam_y_array: np.ndarray | None = None,
+    theta_array: np.ndarray | None = None,
+    phi_array: np.ndarray | None = None,
+    wavelength_array: np.ndarray | None = None,
+) -> tuple[tuple[float, float, float, float, float, int], bool]:
+    """Return a sortable key for the row nearest the top of the mosaic."""
+
+    row_idx = int(row_idx)
+    angular_metric = float("inf")
+    beam_metric = float("inf")
+    wavelength_metric = float("inf")
+    has_top_metric = False
+
+    sample_idx = _intersection_cache_row_sample_index(table, row_idx)
+    if sample_idx is not None:
+        theta_val = _array_value(theta_array, sample_idx)
+        phi_val = _array_value(phi_array, sample_idx)
+        if np.isfinite(theta_val) and np.isfinite(phi_val):
+            angular_metric = theta_val * theta_val + phi_val * phi_val
+            has_top_metric = True
+
+        beam_x_val = _array_value(beam_x_array, sample_idx)
+        beam_y_val = _array_value(beam_y_array, sample_idx)
+        if np.isfinite(beam_x_val) and np.isfinite(beam_y_val):
+            beam_metric = beam_x_val * beam_x_val + beam_y_val * beam_y_val
+
+        wavelength_val = _array_value(wavelength_array, sample_idx)
+        if np.isfinite(wavelength_val):
+            if wavelength_array is not None and wavelength_array.size > 0:
+                finite_wavelengths = wavelength_array[np.isfinite(wavelength_array)]
+                if finite_wavelengths.size > 0:
+                    wavelength_metric = abs(wavelength_val - float(np.mean(finite_wavelengths)))
+
+    if not has_top_metric and table.shape[1] > 12:
+        theta_offset = float(table[row_idx, 11])
+        phi_offset = float(table[row_idx, 12])
+        if np.isfinite(theta_offset) and np.isfinite(phi_offset):
+            angular_metric = theta_offset * theta_offset + phi_offset * phi_offset
+            has_top_metric = True
+        if table.shape[1] > 10:
+            beam_x_offset = float(table[row_idx, 9])
+            beam_y_offset = float(table[row_idx, 10])
+            if np.isfinite(beam_x_offset) and np.isfinite(beam_y_offset):
+                beam_metric = beam_x_offset * beam_x_offset + beam_y_offset * beam_y_offset
+        if table.shape[1] > 13:
+            wavelength_offset = float(table[row_idx, 13])
+            if np.isfinite(wavelength_offset):
+                wavelength_metric = abs(wavelength_offset)
+
+    col = float(table[row_idx, 2]) if table.shape[1] > 2 else float("nan")
+    row = float(table[row_idx, 3]) if table.shape[1] > 3 else float("nan")
+    if np.isfinite(col) and np.isfinite(row) and detector_center.shape[0] >= 2:
+        detector_dist = (
+            (col - float(detector_center[0])) * (col - float(detector_center[0]))
+            + (row - float(detector_center[1])) * (row - float(detector_center[1]))
+        )
+    else:
+        detector_dist = float("inf")
+    intensity = float(table[row_idx, 4]) if table.shape[1] > 4 else float("nan")
+    intensity_key = -intensity if np.isfinite(intensity) else float("inf")
+    return (
+        (
+            float(angular_metric),
+            float(beam_metric),
+            float(wavelength_metric),
+            float(detector_dist),
+            float(intensity_key),
+            int(row_idx),
+        ),
+        bool(has_top_metric),
+    )
+
+
+def _intersection_cache_representative_row_index(
+    table: np.ndarray,
+    candidate_indices: np.ndarray,
+    beam_x_array: np.ndarray | None = None,
+    beam_y_array: np.ndarray | None = None,
+    theta_array: np.ndarray | None = None,
+    phi_array: np.ndarray | None = None,
+    wavelength_array: np.ndarray | None = None,
+) -> int:
+    """Return the representative row, preferring the ray nearest mosaic center."""
+
+    candidates = np.asarray(candidate_indices, dtype=np.int64).reshape(-1)
+    if candidates.size <= 0:
+        return 0
+
+    coords = np.asarray(table[candidates, 2:4], dtype=np.float64)
+    detector_center = np.mean(coords, axis=0, dtype=np.float64)
+    best_idx: int | None = None
+    best_key: tuple[float, float, float, float, float, int] | None = None
+    for idx in candidates:
+        key, has_top_metric = _intersection_cache_top_mosaic_key(
+            table,
+            int(idx),
+            detector_center,
+            beam_x_array=beam_x_array,
+            beam_y_array=beam_y_array,
+            theta_array=theta_array,
+            phi_array=phi_array,
+            wavelength_array=wavelength_array,
+        )
+        if not has_top_metric:
+            continue
+        if best_key is None or key < best_key:
+            best_key = key
+            best_idx = int(idx)
+    if best_idx is not None:
+        return best_idx
+
+    rep_local_idx = _intersection_cache_representative_local_index(coords)
+    return int(candidates[rep_local_idx])
 
 
 def _intersection_cache_two_row_clusters(coords: np.ndarray) -> list[np.ndarray]:
@@ -6388,7 +6533,15 @@ def _collapse_intersection_cache_table(cache_table: np.ndarray) -> np.ndarray:
     return table[np.asarray(selected_indices, dtype=np.int64), :].copy()
 
 
-def _intersection_cache_selected_row_indices(cache_table: np.ndarray) -> list[int]:
+def _intersection_cache_selected_row_indices(
+    cache_table: np.ndarray,
+    *,
+    beam_x_array: np.ndarray | None = None,
+    beam_y_array: np.ndarray | None = None,
+    theta_array: np.ndarray | None = None,
+    phi_array: np.ndarray | None = None,
+    wavelength_array: np.ndarray | None = None,
+) -> list[int]:
     """Return the representative combined-table row indices kept by cache collapse."""
 
     table = np.asarray(cache_table, dtype=np.float64)
@@ -6411,35 +6564,64 @@ def _intersection_cache_selected_row_indices(cache_table: np.ndarray) -> list[in
 
     valid_coords = coords[valid_indices, :]
     if target_count == 1 or valid_indices.size == 1:
-        rep_local_idx = _intersection_cache_representative_local_index(valid_coords)
-        return [int(valid_indices[rep_local_idx])]
+        return [
+            _intersection_cache_representative_row_index(
+                table,
+                valid_indices,
+                beam_x_array=beam_x_array,
+                beam_y_array=beam_y_array,
+                theta_array=theta_array,
+                phi_array=phi_array,
+                wavelength_array=wavelength_array,
+            )
+        ]
 
     selected_indices: list[int] = []
     for cluster_local_indices in _intersection_cache_two_row_clusters(valid_coords):
         if cluster_local_indices.size <= 0:
             continue
-        cluster_coords = valid_coords[cluster_local_indices, :]
-        rep_local_idx = _intersection_cache_representative_local_index(cluster_coords)
+        cluster_indices = valid_indices[cluster_local_indices]
         selected_indices.append(
-            int(valid_indices[int(cluster_local_indices[rep_local_idx])])
+            _intersection_cache_representative_row_index(
+                table,
+                cluster_indices,
+                beam_x_array=beam_x_array,
+                beam_y_array=beam_y_array,
+                theta_array=theta_array,
+                phi_array=phi_array,
+                wavelength_array=wavelength_array,
+            )
         )
 
     if not selected_indices:
-        rep_local_idx = _intersection_cache_representative_local_index(valid_coords)
-        return [int(valid_indices[rep_local_idx])]
+        return [
+            _intersection_cache_representative_row_index(
+                table,
+                valid_indices,
+                beam_x_array=beam_x_array,
+                beam_y_array=beam_y_array,
+                theta_array=theta_array,
+                phi_array=phi_array,
+                wavelength_array=wavelength_array,
+            )
+        ]
 
     if len(selected_indices) < target_count:
         remaining = [
             idx for idx in valid_indices.tolist() if int(idx) not in selected_indices
         ]
-        remaining_coords = coords[np.asarray(remaining, dtype=np.int64), :]
         while remaining and len(selected_indices) < target_count:
-            rep_local_idx = _intersection_cache_representative_local_index(
-                remaining_coords
+            rep_idx = _intersection_cache_representative_row_index(
+                table,
+                np.asarray(remaining, dtype=np.int64),
+                beam_x_array=beam_x_array,
+                beam_y_array=beam_y_array,
+                theta_array=theta_array,
+                phi_array=phi_array,
+                wavelength_array=wavelength_array,
             )
-            selected_indices.append(int(remaining.pop(rep_local_idx)))
-            if remaining:
-                remaining_coords = coords[np.asarray(remaining, dtype=np.int64), :]
+            selected_indices.append(int(rep_idx))
+            remaining = [idx for idx in remaining if int(idx) != int(rep_idx)]
 
     ordered_indices = sorted(
         {int(idx) for idx in selected_indices},
@@ -6524,6 +6706,12 @@ def _intersection_cache_summary_q_value(values: np.ndarray) -> float | None:
 
 def _expand_intersection_cache_group_with_metadata(
     cache_tables: list[np.ndarray],
+    *,
+    beam_x_array: np.ndarray | None = None,
+    beam_y_array: np.ndarray | None = None,
+    theta_array: np.ndarray | None = None,
+    phi_array: np.ndarray | None = None,
+    wavelength_array: np.ndarray | None = None,
 ) -> tuple[list[np.ndarray], dict[str, object]]:
     """Reduce one nominal Bragg family and return cache-table provenance metadata."""
 
@@ -6541,7 +6729,14 @@ def _expand_intersection_cache_group_with_metadata(
         if len(valid_tables) > 1
         else np.asarray(valid_tables[0], dtype=np.float64)
     )
-    selected_indices = _intersection_cache_selected_row_indices(combined_table)
+    selected_indices = _intersection_cache_selected_row_indices(
+        combined_table,
+        beam_x_array=beam_x_array,
+        beam_y_array=beam_y_array,
+        theta_array=theta_array,
+        phi_array=phi_array,
+        wavelength_array=wavelength_array,
+    )
     collapsed_table = (
         combined_table[np.asarray(selected_indices, dtype=np.int64), :].copy()
         if selected_indices
@@ -6613,6 +6808,39 @@ def _expand_intersection_cache_group_with_metadata(
     return final_tables, metadata
 
 
+def _sample_context_index_valid(
+    sample_idx: int,
+    beam_x_array: np.ndarray | None,
+    beam_y_array: np.ndarray | None,
+    theta_array: np.ndarray | None,
+    phi_array: np.ndarray | None,
+    wavelength_array: np.ndarray | None,
+) -> bool:
+    """Return whether all per-sample context arrays contain ``sample_idx``."""
+
+    if sample_idx < 0:
+        return False
+    arrays = (beam_x_array, beam_y_array, theta_array, phi_array, wavelength_array)
+    for arr in arrays:
+        if arr is None or sample_idx >= arr.shape[0]:
+            return False
+    return True
+
+
+def _hit_table_row_sample_indices(hits_arr: np.ndarray) -> np.ndarray:
+    """Return per-hit beam sample indices carried by provenance-width hit tables."""
+
+    n_rows = int(hits_arr.shape[0]) if hits_arr.ndim == 2 else 0
+    row_sample_indices = np.full(n_rows, -1, dtype=np.int64)
+    if hits_arr.ndim != 2 or hits_arr.shape[1] <= HIT_ROW_COL_BEST_SAMPLE_INDEX:
+        return row_sample_indices
+    raw_values = np.asarray(hits_arr[:, HIT_ROW_COL_BEST_SAMPLE_INDEX], dtype=np.float64)
+    finite_mask = np.isfinite(raw_values)
+    row_sample_indices[finite_mask] = np.rint(raw_values[finite_mask]).astype(np.int64)
+    row_sample_indices[row_sample_indices < 0] = -1
+    return row_sample_indices
+
+
 def build_intersection_cache(
     hit_tables,
     av,
@@ -6633,9 +6861,9 @@ def build_intersection_cache(
     Replay helpers also accept legacy 14-column detector caches plus legacy/current
     caked layouts with widths 16 and 19, but this builder remains the authoritative
     producer for the 17-column detector schema. Hit tables are merged by nominal
-    Bragg family before reduction, then the final cache keeps one one-row table
-    for each ``00L`` peak and one one-row table per detector-side branch for
-    non-specular peaks.
+    Bragg family before reduction, then the final cache keeps the row nearest the
+    top of the mosaic for each ``00L`` peak and one such row per detector-side
+    branch for non-specular peaks.
     """
 
     if hit_tables is None:
@@ -6704,17 +6932,29 @@ def build_intersection_cache(
         sample_idx = -1
         if best_sample_arr is not None and table_idx < best_sample_arr.shape[0]:
             sample_idx = int(best_sample_arr[table_idx])
+        row_sample_indices = _hit_table_row_sample_indices(hits_arr)
 
         if has_beam_context_arrays:
-            has_valid_sample_idx = (
-                sample_idx >= 0
-                and sample_idx < beam_x_arr.shape[0]
-                and sample_idx < beam_y_arr.shape[0]
-                and sample_idx < theta_arr.shape[0]
-                and sample_idx < phi_arr.shape[0]
-                and sample_idx < wavelength_arr.shape[0]
+            has_valid_sample_idx = _sample_context_index_valid(
+                sample_idx,
+                beam_x_arr,
+                beam_y_arr,
+                theta_arr,
+                phi_arr,
+                wavelength_arr,
             )
-            if not has_valid_sample_idx:
+            has_valid_row_sample_idx = any(
+                _sample_context_index_valid(
+                    int(row_sample_idx),
+                    beam_x_arr,
+                    beam_y_arr,
+                    theta_arr,
+                    phi_arr,
+                    wavelength_arr,
+                )
+                for row_sample_idx in row_sample_indices
+            )
+            if not (has_valid_sample_idx or has_valid_row_sample_idx):
                 dropped_missing_best_sample_tables.append(int(table_idx))
                 continue
 
@@ -6727,21 +6967,35 @@ def build_intersection_cache(
         cache_table[:, 4] = hits_arr[:, 0]
         cache_table[:, 5] = hits_arr[:, 3]
         cache_table[:, 6:9] = hits_arr[:, 4:7]
+        cache_table[:, 9:14] = np.nan
+        cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX] = np.nan
         if has_beam_context_arrays:
-            cache_table[:, 9] = beam_x_arr[sample_idx] - beam_x_center
-            cache_table[:, 10] = beam_y_arr[sample_idx] - beam_y_center
-            cache_table[:, 11] = theta_arr[sample_idx] - theta_center
-            cache_table[:, 12] = phi_arr[sample_idx] - phi_center
-            cache_table[:, 13] = wavelength_arr[sample_idx] - wavelength_center
+            for row_idx in range(n_rows):
+                row_sample_idx = int(row_sample_indices[row_idx])
+                sample_for_row = row_sample_idx if row_sample_idx >= 0 else sample_idx
+                if _sample_context_index_valid(
+                    sample_for_row,
+                    beam_x_arr,
+                    beam_y_arr,
+                    theta_arr,
+                    phi_arr,
+                    wavelength_arr,
+                ):
+                    cache_table[row_idx, 9] = beam_x_arr[sample_for_row] - beam_x_center
+                    cache_table[row_idx, 10] = beam_y_arr[sample_for_row] - beam_y_center
+                    cache_table[row_idx, 11] = theta_arr[sample_for_row] - theta_center
+                    cache_table[row_idx, 12] = phi_arr[sample_for_row] - phi_center
+                    cache_table[row_idx, 13] = wavelength_arr[sample_for_row] - wavelength_center
+                    cache_table[row_idx, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_for_row)
         else:
-            cache_table[:, 9:14] = np.nan
+            valid_row_samples = row_sample_indices >= 0
+            cache_table[valid_row_samples, CACHE_COL_BEST_SAMPLE_INDEX] = row_sample_indices[
+                valid_row_samples
+            ].astype(np.float64)
+            if sample_idx >= 0:
+                cache_table[~valid_row_samples, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_idx)
         cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX] = float(table_idx)
         cache_table[:, CACHE_COL_SOURCE_ROW_INDEX] = np.arange(n_rows, dtype=np.float64)
-        cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX] = (
-            float(sample_idx)
-            if sample_idx >= 0
-            else np.nan
-        )
 
         group_key = _intersection_cache_group_key(cache_table)
         if group_key is None:
@@ -6752,7 +7006,12 @@ def build_intersection_cache(
     cache_table_summaries = []
     for group_tables in grouped_cache_tables.values():
         expanded_tables, group_metadata = _expand_intersection_cache_group_with_metadata(
-            group_tables
+            group_tables,
+            beam_x_array=beam_x_arr,
+            beam_y_array=beam_y_arr,
+            theta_array=theta_arr,
+            phi_array=phi_arr,
+            wavelength_array=wavelength_arr,
         )
         cache.extend(expanded_tables)
         if isinstance(group_metadata, dict) and group_metadata:
