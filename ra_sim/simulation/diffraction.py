@@ -10,6 +10,14 @@ import numpy as np
 from ra_sim.config import get_dir
 from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
+from ra_sim.simulation.intersection_cache_schema import (
+    CACHE_COL_BEST_SAMPLE_INDEX,
+    CACHE_COL_SOURCE_ROW_INDEX,
+    CACHE_COL_SOURCE_TABLE_INDEX,
+    CURRENT_DETECTOR_CACHE_WIDTH,
+    cache_table_to_hit_table,
+    coerce_float64_table,
+)
 from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
 from ra_sim.debug_controls import (
     current_startup_debug_log_path,
@@ -393,9 +401,10 @@ def _write_intersection_cache_log(
     table_arrays: list[np.ndarray] = []
     table_files: list[str] = []
     for idx, table in enumerate(cache):
-        table_arr = np.asarray(table, dtype=np.float64)
-        if table_arr.ndim != 2:
-            table_arr = np.empty((0, 17), dtype=np.float64)
+        table_arr = coerce_float64_table(
+            table,
+            empty_width=CURRENT_DETECTOR_CACHE_WIDTH,
+        )
         table_name = f"table_{int(idx):04d}.npy"
         row_counts.append(int(table_arr.shape[0]))
         table_arrays.append(np.asarray(table_arr, dtype=np.float64).copy())
@@ -6169,11 +6178,11 @@ def hit_tables_to_max_positions(hit_tables):
 def intersection_cache_to_hit_tables(intersection_cache):
     """Convert intersection-cache tables into legacy hit-table rows.
 
-    Cache tables store columns ``[Qr, Qz, detector_col, detector_row, intensity,
-    phi, H, K, L, ...]``. Downstream geometry and selection paths still expect
-    hit-table-leading rows shaped ``[intensity, col, row, phi, H, K, L]``.
-    Preserve the input table count and append cache provenance columns when
-    present: ``[source_table_index, source_row_index, best_sample_index]``.
+    Supported cache layouts are detector ``14``/``17`` columns and caked
+    ``16``/``19`` columns. Downstream geometry and selection paths expect base
+    hit rows shaped ``[intensity, col, row, phi, H, K, L]`` and append
+    ``[source_table_index, source_row_index, best_sample_index]`` only when the
+    cache layout truly carries provenance. Input table count stays unchanged.
     """
 
     hit_tables = []
@@ -6181,41 +6190,7 @@ def intersection_cache_to_hit_tables(intersection_cache):
         return hit_tables
 
     for table in intersection_cache:
-        try:
-            cache_arr = np.asarray(table, dtype=np.float64)
-        except Exception:
-            hit_tables.append(np.empty((0, 7), dtype=np.float64))
-            continue
-
-        if cache_arr.size == 0:
-            hit_tables.append(np.empty((0, 7), dtype=np.float64))
-            continue
-        if cache_arr.ndim == 1:
-            cache_arr = cache_arr.reshape(1, -1)
-        if cache_arr.ndim != 2 or cache_arr.shape[1] < 9:
-            hit_tables.append(np.empty((0, 7), dtype=np.float64))
-            continue
-
-        hit_table = np.full((cache_arr.shape[0], 10), np.nan, dtype=np.float64)
-        hit_table[:, 0] = cache_arr[:, 4]
-        hit_table[:, 1] = cache_arr[:, 2]
-        hit_table[:, 2] = cache_arr[:, 3]
-        hit_table[:, 3] = cache_arr[:, 5]
-        hit_table[:, 4] = cache_arr[:, 6]
-        hit_table[:, 5] = cache_arr[:, 7]
-        hit_table[:, 6] = cache_arr[:, 8]
-        if cache_arr.shape[1] >= 17:
-            hit_table[:, 7] = cache_arr[:, 14]
-            hit_table[:, 8] = cache_arr[:, 15]
-            hit_table[:, 9] = cache_arr[:, 16]
-
-        finite_rows = np.isfinite(hit_table[:, 0])
-        finite_rows &= np.isfinite(hit_table[:, 1])
-        finite_rows &= np.isfinite(hit_table[:, 2])
-        finite_rows &= np.isfinite(hit_table[:, 4])
-        finite_rows &= np.isfinite(hit_table[:, 5])
-        finite_rows &= np.isfinite(hit_table[:, 6])
-        hit_tables.append(np.asarray(hit_table[finite_rows], dtype=np.float64).copy())
+        hit_tables.append(cache_table_to_hit_table(table))
 
     return hit_tables
 
@@ -6223,7 +6198,13 @@ def intersection_cache_to_hit_tables(intersection_cache):
 def _copy_intersection_cache(cache):
     """Return one detached copy of the mosaic-ring intersection cache."""
 
-    return [np.asarray(table, dtype=np.float64).copy() for table in cache]
+    return [
+        coerce_float64_table(
+            table,
+            empty_width=CURRENT_DETECTOR_CACHE_WIDTH,
+        )
+        for table in cache
+    ]
 
 
 def _set_last_intersection_cache(cache):
@@ -6242,10 +6223,12 @@ def _set_last_intersection_cache(cache):
 def get_last_intersection_cache():
     """Return the last detector-hit cache keyed by Qr/Qz set.
 
-    Each table aligns with one simulated reflection and stores
+    Fresh builds store the current 17-column detector layout:
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
     beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset,
     wavelength_offset, source_table_index, source_row_index, best_sample_index]``.
+    Replay and conversion helpers remain backward-compatible with legacy
+    14-column detector caches and caked layouts with widths 16 and 19.
     """
 
     return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
@@ -6643,13 +6626,16 @@ def build_intersection_cache(
 ):
     """Convert hit tables into a per-Bragg-peak detector intersection cache.
 
-    Columns are:
+    Current detector-cache rows use 17 columns:
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
     beam_x_offset, beam_z_offset, divergence_x_offset, divergence_z_offset,
     wavelength_offset, source_table_index, source_row_index, best_sample_index]``.
-    Hit tables are merged by nominal Bragg family before reduction, then the
-    final cache keeps one one-row table for each ``00L`` peak and one one-row
-    table per detector-side branch for non-specular peaks.
+    Replay helpers also accept legacy 14-column detector caches plus legacy/current
+    caked layouts with widths 16 and 19, but this builder remains the authoritative
+    producer for the 17-column detector schema. Hit tables are merged by nominal
+    Bragg family before reduction, then the final cache keeps one one-row table
+    for each ``00L`` peak and one one-row table per detector-side branch for
+    non-specular peaks.
     """
 
     if hit_tables is None:
@@ -6733,7 +6719,7 @@ def build_intersection_cache(
                 continue
 
         n_rows = hits_arr.shape[0]
-        cache_table = np.empty((n_rows, 17), dtype=np.float64)
+        cache_table = np.empty((n_rows, CURRENT_DETECTOR_CACHE_WIDTH), dtype=np.float64)
         cache_table[:, 0] = qr_vals
         cache_table[:, 1] = qz_vals
         cache_table[:, 2] = hits_arr[:, 1]
@@ -6749,9 +6735,9 @@ def build_intersection_cache(
             cache_table[:, 13] = wavelength_arr[sample_idx] - wavelength_center
         else:
             cache_table[:, 9:14] = np.nan
-        cache_table[:, 14] = float(table_idx)
-        cache_table[:, 15] = np.arange(n_rows, dtype=np.float64)
-        cache_table[:, 16] = (
+        cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX] = float(table_idx)
+        cache_table[:, CACHE_COL_SOURCE_ROW_INDEX] = np.arange(n_rows, dtype=np.float64)
+        cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX] = (
             float(sample_idx)
             if sample_idx >= 0
             else np.nan

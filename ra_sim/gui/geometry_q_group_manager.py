@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
 from ra_sim.simulation.diffraction import (
     get_process_peaks_runtime_kwargs,
     process_peaks_parallel as diffraction_process_peaks_parallel,
@@ -855,28 +856,13 @@ def build_geometry_fit_simulated_peaks(
             if not (np.isfinite(intensity) and np.isfinite(xpix) and np.isfinite(ypix)):
                 continue
 
-            source_table_index = int(table_idx)
-            source_row_index = int(row_idx)
-            best_sample_index = None
-            if row.shape[0] >= 10:
-                try:
-                    source_table_value = float(row[7])
-                except Exception:
-                    source_table_value = float("nan")
-                try:
-                    source_row_value = float(row[8])
-                except Exception:
-                    source_row_value = float("nan")
-                try:
-                    best_sample_value = float(row[9])
-                except Exception:
-                    best_sample_value = float("nan")
-                if np.isfinite(source_table_value):
-                    source_table_index = int(np.rint(source_table_value))
-                if np.isfinite(source_row_value):
-                    source_row_index = int(np.rint(source_row_value))
-                if np.isfinite(best_sample_value):
-                    best_sample_index = int(np.rint(best_sample_value))
+            source_table_index, source_row_index, best_sample_index = (
+                extract_hit_row_provenance(row)
+            )
+            if source_table_index is None:
+                source_table_index = int(table_idx)
+            if source_row_index is None:
+                source_row_index = int(row_idx)
 
             native_col = float(xpix)
             native_row = float(ypix)
@@ -1734,6 +1720,10 @@ def make_runtime_geometry_q_group_value_callbacks(
         [float, float, tuple[int, int]],
         tuple[float, float],
     ],
+    native_detector_coords_to_detector_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
     caked_view_enabled_factory: object = False,
     native_detector_coords_to_caked_display_coords: Callable[
         [float, float], tuple[float, float] | None
@@ -1843,6 +1833,28 @@ def make_runtime_geometry_q_group_value_callbacks(
                         float(projected_caked[1]),
                     )
             raw_detector_display = _finite_point(entry, "sim_col_raw", "sim_row_raw")
+            if (
+                raw_detector_display is None
+                and native_point is not None
+                and callable(native_detector_coords_to_detector_display_coords)
+            ):
+                try:
+                    projected = native_detector_coords_to_detector_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                    )
+                except Exception:
+                    projected = None
+                if (
+                    isinstance(projected, tuple)
+                    and len(projected) >= 2
+                    and np.isfinite(float(projected[0]))
+                    and np.isfinite(float(projected[1]))
+                ):
+                    raw_detector_display = (
+                        float(projected[0]),
+                        float(projected[1]),
+                    )
             if (
                 raw_detector_display is None
                 and native_point is not None
@@ -2084,6 +2096,9 @@ def make_runtime_geometry_q_group_value_callbacks(
                 caked_view_enabled_factory=caked_view_enabled_factory,
                 native_detector_coords_to_caked_display_coords=(
                     native_detector_coords_to_caked_display_coords
+                ),
+                native_detector_coords_to_detector_display_coords=(
+                    native_detector_coords_to_detector_display_coords
                 ),
             )
         except Exception:

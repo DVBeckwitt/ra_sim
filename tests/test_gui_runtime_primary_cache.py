@@ -127,6 +127,26 @@ def test_build_primary_subset_payload_for_qr_preserves_sorted_m_local_order() ->
     )
 
 
+def test_copy_intersection_cache_tables_preserves_supported_schema_widths() -> None:
+    copied = primary_cache_helpers.copy_intersection_cache_tables(
+        [
+            np.empty((0, 14), dtype=np.float64),
+            np.empty((0, 16), dtype=np.float64),
+            np.empty((0, 17), dtype=np.float64),
+            np.empty((0, 19), dtype=np.float64),
+            object(),
+        ]
+    )
+
+    assert [table.shape for table in copied[:4]] == [
+        (0, 14),
+        (0, 16),
+        (0, 17),
+        (0, 19),
+    ]
+    assert copied[4].shape == (0, 17)
+
+
 def test_resolve_incremental_sf_prune_action_only_requests_missing_added_keys() -> None:
     action = runtime_primary_cache.resolve_incremental_sf_prune_action(
         cache_signature=("base", 1),
@@ -315,6 +335,7 @@ def test_store_primary_cache_payload_handles_discard_path() -> None:
         active_keys=[1],
         contribution_keys=[1],
         raw_hit_tables=[np.ones((1, 7), dtype=np.float64)],
+        best_sample_indices=None,
         retain_runtime_optional_cache=lambda *_args, **_kwargs: False,
         trace_live_cache_event=trace_live_cache_event,
         live_cache_count=lambda value: len(value) if value is not None else 0,

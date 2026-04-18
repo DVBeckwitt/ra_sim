@@ -5307,6 +5307,11 @@ def make_runtime_geometry_manual_projection_callbacks(
     intensities: Callable[[], object] | object = None,
     image_size: Callable[[], object] | object = 0,
     display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None,
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, ...]],
+        tuple[float, float],
+    ]
+    | None = None,
     get_detector_angular_maps: Callable[[object], tuple[object, object]] = lambda _ai: (None, None),
     detector_pixel_to_scattering_angles: Callable[
         [float, float, Sequence[float] | None, float, float],
@@ -5626,27 +5631,41 @@ def make_runtime_geometry_manual_projection_callbacks(
                 if len(background_shape) >= 2 and min(background_shape) > 0
                 else sim_shape
             )
-            if (
-                native_point is not None
-                and len(detector_display_shape) >= 2
-                and min(detector_display_shape) > 0
-            ):
-                try:
-                    rotated = rotate_point_for_display(
-                        float(native_point[0]),
-                        float(native_point[1]),
-                        detector_display_shape,
-                        int(display_rotate_k),
-                    )
-                except Exception:
-                    rotated = None
+            if native_point is not None:
+                projected_native = None
+                if callable(native_sim_to_display_coords):
+                    try:
+                        projected_native = native_sim_to_display_coords(
+                            float(native_point[0]),
+                            float(native_point[1]),
+                            sim_shape,
+                        )
+                    except Exception:
+                        projected_native = None
                 if (
-                    isinstance(rotated, tuple)
-                    and len(rotated) >= 2
-                    and np.isfinite(float(rotated[0]))
-                    and np.isfinite(float(rotated[1]))
+                    projected_native is None
+                    and len(detector_display_shape) >= 2
+                    and min(detector_display_shape) > 0
                 ):
-                    raw_detector_display = (float(rotated[0]), float(rotated[1]))
+                    try:
+                        projected_native = rotate_point_for_display(
+                            float(native_point[0]),
+                            float(native_point[1]),
+                            detector_display_shape,
+                            int(display_rotate_k),
+                        )
+                    except Exception:
+                        projected_native = None
+                if (
+                    isinstance(projected_native, tuple)
+                    and len(projected_native) >= 2
+                    and np.isfinite(float(projected_native[0]))
+                    and np.isfinite(float(projected_native[1]))
+                ):
+                    raw_detector_display = (
+                        float(projected_native[0]),
+                        float(projected_native[1]),
+                    )
 
             if (
                 native_point is None

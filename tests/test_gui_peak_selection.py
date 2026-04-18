@@ -526,6 +526,7 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
         "reflection_q_group_metadata": "q-group",
         "caked_view_enabled_factory": False,
         "native_detector_coords_to_caked_display_coords": None,
+        "native_detector_coords_to_detector_display_coords": None,
         "max_hits_per_reflection": captured["kwargs"]["max_hits_per_reflection"],
         "min_separation_px": 2.5,
         "force": True,
@@ -533,6 +534,45 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
     assert captured["kwargs"]["primary_a"]() == 5.0
     assert captured["kwargs"]["primary_c"]() == 7.0
     assert captured["kwargs"]["max_hits_per_reflection"]() == 3
+
+
+def test_peak_selection_runtime_peak_overlay_data_prefers_detector_display_projection_for_detector_view() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig",),
+        stored_primary_intersection_cache=[
+            np.asarray(
+                [[np.nan, np.nan, 10.0, 20.0, 8.0, 0.125, 1.0, 0.0, 2.0]],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+    sim_display_calls: list[tuple[float, float, tuple[int, int]]] = []
+    detector_display_calls: list[tuple[float, float]] = []
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            sim_display_calls.append((float(col), float(row), image_shape))
+            or (float(col) + 100.0, float(row) + 200.0)
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            detector_display_calls.append((float(col), float(row)))
+            or (float(col) + 10.0, float(row) + 20.0)
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 0.75),
+        max_hits_per_reflection=1,
+        min_separation_px=0.0,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(20.0, 40.0)]
+    assert runtime_state.peak_records[0]["display_col"] == 20.0
+    assert runtime_state.peak_records[0]["display_row"] == 40.0
+    assert detector_display_calls == [(10.0, 20.0)]
+    assert sim_display_calls == []
 
 
 def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cache() -> None:
@@ -847,6 +887,68 @@ def test_peak_selection_runtime_peak_overlay_data_uses_cached_caked_coords() -> 
     assert record["cv"] == 6.0
     assert record["source_table_index"] == 0
     assert record["source_row_index"] == 0
+
+
+def test_peak_selection_runtime_peak_overlay_data_reads_current_caked_cache_provenance() -> None:
+    bundle = object()
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=None,
+        last_caked_intersection_cache=[
+            np.asarray(
+                [
+                    [
+                        1.5,
+                        2.5,
+                        40.0,
+                        50.0,
+                        8.0,
+                        0.375,
+                        1.0,
+                        0.0,
+                        2.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        5.0,
+                        6.0,
+                        7.0,
+                        17.5,
+                        -32.0,
+                    ]
+                ],
+                dtype=float,
+            )
+        ],
+        last_caked_transform_bundle=bundle,
+        last_caked_intersection_cache_transform_bundle=bundle,
+        last_caked_intersection_cache_source_signature=(0, 0),
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("current caked cache rows should not use raw display conversion")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
+        caked_view_enabled_factory=True,
+        native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("current caked cache should use stored caked coordinates")
+        ),
+    )
+
+    assert ok is True
+    record = runtime_state.peak_records[0]
+    assert runtime_state.peak_positions == [(17.5, -32.0)]
+    assert record["source_table_index"] == 5
+    assert record["source_row_index"] == 6
+    assert record["best_sample_index"] == 7
+    assert record["two_theta_deg"] == 17.5
+    assert record["phi_deg"] == -32.0
 
 
 def test_peak_selection_runtime_peak_overlay_data_prefers_live_caked_cache_over_detector_cache() -> (
@@ -2039,6 +2141,165 @@ def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cach
     assert runtime_state.peak_positions == [(91.0, -44.0)]
 
 
+def test_restore_peak_overlay_lists_prefers_detector_display_projection_for_detector_view() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "hkl": (1, 0, 2),
+                    "intensity": 8.0,
+                    "native_col": 10.0,
+                    "native_row": 20.0,
+                    "sim_col_raw": 110.0,
+                    "sim_row_raw": 220.0,
+                }
+            ]
+        }
+    )
+    sim_display_calls: list[tuple[float, float, tuple[int, int]]] = []
+    detector_display_calls: list[tuple[float, float]] = []
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=False,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            sim_display_calls.append((float(col), float(row), image_shape))
+            or (float(col) + 100.0, float(row) + 200.0)
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            detector_display_calls.append((float(col), float(row)))
+            or (float(col) + 10.0, float(row) + 20.0)
+        ),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(20.0, 40.0)]
+    assert runtime_state.peak_records[0]["display_col"] == 20.0
+    assert runtime_state.peak_records[0]["display_row"] == 40.0
+    assert detector_display_calls == [(10.0, 20.0)]
+    assert sim_display_calls == []
+
+
+def test_select_peak_from_canvas_click_uses_detector_display_inverse_in_detector_view() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(12.0, 22.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[8.0],
+        peak_records=[{"native_col": 10.0, "native_row": 20.0}],
+    )
+    peak_state = state.PeakSelectionState()
+    picked_calls: list[dict[str, object]] = []
+    detector_inverse_calls: list[tuple[float, float]] = []
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        12.0,
+        22.0,
+        config=_canvas_pick_config(),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("detector view should not use sim-display inverse")
+        ),
+        native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: picked_calls.append({"idx": idx, **kwargs}) or True,
+        set_pick_mode=lambda *_args, **_kwargs: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        caked_view_enabled=False,
+        detector_display_to_native_detector_coords=lambda col, row: (
+            detector_inverse_calls.append((float(col), float(row)))
+            or (float(col) + 100.0, float(row) + 200.0)
+        ),
+    )
+
+    assert ok is True
+    assert detector_inverse_calls == [(12.0, 22.0)]
+    assert picked_calls[0]["clicked_native"] == (112.0, 222.0)
+
+
+def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_returns_none_without_sim_inverse() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(12.0, 22.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[8.0],
+        peak_records=[{"native_col": 10.0, "native_row": 20.0}],
+    )
+    peak_state = state.PeakSelectionState()
+    picked_calls: list[dict[str, object]] = []
+    detector_inverse_calls: list[tuple[float, float]] = []
+    status_messages: list[str] = []
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        12.0,
+        22.0,
+        config=_canvas_pick_config(),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=None,
+        native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: picked_calls.append({"idx": idx, **kwargs}) or True,
+        set_pick_mode=lambda *_args, **_kwargs: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+        caked_view_enabled=False,
+        detector_display_to_native_detector_coords=lambda col, row: (
+            detector_inverse_calls.append((float(col), float(row))) or None
+        ),
+    )
+
+    assert ok is False
+    assert detector_inverse_calls == [(12.0, 22.0)]
+    assert picked_calls == []
+    assert status_messages == []
+
+
+def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_returns_non_finite_without_sim_inverse() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(12.0, 22.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[8.0],
+        peak_records=[{"native_col": 10.0, "native_row": 20.0}],
+    )
+    peak_state = state.PeakSelectionState()
+    picked_calls: list[dict[str, object]] = []
+    detector_inverse_calls: list[tuple[float, float]] = []
+    status_messages: list[str] = []
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        12.0,
+        22.0,
+        config=_canvas_pick_config(),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=None,
+        native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: picked_calls.append({"idx": idx, **kwargs}) or True,
+        set_pick_mode=lambda *_args, **_kwargs: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+        caked_view_enabled=False,
+        detector_display_to_native_detector_coords=lambda col, row: (
+            detector_inverse_calls.append((float(col), float(row)))
+            or (float("nan"), float("nan"))
+        ),
+    )
+
+    assert ok is False
+    assert detector_inverse_calls == [(12.0, 22.0)]
+    assert picked_calls == []
+    assert status_messages == []
+
+
 def test_select_peak_from_canvas_click_uses_100x100_square_search_window() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(50.0, 50.0)],
@@ -2807,6 +3068,81 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         ("click_cb", "bindings-8", 3.0, 4.0),
         ("find_click_cb", "bindings-9", 5.0, 6.0, 7.0),
     ]
+
+
+def test_select_peak_from_runtime_canvas_click_allows_detector_inverse_without_sim_inverse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_state = state.SimulationRuntimeState()
+    peak_state = state.PeakSelectionState()
+    marker = _FakeMarker()
+    calls: list[tuple[object, ...]] = []
+
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        set_status_text=lambda _text: None,
+        display_to_native_sim_coords=None,
+        detector_display_to_native_detector_coords=lambda col, row: (col, row),
+    )
+
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_canvas_click",
+        lambda runtime_state_arg, peak_state_arg, click_col, click_row, **kwargs: (
+            calls.append(
+                (runtime_state_arg, peak_state_arg, click_col, click_row, kwargs)
+            ),
+            True,
+        )[-1],
+    )
+
+    assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is True
+    assert len(calls) == 1
+    assert calls[0][0] is runtime_state
+    assert calls[0][1] is peak_state
+    assert calls[0][2:4] == (9.5, 11.5)
+    assert calls[0][4]["caked_view_enabled"] is False
+    assert calls[0][4]["display_to_native_sim_coords"] is None
+    assert callable(calls[0][4]["detector_display_to_native_detector_coords"])
+
+
+def test_select_peak_from_runtime_canvas_click_requires_sim_inverse_in_caked_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=state.SimulationRuntimeState(),
+        peak_selection_state=state.PeakSelectionState(),
+        hkl_lookup_view_state=None,
+        selected_peak_marker=_FakeMarker(),
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: True,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        set_status_text=lambda _text: None,
+        display_to_native_sim_coords=None,
+        detector_display_to_native_detector_coords=lambda col, row: (col, row),
+    )
+    called = {"value": False}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_canvas_click",
+        lambda *_args, **_kwargs: called.__setitem__("value", True) or True,
+    )
+
+    assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is False
+    assert called["value"] is False
 
 
 def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:

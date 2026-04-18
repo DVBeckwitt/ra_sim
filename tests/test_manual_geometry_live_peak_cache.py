@@ -330,6 +330,82 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
     assert cache_entry["sim_row_raw"] == 4.0
 
 
+def test_build_geometry_manual_pick_cache_peak_record_fallback_uses_peak_lookup_projection_when_available() -> None:
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.zeros((8, 8), dtype=float),
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("native detector coords should still drive display reprojection")
+        ),
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        rotate_point_for_display=lambda col, row, _shape, _k: (
+            float(col),
+            float(row),
+        ),
+        display_rotate_k=0,
+        get_detector_angular_maps=_fail_projection_legacy_path(
+            "detector angular maps should not be used"
+        ),
+        detector_pixel_to_scattering_angles=_fail_projection_legacy_path(
+            "analytic forward fallback should not be used"
+        ),
+    )
+
+    peak_record = {
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "native_col": 6.0,
+        "native_row": 7.0,
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "intensity": 3.0,
+    }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        peak_records=[peak_record],
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+    )
+
+    cache_entry = cache_data["simulated_lookup"][_source_key(peak_record)]
+    assert cache_entry["native_col"] == 6.0
+    assert cache_entry["native_row"] == 7.0
+    assert cache_entry["sim_col"] == 106.0
+    assert cache_entry["sim_row"] == 207.0
+    assert cache_entry["sim_col_raw"] == 106.0
+    assert cache_entry["sim_row_raw"] == 207.0
+    assert cache_entry["display_col"] == 106.0
+    assert cache_entry["display_row"] == 207.0
+    assert next_sig == ("sig",)
+    grouped_entry = next_state["grouped_candidates"][peak_record["q_group_key"]][0]
+    assert grouped_entry["sim_col"] == 106.0
+    assert grouped_entry["sim_row"] == 207.0
+    assert grouped_entry["display_col"] == 106.0
+    assert grouped_entry["display_row"] == 207.0
+
+
 def test_build_geometry_manual_pick_cache_peak_record_fallback_reprojects_detector_from_native_fields() -> None:
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,

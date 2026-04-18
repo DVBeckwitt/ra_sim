@@ -1051,6 +1051,14 @@ def build_runtime_selected_peak_bootstrap(
         [float, float], tuple[float, float] | None
     ]
     | None = None,
+    native_detector_coords_to_detector_display_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
+    detector_display_to_native_detector_coords: Callable[
+        [float, float], tuple[float, float] | None
+    ]
+    | None = None,
     reflection_q_group_metadata: Callable[..., object] | None = None,
     max_hits_per_reflection: object = None,
     schedule_update_factory: object = None,
@@ -1118,6 +1126,9 @@ def build_runtime_selected_peak_bootstrap(
         native_detector_coords_to_caked_display_coords=(
             native_detector_coords_to_caked_display_coords
         ),
+        native_detector_coords_to_detector_display_coords=(
+            native_detector_coords_to_detector_display_coords
+        ),
         max_hits_per_reflection=max_hits_per_reflection,
         min_separation_px=min_separation_px,
     )
@@ -1137,7 +1148,13 @@ def build_runtime_selected_peak_bootstrap(
         set_status_text_factory=set_status_text_factory,
         draw_idle_factory=draw_idle_factory,
         display_to_native_sim_coords=display_to_native_sim_coords,
+        detector_display_to_native_detector_coords=(
+            detector_display_to_native_detector_coords
+        ),
         native_sim_to_display_coords=native_sim_to_display_coords,
+        native_detector_coords_to_detector_display_coords=(
+            native_detector_coords_to_detector_display_coords
+        ),
         simulate_ideal_hkl_native_center=config_factories.ideal_center,
         deactivate_conflicting_modes_factory=deactivate_conflicting_modes_factory,
         on_hkl_pick_mode_changed_factory=on_hkl_pick_mode_changed_factory,

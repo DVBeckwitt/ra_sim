@@ -73,7 +73,7 @@ def test_hit_tables_to_max_positions_prefers_local_peak_over_cluster_tail():
     assert 19.95 < float(maxpos[0, 2]) < 20.15
 
 
-def test_intersection_cache_to_hit_tables_maps_cache_centers_into_hit_rows():
+def test_intersection_cache_to_hit_tables_maps_supported_cache_layouts_into_hit_rows():
     cache = [
         np.array(
             [
@@ -84,14 +84,44 @@ def test_intersection_cache_to_hit_tables_maps_cache_centers_into_hit_rows():
         ),
         np.empty((0, 14), dtype=np.float64),
         np.array(
-            [[0.5, 0.6, 12.5, 22.5, 4.0, 32.0, np.nan, 0.0, 3.0, 0, 0, 0, 0, 0]],
+            [[0.5, 0.6, 12.5, 22.5, 4.0, 32.0, 2.0, 1.0, 3.0, 0, 0, 0, 0, 0, 5, 6, 7]],
+            dtype=np.float64,
+        ),
+        np.array(
+            [[0.7, 0.8, 13.5, 23.5, 5.0, 33.0, 3.0, 2.0, 4.0, 0, 0, 0, 0, 0, 17.5, -32.0]],
+            dtype=np.float64,
+        ),
+        np.array(
+            [
+                [
+                    0.9,
+                    1.0,
+                    14.5,
+                    24.5,
+                    6.0,
+                    34.0,
+                    4.0,
+                    3.0,
+                    5.0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    8,
+                    9,
+                    10,
+                    18.5,
+                    -31.0,
+                ]
+            ],
             dtype=np.float64,
         ),
     ]
 
     hit_tables = diffraction.intersection_cache_to_hit_tables(cache)
 
-    assert len(hit_tables) == 3
+    assert len(hit_tables) == 5
     np.testing.assert_allclose(
         hit_tables[0],
         np.array(
@@ -103,4 +133,24 @@ def test_intersection_cache_to_hit_tables_maps_cache_centers_into_hit_rows():
         ),
     )
     assert hit_tables[1].shape == (0, 7)
-    assert hit_tables[2].shape == (0, 7)
+    np.testing.assert_allclose(
+        hit_tables[2],
+        np.array(
+            [[4.0, 12.5, 22.5, 32.0, 2.0, 1.0, 3.0, 5.0, 6.0, 7.0]],
+            dtype=np.float64,
+        ),
+    )
+    np.testing.assert_allclose(
+        hit_tables[3],
+        np.array(
+            [[5.0, 13.5, 23.5, 33.0, 3.0, 2.0, 4.0]],
+            dtype=np.float64,
+        ),
+    )
+    np.testing.assert_allclose(
+        hit_tables[4],
+        np.array(
+            [[6.0, 14.5, 24.5, 34.0, 4.0, 3.0, 5.0, 8.0, 9.0, 10.0]],
+            dtype=np.float64,
+        ),
+    )

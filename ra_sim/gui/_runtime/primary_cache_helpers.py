@@ -9,6 +9,11 @@ import numpy as np
 from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
+from ra_sim.simulation.intersection_cache_schema import (
+    CURRENT_DETECTOR_CACHE_WIDTH,
+    coerce_float64_table,
+    empty_hit_table,
+)
 
 
 def copy_intersection_cache_tables(cache: object) -> list[np.ndarray]:
@@ -16,10 +21,12 @@ def copy_intersection_cache_tables(cache: object) -> list[np.ndarray]:
     if not isinstance(cache, (list, tuple)):
         return copied
     for table in cache:
-        try:
-            copied.append(np.asarray(table, dtype=np.float64).copy())
-        except Exception:
-            copied.append(np.empty((0, 17), dtype=np.float64))
+        copied.append(
+            coerce_float64_table(
+                table,
+                empty_width=CURRENT_DETECTOR_CACHE_WIDTH,
+            )
+        )
     return copied
 
 
@@ -31,7 +38,7 @@ def copy_hit_tables(hit_tables: object) -> list[np.ndarray]:
         try:
             copied.append(np.asarray(table, dtype=np.float64).copy())
         except Exception:
-            copied.append(np.empty((0, 7), dtype=np.float64))
+            copied.append(empty_hit_table())
     return copied
 
 

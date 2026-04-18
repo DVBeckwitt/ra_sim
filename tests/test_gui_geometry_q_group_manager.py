@@ -319,6 +319,28 @@ def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> No
     assert fallback_peaks[0]["q_group_key"] == ("q_group", "primary", 3, 0)
 
 
+def test_geometry_q_group_manager_builds_simulated_peaks_from_provenance_hit_rows() -> None:
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        [
+            np.asarray(
+                [
+                    [10.0, 1.2, 2.8, -15.0, 1.0, 0.0, 0.0, 5.0, 6.0, 7.0],
+                ],
+                dtype=float,
+            )
+        ],
+        image_shape=(20, 30),
+        native_sim_to_display_coords=lambda col, row, shape: (col, row),
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        round_pixel_centers=False,
+    )
+
+    assert len(peaks) == 1
+    assert peaks[0]["source_table_index"] == 5
+    assert peaks[0]["source_row_index"] == 6
+    assert peaks[0]["best_sample_index"] == 7
+
+
 def test_geometry_q_group_manager_aggregates_peak_centers_from_max_positions() -> None:
     assert geometry_q_group_manager.geometry_fit_peak_center_from_max_position(
         [9.0, 1.0, 2.0, 4.0, 8.0, 9.0]
@@ -1302,6 +1324,62 @@ def test_geometry_q_group_manager_rebuilds_stale_peak_records_from_overlay_build
     entries = bundle.build_entries_snapshot()
     assert len(entries) == 1
     assert entries[0]["key"] == ("q_group", "primary", 1, 0)
+
+
+def test_geometry_q_group_manager_rebuilds_detector_display_coords_from_detector_projection() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 30.25,
+                "display_row": -57.5,
+                "native_col": 1.5,
+                "native_row": 2.5,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "phi": 15.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "source_peak_index": 13,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_sim_image=np.zeros((48, 48), dtype=float),
+    )
+    sim_display_calls: list[tuple[float, float, tuple[int, int]]] = []
+    detector_display_calls: list[tuple[float, float]] = []
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 11.0,
+        primary_c_factory=lambda: 13.0,
+        image_size_factory=lambda: 48,
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            sim_display_calls.append((float(col), float(row), image_shape))
+            or (float(col) + 100.0, float(row) + 200.0)
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            detector_display_calls.append((float(col), float(row)))
+            or (float(col) + 10.0, float(row) + 20.0)
+        ),
+    )
+
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["sim_col"] == 11.5
+    assert cached_preview_peaks[0]["sim_row"] == 22.5
+    assert cached_preview_peaks[0]["display_col"] == 11.5
+    assert cached_preview_peaks[0]["display_row"] == 22.5
+    assert cached_preview_peaks[0]["sim_col_raw"] == 11.5
+    assert cached_preview_peaks[0]["sim_row_raw"] == 22.5
+    assert detector_display_calls
+    assert all(call == (1.5, 2.5) for call in detector_display_calls)
+    assert sim_display_calls == []
 
 
 def test_geometry_q_group_manager_reprojects_peak_records_into_current_view() -> None:
