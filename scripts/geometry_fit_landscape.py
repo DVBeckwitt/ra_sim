@@ -68,6 +68,38 @@ SUMMARY_METRIC_NAMES = [
     "anisotropy_ratio",
     "runtime_s",
 ]
+THESIS_METRIC_NAMES = [
+    "visible_peak_count",
+    "centroid_x_px",
+    "centroid_y_px",
+    "radius_gyration_px",
+    "x_span_px",
+    "y_span_px",
+    "anisotropy_ratio",
+]
+THESIS_METRIC_LABELS = {
+    "visible_peak_count": "Visible peaks",
+    "centroid_x_px": "Centroid x",
+    "centroid_y_px": "Centroid y",
+    "radius_gyration_px": "Radius of gyration",
+    "x_span_px": "x span",
+    "y_span_px": "y span",
+    "anisotropy_ratio": "Anisotropy",
+}
+THESIS_PARAMETER_LABELS = {
+    "zb": r"$z_b$",
+    "zs": r"$z_s$",
+    "theta_initial": r"$\theta$",
+    "theta_offset": r"$\Delta\theta$",
+    "psi_z": r"$\psi_z$",
+    "chi": r"$\chi$",
+    "cor_angle": r"$\alpha_{\mathrm{cor}}$",
+    "gamma": r"$\gamma$",
+    "Gamma": r"$\Gamma$",
+    "corto_detector": r"$d$",
+    "center_x": r"$c_x$",
+    "center_y": r"$c_y$",
+}
 PANEL_METRIC_NAMES = [
     "visible_peak_count",
     "centroid_shift_px",
@@ -80,6 +112,8 @@ PANEL_METRIC_COLORS = {
     "radius_gyration_px": "#1f5aa6",
     "anisotropy_ratio": "#9c6644",
 }
+
+
 @dataclass(frozen=True)
 class SweepSpec:
     """Resolved one-at-a-time sweep for one geometry-fit parameter."""
@@ -477,6 +511,10 @@ def _zscore(values: list[float]) -> np.ndarray:
     if not np.isfinite(std) or std <= 0.0:
         return np.zeros_like(arr, dtype=float)
     return (arr - mean) / std
+
+
+def _thesis_parameter_label(name: str) -> str:
+    return str(THESIS_PARAMETER_LABELS.get(name, name.replace("_", " ")))
 
 
 def _update_param_set_for_sweep(
@@ -1083,6 +1121,50 @@ def render_landscape_figure(
     plt.close(fig)
 
 
+def render_thesis_identifiability_heatmap(
+    rows: list[dict[str, object]],
+    sweep_specs: list[SweepSpec],
+    *,
+    output_path: Path,
+) -> None:
+    """Render a compact thesis-ready local geometry-sensitivity heatmap."""
+
+    correlation_matrix = build_correlation_matrix(
+        rows,
+        sweep_specs,
+        metric_names=THESIS_METRIC_NAMES,
+    )
+    figure_height = max(5.5, 2.2 + 0.42 * len(sweep_specs))
+    fig, axis = plt.subplots(figsize=(7.25, figure_height))
+    image = axis.imshow(
+        correlation_matrix,
+        cmap="coolwarm",
+        aspect="auto",
+        vmin=-1.0,
+        vmax=1.0,
+    )
+    axis.set_title("Local geometry-parameter sensitivity around the converged baseline")
+    axis.set_xlabel("Detector-space summary metric")
+    axis.set_ylabel("Geometry-fit parameter")
+    axis.set_xticks(np.arange(len(THESIS_METRIC_NAMES)))
+    axis.set_xticklabels(
+        [THESIS_METRIC_LABELS[name] for name in THESIS_METRIC_NAMES],
+        rotation=30,
+        ha="right",
+        fontsize=9,
+    )
+    axis.set_yticks(np.arange(len(sweep_specs)))
+    axis.set_yticklabels(
+        [_thesis_parameter_label(spec.name) for spec in sweep_specs],
+        fontsize=10,
+    )
+    colorbar = fig.colorbar(image, ax=axis, fraction=0.046, pad=0.02)
+    colorbar.set_label("Signed Spearman correlation", rotation=90)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _default_output_dir() -> Path:
     stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     return Path("artifacts") / f"geometry_fit_landscape_{stamp}"
@@ -1121,6 +1203,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Output directory for CSV, PNG, and metadata JSON.",
+    )
+    parser.add_argument(
+        "--thesis-heatmap",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path for a compact thesis-ready identifiability heatmap "
+            "PNG generated from the same sweep rows."
+        ),
     )
     return parser
 
@@ -1171,11 +1262,23 @@ def main(argv: list[str] | None = None) -> int:
     figure_elapsed_s = float(time.perf_counter() - figure_started)
     write_baseline_metadata(context, sweep_specs, baseline_metrics, metadata_path)
 
+    thesis_heatmap_path = None
+    if args.thesis_heatmap is not None:
+        thesis_heatmap_path = Path(args.thesis_heatmap).expanduser().resolve()
+        thesis_heatmap_path.parent.mkdir(parents=True, exist_ok=True)
+        render_thesis_identifiability_heatmap(
+            rows,
+            sweep_specs,
+            output_path=thesis_heatmap_path,
+        )
+
     print(f"Simulation generation took {simulation_elapsed_s:.2f} s")
     print(f"Figure update took {figure_elapsed_s:.2f} s")
     print(f"Wrote {csv_path}")
     print(f"Wrote {figure_path}")
     print(f"Wrote {metadata_path}")
+    if thesis_heatmap_path is not None:
+        print(f"Wrote {thesis_heatmap_path}")
     return 0
 
 

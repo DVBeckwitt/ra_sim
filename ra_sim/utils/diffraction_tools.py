@@ -7,6 +7,8 @@ import json
 import math
 import re
 from contextlib import redirect_stdout
+from functools import lru_cache
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -19,6 +21,24 @@ from ra_sim.utils.calculations import d_spacing, two_theta
 
 
 DEFAULT_PIXEL_SIZE_M = 100e-6
+
+
+@lru_cache(maxsize=1)
+def _load_pyplot():
+    import matplotlib.pyplot as pyplot
+
+    return pyplot
+
+
+class _LazyPyplotProxy:
+    def __getattr__(self, name: str):
+        return getattr(_load_pyplot(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(_load_pyplot(), name, value)
+
+
+plt = _LazyPyplotProxy()
 
 
 def detector_two_theta_max(
@@ -295,8 +315,6 @@ def intensities_for_hkls(
 def view_azimuthal_radial(simulated_image, center, detector_params, *, rows=None, cols=None):
     """Display the azimuthal vs radial intensity map for a simulated image."""
 
-    import matplotlib.pyplot as plt
-
     _ = center
     pixel_size = detector_params["pixel_size"]
     poni1 = detector_params["poni1"]
@@ -327,6 +345,12 @@ def view_azimuthal_radial(simulated_image, center, detector_params, *, rows=None
         rows=rows,
         cols=cols,
     )
+    if not hasattr(res2, "radial_deg") and hasattr(res2, "radial"):
+        res2 = SimpleNamespace(
+            intensity=res2.intensity,
+            radial_deg=res2.radial,
+            azimuthal_deg=getattr(res2, "azimuthal_deg", res2.azimuthal),
+        )
     intensity_sorted, radial, azimuthal_adjusted_sorted = prepare_gui_phi_display(res2)
 
     extent = [

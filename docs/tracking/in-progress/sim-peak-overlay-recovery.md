@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-04-17
+Last updated: 2026-04-18
 
 This page tracks the unresolved simulated-peak overlay bug in the GUI. Use it
 as the short resume document if chat history is lost.
@@ -38,6 +38,7 @@ See also:
   the bug is in per-peak overlay identity/projection, not the whole simulation
   image generation path.
 - Most relevant recent commits:
+  - `9be9c9b` `fix(gui): split detector peak frame prep`
   - `1b62e0d` `fix(q-group): trust normalized peak records`
   - `1519e90` `fix(runtime): use exact caked cache angles`
   - `09c7be7` `fix(manual-geometry): sync refined sim aliases`
@@ -98,6 +99,30 @@ For the same simulated source peak:
   that still trust stored detector/caked alias fields instead of canonical
   detector-native truth.
 
+## Current State
+
+- Two focused implementation attempts now exist in current repo state:
+  the earlier manual-geometry native-projector handoff and the later
+  detector-frame split through peak-selection/Q-group cache paths.
+- `9be9c9b` threaded detector-view peak-frame callbacks through
+  `peak_selection`, `bootstrap`, and `geometry_q_group_manager` so live
+  detector-view overlay/cache rows rebuild in the displayed background-detector
+  frame instead of the simulator-detector frame.
+- The same detector-frame work also hardened detector-view click selection so
+  detector-only inverse callbacks fail safe when they return `None` or
+  non-finite values and no simulator inverse is available.
+- Adjacent cache-schema helper work now keeps detector/caked layout handling
+  explicit during replay, normalization, and focused regression coverage.
+- Targeted automated validation was green:
+  - `python -m pytest tests/test_gui_peak_selection.py -q` -> `47 passed`
+  - `python -m pytest tests/test_gui_runtime_import_safe.py tests/test_intersection_cache_schema.py tests/test_gui_runtime_primary_cache.py tests/test_manual_geometry_live_peak_cache.py -q` -> `234 passed`
+- Manual GUI verification still showed detector-view `Pick Qr Set` and related
+  simulated overlays failing to align with `Pick HKL` for the same simulated
+  reflection.
+- So the detector-frame work, click guard, and focused regressions changed real
+  code paths but still did not resolve the user-visible bug or produce a
+  visible behavior change in the GUI.
+
 ## What Has Already Been Changed
 
 ### 1. Q-group / peak-record trust cleanup
@@ -123,6 +148,10 @@ What it did not prove:
   angle storage instead of cake-bin center approximation.
 - Worker/cached-result geometry sourcing was updated so angle cache prep does
   not depend on live sliders when replaying a result.
+- Cache-schema handling is now centralized around the four supported layouts:
+  detector `14`/`17` and caked `16`/`19`, with shared helpers for provenance
+  and cached-angle extraction so overlay/rebuild consumers stop inferring
+  semantics from scattered raw width checks.
 
 What this helped:
 
@@ -154,6 +183,65 @@ What it did not prove:
 
 - that every consumer of simulated rows actually goes through this projector
 
+### 4. HKL/Qr-set detector projection handoff attempt
+
+- `ra_sim/gui/manual_geometry.py` was updated so
+  `project_peaks_to_current_view()` first tries
+  `native_sim_to_display_coords(...)` whenever a live candidate row already has
+  canonical native simulated detector coordinates.
+- `ra_sim/gui/_runtime/runtime_session.py` now passes
+  `_native_sim_to_display_coords` into the manual-geometry runtime projection
+  workflow.
+- `tests/test_manual_geometry_live_peak_cache.py` now covers the live
+  peak-cache fallback case and asserts detector-view manual-geometry candidates
+  keep the same projected detector coordinates as HKL lookup.
+
+What this helped:
+
+- removed one real mismatch between HKL lookup projection and the manual
+  projector code path for native simulated detector coords
+- proved the focused projector handoff works in targeted automated coverage
+
+What it did not prove:
+
+- that the failing GUI row actually goes through that code path end to end
+- that no later consumer or redraw step overwrites the corrected detector-view
+  coordinates
+- that this projector handoff is the main seam causing the remaining visible
+  bug
+
+### 5. Detector-frame peak/cache split attempt
+
+- Detector-view peak-selection cache assembly was updated so live
+  `peak_positions`, restored detector rows, and nearest-peak detector lookups
+  rebuild in the displayed background-detector frame instead of trusting
+  simulator-frame detector aliases.
+- Runtime/bootstrap wiring now carries detector-native to displayed-detector
+  callbacks into the peak-selection and Q-group preview/rebuild seams rather
+  than forcing those detector rows through the simulator-display projector.
+- Detector-view click inversion now returns safely when a detector-only inverse
+  callback yields `None` or non-finite values and no simulator inverse exists,
+  instead of falling through to a `TypeError`.
+- Cache-schema helpers and focused tests now make the supported detector/caked
+  layouts explicit for overlay/cache replay and rebuild consumers instead of
+  relying on scattered raw-width guesses.
+
+What this helped:
+
+- removed one real wrong-frame seam in detector-view HKL nearest-peak search,
+  overlay cache rebuild, and Q-group preview row normalization
+- closed one real detector-only click crash path
+- added deterministic regression coverage for the legacy/current cache-layout
+  replay seams touched by this attempt
+
+What it did not prove:
+
+- that the final visible overlay consumer keeps using those corrected
+  detector-frame coordinates instead of overwriting them later
+- that the remaining visible bug is explained by cache-schema replay rather
+  than a later overlay assembly seam
+- that manual GUI behavior changed
+
 ## What Is Most Likely Still Wrong
 
 The remaining bug is probably one of these:
@@ -165,11 +253,32 @@ The remaining bug is probably one of these:
    that row before or after the projector runs.
 3. HKL overlay, QR/manual overlay, and geometry-fit overlay are not all using
    the same canonical source-row truth for the same picked peak.
+4. The failing detector-view row may never exercise the new
+   `native_sim_to_display_coords(...)` handoff, or a later overlay assembly
+   path may replace the corrected detector coordinates before draw.
+
+Latest evidence:
+
+- the manual-geometry native-projector handoff was implemented and the focused
+  tests passed
+- `9be9c9b` detector-frame split landed with focused peak/Q-group/cache
+  regressions
+- `python -m pytest tests/test_gui_peak_selection.py -q` passed with
+  `47 passed`
+- `python -m pytest tests/test_gui_runtime_import_safe.py tests/test_intersection_cache_schema.py tests/test_gui_runtime_primary_cache.py tests/test_manual_geometry_live_peak_cache.py -q`
+  passed with `234 passed`
+- manual GUI behavior still did not change
+- so the bug is not explained solely by missing
+  `native_sim_to_display_coords(...)` inside
+  `project_peaks_to_current_view()`, nor solely by the later detector-frame
+  rewiring in peak-selection/Q-group cache paths
 
 The highest-value suspicion is still:
 
-- some per-peak overlay path is treating simulation-frame detector aliases as
-  background-display detector aliases
+- some later per-peak overlay path is still treating corrected detector-frame
+  coordinates as disposable and is either rebuilding from simulation-frame
+  aliases or overwriting the row after the peak-selection/Q-group seams already
+  did the right thing
 
 ## Most Relevant Places To Recheck
 
@@ -227,21 +336,28 @@ Questions:
 The next debugging pass should be deterministic and row-based:
 
 1. Pick one concrete bad peak in the GUI.
-2. Log or breakpoint the exact source identity for that peak:
+2. Confirm whether that exact bad row is already corrected inside
+   `simulation_runtime_state.peak_records` / detector-view peak overlay cache
+   after `ensure_runtime_peak_overlay_data()`, and whether any detector-only
+   inverse guard is even relevant for the failing interaction.
+3. Log or breakpoint the exact source identity for that peak:
    `source_table_index`, `source_row_index`, `source_peak_index`,
    `source_branch_index`, `source_reflection_index`.
-3. For that exact row, compare fields at each seam:
+4. For that exact row, compare fields at each seam:
    - `native_col/native_row`
    - `sim_col_raw/sim_row_raw`
    - `display_col/display_row`
    - `caked_x/caked_y`
    - `two_theta_deg/phi_deg`
    - `refined_sim_*`
-4. Trace that same row through:
+5. Trace that same row through:
    - HKL overlay
    - QR/manual overlay
+   - Q-group preview / candidate rebuild
    - geometry-fit `initial_pairs_display`
-5. Verify which field each consumer actually draws.
+6. Verify which field each consumer actually draws and whether any later step
+   overwrites or ignores the corrected detector-frame coords after the new
+   peak-selection/Q-group handoff.
 
 Do not start from aggregate caches or grouped previews first. Start from one
 known bad row and follow it end to end.

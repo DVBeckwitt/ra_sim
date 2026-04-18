@@ -112,6 +112,22 @@ from ra_sim.simulation.diffraction import (
     process_peaks_parallel_safe,
     process_qr_rods_parallel,
 )
+from ra_sim.simulation.intersection_cache_schema import (
+    CACHE_COL_DETECTOR_COL,
+    CACHE_COL_DETECTOR_ROW,
+    CACHE_COL_L,
+    CURRENT_CAKED_COL_PHI,
+    CURRENT_CAKED_COL_TWO_THETA,
+    CURRENT_DETECTOR_CACHE_WIDTH,
+    LEGACY_CAKED_CACHE_WIDTH,
+    LEGACY_CAKED_COL_PHI,
+    LEGACY_CAKED_COL_TWO_THETA,
+    classify_intersection_cache_table,
+    coerce_float64_table,
+    empty_caked_cache_table,
+    extract_cached_caked_angles,
+    is_intersection_cache_table,
+)
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
     process_qr_rods_parallel_debug,
@@ -5851,6 +5867,7 @@ def _initialize_runtime_controls_block_04() -> None:
             intensities=lambda: intensities,
             image_size=int(image_size),
             display_to_native_sim_coords=_display_to_native_sim_coords,
+            native_sim_to_display_coords=_native_sim_to_display_coords,
             get_detector_angular_maps=(
                 lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
             ),
@@ -6612,6 +6629,12 @@ def _initialize_runtime_controls_block_09() -> None:
             native_sim_to_display_coords=_native_sim_to_display_coords,
             native_detector_coords_to_caked_display_coords=(
                 _native_detector_coords_to_live_caked_coords
+            ),
+            native_detector_coords_to_detector_display_coords=(
+                _native_detector_coords_to_live_bundle_detector_coords
+            ),
+            detector_display_to_native_detector_coords=(
+                _background_display_to_native_detector_coords
             ),
             reflection_q_group_metadata=(gui_geometry_q_group_manager.reflection_q_group_metadata),
             max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
@@ -7681,7 +7704,10 @@ def _initialize_runtime_controls_block_16() -> None:
 
 
 def _get_scale_factor_value(default=1.0):
-    simulation_scale_factor_var = display_controls_view_state.simulation_scale_factor_var
+    display_controls = globals().get("display_controls_view_state")
+    simulation_scale_factor_var = getattr(
+        display_controls, "simulation_scale_factor_var", None
+    )
     if simulation_scale_factor_var is None:
         return default
     try:
@@ -7796,6 +7822,10 @@ def _detector_display_raster_source_signature() -> object | None:
         unscaled_signature,
         _display_scale_signature_value(_get_scale_factor_value(default=1.0)),
     )
+
+
+def _current_detector_artist_source_signature() -> object | None:
+    return _primary_raster_source_payload(globals().get("image_display"))[3]
 
 
 def _resolved_primary_raster_source_signature(
@@ -9258,34 +9288,56 @@ def _prepare_caked_intersection_cache(
 
     transformed = []
     for table in source_tables:
-        try:
-            arr = np.asarray(table, dtype=float)
-        except Exception:
-            arr = np.empty((0, 19), dtype=float)
-
-        if arr.ndim != 2:
-            transformed.append(arr.copy())
+        arr = coerce_float64_table(table, empty_width=0)
+        schema = classify_intersection_cache_table(arr)
+        abbreviated_detector_cache = (
+            not schema.is_valid and arr.ndim == 2 and arr.shape[1] == (CACHE_COL_L + 1)
+        )
+        if not schema.is_valid and not abbreviated_detector_cache:
+            transformed.append(empty_caked_cache_table())
             continue
 
-        out_cols = max(int(arr.shape[1]), 19)
-        out = np.full((arr.shape[0], out_cols), np.nan, dtype=float)
-        if arr.shape[0] > 0 and arr.shape[1] > 0:
-            out[:, : arr.shape[1]] = arr
-        if out.shape[1] >= 19:
-            out[:, 17] = np.nan
-            out[:, 18] = np.nan
+        if abbreviated_detector_cache:
+            out = np.full(
+                (arr.shape[0], LEGACY_CAKED_CACHE_WIDTH),
+                np.nan,
+                dtype=float,
+            )
+            if arr.shape[0] > 0:
+                out[:, : arr.shape[1]] = arr
+            caked_two_theta_col = LEGACY_CAKED_COL_TWO_THETA
+            caked_phi_col = LEGACY_CAKED_COL_PHI
+        elif schema.is_caked_cache:
+            out = np.array(arr, dtype=float, copy=True)
+            if schema.width == LEGACY_CAKED_CACHE_WIDTH:
+                caked_two_theta_col = LEGACY_CAKED_COL_TWO_THETA
+                caked_phi_col = LEGACY_CAKED_COL_PHI
+            else:
+                caked_two_theta_col = CURRENT_CAKED_COL_TWO_THETA
+                caked_phi_col = CURRENT_CAKED_COL_PHI
+        else:
+            empty_out = empty_caked_cache_table(legacy=not schema.has_provenance)
+            out = np.full((arr.shape[0], empty_out.shape[1]), np.nan, dtype=float)
+            if arr.shape[0] > 0 and arr.shape[1] > 0:
+                out[:, : arr.shape[1]] = arr
+            if schema.has_provenance:
+                caked_two_theta_col = CURRENT_CAKED_COL_TWO_THETA
+                caked_phi_col = CURRENT_CAKED_COL_PHI
+            else:
+                caked_two_theta_col = LEGACY_CAKED_COL_TWO_THETA
+                caked_phi_col = LEGACY_CAKED_COL_PHI
 
         if (
             arr.shape[0] == 0
-            or arr.shape[1] < 4
+            or arr.shape[1] < (CACHE_COL_DETECTOR_ROW + 1)
             or not isinstance(transform_bundle, CakeTransformBundle)
             or portable_geometry is None
         ):
             transformed.append(out)
             continue
 
-        cols = np.asarray(arr[:, 2], dtype=float)
-        rows = np.asarray(arr[:, 3], dtype=float)
+        cols = np.asarray(arr[:, CACHE_COL_DETECTOR_COL], dtype=float)
+        rows = np.asarray(arr[:, CACHE_COL_DETECTOR_ROW], dtype=float)
         valid = np.isfinite(cols) & np.isfinite(rows)
         valid_indices = np.flatnonzero(valid)
         if valid_indices.size == 0:
@@ -9307,8 +9359,8 @@ def _prepare_caked_intersection_cache(
             continue
         finite = np.isfinite(two_theta_arr) & np.isfinite(phi_arr)
         if np.any(finite):
-            out[valid_indices[finite], 17] = two_theta_arr[finite]
-            out[valid_indices[finite], 18] = phi_arr[finite]
+            out[valid_indices[finite], caked_two_theta_col] = two_theta_arr[finite]
+            out[valid_indices[finite], caked_phi_col] = phi_arr[finite]
         transformed.append(out)
 
     return transformed
@@ -13449,15 +13501,7 @@ def do_update():
 
     simulation_runtime_state.update_pending = None
     simulation_runtime_state.update_running = True
-    first_visible_simulation_before_update = bool(
-        simulation_runtime_state.unscaled_image is not None
-        and getattr(
-            simulation_runtime_state,
-            "last_unscaled_image_signature",
-            None,
-        )
-        is not None
-    )
+    detector_artist_signature_before = _current_detector_artist_source_signature()
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "applying"
     _refresh_run_status_bar()
@@ -14669,11 +14713,13 @@ def do_update():
         "last_unscaled_image_signature",
         None,
     )
+    desired_detector_signature = _detector_display_raster_source_signature()
+    detector_artist_signature_after = _current_detector_artist_source_signature()
     first_visible_detector_simulation_after_update = bool(
-        (not first_visible_simulation_before_update)
-        and simulation_runtime_state.unscaled_image is not None
-        and current_unscaled_image_signature is not None
-        and target_primary_view_mode == "detector"
+        target_primary_view_mode == "detector"
+        and desired_detector_signature is not None
+        and detector_artist_signature_after == desired_detector_signature
+        and detector_artist_signature_before != desired_detector_signature
     )
     if first_visible_detector_simulation_after_update:
         _schedule_post_idle_main_canvas_redraw()
@@ -16831,6 +16877,9 @@ def _initialize_runtime_controls_block_38() -> None:
             primary_c_factory=lambda: float(c_var.get()) if "c_var" in globals() else float(cv),
             image_size_factory=lambda: int(image_size),
             native_sim_to_display_coords=_native_sim_to_display_coords,
+            native_detector_coords_to_detector_display_coords=(
+                _native_detector_coords_to_live_bundle_detector_coords
+            ),
             caked_view_enabled_factory=lambda: _active_caked_primary_view(),
             native_detector_coords_to_caked_display_coords=(
                 _native_detector_coords_to_live_caked_coords
@@ -17449,8 +17498,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
         table_list = list(source_tables or ())
         if not table_list:
             return [], [], []
-        first_table = np.asarray(table_list[0], dtype=np.float64)
-        if first_table.ndim == 2 and first_table.shape[1] >= 14:
+        if is_intersection_cache_table(table_list[0]):
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
@@ -22660,14 +22708,16 @@ def _analysis_cache_overlay_coords(
         use_cached_caked_coords = bool(_analysis_cache_overlay_table_uses_live_caked_cache(table))
         x_vals = np.full(arr.shape[0], np.nan, dtype=float)
         y_vals = np.full(arr.shape[0], np.nan, dtype=float)
-        if use_cached_caked_coords and arr.shape[1] >= 19:
-            x_vals[:] = arr[:, 17]
-            y_vals[:] = arr[:, 18]
+        if use_cached_caked_coords:
+            for idx, row in enumerate(arr):
+                cached_two_theta, cached_phi = extract_cached_caked_angles(row)
+                x_vals[idx] = cached_two_theta
+                y_vals[idx] = cached_phi
         invalid = ~(np.isfinite(x_vals) & np.isfinite(y_vals))
         if np.any(invalid):
             for idx in np.flatnonzero(invalid):
-                col = float(arr[idx, 2])
-                row = float(arr[idx, 3])
+                col = float(arr[idx, CACHE_COL_DETECTOR_COL])
+                row = float(arr[idx, CACHE_COL_DETECTOR_ROW])
                 converted = _native_detector_coords_to_live_caked_coords(col, row)
                 if converted is None:
                     continue
@@ -25552,8 +25602,7 @@ def _run_async_geometry_fit_worker_job(
         table_list = list(source_tables or ())
         if not table_list:
             return [], [], []
-        first_table = np.asarray(table_list[0], dtype=np.float64)
-        if first_table.ndim == 2 and first_table.shape[1] >= 14:
+        if is_intersection_cache_table(table_list[0]):
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)

@@ -2777,6 +2777,18 @@ def test_store_primary_raster_source_uses_detector_buffer_signature_for_global_i
     assert source_signature == (detector_signature, 2.5)
 
 
+def test_get_scale_factor_value_returns_default_when_scale_var_missing(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(),
+        raising=False,
+    )
+
+    assert runtime_session._get_scale_factor_value(default=1.25) == 1.25
+
+
 def test_set_primary_integration_overlay_image_uses_distinct_overlay_source_signature(
     monkeypatch,
 ) -> None:
@@ -3730,10 +3742,10 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
     np.testing.assert_allclose(cols_arg, [40.0])
     np.testing.assert_allclose(rows_arg, [50.0])
     assert geometry_arg is geometry_token
-    assert out.shape == (1, 19)
+    assert out.shape == (1, 16)
     np.testing.assert_allclose(out[0, :9], [1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0])
-    assert out[0, 17] == 40.5
-    assert out[0, 18] == 49.75
+    assert out[0, 14] == 40.5
+    assert out[0, 15] == 49.75
 
 
 def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> (
@@ -3756,10 +3768,8 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_va
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert out.shape == (1, 19)
+    assert out.shape == (1, 16)
     np.testing.assert_allclose(out[0, :16], table[0, :16])
-    assert np.isnan(out[0, 17])
-    assert np.isnan(out[0, 18])
 
 
 def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact_angles_are_nan(
@@ -3827,10 +3837,8 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact
     np.testing.assert_allclose(cols_arg, [40.0])
     np.testing.assert_allclose(rows_arg, [50.0])
     assert geometry_arg is geometry_token
-    assert out.shape == (1, 19)
+    assert out.shape == (1, 16)
     np.testing.assert_allclose(out[0, :16], table[0, :16])
-    assert np.isnan(out[0, 17])
-    assert np.isnan(out[0, 18])
 
 
 def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_columns(
@@ -4449,6 +4457,7 @@ def _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixtur
             background_max_var=_RuntimeVar(1.0),
             simulation_min_var=_RuntimeVar(0.0),
             simulation_max_var=_RuntimeVar(1.0),
+            simulation_scale_factor_var=_RuntimeVar(1.0),
         ),
         raising=False,
     )
@@ -4622,17 +4631,35 @@ def _patch_do_update_first_visible_simulation_finish_prereqs(
     scheduled_post_idle_redraw_calls: list[str],
     scheduled_settle_calls: list[str],
     apply_scale_factor_calls: list[dict[str, object]],
+    initial_detector_artist_signature: object | None = None,
+    move_detector_artist_to_current_signature: bool = True,
 ) -> None:
+    detector_artist_signature_state = {"current": initial_detector_artist_signature}
+
     monkeypatch.setattr(
         runtime_session,
         "_capture_geometry_source_snapshot",
         lambda: None,
         raising=False,
     )
+
+    def _apply_primary_display(*_args, **_kwargs) -> str:
+        if move_detector_artist_to_current_signature:
+            detector_artist_signature_state["current"] = (
+                runtime_session._detector_display_raster_source_signature()
+            )
+        return "detector"
+
     monkeypatch.setattr(
         runtime_session,
         "_apply_primary_figure_display_from_cached_results",
-        lambda *_args, **_kwargs: "detector",
+        _apply_primary_display,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_detector_artist_source_signature",
+        lambda: detector_artist_signature_state["current"],
         raising=False,
     )
     monkeypatch.setattr(
@@ -4962,6 +4989,101 @@ def test_do_update_placeholder_simulation_does_not_block_first_real_detector_red
         }
     ]
     assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_schedules_post_idle_redraw_when_detector_artist_first_shows_current_startup_simulation(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("startup-real",)
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+        initial_detector_artist_signature=("startup-placeholder",),
+    )
+
+    runtime_session.do_update()
+
+    assert apply_scale_factor_calls == [
+        {
+            "update_limits": False,
+            "update_1d": False,
+            "force_canvas_redraw": False,
+            "update_chi_square": True,
+        }
+    ]
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
+def test_do_update_does_not_reschedule_post_idle_redraw_when_detector_artist_already_shows_current_simulation(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+
+    runtime_session.simulation_runtime_state.unscaled_image = np.ones((2, 2), dtype=np.float64)
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = ("startup-real",)
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    current_detector_signature = ("detector-current",)
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_display_raster_source_signature",
+        lambda: current_detector_signature,
+        raising=False,
+    )
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+        initial_detector_artist_signature=current_detector_signature,
+    )
+
+    runtime_session.do_update()
+
+    assert apply_scale_factor_calls == [
+        {
+            "update_limits": False,
+            "update_1d": False,
+            "force_canvas_redraw": False,
+            "update_chi_square": True,
+        }
+    ]
+    assert scheduled_post_idle_redraw_calls == []
     assert scheduled_settle_calls == ["scheduled"]
 
 
@@ -8608,7 +8730,9 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     assert '"first_visible_simulation_settle_token"' in source
     assert '"first_visible_simulation_settled_signature"' in source
     assert "LIVE_DRAG_SETTLE_MS" in source
-    assert "first_visible_simulation_before_update" in do_update_block
+    assert "detector_artist_signature_before = _current_detector_artist_source_signature()" in do_update_block
+    assert "desired_detector_signature = _detector_display_raster_source_signature()" in do_update_block
+    assert "detector_artist_signature_after = _current_detector_artist_source_signature()" in do_update_block
     assert "_schedule_post_idle_main_canvas_redraw()" in do_update_block
     assert "_schedule_first_visible_simulation_settle_pass()" in do_update_block
     assert "and not bool(simulation_runtime_state.preview_active)" in do_update_block

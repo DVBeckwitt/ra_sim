@@ -11200,7 +11200,7 @@ def build_geometry_fit_overlay_diagnostic_lines(
 
     diag = frame_diag if isinstance(frame_diag, Mapping) else {}
     lines = [
-        "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+        "transform_rule=sim:native_to_overlay_display; bg:inverse_orientation_then_overlay_display",
         f"overlay_records={int(overlay_record_count)}",
         f"paired_records={int(diag.get('paired_records', 0))}",
         f"sim_display_med_px={float(diag.get('sim_display_med_px', np.nan)):.3f}",

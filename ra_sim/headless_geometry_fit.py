@@ -184,6 +184,13 @@ def _load_simulation_diffraction():
 
 
 @lru_cache(maxsize=1)
+def _load_intersection_cache_schema():
+    from ra_sim.simulation import intersection_cache_schema
+
+    return intersection_cache_schema
+
+
+@lru_cache(maxsize=1)
 def _load_stacking_fault_runtime():
     from ra_sim.utils import stacking_fault
 
@@ -907,6 +914,7 @@ def _empty_peak_overlay_cache() -> dict[str, object]:
 
 
 def _copy_hit_tables(hit_tables: Sequence[object] | None) -> list[np.ndarray]:
+    schema = _load_intersection_cache_schema()
     copied: list[np.ndarray] = []
     if not isinstance(hit_tables, Sequence) or isinstance(hit_tables, (str, bytes)):
         return copied
@@ -914,21 +922,24 @@ def _copy_hit_tables(hit_tables: Sequence[object] | None) -> list[np.ndarray]:
         try:
             copied.append(np.asarray(table, dtype=np.float64).copy())
         except Exception:
-            copied.append(np.empty((0, 7), dtype=np.float64))
+            copied.append(schema.empty_hit_table())
     return copied
 
 
 def _copy_intersection_cache_tables(
     cache: Sequence[object] | None,
 ) -> list[np.ndarray]:
+    schema = _load_intersection_cache_schema()
     copied: list[np.ndarray] = []
     if not isinstance(cache, Sequence) or isinstance(cache, (str, bytes)):
         return copied
     for table in cache:
-        try:
-            copied.append(np.asarray(table, dtype=np.float64).copy())
-        except Exception:
-            copied.append(np.empty((0, 17), dtype=np.float64))
+        copied.append(
+            schema.coerce_float64_table(
+                table,
+                empty_width=schema.CURRENT_DETECTOR_CACHE_WIDTH,
+            )
+        )
     return copied
 
 
@@ -1882,11 +1893,11 @@ def run_headless_geometry_fit(
         def _build_source_rows_for_rebuild(
             source_tables: Sequence[object] | None,
         ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
+            schema = _load_intersection_cache_schema()
             table_list = list(source_tables or ())
             if not table_list:
                 return [], [], []
-            first_table = np.asarray(table_list[0], dtype=np.float64)
-            if first_table.ndim == 2 and first_table.shape[1] >= 14:
+            if schema.is_intersection_cache_table(table_list[0]):
                 hit_tables_local = diffraction.intersection_cache_to_hit_tables(table_list)
             else:
                 hit_tables_local = _copy_hit_tables(table_list)

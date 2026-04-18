@@ -8388,7 +8388,7 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         overlay_record_count=7,
     )
     assert overlay_lines == [
-        "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+        "transform_rule=sim:native_to_overlay_display; bg:inverse_orientation_then_overlay_display",
         "overlay_records=7",
         "paired_records=3",
         "sim_display_med_px=1.200",
@@ -10329,7 +10329,7 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         "max_display_markers": 120,
     }
     assert postprocess.overlay_diagnostic_lines == [
-        "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+        "transform_rule=sim:native_to_overlay_display; bg:inverse_orientation_then_overlay_display",
         "overlay_records=1",
         "paired_records=1",
         "sim_display_med_px=1.200",

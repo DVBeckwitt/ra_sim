@@ -54,6 +54,14 @@ def test_build_argument_parser_exposes_workers_flag() -> None:
     assert args.workers == 4
 
 
+def test_build_argument_parser_exposes_thesis_heatmap_flag(tmp_path: Path) -> None:
+    parser = geometry_fit_landscape.build_argument_parser()
+    output_path = tmp_path / "thesis_heatmap.png"
+    args = parser.parse_args(["--thesis-heatmap", str(output_path)])
+
+    assert args.thesis_heatmap == output_path
+
+
 def test_default_worker_count_uses_available_cores_minus_two(monkeypatch) -> None:
     monkeypatch.setattr(parallel_utils.os, "cpu_count", lambda: 32)
 
@@ -303,6 +311,218 @@ def test_render_landscape_figure_writes_with_constant_panel_data(tmp_path: Path)
 
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+def test_render_thesis_identifiability_heatmap_writes_png(tmp_path: Path) -> None:
+    sweep_specs = [
+        geometry_fit_landscape.SweepSpec(
+            name="gamma",
+            baseline=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            values=np.array([-1.0, 0.0, 1.0], dtype=float),
+            source="bounds:relative",
+        ),
+        geometry_fit_landscape.SweepSpec(
+            name="center_x",
+            baseline=100.0,
+            min_value=90.0,
+            max_value=110.0,
+            values=np.array([90.0, 100.0, 110.0], dtype=float),
+            source="center_prior_pm3sigma",
+        ),
+    ]
+    rows = [
+        {
+            "parameter": "gamma",
+            "parameter_value": -1.0,
+            "visible_peak_count": 5.0,
+            "centroid_x_px": 1.0,
+            "centroid_y_px": 1.5,
+            "radius_gyration_px": 3.0,
+            "x_span_px": 4.0,
+            "y_span_px": 5.0,
+            "anisotropy_ratio": 1.1,
+        },
+        {
+            "parameter": "gamma",
+            "parameter_value": 0.0,
+            "visible_peak_count": 6.0,
+            "centroid_x_px": 2.0,
+            "centroid_y_px": 2.5,
+            "radius_gyration_px": 4.0,
+            "x_span_px": 5.0,
+            "y_span_px": 6.0,
+            "anisotropy_ratio": 1.2,
+        },
+        {
+            "parameter": "gamma",
+            "parameter_value": 1.0,
+            "visible_peak_count": 7.0,
+            "centroid_x_px": 3.0,
+            "centroid_y_px": 3.5,
+            "radius_gyration_px": 5.0,
+            "x_span_px": 6.0,
+            "y_span_px": 7.0,
+            "anisotropy_ratio": 1.3,
+        },
+        {
+            "parameter": "center_x",
+            "parameter_value": 90.0,
+            "visible_peak_count": 7.0,
+            "centroid_x_px": 10.0,
+            "centroid_y_px": 2.0,
+            "radius_gyration_px": 3.0,
+            "x_span_px": 4.0,
+            "y_span_px": 5.0,
+            "anisotropy_ratio": 1.0,
+        },
+        {
+            "parameter": "center_x",
+            "parameter_value": 100.0,
+            "visible_peak_count": 7.0,
+            "centroid_x_px": 11.0,
+            "centroid_y_px": 2.0,
+            "radius_gyration_px": 3.0,
+            "x_span_px": 4.0,
+            "y_span_px": 5.0,
+            "anisotropy_ratio": 1.0,
+        },
+        {
+            "parameter": "center_x",
+            "parameter_value": 110.0,
+            "visible_peak_count": 7.0,
+            "centroid_x_px": 12.0,
+            "centroid_y_px": 2.0,
+            "radius_gyration_px": 3.0,
+            "x_span_px": 4.0,
+            "y_span_px": 5.0,
+            "anisotropy_ratio": 1.0,
+        },
+    ]
+
+    output_path = tmp_path / "thesis_heatmap.png"
+    geometry_fit_landscape.render_thesis_identifiability_heatmap(
+        rows,
+        sweep_specs,
+        output_path=output_path,
+    )
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+
+
+def test_main_writes_optional_thesis_heatmap(monkeypatch, tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    outdir = tmp_path / "artifacts"
+    thesis_heatmap = tmp_path / "thesis" / "geometry_identifiability_heatmap.png"
+
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "_load_saved_state",
+        lambda path: {"state_path": str(path)},
+    )
+
+    context = geometry_fit_landscape.LandscapeContext(
+        state_path=state_path,
+        saved_state={"files": {}},
+        defaults=None,
+        structure_state=None,
+        baseline_params={},
+        candidate_param_names=["gamma"],
+        fit_geometry_config={},
+        solve_q_steps=1,
+        solve_q_rel_tol=1.0e-3,
+        solve_q_mode=0,
+        theta_base_current=0.0,
+        use_shared_theta_offset=False,
+        theta_param_name="theta_initial",
+        active_cif_path="test.cif",
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "_build_geometry_fit_value_state",
+        lambda saved_state, path: context,
+    )
+
+    sweep_specs = [
+        geometry_fit_landscape.SweepSpec(
+            name="gamma",
+            baseline=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            values=np.array([-1.0, 0.0, 1.0], dtype=float),
+            source="bounds:relative",
+        )
+    ]
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "build_sweep_specs",
+        lambda *args, **kwargs: sweep_specs,
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "run_landscape_sweeps",
+        lambda *args, **kwargs: (
+            [{"parameter": "gamma", "parameter_value": 0.0, "runtime_s": 0.1}],
+            {"visible_peak_count": 1.0},
+        ),
+    )
+
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "write_landscape_csv",
+        lambda rows, output_path: calls.append(("csv", output_path)),
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "render_landscape_figure",
+        lambda rows, specs, **kwargs: calls.append(("figure", kwargs["output_path"])),
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "write_baseline_metadata",
+        lambda context_arg, specs, baseline_metrics, output_path: calls.append(
+            ("metadata", output_path)
+        ),
+    )
+    monkeypatch.setattr(
+        geometry_fit_landscape,
+        "render_thesis_identifiability_heatmap",
+        lambda rows, specs, *, output_path: calls.append(("thesis", output_path)),
+    )
+
+    perf_counter_values = iter([10.0, 12.5, 20.0, 20.75])
+    monkeypatch.setattr(
+        geometry_fit_landscape.time,
+        "perf_counter",
+        lambda: next(perf_counter_values),
+    )
+
+    result = geometry_fit_landscape.main(
+        [
+            "--state",
+            str(state_path),
+            "--outdir",
+            str(outdir),
+            "--points",
+            "3",
+            "--workers",
+            "1",
+            "--thesis-heatmap",
+            str(thesis_heatmap),
+        ]
+    )
+
+    assert result == 0
+    assert calls == [
+        ("csv", outdir / "landscape_runs.csv"),
+        ("figure", outdir / "landscape_figure.png"),
+        ("metadata", outdir / "baseline_metadata.json"),
+        ("thesis", thesis_heatmap.resolve()),
+    ]
 
 
 def test_main_reports_simulation_and_figure_timing(
