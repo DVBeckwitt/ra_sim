@@ -6201,6 +6201,150 @@ def test_apply_primary_figure_display_from_cached_results_preserves_hidden_analy
     )
 
 
+def test_apply_primary_detector_display_refreshes_buffer_before_projection_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _RasterArtist:
+        def __init__(self) -> None:
+            self.data = None
+            self.extent = None
+
+        def set_data(self, data) -> None:
+            self.data = np.asarray(data, dtype=float).copy()
+
+        def set_extent(self, extent) -> None:
+            self.extent = tuple(float(value) for value in extent)
+
+        def set_visible(self, *_args, **_kwargs) -> None:
+            return None
+
+    image_artist = _RasterArtist()
+    background_artist = _RasterArtist()
+    source_image = np.arange(1.0, 17.0, dtype=np.float64).reshape(4, 4)
+    stale_detector_buffer = np.zeros((4, 4), dtype=np.float64)
+    runtime_session.gui_display_projection._PROJECTION_CACHE.clear()
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            unscaled_image=source_image,
+            last_unscaled_image_signature=("startup-default",),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(visible=False, current_background_display=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_view_state",
+        SimpleNamespace(
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(1.0),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "global_image_buffer",
+        stale_detector_buffer,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_display", image_artist, raising=False)
+    monkeypatch.setattr(runtime_session, "background_display", background_artist, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "ax",
+        SimpleNamespace(
+            set_aspect=lambda *_args, **_kwargs: None,
+            set_xlabel=lambda *_args, **_kwargs: None,
+            set_ylabel=lambda *_args, **_kwargs: None,
+            set_title=lambda *_args, **_kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_legacy_main_matplotlib_interaction_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_main_display_raster_size_limit",
+        lambda: 2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_scale_factor_value",
+        lambda default=1.0: 1.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_roi_preview_display_sources",
+        lambda **kwargs: (kwargs["simulation_image"], kwargs["background_image"]),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_canvas_interactions,
+        "restore_axis_view",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "set_main_figure_axes_axis_visibility",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_main_figure_chrome,
+        "apply_main_figure_axes_chrome",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    def _sync_detector_projection(**kwargs) -> None:
+        assert kwargs.get("view_mode") == "detector"
+        runtime_session._store_primary_raster_geometry(
+            image_artist,
+            origin="upper",
+            extent=(0.0, 4.0, 4.0, 0.0),
+        )
+        runtime_session._apply_projected_primary_raster_to_artist(image_artist)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        _sync_detector_projection,
+        raising=False,
+    )
+
+    runtime_session._apply_primary_figure_display_from_cached_results(
+        "detector",
+        ((0.0, 4.0), (4.0, 0.0)),
+    )
+
+    np.testing.assert_array_equal(runtime_session.global_image_buffer, source_image)
+    assert image_artist.data is not None
+    assert float(np.max(image_artist.data)) == 16.0
+
+
 @pytest.mark.parametrize(
     ("view_mode", "payload_signature"),
     [

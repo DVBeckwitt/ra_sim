@@ -31,6 +31,7 @@
   - Updated `ra_sim/fitting/optimization.py` with robust solver config, restart support, one-to-one point matching, weighted residuals, and missing-pair penalties.
 
 - **GUI and UX updates**
+  - Fixed the startup/default detector-view regression where a blank detached projection could be cached until a parameter change or caked-view toggle forced a new detector signature.
   - Updated `main.py` and `ra_sim/gui/app.py` to use shared hBN geometry conversion helpers.
   - Routed the import-safe `ra_sim/gui/app.py` geometry-fit UI/value readers through the same shared value-callback bundle used by the main runtime.
   - Routed runtime geometry-fit undo/redo callback assembly through a shared history-callback builder in `ra_sim/gui/geometry_fit.py`.

@@ -8484,6 +8484,35 @@ def _ensure_global_image_buffer_shape(source_image: object) -> np.ndarray:
     return global_image_buffer
 
 
+def _refresh_global_detector_buffer_from_unscaled(
+    *,
+    scale: object | None = None,
+) -> np.ndarray | None:
+    unscaled_image = getattr(simulation_runtime_state, "unscaled_image", None)
+    if unscaled_image is None:
+        return None
+    try:
+        unscaled_array = np.asarray(unscaled_image)
+    except Exception:
+        return None
+
+    scaled_buffer = _ensure_global_image_buffer_shape(unscaled_array)
+    try:
+        scale_value = float(
+            _get_scale_factor_value(default=1.0) if scale is None else scale
+        )
+    except Exception:
+        scale_value = 1.0
+    if not math.isfinite(scale_value):
+        scale_value = 1.0
+
+    if abs(scale_value - 1.0) <= 1e-12:
+        np.copyto(scaled_buffer, unscaled_array, casting="unsafe")
+    else:
+        np.multiply(unscaled_array, scale_value, out=scaled_buffer)
+    return scaled_buffer
+
+
 def apply_scale_factor_to_existing_results(
     update_limits=False,
     *,
@@ -8557,12 +8586,9 @@ def apply_scale_factor_to_existing_results(
         return
 
     scale = _get_scale_factor_value(default=1.0)
-    _ensure_global_image_buffer_shape(simulation_runtime_state.unscaled_image)
-    if abs(float(scale) - 1.0) <= 1e-12:
-        np.copyto(global_image_buffer, simulation_runtime_state.unscaled_image, casting="unsafe")
-    else:
-        np.multiply(simulation_runtime_state.unscaled_image, float(scale), out=global_image_buffer)
-    scaled_image = global_image_buffer
+    scaled_image = _refresh_global_detector_buffer_from_unscaled(scale=scale)
+    if scaled_image is None:
+        return
     base_unscaled_sig = simulation_runtime_state.last_unscaled_image_signature
     chi_square_sig = (
         base_unscaled_sig,
@@ -13406,15 +13432,18 @@ def _apply_primary_figure_display_from_cached_results(
             )
             else None
         )
+        detector_simulation_source = _refresh_global_detector_buffer_from_unscaled()
+        if not isinstance(detector_simulation_source, np.ndarray):
+            detector_simulation_source = global_image_buffer
         display_primary_source, display_secondary_source = (
             _geometry_fit_caked_roi_preview_display_sources(
                 show_caked_image=False,
-                simulation_image=global_image_buffer,
+                simulation_image=detector_simulation_source,
                 background_image=detector_background_source,
             )
         )
         if not isinstance(display_primary_source, np.ndarray):
-            display_primary_source = global_image_buffer
+            display_primary_source = detector_simulation_source
         _store_primary_raster_source(image_display, display_primary_source)
         gui_canvas_interactions.restore_axis_view(
             ax,

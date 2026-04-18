@@ -10,7 +10,6 @@ and roadmap views. Do not use this page as a second backlog.
 | --- | --- | --- | --- | --- | --- | --- |
 | Grouped-pick recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-17 | [grouped-pick-recovery.md](in-progress/grouped-pick-recovery.md) |
 | Simulated peak overlay recovery | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-18 | [sim-peak-overlay-recovery.md](in-progress/sim-peak-overlay-recovery.md) |
-| Startup default detector visibility regression | bug | - | none | p1 | 2026-04-18 | [startup-default-detector-visibility.md](in-progress/startup-default-detector-visibility.md) |
 
 ## Known bugs
 
@@ -28,4 +27,4 @@ and roadmap views. Do not use this page as a second backlog.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| - | - | - | - | - | - | - |
+| Startup default detector visibility regression | bug | - | none | p1 | 2026-04-18 | [startup-default-detector-visibility.md](archive/startup-default-detector-visibility.md) |
