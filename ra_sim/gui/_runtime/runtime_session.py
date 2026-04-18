@@ -13450,7 +13450,13 @@ def do_update():
     simulation_runtime_state.update_pending = None
     simulation_runtime_state.update_running = True
     first_visible_simulation_before_update = bool(
-        simulation_runtime_state.stored_sim_image is not None
+        simulation_runtime_state.unscaled_image is not None
+        and getattr(
+            simulation_runtime_state,
+            "last_unscaled_image_signature",
+            None,
+        )
+        is not None
     )
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "applying"
@@ -14658,20 +14664,19 @@ def do_update():
     else:
         _refresh_settled_overlays()
 
-    first_visible_detector_simulation_after_update = bool(
-        (not first_visible_simulation_before_update)
-        and simulation_runtime_state.stored_sim_image is not None
-        and simulation_runtime_state.unscaled_image is not None
-        and target_primary_view_mode == "detector"
-    )
-    if first_visible_detector_simulation_after_update:
-        _schedule_post_idle_main_canvas_redraw()
-
     current_unscaled_image_signature = getattr(
         simulation_runtime_state,
         "last_unscaled_image_signature",
         None,
     )
+    first_visible_detector_simulation_after_update = bool(
+        (not first_visible_simulation_before_update)
+        and simulation_runtime_state.unscaled_image is not None
+        and current_unscaled_image_signature is not None
+        and target_primary_view_mode == "detector"
+    )
+    if first_visible_detector_simulation_after_update:
+        _schedule_post_idle_main_canvas_redraw()
     if current_unscaled_image_signature is None:
         gui_controllers.clear_tk_after_token(
             root,

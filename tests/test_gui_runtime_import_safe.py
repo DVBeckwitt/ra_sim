@@ -4899,6 +4899,72 @@ def test_do_update_schedules_post_idle_redraw_when_worker_result_creates_first_v
     assert scheduled_settle_calls == ["scheduled"]
 
 
+def test_do_update_placeholder_simulation_does_not_block_first_real_detector_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    scheduled_post_idle_redraw_calls: list[str] = []
+    scheduled_settle_calls: list[str] = []
+    apply_scale_factor_calls: list[dict[str, object]] = []
+    ready_result = {
+        "primary_image": np.ones((2, 2), dtype=np.float64),
+        "secondary_image": np.zeros((2, 2), dtype=np.float64),
+        "job_kind": "full",
+        "image_generation_elapsed_ms": 1.25,
+    }
+
+    runtime_session.simulation_runtime_state.stored_primary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_secondary_sim_image = None
+    runtime_session.simulation_runtime_state.stored_sim_image = np.zeros(
+        (2, 2),
+        dtype=np.float64,
+    )
+    runtime_session.simulation_runtime_state.unscaled_image = None
+    runtime_session.simulation_runtime_state.last_unscaled_image_signature = None
+    runtime_session.simulation_runtime_state.first_visible_simulation_settled_signature = None
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=scheduled_post_idle_redraw_calls,
+        scheduled_settle_calls=scheduled_settle_calls,
+        apply_scale_factor_calls=apply_scale_factor_calls,
+    )
+    apply_ready_calls = _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
+        monkeypatch,
+        runtime_session,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_consume_ready_simulation_result",
+        lambda _sig: dict(ready_result),
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert len(apply_ready_calls) == 1
+    assert apply_scale_factor_calls == [
+        {
+            "update_limits": False,
+            "update_1d": False,
+            "force_canvas_redraw": False,
+            "update_chi_square": True,
+        }
+    ]
+    assert scheduled_post_idle_redraw_calls == ["scheduled"]
+    assert scheduled_settle_calls == ["scheduled"]
+
+
 def test_do_update_schedules_post_idle_redraw_for_first_sync_simulation(
     monkeypatch,
 ) -> None:
