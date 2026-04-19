@@ -1372,11 +1372,59 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_
 
     assert ok is True
     assert runtime_state.peak_positions == [(30.25, -57.5)]
-    assert runtime_state.peak_records[0]["sim_col"] == 30.25
-    assert runtime_state.peak_records[0]["sim_row"] == -57.5
-    assert runtime_state.peak_records[0]["display_col"] == 30.25
-    assert runtime_state.peak_records[0]["display_row"] == -57.5
+    assert runtime_state.peak_records[0]["sim_col"] == 110.0
+    assert runtime_state.peak_records[0]["sim_row"] == 220.0
+    assert runtime_state.peak_records[0]["display_col"] == 110.0
+    assert runtime_state.peak_records[0]["display_row"] == 220.0
+    assert runtime_state.peak_records[0]["caked_x"] == 30.25
+    assert runtime_state.peak_records[0]["caked_y"] == -57.5
     assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
+
+
+def test_peak_selection_runtime_peak_overlay_data_keeps_detector_coords_when_restoring_caked_cache() -> None:
+    record = {
+        "display_col": 110.0,
+        "display_row": 220.0,
+        "sim_col": 110.0,
+        "sim_row": 220.0,
+        "sim_col_raw": 110.0,
+        "sim_row_raw": 220.0,
+        "two_theta_deg": 30.25,
+        "phi_deg": -57.5,
+        "hkl": [1, 0, 2],
+        "intensity": 8.0,
+    }
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [dict(record)],
+            "restored_from_gui_state": True,
+        },
+        peak_records=[dict(record)],
+        stored_max_positions_local=None,
+        stored_sim_image=None,
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("caked restore should not need detector reprojection")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("restored GUI-state cache should avoid legacy peak rebuild")
+        ),
+        caked_view_enabled_factory=True,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_records[0]["sim_col"] == 110.0
+    assert runtime_state.peak_records[0]["sim_row"] == 220.0
+    assert runtime_state.peak_records[0]["display_col"] == 110.0
+    assert runtime_state.peak_records[0]["display_row"] == 220.0
+    assert runtime_state.peak_records[0]["caked_x"] == 30.25
+    assert runtime_state.peak_records[0]["caked_y"] == -57.5
 
 
 def test_peak_selection_runtime_peak_overlay_data_skips_ambiguous_restored_rows() -> None:
@@ -2439,6 +2487,72 @@ def test_select_peak_from_canvas_click_uses_indexed_qr_payload_without_linear_sc
     assert kwargs["selected_native"] == (target_index * 60.0 + 100.0, 110.0)
 
 
+def test_select_peak_from_canvas_click_uses_qr_payload_caked_coordinates() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 10.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[1.0],
+        peak_records=[
+            {
+                "hkl": (9, 9, 9),
+                "display_col": 10.0,
+                "display_row": 10.0,
+                "native_col": 10.0,
+                "native_row": 10.0,
+            }
+        ],
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    select_calls: list[tuple[int, dict[str, object]]] = []
+    candidate = {
+        "hkl": (1, 0, 10),
+        "hkl_raw": (1.0, 0.0, 10.0),
+        # Detector/display fields are deliberately misleading in caked mode.
+        "display_col": 10.0,
+        "display_row": 10.0,
+        "sim_col": 10.0,
+        "sim_row": 10.0,
+        "native_col": 111.0,
+        "native_row": 222.0,
+        "caked_x": 72.0,
+        "caked_y": -18.0,
+        "raw_caked_x": 72.0,
+        "raw_caked_y": -18.0,
+        "intensity": 99.0,
+    }
+    payload = peak_selection.build_hkl_pick_simulation_point_payload([candidate])
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        72.5,
+        -17.5,
+        config=_canvas_pick_config(image_shape=(128, 128)),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (float(col), float(row)),
+        native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: select_calls.append((idx, kwargs)) or True,
+        set_pick_mode=lambda enabled, message=None: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        caked_view_enabled=True,
+        simulation_point_candidates=payload,
+    )
+
+    assert ok is True
+    assert len(select_calls) == 1
+    idx, kwargs = select_calls[0]
+    assert idx == -1
+    assert kwargs["record_override"]["hkl"] == (1, 0, 10)
+    assert kwargs["record_override"]["display_col"] == 10.0
+    assert kwargs["selected_display"] == (72.0, -18.0)
+    assert kwargs["selected_native"] == (111.0, 222.0)
+    assert kwargs["clicked_display"] == (72.5, -17.5)
+    assert kwargs["clicked_native"] == (111.0, 222.0)
+
+
 def test_hkl_pick_simulation_point_payload_limits_click_candidates() -> None:
     candidates = [
         {
@@ -3320,7 +3434,7 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
         sync_peak_selection_state=lambda: sync_calls.append(True),
         set_status_text=status_messages.append,
         caked_view_enabled=True,
-        simulation_point_candidates=misleading_payload,
+        simulation_point_candidates=None,
     )
 
     assert caked_ok is True
@@ -3595,7 +3709,9 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     assert isinstance(click_call[5]["config"], peak_selection.SelectedPeakCanvasPickConfig)
     assert callable(click_call[5]["select_peak_by_index"])
     assert callable(click_call[5]["set_pick_mode"])
-    assert click_call[5]["simulation_point_candidates"] is None
+    payload = click_call[5]["simulation_point_candidates"]
+    assert isinstance(payload, dict)
+    assert tuple(payload["candidates"])[0]["hkl"] == (1, 0, 2)
 
     callback_calls = []
     versions = {"count": 0}
@@ -3741,9 +3857,12 @@ def test_select_peak_from_runtime_canvas_click_allows_detector_inverse_without_s
     assert callable(calls[0][4]["detector_display_to_native_detector_coords"])
 
 
-def test_select_peak_from_runtime_canvas_click_does_not_require_sim_inverse_in_caked_view(
+def test_select_peak_from_runtime_canvas_click_uses_qr_payload_in_caked_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [{"hkl": (1, 0, 10), "caked_x": 9.5, "caked_y": 11.5}]
+    )
     bindings = peak_selection.SelectedPeakRuntimeBindings(
         simulation_runtime_state=state.SimulationRuntimeState(),
         peak_selection_state=state.PeakSelectionState(),
@@ -3758,16 +3877,10 @@ def test_select_peak_from_runtime_canvas_click_does_not_require_sim_inverse_in_c
         set_status_text=lambda _text: None,
         display_to_native_sim_coords=None,
         detector_display_to_native_detector_coords=lambda col, row: (col, row),
+        hkl_pick_simulation_points_factory=lambda: payload,
     )
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        peak_selection,
-        "_simulation_point_payload_from_factory",
-        lambda _factory: (_ for _ in ()).throw(
-            AssertionError("caked runtime click should not build Qr payload")
-        ),
-    )
     monkeypatch.setattr(
         peak_selection,
         "select_peak_from_canvas_click",
@@ -3776,12 +3889,15 @@ def test_select_peak_from_runtime_canvas_click_does_not_require_sim_inverse_in_c
 
     assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is True
     assert captured["caked_view_enabled"] is True
-    assert captured["simulation_point_candidates"] is None
+    assert tuple(captured["simulation_point_candidates"]["candidates"])[0]["hkl"] == (1, 0, 10)
 
 
-def test_find_peak_record_from_runtime_canvas_click_skips_payload_factory_in_caked_view(
+def test_find_peak_record_from_runtime_canvas_click_uses_qr_payload_in_caked_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [{"hkl": (1, 0, 10), "caked_x": 9.5, "caked_y": 11.5}]
+    )
     bindings = peak_selection.SelectedPeakRuntimeBindings(
         simulation_runtime_state=state.SimulationRuntimeState(),
         peak_selection_state=state.PeakSelectionState(),
@@ -3794,16 +3910,10 @@ def test_find_peak_record_from_runtime_canvas_click_skips_payload_factory_in_cak
         ensure_peak_overlay_data=lambda **_kwargs: True,
         schedule_update=lambda: None,
         set_status_text=lambda _text: None,
+        hkl_pick_simulation_points_factory=lambda: payload,
     )
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        peak_selection,
-        "_simulation_point_payload_from_factory",
-        lambda _factory: (_ for _ in ()).throw(
-            AssertionError("caked runtime lookup should not build Qr payload")
-        ),
-    )
     monkeypatch.setattr(
         peak_selection,
         "find_peak_record_for_canvas_click",
@@ -3822,13 +3932,16 @@ def test_find_peak_record_from_runtime_canvas_click_skips_payload_factory_in_cak
     assert np.isnan(result[2])
     assert result[3] is False
     assert captured["use_caked_display"] is True
-    assert captured["simulation_point_candidates"] is None
+    assert tuple(captured["simulation_point_candidates"]["candidates"])[0]["hkl"] == (1, 0, 10)
     assert captured["max_axis_distance_px"] == 7.0
 
 
-def test_select_peak_from_runtime_canvas_click_uses_hkl_cache_not_qr_payload_in_detector_view(
+def test_select_peak_from_runtime_canvas_click_uses_qr_payload_in_detector_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [{"hkl": (1, 0, 10), "display_col": 9.5, "display_row": 11.5}]
+    )
     bindings = peak_selection.SelectedPeakRuntimeBindings(
         simulation_runtime_state=state.SimulationRuntimeState(),
         peak_selection_state=state.PeakSelectionState(),
@@ -3843,19 +3956,10 @@ def test_select_peak_from_runtime_canvas_click_uses_hkl_cache_not_qr_payload_in_
         set_status_text=lambda _text: None,
         display_to_native_sim_coords=lambda col, row, image_shape: (float(col), float(row)),
         detector_display_to_native_detector_coords=lambda col, row: (col, row),
-        hkl_pick_simulation_points_factory=lambda: (_ for _ in ()).throw(
-            AssertionError("detector HKL picking should use the HKL cache, not Qr payload")
-        ),
+        hkl_pick_simulation_points_factory=lambda: payload,
     )
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        peak_selection,
-        "_simulation_point_payload_from_factory",
-        lambda _factory: (_ for _ in ()).throw(
-            AssertionError("detector runtime click should not build Qr payload")
-        ),
-    )
     monkeypatch.setattr(
         peak_selection,
         "select_peak_from_canvas_click",
@@ -3864,12 +3968,15 @@ def test_select_peak_from_runtime_canvas_click_uses_hkl_cache_not_qr_payload_in_
 
     assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is True
     assert captured["caked_view_enabled"] is False
-    assert captured["simulation_point_candidates"] is None
+    assert tuple(captured["simulation_point_candidates"]["candidates"])[0]["hkl"] == (1, 0, 10)
 
 
-def test_find_peak_record_from_runtime_canvas_click_uses_hkl_cache_not_qr_payload_in_detector_view(
+def test_find_peak_record_from_runtime_canvas_click_uses_qr_payload_in_detector_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [{"hkl": (1, 0, 10), "display_col": 9.5, "display_row": 11.5}]
+    )
     bindings = peak_selection.SelectedPeakRuntimeBindings(
         simulation_runtime_state=state.SimulationRuntimeState(),
         peak_selection_state=state.PeakSelectionState(),
@@ -3882,19 +3989,10 @@ def test_find_peak_record_from_runtime_canvas_click_uses_hkl_cache_not_qr_payloa
         ensure_peak_overlay_data=lambda **_kwargs: True,
         schedule_update=lambda: None,
         set_status_text=lambda _text: None,
-        hkl_pick_simulation_points_factory=lambda: (_ for _ in ()).throw(
-            AssertionError("detector HKL lookup should use the HKL cache, not Qr payload")
-        ),
+        hkl_pick_simulation_points_factory=lambda: payload,
     )
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        peak_selection,
-        "_simulation_point_payload_from_factory",
-        lambda _factory: (_ for _ in ()).throw(
-            AssertionError("detector runtime lookup should not build Qr payload")
-        ),
-    )
     monkeypatch.setattr(
         peak_selection,
         "find_peak_record_for_canvas_click",
@@ -3913,9 +4011,8 @@ def test_find_peak_record_from_runtime_canvas_click_uses_hkl_cache_not_qr_payloa
     assert np.isnan(result[2])
     assert result[3] is False
     assert captured["use_caked_display"] is False
-    assert captured["simulation_point_candidates"] is None
+    assert tuple(captured["simulation_point_candidates"]["candidates"])[0]["hkl"] == (1, 0, 10)
     assert captured["max_axis_distance_px"] == 7.0
-
 
 def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:
     runtime_state = state.SimulationRuntimeState(

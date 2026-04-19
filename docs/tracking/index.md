@@ -9,11 +9,11 @@ and roadmap views. Do not use this page as a second backlog.
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
 | Grouped-pick recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-17 | [grouped-pick-recovery.md](in-progress/grouped-pick-recovery.md) |
-| Simulated peak overlay recovery | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-18 | [sim-peak-overlay-recovery.md](in-progress/sim-peak-overlay-recovery.md) |
 
-Current emphasis for [#248](https://github.com/DVBeckwitt/ra_sim/issues/248):
-selected-Qr redraw path. Detector view fixed, caked view next, HKL deferred
-until Qr redraw truth is stable in both views.
+Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
+continue grouped-pick recovery. Manual Qr/Qz and HKL picker alignment for
+[#248](https://github.com/DVBeckwitt/ra_sim/issues/248) is resolved and
+archived below.
 
 ## Known bugs
 
@@ -32,3 +32,4 @@ until Qr redraw truth is stable in both views.
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
 | Startup default detector visibility regression | bug | - | none | p1 | 2026-04-18 | [startup-default-detector-visibility.md](archive/startup-default-detector-visibility.md) |
+| Manual Qr/Qz and HKL picker alignment | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-19 | [sim-peak-overlay-recovery.md](archive/sim-peak-overlay-recovery.md) |

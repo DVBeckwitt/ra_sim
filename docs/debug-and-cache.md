@@ -45,6 +45,30 @@ Retention modes:
 - `auto`: retain when the active feature benefits from reuse
 - `always`: retain whenever built
 
+## Geometry Qr/Qz and HKL Picker State
+
+Manual Qr/Qz picking uses a structural group cache derived from the active
+simulation hit tables and CIF/lattice state. It is not a detector-view or
+caked-view cache. Detector/caked view switches must not invalidate or filter
+the Qr/Qz group universe. CIF, unit-cell, or simulation-hit-table changes do
+invalidate it.
+
+Caked manual picking uses two different coordinate responsibilities:
+
+- simulated Qr/Qz and HKL seed positions start from simulation-native detector
+  branch pixels;
+- caked click targets map those simulation-native pixels through the live caked
+  simulation transform into `(2theta, phi)`;
+- detector aliases such as `sim_col`, `sim_row`, `display_col`, and
+  `display_row` remain detector/display coordinates;
+- caked aliases such as `caked_x`, `caked_y`, `raw_caked_x`, `raw_caked_y`,
+  `two_theta_deg`, and `phi_deg` hold current-view angular coordinates.
+
+The HKL picker intentionally shares the corrected Qr/manual picker candidate
+payload for hit testing and selected-marker placement. If either picker
+regresses, first check whether the failing path bypassed that shared candidate
+payload or treated detector/display aliases as caked coordinates.
+
 ## Numba on-disk compilation cache
 
 RA-SIM sets `NUMBA_CACHE_DIR` at package import time for stable startup behavior.

@@ -2100,10 +2100,10 @@ def _simulation_point_active_view_pair(
         if np.isfinite(col) and np.isfinite(row):
             return float(col), float(row)
     if bool(use_caked_display):
-        return _finite_record_pair(record, "display_col", "display_row") or _finite_record_pair(
-            record,
-            "caked_x",
-            "caked_y",
+        return (
+            _finite_record_pair(record, "caked_x", "caked_y")
+            or _finite_record_pair(record, "raw_caked_x", "raw_caked_y")
+            or _finite_record_pair(record, "two_theta_deg", "phi_deg")
         )
     return _finite_record_pair(record, "sim_col", "sim_row") or _finite_record_pair(
         record,
@@ -2240,6 +2240,22 @@ def _simulation_point_candidates_from_factory(
     if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
         return []
     return [dict(entry) for entry in candidates if isinstance(entry, Mapping)]
+
+
+def _runtime_hkl_pick_simulation_point_payload(bindings: SelectedPeakRuntimeBindings) -> object:
+    """Return the exact Qr/manual picker payload for HKL image picking."""
+
+    payload = _simulation_point_payload_from_factory(
+        getattr(bindings, "hkl_pick_simulation_points_factory", None)
+    )
+    if not isinstance(payload, Mapping):
+        return None
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        return None
+    if not candidates:
+        return None
+    return payload
 
 
 def _simulation_point_candidates_from_payload(
@@ -2754,6 +2770,22 @@ def _restore_peak_overlay_lists_from_cached_records(
         if display_point is None:
             continue
 
+        if bool(show_caked):
+            detector_display_point = _resolve_peak_record_display_coords(
+                raw_record,
+                show_caked=False,
+                image_shape=image_shape,
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                native_detector_coords_to_caked_display_coords=(
+                    native_detector_coords_to_caked_display_coords
+                ),
+                native_detector_coords_to_detector_display_coords=(
+                    native_detector_coords_to_detector_display_coords
+                ),
+            )
+        else:
+            detector_display_point = display_point
+
         hkl_value = raw_record.get("hkl")
         if not isinstance(hkl_value, (list, tuple)) or len(hkl_value) < 3:
             continue
@@ -2787,10 +2819,25 @@ def _restore_peak_overlay_lists_from_cached_records(
                 pass
         if isinstance(record.get("q_group_key"), list):
             record["q_group_key"] = tuple(record["q_group_key"])
-        record["sim_col"] = float(display_point[0])
-        record["sim_row"] = float(display_point[1])
-        record["display_col"] = float(display_point[0])
-        record["display_row"] = float(display_point[1])
+        if detector_display_point is not None:
+            record["sim_col"] = float(detector_display_point[0])
+            record["sim_row"] = float(detector_display_point[1])
+            record["sim_col_raw"] = float(detector_display_point[0])
+            record["sim_row_raw"] = float(detector_display_point[1])
+            record["display_col"] = float(detector_display_point[0])
+            record["display_row"] = float(detector_display_point[1])
+        elif not bool(show_caked):
+            record["sim_col"] = float(display_point[0])
+            record["sim_row"] = float(display_point[1])
+            record["display_col"] = float(display_point[0])
+            record["display_row"] = float(display_point[1])
+        if bool(show_caked):
+            record["caked_x"] = float(display_point[0])
+            record["caked_y"] = float(display_point[1])
+            record.setdefault("raw_caked_x", float(display_point[0]))
+            record.setdefault("raw_caked_y", float(display_point[1]))
+            record.setdefault("two_theta_deg", float(display_point[0]))
+            record.setdefault("phi_deg", float(display_point[1]))
 
         restored_records.append(record)
         restored_positions.append((float(display_point[0]), float(display_point[1])))
@@ -3293,17 +3340,16 @@ def find_peak_record_for_canvas_click(
     """Return nearest visible simulation point from one click without mutating selection."""
 
     ensure_peak_overlay_data(force=False)
-    if not bool(use_caked_display):
-        candidate_result = _nearest_simulation_point_for_click(
-            simulation_runtime_state,
-            float(click_col),
-            float(click_row),
-            candidate_records=simulation_point_candidates,
-            max_axis_distance_px=float(max_axis_distance_px),
-            use_caked_display=False,
-        )
-        if candidate_result[1] is not None:
-            return candidate_result
+    candidate_result = _nearest_simulation_point_for_click(
+        simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+        candidate_records=simulation_point_candidates,
+        max_axis_distance_px=float(max_axis_distance_px),
+        use_caked_display=bool(use_caked_display),
+    )
+    if candidate_result[1] is not None:
+        return candidate_result
 
     if not simulation_runtime_state.peak_positions:
         return -1, None, float("nan"), False
@@ -3456,7 +3502,10 @@ def select_peak_from_canvas_click(
         return False
 
     selected_native = _record_native_pair(peak_record)
-    selected_display = _record_display_pair(peak_record)
+    selected_display = _simulation_point_active_view_pair(
+        peak_record,
+        use_caked_display=True,
+    ) if bool(caked_view_enabled) else _record_display_pair(peak_record)
     if bool(caked_view_enabled):
         clicked_native_for_record = (
             (float(selected_native[0]), float(selected_native[1]))
@@ -4064,7 +4113,7 @@ def select_peak_from_runtime_canvas_click(
         or callable(bindings.detector_display_to_native_detector_coords)
     ):
         return False
-    simulation_point_candidates = None
+    simulation_point_candidates = _runtime_hkl_pick_simulation_point_payload(bindings)
     return select_peak_from_canvas_click(
         bindings.simulation_runtime_state,
         bindings.peak_selection_state,
@@ -4115,7 +4164,7 @@ def find_peak_record_from_runtime_canvas_click(
     """Return nearest visible live peak for one click under runtime bindings."""
 
     use_caked_display = _runtime_bool(bindings.caked_view_enabled_factory, False)
-    simulation_point_candidates = None
+    simulation_point_candidates = _runtime_hkl_pick_simulation_point_payload(bindings)
     return find_peak_record_for_canvas_click(
         bindings.simulation_runtime_state,
         float(click_col),

@@ -970,6 +970,8 @@ class SimulationRuntimeState:
     peak_millers: list[tuple[int, int, int]] = field(default_factory=list)
     peak_intensities: list[float] = field(default_factory=list)
     peak_records: list[dict[str, object]] = field(default_factory=list)
+    geometry_q_group_entries_cache_signature: object = None
+    geometry_q_group_entries_cache: list[dict[str, object]] = field(default_factory=list)
     selected_peak_record: dict[str, object] | None = None
     prev_background_visible: bool = True
     last_bg_signature: object = None

@@ -1651,6 +1651,57 @@ def test_geometry_q_group_manager_build_entries_snapshot_uses_intersection_cache
     assert entries[0]["peak_count"] == 1
 
 
+def test_geometry_q_group_manager_caked_preview_uses_stored_hit_tables_without_peak_records() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[],
+        stored_max_positions_local=[
+            np.asarray(
+                [
+                    [12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 10.0],
+                    [8.0, 12.0, 24.0, 0.0, -1.0, 0.0, 10.0],
+                ],
+                dtype=float,
+            )
+        ],
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+        stored_hit_table_signature=("cif", "Bi2Se3", 1),
+        stored_sim_image=np.zeros((32, 32), dtype=float),
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        image_size_factory=lambda: 32,
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+        caked_view_enabled_factory=lambda: True,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            0.1 * col,
+            0.2 * row,
+        ),
+    )
+
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+    entries = bundle.build_entries_snapshot()
+
+    assert len(cached_preview_peaks) == 2
+    assert {entry["q_group_key"] for entry in cached_preview_peaks} == {
+        ("q_group", "primary", 1, 10)
+    }
+    assert cached_preview_peaks[0]["caked_x"] == 1.0
+    assert cached_preview_peaks[0]["caked_y"] == 4.0
+    assert bundle.last_live_preview_cache_metadata()["cache_source"] == "stored_hit_tables"
+    assert bundle.last_live_preview_cache_metadata()["max_positions_row_count"] == 2
+    assert len(entries) == 1
+    assert entries[0]["key"] == ("q_group", "primary", 1, 10)
+    assert entries[0]["peak_count"] == 2
+    assert runtime_state.geometry_q_group_entries_cache_signature is not None
+
+
 def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
     excluded_entry = {
         "hkl": (1, 0, 0),

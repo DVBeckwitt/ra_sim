@@ -43,6 +43,8 @@ non-interactive path:
 
 - Geometry-fit-cached mosaic fitting depends on the latest successful manual geometry dataset.
 - Detector-space agreement comes first; 1D views are validation tools, not the primary fitting target.
+- Manual Qr/Qz group selection is expected to work in both detector view and caked `(2theta, phi)` view. The selectable Qr/Qz groups come from active CIF/lattice simulation hit-table state, not from view-filtered live peak rows.
+- HKL picking is expected to follow the same current-view candidate frame as Qr/Qz picking. In caked view, simulated HKL targets should agree with the rendered caked simulation spot, not detector/display aliases.
 - Main viewport stays embedded in Tk through Matplotlib.
 
 For deeper physical and implementation detail, use:

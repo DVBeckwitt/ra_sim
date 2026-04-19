@@ -1927,6 +1927,103 @@ def make_runtime_geometry_q_group_value_callbacks(
                 return True
         return False
 
+    def _q_group_cache_scalar(value: object) -> object:
+        if value is None or isinstance(value, (str, bytes, int, bool)):
+            return value
+        try:
+            numeric = float(value)
+        except Exception:
+            return repr(value)
+        if not np.isfinite(numeric):
+            return repr(value)
+        return round(float(numeric), 9)
+
+    def _q_group_cache_signature_value(value: object) -> object:
+        if isinstance(value, np.ndarray):
+            array_value = np.asarray(value)
+            try:
+                payload = hash(np.ascontiguousarray(array_value).tobytes())
+            except Exception:
+                payload = repr(array_value)
+            return (
+                "ndarray",
+                tuple(int(size) for size in array_value.shape),
+                str(array_value.dtype),
+                payload,
+            )
+        if isinstance(value, Mapping):
+            return tuple(
+                sorted(
+                    (repr(key), _q_group_cache_signature_value(item))
+                    for key, item in value.items()
+                )
+            )
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return tuple(_q_group_cache_signature_value(item) for item in value)
+        return _q_group_cache_scalar(value)
+
+    def _stored_peak_table_lattice_signature() -> object:
+        return _q_group_cache_signature_value(
+            getattr(simulation_runtime_state, "stored_peak_table_lattice", None)
+        )
+
+    def _stored_hit_table_q_group_signature() -> tuple[object, ...]:
+        return (
+            "geometry_q_group_entries",
+            1,
+            _q_group_cache_signature_value(
+                getattr(simulation_runtime_state, "stored_hit_table_signature", None)
+            ),
+            _stored_peak_table_lattice_signature(),
+            _q_group_cache_scalar(_primary_a()),
+            _q_group_cache_scalar(_primary_c()),
+        )
+
+    def _stored_hit_tables_available() -> bool:
+        hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
+        return isinstance(hit_tables, Sequence) and not isinstance(hit_tables, (str, bytes))
+
+    def _build_simulated_peaks_from_stored_hit_tables() -> list[dict[str, object]]:
+        hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
+        if not isinstance(hit_tables, Sequence) or isinstance(hit_tables, (str, bytes)):
+            return []
+        records = build_geometry_fit_simulated_peaks(
+            hit_tables,
+            image_shape=_detector_preview_image_shape(),
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            peak_table_lattice=getattr(
+                simulation_runtime_state,
+                "stored_peak_table_lattice",
+                None,
+            ),
+            source_reflection_indices=getattr(
+                simulation_runtime_state,
+                "stored_source_reflection_indices_local",
+                None,
+            ),
+            primary_a=_primary_a(),
+            primary_c=_primary_c(),
+            default_source_label="primary",
+            allow_nominal_hkl_indices=True,
+        )
+        records = _normalize_detector_peak_record_fallback_rows(records)
+        if callable(project_peaks_to_current_view) and records:
+            try:
+                records = [
+                    dict(entry)
+                    for entry in (project_peaks_to_current_view(records) or ())
+                    if isinstance(entry, Mapping)
+                ]
+            except Exception:
+                records = []
+        if _caked_view_enabled():
+            records = [
+                dict(entry)
+                for entry in records
+                if _finite_point(entry, "caked_x", "caked_y") is not None
+            ]
+        return records
+
     def _caked_view_enabled() -> bool:
         try:
             return bool(_resolve_runtime_value(caked_view_enabled_factory))
@@ -2124,6 +2221,11 @@ def make_runtime_geometry_q_group_value_callbacks(
         peak_records = _current_peak_records(provenance=provenance)
         peak_record_count = int(len(peak_records))
         max_positions_row_count = 0
+        hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
+        if isinstance(hit_tables, Sequence) and not isinstance(hit_tables, (str, bytes)):
+            max_positions_row_count = sum(
+                int(len(geometry_reference_hit_rows(table))) for table in hit_tables
+            )
 
         cached_peaks = _normalized_live_peak_record_candidates(
             peak_records,
@@ -2151,6 +2253,26 @@ def make_runtime_geometry_q_group_value_callbacks(
         )
         if cached_peaks:
             return cached_peaks
+
+        hit_table_peaks = _build_simulated_peaks_from_stored_hit_tables()
+        if hit_table_peaks:
+            _set_live_preview_cache_metadata(
+                cache_source="stored_hit_tables",
+                fallback_used=True,
+                max_positions_row_count=int(max_positions_row_count),
+                peak_record_count=int(peak_record_count),
+                active_signature_matches=bool(
+                    provenance.get("active_signature_matches", False)
+                ),
+                source_snapshot_row_count=int(
+                    provenance.get("source_snapshot_row_count", 0) or 0
+                ),
+                source_snapshot_background_index=provenance.get(
+                    "source_snapshot_background_index"
+                ),
+                simulated_peak_count=int(len(hit_table_peaks)),
+            )
+            return hit_table_peaks
 
         _set_live_preview_cache_metadata(
             cache_source="empty",
@@ -2184,6 +2306,42 @@ def make_runtime_geometry_q_group_value_callbacks(
         )
 
     def _build_entries_snapshot() -> list[dict[str, object]]:
+        if _stored_hit_tables_available():
+            cache_signature = _stored_hit_table_q_group_signature()
+            if (
+                getattr(
+                    simulation_runtime_state,
+                    "geometry_q_group_entries_cache_signature",
+                    None,
+                )
+                == cache_signature
+            ):
+                return gui_controllers.clone_geometry_q_group_entries(
+                    getattr(
+                        simulation_runtime_state,
+                        "geometry_q_group_entries_cache",
+                        [],
+                    )
+                )
+            entries = build_geometry_q_group_entries(
+                getattr(simulation_runtime_state, "stored_max_positions_local", None),
+                peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+                peak_records=None,
+                primary_a=_primary_a(),
+                primary_c=_primary_c(),
+                allow_nominal_hkl_indices=True,
+            )
+            try:
+                simulation_runtime_state.geometry_q_group_entries_cache_signature = (
+                    cache_signature
+                )
+                simulation_runtime_state.geometry_q_group_entries_cache = (
+                    gui_controllers.clone_geometry_q_group_entries(entries)
+                )
+            except Exception:
+                pass
+            return gui_controllers.clone_geometry_q_group_entries(entries)
+
         return build_geometry_q_group_entries(
             None,
             peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
