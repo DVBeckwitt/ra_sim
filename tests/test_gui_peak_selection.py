@@ -2750,6 +2750,194 @@ def test_select_peak_from_canvas_click_uses_qr_payload_caked_coordinates() -> No
     assert kwargs["clicked_native"] == (111.0, 222.0)
 
 
+def test_find_peak_record_for_canvas_click_falls_back_to_peak_positions_when_candidate_miss_is_outside_window() -> (
+    None
+):
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(12.0, 12.0)],
+        peak_millers=[(2, 0, 1)],
+        peak_intensities=[5.0],
+        peak_records=[
+            {
+                "hkl": (2, 0, 1),
+                "display_col": 12.0,
+                "display_row": 12.0,
+                "native_col": 112.0,
+                "native_row": 112.0,
+                "intensity": 5.0,
+            }
+        ],
+    )
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [
+            {
+                "hkl": (1, 0, 10),
+                "hkl_raw": (1.0, 0.0, 10.0),
+                "display_col": 80.0,
+                "display_row": 80.0,
+                "sim_col": 80.0,
+                "sim_row": 80.0,
+                "native_col": 180.0,
+                "native_row": 180.0,
+                "intensity": 9.0,
+                "source_label": "primary",
+                "source_table_index": 3,
+                "source_row_index": 4,
+                "q_group_key": ("primary", 1, 0, 10),
+                "av": 5.0,
+            }
+        ]
+    )
+
+    best_i, peak_record, best_dist, within_window = (
+        peak_selection.find_peak_record_for_canvas_click(
+            runtime_state,
+            10.0,
+            10.0,
+            ensure_peak_overlay_data=lambda **_kwargs: True,
+            max_axis_distance_px=15.0,
+            simulation_point_candidates=payload,
+            use_caked_display=False,
+        )
+    )
+
+    assert best_i == 0
+    assert peak_record is not None
+    assert peak_record["hkl"] == (2, 0, 1)
+    assert peak_record["display_col"] == 12.0
+    assert peak_record["display_row"] == 12.0
+    assert np.isclose(best_dist, np.sqrt(8.0))
+    assert within_window is True
+
+
+def test_find_peak_record_for_canvas_click_prefers_in_window_caked_candidate_payload() -> (
+    None
+):
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(11.0, -11.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[1.0],
+        peak_records=[
+            {
+                "hkl": (9, 9, 9),
+                "display_col": 11.0,
+                "display_row": -11.0,
+                "native_col": 11.0,
+                "native_row": -11.0,
+                "intensity": 1.0,
+            }
+        ],
+    )
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [
+            {
+                "hkl": (1, 0, 10),
+                "hkl_raw": (1.0, 0.0, 10.0),
+                "display_col": 80.0,
+                "display_row": 80.0,
+                "sim_col": 80.0,
+                "sim_row": 80.0,
+                "native_col": 111.0,
+                "native_row": 222.0,
+                "caked_x": 10.5,
+                "caked_y": -9.5,
+                "raw_caked_x": 10.5,
+                "raw_caked_y": -9.5,
+                "intensity": 99.0,
+            }
+        ]
+    )
+
+    best_i, peak_record, best_dist, within_window = (
+        peak_selection.find_peak_record_for_canvas_click(
+            runtime_state,
+            10.0,
+            -10.0,
+            ensure_peak_overlay_data=lambda **_kwargs: True,
+            max_axis_distance_px=15.0,
+            simulation_point_candidates=payload,
+            use_caked_display=True,
+        )
+    )
+
+    assert best_i == -1
+    assert peak_record is not None
+    assert peak_record["hkl"] == (1, 0, 10)
+    assert peak_record["caked_x"] == 10.5
+    assert peak_record["caked_y"] == -9.5
+    assert np.isclose(best_dist, np.sqrt(0.5))
+    assert within_window is True
+
+
+def test_find_peak_record_for_canvas_click_preserves_peak_positions_miss_without_peak_record() -> (
+    None
+):
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(50.0, 50.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[5.0],
+        peak_records=[],
+    )
+
+    best_i, peak_record, best_dist, within_window = (
+        peak_selection.find_peak_record_for_canvas_click(
+            runtime_state,
+            0.0,
+            0.0,
+            ensure_peak_overlay_data=lambda **_kwargs: True,
+            max_axis_distance_px=10.0,
+            simulation_point_candidates=None,
+            use_caked_display=False,
+        )
+    )
+
+    assert best_i == 0
+    assert peak_record is None
+    assert np.isclose(best_dist, np.sqrt(5000.0))
+    assert within_window is False
+
+
+def test_find_peak_record_for_canvas_click_prefers_nearer_peak_positions_miss_when_peak_record_missing() -> (
+    None
+):
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(50.0, 50.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[5.0],
+        peak_records=[],
+    )
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [
+            {
+                "hkl": (9, 0, 1),
+                "display_col": 100.0,
+                "display_row": 100.0,
+                "sim_col": 100.0,
+                "sim_row": 100.0,
+                "native_col": 100.0,
+                "native_row": 100.0,
+            }
+        ]
+    )
+
+    best_i, peak_record, best_dist, within_window = (
+        peak_selection.find_peak_record_for_canvas_click(
+            runtime_state,
+            0.0,
+            0.0,
+            ensure_peak_overlay_data=lambda **_kwargs: True,
+            max_axis_distance_px=10.0,
+            simulation_point_candidates=payload,
+            use_caked_display=False,
+        )
+    )
+
+    assert best_i == 0
+    assert peak_record is None
+    assert np.isclose(best_dist, np.sqrt(5000.0))
+    assert within_window is False
+
+
 def test_hkl_pick_simulation_point_payload_limits_click_candidates() -> None:
     candidates = [
         {

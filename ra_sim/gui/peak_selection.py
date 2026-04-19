@@ -3395,28 +3395,49 @@ def find_peak_record_for_canvas_click(
         max_axis_distance_px=float(max_axis_distance_px),
         use_caked_display=bool(use_caked_display),
     )
-    if candidate_result[1] is not None:
+    if candidate_result[1] is not None and bool(candidate_result[3]):
         return candidate_result
 
-    if not simulation_runtime_state.peak_positions:
-        return -1, None, float("nan"), False
-
-    best_i, best_d2, within_window = _nearest_peak_index_for_click(
-        simulation_runtime_state,
-        float(click_col),
-        float(click_row),
-        max_axis_distance_px=float(max_axis_distance_px),
+    fallback_result: tuple[int, dict[str, object] | None, float, bool] = (
+        -1,
+        None,
+        float("nan"),
+        False,
     )
-    if best_i == -1 or not np.isfinite(best_d2):
-        return -1, None, float("nan"), False
+    fallback_valid = False
+    if simulation_runtime_state.peak_positions:
+        best_i, best_d2, within_window = _nearest_peak_index_for_click(
+            simulation_runtime_state,
+            float(click_col),
+            float(click_row),
+            max_axis_distance_px=float(max_axis_distance_px),
+        )
+        if best_i != -1 and np.isfinite(best_d2):
+            peak_record = None
+            if best_i < len(simulation_runtime_state.peak_records):
+                raw_record = simulation_runtime_state.peak_records[best_i]
+                if isinstance(raw_record, Mapping):
+                    peak_record = dict(raw_record)
 
-    peak_record = None
-    if best_i < len(simulation_runtime_state.peak_records):
-        raw_record = simulation_runtime_state.peak_records[best_i]
-        if isinstance(raw_record, Mapping):
-            peak_record = dict(raw_record)
+            fallback_result = (
+                int(best_i),
+                peak_record,
+                float(np.sqrt(best_d2)),
+                bool(within_window),
+            )
+            fallback_valid = True
+            if bool(within_window):
+                return fallback_result
 
-    return int(best_i), peak_record, float(np.sqrt(best_d2)), bool(within_window)
+    if candidate_result[1] is not None and np.isfinite(candidate_result[2]):
+        if not fallback_valid or not np.isfinite(fallback_result[2]):
+            return candidate_result
+        if float(candidate_result[2]) <= float(fallback_result[2]):
+            return candidate_result
+
+    if fallback_valid:
+        return fallback_result
+    return -1, None, float("nan"), False
 
 
 def _resolve_selected_peak_click_coordinates(
