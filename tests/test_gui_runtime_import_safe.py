@@ -873,6 +873,29 @@ def test_runtime_impl_warms_live_exact_cake_geometry_cache() -> None:
     assert "start_exact_cake_geometry_warmup_in_background(" in source
 
 
+def test_runtime_impl_async_caked_hkl_cache_uses_live_detector_cache_signature() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert '"intersection_cache_source_signature": (' in source
+    assert "_current_combined_detector_intersection_cache_signature()" in source
+    assert '"sim_caked_intersection_cache_source_signature": job.get(' in source
+    assert '"intersection_cache_source_signature",' in source
+    assert "_detector_intersection_cache_signature(intersection_cache)," in source
+
+
+def test_runtime_impl_caked_hkl_cache_tracks_exact_cake_transform_pixels() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    start = source.index("def _prepare_caked_intersection_cache(")
+    stop = source.index("def _detector_intersection_cache_signature", start)
+    block = source[start:stop]
+
+    assert "native_detector_coords_to_bundle_detector_coords(" in block
+    assert "detector_pixel_to_caked_bin(" in block
+    assert "detector_points_to_angles(" not in block
+    assert "out[int(row_index), caked_two_theta_col] = two_theta_float" in block
+    assert "out[int(row_index), caked_phi_col] = phi_float" in block
+
+
 def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_and_wavelength() -> (
     None
 ):

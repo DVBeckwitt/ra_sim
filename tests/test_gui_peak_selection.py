@@ -3826,6 +3826,97 @@ def test_find_peak_record_from_runtime_canvas_click_skips_payload_factory_in_cak
     assert captured["max_axis_distance_px"] == 7.0
 
 
+def test_select_peak_from_runtime_canvas_click_uses_hkl_cache_not_qr_payload_in_detector_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=state.SimulationRuntimeState(),
+        peak_selection_state=state.PeakSelectionState(),
+        hkl_lookup_view_state=None,
+        selected_peak_marker=_FakeMarker(),
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        set_status_text=lambda _text: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (float(col), float(row)),
+        detector_display_to_native_detector_coords=lambda col, row: (col, row),
+        hkl_pick_simulation_points_factory=lambda: (_ for _ in ()).throw(
+            AssertionError("detector HKL picking should use the HKL cache, not Qr payload")
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "_simulation_point_payload_from_factory",
+        lambda _factory: (_ for _ in ()).throw(
+            AssertionError("detector runtime click should not build Qr payload")
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_canvas_click",
+        lambda *_args, **kwargs: captured.update(kwargs) or True,
+    )
+
+    assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is True
+    assert captured["caked_view_enabled"] is False
+    assert captured["simulation_point_candidates"] is None
+
+
+def test_find_peak_record_from_runtime_canvas_click_uses_hkl_cache_not_qr_payload_in_detector_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=state.SimulationRuntimeState(),
+        peak_selection_state=state.PeakSelectionState(),
+        hkl_lookup_view_state=None,
+        selected_peak_marker=_FakeMarker(),
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        set_status_text=lambda _text: None,
+        hkl_pick_simulation_points_factory=lambda: (_ for _ in ()).throw(
+            AssertionError("detector HKL lookup should use the HKL cache, not Qr payload")
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "_simulation_point_payload_from_factory",
+        lambda _factory: (_ for _ in ()).throw(
+            AssertionError("detector runtime lookup should not build Qr payload")
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "find_peak_record_for_canvas_click",
+        lambda *_args, **kwargs: captured.update(kwargs) or (-1, None, float("nan"), False),
+    )
+
+    result = peak_selection.find_peak_record_from_runtime_canvas_click(
+        bindings,
+        9.5,
+        11.5,
+        max_axis_distance_px=7.0,
+    )
+
+    assert result[0] == -1
+    assert result[1] is None
+    assert np.isnan(result[2])
+    assert result[3] is False
+    assert captured["use_caked_display"] is False
+    assert captured["simulation_point_candidates"] is None
+    assert captured["max_axis_distance_px"] == 7.0
+
+
 def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(1.0, 2.0)],

@@ -3907,10 +3907,6 @@ def set_runtime_hkl_pick_mode(
         bindings.deactivate_conflicting_modes
     ):
         bindings.deactivate_conflicting_modes()
-    if bindings.peak_selection_state.hkl_pick_armed:
-        _simulation_point_payload_from_factory(
-            getattr(bindings, "hkl_pick_simulation_points_factory", None)
-        )
     update_runtime_hkl_pick_button_label(bindings)
     if callable(bindings.on_hkl_pick_mode_changed):
         try:
@@ -4068,13 +4064,7 @@ def select_peak_from_runtime_canvas_click(
         or callable(bindings.detector_display_to_native_detector_coords)
     ):
         return False
-    simulation_point_candidates = (
-        None
-        if bool(caked_view_enabled)
-        else _simulation_point_payload_from_factory(
-            getattr(bindings, "hkl_pick_simulation_points_factory", None)
-        )
-    )
+    simulation_point_candidates = None
     return select_peak_from_canvas_click(
         bindings.simulation_runtime_state,
         bindings.peak_selection_state,
@@ -4125,13 +4115,7 @@ def find_peak_record_from_runtime_canvas_click(
     """Return nearest visible live peak for one click under runtime bindings."""
 
     use_caked_display = _runtime_bool(bindings.caked_view_enabled_factory, False)
-    simulation_point_candidates = (
-        None
-        if use_caked_display
-        else _simulation_point_payload_from_factory(
-            getattr(bindings, "hkl_pick_simulation_points_factory", None)
-        )
-    )
+    simulation_point_candidates = None
     return find_peak_record_for_canvas_click(
         bindings.simulation_runtime_state,
         float(click_col),

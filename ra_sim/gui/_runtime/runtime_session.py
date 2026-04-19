@@ -12886,8 +12886,9 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         "bg_res2": bg_res2,
         "sim_caked": sim_caked,
         "sim_caked_intersection_cache": sim_caked_intersection_cache,
-        "sim_caked_intersection_cache_source_signature": _detector_intersection_cache_signature(
-            intersection_cache
+        "sim_caked_intersection_cache_source_signature": job.get(
+            "intersection_cache_source_signature",
+            _detector_intersection_cache_signature(intersection_cache),
         ),
         "bg_caked": bg_caked,
         "sim_q_space": sim_q_space,
@@ -14809,6 +14810,9 @@ def do_update():
                 ),
                 "intersection_cache": _copy_intersection_cache_tables(
                     simulation_runtime_state.stored_intersection_cache
+                ),
+                "intersection_cache_source_signature": (
+                    _current_combined_detector_intersection_cache_signature()
                 ),
                 "distance_m": float(corto_det_up),
                 "center": np.asarray(
