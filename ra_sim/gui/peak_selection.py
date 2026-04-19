@@ -137,6 +137,7 @@ class SelectedPeakRuntimeBindings:
     native_detector_coords_to_detector_display_coords: Callable[
         [float, float], tuple[float, float] | None
     ] | None = None
+    hkl_pick_simulation_points_factory: Callable[[], object] | None = None
     simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None
     deactivate_conflicting_modes: Callable[[], None] | None = None
     on_hkl_pick_mode_changed: Callable[[bool], None] | None = None
@@ -2068,16 +2069,20 @@ def _peak_intensity_for_index(
 ) -> float:
     """Return one peak intensity, preferring the cached record value."""
 
-    record = _peak_record_for_index(simulation_runtime_state, int(idx), record_override)
+    idx_value = int(idx)
+    record = _peak_record_for_index(simulation_runtime_state, idx_value, record_override)
     if isinstance(record, Mapping):
-        try:
-            val = float(record.get("intensity", np.nan))
-        except Exception:
-            val = float("nan")
-        if np.isfinite(val):
-            return float(val)
+        for key in ("intensity", "weight"):
+            try:
+                val = float(record.get(key, np.nan))
+            except Exception:
+                val = float("nan")
+            if np.isfinite(val):
+                return float(val)
+    if isinstance(record_override, Mapping) and idx_value < 0:
+        return float("nan")
     try:
-        val = float(simulation_runtime_state.peak_intensities[int(idx)])
+        val = float(simulation_runtime_state.peak_intensities[idx_value])
     except Exception:
         return float("nan")
     return float(val) if np.isfinite(val) else float("nan")
@@ -2103,6 +2108,495 @@ def _peak_display_pair_for_index(
     if not (np.isfinite(px) and np.isfinite(py)):
         return None
     return float(px), float(py)
+
+
+def _simulation_point_active_view_pair(
+    record: Mapping[str, object] | None,
+    *,
+    use_caked_display: bool,
+) -> tuple[float, float] | None:
+    """Return the same active-view point used by manual Qr picking."""
+
+    if not isinstance(record, Mapping):
+        return None
+    try:
+        point = gui_manual_geometry._geometry_manual_entry_active_view_point(
+            record,
+            use_caked_display=bool(use_caked_display),
+        )
+    except Exception:
+        point = None
+    if point is not None:
+        try:
+            col = float(point[0])
+            row = float(point[1])
+        except Exception:
+            return None
+        if np.isfinite(col) and np.isfinite(row):
+            return float(col), float(row)
+    if bool(use_caked_display):
+        return _finite_record_pair(record, "display_col", "display_row") or _finite_record_pair(
+            record,
+            "caked_x",
+            "caked_y",
+        )
+    return _finite_record_pair(record, "sim_col", "sim_row") or _finite_record_pair(
+        record,
+        "display_col",
+        "display_row",
+    )
+
+
+def _build_simulation_point_click_index(
+    candidate_records: Sequence[Mapping[str, object]] | None,
+    *,
+    use_caked_display: bool,
+    cell_size_px: float = _PEAK_CLICK_INDEX_CELL_SIZE_PX,
+) -> dict[str, object]:
+    """Bucket Qr/manual simulation-point rows for fast HKL click lookup."""
+
+    cell_size = max(1.0, float(cell_size_px))
+    cells: dict[tuple[int, int], list[int]] = {}
+    points: list[tuple[float, float] | None] = []
+    count = 0
+    for idx, raw_record in enumerate(candidate_records or ()):
+        count += 1
+        point = _simulation_point_active_view_pair(
+            raw_record,
+            use_caked_display=bool(use_caked_display),
+        )
+        if point is None:
+            points.append(None)
+            continue
+        col = float(point[0])
+        row = float(point[1])
+        if not (np.isfinite(col) and np.isfinite(row)):
+            points.append(None)
+            continue
+        points.append((float(col), float(row)))
+        cell_key = (
+            int(np.floor(col / cell_size)),
+            int(np.floor(row / cell_size)),
+        )
+        cells.setdefault(cell_key, []).append(int(idx))
+    return {
+        "cell_size_px": float(cell_size),
+        "candidate_count": int(count),
+        "use_caked_display": bool(use_caked_display),
+        "cells": cells,
+        "points": points,
+    }
+
+
+def build_hkl_pick_simulation_point_payload(
+    candidate_records: Sequence[Mapping[str, object]] | None,
+    *,
+    cell_size_px: float = _PEAK_CLICK_INDEX_CELL_SIZE_PX,
+) -> dict[str, object]:
+    """Build reusable HKL click payload from the exact Qr/manual candidate rows."""
+
+    candidates = tuple(
+        dict(entry) for entry in (candidate_records or ()) if isinstance(entry, Mapping)
+    )
+    return {
+        "candidates": candidates,
+        "candidate_count": int(len(candidates)),
+        "detector_index": _build_simulation_point_click_index(
+            candidates,
+            use_caked_display=False,
+            cell_size_px=float(cell_size_px),
+        ),
+        "caked_index": _build_simulation_point_click_index(
+            candidates,
+            use_caked_display=True,
+            cell_size_px=float(cell_size_px),
+        ),
+    }
+
+
+def _simulation_point_payload_from_factory(
+    factory: Callable[[], object] | None,
+) -> dict[str, object] | None:
+    """Return current Qr-picker simulation point payload, if a provider is wired."""
+
+    if not callable(factory):
+        return None
+    try:
+        raw_payload = factory()
+    except TypeError:
+        try:
+            raw_payload = factory(None, prefer_cache=True)  # type: ignore[misc]
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+    if isinstance(raw_payload, Mapping):
+        candidates = raw_payload.get("candidates")
+        if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+            if isinstance(raw_payload.get("detector_index"), Mapping) or isinstance(
+                raw_payload.get("caked_index"),
+                Mapping,
+            ):
+                return dict(raw_payload)
+            payload = build_hkl_pick_simulation_point_payload(candidates)
+            for key, value in raw_payload.items():
+                if key not in payload:
+                    payload[key] = value
+            return payload
+        grouped = raw_payload.get("grouped_candidates")
+        if isinstance(grouped, Mapping):
+            rows: list[Mapping[str, object]] = []
+            for entries in grouped.values():
+                if isinstance(entries, Sequence) and not isinstance(entries, (str, bytes)):
+                    rows.extend(entry for entry in entries if isinstance(entry, Mapping))
+            if rows:
+                payload = build_hkl_pick_simulation_point_payload(rows)
+                for key, value in raw_payload.items():
+                    if key not in payload:
+                        payload[key] = value
+                return payload
+        return None
+
+    if not isinstance(raw_payload, Sequence) or isinstance(raw_payload, (str, bytes)):
+        return None
+    return build_hkl_pick_simulation_point_payload(
+        [entry for entry in raw_payload if isinstance(entry, Mapping)]
+    )
+
+
+def _simulation_point_candidates_from_factory(
+    factory: Callable[[], object] | None,
+) -> list[dict[str, object]]:
+    """Return current Qr-picker simulation point rows, if a provider is wired."""
+
+    payload = _simulation_point_payload_from_factory(factory)
+    candidates = payload.get("candidates") if isinstance(payload, Mapping) else None
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        return []
+    return [dict(entry) for entry in candidates if isinstance(entry, Mapping)]
+
+
+def _simulation_point_candidates_from_payload(
+    payload_or_candidates: object,
+) -> Sequence[Mapping[str, object]]:
+    """Normalize indexed payloads or legacy candidate lists to one candidate sequence."""
+
+    if isinstance(payload_or_candidates, Mapping):
+        candidates = payload_or_candidates.get("candidates")
+        if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+            return candidates
+        return ()
+    if isinstance(payload_or_candidates, Sequence) and not isinstance(
+        payload_or_candidates,
+        (str, bytes),
+    ):
+        return tuple(entry for entry in payload_or_candidates if isinstance(entry, Mapping))
+    return ()
+
+
+def _simulation_point_click_index_from_payload(
+    payload_or_candidates: object,
+    *,
+    use_caked_display: bool,
+) -> Mapping[str, object] | None:
+    """Return the prebuilt click index for the active view, if present."""
+
+    if not isinstance(payload_or_candidates, Mapping):
+        return None
+    key = "caked_index" if bool(use_caked_display) else "detector_index"
+    value = payload_or_candidates.get(key)
+    return value if isinstance(value, Mapping) else None
+
+
+def _simulation_point_candidate_indices_for_click(
+    spatial_index: Mapping[str, object] | None,
+    click_col: float,
+    click_row: float,
+    *,
+    max_axis_distance_px: float | None,
+) -> list[int]:
+    """Return indexed Qr/manual candidates whose cells intersect the click window."""
+
+    if not isinstance(spatial_index, Mapping):
+        return []
+    cells = spatial_index.get("cells")
+    if not isinstance(cells, Mapping):
+        return []
+    try:
+        cell_size = max(
+            1.0,
+            float(
+                spatial_index.get(
+                    "cell_size_px",
+                    _PEAK_CLICK_INDEX_CELL_SIZE_PX,
+                )
+            ),
+        )
+    except Exception:
+        cell_size = float(_PEAK_CLICK_INDEX_CELL_SIZE_PX)
+    half_window = (
+        max(0.0, float(max_axis_distance_px))
+        if max_axis_distance_px is not None
+        else float(cell_size)
+    )
+    min_cell_x = int(np.floor((float(click_col) - half_window) / cell_size))
+    max_cell_x = int(np.floor((float(click_col) + half_window) / cell_size))
+    min_cell_y = int(np.floor((float(click_row) - half_window) / cell_size))
+    max_cell_y = int(np.floor((float(click_row) + half_window) / cell_size))
+
+    candidate_indices: list[int] = []
+    for cell_x in range(min_cell_x, max_cell_x + 1):
+        for cell_y in range(min_cell_y, max_cell_y + 1):
+            cell_entries = cells.get((cell_x, cell_y))
+            if not isinstance(cell_entries, Sequence) or isinstance(
+                cell_entries,
+                (str, bytes),
+            ):
+                continue
+            candidate_indices.extend(int(idx) for idx in cell_entries)
+    return candidate_indices
+
+
+def _nearest_indexed_simulation_point(
+    candidates: Sequence[Mapping[str, object]],
+    candidate_indices: Sequence[int] | None,
+    *,
+    points: Sequence[tuple[float, float] | None] | None,
+    click_col: float,
+    click_row: float,
+    use_caked_display: bool,
+    apply_window: bool,
+    max_axis_distance_px: float | None,
+) -> tuple[int | None, float]:
+    """Return nearest candidate index using precomputed points when possible."""
+
+    best_idx: int | None = None
+    best_d2 = float("inf")
+    half_window = (
+        max(0.0, float(max_axis_distance_px))
+        if max_axis_distance_px is not None
+        else None
+    )
+    for raw_idx in candidate_indices or ():
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        if idx < 0 or idx >= len(candidates):
+            continue
+        point = None
+        if points is not None and idx < len(points):
+            point = points[idx]
+        if point is None:
+            point = _simulation_point_active_view_pair(
+                candidates[idx],
+                use_caked_display=bool(use_caked_display),
+            )
+        if point is None:
+            continue
+        px = float(point[0])
+        py = float(point[1])
+        if not (np.isfinite(px) and np.isfinite(py)):
+            continue
+        dx = px - float(click_col)
+        dy = py - float(click_row)
+        if apply_window and half_window is not None and (
+            abs(dx) > half_window or abs(dy) > half_window
+        ):
+            continue
+        d2 = dx * dx + dy * dy
+        if d2 < best_d2 or (
+            d2 == best_d2 and (best_idx is None or int(idx) < int(best_idx))
+        ):
+            best_idx = int(idx)
+            best_d2 = float(d2)
+    return best_idx, best_d2
+
+
+def _peak_record_index_for_simulation_point(
+    simulation_runtime_state,
+    candidate: Mapping[str, object],
+    *,
+    allow_slow_scan: bool = True,
+) -> int | None:
+    """Resolve a Qr-picker simulation point back to a live peak-record index."""
+
+    peak_records = getattr(simulation_runtime_state, "peak_records", ())
+    if not isinstance(peak_records, Sequence) or isinstance(peak_records, (str, bytes)):
+        return None
+
+    candidate_dict = dict(candidate)
+    if not bool(allow_slow_scan):
+        return None
+    try:
+        candidate_key = gui_manual_geometry.geometry_manual_candidate_source_key(candidate_dict)
+    except Exception:
+        candidate_key = None
+    if (
+        isinstance(candidate_key, tuple)
+        and candidate_key
+        and candidate_key[0] in {"source", "source_branch"}
+    ):
+        for idx, raw_record in enumerate(peak_records):
+            if not isinstance(raw_record, Mapping):
+                continue
+            record_dict = dict(raw_record)
+            if str(candidate_key[0]) == "source":
+                try:
+                    record_key = gui_manual_geometry.geometry_manual_candidate_source_key(
+                        record_dict
+                    )
+                except Exception:
+                    record_key = None
+                if record_key != candidate_key:
+                    continue
+                return int(idx)
+            else:
+                try:
+                    same_identity = gui_manual_geometry.geometry_manual_source_entries_share_identity(
+                        candidate_dict,
+                        record_dict,
+                    )
+                except Exception:
+                    same_identity = False
+                if not same_identity:
+                    continue
+                return int(idx)
+
+    candidate_hkl = _record_hkl_triplet(candidate_dict)
+    candidate_native = _record_native_pair(candidate_dict)
+    if candidate_hkl is None and candidate_native is None:
+        return None
+    best_idx: int | None = None
+    best_d2 = float("inf")
+    for idx, raw_record in enumerate(peak_records):
+        if not isinstance(raw_record, Mapping):
+            continue
+        record_hkl = _record_hkl_triplet(raw_record)
+        if candidate_hkl is not None and record_hkl != candidate_hkl:
+            continue
+        record_native = _record_native_pair(raw_record)
+        if candidate_native is not None:
+            if record_native is None:
+                continue
+            d2 = (float(record_native[0]) - float(candidate_native[0])) ** 2 + (
+                float(record_native[1]) - float(candidate_native[1])
+            ) ** 2
+        else:
+            d2 = 0.0
+        if d2 < best_d2:
+            best_idx = int(idx)
+            best_d2 = float(d2)
+    return best_idx
+
+
+def _merged_simulation_point_peak_record(
+    simulation_runtime_state,
+    candidate: Mapping[str, object],
+    idx: int | None,
+) -> dict[str, object]:
+    """Merge the base live peak record with the Qr-picker simulation point row."""
+
+    merged: dict[str, object] = {}
+    if idx is not None and idx >= 0:
+        base = _copy_selected_peak_record(simulation_runtime_state, int(idx))
+        if isinstance(base, dict):
+            merged.update(base)
+    merged.update(dict(candidate))
+    return merged
+
+
+def _nearest_simulation_point_for_click(
+    simulation_runtime_state,
+    click_col: float,
+    click_row: float,
+    *,
+    candidate_records: object,
+    max_axis_distance_px: float | None,
+    use_caked_display: bool,
+) -> tuple[int, dict[str, object] | None, float, bool]:
+    """Return the nearest Qr-picker simulation point for an HKL click."""
+
+    candidates = _simulation_point_candidates_from_payload(candidate_records)
+    if not candidates:
+        return -1, None, float("nan"), False
+
+    spatial_index = _simulation_point_click_index_from_payload(
+        candidate_records,
+        use_caked_display=bool(use_caked_display),
+    )
+    points: Sequence[tuple[float, float] | None] | None = None
+    if isinstance(spatial_index, Mapping):
+        raw_points = spatial_index.get("points")
+        if isinstance(raw_points, Sequence) and not isinstance(raw_points, (str, bytes)):
+            points = raw_points  # type: ignore[assignment]
+
+    candidate_indices = _simulation_point_candidate_indices_for_click(
+        spatial_index,
+        float(click_col),
+        float(click_row),
+        max_axis_distance_px=max_axis_distance_px,
+    )
+    if candidate_indices:
+        best_candidate_idx, best_d2 = _nearest_indexed_simulation_point(
+            candidates,
+            candidate_indices,
+            points=points,
+            click_col=float(click_col),
+            click_row=float(click_row),
+            use_caked_display=bool(use_caked_display),
+            apply_window=True,
+            max_axis_distance_px=max_axis_distance_px,
+        )
+    else:
+        best_candidate_idx, best_d2 = None, float("inf")
+
+    if best_candidate_idx is None:
+        full_range = range(len(candidates))
+        best_candidate_idx, best_d2 = _nearest_indexed_simulation_point(
+            candidates,
+            full_range,
+            points=points,
+            click_col=float(click_col),
+            click_row=float(click_row),
+            use_caked_display=bool(use_caked_display),
+            apply_window=False,
+            max_axis_distance_px=max_axis_distance_px,
+        )
+    if best_candidate_idx is None or not np.isfinite(best_d2):
+        return -1, None, float("nan"), False
+
+    nearest_candidate = dict(candidates[int(best_candidate_idx)])
+    active_point = None
+    if points is not None and int(best_candidate_idx) < len(points):
+        active_point = points[int(best_candidate_idx)]
+    if active_point is None:
+        active_point = _simulation_point_active_view_pair(
+            nearest_candidate,
+            use_caked_display=bool(use_caked_display),
+        )
+    if active_point is None:
+        return -1, None, float("nan"), False
+    dx = float(active_point[0]) - float(click_col)
+    dy = float(active_point[1]) - float(click_row)
+    dist = float(np.sqrt(best_d2))
+    within_window = True
+    if max_axis_distance_px is not None:
+        half_window = max(0.0, float(max_axis_distance_px))
+        within_window = bool(abs(dx) <= half_window and abs(dy) <= half_window)
+
+    idx = _peak_record_index_for_simulation_point(
+        simulation_runtime_state,
+        nearest_candidate,
+        allow_slow_scan=_record_hkl_triplet(nearest_candidate) is None,
+    )
+    merged_record = _merged_simulation_point_peak_record(
+        simulation_runtime_state,
+        nearest_candidate,
+        idx,
+    )
+    return (-1 if idx is None else int(idx)), merged_record, float(dist), bool(within_window)
 
 
 def _apply_selected_peak_record_coordinates(
@@ -2462,13 +2956,15 @@ def select_peak_by_index(
 ) -> bool:
     """Select one simulated peak by cached index and update GUI state."""
 
+    selected_record_override = dict(record_override) if isinstance(record_override, Mapping) else None
     if idx < 0 or idx >= len(simulation_runtime_state.peak_positions):
-        return False
+        if selected_record_override is None:
+            return False
 
     hkl = _peak_hkl_for_index(
         simulation_runtime_state,
         int(idx),
-        record_override=record_override,
+        record_override=selected_record_override,
     )
     if hkl is None:
         return False
@@ -2477,12 +2973,12 @@ def select_peak_by_index(
     intensity = _peak_intensity_for_index(
         simulation_runtime_state,
         int(idx),
-        record_override=record_override,
+        record_override=selected_record_override,
     )
     display_point = _peak_display_pair_for_index(
         simulation_runtime_state,
         int(idx),
-        record_override=record_override,
+        record_override=selected_record_override,
     )
     if selected_display is not None:
         disp_col, disp_row = (float(selected_display[0]), float(selected_display[1]))
@@ -2500,7 +2996,7 @@ def select_peak_by_index(
     selected_record = _peak_record_for_index(
         simulation_runtime_state,
         int(idx),
-        record_override=record_override,
+        record_override=selected_record_override,
     )
     selected_record = _apply_selected_peak_record_coordinates(
         selected_record,
@@ -2841,10 +3337,23 @@ def find_peak_record_for_canvas_click(
     *,
     ensure_peak_overlay_data: Any,
     max_axis_distance_px: float,
+    simulation_point_candidates: object = None,
+    use_caked_display: bool = False,
 ) -> tuple[int, dict[str, object] | None, float, bool]:
-    """Return nearest visible peak record from one click without mutating selection."""
+    """Return nearest visible simulation point from one click without mutating selection."""
 
     ensure_peak_overlay_data(force=False)
+    candidate_result = _nearest_simulation_point_for_click(
+        simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+        candidate_records=simulation_point_candidates,
+        max_axis_distance_px=float(max_axis_distance_px),
+        use_caked_display=bool(use_caked_display),
+    )
+    if candidate_result[1] is not None:
+        return candidate_result
+
     if not simulation_runtime_state.peak_positions:
         return -1, None, float("nan"), False
 
@@ -2966,6 +3475,7 @@ def select_peak_from_canvas_click(
     set_status_text: Any,
     caked_view_enabled: bool = False,
     detector_display_to_native_detector_coords: Any = None,
+    simulation_point_candidates: object = None,
 ) -> bool:
     """Select the nearest visible peak from one detector or caked-view click."""
 
@@ -2975,13 +3485,15 @@ def select_peak_from_canvas_click(
         float(click_row),
         ensure_peak_overlay_data=ensure_peak_overlay_data,
         max_axis_distance_px=max(0.0, float(config.max_distance_px)),
+        simulation_point_candidates=simulation_point_candidates,
+        use_caked_display=bool(caked_view_enabled),
     )
-    if not simulation_runtime_state.peak_positions:
+    if not simulation_runtime_state.peak_positions and peak_record is None:
         schedule_update()
         set_status_text("Preparing simulated peak map... click again after update.")
         return False
 
-    if best_i == -1:
+    if best_i == -1 and peak_record is None:
         set_status_text("No peaks on screen.")
         return False
     if not within_window:
@@ -3439,6 +3951,10 @@ def set_runtime_hkl_pick_mode(
         bindings.deactivate_conflicting_modes
     ):
         bindings.deactivate_conflicting_modes()
+    if bindings.peak_selection_state.hkl_pick_armed:
+        _simulation_point_payload_from_factory(
+            getattr(bindings, "hkl_pick_simulation_points_factory", None)
+        )
     update_runtime_hkl_pick_button_label(bindings)
     if callable(bindings.on_hkl_pick_mode_changed):
         try:
@@ -3599,6 +4115,9 @@ def select_peak_from_runtime_canvas_click(
         or callable(bindings.detector_display_to_native_detector_coords)
     ):
         return False
+    simulation_point_candidates = _simulation_point_payload_from_factory(
+        getattr(bindings, "hkl_pick_simulation_points_factory", None)
+    )
     return select_peak_from_canvas_click(
         bindings.simulation_runtime_state,
         bindings.peak_selection_state,
@@ -3635,6 +4154,7 @@ def select_peak_from_runtime_canvas_click(
         detector_display_to_native_detector_coords=(
             bindings.detector_display_to_native_detector_coords
         ),
+        simulation_point_candidates=simulation_point_candidates,
     )
 
 
@@ -3647,12 +4167,17 @@ def find_peak_record_from_runtime_canvas_click(
 ) -> tuple[int, dict[str, object] | None, float, bool]:
     """Return nearest visible live peak for one click under runtime bindings."""
 
+    simulation_point_candidates = _simulation_point_payload_from_factory(
+        getattr(bindings, "hkl_pick_simulation_points_factory", None)
+    )
     return find_peak_record_for_canvas_click(
         bindings.simulation_runtime_state,
         float(click_col),
         float(click_row),
         ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
         max_axis_distance_px=float(max_axis_distance_px),
+        simulation_point_candidates=simulation_point_candidates,
+        use_caked_display=bool(_runtime_caked_view_enabled(bindings)),
     )
 
 
@@ -3679,6 +4204,7 @@ def make_runtime_peak_selection_bindings_factory(
     native_detector_coords_to_detector_display_coords: Callable[
         [float, float], tuple[float, float] | None
     ] | None = None,
+    hkl_pick_simulation_points_factory: Callable[[], object] | None = None,
     simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None,
     deactivate_conflicting_modes_factory: object = None,
     on_hkl_pick_mode_changed_factory: object = None,
@@ -3710,6 +4236,7 @@ def make_runtime_peak_selection_bindings_factory(
             native_detector_coords_to_detector_display_coords=(
                 native_detector_coords_to_detector_display_coords
             ),
+            hkl_pick_simulation_points_factory=hkl_pick_simulation_points_factory,
             simulate_ideal_hkl_native_center=simulate_ideal_hkl_native_center,
             deactivate_conflicting_modes=_resolve_runtime_value(
                 deactivate_conflicting_modes_factory

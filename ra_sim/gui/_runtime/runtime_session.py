@@ -5989,6 +5989,113 @@ def _initialize_runtime_controls_block_04() -> None:
     )
 
 
+def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
+    """Return indexed Qr/manual simulation-point rows used by HKL picking."""
+
+    params_factory = globals().get("_current_geometry_fit_params")
+    if callable(params_factory):
+        try:
+            param_set = dict(params_factory())
+        except Exception:
+            param_set = None
+    else:
+        param_set = None
+
+    payload_cache = globals().setdefault("_hkl_pick_simulation_points_payload_cache", {})
+    if not isinstance(payload_cache, dict):
+        payload_cache = {}
+        globals()["_hkl_pick_simulation_points_payload_cache"] = payload_cache
+
+    def _grouped_rows_and_signature(
+        cache_data: object,
+    ) -> tuple[list[dict[str, object]], tuple[object, ...]]:
+        if not isinstance(cache_data, dict):
+            return [], ("empty",)
+        grouped = cache_data.get("grouped_candidates")
+        if not isinstance(grouped, dict):
+            return [], ("no_grouped_candidates", id(cache_data))
+        rows: list[dict[str, object]] = []
+        group_lengths: list[tuple[object, int, int]] = []
+        for key, entries in grouped.items():
+            entry_count = len(entries) if isinstance(entries, (list, tuple)) else 0
+            group_lengths.append((key, int(entry_count), id(entries)))
+            if isinstance(entries, (list, tuple)):
+                rows.extend(dict(entry) for entry in entries if isinstance(entry, dict))
+        signature = (
+            "grouped",
+            cache_data.get("signature"),
+            id(grouped),
+            len(grouped),
+            len(rows),
+            tuple(group_lengths),
+        )
+        return rows, signature
+
+    get_cache = globals().get("_get_geometry_manual_pick_cache")
+    cache_data: object = {}
+    if callable(get_cache):
+        try:
+            cache_data = get_cache(param_set=param_set, prefer_cache=True)
+        except TypeError:
+            try:
+                cache_data = get_cache(prefer_cache=True)
+            except TypeError:
+                try:
+                    cache_data = get_cache()
+                except Exception:
+                    cache_data = {}
+            except Exception:
+                cache_data = {}
+        except Exception:
+            cache_data = {}
+    rows, signature = _grouped_rows_and_signature(cache_data)
+    if rows:
+        if payload_cache.get("signature") == signature and isinstance(
+            payload_cache.get("payload"),
+            dict,
+        ):
+            return payload_cache["payload"]
+        payload = gui_peak_selection.build_hkl_pick_simulation_point_payload(rows)
+        payload["source_signature"] = signature
+        payload_cache["signature"] = signature
+        payload_cache["payload"] = payload
+        return payload
+
+    # Fallback for early startup before the cache has been built.  This is the
+    # same projected candidate source used to populate the Qr picker cache.
+    provider = globals().get("_geometry_manual_simulated_peaks_for_params")
+    if callable(provider):
+        try:
+            raw_rows = provider(param_set, prefer_cache=True)
+        except TypeError:
+            try:
+                raw_rows = provider(param_set)
+            except Exception:
+                raw_rows = []
+        except Exception:
+            raw_rows = []
+        if isinstance(raw_rows, (list, tuple)):
+            rows = [dict(entry) for entry in raw_rows if isinstance(entry, dict)]
+            signature = (
+                "provider",
+                id(raw_rows),
+                len(rows),
+                tuple(param_set.items()) if isinstance(param_set, dict) else None,
+            )
+            if rows:
+                if payload_cache.get("signature") == signature and isinstance(
+                    payload_cache.get("payload"),
+                    dict,
+                ):
+                    return payload_cache["payload"]
+                payload = gui_peak_selection.build_hkl_pick_simulation_point_payload(rows)
+                payload["source_signature"] = signature
+                payload_cache["signature"] = signature
+                payload_cache["payload"] = payload
+                return payload
+    return []
+
+
 def _clear_geometry_pick_artists(*, redraw: bool = True):
     """Remove geometry fit markers from the plot and reset the cache."""
 
@@ -6632,6 +6739,9 @@ def _initialize_runtime_controls_block_09() -> None:
             ),
             native_detector_coords_to_detector_display_coords=(
                 _native_detector_coords_to_live_bundle_detector_coords
+            ),
+            hkl_pick_simulation_points_factory=(
+                _hkl_pick_simulation_points_from_qr_picker_cache
             ),
             detector_display_to_native_detector_coords=(
                 _background_display_to_native_detector_coords

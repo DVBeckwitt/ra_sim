@@ -1059,6 +1059,7 @@ def build_runtime_selected_peak_bootstrap(
         [float, float], tuple[float, float] | None
     ]
     | None = None,
+    hkl_pick_simulation_points_factory: Callable[[], object] | None = None,
     reflection_q_group_metadata: Callable[..., object] | None = None,
     max_hits_per_reflection: object = None,
     schedule_update_factory: object = None,
@@ -1155,6 +1156,7 @@ def build_runtime_selected_peak_bootstrap(
         native_detector_coords_to_detector_display_coords=(
             native_detector_coords_to_detector_display_coords
         ),
+        hkl_pick_simulation_points_factory=hkl_pick_simulation_points_factory,
         simulate_ideal_hkl_native_center=config_factories.ideal_center,
         deactivate_conflicting_modes_factory=deactivate_conflicting_modes_factory,
         on_hkl_pick_mode_changed_factory=on_hkl_pick_mode_changed_factory,

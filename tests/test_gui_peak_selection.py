@@ -1669,6 +1669,104 @@ def test_select_peak_by_index_prefers_record_override_over_parallel_arrays() -> 
     assert "I=77" in status_messages[-1]
 
 
+def test_select_peak_by_index_accepts_qr_picker_record_without_parallel_index() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[],
+        peak_millers=[],
+        peak_intensities=[],
+        peak_records=[],
+        sim_miller1=np.asarray([[1.0, 0.0, 2.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    marker = _FakeMarker()
+    status_messages: list[str] = []
+    selected_record = {
+        "hkl": (1, 0, 2),
+        "hkl_raw": (1.0, 0.0, 2.0),
+        "intensity": 77.0,
+        "display_col": 40.0,
+        "display_row": 44.0,
+        "native_col": 140.0,
+        "native_row": 144.0,
+        "source_label": "primary",
+        "av": 5.0,
+    }
+
+    ok = peak_selection.select_peak_by_index(
+        runtime_state,
+        peak_state,
+        view_state,
+        marker,
+        -1,
+        primary_a=5.0,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+        draw_idle=lambda: None,
+        record_override=selected_record,
+    )
+
+    assert ok is True
+    assert marker.data == ([40.0], [44.0])
+    assert peak_state.selected_hkl_target == (1, 0, 2)
+    assert runtime_state.selected_peak_record["hkl"] == (1, 0, 2)
+    assert runtime_state.selected_peak_record["selected_native_col"] == 140.0
+    assert view_state.selected_h_var.get() == "1"
+    assert "HKL=(1 0 2)" in status_messages[-1]
+
+
+def test_select_peak_by_index_uses_override_weight_without_parallel_index() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(5.0, 6.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[1.0],
+        peak_records=[{"hkl": (9, 9, 9), "intensity": 1.0}],
+        sim_miller1=np.asarray([[1.0, 0.0, 2.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    marker = _FakeMarker()
+    status_messages: list[str] = []
+    selected_record = {
+        "hkl": (1, 0, 2),
+        "hkl_raw": (1.0, 0.0, 2.0),
+        "weight": 77.0,
+        "display_col": 40.0,
+        "display_row": 44.0,
+        "native_col": 140.0,
+        "native_row": 144.0,
+        "source_label": "primary",
+        "av": 5.0,
+    }
+
+    ok = peak_selection.select_peak_by_index(
+        runtime_state,
+        peak_state,
+        view_state,
+        marker,
+        -1,
+        primary_a=5.0,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+        draw_idle=lambda: None,
+        record_override=selected_record,
+    )
+
+    assert ok is True
+    assert marker.data == ([40.0], [44.0])
+    assert runtime_state.selected_peak_record["hkl"] == (1, 0, 2)
+    assert "I=77" in status_messages[-1]
+    assert "I=1" not in status_messages[-1]
+
+
 def test_select_peak_by_hkl_prefers_cached_records_over_parallel_arrays() -> None:
     runtime_state = state.SimulationRuntimeState(
         unscaled_image=np.ones((4, 4), dtype=float),
@@ -2201,6 +2299,396 @@ def test_select_peak_from_canvas_click_selects_nearest_cached_peak_without_repro
     assert peak_state.suppress_drag_press_once is True
     assert sync_calls == [True]
     assert status_messages == []
+
+
+def test_select_peak_from_canvas_click_prefers_qr_picker_simulation_points() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 10.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[1.0],
+        peak_records=[
+            {
+                "hkl": (9, 9, 9),
+                "display_col": 10.0,
+                "display_row": 10.0,
+                "native_col": 10.0,
+                "native_row": 10.0,
+            }
+        ],
+        sim_miller1=np.asarray([[1.0, 0.0, 2.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    select_calls: list[tuple[int, dict[str, object]]] = []
+    pick_mode_calls: list[tuple[bool, object]] = []
+    sync_calls: list[bool] = []
+    candidate = {
+        "hkl": (1, 0, 2),
+        "hkl_raw": (1.0, 0.0, 2.0),
+        "display_col": 50.0,
+        "display_row": 60.0,
+        "sim_col": 50.0,
+        "sim_row": 60.0,
+        "native_col": 150.0,
+        "native_row": 160.0,
+        "intensity": 77.0,
+        "source_label": "primary",
+        "source_table_index": 3,
+        "source_row_index": 4,
+        "q_group_key": ("primary", 1, 0, 2),
+        "av": 5.0,
+    }
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        49.0,
+        61.0,
+        config=_canvas_pick_config(image_shape=(128, 128)),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (float(col), float(row)),
+        native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: select_calls.append((idx, kwargs)) or True,
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append((bool(enabled), message)),
+        sync_peak_selection_state=lambda: sync_calls.append(True),
+        set_status_text=lambda _text: None,
+        simulation_point_candidates=[candidate],
+    )
+
+    assert ok is True
+    assert len(select_calls) == 1
+    idx, kwargs = select_calls[0]
+    assert idx == -1
+    assert kwargs["record_override"]["hkl"] == (1, 0, 2)
+    assert kwargs["record_override"]["source_table_index"] == 3
+    assert kwargs["record_override"]["source_row_index"] == 4
+    assert kwargs["selected_display"] == (50.0, 60.0)
+    assert kwargs["selected_native"] == (150.0, 160.0)
+    assert kwargs["clicked_display"] == (49.0, 61.0)
+    assert kwargs["clicked_native"] == (49.0, 61.0)
+    assert pick_mode_calls == [(False, None)]
+    assert sync_calls == [True]
+
+
+def test_select_peak_from_canvas_click_uses_indexed_qr_payload_without_linear_scan(
+    monkeypatch,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[],
+        peak_millers=[],
+        peak_intensities=[],
+        peak_records=[{"hkl": (8, 8, 8), "display_col": 1.0, "display_row": 1.0}],
+        sim_miller1=np.asarray([[2.0, 0.0, 4.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    select_calls: list[tuple[int, dict[str, object]]] = []
+    target_index = 40
+    candidates = [
+        {
+            "hkl": (idx, 0, 2),
+            "display_col": float(idx * 60.0),
+            "display_row": 10.0,
+            "sim_col": float(idx * 60.0),
+            "sim_row": 10.0,
+            "native_col": float(idx * 60.0 + 100.0),
+            "native_row": 110.0,
+            "intensity": float(idx),
+        }
+        for idx in range(80)
+    ]
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(candidates)
+
+    monkeypatch.setattr(
+        peak_selection.gui_manual_geometry,
+        "geometry_manual_nearest_candidate_to_point",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("HKL click should use the prebuilt spatial index")
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection.gui_manual_geometry,
+        "geometry_manual_candidate_source_key",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("complete Qr candidate should not scan peak_records")
+        ),
+    )
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        float(target_index * 60.0 + 1.0),
+        11.0,
+        config=peak_selection.build_selected_peak_canvas_pick_config(
+            image_size=8192,
+            primary_a=5.0,
+            primary_c=7.0,
+            max_distance_px=6.0,
+            min_separation_px=2.0,
+            image_shape=(8192, 8192),
+        ),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (float(col), float(row)),
+        native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda idx, **kwargs: select_calls.append((idx, kwargs)) or True,
+        set_pick_mode=lambda enabled, message=None: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        simulation_point_candidates=payload,
+    )
+
+    assert ok is True
+    assert len(select_calls) == 1
+    idx, kwargs = select_calls[0]
+    assert idx == -1
+    assert kwargs["record_override"]["hkl"] == (target_index, 0, 2)
+    assert kwargs["selected_display"] == (target_index * 60.0, 10.0)
+    assert kwargs["selected_native"] == (target_index * 60.0 + 100.0, 110.0)
+
+
+def test_hkl_pick_simulation_point_payload_limits_click_candidates() -> None:
+    candidates = [
+        {
+            "hkl": (idx, 0, 2),
+            "display_col": float(idx * 100.0),
+            "display_row": float(idx * 100.0),
+            "sim_col": float(idx * 100.0),
+            "sim_row": float(idx * 100.0),
+        }
+        for idx in range(25)
+    ]
+
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(candidates)
+    detector_index = payload["detector_index"]
+    candidate_indices = peak_selection._simulation_point_candidate_indices_for_click(
+        detector_index,
+        1200.0,
+        1200.0,
+        max_axis_distance_px=5.0,
+    )
+
+    assert candidate_indices == [12]
+    assert payload["candidate_count"] == 25
+
+
+def test_simulation_point_candidates_from_payload_reuses_prebuilt_candidates() -> None:
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 10.0,
+                "display_row": 20.0,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            }
+        ]
+    )
+
+    candidates = peak_selection._simulation_point_candidates_from_payload(payload)
+
+    assert candidates is payload["candidates"]
+
+
+def test_nearest_simulation_point_preserves_original_candidate_order_on_ties() -> None:
+    candidates = [
+        {
+            "hkl": (9, 0, 1),
+            "display_col": 60.0,
+            "display_row": 10.0,
+            "sim_col": 60.0,
+            "sim_row": 10.0,
+            "native_col": 160.0,
+            "native_row": 110.0,
+            "intensity": 9.0,
+        },
+        {
+            "hkl": (4, 0, 1),
+            "display_col": 40.0,
+            "display_row": 10.0,
+            "sim_col": 40.0,
+            "sim_row": 10.0,
+            "native_col": 140.0,
+            "native_row": 110.0,
+            "intensity": 4.0,
+        },
+    ]
+    payload = peak_selection.build_hkl_pick_simulation_point_payload(candidates)
+
+    idx, peak_record, best_dist, within_window = (
+        peak_selection._nearest_simulation_point_for_click(
+            state.SimulationRuntimeState(peak_records=[]),
+            50.0,
+            10.0,
+            candidate_records=payload,
+            max_axis_distance_px=15.0,
+            use_caked_display=False,
+        )
+    )
+
+    assert idx == -1
+    assert peak_record is not None
+    assert peak_record["hkl"] == (9, 0, 1)
+    assert best_dist == 10.0
+    assert within_window is True
+
+
+def test_peak_record_index_for_simulation_point_ignores_branch_namespace_source_peak_index() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "hkl": (9, 9, 9),
+                "native_col": 10.0,
+                "native_row": 20.0,
+            },
+            {
+                "hkl": (8, 8, 8),
+                "native_col": 150.0,
+                "native_row": 160.0,
+            },
+        ],
+    )
+    candidate = {
+        "native_col": 150.0,
+        "native_row": 160.0,
+        "source_peak_index": 0,
+    }
+
+    idx = peak_selection._peak_record_index_for_simulation_point(
+        runtime_state,
+        candidate,
+    )
+
+    assert idx == 1
+
+
+def test_peak_record_index_for_simulation_point_prefers_exact_native_match() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "hkl": (2, 1, 0),
+            },
+            {
+                "hkl": (2, 1, 0),
+                "native_col": 150.0,
+                "native_row": 160.0,
+            },
+        ],
+    )
+    candidate = {
+        "hkl": (2, 1, 0),
+        "native_col": 150.0,
+        "native_row": 160.0,
+        "source_table_index": 9,
+        "source_row_index": 10,
+    }
+
+    idx = peak_selection._peak_record_index_for_simulation_point(
+        runtime_state,
+        candidate,
+    )
+
+    assert idx == 1
+
+
+def test_peak_record_index_for_simulation_point_hkl_only_key_uses_native_match() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "hkl": (2, 1, 0),
+                "native_col": 10.0,
+                "native_row": 20.0,
+            },
+            {
+                "hkl": (2, 1, 0),
+                "native_col": 150.0,
+                "native_row": 160.0,
+            },
+        ],
+    )
+    candidate = {
+        "hkl": (2, 1, 0),
+        "native_col": 150.0,
+        "native_row": 160.0,
+    }
+
+    idx = peak_selection._peak_record_index_for_simulation_point(
+        runtime_state,
+        candidate,
+    )
+
+    assert idx == 1
+
+
+def test_peak_record_index_for_simulation_point_source_branch_uses_row_identity() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "hkl": (2, 1, 0),
+                "native_col": 10.0,
+                "native_row": 20.0,
+                "source_table_index": 5,
+                "source_row_index": 1,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            },
+            {
+                "hkl": (2, 1, 0),
+                "native_col": 150.0,
+                "native_row": 160.0,
+                "source_table_index": 5,
+                "source_row_index": 2,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            },
+        ],
+    )
+    candidate = {
+        "hkl": (2, 1, 0),
+        "native_col": 150.0,
+        "native_row": 160.0,
+        "source_table_index": 5,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+
+    idx = peak_selection._peak_record_index_for_simulation_point(
+        runtime_state,
+        candidate,
+    )
+
+    assert idx == 1
+
+
+def test_peak_record_index_for_simulation_point_prefers_exact_source_key() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "hkl": (2, 1, 0),
+                "source_table_index": 5,
+                "source_row_index": 1,
+            },
+            {
+                "hkl": (2, 1, 0),
+                "source_table_index": 5,
+                "source_row_index": 2,
+            },
+        ],
+    )
+    candidate = {
+        "hkl": (2, 1, 0),
+        "source_table_index": 5,
+        "source_row_index": 2,
+    }
+
+    idx = peak_selection._peak_record_index_for_simulation_point(
+        runtime_state,
+        candidate,
+    )
+
+    assert idx == 1
 
 
 def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cache_for_same_view() -> None:
@@ -2878,6 +3366,8 @@ def test_peak_selection_runtime_binding_factory_builds_live_bindings(
         idx = counters["deactivate"]
         return lambda: f"deactivate-{idx}"
 
+    hkl_pick_points_factory = lambda: [{"display_col": 1.0, "display_row": 2.0}]
+
     factory = peak_selection.make_runtime_peak_selection_bindings_factory(
         simulation_runtime_state="runtime-state",
         peak_selection_state="peak-state",
@@ -2894,6 +3384,7 @@ def test_peak_selection_runtime_binding_factory_builds_live_bindings(
         draw_idle_factory=build_draw,
         display_to_native_sim_coords=lambda col, row, image_shape: (col, row),
         native_sim_to_display_coords=lambda col, row, image_shape: (col, row),
+        hkl_pick_simulation_points_factory=hkl_pick_points_factory,
         simulate_ideal_hkl_native_center=lambda *_args: None,
         deactivate_conflicting_modes_factory=build_deactivate,
         n2="n2",
@@ -2911,6 +3402,7 @@ def test_peak_selection_runtime_binding_factory_builds_live_bindings(
     assert callable(calls[0]["schedule_update"])
     assert callable(calls[0]["draw_idle"])
     assert callable(calls[0]["deactivate_conflicting_modes"])
+    assert calls[0]["hkl_pick_simulation_points_factory"] is hkl_pick_points_factory
     assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
     assert calls[0]["schedule_update"] is not calls[1]["schedule_update"]
     assert calls[0]["draw_idle"] is not calls[1]["draw_idle"]
@@ -2930,6 +3422,13 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     deactivate_calls = []
     mode_change_calls = []
     calls = []
+    hkl_pick_points = [
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 9.0,
+            "display_row": 11.0,
+        }
+    ]
 
     bindings = peak_selection.SelectedPeakRuntimeBindings(
         simulation_runtime_state=runtime_state,
@@ -2947,6 +3446,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         draw_idle=lambda: None,
         display_to_native_sim_coords=lambda col, row, image_shape: (col, row),
         native_sim_to_display_coords=lambda col, row, image_shape: (col, row),
+        hkl_pick_simulation_points_factory=lambda: hkl_pick_points,
         simulate_ideal_hkl_native_center=lambda *_args: None,
         deactivate_conflicting_modes=lambda: deactivate_calls.append(True),
         on_hkl_pick_mode_changed=lambda enabled: mode_change_calls.append(bool(enabled)),
@@ -3087,6 +3587,11 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     assert isinstance(click_call[5]["config"], peak_selection.SelectedPeakCanvasPickConfig)
     assert callable(click_call[5]["select_peak_by_index"])
     assert callable(click_call[5]["set_pick_mode"])
+    click_payload = click_call[5]["simulation_point_candidates"]
+    assert isinstance(click_payload, dict)
+    assert list(click_payload["candidates"]) == hkl_pick_points
+    assert isinstance(click_payload["detector_index"], dict)
+    assert isinstance(click_payload["caked_index"], dict)
 
     callback_calls = []
     versions = {"count": 0}
