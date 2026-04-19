@@ -3434,13 +3434,6 @@ def geometry_manual_live_peak_candidates_from_records(
             or not _points_match(legacy_sim_point, caked_point)
         ):
             detector_display = legacy_sim_point
-        if (
-            detector_display is None
-            and display_point is not None
-            and caked_point is None
-            and native_point is None
-        ):
-            detector_display = display_point
         if detector_display is not None:
             entry["sim_col"] = float(detector_display[0])
             entry["sim_row"] = float(detector_display[1])
@@ -3456,6 +3449,8 @@ def geometry_manual_live_peak_candidates_from_records(
             entry["caked_y"] = float(caked_point[1])
             entry.setdefault("raw_caked_x", float(caked_point[0]))
             entry.setdefault("raw_caked_y", float(caked_point[1]))
+        if detector_display is None and native_point is None and caked_point is None:
+            continue
         if entry.get("weight") is None:
             try:
                 entry["weight"] = max(0.0, float(entry.get("intensity", 0.0)))
@@ -3660,24 +3655,6 @@ def build_geometry_manual_pick_cache(
         return filtered_rows
 
     if prefer_cache and bg_index == current_bg_index:
-        cached_simulated_peaks = geometry_manual_live_peak_candidates_from_records(
-            peak_records
-        )
-        if _apply_candidate_source(
-            cached_simulated_peaks,
-            action="reused",
-            source="peak_records",
-            provenance=[
-                "peak_records",
-                "build_grouped_candidates",
-                "build_simulated_lookup",
-            ],
-            stale_reason_override=None,
-        ):
-            pass
-        elif stale_reason is None:
-            stale_reason = "live peak records were empty."
-    if prefer_cache and bg_index == current_bg_index and not grouped_candidates:
         cached_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
             param_set=param_set,
@@ -3697,6 +3674,24 @@ def build_geometry_manual_pick_cache(
             pass
         else:
             stale_reason = "cached preview groups were empty."
+    if prefer_cache and bg_index == current_bg_index and not grouped_candidates:
+        cached_simulated_peaks = geometry_manual_live_peak_candidates_from_records(
+            peak_records
+        )
+        if _apply_candidate_source(
+            cached_simulated_peaks,
+            action="reused",
+            source="peak_records",
+            provenance=[
+                "peak_records",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            stale_reason_override=None,
+        ):
+            pass
+        elif stale_reason is None:
+            stale_reason = "live peak records were empty."
     if prefer_cache and not grouped_candidates:
         cached_simulated_peaks = (
             [
@@ -5700,18 +5695,12 @@ def make_runtime_geometry_manual_projection_callbacks(
             elif refined_native_point is None and refined_caked_point is not None:
                 raw_detector_display = None
             if raw_detector_display is None and legacy_sim_point is not None and (
-                caked_point is None or not _points_match(legacy_sim_point, caked_point)
+                display_detector_candidate is None
+                or native_point is not None
+                or caked_point is not None
+                or not _points_match(legacy_sim_point, display_detector_candidate)
             ):
                 raw_detector_display = legacy_sim_point
-            if (
-                raw_detector_display is None
-                and display_detector_candidate is not None
-                and (
-                    caked_point is None
-                    or not _points_match(display_detector_candidate, caked_point)
-                )
-            ):
-                raw_detector_display = display_detector_candidate
             if raw_detector_display is None and legacy_xy_point is not None:
                 raw_detector_display = legacy_xy_point
             for stale_key in (
@@ -5878,8 +5867,6 @@ def make_runtime_geometry_manual_projection_callbacks(
                 entry["sim_row_raw"] = float(raw_detector_display[1])
                 entry["sim_col"] = float(raw_detector_display[0])
                 entry["sim_row"] = float(raw_detector_display[1])
-                entry["display_col"] = float(raw_detector_display[0])
-                entry["display_row"] = float(raw_detector_display[1])
             if caked_point is not None:
                 entry["caked_x"] = float(caked_point[0])
                 entry["caked_y"] = float(caked_point[1])
@@ -5890,6 +5877,8 @@ def make_runtime_geometry_manual_projection_callbacks(
 
             if use_caked:
                 if caked_point is not None:
+                    entry["display_col"] = float(caked_point[0])
+                    entry["display_row"] = float(caked_point[1])
                     entry["sim_col_global"] = float(caked_point[0])
                     entry["sim_row_global"] = float(caked_point[1])
                     entry["sim_col_local"] = float(
@@ -8156,4 +8145,3 @@ def import_geometry_manual_pairs(
     if callable(set_status_text):
         set_status_text(message)
     return message
-

@@ -21,6 +21,7 @@ from scipy.spatial import cKDTree
 from ra_sim.fitting import optimization_mosaic_profiles as _mosaic_profiles
 from ra_sim.fitting import optimization_runtime as _runtime
 from ra_sim.fitting.optimization_runtime import SimulationCache
+from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
 from ra_sim.simulation.diffraction import (
     get_last_process_peaks_safe_stats,
     hit_tables_to_max_positions,
@@ -9421,12 +9422,25 @@ def build_measured_dict(
 def _valid_hit_rows(hit_table: object) -> List[np.ndarray]:
     """Return filtered hit rows using the same rules as geometry auto-match."""
 
+    return [
+        np.asarray(record["row"], dtype=float)
+        for record in _valid_hit_row_records(hit_table)
+    ]
+
+
+def _valid_hit_row_records(hit_table: object) -> List[Dict[str, object]]:
+    """Return filtered hit rows plus stable provenance row indices when available."""
+
     hits = np.asarray(hit_table)
     if hits.ndim != 2 or hits.shape[1] < 7:
         return []
 
-    rows: List[np.ndarray] = []
-    for row in hits:
+    rows: List[Dict[str, object]] = []
+    for row_position, raw_row in enumerate(hits):
+        try:
+            row = np.asarray(raw_row, dtype=float).reshape(-1)
+        except Exception:
+            continue
         if (
             not np.isfinite(row[0])
             or not np.isfinite(row[1])
@@ -9436,8 +9450,44 @@ def _valid_hit_rows(hit_table: object) -> List[np.ndarray]:
             or not np.isfinite(row[6])
         ):
             continue
-        rows.append(np.asarray(row[:7], dtype=float))
+        source_table_index, source_row_index, _best_sample_index = extract_hit_row_provenance(
+            row
+        )
+        if source_row_index is None:
+            source_row_index = int(row_position)
+        rows.append(
+            {
+                "row": np.asarray(row[:7], dtype=float),
+                "row_position": int(row_position),
+                "source_table_index": (
+                    int(source_table_index)
+                    if source_table_index is not None
+                    else None
+                ),
+                "source_row_index": int(source_row_index),
+            }
+        )
     return rows
+
+
+def _resolve_source_row_record(
+    row_records: Sequence[Mapping[str, object]],
+    row_index: int | None,
+) -> Tuple[Optional[Dict[str, object]], str]:
+    """Resolve a saved source-row identity against hit-table provenance first."""
+
+    if row_index is None:
+        return None, "missing_source_row_index"
+    if int(row_index) < 0:
+        return None, "source_row_out_of_range"
+
+    for record in row_records:
+        if _nonnegative_index(record.get("source_row_index")) == int(row_index):
+            return dict(record), "resolved_source_row"
+
+    if int(row_index) >= len(row_records):
+        return None, "source_row_out_of_range"
+    return dict(row_records[int(row_index)]), "resolved_source_row"
 
 
 def _nonnegative_index(value: object) -> Optional[int]:
@@ -9535,6 +9585,19 @@ def _measured_source_peak_index(
         allow_legacy_peak_fallback=allow_legacy_peak_fallback,
     )
     return peak_idx
+
+
+def _geometry_fit_prefers_source_row_resolution(
+    entry: Mapping[str, object],
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+    if fit_kind != "source_row":
+        return False
+    return _nonnegative_index(
+        entry.get("frozen_row_index", entry.get("source_row_index"))
+    ) is not None
 
 
 def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, object]:
@@ -9700,19 +9763,18 @@ def _branch_representative_row(
 
 
 def _trusted_source_row_fallback(
-    rows: Sequence[np.ndarray],
+    row_records: Sequence[Mapping[str, object]],
     *,
     row_index: int | None,
     measured_hkl: object = None,
 ) -> Tuple[Optional[np.ndarray], str]:
     """Return one safe trusted-row fallback when branch recovery is ambiguous."""
 
-    if row_index is None:
-        return None, "missing_source_row_index"
-    if row_index < 0 or row_index >= len(rows):
-        return None, "source_row_out_of_range"
+    row_record, row_reason = _resolve_source_row_record(row_records, row_index)
+    if row_record is None:
+        return None, str(row_reason)
     try:
-        row = np.asarray(rows[int(row_index)], dtype=float).reshape(-1)
+        row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
     except Exception:
         return None, "source_row_parse_failed"
     if row.shape[0] < 7:
@@ -9725,7 +9787,7 @@ def _trusted_source_row_fallback(
     if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
         return None, "invalid_simulated_point"
     row_branch = source_branch_index_from_phi_deg(row[3])
-    if row_branch is not None and len(rows) != 1:
+    if row_branch is not None and len(row_records) != 1:
         return None, "source_row_has_explicit_branch"
     measured_hkl_key = _normalized_hkl_key(measured_hkl)
     if measured_hkl_key is not None:
@@ -9797,7 +9859,7 @@ def _resolve_fixed_source_matches(
 ]:
     """Resolve measured peaks back to their original simulated hit-table rows."""
 
-    filtered_rows_cache: Dict[int, List[np.ndarray]] = {}
+    filtered_rows_cache: Dict[int, List[Dict[str, object]]] = {}
     resolved: List[Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]] = []
     fallback_entries: List[Dict[str, object]] = []
     resolution_lookup: Dict[int, Dict[str, object]] = {}
@@ -9894,9 +9956,10 @@ def _resolve_fixed_source_matches(
             if table_idx < 0 or table_idx >= len(hit_tables):
                 filtered_rows_cache[table_idx] = []
             else:
-                filtered_rows_cache[table_idx] = _valid_hit_rows(hit_tables[table_idx])
+                filtered_rows_cache[table_idx] = _valid_hit_row_records(hit_tables[table_idx])
 
-        rows = filtered_rows_cache.get(table_idx, [])
+        row_records = filtered_rows_cache.get(table_idx, [])
+        rows = [np.asarray(record["row"], dtype=float) for record in row_records]
         resolved_from_peak = False
         sim_col = float("nan")
         sim_row = float("nan")
@@ -9934,7 +9997,7 @@ def _resolve_fixed_source_matches(
                     resolved_from_peak = True
                 elif trusted_full_reflection and source_row_key is not None:
                     fallback_row, fallback_reason = _trusted_source_row_fallback(
-                        rows,
+                        row_records,
                         row_index=int(source_row_key[1]),
                         measured_hkl=entry.get("hkl"),
                     )
@@ -10000,20 +10063,21 @@ def _resolve_fixed_source_matches(
                     fallback_entries.append(entry)
                 continue
             row_idx = int(source_row_key[1])
-            if row_idx < 0 or row_idx >= len(rows):
+            row_record, row_reason = _resolve_source_row_record(row_records, row_idx)
+            if row_record is None:
                 _store_resolution_diag(
                     entry,
                     {
                     **base_diag,
                     "resolution_kind": "hkl_fallback",
-                    "resolution_reason": "source_row_out_of_range",
-                    "source_row_count": int(len(rows)),
+                    "resolution_reason": str(row_reason),
+                    "source_row_count": int(len(row_records)),
                     },
                 )
                 fallback_entries.append(entry)
                 continue
 
-            row = rows[row_idx]
+            row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
             try:
                 sim_col = float(row[1])
                 sim_row = float(row[2])
@@ -10226,6 +10290,8 @@ def _resolve_geometry_fit_correspondence(
 ) -> Tuple[Optional[Tuple[float, float]], Dict[str, object]]:
     """Resolve one frozen correspondence back to a simulated detector point."""
 
+    filtered_row_records_cache: Dict[int, List[Dict[str, object]]] = {}
+
     def _payload(
         reason: str,
         *,
@@ -10257,6 +10323,16 @@ def _resolve_geometry_fit_correspondence(
                 filtered_rows_cache[int(table_idx)] = []
         return filtered_rows_cache.get(int(table_idx), [])
 
+    def _row_records_for_table(table_idx: int) -> List[Dict[str, object]]:
+        if int(table_idx) not in filtered_row_records_cache:
+            if 0 <= int(table_idx) < len(hit_tables):
+                filtered_row_records_cache[int(table_idx)] = _valid_hit_row_records(
+                    hit_tables[int(table_idx)]
+                )
+            else:
+                filtered_row_records_cache[int(table_idx)] = []
+        return filtered_row_records_cache.get(int(table_idx), [])
+
     def _branch_sim_hkl(row: np.ndarray, fallback: object = None) -> object:
         try:
             return tuple(int(round(float(v))) for v in row[4:7])
@@ -10264,6 +10340,9 @@ def _resolve_geometry_fit_correspondence(
             return fallback
 
     trusted_full_reflection = _entry_trusted_full_reflection_identity(correspondence)
+    prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(
+        correspondence
+    )
     frozen_kind = str(correspondence.get("frozen_locator_kind", "") or "").strip().lower()
     frozen_namespace = str(correspondence.get("frozen_table_namespace", "") or "").strip().lower()
     frozen_signature = correspondence.get("frozen_table_signature")
@@ -10319,6 +10398,24 @@ def _resolve_geometry_fit_correspondence(
             peak_idx = _nonnegative_index(correspondence.get("frozen_branch_index"))
             if peak_idx not in {0, 1}:
                 return None, _payload("missing_source_peak_index", table_idx=table_idx)
+        elif frozen_kind == "trusted_row":
+            if frozen_namespace != "full_reflection":
+                return None, _payload("invalid_frozen_locator")
+            table_idx, remap_payload = _maybe_remap_trusted_full_reflection_index(
+                table_idx,
+                namespace=frozen_namespace,
+            )
+            if remap_payload is not None and table_idx is None:
+                return None, remap_payload
+            trusted_full_reflection_remapped = bool(
+                isinstance(remap_payload, Mapping)
+                and remap_payload.get("trusted_full_reflection_remapped", False)
+            )
+            row_idx = _nonnegative_index(correspondence.get("frozen_row_index"))
+            if row_idx is None:
+                row_idx = _nonnegative_index(correspondence.get("source_row_index"))
+            if row_idx is None:
+                return None, _payload("missing_source_row_index", table_idx=table_idx)
         elif frozen_kind == "local_branch":
             if frozen_namespace != "current_full_local":
                 return None, _payload("invalid_frozen_locator")
@@ -10371,10 +10468,16 @@ def _resolve_geometry_fit_correspondence(
             isinstance(remap_payload, Mapping)
             and remap_payload.get("trusted_full_reflection_remapped", False)
         )
-        peak_idx = _measured_source_peak_index(correspondence)
-        if peak_idx not in {0, 1}:
-            return None, _payload("missing_source_peak_index", table_idx=table_idx)
-        frozen_kind = "trusted_branch"
+        if prefer_source_row_resolution:
+            row_idx = _nonnegative_index(correspondence.get("source_row_index"))
+            if row_idx is None:
+                return None, _payload("missing_source_row_index", table_idx=table_idx)
+            frozen_kind = "trusted_row"
+        else:
+            peak_idx = _measured_source_peak_index(correspondence)
+            if peak_idx not in {0, 1}:
+                return None, _payload("missing_source_peak_index", table_idx=table_idx)
+            frozen_kind = "trusted_branch"
     else:
         resolved_table_idx = _nonnegative_index(correspondence.get("resolved_table_index"))
         if resolved_table_idx is not None:
@@ -10385,11 +10488,13 @@ def _resolve_geometry_fit_correspondence(
                 table_idx = int(source_table_idx)
         if table_idx is None:
             return None, _payload("missing_source_table_index")
+        row_idx = _nonnegative_index(correspondence.get("source_row_index"))
         peak_idx = _measured_source_peak_index(correspondence)
-        if peak_idx in {0, 1}:
+        if prefer_source_row_resolution and row_idx is not None:
+            frozen_kind = "local_row"
+        elif peak_idx in {0, 1}:
             frozen_kind = "local_branch"
         else:
-            row_idx = _nonnegative_index(correspondence.get("source_row_index"))
             if row_idx is None:
                 return None, _payload("missing_source_peak_index", table_idx=table_idx)
             frozen_kind = "local_row"
@@ -10398,6 +10503,7 @@ def _resolve_geometry_fit_correspondence(
         return None, _payload("source_table_out_of_range", table_idx=table_idx)
 
     rows = _rows_for_table(int(table_idx))
+    row_records = _row_records_for_table(int(table_idx))
     if frozen_kind in {"trusted_branch", "local_branch"}:
         branch_row, branch_reason = _branch_representative_row(
             rows,
@@ -10437,7 +10543,7 @@ def _resolve_geometry_fit_correspondence(
                 )
         elif frozen_kind == "trusted_branch":
             trusted_row, trusted_reason = _trusted_source_row_fallback(
-                rows,
+                row_records,
                 row_index=_nonnegative_index(correspondence.get("source_row_index")),
                 measured_hkl=correspondence.get("hkl"),
             )
@@ -10467,13 +10573,14 @@ def _resolve_geometry_fit_correspondence(
 
     if row_idx is None:
         return None, _payload("missing_source_row_index", table_idx=table_idx)
-    if row_idx >= len(rows):
+    row_record, row_reason = _resolve_source_row_record(row_records, row_idx)
+    if row_record is None:
         return None, _payload(
-            "source_row_out_of_range",
+            str(row_reason),
             table_idx=table_idx,
-            extra={"source_row_count": int(len(rows))},
+            extra={"source_row_count": int(len(row_records))},
         )
-    row = rows[int(row_idx)]
+    row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
     try:
         sim_col = float(row[1])
         sim_row = float(row[2])
@@ -15071,6 +15178,8 @@ def fit_geometry_parameters(
 
     def _build_full_beam_seed_correspondence_map(
         seed_diagnostics: Sequence[Dict[str, object]],
+        *,
+        accept_unmatched_fixed_sources: bool = False,
     ) -> Dict[int, List[Dict[str, object]]]:
         dataset_table_signatures = {
             int(dataset_ctx.dataset_index): _local_table_signature(
@@ -15084,15 +15193,31 @@ def fit_geometry_parameters(
             *,
             dataset_index: int,
         ) -> Optional[Dict[str, object]]:
-            if str(entry.get("match_status", "")).strip().lower() != "matched":
+            if (
+                str(entry.get("match_status", "")).strip().lower() != "matched"
+                and not accept_unmatched_fixed_sources
+            ):
                 return None
             trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
+            prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(
+                entry
+            )
             source_branch_index, _source_branch_source = _measured_source_peak_index_with_source(
                 entry
             )
+            row_idx = _nonnegative_index(entry.get("source_row_index"))
             if trusted_full_reflection:
                 reflection_idx = _nonnegative_index(entry.get("source_reflection_index"))
-                if reflection_idx is None or source_branch_index not in {0, 1}:
+                if reflection_idx is None:
+                    return None
+                if prefer_source_row_resolution and row_idx is not None:
+                    return {
+                        "frozen_locator_kind": "trusted_row",
+                        "frozen_table_namespace": "full_reflection",
+                        "frozen_table_index": int(reflection_idx),
+                        "frozen_row_index": int(row_idx),
+                    }
+                if source_branch_index not in {0, 1}:
                     return None
                 return {
                     "frozen_locator_kind": "trusted_branch",
@@ -15108,6 +15233,14 @@ def fit_geometry_parameters(
                 return None
             table_signature = dataset_table_signatures.get(int(dataset_index))
             if source_branch_index in {0, 1}:
+                if prefer_source_row_resolution and row_idx is not None:
+                    return {
+                        "frozen_locator_kind": "local_row",
+                        "frozen_table_namespace": "current_full_local",
+                        "frozen_table_index": int(table_idx),
+                        "frozen_row_index": int(row_idx),
+                        "frozen_table_signature": table_signature,
+                    }
                 return {
                     "frozen_locator_kind": "local_branch",
                     "frozen_table_namespace": "current_full_local",
@@ -15165,14 +15298,25 @@ def fit_geometry_parameters(
             frozen_locator = _frozen_locator_fields(entry, dataset_index=int(dataset_index))
             if not isinstance(frozen_locator, dict):
                 continue
+            effective_match_status = str(
+                entry.get(
+                    "match_status",
+                    "matched" if accept_unmatched_fixed_sources else "",
+                )
+            )
             grouped.setdefault(int(dataset_index), {})[int(overlay_match_index)] = {
                 "dataset_index": int(dataset_index),
                 "overlay_match_index": int(overlay_match_index),
                 "match_input_index": int(entry.get("match_input_index", overlay_match_index)),
                 "label": str(entry.get("label", "")),
                 "q_group_key": entry.get("q_group_key"),
-                "seed_match_status": str(entry.get("match_status", "")),
-                "match_status": str(entry.get("match_status", "")),
+                "seed_match_status": str(
+                    entry.get(
+                        "seed_match_status",
+                        effective_match_status,
+                    )
+                ),
+                "match_status": str(effective_match_status),
                 "match_kind": str(entry.get("match_kind", "")),
                 "resolution_kind": str(entry.get("resolution_kind", "")),
                 "resolution_reason": str(entry.get("resolution_reason", "")),
@@ -15357,6 +15501,7 @@ def fit_geometry_parameters(
             fixed_source_count_local = 0
             for entry in correspondence_entries:
                 if str(entry.get("frozen_locator_kind", "")).strip().lower() in {
+                    "trusted_row",
                     "trusted_branch",
                     "local_branch",
                     "local_row",
@@ -15893,57 +16038,45 @@ def fit_geometry_parameters(
             summary["reason"] = "missing_full_beam_mosaic"
             return summary
 
-        start_x = np.asarray(current_result.x, dtype=float)
-        start_local = _apply_trial_params(start_x)
-        _, seed_diagnostics, seed_summary = _evaluate_pixel_matches(
-            start_local,
-            collect_diagnostics=True,
-        )
-        fixed_correspondence_map = _build_full_beam_seed_correspondence_map(seed_diagnostics)
-        correspondence_count = int(
-            sum(len(entries) for entries in fixed_correspondence_map.values())
-        )
-        summary["seed_correspondence_count"] = int(correspondence_count)
-        summary["seed_correspondence_records"] = [
-            dict(entry)
-            for dataset_entries in fixed_correspondence_map.values()
-            for entry in dataset_entries
-            if isinstance(entry, Mapping)
-        ]
-        summary["seed_matched_pair_count"] = int(seed_summary.get("matched_pair_count", 0))
-        summary["seed_rms_px"] = float(seed_summary.get("unweighted_peak_rms_px", np.nan))
-        if correspondence_count <= 0:
-            summary["reason"] = "no_seed_correspondences"
-            return summary
-
-        def _full_beam_point_match_evaluator(
-            local_trial: Dict[str, object],
-            *,
-            collect_diagnostics: bool = False,
-        ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
-            return _evaluate_full_beam_point_matches(
-                local_trial,
-                fixed_correspondence_map,
-                collect_diagnostics=collect_diagnostics,
-            )
-
-        def _full_beam_residual(x_trial: np.ndarray) -> np.ndarray:
-            local_trial = _apply_trial_params(np.asarray(x_trial, dtype=float))
-            residual_arr, _, _ = _full_beam_point_match_evaluator(
-                local_trial,
-                collect_diagnostics=False,
-            )
-            prior_residual = _parameter_prior_residuals(np.asarray(x_trial, dtype=float))
-            if prior_residual.size:
-                if residual_arr.size:
-                    return np.concatenate(
-                        [
-                            np.asarray(residual_arr, dtype=float),
-                            np.asarray(prior_residual, dtype=float),
-                        ]
+        def _direct_seed_entries() -> List[Dict[str, object]]:
+            entries_out: List[Dict[str, object]] = []
+            for dataset_ctx in dataset_contexts:
+                for fallback_index, raw_entry in enumerate(dataset_ctx.subset.measured_entries):
+                    if not isinstance(raw_entry, Mapping):
+                        continue
+                    entry = dict(raw_entry)
+                    entry.setdefault("dataset_index", int(dataset_ctx.dataset_index))
+                    entry.setdefault("overlay_match_index", int(fallback_index))
+                    entry.setdefault("match_input_index", int(fallback_index))
+                    entry.setdefault("label", str(entry.get("label", "")))
+                    entry.setdefault(
+                        "measured_x",
+                        float(
+                            entry.get(
+                                "detector_x",
+                                entry.get("x", np.nan),
+                            )
+                        ),
                     )
-                return np.asarray(prior_residual, dtype=float)
-            return np.asarray(residual_arr, dtype=float)
+                    entry.setdefault(
+                        "measured_y",
+                        float(
+                            entry.get(
+                                "detector_y",
+                                entry.get("y", np.nan),
+                            )
+                        ),
+                    )
+                    entry.setdefault("fit_source_identity_only", True)
+                    entry.setdefault("match_status", "matched")
+                    entry.setdefault("seed_match_status", "matched")
+                    entry.setdefault("resolution_kind", "fixed_source")
+                    entry.setdefault(
+                        "resolution_reason",
+                        "direct_source_identity_seed",
+                    )
+                    entries_out.append(entry)
+            return entries_out
 
         def _copy_point_match_diagnostics_for_summary(
             diagnostics_in: Sequence[object] | None,
@@ -16025,6 +16158,344 @@ def fit_geometry_parameters(
                     point_match_summary_in.get("unweighted_peak_max_px", np.nan)
                 )
             return out
+
+        def _full_beam_start_bundle(
+            candidate_x: np.ndarray,
+            *,
+            vector_source: str,
+        ) -> Dict[str, object]:
+            candidate_x = np.asarray(candidate_x, dtype=float)
+            candidate_local = _apply_trial_params(candidate_x)
+            _, seed_diagnostics, seed_summary = _evaluate_pixel_matches(
+                candidate_local,
+                collect_diagnostics=True,
+            )
+            candidate_fixed_correspondence_map = _build_full_beam_seed_correspondence_map(
+                seed_diagnostics
+            )
+            correspondence_count = int(
+                sum(len(entries) for entries in candidate_fixed_correspondence_map.values())
+            )
+            seed_source = "current_result_diagnostics"
+            if correspondence_count <= 0:
+                candidate_fixed_correspondence_map = _build_full_beam_seed_correspondence_map(
+                    _direct_seed_entries(),
+                    accept_unmatched_fixed_sources=True,
+                )
+                correspondence_count = int(
+                    sum(
+                        len(entries)
+                        for entries in candidate_fixed_correspondence_map.values()
+                    )
+                )
+                if correspondence_count > 0:
+                    seed_source = "prepared_fixed_source_entries"
+
+            if correspondence_count > 0:
+                candidate_start_residual, candidate_start_pm_diagnostics, candidate_start_pm_summary = (
+                    _evaluate_full_beam_point_matches(
+                        candidate_local,
+                        candidate_fixed_correspondence_map,
+                        collect_diagnostics=True,
+                    )
+                )
+            else:
+                candidate_start_residual = np.array([], dtype=float)
+                candidate_start_pm_diagnostics = []
+                candidate_start_pm_summary = {}
+
+            candidate_start_prior = _parameter_prior_residuals(candidate_x)
+            if candidate_start_prior.size:
+                if candidate_start_residual.size:
+                    candidate_start_fun = np.concatenate(
+                        [
+                            np.asarray(candidate_start_residual, dtype=float),
+                            np.asarray(candidate_start_prior, dtype=float),
+                        ]
+                    )
+                else:
+                    candidate_start_fun = np.asarray(candidate_start_prior, dtype=float)
+            else:
+                candidate_start_fun = np.asarray(candidate_start_residual, dtype=float)
+
+            candidate_start_cost = float(
+                _robust_cost(candidate_start_fun, loss=solver_loss, f_scale=solver_f_scale)
+            )
+            candidate_start_acceptance_metrics = _full_beam_acceptance_metrics(
+                candidate_start_residual,
+                candidate_start_pm_diagnostics,
+                candidate_start_pm_summary,
+            )
+            return {
+                "x": np.asarray(candidate_x, dtype=float),
+                "local": candidate_local,
+                "vector_source": str(vector_source),
+                "fixed_correspondence_map": candidate_fixed_correspondence_map,
+                "correspondence_count": int(correspondence_count),
+                "seed_correspondence_records": [
+                    dict(entry)
+                    for dataset_entries in candidate_fixed_correspondence_map.values()
+                    for entry in dataset_entries
+                    if isinstance(entry, Mapping)
+                ],
+                "seed_source": str(seed_source),
+                "seed_matched_pair_count": int(seed_summary.get("matched_pair_count", 0)),
+                "seed_rms_px": float(seed_summary.get("unweighted_peak_rms_px", np.nan)),
+                "start_residual": np.asarray(candidate_start_residual, dtype=float),
+                "start_pm_diagnostics": _copy_point_match_diagnostics_for_summary(
+                    candidate_start_pm_diagnostics
+                ),
+                "start_pm_summary": _copy_point_match_summary_for_summary(
+                    candidate_start_pm_summary
+                ),
+                "start_fun": np.asarray(candidate_start_fun, dtype=float),
+                "start_cost": float(candidate_start_cost),
+                "start_matched": int(candidate_start_pm_summary.get("matched_pair_count", 0)),
+                "fixed_source_resolved_count": int(
+                    candidate_start_pm_summary.get("fixed_source_resolved_count", 0)
+                ),
+                "start_acceptance_metrics": dict(candidate_start_acceptance_metrics),
+            }
+
+        def _full_beam_start_bundle_is_better(
+            candidate: Mapping[str, object],
+            baseline: Mapping[str, object],
+        ) -> bool:
+            candidate_rank = (
+                int(candidate.get("start_matched", 0)),
+                int(candidate.get("fixed_source_resolved_count", 0)),
+                int(candidate.get("correspondence_count", 0)),
+            )
+            baseline_rank = (
+                int(baseline.get("start_matched", 0)),
+                int(baseline.get("fixed_source_resolved_count", 0)),
+                int(baseline.get("correspondence_count", 0)),
+            )
+            if candidate_rank != baseline_rank:
+                return bool(candidate_rank > baseline_rank)
+            try:
+                candidate_cost = float(candidate.get("start_cost", np.inf))
+            except Exception:
+                candidate_cost = float("inf")
+            try:
+                baseline_cost = float(baseline.get("start_cost", np.inf))
+            except Exception:
+                baseline_cost = float("inf")
+            if np.isfinite(candidate_cost) and np.isfinite(baseline_cost):
+                return bool(candidate_cost < baseline_cost)
+            return bool(np.isfinite(candidate_cost) and not np.isfinite(baseline_cost))
+
+        selected_start_bundle = _full_beam_start_bundle(
+            np.asarray(current_result.x, dtype=float),
+            vector_source="current_result.x",
+        )
+        candidate_start_vector_sources = [str(selected_start_bundle["vector_source"])]
+
+        def _maybe_consider_start_vector(
+            candidate_x: object,
+            *,
+            vector_source: str,
+        ) -> None:
+            nonlocal selected_start_bundle
+            try:
+                candidate_x_arr = np.asarray(candidate_x, dtype=float)
+            except Exception:
+                return
+            if (
+                candidate_x_arr.ndim != 1
+                or candidate_x_arr.size != int(np.asarray(current_result.x).size)
+            ):
+                return
+            same_start = False
+            try:
+                same_start = bool(
+                    np.allclose(
+                        candidate_x_arr,
+                        np.asarray(selected_start_bundle.get("x"), dtype=float),
+                        rtol=0.0,
+                        atol=1e-12,
+                        equal_nan=True,
+                    )
+                )
+            except Exception:
+                same_start = False
+            if same_start:
+                return
+            candidate_bundle = _full_beam_start_bundle(
+                candidate_x_arr,
+                vector_source=str(vector_source),
+            )
+            candidate_start_vector_sources.append(str(candidate_bundle["vector_source"]))
+            if _full_beam_start_bundle_is_better(
+                candidate_bundle,
+                selected_start_bundle,
+            ):
+                selected_start_bundle = candidate_bundle
+
+        if (
+            int(selected_start_bundle.get("start_matched", 0)) <= 0
+            or int(selected_start_bundle.get("correspondence_count", 0)) <= 0
+            or int(selected_start_bundle.get("fixed_source_resolved_count", 0)) <= 0
+        ):
+            progress_state = getattr(current_result, "geometry_fit_progress", None)
+            progress_start_x = (
+                progress_state.get("start_x")
+                if isinstance(progress_state, Mapping)
+                else None
+            )
+            _maybe_consider_start_vector(
+                progress_start_x,
+                vector_source="geometry_fit_progress.start_x",
+            )
+            _maybe_consider_start_vector(
+                requested_x0_arr,
+                vector_source="requested_x0",
+            )
+
+        summary["candidate_start_vector_sources"] = list(candidate_start_vector_sources)
+        summary["seed_correspondence_count"] = int(
+            selected_start_bundle.get("correspondence_count", 0)
+        )
+        summary["seed_correspondence_records"] = [
+            dict(entry)
+            for entry in selected_start_bundle.get("seed_correspondence_records", [])
+            if isinstance(entry, Mapping)
+        ]
+        summary["seed_source"] = str(selected_start_bundle.get("seed_source", ""))
+        summary["seed_matched_pair_count"] = int(
+            selected_start_bundle.get("seed_matched_pair_count", 0)
+        )
+        summary["seed_rms_px"] = float(
+            selected_start_bundle.get("seed_rms_px", np.nan)
+        )
+        summary["start_vector_source"] = str(
+            selected_start_bundle.get("vector_source", "current_result.x")
+        )
+        if int(selected_start_bundle.get("correspondence_count", 0)) <= 0:
+            summary["reason"] = "no_seed_correspondences"
+            return summary
+
+        fixed_correspondence_map = {
+            int(dataset_index): [
+                dict(entry)
+                for entry in dataset_entries
+                if isinstance(entry, Mapping)
+            ]
+            for dataset_index, dataset_entries in dict(
+                selected_start_bundle.get("fixed_correspondence_map", {})
+            ).items()
+        }
+        start_x = np.asarray(selected_start_bundle.get("x"), dtype=float)
+        start_local = dict(selected_start_bundle.get("local", {}))
+
+        def _full_beam_point_match_evaluator(
+            local_trial: Dict[str, object],
+            *,
+            collect_diagnostics: bool = False,
+        ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+            return _evaluate_full_beam_point_matches(
+                local_trial,
+                fixed_correspondence_map,
+                collect_diagnostics=collect_diagnostics,
+            )
+
+        def _full_beam_residual(x_trial: np.ndarray) -> np.ndarray:
+            local_trial = _apply_trial_params(np.asarray(x_trial, dtype=float))
+            residual_arr, _, _ = _full_beam_point_match_evaluator(
+                local_trial,
+                collect_diagnostics=False,
+            )
+            prior_residual = _parameter_prior_residuals(np.asarray(x_trial, dtype=float))
+            if prior_residual.size:
+                if residual_arr.size:
+                    return np.concatenate(
+                        [
+                            np.asarray(residual_arr, dtype=float),
+                            np.asarray(prior_residual, dtype=float),
+                        ]
+                    )
+                return np.asarray(prior_residual, dtype=float)
+            return np.asarray(residual_arr, dtype=float)
+
+        start_residual = np.asarray(selected_start_bundle.get("start_residual"), dtype=float)
+        start_fun = np.asarray(selected_start_bundle.get("start_fun"), dtype=float)
+        start_cost = float(selected_start_bundle.get("start_cost", np.nan))
+        start_pm_diagnostics_summary = _copy_point_match_diagnostics_for_summary(
+            selected_start_bundle.get("start_pm_diagnostics")
+        )
+        start_pm_summary_public = _copy_point_match_summary_for_summary(
+            selected_start_bundle.get("start_pm_summary")
+        )
+        selected_x = np.asarray(start_x, dtype=float)
+        selected_fun = np.asarray(start_fun, dtype=float)
+        selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(
+            selected_start_bundle.get("start_pm_diagnostics")
+        )
+        selected_pm_summary = _copy_point_match_summary_for_summary(
+            selected_start_bundle.get("start_pm_summary")
+        )
+        selected_cost = float(start_cost)
+        start_matched = int(selected_start_bundle.get("start_matched", 0))
+        start_acceptance_metrics = dict(
+            selected_start_bundle.get("start_acceptance_metrics", {})
+        )
+        summary["matched_pair_count_before"] = int(start_matched)
+        summary["fixed_source_resolved_count"] = int(
+            selected_start_bundle.get("fixed_source_resolved_count", 0)
+        )
+        try:
+            start_point_rms = float(start_acceptance_metrics.get("weighted_rms_px", np.nan))
+        except Exception:
+            start_point_rms = float("nan")
+        try:
+            start_point_match_cost = float(
+                start_acceptance_metrics.get("point_match_cost", np.nan)
+            )
+        except Exception:
+            start_point_match_cost = float("nan")
+        try:
+            start_unweighted_peak_rms = float(
+                start_acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            start_unweighted_peak_rms = float("nan")
+        try:
+            start_unweighted_peak_max = float(
+                start_acceptance_metrics.get("unweighted_peak_max_px", np.nan)
+            )
+        except Exception:
+            start_unweighted_peak_max = float("nan")
+        summary["acceptance_metric_scope"] = str(
+            start_acceptance_metrics.get(
+                "acceptance_metric_scope",
+                "all_resolved_fixed_correspondences",
+            )
+        )
+        summary["raw_detector_metrics_diagnostic_only"] = True
+        summary["start_rms_px"] = float(start_point_rms)
+        summary["start_weighted_rms_px"] = float(start_point_rms)
+        summary["start_point_match_cost"] = float(start_point_match_cost)
+        summary["start_peak_max_px"] = float(start_unweighted_peak_max)
+        summary["start_unweighted_peak_rms_px"] = float(start_unweighted_peak_rms)
+        summary["start_unweighted_peak_max_px"] = float(start_unweighted_peak_max)
+        summary["start_all_match_rms_px"] = float(
+            start_acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
+        )
+        summary["start_all_match_peak_max_px"] = float(
+            start_acceptance_metrics.get("unweighted_peak_max_px", np.nan)
+        )
+        summary["start_acceptance_metric_scope"] = str(
+            start_acceptance_metrics.get(
+                "acceptance_metric_scope",
+                "all_resolved_fixed_correspondences",
+            )
+        )
+        summary["start_match_radius_exceeded_count"] = int(
+            start_acceptance_metrics.get("match_radius_exceeded_count", 0)
+        )
+        summary["start_resolved_fixed_matched_pair_count"] = int(
+            start_acceptance_metrics.get("resolved_fixed_matched_pair_count", start_matched)
+        )
 
         start_residual, start_pm_diagnostics, start_pm_summary = _full_beam_point_match_evaluator(
             start_local,

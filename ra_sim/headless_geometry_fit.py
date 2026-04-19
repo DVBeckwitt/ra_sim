@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -2206,9 +2206,35 @@ def run_headless_geometry_fit(
     )
     if preparation.prepared_run is None:
         raise RuntimeError(str(preparation.error_text or "Geometry fit preparation failed."))
+    prepared_run = preparation.prepared_run
+    headless_geometry_cfg = gui_geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+        gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+            copy.deepcopy(
+                defaults.fit_config.get("geometry", {})
+                if isinstance(defaults.fit_config, dict)
+                else {}
+            ),
+            joint_background_mode=prepared_run.joint_background_mode,
+        ),
+        joint_background_mode=prepared_run.joint_background_mode,
+    )
+    prepared_run = replace(
+        prepared_run,
+        start_log_sections=gui_geometry_fit.build_geometry_fit_start_log_sections(
+            params=prepared_run.fit_params,
+            var_names=var_names,
+            dataset_infos=prepared_run.dataset_infos,
+            current_dataset=prepared_run.current_dataset,
+            selected_background_indices=prepared_run.selected_background_indices,
+            joint_background_mode=prepared_run.joint_background_mode,
+            geometry_runtime_cfg=headless_geometry_cfg,
+        ),
+        geometry_runtime_cfg=headless_geometry_cfg,
+    )
+    preparation = replace(preparation, prepared_run=prepared_run)
 
     setup = gui_geometry_fit.build_runtime_geometry_fit_execution_setup(
-        prepared_run=preparation.prepared_run,
+        prepared_run=prepared_run,
         mosaic_params=mosaic_params,
         stamp=fit_stamp,
         downloads_dir=downloads_path,
@@ -2251,7 +2277,7 @@ def run_headless_geometry_fit(
         ),
     )
     execution = gui_geometry_fit.execute_runtime_geometry_fit(
-        prepared_run=preparation.prepared_run,
+        prepared_run=prepared_run,
         var_names=var_names,
         preserve_live_theta=preserve_live_theta,
         solve_fit=fit_runtime.fit_geometry_parameters,

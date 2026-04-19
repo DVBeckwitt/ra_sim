@@ -2364,6 +2364,58 @@ def test_geometry_fit_correspondence_simulated_point_allows_trusted_deadband_sou
     assert reason == "resolved_source_row_fallback"
 
 
+def test_geometry_fit_correspondence_simulated_point_prefers_trusted_source_row_for_row_bound_fits() -> None:
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        {
+            "hkl": (1, 0, 3),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "fit_source_resolution_kind": "source_row",
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 3.0],
+                    [1.0, 8.0, 8.0, 0.0, 1.0, 0.0, 3.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+        trusted_full_reflection_local_index_map={7: 0},
+    )
+
+    assert point == (8.0, 8.0)
+    assert reason == "resolved_source_row"
+
+
+def test_geometry_fit_correspondence_simulated_point_uses_source_row_provenance() -> None:
+    point, reason = opt._geometry_fit_correspondence_simulated_point(
+        {
+            "resolved_table_index": 0,
+            "source_row_index": 9,
+            "hkl": (1, 0, 0),
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [np.nan, 2.0, 2.0, -22.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 22.0, 1.0, 0.0, 0.0, 0.0, 9.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+    )
+
+    assert point == (8.0, 8.0)
+    assert reason == "resolved_source_row"
+
+
 def _install_identity_bridge_solver_stubs(monkeypatch) -> None:
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
@@ -2706,6 +2758,96 @@ def test_seed_correspondence_records_preserve_trusted_identity_payload(
     assert seed_record["frozen_table_namespace"] == "full_reflection"
 
 
+def test_full_beam_polish_freezes_trusted_row_locator_for_row_bound_fits(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 0.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    measured = [
+        {
+            "label": "1,0,0",
+            "hkl": (1, 0, 0),
+            "x": 8.0,
+            "y": 8.0,
+            "source_reflection_index": 0,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "fit_source_resolution_kind": "source_row",
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "dynamic_point_geometry_fit": True,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+            },
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert bool(result.success) is True
+    assert result.point_match_diagnostics[0]["match_status"] == "matched"
+    seed_record = dict(result.full_beam_polish_summary["seed_correspondence_records"][0])
+    assert seed_record["frozen_locator_kind"] == "trusted_row"
+    assert seed_record["frozen_table_namespace"] == "full_reflection"
+
+
 def test_full_beam_polish_remaps_trusted_full_reflection_indices_into_subset_local_tables(
     monkeypatch,
 ) -> None:
@@ -2804,6 +2946,39 @@ def test_geometry_fit_correspondence_simulated_point_allows_untrusted_local_row_
 
     assert point == (8.0, 8.0)
     assert reason == "resolved_source_row"
+
+
+def test_resolve_geometry_fit_correspondence_remaps_trusted_full_reflection_row_locator() -> None:
+    point, payload = opt._resolve_geometry_fit_correspondence(
+        {
+            "hkl": (1, 0, 0),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "fit_source_resolution_kind": "source_row",
+            "frozen_locator_kind": "trusted_row",
+            "frozen_table_namespace": "full_reflection",
+            "frozen_table_index": 7,
+            "frozen_row_index": 1,
+            "source_row_index": 1,
+        },
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 0.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.asarray([[1.0, 2.0, 2.0, 1.0, 8.0, 8.0]], dtype=np.float64),
+        trusted_full_reflection_local_index_map={7: 0},
+    )
+
+    assert point == (8.0, 8.0)
+    assert payload["resolution_reason"] == "resolved_source_row"
+    assert int(payload["resolved_table_index"]) == 0
+    assert bool(payload["trusted_full_reflection_remapped"]) is True
 
 
 def test_resolve_geometry_fit_correspondence_rejects_mismatched_local_table_signature() -> None:

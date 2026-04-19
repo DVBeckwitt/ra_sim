@@ -979,6 +979,7 @@ class SimulationRuntimeState:
     last_simulation_signature: object = None
     source_row_snapshots: dict[int, dict[str, object]] = field(default_factory=dict)
     stored_hit_table_signature: object = None
+    stored_q_group_content_signature: object = None
     stored_max_positions_local: Any = None
     stored_sim_image: np.ndarray | None = None
     stored_peak_table_lattice: Any = None

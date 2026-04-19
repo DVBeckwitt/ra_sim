@@ -518,6 +518,7 @@ def invalidate_runtime_bragg_qr_filter_results(
     bindings.simulation_runtime_state.last_sim_signature = None
     bindings.simulation_runtime_state.last_simulation_signature = None
     bindings.simulation_runtime_state.stored_max_positions_local = None
+    bindings.simulation_runtime_state.stored_q_group_content_signature = None
     bindings.simulation_runtime_state.stored_sim_image = None
     bindings.simulation_runtime_state.stored_peak_table_lattice = None
     bindings.simulation_runtime_state.selected_peak_record = None

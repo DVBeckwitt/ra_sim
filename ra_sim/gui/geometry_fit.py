@@ -7031,12 +7031,36 @@ def apply_dynamic_point_geometry_fit_runtime_overrides(
     *,
     joint_background_mode: bool,
 ) -> dict[str, object]:
-    """Backward-compatible alias for the raw manual point-fit runtime profile."""
+    """Build the richer runtime profile for source-bound dynamic point fitting."""
 
-    return apply_manual_point_geometry_fit_runtime_overrides(
-        runtime_cfg,
-        joint_background_mode=joint_background_mode,
+    del joint_background_mode
+
+    cfg = copy.deepcopy(dict(runtime_cfg or {}))
+    unsafe_runtime_enabled = bool(cfg.get("allow_unsafe_runtime", False))
+
+    optimizer_cfg_raw = cfg.get("optimizer", cfg.get("solver", {}))
+    optimizer_cfg = (
+        dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
     )
+    optimizer_cfg.pop("manual_point_fit_mode", None)
+    optimizer_cfg["dynamic_point_geometry_fit"] = True
+    optimizer_cfg["workers"] = optimizer_cfg.get("workers", "auto")
+
+    parallel_mode = str(optimizer_cfg.get("parallel_mode", "auto")).strip().lower()
+    if parallel_mode in {"false", "none", "disabled"}:
+        parallel_mode = "off"
+    if parallel_mode not in {"auto", "off", "datasets", "restarts"}:
+        parallel_mode = "auto"
+    optimizer_cfg["parallel_mode"] = parallel_mode
+    optimizer_cfg["worker_numba_threads"] = optimizer_cfg.get(
+        "worker_numba_threads",
+        0,
+    )
+    cfg["optimizer"] = optimizer_cfg
+    cfg["solver"] = optimizer_cfg
+    cfg["use_numba"] = bool(cfg.get("use_numba", False))
+    cfg["allow_unsafe_runtime"] = bool(unsafe_runtime_enabled)
+    return cfg
 
 
 def _geometry_fit_cache_normalized_hkl(

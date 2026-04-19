@@ -2114,6 +2114,7 @@ def test_headless_geometry_fit_legacy_dense_rebind_matches_shared_preflight(
 
     def _fake_execute_runtime_geometry_fit(*, prepared_run, **kwargs):
         captured["dataset"] = prepared_run.current_dataset
+        captured["geometry_runtime_cfg"] = prepared_run.geometry_runtime_cfg
         return geometry_fit.GeometryFitRuntimeExecutionResult(
             log_path=tmp_path / "headless_geometry_fit.log",
             apply_result=geometry_fit.GeometryFitRuntimeApplyResult(
@@ -2515,6 +2516,7 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
 
     def _fake_execute_runtime_geometry_fit(*, prepared_run, **kwargs):
         captured["dataset"] = prepared_run.current_dataset
+        captured["geometry_runtime_cfg"] = prepared_run.geometry_runtime_cfg
         return geometry_fit.GeometryFitRuntimeExecutionResult(
             log_path=tmp_path / "headless_geometry_fit.log",
             apply_result=geometry_fit.GeometryFitRuntimeApplyResult(
@@ -2567,6 +2569,9 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
         assert [entry.get(field) for entry in headless_dataset["measured_for_fit"]] == [
             entry.get(field) for entry in workflow_dataset["measured_for_fit"]
         ]
+    headless_runtime_cfg = captured["geometry_runtime_cfg"]
+    assert bool(headless_runtime_cfg["solver"]["dynamic_point_geometry_fit"]) is True
+    assert "manual_point_fit_mode" not in headless_runtime_cfg["solver"]
 
 
 def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -> None:
@@ -7758,6 +7763,44 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_preserves_safe_wrappe
     assert changed["use_numba"] is True
     assert changed["allow_unsafe_runtime"] is False
     assert changed["sampling"] == {"fit_sample_count": 8}
+
+
+def test_apply_dynamic_point_geometry_fit_runtime_overrides_preserves_richer_solver_path() -> None:
+    base_cfg = {
+        "solver": {
+            "manual_point_fit_mode": True,
+            "dynamic_point_geometry_fit": False,
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
+            "loss": "soft_l1",
+            "f_scale_px": 8.0,
+            "weighted_matching": True,
+            "use_measurement_uncertainty": True,
+            "anisotropic_measurement_uncertainty": True,
+            "restarts": 3,
+        },
+        "full_beam_polish": {"enabled": True, "max_nfev": 40},
+        "use_numba": True,
+        "allow_unsafe_runtime": True,
+    }
+
+    changed = geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+        base_cfg,
+        joint_background_mode=False,
+    )
+
+    assert changed["solver"]["dynamic_point_geometry_fit"] is True
+    assert "manual_point_fit_mode" not in changed["solver"]
+    assert changed["solver"]["loss"] == "soft_l1"
+    assert changed["solver"]["f_scale_px"] == 8.0
+    assert changed["solver"]["weighted_matching"] is True
+    assert changed["solver"]["use_measurement_uncertainty"] is True
+    assert changed["solver"]["anisotropic_measurement_uncertainty"] is True
+    assert changed["solver"]["restarts"] == 3
+    assert changed["full_beam_polish"] == {"enabled": True, "max_nfev": 40}
+    assert changed["use_numba"] is True
+    assert changed["allow_unsafe_runtime"] is True
 
 
 def test_prepare_geometry_fit_run_rejects_dataset_without_orientation_anchor_pairs() -> None:

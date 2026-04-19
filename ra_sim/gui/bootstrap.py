@@ -1133,35 +1133,41 @@ def build_runtime_selected_peak_bootstrap(
         max_hits_per_reflection=max_hits_per_reflection,
         min_separation_px=min_separation_px,
     )
-    runtime_bootstrap = build_runtime_peak_selection_bootstrap(
-        peak_selection_module=peak_selection_module,
-        simulation_runtime_state=simulation_runtime_state,
-        peak_selection_state=peak_selection_state,
-        hkl_lookup_view_state_factory=hkl_lookup_view_state_factory,
-        selected_peak_marker_factory=selected_peak_marker_factory,
-        current_primary_a_factory=current_primary_a_factory,
-        caked_view_enabled_factory=caked_view_enabled_factory,
-        current_canvas_pick_config_factory=config_factories.canvas_pick,
-        current_intersection_config_factory=config_factories.intersection,
-        ensure_peak_overlay_data=ensure_peak_overlay_data,
-        sync_peak_selection_state=sync_peak_selection_state,
-        schedule_update_factory=schedule_update_factory,
-        set_status_text_factory=set_status_text_factory,
-        draw_idle_factory=draw_idle_factory,
-        display_to_native_sim_coords=display_to_native_sim_coords,
-        detector_display_to_native_detector_coords=(
+    runtime_bootstrap_kwargs: dict[str, object] = {
+        "peak_selection_module": peak_selection_module,
+        "simulation_runtime_state": simulation_runtime_state,
+        "peak_selection_state": peak_selection_state,
+        "hkl_lookup_view_state_factory": hkl_lookup_view_state_factory,
+        "selected_peak_marker_factory": selected_peak_marker_factory,
+        "current_primary_a_factory": current_primary_a_factory,
+        "caked_view_enabled_factory": caked_view_enabled_factory,
+        "current_canvas_pick_config_factory": config_factories.canvas_pick,
+        "current_intersection_config_factory": config_factories.intersection,
+        "ensure_peak_overlay_data": ensure_peak_overlay_data,
+        "sync_peak_selection_state": sync_peak_selection_state,
+        "schedule_update_factory": schedule_update_factory,
+        "set_status_text_factory": set_status_text_factory,
+        "draw_idle_factory": draw_idle_factory,
+        "display_to_native_sim_coords": display_to_native_sim_coords,
+        "detector_display_to_native_detector_coords": (
             detector_display_to_native_detector_coords
         ),
-        native_sim_to_display_coords=native_sim_to_display_coords,
-        native_detector_coords_to_detector_display_coords=(
+        "native_sim_to_display_coords": native_sim_to_display_coords,
+        "native_detector_coords_to_detector_display_coords": (
             native_detector_coords_to_detector_display_coords
         ),
-        hkl_pick_simulation_points_factory=hkl_pick_simulation_points_factory,
-        simulate_ideal_hkl_native_center=config_factories.ideal_center,
-        deactivate_conflicting_modes_factory=deactivate_conflicting_modes_factory,
-        on_hkl_pick_mode_changed_factory=on_hkl_pick_mode_changed_factory,
-        n2=n2,
-        tcl_error_types=tcl_error_types,
+        "simulate_ideal_hkl_native_center": config_factories.ideal_center,
+        "deactivate_conflicting_modes_factory": deactivate_conflicting_modes_factory,
+        "on_hkl_pick_mode_changed_factory": on_hkl_pick_mode_changed_factory,
+        "n2": n2,
+        "tcl_error_types": tcl_error_types,
+    }
+    if hkl_pick_simulation_points_factory is not None:
+        runtime_bootstrap_kwargs["hkl_pick_simulation_points_factory"] = (
+            hkl_pick_simulation_points_factory
+        )
+    runtime_bootstrap = build_runtime_peak_selection_bootstrap(
+        **runtime_bootstrap_kwargs
     )
     return PeakSelectionRuntimeBootstrap(
         bindings_factory=runtime_bootstrap.bindings_factory,
