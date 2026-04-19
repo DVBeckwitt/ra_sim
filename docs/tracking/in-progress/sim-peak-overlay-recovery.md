@@ -27,22 +27,28 @@ See also:
 ## Resume Here
 
 - User-visible symptom:
-  simulated detector-space markers can appear about 90 degrees clockwise from
-  where they should be, while background points are correct.
-- In detector mode, the error looks like a clean 90 degree rotation.
-- In caked mode, simulated point overlays are also wrong, but not by the same
-  clean 90 degree rotation.
+  selected `Pick Qr Set` simulated markers were landing in the wrong place even
+  when the chosen Qr branch identity was already correct.
+- Detector-view redraw was the first confirmed failure mode:
+  selected simulated branch candidates were being redrawn through the
+  background/manual geometry refresh path instead of from the chosen simulated
+  candidate row itself.
+- Detector-view selected-Qr redraw is now fixed.
+- Caked-view selected-Qr redraw is still wrong and is the next active target.
+- The HKL peak issue is still unresolved, but it is intentionally not the
+  active target until the Qr redraw path is correct in both detector and caked
+  views.
 - Important non-symptom:
   the full caked simulation image itself is reported to be correct.
 - High-confidence consequence:
   the bug is in per-peak overlay identity/projection, not the whole simulation
   image generation path.
 - Most relevant recent commits:
+  - `4620434` `fix(gui): keep selected Qr markers aligned`
   - `9be9c9b` `fix(gui): split detector peak frame prep`
   - `1b62e0d` `fix(q-group): trust normalized peak records`
   - `1519e90` `fix(runtime): use exact caked cache angles`
   - `09c7be7` `fix(manual-geometry): sync refined sim aliases`
-  - `7a66a05` `fix(gui): reproject refined sim peaks`
 - Main code paths:
   - `ra_sim/gui/manual_geometry.py`
   - `ra_sim/gui/geometry_fit.py`
@@ -101,27 +107,30 @@ For the same simulated source peak:
 
 ## Current State
 
-- Two focused implementation attempts now exist in current repo state:
-  the earlier manual-geometry native-projector handoff and the later
-  detector-frame split through peak-selection/Q-group cache paths.
-- `9be9c9b` threaded detector-view peak-frame callbacks through
-  `peak_selection`, `bootstrap`, and `geometry_q_group_manager` so live
-  detector-view overlay/cache rows rebuild in the displayed background-detector
-  frame instead of the simulator-detector frame.
-- The same detector-frame work also hardened detector-view click selection so
-  detector-only inverse callbacks fail safe when they return `None` or
-  non-finite values and no simulator inverse is available.
-- Adjacent cache-schema helper work now keeps detector/caked layout handling
-  explicit during replay, normalization, and focused regression coverage.
-- Targeted automated validation was green:
-  - `python -m pytest tests/test_gui_peak_selection.py -q` -> `47 passed`
-  - `python -m pytest tests/test_gui_runtime_import_safe.py tests/test_intersection_cache_schema.py tests/test_gui_runtime_primary_cache.py tests/test_manual_geometry_live_peak_cache.py -q` -> `234 passed`
-- Manual GUI verification still showed detector-view `Pick Qr Set` and related
-  simulated overlays failing to align with `Pick HKL` for the same simulated
-  reflection.
-- So the detector-frame work, click guard, and focused regressions changed real
-  code paths but still did not resolve the user-visible bug or produce a
-  visible behavior change in the GUI.
+- The active bug has now been narrowed from “Qr picker wrong” to
+  “selected-Qr redraw wrong after correct branch identification.”
+- `4620434` fixed the detector-view selected-Qr redraw path.
+- The key change was in
+  `geometry_manual_session_initial_pairs_display()`:
+  selected simulated branch candidates are now treated as the source of truth
+  for display instead of being refreshed through the background/manual geometry
+  path by default.
+- In detector view, the chosen simulated candidate now draws from its own
+  simulation display pixel (`sim_col`, `sim_row`) instead of from refreshed
+  background-frame `x`, `y`.
+- In caked view, the selected candidate now prefers
+  `project_peaks_to_current_view(...)`, and background/manual geometry refresh
+  is only a fallback when no usable current-view simulated coordinate exists.
+- Runtime wiring now passes both `refresh_entry_geometry` and
+  `project_peaks_to_current_view` into the selected-Qr overlay path.
+- Targeted validation for the redraw fix was green:
+  - `python -S -m py_compile ra_sim/gui/manual_geometry.py ra_sim/gui/_runtime/runtime_session.py tests/test_manual_geometry_selection_helpers.py tests/test_gui_runtime_import_safe.py`
+  - focused pytest regressions for detector redraw, caked fallback, and runtime
+    wiring -> `6 passed`
+- Detector-view `Pick Qr Set` redraw is now considered fixed.
+- The next active bug is caked-view selected-Qr redraw.
+- HKL mismatch is still unresolved, but it is intentionally deferred until the
+  Qr redraw path is correct in both detector and caked views.
 
 ## What Has Already Been Changed
 
@@ -242,43 +251,66 @@ What it did not prove:
   than a later overlay assembly seam
 - that manual GUI behavior changed
 
+### 6. Selected-Qr redraw source-of-truth fix
+
+- `geometry_manual_session_initial_pairs_display()` was updated so selected
+  simulated branch candidates are no longer refreshed through
+  `refresh_entry_geometry()` before drawing by default.
+- The selected simulated candidate row is now the source of truth for redraw:
+  - detector view uses the chosen candidate's simulation display point
+  - caked view prefers the chosen candidate projected through
+    `project_peaks_to_current_view(...)`
+- `refresh_entry_geometry()` remains in the path only as a fallback when the
+  chosen simulated candidate does not expose a usable current-view simulated
+  coordinate.
+- Focused regressions now cover:
+  - projection of selected active simulated display geometry
+  - preserving detector simulation pixels instead of background-rotated
+    detector coordinates
+  - caked-view fallback when projection returns detector-only fields
+  - runtime wiring for projection + refresh callbacks
+
+What this helped:
+
+- fixed the detector-view selected-Qr redraw bug caused by routing chosen
+  simulated candidates through the background/manual display frame
+- proved the selected-Qr overlay now rejects detector-only coordinates in caked
+  mode and falls back to refreshed caked coordinates instead
+
+What it did not prove:
+
+- that the live caked-view redraw is now correct end to end
+- that the separate HKL overlay issue is resolved
+
 ## What Is Most Likely Still Wrong
 
-The remaining bug is probably one of these:
+The active remaining bug is probably one of these:
 
-1. A consumer still reads `sim_col/sim_row`, `display_col/display_row`,
-   `caked_x/caked_y`, or `two_theta_deg/phi_deg` directly from a shared row
-   without first reprojecting from canonical detector-native coordinates.
-2. A row is being reprojected, but the wrong source frame is still chosen for
-   that row before or after the projector runs.
-3. HKL overlay, QR/manual overlay, and geometry-fit overlay are not all using
-   the same canonical source-row truth for the same picked peak.
-4. The failing detector-view row may never exercise the new
-   `native_sim_to_display_coords(...)` handoff, or a later overlay assembly
-   path may replace the corrected detector coordinates before draw.
+1. A caked-view consumer still accepts detector-space fields from the chosen
+   Qr branch row instead of requiring the projected caked-space fields.
+2. `project_peaks_to_current_view(...)` is not yet returning the authoritative
+   caked coordinates for the exact chosen row used by redraw.
+3. A later caked-view overlay assembly step still overwrites or ignores the
+   corrected projected row before draw.
+4. The HKL overlay mismatch is a separate remaining consumer bug, but it is not
+   the active target until the Qr redraw path is correct in both views.
 
 Latest evidence:
 
-- the manual-geometry native-projector handoff was implemented and the focused
-  tests passed
-- `9be9c9b` detector-frame split landed with focused peak/Q-group/cache
-  regressions
-- `python -m pytest tests/test_gui_peak_selection.py -q` passed with
-  `47 passed`
-- `python -m pytest tests/test_gui_runtime_import_safe.py tests/test_intersection_cache_schema.py tests/test_gui_runtime_primary_cache.py tests/test_manual_geometry_live_peak_cache.py -q`
-  passed with `234 passed`
-- manual GUI behavior still did not change
-- so the bug is not explained solely by missing
-  `native_sim_to_display_coords(...)` inside
-  `project_peaks_to_current_view()`, nor solely by the later detector-frame
-  rewiring in peak-selection/Q-group cache paths
+- detector-view selected-Qr redraw is now fixed
+- focused redraw regressions passed after the selected-source-of-truth change
+- the full caked simulation image is still reported correct
+- the live remaining target is caked-view selected-Qr redraw, not branch
+  identification
+- HKL mismatch still exists, but work is intentionally paused there until the
+  Qr redraw path is stable in both views
 
 The highest-value suspicion is still:
 
-- some later per-peak overlay path is still treating corrected detector-frame
-  coordinates as disposable and is either rebuilding from simulation-frame
-  aliases or overwriting the row after the peak-selection/Q-group seams already
-  did the right thing
+- some caked-view redraw consumer is still treating the chosen projected
+  simulated row as disposable and is either accepting detector-frame aliases or
+  overwriting the row after the manual-geometry projector already did the right
+  thing
 
 ## Most Relevant Places To Recheck
 
@@ -333,34 +365,21 @@ Questions:
 
 ## What To Do Next
 
-The next debugging pass should be deterministic and row-based:
+The next debugging pass should stay tightly scoped to caked-view selected-Qr
+redraw:
 
-1. Pick one concrete bad peak in the GUI.
-2. Confirm whether that exact bad row is already corrected inside
-   `simulation_runtime_state.peak_records` / detector-view peak overlay cache
-   after `ensure_runtime_peak_overlay_data()`, and whether any detector-only
-   inverse guard is even relevant for the failing interaction.
-3. Log or breakpoint the exact source identity for that peak:
+1. Reproduce one selected Qr branch in caked view whose detector-view redraw is
+   already confirmed fixed.
+2. Confirm the exact chosen candidate identity for that row:
    `source_table_index`, `source_row_index`, `source_peak_index`,
    `source_branch_index`, `source_reflection_index`.
-4. For that exact row, compare fields at each seam:
-   - `native_col/native_row`
-   - `sim_col_raw/sim_row_raw`
-   - `display_col/display_row`
-   - `caked_x/caked_y`
-   - `two_theta_deg/phi_deg`
-   - `refined_sim_*`
-5. Trace that same row through:
-   - HKL overlay
-   - QR/manual overlay
-   - Q-group preview / candidate rebuild
-   - geometry-fit `initial_pairs_display`
-6. Verify which field each consumer actually draws and whether any later step
-   overwrites or ignores the corrected detector-frame coords after the new
-   peak-selection/Q-group handoff.
-
-Do not start from aggregate caches or grouped previews first. Start from one
-known bad row and follow it end to end.
+3. Verify whether `project_peaks_to_current_view([candidate])` returns the
+   authoritative `caked_x/caked_y` for that exact chosen row.
+4. If projection is wrong or incomplete, fix that caked projection seam first.
+5. If projection is correct, trace where later overlay assembly or redraw
+   discards or overwrites that projected caked row before draw.
+6. Do not expand back into HKL work until detector + caked Qr redraw share the
+   same source-of-truth path.
 
 ## Acceptance Criteria
 
