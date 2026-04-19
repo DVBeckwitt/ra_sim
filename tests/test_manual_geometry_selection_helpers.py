@@ -3141,7 +3141,7 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert entries[0]["qz"] == 2.3456789012
 
 
-def test_geometry_manual_session_initial_pairs_display_refreshes_active_sim_display_geometry() -> None:
+def test_geometry_manual_session_initial_pairs_display_projects_active_sim_display_geometry() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 0),
         "group_entries": [
@@ -3166,6 +3166,62 @@ def test_geometry_manual_session_initial_pairs_display_refreshes_active_sim_disp
         ],
         "background_index": 0,
     }
+    projection_calls: list[dict[str, object]] = []
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        project_peaks_to_current_view=lambda entries: [
+            (
+                projection_calls.append(dict(entry))
+                or {
+                    **dict(entry),
+                    "sim_col": 50.0,
+                    "sim_row": 60.0,
+                    "qr": 3.25,
+                    "qz": 4.75,
+                }
+            )
+            for entry in entries or []
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(projection_calls) == 1
+    assert projection_calls[0]["sim_col"] == 5.0
+    assert projection_calls[0]["sim_row"] == 6.0
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (50.0, 60.0)
+    assert entries[0]["bg_display"] == (9.0, 10.0)
+    assert entries[0]["qr"] == 3.25
+    assert entries[0]["qz"] == 4.75
+
+
+def test_geometry_manual_session_initial_pairs_display_keeps_detector_sim_pixel_over_background_rotation() -> None:
+    background_shape = (100, 200)
+    native_point = (20.0, 10.0)
+    background_rotated_point = mg._default_rotate_point(
+        native_point[0],
+        native_point[1],
+        background_shape,
+        -1,
+    )
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": native_point[0],
+                "sim_row": native_point[1],
+                "native_col": native_point[0],
+                "native_row": native_point[1],
+            }
+        ],
+        "pending_entries": [],
+        "background_index": 0,
+    }
     refresh_calls: list[dict[str, object]] = []
 
     entries = mg.geometry_manual_session_initial_pairs_display(
@@ -3175,54 +3231,17 @@ def test_geometry_manual_session_initial_pairs_display_refreshes_active_sim_disp
             refresh_calls.append(dict(entry or {}))
             or {
                 **dict(entry or {}),
-                "sim_col": 50.0,
-                "sim_row": 60.0,
-                "qr": 3.25,
-                "qz": 4.75,
+                "x": background_rotated_point[0],
+                "y": background_rotated_point[1],
             }
         ),
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
     )
 
-    assert len(refresh_calls) == 1
-    assert refresh_calls[0]["sim_col"] == 5.0
-    assert refresh_calls[0]["sim_row"] == 6.0
+    assert refresh_calls == []
     assert len(entries) == 1
-    assert entries[0]["sim_display"] == (50.0, 60.0)
-    assert entries[0]["bg_display"] == (9.0, 10.0)
-    assert entries[0]["qr"] == 3.25
-    assert entries[0]["qz"] == 4.75
-
-
-def test_geometry_manual_session_initial_pairs_display_uses_refreshed_detector_xy() -> None:
-    session = {
-        "group_key": ("q_group", "primary", 1, 0),
-        "group_entries": [
-            {
-                "label": "1,0,0",
-                "source_table_index": 1,
-                "source_row_index": 2,
-                "sim_col": 5.0,
-                "sim_row": 6.0,
-            }
-        ],
-        "pending_entries": [],
-        "background_index": 0,
-    }
-
-    entries = mg.geometry_manual_session_initial_pairs_display(
-        session,
-        current_background_index=0,
-        refresh_entry_geometry=lambda entry: {
-            **dict(entry or {}),
-            "x": 50.0,
-            "y": 60.0,
-        },
-        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
-    )
-
-    assert len(entries) == 1
-    assert entries[0]["sim_display"] == (50.0, 60.0)
+    assert entries[0]["sim_display"] == native_point
+    assert entries[0]["sim_display"] != background_rotated_point
 
 
 def test_geometry_manual_session_initial_pairs_display_refreshes_projected_detector_rows() -> None:
@@ -3284,6 +3303,53 @@ def test_geometry_manual_session_initial_pairs_display_refreshes_projected_detec
 
     assert len(entries) == 1
     assert entries[0]["sim_display"] == detector_display
+
+
+def test_geometry_manual_session_initial_pairs_display_refreshes_caked_view_when_projection_has_no_caked_coords() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+            }
+        ],
+        "pending_entries": [],
+        "background_index": 0,
+    }
+    projection_calls: list[dict[str, object]] = []
+    refresh_calls: list[dict[str, object]] = []
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        use_caked_display=True,
+        project_peaks_to_current_view=lambda entries: [
+            projection_calls.append(dict(entry)) or dict(entry)
+            for entry in entries or []
+        ],
+        refresh_entry_geometry=lambda entry: (
+            refresh_calls.append(dict(entry or {}))
+            or {
+                **dict(entry or {}),
+                "caked_x": 30.0,
+                "caked_y": -40.0,
+            }
+        ),
+        entry_display_coords=lambda entry: (float(entry["sim_col"]), float(entry["sim_row"])),
+    )
+
+    assert len(projection_calls) == 1
+    assert projection_calls[0]["sim_col"] == 5.0
+    assert projection_calls[0]["sim_row"] == 6.0
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0]["sim_col"] == 5.0
+    assert refresh_calls[0]["sim_row"] == 6.0
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (30.0, -40.0)
 
 
 def test_geometry_manual_session_initial_pairs_display_ignores_refresh_errors() -> None:

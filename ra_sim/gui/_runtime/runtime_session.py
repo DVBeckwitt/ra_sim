@@ -4657,9 +4657,15 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
 def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
     _refresh_geometry_manual_pick_session()
+    projection_workflow = globals().get("geometry_manual_projection_workflow")
     refresh_entry_geometry = getattr(
-        globals().get("geometry_manual_projection_workflow"),
+        projection_workflow,
         "refresh_entry_geometry",
+        None,
+    )
+    project_peaks_to_current_view = getattr(
+        projection_workflow,
+        "project_peaks_to_current_view",
         None,
     )
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
@@ -4667,6 +4673,7 @@ def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
         current_background_index=background_runtime_state.current_background_index,
         use_caked_display=_geometry_manual_pick_uses_caked_space(),
         refresh_entry_geometry=refresh_entry_geometry,
+        project_peaks_to_current_view=project_peaks_to_current_view,
         candidate_source_key=_geometry_manual_candidate_source_key,
         entry_display_coords=_geometry_manual_entry_display_coords,
     )

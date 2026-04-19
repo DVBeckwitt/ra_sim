@@ -8901,13 +8901,17 @@ def test_runtime_session_geometry_manual_session_overlay_uses_projection_refresh
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     refresh_entry_geometry = lambda entry: {"refreshed": True, **dict(entry or {})}
+    project_peaks_to_current_view = lambda entries: list(entries or [])
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(runtime_session, "_refresh_geometry_manual_pick_session", lambda: None)
     monkeypatch.setattr(
         runtime_session,
         "geometry_manual_projection_workflow",
-        SimpleNamespace(refresh_entry_geometry=refresh_entry_geometry),
+        SimpleNamespace(
+            refresh_entry_geometry=refresh_entry_geometry,
+            project_peaks_to_current_view=project_peaks_to_current_view,
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -8956,6 +8960,7 @@ def test_runtime_session_geometry_manual_session_overlay_uses_projection_refresh
     runtime_session._geometry_manual_session_initial_pairs_display()
 
     assert captured["refresh_entry_geometry"] is refresh_entry_geometry
+    assert captured["project_peaks_to_current_view"] is project_peaks_to_current_view
 
 
 def test_runtime_impl_defers_exact_cake_numba_warmup_until_after_startup_work() -> None:

@@ -4854,6 +4854,11 @@ def geometry_manual_session_initial_pairs_display(
         dict[str, object] | None,
     ]
     | None = None,
+    project_peaks_to_current_view: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     candidate_source_key: Callable[
         [dict[str, object] | None],
         tuple[object, ...] | None,
@@ -4863,7 +4868,14 @@ def geometry_manual_session_initial_pairs_display(
         tuple[float, float] | None,
     ],
 ) -> list[dict[str, object]]:
-    """Return overlay-ready display entries for the in-progress manual pick session."""
+    """Return overlay-ready display entries for the in-progress manual pick session.
+
+    Group entries are already the selected simulated branch candidates. Their
+    detector/caked display coordinates must stay in the same coordinate frame as
+    the visible simulation points. Background-entry refresh is only a fallback for
+    missing simulated display coordinates because it uses the background-display
+    rotation.
+    """
 
     if not geometry_manual_pick_session_active(
         pick_session,
@@ -4891,21 +4903,37 @@ def geometry_manual_session_initial_pairs_display(
                 raw_entry,
             )
 
+    def _current_view_sim_entry(raw_entry: dict[str, object]) -> dict[str, object]:
+        source_entry = dict(raw_entry)
+        if callable(project_peaks_to_current_view):
+            try:
+                projected_entries = project_peaks_to_current_view([source_entry])
+            except Exception:
+                projected_entries = []
+            projected_entry = next(
+                (
+                    dict(candidate)
+                    for candidate in (projected_entries or ())
+                    if isinstance(candidate, Mapping)
+                ),
+                None,
+            )
+            if isinstance(projected_entry, dict):
+                return projected_entry
+        return source_entry
+
+    def _selected_sim_display_point(
+        display_entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if bool(use_caked_display):
+            return _geometry_manual_entry_caked_point(display_entry)
+        return _geometry_manual_entry_current_view_point(display_entry)
+
     initial_pairs_display: list[dict[str, object]] = []
     for pair_idx, raw_entry in enumerate(group_entries):
         if not isinstance(raw_entry, dict):
             continue
-        refreshed_entry = None
-        if callable(refresh_entry_geometry):
-            try:
-                refreshed_entry = refresh_entry_geometry(raw_entry)
-            except Exception:
-                refreshed_entry = None
-        display_entry = (
-            dict(refreshed_entry)
-            if isinstance(refreshed_entry, Mapping)
-            else dict(raw_entry)
-        )
+        display_entry = _current_view_sim_entry(raw_entry)
         entry: dict[str, object] = {
             "overlay_match_index": int(pair_idx),
             "hkl": raw_entry.get("hkl", raw_entry.get("label")),
@@ -4915,17 +4943,14 @@ def geometry_manual_session_initial_pairs_display(
             entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             entry["q_group_key"] = tuple(raw_group_key)
-        sim_display = None
-        if not bool(use_caked_display):
-            sim_display = _geometry_manual_finite_point(
-                display_entry,
-                (("x", "y"),),
-            )
-        if sim_display is None:
-            sim_display = _geometry_manual_entry_active_view_point(
-                display_entry,
-                use_caked_display=use_caked_display,
-            )
+        sim_display = _selected_sim_display_point(display_entry)
+        if sim_display is None and callable(refresh_entry_geometry):
+            try:
+                refreshed_entry = refresh_entry_geometry(raw_entry)
+            except Exception:
+                refreshed_entry = None
+            if isinstance(refreshed_entry, Mapping):
+                sim_display = _selected_sim_display_point(refreshed_entry)
         if sim_display is not None:
             entry["sim_display"] = (float(sim_display[0]), float(sim_display[1]))
 
