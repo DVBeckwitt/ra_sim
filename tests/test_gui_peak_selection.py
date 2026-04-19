@@ -3089,6 +3089,68 @@ def test_restore_peak_overlay_lists_prefers_detector_display_projection_for_dete
     assert sim_display_calls == []
 
 
+def test_resolve_peak_record_display_coords_projects_native_detector_coords_in_caked_view() -> None:
+    projector_calls: list[tuple[float, float]] = []
+
+    display_point = peak_selection._resolve_peak_record_display_coords(
+        {
+            "native_col": 42.0,
+            "native_row": 84.0,
+        },
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=None,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            projector_calls.append((float(col), float(row))) or (7.5, 8.5)
+        ),
+    )
+
+    assert display_point == (7.5, 8.5)
+    assert projector_calls == [(42.0, 84.0)]
+
+
+def test_resolve_peak_record_display_coords_projects_sim_native_alias_in_caked_view() -> None:
+    projector_calls: list[tuple[float, float]] = []
+
+    display_point = peak_selection._resolve_peak_record_display_coords(
+        {
+            "sim_native_x": 42.0,
+            "sim_native_y": 84.0,
+        },
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=None,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            projector_calls.append((float(col), float(row))) or (7.5, 8.5)
+        ),
+    )
+
+    assert display_point == (7.5, 8.5)
+    assert projector_calls == [(42.0, 84.0)]
+
+
+def test_resolve_peak_record_display_coords_prefers_explicit_caked_coords() -> None:
+    projector_calls: list[tuple[float, float]] = []
+
+    display_point = peak_selection._resolve_peak_record_display_coords(
+        {
+            "native_col": 42.0,
+            "native_row": 84.0,
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        },
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=None,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            projector_calls.append((float(col), float(row))) or (7.5, 8.5)
+        ),
+    )
+
+    assert display_point == (30.25, -57.5)
+    assert projector_calls == []
+
+
 def test_select_peak_from_canvas_click_uses_detector_display_inverse_in_detector_view() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(12.0, 22.0)],

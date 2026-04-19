@@ -2682,6 +2682,18 @@ def _resolve_peak_record_display_coords(
             return None
         return float(col), float(row)
 
+    def _projected_caked_point(
+        projected: object,
+    ) -> tuple[float, float] | None:
+        try:
+            col = float(projected[0])  # type: ignore[index]
+            row = float(projected[1])  # type: ignore[index]
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
     native_point = _point("native_col", "native_row") or _point(
         "sim_native_x",
         "sim_native_y",
@@ -2696,6 +2708,17 @@ def _resolve_peak_record_display_coords(
     if bool(show_caked):
         if caked_point is not None:
             return caked_point
+        if native_point is not None and callable(native_detector_coords_to_caked_display_coords):
+            try:
+                projected = native_detector_coords_to_caked_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+            except Exception:
+                projected = None
+            projected_point = _projected_caked_point(projected)
+            if projected_point is not None:
+                return projected_point
         return None
 
     if native_point is not None and callable(native_detector_coords_to_detector_display_coords):
