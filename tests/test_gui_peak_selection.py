@@ -1861,6 +1861,155 @@ def test_select_peak_by_hkl_prefers_cached_records_over_parallel_arrays() -> Non
     assert "I=55" in status_messages[-1]
 
 
+def test_select_peak_by_hkl_uses_caked_coordinates_when_enabled() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(110.0, 220.0)],
+        peak_millers=[(1, 0, 10)],
+        peak_intensities=[55.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 10),
+                "display_col": 110.0,
+                "display_row": 220.0,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+                "native_col": 115.0,
+                "native_row": 225.0,
+            }
+        ],
+        sim_miller1=np.asarray([[1.0, 0.0, 10.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    marker = _FakeMarker()
+    status_messages = []
+
+    ok = peak_selection.select_peak_by_hkl(
+        runtime_state,
+        peak_state,
+        view_state,
+        marker,
+        1,
+        0,
+        10,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+        draw_idle=lambda: None,
+        caked_view_enabled=True,
+    )
+
+    assert ok is True
+    assert marker.data == ([30.25], [-57.5])
+    assert runtime_state.selected_peak_record["selected_display_col"] == 30.25
+    assert runtime_state.selected_peak_record["selected_display_row"] == -57.5
+    assert runtime_state.selected_peak_record["selected_native_col"] == 115.0
+    assert "HKL=(1 0 10)" in status_messages[-1]
+
+
+def test_select_peak_by_hkl_caked_view_falls_back_to_peak_positions_when_caked_fields_missing() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(33.0, -44.0)],
+        peak_millers=[(1, 0, 10)],
+        peak_intensities=[55.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 10),
+                "display_col": 110.0,
+                "display_row": 220.0,
+                "native_col": 115.0,
+                "native_row": 225.0,
+            }
+        ],
+        sim_miller1=np.asarray([[1.0, 0.0, 10.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    marker = _FakeMarker()
+
+    ok = peak_selection.select_peak_by_hkl(
+        runtime_state,
+        peak_state,
+        view_state,
+        marker,
+        1,
+        0,
+        10,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        draw_idle=lambda: None,
+        caked_view_enabled=True,
+    )
+
+    assert ok is True
+    assert marker.data == ([33.0], [-44.0])
+    assert runtime_state.selected_peak_record["selected_display_col"] == 33.0
+    assert runtime_state.selected_peak_record["selected_display_row"] == -44.0
+
+
+def test_select_peak_by_hkl_caked_view_ignores_stale_caked_fields() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(33.0, -44.0)],
+        peak_millers=[(1, 0, 10)],
+        peak_intensities=[55.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 10),
+                "display_col": 110.0,
+                "display_row": 220.0,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+                "stale_caked_fields": True,
+                "native_col": 115.0,
+                "native_row": 225.0,
+            }
+        ],
+        sim_miller1=np.asarray([[1.0, 0.0, 10.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    marker = _FakeMarker()
+
+    ok = peak_selection.select_peak_by_hkl(
+        runtime_state,
+        peak_state,
+        view_state,
+        marker,
+        1,
+        0,
+        10,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        draw_idle=lambda: None,
+        caked_view_enabled=True,
+    )
+
+    assert ok is True
+    assert marker.data == ([33.0], [-44.0])
+    assert runtime_state.selected_peak_record["selected_display_col"] == 33.0
+    assert runtime_state.selected_peak_record["selected_display_row"] == -44.0
+
+
 def test_select_peak_by_hkl_uses_rod_fallback_and_missing_path() -> None:
     runtime_state = state.SimulationRuntimeState(
         unscaled_image=np.ones((4, 4), dtype=float),
@@ -1978,6 +2127,54 @@ def test_select_peak_from_hkl_controls_and_clear_selected_peak() -> None:
     assert marker.visible is False
     assert status_messages[-1] == "Peak selection cleared."
     assert len(synced) >= 2
+
+
+def test_select_peak_from_hkl_controls_uses_caked_coordinates_when_enabled() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(110.0, 220.0)],
+        peak_millers=[(1, 2, 3)],
+        peak_intensities=[5.0],
+        peak_records=[
+            {
+                "hkl": (1, 2, 3),
+                "display_col": 110.0,
+                "display_row": 220.0,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+                "native_col": 2.0,
+                "native_row": 3.0,
+            }
+        ],
+        sim_miller1=np.asarray([[1.0, 2.0, 3.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar("1"),
+        selected_k_var=_FakeVar("2"),
+        selected_l_var=_FakeVar("3"),
+    )
+    marker = _FakeMarker()
+    status_messages = []
+
+    ok = peak_selection.select_peak_from_hkl_controls(
+        runtime_state,
+        peak_state,
+        view_state,
+        marker,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+        draw_idle=lambda: None,
+        caked_view_enabled=True,
+    )
+
+    assert ok is True
+    assert marker.data == ([30.25], [-57.5])
+    assert runtime_state.selected_peak_record["selected_display_col"] == 30.25
+    assert runtime_state.selected_peak_record["selected_display_row"] == -57.5
+    assert "HKL=(1 2 3)" in status_messages[-1]
 
 
 def test_open_selected_peak_intersection_figure_requires_selection() -> None:
@@ -3673,6 +3870,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     assert select_hkl_call[4] is marker
     assert select_hkl_call[5:8] == (1, 2, 3)
     assert select_hkl_call[8]["primary_a"] == 5.5
+    assert select_hkl_call[8]["caked_view_enabled"] is True
     assert select_hkl_call[8]["sync_hkl_vars"] is False
     assert select_hkl_call[8]["silent_if_missing"] is True
 
@@ -3684,6 +3882,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     assert controls_call[3] is view_state
     assert controls_call[4] is marker
     assert controls_call[5]["primary_a"] == 5.5
+    assert controls_call[5]["caked_view_enabled"] is True
     assert controls_call[5]["tcl_error_types"] == (RuntimeError,)
 
     peak_selection.clear_runtime_selected_peak(bindings)
@@ -3810,6 +4009,59 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         ("click_cb", "bindings-8", 3.0, 4.0),
         ("find_click_cb", "bindings-9", 5.0, 6.0, 7.0),
     ]
+
+
+def test_reselect_runtime_selected_peak_uses_caked_coordinates_when_enabled() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(110.0, 220.0)],
+        peak_millers=[(1, 0, 10)],
+        peak_intensities=[55.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 10),
+                "display_col": 110.0,
+                "display_row": 220.0,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+                "native_col": 115.0,
+                "native_row": 225.0,
+            }
+        ],
+        sim_miller1=np.asarray([[1.0, 0.0, 10.0]], dtype=float),
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 10))
+    view_state = state.HklLookupViewState(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    marker = _FakeMarker()
+    status_messages = []
+
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=view_state,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: True,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        sync_peak_selection_state=lambda: None,
+        schedule_update=lambda: None,
+        set_status_text=status_messages.append,
+        draw_idle=lambda: None,
+    )
+
+    ok = peak_selection.reselect_runtime_selected_peak(bindings)
+
+    assert ok is True
+    assert marker.data == ([30.25], [-57.5])
+    assert runtime_state.selected_peak_record["selected_display_col"] == 30.25
+    assert runtime_state.selected_peak_record["selected_display_row"] == -57.5
+    assert runtime_state.selected_peak_record["selected_native_col"] == 115.0
+    assert "HKL=(1 0 10)" in status_messages[-1]
 
 
 def test_select_peak_from_runtime_canvas_click_allows_detector_inverse_without_sim_inverse(

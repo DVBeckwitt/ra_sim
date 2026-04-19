@@ -2057,11 +2057,17 @@ def _peak_display_pair_for_index(
     simulation_runtime_state,
     idx: int,
     record_override: Mapping[str, object] | None = None,
+    *,
+    use_caked_display: bool = False,
 ) -> tuple[float, float] | None:
     """Return the active-view display point for one peak index."""
 
     record = _peak_record_for_index(simulation_runtime_state, int(idx), record_override)
-    point = _record_display_pair(record)
+    point = (
+        _simulation_point_active_view_pair(record, use_caked_display=True)
+        if bool(use_caked_display)
+        else _record_display_pair(record)
+    )
     if point is not None:
         return point
     try:
@@ -2100,6 +2106,11 @@ def _simulation_point_active_view_pair(
         if np.isfinite(col) and np.isfinite(row):
             return float(col), float(row)
     if bool(use_caked_display):
+        try:
+            if gui_manual_geometry._geometry_manual_entry_has_stale_caked_fields(record):
+                return None
+        except Exception:
+            pass
         return (
             _finite_record_pair(record, "caked_x", "caked_y")
             or _finite_record_pair(record, "raw_caked_x", "raw_caked_y")
@@ -3063,6 +3074,7 @@ def select_peak_by_hkl(
     sync_peak_selection_state: Any,
     set_status_text: Any,
     draw_idle: Any,
+    caked_view_enabled: bool = False,
     sync_hkl_vars: bool = True,
     silent_if_missing: bool = False,
 ) -> bool:
@@ -3082,7 +3094,11 @@ def select_peak_by_hkl(
         return False
 
     def _visible_peak_index(idx_value: int) -> bool:
-        point = _peak_display_pair_for_index(simulation_runtime_state, int(idx_value))
+        point = _peak_display_pair_for_index(
+            simulation_runtime_state,
+            int(idx_value),
+            use_caked_display=bool(caked_view_enabled),
+        )
         return bool(point is not None and float(point[0]) >= 0.0)
 
     matches = [
@@ -3122,6 +3138,11 @@ def select_peak_by_hkl(
         return float(val) if np.isfinite(val) else float("-inf")
 
     best_idx = max(matches, key=_score)
+    selected_display = _peak_display_pair_for_index(
+        simulation_runtime_state,
+        int(best_idx),
+        use_caked_display=bool(caked_view_enabled),
+    )
     return select_peak_by_index(
         simulation_runtime_state,
         peak_selection_state,
@@ -3133,6 +3154,7 @@ def select_peak_by_hkl(
         set_status_text=set_status_text,
         draw_idle=draw_idle,
         prefix="Selected peak",
+        selected_display=selected_display,
         sync_hkl_vars=sync_hkl_vars,
     )
 
@@ -3169,6 +3191,7 @@ def select_peak_from_hkl_controls(
     sync_peak_selection_state: Any,
     set_status_text: Any,
     draw_idle: Any,
+    caked_view_enabled: bool = False,
     tcl_error_types: tuple[type[BaseException], ...] = (),
 ) -> bool:
     """Select one peak from the HKL lookup entry controls."""
@@ -3197,6 +3220,7 @@ def select_peak_from_hkl_controls(
         sync_peak_selection_state=sync_peak_selection_state,
         set_status_text=set_status_text,
         draw_idle=draw_idle,
+        caked_view_enabled=bool(caked_view_enabled),
         sync_hkl_vars=True,
         silent_if_missing=False,
     )
@@ -4001,6 +4025,7 @@ def select_peak_by_hkl_runtime(
 
     if bindings.selected_peak_marker is None:
         return False
+    caked_view_enabled = _runtime_bool(bindings.caked_view_enabled_factory, False)
     return select_peak_by_hkl(
         bindings.simulation_runtime_state,
         bindings.peak_selection_state,
@@ -4017,6 +4042,7 @@ def select_peak_by_hkl_runtime(
         sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
         set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
         draw_idle=lambda: _runtime_draw_idle(bindings),
+        caked_view_enabled=bool(caked_view_enabled),
         sync_hkl_vars=sync_hkl_vars,
         silent_if_missing=silent_if_missing,
     )
@@ -4058,6 +4084,7 @@ def select_peak_from_runtime_hkl_controls(
         sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
         set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
         draw_idle=lambda: _runtime_draw_idle(bindings),
+        caked_view_enabled=_runtime_bool(bindings.caked_view_enabled_factory, False),
         tcl_error_types=tuple(bindings.tcl_error_types or ()),
     )
 
