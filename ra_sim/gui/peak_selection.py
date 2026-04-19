@@ -1344,43 +1344,43 @@ def _peak_overlay_intersection_entries(
         simulation_runtime_state
     )
 
-    if bool(show_caked) and live_caked_cache_current:
-        combined_lattice_entries = getattr(
-            simulation_runtime_state,
-            "stored_peak_table_lattice",
-            None,
-        )
-        caked_tables = getattr(
-            simulation_runtime_state,
-            "last_caked_intersection_cache",
-            None,
-        )
-        if isinstance(caked_tables, (list, tuple)):
-            for table_index, table in enumerate(caked_tables):
-                try:
-                    table_arr = np.asarray(table, dtype=float)
-                except Exception:
-                    continue
-                if table_arr.ndim != 2 or table_arr.shape[0] <= 0:
-                    continue
-                av_used, cv_used, source_label = _peak_overlay_table_defaults(
-                    combined_lattice_entries,
-                    table_index=int(table_index),
-                    fallback_a=fallback_a,
-                    fallback_c=fallback_c,
-                    default_label="primary",
-                )
-                entries.append(
-                    (
-                        table_arr,
-                        float(av_used),
-                        float(cv_used),
-                        str(source_label),
-                        "last_caked_intersection_cache",
+    if bool(show_caked):
+        if live_caked_cache_current:
+            combined_lattice_entries = getattr(
+                simulation_runtime_state,
+                "stored_peak_table_lattice",
+                None,
+            )
+            caked_tables = getattr(
+                simulation_runtime_state,
+                "last_caked_intersection_cache",
+                None,
+            )
+            if isinstance(caked_tables, (list, tuple)):
+                for table_index, table in enumerate(caked_tables):
+                    try:
+                        table_arr = np.asarray(table, dtype=float)
+                    except Exception:
+                        continue
+                    if table_arr.ndim != 2 or table_arr.shape[0] <= 0:
+                        continue
+                    av_used, cv_used, source_label = _peak_overlay_table_defaults(
+                        combined_lattice_entries,
+                        table_index=int(table_index),
+                        fallback_a=fallback_a,
+                        fallback_c=fallback_c,
+                        default_label="primary",
                     )
-                )
-        if entries:
-            return entries
+                    entries.append(
+                        (
+                            table_arr,
+                            float(av_used),
+                            float(cv_used),
+                            str(source_label),
+                            "last_caked_intersection_cache",
+                        )
+                    )
+        return entries
 
     primary_defaults = _peak_overlay_source_defaults(
         getattr(simulation_runtime_state, "stored_primary_peak_table_lattice", None),
@@ -1469,43 +1469,13 @@ def _peak_overlay_intersection_entries(
     return entries
 
 
-def _peak_overlay_cache_row_caked_coords(
-    row: np.ndarray,
-    *,
-    native_col: float,
-    native_row: float,
-    native_detector_coords_to_caked_display_coords: Callable[
-        [float, float], tuple[float, float] | None
-    ]
-    | None,
-    prefer_cached_coords: bool = False,
-) -> tuple[float, float] | None:
-    """Return cached or projected ``(2theta, phi)`` display coordinates for one row."""
+def _peak_overlay_cache_row_caked_coords(row: np.ndarray) -> tuple[float, float] | None:
+    """Return cached ``(2theta, phi)`` display coordinates for one caked cache row."""
 
-    if prefer_cached_coords:
-        cached_two_theta, cached_phi = extract_cached_caked_angles(row)
-        if np.isfinite(cached_two_theta) and np.isfinite(cached_phi):
-            return float(cached_two_theta), float(cached_phi)
-
-    if not callable(native_detector_coords_to_caked_display_coords):
-        return None
-    try:
-        coords = native_detector_coords_to_caked_display_coords(
-            float(native_col),
-            float(native_row),
-        )
-    except Exception:
-        return None
-    if not isinstance(coords, (list, tuple)) or len(coords) < 2:
-        return None
-    try:
-        two_theta_deg = float(coords[0])
-        phi_deg = float(coords[1])
-    except Exception:
-        return None
-    if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg)):
-        return None
-    return float(two_theta_deg), float(phi_deg)
+    cached_two_theta, cached_phi = extract_cached_caked_angles(row)
+    if np.isfinite(cached_two_theta) and np.isfinite(cached_phi):
+        return float(cached_two_theta), float(cached_phi)
+    return None
 
 
 def ensure_runtime_peak_overlay_data(
@@ -1576,9 +1546,6 @@ def ensure_runtime_peak_overlay_data(
     max_hits_limit = max_hits_raw if max_hits_raw > 0 else None
     min_sep_sq = float(min_separation_value) ** 2
     show_caked = _runtime_bool(caked_view_enabled_factory, False)
-    last_caked_cache_current = _peak_overlay_live_caked_cache_is_current(
-        simulation_runtime_state
-    )
     peak_sig = (
         simulation_runtime_state.last_simulation_signature,
         tuple(updated_image.shape),
@@ -1716,21 +1683,13 @@ def ensure_runtime_peak_overlay_data(
                 ):
                     continue
 
-                prefer_cached_coords = (
-                    bool(show_caked)
-                    and str(cache_attr_name) == "last_caked_intersection_cache"
-                    and last_caked_cache_current
-                )
-                caked_coords = _peak_overlay_cache_row_caked_coords(
-                    np.asarray(row, dtype=float).reshape(-1),
-                    native_col=float(cx),
-                    native_row=float(cy),
-                    native_detector_coords_to_caked_display_coords=(
-                        native_detector_coords_to_caked_display_coords
-                    ),
-                    prefer_cached_coords=prefer_cached_coords,
-                )
-                if bool(show_caked) and caked_coords is not None:
+                caked_coords = None
+                if bool(show_caked):
+                    caked_coords = _peak_overlay_cache_row_caked_coords(
+                        np.asarray(row, dtype=float).reshape(-1),
+                    )
+                    if caked_coords is None:
+                        continue
                     disp_cx = float(caked_coords[0])
                     disp_cy = float(caked_coords[1])
                 elif callable(native_detector_coords_to_detector_display_coords):
@@ -1856,6 +1815,12 @@ def ensure_runtime_peak_overlay_data(
                         float(caked_coords[0]) if caked_coords is not None else float("nan")
                     ),
                     "phi_deg": (
+                        float(caked_coords[1]) if caked_coords is not None else float("nan")
+                    ),
+                    "caked_x": (
+                        float(caked_coords[0]) if caked_coords is not None else float("nan")
+                    ),
+                    "caked_y": (
                         float(caked_coords[1]) if caked_coords is not None else float("nan")
                     ),
                     "source_label": str(source_label),
@@ -2702,21 +2667,6 @@ def _resolve_peak_record_display_coords(
     )
 
     if bool(show_caked):
-        if native_point is not None and callable(native_detector_coords_to_caked_display_coords):
-            try:
-                projected = native_detector_coords_to_caked_display_coords(
-                    float(native_point[0]),
-                    float(native_point[1]),
-                )
-            except Exception:
-                projected = None
-            if (
-                isinstance(projected, tuple)
-                and len(projected) >= 2
-                and np.isfinite(float(projected[0]))
-                and np.isfinite(float(projected[1]))
-            ):
-                return (float(projected[0]), float(projected[1]))
         if caked_point is not None:
             return caked_point
         return None
@@ -3343,16 +3293,17 @@ def find_peak_record_for_canvas_click(
     """Return nearest visible simulation point from one click without mutating selection."""
 
     ensure_peak_overlay_data(force=False)
-    candidate_result = _nearest_simulation_point_for_click(
-        simulation_runtime_state,
-        float(click_col),
-        float(click_row),
-        candidate_records=simulation_point_candidates,
-        max_axis_distance_px=float(max_axis_distance_px),
-        use_caked_display=bool(use_caked_display),
-    )
-    if candidate_result[1] is not None:
-        return candidate_result
+    if not bool(use_caked_display):
+        candidate_result = _nearest_simulation_point_for_click(
+            simulation_runtime_state,
+            float(click_col),
+            float(click_row),
+            candidate_records=simulation_point_candidates,
+            max_axis_distance_px=float(max_axis_distance_px),
+            use_caked_display=False,
+        )
+        if candidate_result[1] is not None:
+            return candidate_result
 
     if not simulation_runtime_state.peak_positions:
         return -1, None, float("nan"), False
@@ -3504,47 +3455,52 @@ def select_peak_from_canvas_click(
         )
         return False
 
-    cx = int(round(float(click_col)))
-    cy = int(round(float(click_row)))
-    image_shape = (
-        tuple(int(v) for v in config.image_shape)
-        if config.image_shape is not None
-        else (int(config.image_size), int(config.image_size))
-    )
-    if not bool(caked_view_enabled) and callable(detector_display_to_native_detector_coords):
-        native_coords = detector_display_to_native_detector_coords(
-            float(cx),
-            float(cy),
+    selected_native = _record_native_pair(peak_record)
+    selected_display = _record_display_pair(peak_record)
+    if bool(caked_view_enabled):
+        clicked_native_for_record = (
+            (float(selected_native[0]), float(selected_native[1]))
+            if selected_native is not None
+            else None
         )
-        if (
-            isinstance(native_coords, tuple)
-            and len(native_coords) >= 2
-            and np.isfinite(float(native_coords[0]))
-            and np.isfinite(float(native_coords[1]))
-        ):
-            clicked_native_col = float(native_coords[0])
-            clicked_native_row = float(native_coords[1])
-        elif callable(display_to_native_sim_coords):
+    else:
+        cx = int(round(float(click_col)))
+        cy = int(round(float(click_row)))
+        image_shape = (
+            tuple(int(v) for v in config.image_shape)
+            if config.image_shape is not None
+            else (int(config.image_size), int(config.image_size))
+        )
+        if callable(detector_display_to_native_detector_coords):
+            native_coords = detector_display_to_native_detector_coords(
+                float(cx),
+                float(cy),
+            )
+            if (
+                isinstance(native_coords, tuple)
+                and len(native_coords) >= 2
+                and np.isfinite(float(native_coords[0]))
+                and np.isfinite(float(native_coords[1]))
+            ):
+                clicked_native_col = float(native_coords[0])
+                clicked_native_row = float(native_coords[1])
+            elif callable(display_to_native_sim_coords):
+                clicked_native_col, clicked_native_row = display_to_native_sim_coords(
+                    cx,
+                    cy,
+                    image_shape,
+                )
+            else:
+                return False
+        else:
+            if not callable(display_to_native_sim_coords):
+                return False
             clicked_native_col, clicked_native_row = display_to_native_sim_coords(
                 cx,
                 cy,
                 image_shape,
             )
-        else:
-            return False
-    else:
-        if not callable(display_to_native_sim_coords):
-            return False
-        clicked_native_col, clicked_native_row = display_to_native_sim_coords(
-            cx,
-            cy,
-            image_shape,
-        )
-    selected_native = _record_native_pair(peak_record)
-    selected_display = _record_display_pair(peak_record)
-    clicked_native_for_record = (float(clicked_native_col), float(clicked_native_row))
-    if bool(caked_view_enabled) and selected_native is not None:
-        clicked_native_for_record = (float(selected_native[0]), float(selected_native[1]))
+        clicked_native_for_record = (float(clicked_native_col), float(clicked_native_row))
 
     picked = bool(
         select_peak_by_index(
@@ -4107,16 +4063,17 @@ def select_peak_from_runtime_canvas_click(
         _set_status_text(bindings.set_status_text, "HKL image-pick is unavailable.")
         return False
     caked_view_enabled = _runtime_bool(bindings.caked_view_enabled_factory, False)
-    if bool(caked_view_enabled):
-        if not callable(bindings.display_to_native_sim_coords):
-            return False
-    elif not (
+    if not bool(caked_view_enabled) and not (
         callable(bindings.display_to_native_sim_coords)
         or callable(bindings.detector_display_to_native_detector_coords)
     ):
         return False
-    simulation_point_candidates = _simulation_point_payload_from_factory(
-        getattr(bindings, "hkl_pick_simulation_points_factory", None)
+    simulation_point_candidates = (
+        None
+        if bool(caked_view_enabled)
+        else _simulation_point_payload_from_factory(
+            getattr(bindings, "hkl_pick_simulation_points_factory", None)
+        )
     )
     return select_peak_from_canvas_click(
         bindings.simulation_runtime_state,
@@ -4167,8 +4124,13 @@ def find_peak_record_from_runtime_canvas_click(
 ) -> tuple[int, dict[str, object] | None, float, bool]:
     """Return nearest visible live peak for one click under runtime bindings."""
 
-    simulation_point_candidates = _simulation_point_payload_from_factory(
-        getattr(bindings, "hkl_pick_simulation_points_factory", None)
+    use_caked_display = _runtime_bool(bindings.caked_view_enabled_factory, False)
+    simulation_point_candidates = (
+        None
+        if use_caked_display
+        else _simulation_point_payload_from_factory(
+            getattr(bindings, "hkl_pick_simulation_points_factory", None)
+        )
     )
     return find_peak_record_for_canvas_click(
         bindings.simulation_runtime_state,
@@ -4177,7 +4139,7 @@ def find_peak_record_from_runtime_canvas_click(
         ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
         max_axis_distance_px=float(max_axis_distance_px),
         simulation_point_candidates=simulation_point_candidates,
-        use_caked_display=bool(_runtime_caked_view_enabled(bindings)),
+        use_caked_display=use_caked_display,
     )
 
 

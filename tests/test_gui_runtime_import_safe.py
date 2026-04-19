@@ -3659,57 +3659,38 @@ def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata()
     assert '"detector_shape": tuple(normalized_payload.get("detector_shape", ()))' in helper_source
 
 
-def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypatch) -> None:
+def test_prepare_caked_intersection_cache_uses_exact_cake_bundle_projector(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     class FakeBundle:
         detector_shape = (64, 96)
 
     bundle = FakeBundle()
-    geometry_token = object()
-    geometry_calls: list[dict[str, float]] = []
-    projector_calls: list[tuple[np.ndarray, np.ndarray, object]] = []
+    remap_calls: list[tuple[float, float]] = []
+    projector_calls: list[tuple[object, float, float]] = []
 
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
-    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(99.0), raising=False)
-    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(98.0), raising=False)
-    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(97.0), raising=False)
-    monkeypatch.setattr(runtime_session, "pixel_size_m", 9.9e-4, raising=False)
-    monkeypatch.setattr(
-        runtime_session,
-        "_native_detector_coords_to_bundle_detector_coords",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("bundle-coordinate remap should not run")
-        ),
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "detector_pixel_to_caked_bin",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("cake-bin projector should not run")
-        ),
-    )
     monkeypatch.setattr(
         runtime_session,
         "build_geometry",
-        lambda **kwargs: (
-            geometry_calls.append({k: float(v) for k, v in kwargs.items()}) or geometry_token
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked HKL cache should not use analytic geometry")
         ),
     )
     monkeypatch.setattr(
         runtime_session,
         "detector_points_to_angles",
-        lambda cols, rows, geometry: (
-            projector_calls.append(
-                (
-                    np.asarray(cols, dtype=float).copy(),
-                    np.asarray(rows, dtype=float).copy(),
-                    geometry,
-                )
-            )
-            or (
-                np.asarray(cols, dtype=float) + 0.5,
-                np.asarray(rows, dtype=float) - 0.25,
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked HKL cache should not use analytic detector angles")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        lambda bundle_arg, col, row: (
+            projector_calls.append((bundle_arg, float(col), float(row))) or (
+                float(col) + 0.5,
+                float(row) - 0.25,
             )
         ),
     )
@@ -3726,26 +3707,18 @@ def test_prepare_caked_intersection_cache_uses_exact_detector_projector(monkeypa
         distance_m=0.5,
         center_row_px=1.5,
         center_col_px=2.5,
+        native_detector_coords_to_bundle_detector_coords=lambda col, row: (
+            remap_calls.append((float(col), float(row))) or (float(col) + 2.0, float(row) + 3.0)
+        ),
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert geometry_calls == [
-        {
-            "pixel_size_m": 1.0e-4,
-            "distance_m": 0.5,
-            "center_row_px": 1.5,
-            "center_col_px": 2.5,
-        }
-    ]
-    assert len(projector_calls) == 1
-    cols_arg, rows_arg, geometry_arg = projector_calls[0]
-    np.testing.assert_allclose(cols_arg, [40.0])
-    np.testing.assert_allclose(rows_arg, [50.0])
-    assert geometry_arg is geometry_token
+    assert remap_calls == [(40.0, 50.0)]
+    assert projector_calls == [(bundle, 42.0, 53.0)]
     assert out.shape == (1, 16)
     np.testing.assert_allclose(out[0, :9], [1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0])
-    assert out[0, 14] == 40.5
-    assert out[0, 15] == 49.75
+    assert out[0, 14] == 42.5
+    assert out[0, 15] == 52.75
 
 
 def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_valid_bundle() -> (
@@ -3769,7 +3742,9 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_without_va
 
     out = np.asarray(transformed[0], dtype=float)
     assert out.shape == (1, 16)
-    np.testing.assert_allclose(out[0, :16], table[0, :16])
+    np.testing.assert_allclose(out[0, :14], table[0, :14])
+    assert np.isnan(out[0, 14])
+    assert np.isnan(out[0, 15])
 
 
 def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact_angles_are_nan(
@@ -3781,8 +3756,7 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact
         detector_shape = (64, 96)
 
     bundle = FakeBundle()
-    geometry_token = object()
-    projector_calls: list[tuple[np.ndarray, np.ndarray, object]] = []
+    projector_calls: list[tuple[object, float, float]] = []
     table = np.asarray(
         [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 17.5, -32.0]],
         dtype=float,
@@ -3791,34 +3765,24 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
     monkeypatch.setattr(
         runtime_session,
-        "_native_detector_coords_to_bundle_detector_coords",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("bundle-coordinate remap should not run")
+        "build_geometry",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked HKL cache should not use analytic geometry")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_points_to_angles",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked HKL cache should not use analytic detector angles")
         ),
     )
     monkeypatch.setattr(
         runtime_session,
         "detector_pixel_to_caked_bin",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("cake-bin projector should not run")
-        ),
-    )
-    monkeypatch.setattr(runtime_session, "build_geometry", lambda **kwargs: geometry_token)
-    monkeypatch.setattr(
-        runtime_session,
-        "detector_points_to_angles",
-        lambda cols, rows, geometry: (
-            projector_calls.append(
-                (
-                    np.asarray(cols, dtype=float).copy(),
-                    np.asarray(rows, dtype=float).copy(),
-                    geometry,
-                )
-            )
-            or (
-                np.asarray([np.nan], dtype=float),
-                np.asarray([np.nan], dtype=float),
-            )
+        lambda bundle_arg, col, row: (
+            projector_calls.append((bundle_arg, float(col), float(row)))
+            or (float("nan"), float("nan"))
         ),
     )
 
@@ -3832,13 +3796,11 @@ def test_prepare_caked_intersection_cache_blanks_prefilled_caked_cols_when_exact
     )
 
     out = np.asarray(transformed[0], dtype=float)
-    assert len(projector_calls) == 1
-    cols_arg, rows_arg, geometry_arg = projector_calls[0]
-    np.testing.assert_allclose(cols_arg, [40.0])
-    np.testing.assert_allclose(rows_arg, [50.0])
-    assert geometry_arg is geometry_token
+    assert projector_calls == [(bundle, 40.0, 50.0)]
     assert out.shape == (1, 16)
-    np.testing.assert_allclose(out[0, :16], table[0, :16])
+    np.testing.assert_allclose(out[0, :14], table[0, :14])
+    assert np.isnan(out[0, 14])
+    assert np.isnan(out[0, 15])
 
 
 def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_columns(
@@ -3851,8 +3813,7 @@ def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_colum
 
     bundle = FakeBundle()
     detector_cache = [np.asarray([[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]], dtype=float)]
-    geometry_token = object()
-    projector_calls: list[tuple[np.ndarray, np.ndarray, object]] = []
+    projector_calls: list[tuple[object, float, float]] = []
 
     monkeypatch.setattr(runtime_session, "CakeTransformBundle", FakeBundle)
     monkeypatch.setattr(
@@ -3864,27 +3825,24 @@ def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_colum
     )
     monkeypatch.setattr(
         runtime_session,
-        "detector_pixel_to_caked_bin",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("cake-bin projector should not run")
+        "build_geometry",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked cache should not use analytic geometry")
         ),
     )
-    monkeypatch.setattr(runtime_session, "build_geometry", lambda **kwargs: geometry_token)
     monkeypatch.setattr(
         runtime_session,
         "detector_points_to_angles",
-        lambda cols, rows, geometry: (
-            projector_calls.append(
-                (
-                    np.asarray(cols, dtype=float).copy(),
-                    np.asarray(rows, dtype=float).copy(),
-                    geometry,
-                )
-            )
-            or (
-                np.asarray([12.25], dtype=float),
-                np.asarray([-33.5], dtype=float),
-            )
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked cache should not use analytic detector angles")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
+        lambda bundle_arg, col, row: (
+            projector_calls.append((bundle_arg, float(col), float(row)))
+            or (12.25, -33.5)
         ),
     )
 
@@ -3940,11 +3898,7 @@ def test_analysis_cache_overlay_coords_reuses_current_prepared_caked_cache_colum
         show_caked=True,
     )
 
-    assert len(projector_calls) == 1
-    cols_arg, rows_arg, geometry_arg = projector_calls[0]
-    np.testing.assert_allclose(cols_arg, [40.0])
-    np.testing.assert_allclose(rows_arg, [50.0])
-    assert geometry_arg is geometry_token
+    assert projector_calls == [(bundle, 40.0, 50.0)]
     np.testing.assert_allclose(x_vals, [12.25])
     np.testing.assert_allclose(y_vals, [-33.5])
 

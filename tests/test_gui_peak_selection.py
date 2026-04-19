@@ -1021,7 +1021,7 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_live_caked_cache_over_
     assert runtime_state.peak_records[0]["cv"] == 6.0
 
 
-def test_peak_selection_runtime_peak_overlay_data_reprojects_stale_caked_source_signature() -> (
+def test_peak_selection_runtime_peak_overlay_data_ignores_stale_caked_source_signature() -> (
     None
 ):
     bundle = object()
@@ -1067,31 +1067,27 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_stale_caked_source_
         last_caked_intersection_cache_source_signature=(999, 1),
         stored_sim_image=np.zeros((64, 64), dtype=float),
     )
-    projector_calls: list[tuple[float, float]] = []
 
     ok = peak_selection.ensure_runtime_peak_overlay_data(
         runtime_state,
         primary_a=4.0,
         primary_c=6.0,
         native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
-            AssertionError("stale caked cache rows should stay on detector reprojection path")
+            AssertionError("stale caked cache should not fall back to detector display coords")
         ),
         reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
         caked_view_enabled_factory=True,
-        native_detector_coords_to_caked_display_coords=lambda col, row: (
-            projector_calls.append((float(col), float(row))) or (91.0, -44.0)
+        native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale caked cache should not be reprojected during HKL picking")
         ),
     )
 
-    assert ok is True
-    assert projector_calls == [(40.0, 50.0)]
-    assert runtime_state.peak_positions == [(91.0, -44.0)]
-    assert runtime_state.peak_records[0]["source_label"] == "primary"
-    assert runtime_state.peak_records[0]["two_theta_deg"] == 91.0
-    assert runtime_state.peak_records[0]["phi_deg"] == -44.0
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
 
 
-def test_peak_selection_runtime_peak_overlay_data_reprojects_stale_caked_cache() -> None:
+def test_peak_selection_runtime_peak_overlay_data_ignores_stale_caked_cache() -> None:
     detector_cache = [
         np.asarray(
             [[1.5, 2.5, 40.0, 50.0, 8.0, 0.375, 1.0, 0.0, 2.0]],
@@ -1132,30 +1128,27 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_stale_caked_cache()
         last_caked_intersection_cache_source_signature=(id(detector_cache), len(detector_cache)),
         stored_sim_image=np.zeros((64, 64), dtype=float),
     )
-    projector_calls: list[tuple[float, float]] = []
 
     ok = peak_selection.ensure_runtime_peak_overlay_data(
         runtime_state,
         primary_a=4.0,
         primary_c=6.0,
         native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
-            AssertionError("stale caked cache rows should not use raw display conversion")
+            AssertionError("stale caked cache should not use raw display conversion")
         ),
         reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
         caked_view_enabled_factory=True,
-        native_detector_coords_to_caked_display_coords=lambda col, row: (
-            projector_calls.append((float(col), float(row))) or (91.0, -44.0)
+        native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale caked cache should not be reprojected during HKL picking")
         ),
     )
 
-    assert ok is True
-    assert projector_calls == [(40.0, 50.0)]
-    assert runtime_state.peak_positions == [(91.0, -44.0)]
-    assert runtime_state.peak_records[0]["two_theta_deg"] == 91.0
-    assert runtime_state.peak_records[0]["phi_deg"] == -44.0
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
 
 
-def test_peak_selection_runtime_peak_overlay_data_rebuilds_cache_when_bundle_changes() -> None:
+def test_peak_selection_runtime_peak_overlay_data_requires_current_caked_cache_after_bundle_change() -> None:
     bundle_a = object()
     bundle_b = object()
     detector_cache = [
@@ -1187,8 +1180,8 @@ def test_peak_selection_runtime_peak_overlay_data_rebuilds_cache_when_bundle_cha
                         0.0,
                         0.0,
                         0.0,
-                        np.nan,
-                        np.nan,
+                        21.0,
+                        -31.0,
                     ]
                 ],
                 dtype=float,
@@ -1199,12 +1192,6 @@ def test_peak_selection_runtime_peak_overlay_data_rebuilds_cache_when_bundle_cha
         last_caked_intersection_cache_source_signature=(id(detector_cache), len(detector_cache)),
         stored_sim_image=np.zeros((64, 64), dtype=float),
     )
-    projector_results = iter(((21.0, -31.0), (92.0, -45.0)))
-    projector_calls: list[tuple[float, float]] = []
-
-    def _project(col: float, row: float) -> tuple[float, float]:
-        projector_calls.append((float(col), float(row)))
-        return next(projector_results)
 
     ok = peak_selection.ensure_runtime_peak_overlay_data(
         runtime_state,
@@ -1215,7 +1202,9 @@ def test_peak_selection_runtime_peak_overlay_data_rebuilds_cache_when_bundle_cha
         ),
         reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
         caked_view_enabled_factory=True,
-        native_detector_coords_to_caked_display_coords=_project,
+        native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("current caked cache should not be reprojected")
+        ),
     )
 
     assert ok is True
@@ -1233,17 +1222,19 @@ def test_peak_selection_runtime_peak_overlay_data_rebuilds_cache_when_bundle_cha
         primary_a=4.0,
         primary_c=6.0,
         native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
-            AssertionError("bundle change should still use caked reprojection")
+            AssertionError("stale caked cache should not use detector display conversion")
         ),
         reflection_q_group_metadata=lambda *_args, **_kwargs: ("group-key", None, 99.0),
         caked_view_enabled_factory=True,
-        native_detector_coords_to_caked_display_coords=_project,
+        native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale caked cache should not be reprojected")
+        ),
     )
 
-    assert ok is True
-    assert projector_calls == [(40.0, 50.0), (40.0, 50.0)]
-    assert runtime_state.peak_positions == [(92.0, -45.0)]
-    assert runtime_state.peak_overlay_cache["sig"] != first_sig
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
+    assert runtime_state.peak_overlay_cache["sig"] == first_sig
 
 
 def test_peak_selection_runtime_peak_overlay_data_clears_state_when_unavailable() -> None:
@@ -2701,6 +2692,8 @@ def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cach
                     "intensity": 8.0,
                     "native_col": 40.0,
                     "native_row": 50.0,
+                    "caked_x": 91.0,
+                    "caked_y": -44.0,
                 }
             ],
             "restored_from_gui_state": True,
@@ -2723,7 +2716,7 @@ def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cach
     )
 
     assert ok is True
-    assert projector_calls == [(40.0, 50.0)]
+    assert projector_calls == []
     assert runtime_state.peak_positions == [(91.0, -44.0)]
 
     ok = peak_selection.ensure_runtime_peak_overlay_data(
@@ -2741,7 +2734,7 @@ def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cach
     )
 
     assert ok is True
-    assert projector_calls == [(40.0, 50.0)]
+    assert projector_calls == []
     assert runtime_state.peak_positions == [(91.0, -44.0)]
 
 
@@ -2964,7 +2957,9 @@ def test_select_peak_from_canvas_click_uses_100x100_square_search_window() -> No
     assert peak_state.suppress_drag_press_once is True
 
 
-def test_select_peak_from_canvas_click_refreshes_overlay_when_caked_projection_changes() -> None:
+def test_select_peak_from_canvas_click_waits_for_refreshed_caked_cache_when_bundle_changes() -> (
+    None
+):
     bundle_a = object()
     bundle_b = object()
     detector_cache = [
@@ -2996,8 +2991,8 @@ def test_select_peak_from_canvas_click_refreshes_overlay_when_caked_projection_c
                         0.0,
                         0.0,
                         0.0,
-                        np.nan,
-                        np.nan,
+                        21.0,
+                        -31.0,
                     ]
                 ],
                 dtype=float,
@@ -3010,15 +3005,21 @@ def test_select_peak_from_canvas_click_refreshes_overlay_when_caked_projection_c
     )
     peak_state = state.PeakSelectionState(hkl_pick_armed=True)
     pick_mode_calls = []
-    projector_calls = []
     select_calls = []
     status_messages = []
     sync_calls = []
-    projector_results = iter(((21.0, -31.0), (92.0, -45.0)))
-
-    def _project(col: float, row: float) -> tuple[float, float]:
-        projector_calls.append((float(col), float(row)))
-        return next(projector_results)
+    misleading_payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [
+            {
+                "hkl": (9, 9, 9),
+                "hkl_raw": (9.0, 9.0, 9.0),
+                "caked_x": 51.0,
+                "caked_y": 59.0,
+                "intensity": 99.0,
+            }
+        ]
+    )
+    refresh_requests: list[bool] = []
 
     def ensure_peak_overlay_data(*, force: bool = False) -> bool:
         return peak_selection.ensure_runtime_peak_overlay_data(
@@ -3034,7 +3035,9 @@ def test_select_peak_from_canvas_click_refreshes_overlay_when_caked_projection_c
                 99.0,
             ),
             caked_view_enabled_factory=True,
-            native_detector_coords_to_caked_display_coords=_project,
+            native_detector_coords_to_caked_display_coords=lambda *_args: (_ for _ in ()).throw(
+                AssertionError("caked HKL overlay should not reproject detector rows")
+            ),
             force=force,
         )
 
@@ -3049,12 +3052,9 @@ def test_select_peak_from_canvas_click_refreshes_overlay_when_caked_projection_c
         -45.0,
         config=_canvas_pick_config(image_shape=(256, 256)),
         ensure_peak_overlay_data=ensure_peak_overlay_data,
-        schedule_update=lambda: (_ for _ in ()).throw(
-            AssertionError("refreshed overlay should not require another frame")
-        ),
-        display_to_native_sim_coords=lambda col, row, image_shape: (
-            float(col),
-            float(row),
+        schedule_update=lambda: refresh_requests.append(True),
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale caked HKL click should not invert the click to detector space")
         ),
         native_sim_to_display_coords=lambda col, row, image_shape: (
             float(col),
@@ -3069,19 +3069,14 @@ def test_select_peak_from_canvas_click_refreshes_overlay_when_caked_projection_c
         set_status_text=status_messages.append,
     )
 
-    assert ok is True
-    assert projector_calls == [(40.0, 50.0), (40.0, 50.0)]
-    assert runtime_state.peak_positions == [(92.0, -45.0)]
-    assert len(select_calls) == 1
-    idx, kwargs = select_calls[0]
-    assert idx == 0
-    assert kwargs["prefix"] == "Nearest peak (Δ=0.0px)"
-    assert kwargs["clicked_display"] == (92.0, -45.0)
-    assert kwargs["selected_native"] == (40.0, 50.0)
-    assert pick_mode_calls == [(False, None)]
-    assert peak_state.suppress_drag_press_once is True
-    assert sync_calls == [True]
-    assert status_messages == []
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert select_calls == []
+    assert pick_mode_calls == []
+    assert peak_state.suppress_drag_press_once is False
+    assert sync_calls == []
+    assert refresh_requests == [True]
+    assert status_messages == ["Preparing simulated peak map... click again after update."]
 
 
 def test_select_peak_from_canvas_click_uses_intersection_cache_centers_for_nearest_hkl() -> None:
@@ -3268,6 +3263,17 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
     assert runtime_state.peak_millers == [(0, 0, 3), (0, 0, 0)]
     assert select_calls[0][0] == 0
     assert select_calls[0][1]["selected_native"] == (300.0, 300.0)
+    misleading_payload = peak_selection.build_hkl_pick_simulation_point_payload(
+        [
+            {
+                "hkl": (9, 9, 9),
+                "hkl_raw": (9.0, 9.0, 9.0),
+                "caked_x": 51.0,
+                "caked_y": 59.0,
+                "intensity": 99.0,
+            }
+        ]
+    )
 
     def _ensure_caked_overlay(*, force: bool = False) -> bool:
         return peak_selection.ensure_runtime_peak_overlay_data(
@@ -3299,9 +3305,8 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
         schedule_update=lambda: (_ for _ in ()).throw(
             AssertionError("caked overlay should rebuild immediately")
         ),
-        display_to_native_sim_coords=lambda col, row, image_shape: (
-            float(col),
-            float(row),
+        display_to_native_sim_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("caked HKL click should not invert the click to detector space")
         ),
         native_sim_to_display_coords=lambda col, row, image_shape: (
             float(col),
@@ -3314,11 +3319,14 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
         ),
         sync_peak_selection_state=lambda: sync_calls.append(True),
         set_status_text=status_messages.append,
+        caked_view_enabled=True,
+        simulation_point_candidates=misleading_payload,
     )
 
     assert caked_ok is True
     assert runtime_state.peak_positions == [(50.0, 60.0), (200.0, 210.0)]
     assert select_calls[1][0] == 0
+    assert select_calls[1][1]["record_override"]["hkl"] == (0, 0, 3)
     assert select_calls[1][1]["selected_native"] == (300.0, 300.0)
     assert pick_mode_calls == [(False, None), (False, None)]
     assert peak_state.suppress_drag_press_once is True
@@ -3587,11 +3595,7 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     assert isinstance(click_call[5]["config"], peak_selection.SelectedPeakCanvasPickConfig)
     assert callable(click_call[5]["select_peak_by_index"])
     assert callable(click_call[5]["set_pick_mode"])
-    click_payload = click_call[5]["simulation_point_candidates"]
-    assert isinstance(click_payload, dict)
-    assert list(click_payload["candidates"]) == hkl_pick_points
-    assert isinstance(click_payload["detector_index"], dict)
-    assert isinstance(click_payload["caked_index"], dict)
+    assert click_call[5]["simulation_point_candidates"] is None
 
     callback_calls = []
     versions = {"count": 0}
@@ -3737,7 +3741,7 @@ def test_select_peak_from_runtime_canvas_click_allows_detector_inverse_without_s
     assert callable(calls[0][4]["detector_display_to_native_detector_coords"])
 
 
-def test_select_peak_from_runtime_canvas_click_requires_sim_inverse_in_caked_view(
+def test_select_peak_from_runtime_canvas_click_does_not_require_sim_inverse_in_caked_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bindings = peak_selection.SelectedPeakRuntimeBindings(
@@ -3755,16 +3759,71 @@ def test_select_peak_from_runtime_canvas_click_requires_sim_inverse_in_caked_vie
         display_to_native_sim_coords=None,
         detector_display_to_native_detector_coords=lambda col, row: (col, row),
     )
-    called = {"value": False}
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(
         peak_selection,
+        "_simulation_point_payload_from_factory",
+        lambda _factory: (_ for _ in ()).throw(
+            AssertionError("caked runtime click should not build Qr payload")
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
         "select_peak_from_canvas_click",
-        lambda *_args, **_kwargs: called.__setitem__("value", True) or True,
+        lambda *_args, **kwargs: captured.update(kwargs) or True,
     )
 
-    assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is False
-    assert called["value"] is False
+    assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is True
+    assert captured["caked_view_enabled"] is True
+    assert captured["simulation_point_candidates"] is None
+
+
+def test_find_peak_record_from_runtime_canvas_click_skips_payload_factory_in_caked_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=state.SimulationRuntimeState(),
+        peak_selection_state=state.PeakSelectionState(),
+        hkl_lookup_view_state=None,
+        selected_peak_marker=_FakeMarker(),
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: True,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        set_status_text=lambda _text: None,
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "_simulation_point_payload_from_factory",
+        lambda _factory: (_ for _ in ()).throw(
+            AssertionError("caked runtime lookup should not build Qr payload")
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "find_peak_record_for_canvas_click",
+        lambda *_args, **kwargs: captured.update(kwargs) or (-1, None, float("nan"), False),
+    )
+
+    result = peak_selection.find_peak_record_from_runtime_canvas_click(
+        bindings,
+        9.5,
+        11.5,
+        max_axis_distance_px=7.0,
+    )
+
+    assert result[0] == -1
+    assert result[1] is None
+    assert np.isnan(result[2])
+    assert result[3] is False
+    assert captured["use_caked_display"] is True
+    assert captured["simulation_point_candidates"] is None
+    assert captured["max_axis_distance_px"] == 7.0
 
 
 def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:

@@ -9405,22 +9405,16 @@ def _prepare_caked_intersection_cache(
     distance_m,
     center_row_px,
     center_col_px,
+    native_detector_coords_to_bundle_detector_coords: Callable[
+        [float, float], tuple[float | None, float | None]
+    ]
+    | None = None,
 ):
+    del pixel_size_m, distance_m, center_row_px, center_col_px
+
     source_tables = _copy_intersection_cache_tables(intersection_cache)
     if not source_tables:
         return source_tables
-
-    portable_geometry = None
-    if isinstance(transform_bundle, CakeTransformBundle):
-        try:
-            portable_geometry = build_geometry(
-                pixel_size_m=float(pixel_size_m),
-                distance_m=float(distance_m),
-                center_row_px=float(center_row_px),
-                center_col_px=float(center_col_px),
-            )
-        except Exception:
-            portable_geometry = None
 
     transformed = []
     for table in source_tables:
@@ -9463,11 +9457,14 @@ def _prepare_caked_intersection_cache(
                 caked_two_theta_col = LEGACY_CAKED_COL_TWO_THETA
                 caked_phi_col = LEGACY_CAKED_COL_PHI
 
+        if out.shape[0] > 0:
+            out[:, caked_two_theta_col] = np.nan
+            out[:, caked_phi_col] = np.nan
+
         if (
             arr.shape[0] == 0
             or arr.shape[1] < (CACHE_COL_DETECTOR_ROW + 1)
             or not isinstance(transform_bundle, CakeTransformBundle)
-            or portable_geometry is None
         ):
             transformed.append(out)
             continue
@@ -9479,24 +9476,45 @@ def _prepare_caked_intersection_cache(
         if valid_indices.size == 0:
             transformed.append(out)
             continue
-        try:
-            two_theta, phi = detector_points_to_angles(
-                cols[valid_indices],
-                rows[valid_indices],
-                portable_geometry,
-            )
-        except Exception:
-            transformed.append(out)
-            continue
-        two_theta_arr = np.asarray(two_theta, dtype=float).reshape(-1)
-        phi_arr = np.asarray(phi, dtype=float).reshape(-1)
-        if two_theta_arr.shape != phi_arr.shape or two_theta_arr.size != valid_indices.size:
-            transformed.append(out)
-            continue
-        finite = np.isfinite(two_theta_arr) & np.isfinite(phi_arr)
-        if np.any(finite):
-            out[valid_indices[finite], caked_two_theta_col] = two_theta_arr[finite]
-            out[valid_indices[finite], caked_phi_col] = phi_arr[finite]
+
+        for row_index in valid_indices:
+            bundle_col = float(cols[int(row_index)])
+            bundle_row = float(rows[int(row_index)])
+            if callable(native_detector_coords_to_bundle_detector_coords):
+                try:
+                    bundle_point = native_detector_coords_to_bundle_detector_coords(
+                        bundle_col,
+                        bundle_row,
+                    )
+                except Exception:
+                    continue
+                if not isinstance(bundle_point, tuple) or len(bundle_point) < 2:
+                    continue
+                try:
+                    bundle_col = float(bundle_point[0])
+                    bundle_row = float(bundle_point[1])
+                except Exception:
+                    continue
+                if not (np.isfinite(bundle_col) and np.isfinite(bundle_row)):
+                    continue
+
+            try:
+                two_theta_value, phi_value = detector_pixel_to_caked_bin(
+                    transform_bundle,
+                    bundle_col,
+                    bundle_row,
+                )
+            except Exception:
+                continue
+            try:
+                two_theta_float = float(two_theta_value)
+                phi_float = float(phi_value)
+            except Exception:
+                continue
+            if not (np.isfinite(two_theta_float) and np.isfinite(phi_float)):
+                continue
+            out[int(row_index), caked_two_theta_col] = two_theta_float
+            out[int(row_index), caked_phi_col] = phi_float
         transformed.append(out)
 
     return transformed
@@ -12608,6 +12626,15 @@ def _restore_caked_display_payload_from_cached_results(
             distance_m=float(corto_detector_var.get()),
             center_row_px=float(center_x_var.get()),
             center_col_px=float(center_y_var.get()),
+            native_detector_coords_to_bundle_detector_coords=(
+                None
+                if detector_shape is None
+                else (
+                    lambda col, row, _shape=tuple(detector_shape): (
+                        _native_detector_coords_to_bundle_detector_coords(col, row, _shape)
+                    )
+                )
+            ),
         )
         simulation_runtime_state.last_caked_intersection_cache = caked_intersection_cache
         simulation_runtime_state.last_caked_intersection_cache_transform_bundle = resolved_bundle
@@ -12838,6 +12865,11 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         distance_m=job.get("distance_m"),
         center_row_px=job_center_row_px,
         center_col_px=job_center_col_px,
+        native_detector_coords_to_bundle_detector_coords=(
+            lambda col, row, _shape=tuple(sim_image.shape[:2]): (
+                _native_detector_coords_to_bundle_detector_coords(col, row, _shape)
+            )
+        ),
     )
 
     return {
