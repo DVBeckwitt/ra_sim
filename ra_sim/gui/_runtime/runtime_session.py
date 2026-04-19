@@ -17774,6 +17774,8 @@ def _commit_geometry_manual_source_row_rebuild_result(
             except Exception:
                 max_positions_local = np.empty((0, 6), dtype=np.float64)
             simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+        else:
+            simulation_runtime_state.stored_max_positions_local = None
         if q_group_content_signature is None:
             q_group_content_signature = (
                 gui_geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(

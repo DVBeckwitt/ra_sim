@@ -4458,6 +4458,130 @@ def test_runtime_impl_manual_rebuild_invalidates_caked_intersection_cache() -> N
     assert "simulation_runtime_state.stored_hit_table_signature =" not in function_source
 
 
+def test_runtime_session_manual_rebuild_rows_only_clears_stale_q_group_hit_tables(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    state_module = importlib.import_module("ra_sim.gui.state")
+
+    stale_hit_tables = [
+        np.asarray(
+            [[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 0.0]],
+            dtype=np.float64,
+        )
+    ]
+    fresh_rows = [
+        {
+            "display_col": 30.0,
+            "display_row": 40.0,
+            "native_col": 30.0,
+            "native_row": 40.0,
+            "sim_col": 30.0,
+            "sim_row": 40.0,
+            "sim_col_raw": 30.0,
+            "sim_row_raw": 40.0,
+            "hkl": (1, 0, 1),
+            "hkl_raw": (1.0, 0.0, 1.0),
+            "intensity": 7.0,
+            "weight": 7.0,
+            "source_label": "primary",
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 1),
+        }
+    ]
+    runtime_state = state_module.SimulationRuntimeState(
+        stored_max_positions_local=list(stale_hit_tables),
+        stored_hit_table_signature=("sig", 0),
+        stored_q_group_content_signature=(
+            runtime_session.gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+                stale_hit_tables
+            )
+        ),
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 64, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_set_runtime_peak_cache_from_source_rows",
+        lambda rows: setattr(
+            runtime_state,
+            "peak_records",
+            [dict(entry) for entry in rows],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_source_snapshot_diagnostics",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_trace_live_cache_event",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    rebuild_result = geometry_fit.GeometryFitSourceRowRebuildResult(
+        background_index=0,
+        requested_signature=("sig", 1),
+        requested_signature_summary="sig-1",
+        projected_rows=[dict(entry) for entry in fresh_rows],
+        stored_rows=[dict(entry) for entry in fresh_rows],
+        rebuild_source="live_runtime_cache",
+        rebuild_attempts=["live_runtime_cache"],
+        diagnostics={},
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        hit_tables=None,
+        source_reflection_indices=[7],
+        metadata={},
+    )
+
+    committed_rows = runtime_session._commit_geometry_manual_source_row_rebuild_result(
+        rebuild_result
+    )
+
+    assert runtime_state.stored_max_positions_local is None
+    assert committed_rows == [dict(entry) for entry in fresh_rows]
+
+    q_group_bundle = (
+        runtime_session.gui_geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+            simulation_runtime_state=runtime_state,
+            preview_state=state_module.GeometryPreviewState(),
+            q_group_state=state_module.GeometryQGroupState(),
+            fit_config=None,
+            current_geometry_fit_var_names_factory=lambda: [],
+            primary_a_factory=lambda: 3.0,
+            primary_c_factory=lambda: 5.0,
+            image_size_factory=lambda: 64,
+            native_sim_to_display_coords=lambda col, row, _shape: (
+                float(col),
+                float(row),
+            ),
+        )
+    )
+    entries = q_group_bundle.build_entries_snapshot()
+
+    assert [entry["key"] for entry in entries] == [("q_group", "primary", 1, 1)]
+    assert entries[0]["peak_count"] == 1
+    assert entries[0]["total_intensity"] == 7.0
+
+
 class _RuntimeVar:
     def __init__(self, value: float | bool) -> None:
         self._value = value
