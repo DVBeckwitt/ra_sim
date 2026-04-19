@@ -27,6 +27,29 @@ def _entry(group_key, *, peak_count, total_intensity, source="primary"):
     }
 
 
+def _make_runtime_q_group_bundle(
+    runtime_state,
+    *,
+    primary_a_factory=3.0,
+    primary_c_factory=5.0,
+    caked_view_enabled_factory=False,
+    project_peaks_to_current_view=None,
+):
+    return geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=primary_a_factory,
+        primary_c_factory=primary_c_factory,
+        image_size_factory=lambda: 64,
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        caked_view_enabled_factory=caked_view_enabled_factory,
+        project_peaks_to_current_view=project_peaks_to_current_view,
+    )
+
+
 def test_geometry_q_group_manager_geometry_metadata_helpers() -> None:
     rows = geometry_q_group_manager.geometry_reference_hit_rows(
         [
@@ -1651,6 +1674,218 @@ def test_geometry_q_group_manager_build_entries_snapshot_uses_intersection_cache
     assert entries[0]["peak_count"] == 1
 
 
+def test_geometry_q_group_manager_build_entries_snapshot_falls_back_when_stored_hit_tables_empty_list() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 1.5,
+                "display_row": 2.5,
+                "native_col": 4.0,
+                "native_row": 5.0,
+                "sim_col_raw": 4.0,
+                "sim_row_raw": 5.0,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "phi": 15.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_max_positions_local=[],
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        image_size_factory=lambda: 32,
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+    )
+
+    entries = bundle.build_entries_snapshot()
+
+    assert len(entries) == 1
+    assert entries[0]["key"] == ("q_group", "primary", 1, 0)
+    assert entries[0]["peak_count"] == 1
+
+
+def test_geometry_q_group_manager_build_entries_snapshot_prefers_valid_stored_hit_tables() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 1.5,
+                "display_row": 2.5,
+                "native_col": 4.0,
+                "native_row": 5.0,
+                "sim_col_raw": 4.0,
+                "sim_row_raw": 5.0,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "phi": 15.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_max_positions_local=[
+            np.asarray(
+                [[12.0, 10.2, 20.8, 0.0, 1.0, 0.0, 1.0]],
+                dtype=float,
+            )
+        ],
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        image_size_factory=lambda: 32,
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+    )
+
+    entries = bundle.build_entries_snapshot()
+
+    assert len(entries) == 1
+    assert entries[0]["key"] == ("q_group", "primary", 1, 1)
+    assert entries[0]["peak_count"] == 1
+
+
+def test_geometry_q_group_manager_build_entries_snapshot_falls_back_when_stored_hit_tables_are_empty_arrays() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 1.5,
+                "display_row": 2.5,
+                "native_col": 4.0,
+                "native_row": 5.0,
+                "sim_col_raw": 4.0,
+                "sim_row_raw": 5.0,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "phi": 15.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_max_positions_local=[np.asarray([], dtype=float)],
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        image_size_factory=lambda: 32,
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+    )
+
+    entries = bundle.build_entries_snapshot()
+
+    assert len(entries) == 1
+    assert entries[0]["key"] == ("q_group", "primary", 1, 0)
+    assert entries[0]["peak_count"] == 1
+
+
+def test_geometry_q_group_manager_build_entries_snapshot_falls_back_from_empty_cached_stored_entries(
+    monkeypatch,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 1.5,
+                "display_row": 2.5,
+                "native_col": 4.0,
+                "native_row": 5.0,
+                "sim_col_raw": 4.0,
+                "sim_row_raw": 5.0,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "phi": 15.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            }
+        ],
+        stored_max_positions_local=[
+            np.asarray(
+                [[12.0, 10.2, 20.8, 0.0, 1.0, 0.0, 1.0]],
+                dtype=float,
+            )
+        ],
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+    build_entries_calls: list[dict[str, object]] = []
+
+    def _build_entries(max_positions_local, *args, **kwargs):
+        build_entries_calls.append(
+            {
+                "has_max_positions_local": max_positions_local is not None,
+                "peak_records": list(kwargs.get("peak_records", ()) or ()),
+            }
+        )
+        if max_positions_local is not None:
+            return []
+        return [{"records": list(kwargs.get("peak_records", ()) or ())}]
+
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "build_geometry_q_group_entries",
+        _build_entries,
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 3.0,
+        primary_c_factory=lambda: 5.0,
+        image_size_factory=lambda: 32,
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+    )
+
+    first_entries = bundle.build_entries_snapshot()
+    second_entries = bundle.build_entries_snapshot()
+
+    assert first_entries == [{"records": [dict(runtime_state.peak_records[0])]}]
+    assert second_entries == first_entries
+    assert build_entries_calls == [
+        {
+            "has_max_positions_local": True,
+            "peak_records": [],
+        },
+        {
+            "has_max_positions_local": False,
+            "peak_records": [dict(runtime_state.peak_records[0])],
+        },
+        {
+            "has_max_positions_local": False,
+            "peak_records": [dict(runtime_state.peak_records[0])],
+        },
+    ]
+
+
 def test_geometry_q_group_manager_caked_preview_uses_stored_hit_tables_without_peak_records() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_records=[],
@@ -1700,6 +1935,206 @@ def test_geometry_q_group_manager_caked_preview_uses_stored_hit_tables_without_p
     assert entries[0]["key"] == ("q_group", "primary", 1, 10)
     assert entries[0]["peak_count"] == 2
     assert runtime_state.geometry_q_group_entries_cache_signature is not None
+
+
+def test_geometry_q_group_manager_source_row_content_signature_ignores_view_fields() -> None:
+    base_rows = [
+        {
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "source_reflection_index": 7,
+            "source_label": "primary",
+            "hkl_raw": [1.0, 0.0, 0.0],
+            "intensity": 12.0,
+            "native_col": 10.0,
+            "native_row": 20.0,
+            "display_col": 99.0,
+            "display_row": -12.0,
+            "sim_col": 88.0,
+            "sim_row": 77.0,
+            "caked_x": 1.5,
+            "caked_y": -3.0,
+        }
+    ]
+
+    view_variant_rows = [
+        dict(
+            base_rows[0],
+            display_col=-500.0,
+            display_row=800.0,
+            sim_col=-9.0,
+            sim_row=-7.0,
+            caked_x=25.0,
+            caked_y=35.0,
+            current_view_mode="caked",
+        )
+    ]
+
+    base_signature = geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+        base_rows
+    )
+    view_variant_signature = (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            view_variant_rows
+        )
+    )
+
+    assert base_signature == view_variant_signature
+    assert (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            [dict(base_rows[0], native_col=11.0)]
+        )
+        != base_signature
+    )
+    assert (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            [dict(base_rows[0], hkl_raw=[1.0, 0.0, 1.0])]
+        )
+        != base_signature
+    )
+    assert (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            [dict(base_rows[0], intensity=15.0)]
+        )
+        != base_signature
+    )
+    assert (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            [dict(base_rows[0], source_row_index=2)]
+        )
+        != base_signature
+    )
+
+
+def test_geometry_q_group_manager_build_entries_snapshot_invalidates_on_q_group_content_signature_change() -> None:
+    first_hit_tables = [
+        np.asarray(
+            [[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.0]],
+            dtype=float,
+        )
+    ]
+    second_hit_tables = [
+        np.asarray(
+            [[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 5.0]],
+            dtype=float,
+        )
+    ]
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=first_hit_tables,
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+        stored_hit_table_signature=("sig", 0),
+        stored_q_group_content_signature=(
+            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+                first_hit_tables
+            )
+        ),
+    )
+    bundle = _make_runtime_q_group_bundle(runtime_state)
+
+    first_entries = bundle.build_entries_snapshot()
+    first_signature = runtime_state.geometry_q_group_entries_cache_signature
+
+    runtime_state.stored_max_positions_local = second_hit_tables
+    runtime_state.stored_q_group_content_signature = (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+            second_hit_tables
+        )
+    )
+
+    second_entries = bundle.build_entries_snapshot()
+    second_signature = runtime_state.geometry_q_group_entries_cache_signature
+
+    assert [entry["key"] for entry in first_entries] == [("q_group", "primary", 1, 0)]
+    assert [entry["key"] for entry in second_entries] == [("q_group", "primary", 1, 1)]
+    assert first_signature != second_signature
+
+
+def test_geometry_q_group_manager_build_entries_snapshot_is_view_independent() -> None:
+    hit_tables = [
+        np.asarray(
+            [[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 5.0]],
+            dtype=float,
+        )
+    ]
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=hit_tables,
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+        stored_hit_table_signature=("sig", 1),
+        stored_q_group_content_signature=(
+            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+                hit_tables
+            )
+        ),
+    )
+    detector_bundle = _make_runtime_q_group_bundle(
+        runtime_state,
+        caked_view_enabled_factory=lambda: False,
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry, display_col=100.0, display_row=200.0)
+            for entry in (entries or ())
+            if isinstance(entry, dict)
+        ],
+    )
+    caked_bundle = _make_runtime_q_group_bundle(
+        runtime_state,
+        caked_view_enabled_factory=lambda: True,
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry, caked_x=-10.0, caked_y=50.0)
+            for entry in (entries or ())
+            if isinstance(entry, dict)
+        ],
+    )
+
+    detector_entries = detector_bundle.build_entries_snapshot()
+    detector_signature = runtime_state.geometry_q_group_entries_cache_signature
+    caked_entries = caked_bundle.build_entries_snapshot()
+    caked_signature = runtime_state.geometry_q_group_entries_cache_signature
+
+    assert [entry["key"] for entry in detector_entries] == [
+        ("q_group", "primary", 1, 1)
+    ]
+    assert [entry["key"] for entry in caked_entries] == [
+        ("q_group", "primary", 1, 1)
+    ]
+    assert detector_signature == caked_signature
+
+
+def test_geometry_q_group_manager_build_entries_snapshot_invalidates_on_lattice_change() -> None:
+    hit_tables = [
+        np.asarray(
+            [[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.0]],
+            dtype=float,
+        )
+    ]
+    primary_a = {"value": 3.0}
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=hit_tables,
+        stored_hit_table_signature=("sig", 2),
+        stored_q_group_content_signature=(
+            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+                hit_tables
+            )
+        ),
+    )
+    bundle = _make_runtime_q_group_bundle(
+        runtime_state,
+        primary_a_factory=lambda: primary_a["value"],
+        primary_c_factory=5.0,
+    )
+
+    first_entries = bundle.build_entries_snapshot()
+    first_signature = runtime_state.geometry_q_group_entries_cache_signature
+
+    primary_a["value"] = 6.0
+    second_entries = bundle.build_entries_snapshot()
+    second_signature = runtime_state.geometry_q_group_entries_cache_signature
+
+    assert first_signature != second_signature
+    assert np.isclose(first_entries[0]["qr"], (2.0 * np.pi / 3.0) * np.sqrt(4.0 / 3.0))
+    assert np.isclose(
+        second_entries[0]["qr"],
+        (2.0 * np.pi / 6.0) * np.sqrt(4.0 / 3.0),
+    )
 
 
 def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:

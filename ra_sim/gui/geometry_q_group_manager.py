@@ -203,6 +203,144 @@ def _coerce_int(value: object, default: int) -> int:
         return int(default)
 
 
+def _geometry_q_group_cache_scalar(value: object) -> object:
+    if value is None or isinstance(value, (str, bytes, int, bool)):
+        return value
+    try:
+        numeric = float(value)
+    except Exception:
+        return repr(value)
+    if not np.isfinite(numeric):
+        return repr(value)
+    return round(float(numeric), 9)
+
+
+def _geometry_q_group_signature_value(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        array_value = np.asarray(value)
+        try:
+            payload = hash(np.ascontiguousarray(array_value).tobytes())
+        except Exception:
+            payload = repr(array_value)
+        return (
+            "ndarray",
+            tuple(int(size) for size in array_value.shape),
+            str(array_value.dtype),
+            payload,
+        )
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted(
+                (repr(key), _geometry_q_group_signature_value(item))
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_geometry_q_group_signature_value(item) for item in value)
+    return _geometry_q_group_cache_scalar(value)
+
+
+def _geometry_q_group_hit_table_row_signature(
+    row: object,
+) -> tuple[object, ...] | None:
+    try:
+        row_arr = np.asarray(row, dtype=float)
+    except Exception:
+        return None
+    if row_arr.ndim != 1 or row_arr.shape[0] < 7:
+        return None
+    if not (
+        np.isfinite(row_arr[0])
+        and np.isfinite(row_arr[1])
+        and np.isfinite(row_arr[2])
+        and np.isfinite(row_arr[4])
+        and np.isfinite(row_arr[5])
+        and np.isfinite(row_arr[6])
+    ):
+        return None
+    source_table_index, source_row_index, best_sample_index = (
+        extract_hit_row_provenance(row_arr)
+    )
+    return (
+        "hit_row",
+        _geometry_q_group_cache_scalar(row_arr[0]),
+        _geometry_q_group_cache_scalar(row_arr[1]),
+        _geometry_q_group_cache_scalar(row_arr[2]),
+        _geometry_q_group_cache_scalar(row_arr[4]),
+        _geometry_q_group_cache_scalar(row_arr[5]),
+        _geometry_q_group_cache_scalar(row_arr[6]),
+        source_table_index,
+        source_row_index,
+        best_sample_index,
+    )
+
+
+def _geometry_q_group_content_signature_from_hit_tables(
+    hit_tables: Sequence[object] | None,
+) -> object:
+    if not isinstance(hit_tables, Sequence) or isinstance(hit_tables, (str, bytes)):
+        return None
+    table_signatures: list[tuple[object, ...]] = []
+    for table_index, table in enumerate(hit_tables):
+        row_signatures: list[tuple[object, ...]] = []
+        for row in geometry_reference_hit_rows(table):
+            row_signature = _geometry_q_group_hit_table_row_signature(row)
+            if row_signature is not None:
+                row_signatures.append(row_signature)
+        table_signatures.append(
+            (
+                "table",
+                int(table_index),
+                int(len(row_signatures)),
+                tuple(row_signatures),
+            )
+        )
+    return (
+        "q_group_content",
+        "hit_tables",
+        int(len(table_signatures)),
+        tuple(table_signatures),
+    )
+
+
+def _geometry_q_group_source_row_signature(
+    entry: object,
+) -> tuple[object, ...] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    hkl_value = entry.get("hkl_raw", entry.get("hkl"))
+    intensity_value = entry.get("intensity", entry.get("weight"))
+    return (
+        "source_row",
+        _geometry_q_group_signature_value(entry.get("source_table_index")),
+        _geometry_q_group_signature_value(entry.get("source_row_index")),
+        _geometry_q_group_signature_value(entry.get("source_reflection_index")),
+        _geometry_q_group_signature_value(str(entry.get("source_label", "primary"))),
+        _geometry_q_group_signature_value(hkl_value),
+        _geometry_q_group_signature_value(intensity_value),
+        _geometry_q_group_signature_value(entry.get("native_col")),
+        _geometry_q_group_signature_value(entry.get("native_row")),
+    )
+
+
+def _geometry_q_group_content_signature_from_source_rows(
+    source_rows: Sequence[object] | None,
+) -> object:
+    if not isinstance(source_rows, Sequence) or isinstance(source_rows, (str, bytes)):
+        return None
+    row_signatures: list[tuple[object, ...]] = []
+    for entry in source_rows:
+        row_signature = _geometry_q_group_source_row_signature(entry)
+        if row_signature is not None:
+            row_signatures.append(row_signature)
+    return (
+        "q_group_content",
+        "source_rows",
+        int(len(row_signatures)),
+        tuple(row_signatures),
+    )
+
+
 def _copy_simulation_diag_value(value: object) -> object:
     """Return one log-friendly deep copy of simulation diagnostics state."""
 
@@ -1927,61 +2065,44 @@ def make_runtime_geometry_q_group_value_callbacks(
                 return True
         return False
 
-    def _q_group_cache_scalar(value: object) -> object:
-        if value is None or isinstance(value, (str, bytes, int, bool)):
-            return value
-        try:
-            numeric = float(value)
-        except Exception:
-            return repr(value)
-        if not np.isfinite(numeric):
-            return repr(value)
-        return round(float(numeric), 9)
-
-    def _q_group_cache_signature_value(value: object) -> object:
-        if isinstance(value, np.ndarray):
-            array_value = np.asarray(value)
-            try:
-                payload = hash(np.ascontiguousarray(array_value).tobytes())
-            except Exception:
-                payload = repr(array_value)
-            return (
-                "ndarray",
-                tuple(int(size) for size in array_value.shape),
-                str(array_value.dtype),
-                payload,
-            )
-        if isinstance(value, Mapping):
-            return tuple(
-                sorted(
-                    (repr(key), _q_group_cache_signature_value(item))
-                    for key, item in value.items()
-                )
-            )
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            return tuple(_q_group_cache_signature_value(item) for item in value)
-        return _q_group_cache_scalar(value)
-
     def _stored_peak_table_lattice_signature() -> object:
-        return _q_group_cache_signature_value(
+        return _geometry_q_group_signature_value(
             getattr(simulation_runtime_state, "stored_peak_table_lattice", None)
+        )
+
+    def _stored_q_group_content_signature() -> object:
+        content_signature = getattr(
+            simulation_runtime_state,
+            "stored_q_group_content_signature",
+            None,
+        )
+        if content_signature is not None:
+            return _geometry_q_group_signature_value(content_signature)
+        return _geometry_q_group_signature_value(
+            getattr(simulation_runtime_state, "stored_max_positions_local", None)
         )
 
     def _stored_hit_table_q_group_signature() -> tuple[object, ...]:
         return (
             "geometry_q_group_entries",
-            1,
-            _q_group_cache_signature_value(
+            2,
+            _geometry_q_group_signature_value(
                 getattr(simulation_runtime_state, "stored_hit_table_signature", None)
             ),
+            _stored_q_group_content_signature(),
             _stored_peak_table_lattice_signature(),
-            _q_group_cache_scalar(_primary_a()),
-            _q_group_cache_scalar(_primary_c()),
+            _geometry_q_group_cache_scalar(_primary_a()),
+            _geometry_q_group_cache_scalar(_primary_c()),
         )
 
     def _stored_hit_tables_available() -> bool:
         hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
-        return isinstance(hit_tables, Sequence) and not isinstance(hit_tables, (str, bytes))
+        if not isinstance(hit_tables, Sequence) or isinstance(hit_tables, (str, bytes)):
+            return False
+        for table in hit_tables:
+            if geometry_reference_hit_rows(table):
+                return True
+        return False
 
     def _build_simulated_peaks_from_stored_hit_tables() -> list[dict[str, object]]:
         hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
@@ -2316,31 +2437,35 @@ def make_runtime_geometry_q_group_value_callbacks(
                 )
                 == cache_signature
             ):
-                return gui_controllers.clone_geometry_q_group_entries(
+                cached_entries = gui_controllers.clone_geometry_q_group_entries(
                     getattr(
                         simulation_runtime_state,
                         "geometry_q_group_entries_cache",
                         [],
                     )
                 )
-            entries = build_geometry_q_group_entries(
-                getattr(simulation_runtime_state, "stored_max_positions_local", None),
-                peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-                peak_records=None,
-                primary_a=_primary_a(),
-                primary_c=_primary_c(),
-                allow_nominal_hkl_indices=True,
-            )
-            try:
-                simulation_runtime_state.geometry_q_group_entries_cache_signature = (
-                    cache_signature
+                if cached_entries:
+                    return cached_entries
+            else:
+                entries = build_geometry_q_group_entries(
+                    getattr(simulation_runtime_state, "stored_max_positions_local", None),
+                    peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+                    peak_records=None,
+                    primary_a=_primary_a(),
+                    primary_c=_primary_c(),
+                    allow_nominal_hkl_indices=True,
                 )
-                simulation_runtime_state.geometry_q_group_entries_cache = (
-                    gui_controllers.clone_geometry_q_group_entries(entries)
-                )
-            except Exception:
-                pass
-            return gui_controllers.clone_geometry_q_group_entries(entries)
+                try:
+                    simulation_runtime_state.geometry_q_group_entries_cache_signature = (
+                        cache_signature
+                    )
+                    simulation_runtime_state.geometry_q_group_entries_cache = (
+                        gui_controllers.clone_geometry_q_group_entries(entries)
+                    )
+                except Exception:
+                    pass
+                if entries:
+                    return gui_controllers.clone_geometry_q_group_entries(entries)
 
         return build_geometry_q_group_entries(
             None,
