@@ -1485,6 +1485,166 @@ def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projec
     assert invalidated == [True]
 
 
+def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_view_coords(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    projection_calls: list[list[dict[str, object]]] = []
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+
+    def _project_preserving_coords(records):
+        projection_calls.append([dict(record) for record in records or ()])
+        return [dict(record) for record in records or () if isinstance(record, dict)]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        _project_preserving_coords,
+        raising=False,
+    )
+
+    base_source_row = {
+        "display_col": 100.0,
+        "display_row": 200.0,
+        "sim_col": 100.0,
+        "sim_row": 200.0,
+        "sim_col_raw": 100.0,
+        "sim_row_raw": 200.0,
+        "native_col": 100.0,
+        "native_row": 200.0,
+        "hkl": [-1, 0, 5],
+        "weight": 7.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    def _make_state() -> SimpleNamespace:
+        return SimpleNamespace(
+            peak_records=[{"stale": True}],
+            peak_positions=[(1.0, 2.0)],
+            peak_millers=[(9, 9, 9)],
+            peak_intensities=[4.0],
+            selected_peak_record={"stale": True},
+            peak_overlay_cache={"records": [{"stale": True}], "positions": [(1.0, 2.0)]},
+        )
+
+    def _restore_state(
+        source_row: dict[str, object],
+        *,
+        use_caked_display: bool,
+    ) -> SimpleNamespace:
+        monkeypatch.setattr(
+            runtime_session,
+            "_active_caked_primary_view",
+            lambda: use_caked_display,
+        )
+        restored_state = _make_state()
+        monkeypatch.setattr(
+            runtime_session,
+            "simulation_runtime_state",
+            restored_state,
+            raising=False,
+        )
+        runtime_session._geometry_manual_set_runtime_peak_cache_from_source_rows(
+            [dict(source_row)]
+        )
+        return restored_state
+
+    caked_cases = (
+        (
+            {
+                **base_source_row,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+            },
+            (5.5, 12.25),
+        ),
+        (
+            {
+                **base_source_row,
+                "raw_caked_x": 6.5,
+                "raw_caked_y": 14.25,
+            },
+            (6.5, 14.25),
+        ),
+        (
+            {
+                **base_source_row,
+                "two_theta_deg": 7.5,
+                "phi_deg": 16.25,
+            },
+            (7.5, 16.25),
+        ),
+    )
+
+    for source_row, expected_position in caked_cases:
+        caked_state = _restore_state(source_row, use_caked_display=True)
+
+        assert caked_state.peak_positions == [expected_position]
+        assert caked_state.peak_millers == [(-1, 0, 5)]
+        assert caked_state.peak_intensities == [7.0]
+        assert caked_state.selected_peak_record is None
+        assert caked_state.peak_records[0]["display_col"] == 100.0
+        assert caked_state.peak_records[0]["display_row"] == 200.0
+        assert caked_state.peak_records[0]["sim_col"] == 100.0
+        assert caked_state.peak_records[0]["sim_row"] == 200.0
+        assert caked_state.peak_records[0]["sim_col_raw"] == 100.0
+        assert caked_state.peak_records[0]["sim_row_raw"] == 200.0
+        assert caked_state.peak_records[0]["native_col"] == 100.0
+        assert caked_state.peak_records[0]["native_row"] == 200.0
+        assert caked_state.peak_overlay_cache["positions"] == [expected_position]
+        assert caked_state.peak_overlay_cache["records"][0]["display_col"] == 100.0
+        assert caked_state.peak_overlay_cache["records"][0]["display_row"] == 200.0
+
+    detector_state = _restore_state(
+        {
+            **base_source_row,
+            "caked_x": 5.5,
+            "caked_y": 12.25,
+            "raw_caked_x": 6.5,
+            "raw_caked_y": 14.25,
+            "two_theta_deg": 7.5,
+            "phi_deg": 16.25,
+        },
+        use_caked_display=False,
+    )
+
+    assert detector_state.peak_positions == [(100.0, 200.0)]
+    assert detector_state.peak_millers == [(-1, 0, 5)]
+    assert detector_state.peak_intensities == [7.0]
+    assert detector_state.selected_peak_record is None
+    assert detector_state.peak_records[0]["display_col"] == 100.0
+    assert detector_state.peak_records[0]["display_row"] == 200.0
+    assert detector_state.peak_records[0]["sim_col"] == 100.0
+    assert detector_state.peak_records[0]["sim_row"] == 200.0
+    assert detector_state.peak_records[0]["sim_col_raw"] == 100.0
+    assert detector_state.peak_records[0]["sim_row_raw"] == 200.0
+    assert detector_state.peak_records[0]["native_col"] == 100.0
+    assert detector_state.peak_records[0]["native_row"] == 200.0
+    assert detector_state.peak_overlay_cache["positions"] == [(100.0, 200.0)]
+    assert detector_state.peak_overlay_cache["records"][0]["display_col"] == 100.0
+    assert detector_state.peak_overlay_cache["records"][0]["display_row"] == 200.0
+
+    assert len(projection_calls) == 4
+    assert invalidated == [True, True, True, True]
+
+
 def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_lookup(
     monkeypatch,
 ) -> None:
@@ -2885,53 +3045,43 @@ def test_integration_overlay_raster_source_signature_prefers_explicit_overlay_si
     )
 
 
-def test_runtime_live_caked_projection_helper_uses_bound_callback(
+def test_runtime_live_caked_projection_helper_uses_live_bundle_directly(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    bundle = object()
 
     def _fail(*_args, **_kwargs):
-        raise AssertionError("live caked helper should use bound callback only")
+        raise AssertionError("live caked helper should not use bound callback")
 
-    callback_calls: list[tuple[float, float]] = []
+    projection_calls: list[tuple[object, float, float]] = []
 
-    def _record(col: float, row: float):
-        callback_calls.append((float(col), float(row)))
+    def _record(bundle_arg: object, col: float, row: float):
+        projection_calls.append((bundle_arg, float(col), float(row)))
         return (12.0, 34.0)
 
     monkeypatch.setattr(
         runtime_session,
         "_native_detector_coords_to_caked_display_coords",
+        _fail,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_live_caked_transform_bundle",
+        lambda: bundle,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "detector_pixel_to_caked_bin",
         _record,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "_scattering_angles_to_detector_pixel",
-        _fail,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "_detector_pixel_to_scattering_angles",
-        _fail,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "_get_detector_angular_maps",
-        _fail,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "detector_pixel_angular_maps",
-        _fail,
-        raising=False,
     )
 
     assert runtime_session._native_detector_coords_to_live_caked_coords(1.25, 2.5) == (
         12.0,
         34.0,
     )
-    assert callback_calls == [(1.25, 2.5)]
+    assert projection_calls == [(bundle, 1.25, 2.5)]
 
 
 def _install_preview_mask_legacy_helper_guards(monkeypatch, runtime_session) -> None:

@@ -17415,6 +17415,7 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
     restored_positions: list[tuple[float, float]] = []
     restored_millers: list[tuple[int, int, int]] = []
     restored_intensities: list[float] = []
+    use_caked_display = bool(_active_caked_primary_view())
 
     for raw_entry in projected_rows:
         peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
@@ -17426,11 +17427,20 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
         if peak_record is None:
             continue
         try:
-            display_col = float(peak_record.get("sim_col", peak_record.get("display_col", np.nan)))
-            display_row = float(peak_record.get("sim_row", peak_record.get("display_row", np.nan)))
+            active_point = gui_manual_geometry._geometry_manual_entry_active_view_point(
+                peak_record,
+                use_caked_display=use_caked_display,
+            )
         except Exception:
             continue
-        if not (np.isfinite(display_col) and np.isfinite(display_row)):
+        if active_point is None:
+            continue
+        try:
+            active_col = float(active_point[0])
+            active_row = float(active_point[1])
+        except Exception:
+            continue
+        if not (np.isfinite(active_col) and np.isfinite(active_row)):
             continue
 
         hkl_value = peak_record.get("hkl")
@@ -17452,13 +17462,11 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        peak_record["display_col"] = float(display_col)
-        peak_record["display_row"] = float(display_row)
         peak_record["intensity"] = float(intensity)
         peak_record["weight"] = float(intensity)
 
         restored_records.append(peak_record)
-        restored_positions.append((float(display_col), float(display_row)))
+        restored_positions.append((float(active_col), float(active_row)))
         restored_millers.append(hkl_triplet)
         restored_intensities.append(float(intensity))
 
