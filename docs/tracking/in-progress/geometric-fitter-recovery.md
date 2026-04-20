@@ -20,6 +20,17 @@ that minimizes target-to-candidate display-space distance after normalized HKL
 and branch filtering. Saved source identity is stale after regeneration and may
 only break true ties or serve as diagnostics.
 
+Source rebinding is now fixed for the canonical `new4` path: preflight resolves
+`7/7` manual pairs, `background_distance_gate_ok` passes, and
+`dataset_resolved_source_pair_count == 7`. Do not reopen source rebinding
+unless a focused regression test proves it broke again.
+
+The remaining blocker is manual caked fit-space projection provenance. Manual
+caked residual rows must use the exact dataset projector built from the same
+detector-to-caked conversion path as manual selection. When an exact caked
+projector is available, `analytic_detector_fit_space` is forbidden for those
+rows.
+
 The next projects are intentionally blocked behind this one:
 
 1. geometric fitter
@@ -55,24 +66,25 @@ The empty transient rows are expected. The validator and baseline runner must
 regenerate live simulation/source rows from the saved manual pairs rather than
 requiring saved GUI peak rows.
 
-Current root cause for the failing `new4` baseline:
+Current root cause for the remaining `new4` fitter mismatch:
 
-- preflight rebinding still anchors selection on stale saved simulated hints,
-  not the saved measured background point,
-- runtime source rebinding still prefers stale refined-sim hints ahead of the
-  measured background display point,
-- `new4_preflight_report.json` already binds 7 of 7 entries with 0 branch
-  mismatches, but fails because the distance gate is scoring the wrong anchor
-  and runtime dataset resolution still reports 0 resolved source pairs.
+- manual caked selection already records exact caked `(2theta, phi)` through
+  `native_detector_coords_to_caked_display_coords(...)`,
+- optimizer residual code historically mixed in analytic
+  `_detector_pixels_to_fit_space()` conversion,
+- good correspondence can therefore coexist with wrong geometric-fit residual
+  endpoints unless measured and simulated residual rows prove
+  `dataset_fit_space_projector` provenance.
 
-Current live-GUI blocker under verification is no longer correspondence rule
-selection. It is source-cache versus caked-view preflight gating and
-observability after `[geometry-fit] preflight: building source cache for
-background 1`.
+Current live-GUI blocker under verification is fit-space provenance, not source
+rebinding. The canonical `new4` run must show endpoint-specific projection
+diagnostics for every manual caked residual row and must report
+`exact_fit_space_projector_available == true`.
 
-Next action: validate real `new4` GUI run now that source-row readiness,
-`source_cache_build_ready`, and caked-view `ready` / `failed` / `timeout`
-signals are split into separate non-gating stages.
+Next action: keep correspondence fixed, validate projector provenance on manual
+caked residual rows, and classify any remaining `new4` failures as fit-space
+projection failure, optimizer quality failure, or missing local
+fixture/configuration.
 
 The older `new2.json`, `new3.json`, `new2_fresh_all.json`, and
 `new3_fresh_all.json` artifacts are retired as live acceptance gates. They may
@@ -200,6 +212,95 @@ aliases while downstream consumers migrate.
 `retained_start_safe_fallback` is not a fit-quality pass by default. It is only
 acceptable when the raw-detector candidate ledger proves the retained start is
 the best valid no-op optimum instead of a masked timeout or degraded solve.
+
+## Stop criteria for #249
+
+- Focused correspondence tests pass.
+- Runtime/debug parity tests pass.
+- Frame-safety and tie/duplicate tests pass.
+- Non-gating source-cache/caked-view tests pass.
+- Logged-cache `params_mismatch` is fast by construction: meta/signature
+  rejection before heavy hit-table load.
+- Geometry-fit preflight uses `manual_geometry_targeted` mode when saved manual
+  geometry picks exist.
+- Geometry-fit preflight collects required branch-group keys before
+  source-cache rebuild.
+- Geometry-fit preflight passes required branch-group keys to the targeted
+  source-generation path.
+- If targeted fresh simulation is supported, only required branch groups are
+  simulated.
+- If cached full data already exists, preflight may filter it, but must not
+  reproject or rescore unrelated rows.
+- Uncached full fresh simulation fallback is diagnosed and does not pass the
+  targeted performance gate.
+- Repeated unchanged preflight reuses targeted projected cache and does not
+  fresh-simulate, rebuild full source rows, or project the full source table.
+- `new4` preflight reports `7/7` bound, zero missing, zero branch mismatch,
+  `background_distance_gate_ok=true`, `runtime_prepare_ok=true`,
+  `fresh_export_ok=true`, `resolved_source_pair_count=7`, and
+  `targeted_performance_gate.ok=true`.
+- Manual caked residual rows report
+  `simulated_fit_space_source == "dataset_fit_space_projector"`.
+- Manual caked measured rows with known detector/native frame and no explicit
+  override report
+  `measured_fit_space_source == "dataset_fit_space_projector"`.
+- `analytic_detector_fit_space` is absent from exact-projector manual caked
+  rows.
+- Canonical `new4` baseline reports
+  `exact_fit_space_projector_available == true`.
+- `new4` baseline reports `7` matched fixed pairs, zero missing fixed pairs,
+  zero branch mismatch, no `No matched peak pairs were available` rejection,
+  `after_rms_px <= before_rms_px + 0.25`, and
+  `after_max_error_px <= before_max_error_px + 1.0`.
+- GUI logs reach `source_cache_build_ready` and do not block that event on
+  caked-view work.
+
+## Targeted preflight stop criteria
+
+- Geometry-fit preflight source generation, expansion, projection, and
+  background-distance scoring are limited to the branch groups required by the
+  saved manual geometry picks.
+- The targeted projected source-row cache is keyed by
+  `required_hkl_branch_keys_digest`, not by measured click coordinates.
+- Moving only the saved measured background point changes the manual-target
+  scoring digest and rescoring work, but does not force a targeted source-row
+  rebuild or reprojection.
+- `required_branch_group_key` uses the richest stable identity available:
+  normalized HKL, `source_branch_index` when present, and `q_group_key` /
+  `source_q_group_key` / `branch_group_key` when available.
+- Canonical `new4` pairs must not degrade to
+  `branch_constraint_status == "unconstrained_missing_branch"`.
+- `candidate_rows_scored_for_background_distance` contains only required branch
+  groups.
+- `unrelated_projected_row_count_for_rebinding == 0`.
+- `unrelated_scored_row_count_for_rebinding == 0`.
+- `full_source_rows_built_for_rebinding == false`.
+- `full_source_rows_projected_for_rebinding == false`.
+
+## Red flags
+
+- Candidate distances in hundreds or thousands of pixels.
+- Internal use of `candidate_distance_*` instead of `background_distance_*`.
+- `resolved_source_pair_count == 0`.
+- Runtime/debug selected candidates disagree.
+- `params_mismatch` takes seconds or minutes.
+- Fresh simulation runs on unchanged repeated preflight.
+- Full-table source-row build or projection runs on unchanged repeated
+  preflight.
+- `source_rows_projected_for_rebinding` is approximately equal to
+  `total_source_rows_available` on unchanged targeted preflight.
+- `candidate_rows_scored_for_background_distance` includes unrelated HKL or
+  branch rows.
+- `source_cache_build_ready` waits for caked-view work.
+- `targeted_simulation_fallback_reason ==
+  "simulator_filter_not_supported"` during an uncached fresh preflight.
+- Full `733181`-row source build or projection occurs during unchanged targeted
+  geometry-fit preflight.
+- Baseline rejects with
+  `No matched peak pairs were available for the fitted solution.`
+
+Once all stop criteria pass, stop changing fitter or rebinding logic. Future
+changes require a newly failing test or a measured performance regression.
 
 ## Out of scope for this pass
 

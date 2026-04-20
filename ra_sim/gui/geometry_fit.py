@@ -101,6 +101,81 @@ def _geometry_fit_detector_shape_2d(
     return detector_shape
 
 
+def _fit_detector_coords_to_native_detector_coords(
+    detector_col: float,
+    detector_row: float,
+    *,
+    backend_shape: Sequence[object] | None = None,
+    orientation_choice: Mapping[str, object] | None = None,
+    native_mapper: Callable[..., tuple[float | None, float | None]] | None = None,
+    native_shape: Sequence[object] | None = None,
+) -> tuple[float | None, float | None]:
+    """Convert fit/oriented detector coords back into native detector coords."""
+
+    try:
+        backend_col = float(detector_col)
+        backend_row = float(detector_row)
+    except Exception:
+        return None, None
+    if not (np.isfinite(backend_col) and np.isfinite(backend_row)):
+        return None, None
+
+    backend_shape_2d = _geometry_fit_detector_shape_2d(backend_shape)
+    if backend_shape_2d is not None:
+        try:
+            backend_points = gui_geometry_overlay.inverse_transform_points_orientation(
+                [(float(detector_col), float(detector_row))],
+                tuple(backend_shape_2d),
+                orientation_choice or {},
+            )
+        except Exception:
+            return None, None
+        if not backend_points:
+            return None, None
+        try:
+            backend_col = float(backend_points[0][0])
+            backend_row = float(backend_points[0][1])
+        except Exception:
+            return None, None
+        if not (np.isfinite(backend_col) and np.isfinite(backend_row)):
+            return None, None
+
+    if callable(native_mapper):
+        try:
+            native_point = native_mapper(
+                float(backend_col),
+                float(backend_row),
+                native_shape,
+            )
+        except TypeError:
+            try:
+                native_point = native_mapper(
+                    float(backend_col),
+                    float(backend_row),
+                )
+            except Exception:
+                native_point = None
+        except Exception:
+            native_point = None
+        if not (
+            isinstance(native_point, tuple)
+            and len(native_point) >= 2
+            and native_point[0] is not None
+            and native_point[1] is not None
+        ):
+            return None, None
+        try:
+            native_col = float(native_point[0])
+            native_row = float(native_point[1])
+        except Exception:
+            return None, None
+        if not (np.isfinite(native_col) and np.isfinite(native_row)):
+            return None, None
+        return float(native_col), float(native_row)
+
+    return float(backend_col), float(backend_row)
+
+
 def _geometry_fit_axes_match(
     lhs: object,
     rhs: object,
@@ -1128,6 +1203,342 @@ def _geometry_fit_filter_branch_candidates(
     return candidate_pool
 
 
+def _geometry_fit_group_identity(
+    entry: Mapping[str, object] | None,
+) -> object | None:
+    if not isinstance(entry, Mapping):
+        return None
+    for key in (
+        "branch_group_key",
+        "source_q_group_key",
+        "q_group_key",
+    ):
+        value = entry.get(key)
+        if isinstance(value, np.ndarray):
+            try:
+                value = value.tolist()
+            except Exception:
+                value = None
+        if isinstance(value, list):
+            value = tuple(value)
+        if value is not None:
+            return value
+    return None
+
+
+def _geometry_fit_branch_constraint_status(
+    entry: Mapping[str, object] | None,
+) -> str:
+    if not isinstance(entry, Mapping):
+        return "missing_required_branch_identity"
+    branch_idx = _geometry_fit_source_branch_index(entry)
+    group_identity = _geometry_fit_group_identity(entry)
+    if branch_idx in {0, 1}:
+        return "constrained"
+    if group_identity is not None:
+        return "recovered_from_q_group"
+    for key in (
+        "source_reflection_index",
+        "source_peak_index",
+        "source_row_index",
+        "source_table_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+    ):
+        if entry.get(key) is not None:
+            return "missing_required_branch_identity"
+    return "unconstrained_missing_branch"
+
+
+def _geometry_fit_required_branch_group_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[tuple[int, int, int], int | None, object | None] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    normalized_hkl = _geometry_fit_normalized_hkl(entry.get("hkl"))
+    if normalized_hkl is None:
+        return None
+    branch_idx = _geometry_fit_source_branch_index(entry)
+    normalized_branch = int(branch_idx) if branch_idx in {0, 1} else None
+    return (
+        normalized_hkl,
+        normalized_branch,
+        _geometry_fit_group_identity(entry),
+    )
+
+
+def _geometry_fit_required_branch_group_keys(
+    required_manual_fit_targets: Sequence[Mapping[str, object]] | None,
+) -> list[tuple[tuple[int, int, int], int | None, object | None]]:
+    seen: set[tuple[tuple[int, int, int], int | None, object | None]] = set()
+    ordered: list[tuple[tuple[int, int, int], int | None, object | None]] = []
+    for raw_target in required_manual_fit_targets or ():
+        if not isinstance(raw_target, Mapping):
+            continue
+        key = raw_target.get("required_branch_group_key")
+        if not (
+            isinstance(key, (list, tuple))
+            and len(key) >= 3
+            and isinstance(key[0], (list, tuple, np.ndarray))
+        ):
+            key = _geometry_fit_required_branch_group_key(raw_target)
+        if key is None:
+            continue
+        normalized_key = (
+            tuple(int(v) for v in tuple(key[0])[:3]),
+            (
+                int(key[1])
+                if key[1] is not None and int(key[1]) in {0, 1}
+                else None
+            ),
+            key[2],
+        )
+        if normalized_key in seen:
+            continue
+        seen.add(normalized_key)
+        ordered.append(normalized_key)
+    return ordered
+
+
+def _geometry_fit_digest_payload(value: object) -> str:
+    try:
+        canonical = json.dumps(
+            _geometry_fit_cache_jsonable(value),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except Exception:
+        canonical = repr(value)
+    hasher = hashlib.blake2b(digest_size=16)
+    hasher.update(canonical.encode("utf-8", "backslashreplace"))
+    return str(hasher.hexdigest())
+
+
+def _geometry_fit_required_branch_group_keys_digest(
+    required_branch_group_keys: Sequence[object] | None,
+    *,
+    background_index: int,
+    requested_signature: object = None,
+    requested_signature_summary: object = None,
+    preflight_mode: str = "full",
+) -> str:
+    return _geometry_fit_digest_payload(
+        {
+            "background_index": int(background_index),
+            "preflight_mode": str(preflight_mode or "full"),
+            "requested_signature": _geometry_fit_cache_jsonable(requested_signature),
+            "requested_signature_summary": _geometry_fit_cache_jsonable(
+                requested_signature_summary
+            ),
+            "required_branch_group_keys": list(required_branch_group_keys or ()),
+        }
+    )
+
+
+def _geometry_fit_manual_target_scoring_digest(
+    required_manual_fit_targets: Sequence[Mapping[str, object]] | None,
+) -> str:
+    scoring_targets: list[dict[str, object]] = []
+    for raw_target in required_manual_fit_targets or ():
+        if not isinstance(raw_target, Mapping):
+            continue
+        scoring_targets.append(
+            {
+                "pair_id": raw_target.get("pair_id"),
+                "overlay_match_index": raw_target.get("overlay_match_index"),
+                "saved_background_current_view_point": raw_target.get(
+                    "saved_background_current_view_point"
+                ),
+                "saved_background_current_view_frame": raw_target.get(
+                    "saved_background_current_view_frame"
+                ),
+            }
+        )
+    return _geometry_fit_digest_payload(scoring_targets)
+
+
+def _entry_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    saved_point = entry.get("saved_background_current_view_point")
+    if isinstance(saved_point, (list, tuple, np.ndarray)) and len(saved_point) >= 2:
+        try:
+            saved_col = float(saved_point[0])
+            saved_row = float(saved_point[1])
+        except Exception:
+            saved_col = float("nan")
+            saved_row = float("nan")
+        if np.isfinite(saved_col) and np.isfinite(saved_row):
+            return float(saved_col), float(saved_row)
+    for key_x, key_y in (
+        ("display_col", "display_row"),
+        ("x", "y"),
+        ("raw_x", "raw_y"),
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+    ):
+        try:
+            col = float(entry.get(key_x, np.nan))
+            row = float(entry.get(key_y, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(col) and np.isfinite(row):
+            return float(col), float(row)
+    return None
+
+
+def _background_current_view_frame(
+    entry: Mapping[str, object] | None,
+) -> str | None:
+    if not isinstance(entry, Mapping):
+        return None
+    explicit_frame = entry.get("saved_background_current_view_frame")
+    if isinstance(explicit_frame, str) and explicit_frame.strip():
+        return str(explicit_frame)
+    has_caked_point = any(
+        _finite is not None
+        for _finite in (
+            _entry_display_point(
+                {
+                    "saved_background_current_view_point": (
+                        entry.get("caked_x"),
+                        entry.get("caked_y"),
+                    )
+                }
+            ),
+            _entry_display_point(
+                {
+                    "saved_background_current_view_point": (
+                        entry.get("raw_caked_x"),
+                        entry.get("raw_caked_y"),
+                    )
+                }
+            ),
+        )
+    )
+    if has_caked_point:
+        return "caked_display"
+    return "current_view_display" if _entry_display_point(entry) is not None else None
+
+
+def collect_geometry_fit_required_manual_fit_targets(
+    required_pairs: Sequence[Mapping[str, object]] | None,
+    *,
+    background_index: int,
+) -> list[dict[str, object]]:
+    targets: list[dict[str, object]] = []
+    for fallback_index, raw_entry in enumerate(required_pairs or ()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        required_branch_group_key = _geometry_fit_required_branch_group_key(entry)
+        target = {
+            "background_index": int(background_index),
+            "pair_id": str(
+                entry.get("pair_id")
+                or f"bg{int(background_index)}:pair{int(fallback_index)}"
+            ),
+            "overlay_match_index": _geometry_fit_coerce_nonnegative_index(
+                entry.get("overlay_match_index")
+            ),
+            "normalized_hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
+            "source_branch_index": _geometry_fit_source_branch_index(entry),
+            "q_group_key": _geometry_fit_group_identity(entry),
+            "saved_background_current_view_point": _entry_display_point(entry),
+            "saved_background_current_view_frame": _background_current_view_frame(entry),
+            "required_branch_group_key": required_branch_group_key,
+            "branch_constraint_status": _geometry_fit_branch_constraint_status(entry),
+            "branch_unconstrained": (
+                _geometry_fit_branch_constraint_status(entry)
+                == "unconstrained_missing_branch"
+            ),
+        }
+        targets.append(target)
+    return targets
+
+
+def _geometry_fit_entry_matches_required_branch_group_key(
+    entry: Mapping[str, object] | None,
+    required_key: tuple[tuple[int, int, int], int | None, object | None],
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    entry_hkl = _geometry_fit_normalized_hkl(entry.get("hkl"))
+    if entry_hkl is None or tuple(entry_hkl) != tuple(required_key[0]):
+        return False
+    required_group_identity = required_key[2]
+    if required_group_identity is not None:
+        if _geometry_fit_group_identity(entry) != required_group_identity:
+            return False
+    required_branch = required_key[1]
+    if required_branch is None:
+        return True
+    entry_branch = _geometry_fit_source_branch_index(entry)
+    return entry_branch is not None and int(entry_branch) == int(required_branch)
+
+
+def _geometry_fit_filter_entries_for_required_branch_groups(
+    entries: Sequence[object] | None,
+    required_branch_group_keys: Sequence[
+        tuple[tuple[int, int, int], int | None, object | None]
+    ]
+    | None,
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, int],
+    list[tuple[tuple[int, int, int], int | None, object | None]],
+]:
+    copied_entries = [
+        dict(entry)
+        for entry in (entries or ())
+        if isinstance(entry, Mapping)
+    ]
+    required_keys = list(required_branch_group_keys or ())
+    if not copied_entries or not required_keys:
+        matched_keys = [
+            _geometry_fit_required_branch_group_key(entry)
+            for entry in copied_entries
+            if _geometry_fit_required_branch_group_key(entry) is not None
+        ]
+        return copied_entries, {
+            "total_count": int(len(copied_entries)),
+            "after_hkl_filter_count": int(len(copied_entries)),
+            "after_branch_filter_count": int(len(copied_entries)),
+            "unrelated_count": 0,
+        }, [key for key in matched_keys if key is not None]
+
+    required_hkls = {tuple(key[0]) for key in required_keys}
+    after_hkl_filter = [
+        dict(entry)
+        for entry in copied_entries
+        if _geometry_fit_normalized_hkl(entry.get("hkl")) in required_hkls
+    ]
+    after_branch_filter = [
+        dict(entry)
+        for entry in after_hkl_filter
+        if any(
+            _geometry_fit_entry_matches_required_branch_group_key(entry, required_key)
+            for required_key in required_keys
+        )
+    ]
+    matched_keys = [
+        key
+        for key in (
+            _geometry_fit_required_branch_group_key(entry)
+            for entry in after_branch_filter
+        )
+        if key is not None
+    ]
+    return after_branch_filter, {
+        "total_count": int(len(copied_entries)),
+        "after_hkl_filter_count": int(len(after_hkl_filter)),
+        "after_branch_filter_count": int(len(after_branch_filter)),
+        "unrelated_count": max(0, int(len(copied_entries) - len(after_branch_filter))),
+    }, matched_keys
+
+
 def _geometry_fit_is_canonical_live_source_entry(
     entry: Mapping[str, object] | None,
 ) -> tuple[bool, str | None]:
@@ -1608,6 +2019,10 @@ def rebuild_geometry_fit_source_rows(
     build_live_rows: Callable[[], object] | None,
     get_memory_intersection_cache: Callable[[], Sequence[object]] | None,
     memory_cache_signature: object | None = None,
+    load_logged_intersection_cache_metadata: (
+        Callable[[], Mapping[str, object] | None]
+        | None
+    ) = None,
     load_logged_intersection_cache: Callable[
         [],
         tuple[Sequence[object], Mapping[str, object] | None],
@@ -1615,7 +2030,7 @@ def rebuild_geometry_fit_source_rows(
     | None,
     logged_cache_matches_params: Callable[
         [Mapping[str, object] | None, Mapping[str, object]],
-        bool,
+        bool | Mapping[str, object],
     ]
     | None,
     build_source_rows_from_hit_tables: Callable[
@@ -1627,16 +2042,27 @@ def rebuild_geometry_fit_source_rows(
             Sequence[int] | None,
         ],
     ],
-    simulate_hit_tables: Callable[[Mapping[str, object]], Sequence[object]] | None,
+    simulate_hit_tables: Callable[..., Sequence[object]] | None,
     last_runtime_simulation_diagnostics: (
         Callable[[], Mapping[str, object]]
         | None
     ) = None,
     project_rows: Callable[[Sequence[object] | None], Sequence[object]] | None = None,
     required_pairs: Sequence[Mapping[str, object]] | None = None,
+    required_branch_group_keys: Sequence[
+        tuple[tuple[int, int, int], int | None, object | None]
+    ]
+    | None = None,
+    required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+    preflight_mode: str = "full",
     live_cache_inventory: Mapping[str, object]
     | Callable[[], Mapping[str, object]]
     | None = None,
+    get_targeted_projected_cache: Callable[[str], Mapping[str, object] | None] | None = None,
+    store_targeted_projected_cache: (
+        Callable[[str, Mapping[str, object]], None]
+        | None
+    ) = None,
     stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitSourceRowRebuildResult:
     """Rebuild source rows without mutating runtime state."""
@@ -1649,12 +2075,76 @@ def rebuild_geometry_fit_source_rows(
         else f"background {int(background_idx) + 1}"
     )
     normalized_params = dict(params_local or {})
+    normalized_preflight_mode = str(preflight_mode or "full").strip().lower() or "full"
+    collected_required_manual_fit_targets = [
+        dict(entry)
+        for entry in (
+            required_manual_fit_targets
+            if required_manual_fit_targets is not None
+            else collect_geometry_fit_required_manual_fit_targets(
+                required_pairs,
+                background_index=int(background_idx),
+            )
+        )
+        if isinstance(entry, Mapping)
+    ]
+    collected_required_branch_group_keys = list(
+        required_branch_group_keys
+        if required_branch_group_keys is not None
+        else _geometry_fit_required_branch_group_keys(
+            collected_required_manual_fit_targets
+        )
+    )
+    targeted_preflight_enabled = bool(
+        normalized_preflight_mode == "manual_geometry_targeted"
+        and collected_required_branch_group_keys
+    )
+    required_branch_group_keys_digest = _geometry_fit_required_branch_group_keys_digest(
+        collected_required_branch_group_keys,
+        background_index=int(background_idx),
+        requested_signature=requested_signature,
+        requested_signature_summary=requested_signature_summary,
+        preflight_mode=normalized_preflight_mode,
+    )
+    manual_target_scoring_digest = _geometry_fit_manual_target_scoring_digest(
+        collected_required_manual_fit_targets
+    )
     rebuild_attempts: list[str] = []
     live_cache_validation: dict[str, object] | None = None
     live_runtime_cache_metadata: dict[str, object] = {}
     rebuild_started_at = perf_counter()
     stage_callback_failure_count = 0
     stage_callback_last_failed_stage: str | None = None
+    targeted_runtime_flags: dict[str, object] = {
+        "preflight_mode": normalized_preflight_mode,
+        "targeted_preflight_enabled": bool(targeted_preflight_enabled),
+        "required_manual_pair_count": int(len(collected_required_manual_fit_targets)),
+        "required_hkl_branch_group_count": int(len(collected_required_branch_group_keys)),
+        "required_hkl_branch_keys_digest": str(required_branch_group_keys_digest),
+        "manual_target_scoring_digest": str(manual_target_scoring_digest),
+        "targeted_simulation_supported": False,
+        "targeted_simulation_used": False,
+        "targeted_simulation_fallback_reason": None,
+        "targeted_cache_hit": False,
+        "cache_source": None,
+        "total_hit_tables_available": 0,
+        "hit_tables_considered_for_rebinding": 0,
+        "hit_tables_expanded_for_rebinding": 0,
+        "total_source_rows_available": 0,
+        "source_rows_considered_for_rebinding": 0,
+        "source_rows_projected_for_rebinding": 0,
+        "candidate_rows_after_hkl_filter": 0,
+        "candidate_rows_after_branch_filter": 0,
+        "candidate_rows_scored_for_background_distance": 0,
+        "unrelated_projected_row_count_for_rebinding": 0,
+        "unrelated_scored_row_count_for_rebinding": 0,
+        "full_source_rows_built_for_rebinding": False,
+        "full_source_rows_projected_for_rebinding": False,
+        "full_fresh_simulation_fallback_used": False,
+        "required_manual_fit_targets": copy.deepcopy(
+            collected_required_manual_fit_targets
+        ),
+    }
 
     def _emit_rebuild_stage(
         stage: str,
@@ -1681,10 +2171,166 @@ def rebuild_geometry_fit_source_rows(
             stage_callback_failure_count += 1
             stage_callback_last_failed_stage = str(stage)
 
+    def _targeted_gate_payload() -> dict[str, object]:
+        payload = dict(targeted_runtime_flags)
+        payload["preflight_mode"] = normalized_preflight_mode
+        ok = bool(
+            payload.get("targeted_preflight_enabled", False)
+            and str(payload.get("preflight_mode", "")) == "manual_geometry_targeted"
+            and int(payload.get("unrelated_projected_row_count_for_rebinding", 0) or 0)
+            == 0
+            and int(payload.get("unrelated_scored_row_count_for_rebinding", 0) or 0)
+            == 0
+            and not bool(payload.get("full_source_rows_built_for_rebinding", False))
+            and not bool(payload.get("full_source_rows_projected_for_rebinding", False))
+            and (
+                bool(payload.get("targeted_cache_hit", False))
+                or bool(payload.get("targeted_simulation_used", False))
+            )
+        )
+        if bool(payload.get("full_fresh_simulation_fallback_used", False)):
+            ok = False
+        if (
+            str(payload.get("targeted_simulation_fallback_reason") or "")
+            == "simulator_filter_not_supported"
+            and not bool(payload.get("targeted_cache_hit", False))
+        ):
+            ok = False
+        payload["ok"] = bool(ok)
+        return payload
+
+    def _update_targeted_runtime_flags(**fields: object) -> None:
+        for key, value in fields.items():
+            targeted_runtime_flags[str(key)] = copy.deepcopy(value)
+
+    def _emit_target_collection_events() -> None:
+        if not targeted_preflight_enabled:
+            return
+        _emit_rebuild_stage(
+            "source_cache_target_collection_start",
+            preflight_mode=normalized_preflight_mode,
+            required_pair_count=int(len(collected_required_manual_fit_targets)),
+        )
+        _emit_rebuild_stage(
+            "source_cache_target_collection_ready",
+            preflight_mode=normalized_preflight_mode,
+            targeted_preflight_enabled=True,
+            required_pair_count=int(len(collected_required_manual_fit_targets)),
+            required_hkl_branch_group_count=int(
+                len(collected_required_branch_group_keys)
+            ),
+            required_hkl_branch_keys_digest=str(required_branch_group_keys_digest),
+        )
+
+    def _call_with_optional_keywords(
+        callback: Callable[..., object] | None,
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[object, bool]:
+        if not callable(callback):
+            return None, False
+        if not kwargs:
+            return callback(*args), True
+        try:
+            signature = inspect.signature(callback)
+        except Exception:
+            signature = None
+        accepted_kwargs = dict(kwargs)
+        if signature is not None:
+            has_var_keyword = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+            if not has_var_keyword:
+                accepted_kwargs = {
+                    key: value
+                    for key, value in kwargs.items()
+                    if key in signature.parameters
+                }
+        try:
+            return callback(*args, **accepted_kwargs), bool(accepted_kwargs)
+        except TypeError as exc:
+            error_text = str(exc)
+            if kwargs and (
+                "unexpected keyword" in error_text
+                or "positional argument" in error_text
+                or "got an unexpected keyword" in error_text
+            ):
+                return callback(*args), False
+            raise
+
+    def _resolve_logged_cache_match_payload(
+        metadata_local: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        payload: dict[str, object]
+        if callable(logged_cache_matches_params):
+            raw_payload = logged_cache_matches_params(metadata_local, normalized_params)
+            if isinstance(raw_payload, Mapping):
+                payload = dict(raw_payload)
+            else:
+                payload = {"matches": bool(raw_payload)}
+        else:
+            payload = {"matches": False}
+        payload.setdefault("matches", False)
+        payload.setdefault("heavy_hit_table_load_attempted", False)
+        return payload
+
+    def _filter_rows_for_rebinding(
+        raw_rows: Sequence[object] | None,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        copied_rows = _copy_rows(raw_rows)
+        filtered_rows, counts, matched_keys = (
+            _geometry_fit_filter_entries_for_required_branch_groups(
+                copied_rows,
+                collected_required_branch_group_keys,
+            )
+            if targeted_preflight_enabled
+            else (
+                copied_rows,
+                {
+                    "total_count": int(len(copied_rows)),
+                    "after_hkl_filter_count": int(len(copied_rows)),
+                    "after_branch_filter_count": int(len(copied_rows)),
+                    "unrelated_count": 0,
+                },
+                [
+                    key
+                    for key in (
+                        _geometry_fit_required_branch_group_key(entry)
+                        for entry in copied_rows
+                    )
+                    if key is not None
+                ],
+            )
+        )
+        diagnostics_local = {
+            "total_source_rows_available": int(counts.get("total_count", 0) or 0),
+            "source_rows_considered_for_rebinding": int(
+                counts.get("total_count", 0) or 0
+            ),
+            "candidate_rows_after_hkl_filter": int(
+                counts.get("after_hkl_filter_count", 0) or 0
+            ),
+            "candidate_rows_after_branch_filter": int(
+                counts.get("after_branch_filter_count", 0) or 0
+            ),
+            "candidate_rows_scored_for_background_distance": int(
+                counts.get("after_branch_filter_count", 0) or 0
+            ),
+            "unrelated_scored_row_count_for_rebinding": int(
+                counts.get("unrelated_count", 0) or 0
+            ),
+            "required_branch_group_keys_seen": copy.deepcopy(list(matched_keys)),
+        }
+        return filtered_rows, diagnostics_local
+
     def _finalize_diagnostics(
         diagnostics_local: Mapping[str, object] | None,
     ) -> dict[str, object]:
         finalized = dict(diagnostics_local or {})
+        finalized.update(copy.deepcopy(targeted_runtime_flags))
+        finalized["targeted_performance_gate"] = _targeted_gate_payload()
         if stage_callback_failure_count > 0:
             finalized["stage_callback_failure_count"] = int(
                 stage_callback_failure_count
@@ -1769,11 +2415,12 @@ def rebuild_geometry_fit_source_rows(
         return merged
 
     def _project_copied_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
+        row_count = int(len(raw_rows or ()))
         project_started_at = perf_counter()
         _emit_rebuild_stage(
             "source_cache_project_rows_start",
             cache_source="projection",
-            row_count=int(len(raw_rows or ())),
+            row_count=int(row_count),
         )
         projected_rows = raw_rows
         project_status = "projected"
@@ -1784,6 +2431,12 @@ def rebuild_geometry_fit_source_rows(
                 projected_rows = raw_rows
                 project_status = f"project_rows_exception:{type(exc).__name__}"
         copied_projected_rows = _copy_rows(projected_rows)
+        if targeted_preflight_enabled:
+            _update_targeted_runtime_flags(
+                source_rows_projected_for_rebinding=int(len(copied_projected_rows)),
+                unrelated_projected_row_count_for_rebinding=0,
+                full_source_rows_projected_for_rebinding=False,
+            )
         _emit_rebuild_stage(
             "source_cache_project_rows_ready",
             stage_started_at=project_started_at,
@@ -1800,46 +2453,91 @@ def rebuild_geometry_fit_source_rows(
     ) -> tuple[
         Sequence[object],
         Sequence[object] | None,
-        Sequence[object] | None,
-        Sequence[int] | None,
-    ]:
+            Sequence[object] | None,
+            Sequence[int] | None,
+        ]:
+        build_kwargs: dict[str, object] = {}
+        build_used_targeted_filter = False
+        if targeted_preflight_enabled and collected_required_branch_group_keys:
+            build_kwargs["required_branch_group_keys"] = list(
+                collected_required_branch_group_keys
+            )
+            build_kwargs["required_manual_fit_targets"] = copy.deepcopy(
+                collected_required_manual_fit_targets
+            )
+            build_kwargs["preflight_mode"] = normalized_preflight_mode
         build_started_at = perf_counter()
         _emit_rebuild_stage(
-            "source_cache_build_source_rows_start",
+            (
+                "source_cache_targeted_source_rows_start"
+                if targeted_preflight_enabled
+                else "source_cache_build_source_rows_start"
+            ),
             cache_source=str(cache_source),
             hit_table_count=int(len(hit_tables_local or ())),
+            preflight_mode=normalized_preflight_mode,
         )
-        raw_result = build_source_rows_from_hit_tables(hit_tables_local)
+        raw_result, build_used_targeted_filter = _call_with_optional_keywords(
+            build_source_rows_from_hit_tables,
+            hit_tables_local,
+            **build_kwargs,
+        )
+        if targeted_preflight_enabled:
+            _update_targeted_runtime_flags(
+                total_hit_tables_available=int(len(hit_tables_local or ())),
+                hit_tables_considered_for_rebinding=int(len(hit_tables_local or ())),
+                hit_tables_expanded_for_rebinding=int(len(hit_tables_local or ())),
+                full_source_rows_built_for_rebinding=not bool(
+                    build_used_targeted_filter
+                ),
+            )
         rows_for_count: Sequence[object] | None = raw_result
         if isinstance(raw_result, tuple):
             if len(raw_result) == 4:
                 rows_for_count = raw_result[0]
                 _emit_rebuild_stage(
-                    "source_cache_build_source_rows_ready",
+                    (
+                        "source_cache_targeted_source_rows_ready"
+                        if targeted_preflight_enabled
+                        else "source_cache_build_source_rows_ready"
+                    ),
                     stage_started_at=build_started_at,
                     cache_source=str(cache_source),
                     hit_table_count=int(len(hit_tables_local or ())),
                     row_count=int(len(rows_for_count or ())),
+                    preflight_mode=normalized_preflight_mode,
                 )
                 return raw_result
             if len(raw_result) == 3:
                 rows, peak_table_lattice, returned_hit_tables = raw_result
                 _emit_rebuild_stage(
-                    "source_cache_build_source_rows_ready",
+                    (
+                        "source_cache_targeted_source_rows_ready"
+                        if targeted_preflight_enabled
+                        else "source_cache_build_source_rows_ready"
+                    ),
                     stage_started_at=build_started_at,
                     cache_source=str(cache_source),
                     hit_table_count=int(len(hit_tables_local or ())),
                     row_count=int(len(rows or ())),
+                    preflight_mode=normalized_preflight_mode,
                 )
                 return rows, peak_table_lattice, returned_hit_tables, None
         _emit_rebuild_stage(
-            "source_cache_build_source_rows_ready",
+            (
+                "source_cache_targeted_source_rows_ready"
+                if targeted_preflight_enabled
+                else "source_cache_build_source_rows_ready"
+            ),
             stage_started_at=build_started_at,
             cache_source=str(cache_source),
             hit_table_count=int(len(hit_tables_local or ())),
             row_count=int(len(rows_for_count or ())),
+            preflight_mode=normalized_preflight_mode,
         )
         return raw_result, None, None, None
+
+    _emit_target_collection_events()
 
     def _success_result(
         raw_rows: Sequence[object] | None,
@@ -1852,9 +2550,44 @@ def rebuild_geometry_fit_source_rows(
         metadata: Mapping[str, object] | None = None,
         runtime_simulation_diagnostics: Mapping[str, object] | None = None,
     ) -> GeometryFitSourceRowRebuildResult:
-        stored_rows = _copy_rows(raw_rows)
+        stored_rows, row_filter_diagnostics = _filter_rows_for_rebinding(raw_rows)
+        _update_targeted_runtime_flags(
+            **{
+                key: value
+                for key, value in row_filter_diagnostics.items()
+                if key in {
+                    "total_source_rows_available",
+                    "source_rows_considered_for_rebinding",
+                    "candidate_rows_after_hkl_filter",
+                    "candidate_rows_after_branch_filter",
+                    "candidate_rows_scored_for_background_distance",
+                    "unrelated_scored_row_count_for_rebinding",
+                }
+            }
+        )
         projected_rows = _project_copied_rows(stored_rows)
         cache_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        cache_metadata.setdefault(
+            "required_branch_group_keys_digest",
+            str(required_branch_group_keys_digest),
+        )
+        cache_metadata.setdefault(
+            "manual_target_scoring_digest",
+            str(manual_target_scoring_digest),
+        )
+        cache_metadata.setdefault(
+            "preflight_mode",
+            str(normalized_preflight_mode),
+        )
+        if targeted_preflight_enabled:
+            cache_metadata.setdefault(
+                "required_manual_fit_targets",
+                copy.deepcopy(collected_required_manual_fit_targets),
+            )
+            cache_metadata.setdefault(
+                "required_branch_group_keys",
+                copy.deepcopy(list(collected_required_branch_group_keys)),
+            )
         if live_runtime_cache_metadata:
             cache_metadata.setdefault(
                 "live_runtime_cache_metadata",
@@ -1883,6 +2616,37 @@ def rebuild_geometry_fit_source_rows(
                         "live_runtime_cache_dual_path_diff",
                         copy.deepcopy(list(dual_path_diff)),
                     )
+        if (
+            targeted_preflight_enabled
+            and callable(store_targeted_projected_cache)
+            and stored_rows
+        ):
+            try:
+                store_targeted_projected_cache(
+                    str(required_branch_group_keys_digest),
+                    {
+                        "background_index": int(background_idx),
+                        "requested_signature": _geometry_fit_cache_jsonable(
+                            requested_signature
+                        ),
+                        "requested_signature_summary": _geometry_fit_cache_jsonable(
+                            requested_signature_summary
+                        ),
+                        "required_branch_group_keys_digest": str(
+                            required_branch_group_keys_digest
+                        ),
+                        "manual_target_scoring_digest": str(
+                            manual_target_scoring_digest
+                        ),
+                        "preflight_mode": str(normalized_preflight_mode),
+                        "stored_rows": _copy_rows(stored_rows),
+                        "projected_rows": _copy_rows(projected_rows),
+                        "cache_source": str(rebuild_source),
+                        "diagnostics": copy.deepcopy(dict(targeted_runtime_flags)),
+                    },
+                )
+            except Exception:
+                pass
         diagnostics = _merge_runtime_simulation_diagnostics(
             {
                 "source": "source_snapshot",
@@ -1930,6 +2694,123 @@ def rebuild_geometry_fit_source_rows(
             metadata=cache_metadata,
         )
 
+    if targeted_preflight_enabled:
+        rebuild_attempts.append("targeted_projected_cache")
+        targeted_cache_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_targeted_projected_cache_start",
+            cache_source="targeted_projected_cache",
+            preflight_mode=normalized_preflight_mode,
+            required_hkl_branch_keys_digest=str(required_branch_group_keys_digest),
+        )
+        targeted_cache_payload: Mapping[str, object] | None = None
+        if callable(get_targeted_projected_cache):
+            try:
+                targeted_cache_payload = get_targeted_projected_cache(
+                    str(required_branch_group_keys_digest)
+                )
+            except Exception:
+                targeted_cache_payload = None
+        targeted_cache_rows: list[dict[str, object]] = []
+        if isinstance(targeted_cache_payload, Mapping):
+            requested_summary_matches = (
+                targeted_cache_payload.get("requested_signature_summary")
+                == requested_signature_summary
+            )
+            requested_signature_matches = (
+                targeted_cache_payload.get("requested_signature") == requested_signature
+                or requested_summary_matches
+            )
+            projected_payload = targeted_cache_payload.get("projected_rows")
+            stored_payload = targeted_cache_payload.get("stored_rows")
+            targeted_cache_rows = _copy_rows(projected_payload or stored_payload)
+            if requested_signature_matches and targeted_cache_rows:
+                _update_targeted_runtime_flags(
+                    targeted_cache_hit=True,
+                    cache_source="targeted_projected_cache",
+                    total_source_rows_available=int(len(targeted_cache_rows)),
+                    source_rows_considered_for_rebinding=int(len(targeted_cache_rows)),
+                    candidate_rows_after_hkl_filter=int(len(targeted_cache_rows)),
+                    candidate_rows_after_branch_filter=int(len(targeted_cache_rows)),
+                    candidate_rows_scored_for_background_distance=int(
+                        len(targeted_cache_rows)
+                    ),
+                    unrelated_scored_row_count_for_rebinding=0,
+                    source_rows_projected_for_rebinding=0,
+                    unrelated_projected_row_count_for_rebinding=0,
+                    full_source_rows_built_for_rebinding=False,
+                    full_source_rows_projected_for_rebinding=False,
+                )
+                _emit_rebuild_stage(
+                    "source_cache_targeted_projected_cache_ready",
+                    stage_started_at=targeted_cache_started_at,
+                    cache_source="targeted_projected_cache",
+                    preflight_mode=normalized_preflight_mode,
+                    targeted_cache_hit=True,
+                    row_count=int(len(targeted_cache_rows)),
+                )
+                diagnostics = _finalize_diagnostics(
+                    {
+                        "source": "source_snapshot",
+                        "cache_family": "source_snapshot",
+                        "action": "rebuild",
+                        "consumer": lookup_context,
+                        "status": "snapshot_hit",
+                        "background_index": int(background_idx),
+                        "background_label": resolved_background_label,
+                        "requested_signature": requested_signature,
+                        "requested_signature_summary": requested_signature_summary,
+                        "snapshot_signature": requested_signature,
+                        "stored_signature_summary": requested_signature_summary,
+                        "raw_peak_count": int(len(targeted_cache_rows)),
+                        "projected_peak_count": int(len(targeted_cache_rows)),
+                        "created_from": "targeted_projected_cache",
+                        "cache_source": "targeted_projected_cache",
+                        "rebuild_source": "targeted_projected_cache",
+                        "signature_match": True,
+                        "rebuild_attempts": list(rebuild_attempts),
+                        "cache_metadata": {
+                            "required_branch_group_keys_digest": str(
+                                required_branch_group_keys_digest
+                            ),
+                            "manual_target_scoring_digest": str(
+                                manual_target_scoring_digest
+                            ),
+                            "preflight_mode": str(normalized_preflight_mode),
+                        },
+                        "live_cache_inventory": _resolve_live_cache_inventory(),
+                    }
+                )
+                return GeometryFitSourceRowRebuildResult(
+                    background_index=int(background_idx),
+                    requested_signature=requested_signature,
+                    requested_signature_summary=requested_signature_summary,
+                    projected_rows=_copy_rows(targeted_cache_rows),
+                    stored_rows=_copy_rows(
+                        targeted_cache_payload.get("stored_rows") or targeted_cache_rows
+                    ),
+                    rebuild_source="targeted_projected_cache",
+                    rebuild_attempts=list(rebuild_attempts),
+                    diagnostics=diagnostics,
+                    metadata={
+                        "required_branch_group_keys_digest": str(
+                            required_branch_group_keys_digest
+                        ),
+                        "manual_target_scoring_digest": str(
+                            manual_target_scoring_digest
+                        ),
+                        "preflight_mode": str(normalized_preflight_mode),
+                    },
+                )
+        _emit_rebuild_stage(
+            "source_cache_targeted_projected_cache_miss",
+            stage_started_at=targeted_cache_started_at,
+            cache_source="targeted_projected_cache",
+            preflight_mode=normalized_preflight_mode,
+            targeted_cache_hit=False,
+            row_count=int(len(targeted_cache_rows)),
+        )
+
     if can_use_live_runtime_cache and callable(build_live_rows):
         rebuild_attempts.append("live_runtime_cache")
         validation_started_at = perf_counter()
@@ -1971,6 +2852,12 @@ def rebuild_geometry_fit_source_rows(
                 ),
             )
             if bool(live_cache_validation.get("valid", False)):
+                if targeted_preflight_enabled:
+                    _update_targeted_runtime_flags(
+                        targeted_cache_hit=True,
+                        cache_source="live_runtime_cache",
+                        full_source_rows_built_for_rebinding=False,
+                    )
                 _emit_rebuild_stage(
                     "source_cache_live_runtime_cache_accepted",
                     cache_source="live_runtime_cache",
@@ -2090,6 +2977,11 @@ def rebuild_geometry_fit_source_rows(
                 status="empty_cache",
             )
         if memory_rows:
+            if targeted_preflight_enabled:
+                _update_targeted_runtime_flags(
+                    targeted_cache_hit=True,
+                    cache_source="last_intersection_cache_memory",
+                )
             return _success_result(
                 memory_rows,
                 rebuild_source="last_intersection_cache_memory",
@@ -2105,78 +2997,220 @@ def rebuild_geometry_fit_source_rows(
         "source_cache_logged_intersection_cache_start",
         cache_source="last_intersection_cache_log",
     )
-    logged_intersection_cache: Sequence[object] = []
     logged_metadata: Mapping[str, object] | None = None
-    if callable(load_logged_intersection_cache):
+    metadata_only_logged_lookup = callable(load_logged_intersection_cache_metadata)
+    if callable(load_logged_intersection_cache_metadata):
         try:
-            logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
+            logged_metadata = load_logged_intersection_cache_metadata()
         except Exception:
-            logged_intersection_cache, logged_metadata = [], None
-    if (
-        logged_intersection_cache
-        and callable(logged_cache_matches_params)
-        and logged_cache_matches_params(logged_metadata, normalized_params)
-    ):
-        logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = _build_source_rows_result(
-            logged_intersection_cache,
-            cache_source="last_intersection_cache_log",
-        )
-        _emit_rebuild_stage(
-            "source_cache_logged_intersection_cache_ready",
-            stage_started_at=logged_cache_started_at,
-            cache_source="last_intersection_cache_log",
-            row_count=int(len(logged_rows)),
-            hit_table_count=int(len(logged_intersection_cache)),
-            status="ready",
-        )
-        if logged_rows:
-            return _success_result(
-                logged_rows,
-                rebuild_source="last_intersection_cache_log",
-                peak_table_lattice=logged_lattice,
-                hit_tables_local=logged_hit_tables,
-                source_reflection_indices=logged_source_reflection_indices,
-                intersection_cache_local=logged_intersection_cache,
-                metadata=logged_metadata,
-            )
-    else:
+            logged_metadata = None
+    logged_match_payload = _resolve_logged_cache_match_payload(logged_metadata)
+    if not bool(logged_match_payload.get("matches", False)):
         _emit_rebuild_stage(
             "source_cache_logged_intersection_cache_miss",
             stage_started_at=logged_cache_started_at,
             cache_source="last_intersection_cache_log",
             row_count=0,
-            hit_table_count=int(len(logged_intersection_cache or ())),
-            status=(
-                "params_mismatch"
-                if logged_intersection_cache
-                else "empty_cache"
+            hit_table_count=0,
+            status=str(
+                logged_match_payload.get("mismatch_reason")
+                or logged_match_payload.get("status")
+                or (
+                    "params_mismatch"
+                    if isinstance(logged_metadata, Mapping)
+                    else "empty_cache"
+                )
+            ),
+            expected_signature_digest=logged_match_payload.get(
+                "expected_signature_digest"
+            ),
+            actual_signature_digest=logged_match_payload.get(
+                "actual_signature_digest"
+            ),
+            mismatch_reason=logged_match_payload.get("mismatch_reason"),
+            heavy_hit_table_load_attempted=bool(
+                logged_match_payload.get("heavy_hit_table_load_attempted", False)
             ),
         )
+    else:
+        logged_intersection_cache: Sequence[object] = []
+        if callable(load_logged_intersection_cache):
+            try:
+                logged_intersection_cache, logged_metadata = (
+                    load_logged_intersection_cache()
+                )
+                logged_match_payload["heavy_hit_table_load_attempted"] = True
+            except Exception:
+                logged_intersection_cache, logged_metadata = [], logged_metadata
+        if logged_intersection_cache:
+            logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = _build_source_rows_result(
+                logged_intersection_cache,
+                cache_source="last_intersection_cache_log",
+            )
+            _emit_rebuild_stage(
+                "source_cache_logged_intersection_cache_ready",
+                stage_started_at=logged_cache_started_at,
+                cache_source="last_intersection_cache_log",
+                row_count=int(len(logged_rows)),
+                hit_table_count=int(len(logged_intersection_cache)),
+                status="ready",
+            )
+            if logged_rows:
+                if targeted_preflight_enabled:
+                    _update_targeted_runtime_flags(
+                        targeted_cache_hit=True,
+                        cache_source="last_intersection_cache_log",
+                    )
+                return _success_result(
+                    logged_rows,
+                    rebuild_source="last_intersection_cache_log",
+                    peak_table_lattice=logged_lattice,
+                    hit_tables_local=logged_hit_tables,
+                    source_reflection_indices=logged_source_reflection_indices,
+                    intersection_cache_local=logged_intersection_cache,
+                    metadata={
+                        **(
+                            dict(logged_metadata)
+                            if isinstance(logged_metadata, Mapping)
+                            else {}
+                        ),
+                        "expected_signature_digest": logged_match_payload.get(
+                            "expected_signature_digest"
+                        ),
+                        "actual_signature_digest": logged_match_payload.get(
+                            "actual_signature_digest"
+                        ),
+                    },
+                )
+        _emit_rebuild_stage(
+            "source_cache_logged_intersection_cache_miss",
+            stage_started_at=logged_cache_started_at,
+            cache_source="last_intersection_cache_log",
+            row_count=0,
+            hit_table_count=0,
+            status="empty_cache",
+            heavy_hit_table_load_attempted=bool(
+                logged_match_payload.get("heavy_hit_table_load_attempted", False)
+            ),
+        )
+    if (
+        not metadata_only_logged_lookup
+        and callable(load_logged_intersection_cache)
+        and not callable(load_logged_intersection_cache_metadata)
+    ):
+        logged_intersection_cache, logged_metadata = [], None
+        try:
+            logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
+        except Exception:
+            logged_intersection_cache, logged_metadata = [], None
+        if (
+            logged_intersection_cache
+            and callable(logged_cache_matches_params)
+            and bool(_resolve_logged_cache_match_payload(logged_metadata).get("matches", False))
+        ):
+            logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = _build_source_rows_result(
+                logged_intersection_cache,
+                cache_source="last_intersection_cache_log",
+            )
+            if logged_rows:
+                if targeted_preflight_enabled:
+                    _update_targeted_runtime_flags(
+                        targeted_cache_hit=True,
+                        cache_source="last_intersection_cache_log",
+                    )
+                return _success_result(
+                    logged_rows,
+                    rebuild_source="last_intersection_cache_log",
+                    peak_table_lattice=logged_lattice,
+                    hit_tables_local=logged_hit_tables,
+                    source_reflection_indices=logged_source_reflection_indices,
+                    intersection_cache_local=logged_intersection_cache,
+                    metadata=logged_metadata,
+                )
 
     rebuild_attempts.append("fresh_simulation")
     fresh_started_at = perf_counter()
+    fresh_stage_name = (
+        "source_cache_targeted_fresh_simulation_start"
+        if targeted_preflight_enabled
+        else "source_cache_fresh_simulation_start"
+    )
     _emit_rebuild_stage(
-        "source_cache_fresh_simulation_start",
+        fresh_stage_name,
         cache_source="fresh_simulation",
+        preflight_mode=normalized_preflight_mode,
     )
     fresh_hit_tables: Sequence[object] = []
     fresh_simulation_exception: Exception | None = None
+    targeted_simulation_used = False
+    targeted_simulation_supported = False
     if callable(simulate_hit_tables):
         try:
-            fresh_hit_tables = simulate_hit_tables(normalized_params)
+            if targeted_preflight_enabled and collected_required_branch_group_keys:
+                fresh_hit_tables, targeted_simulation_supported = _call_with_optional_keywords(
+                    simulate_hit_tables,
+                    normalized_params,
+                    required_branch_group_keys=list(collected_required_branch_group_keys),
+                    required_manual_fit_targets=copy.deepcopy(
+                        collected_required_manual_fit_targets
+                    ),
+                    preflight_mode=normalized_preflight_mode,
+                )
+                targeted_simulation_used = bool(targeted_simulation_supported)
+                if not targeted_simulation_used:
+                    _update_targeted_runtime_flags(
+                        targeted_simulation_supported=False,
+                        targeted_simulation_used=False,
+                        targeted_simulation_fallback_reason="simulator_filter_not_supported",
+                        full_fresh_simulation_fallback_used=True,
+                    )
+                    fallback_started_at = perf_counter()
+                    _emit_rebuild_stage(
+                        "source_cache_targeted_fresh_simulation_unsupported",
+                        cache_source="fresh_simulation",
+                        preflight_mode=normalized_preflight_mode,
+                        status="simulator_filter_not_supported",
+                    )
+                    _emit_rebuild_stage(
+                        "source_cache_full_simulation_fallback_start",
+                        cache_source="fresh_simulation",
+                        preflight_mode=normalized_preflight_mode,
+                    )
+                    fresh_hit_tables = simulate_hit_tables(normalized_params)
+                    _emit_rebuild_stage(
+                        "source_cache_full_simulation_fallback_ready",
+                        stage_started_at=fallback_started_at,
+                        cache_source="fresh_simulation",
+                        preflight_mode=normalized_preflight_mode,
+                        hit_table_count=int(len(fresh_hit_tables or ())),
+                    )
+                else:
+                    _update_targeted_runtime_flags(
+                        targeted_simulation_supported=True,
+                        targeted_simulation_used=True,
+                        cache_source="fresh_simulation",
+                    )
+            else:
+                fresh_hit_tables = simulate_hit_tables(normalized_params)
         except Exception as exc:
             fresh_simulation_exception = exc
             fresh_hit_tables = []
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
     _emit_rebuild_stage(
         (
-            "source_cache_fresh_simulation_failed"
+            "source_cache_targeted_fresh_simulation_failed"
+            if targeted_preflight_enabled and fresh_simulation_exception is not None
+            else "source_cache_targeted_fresh_simulation_ready"
+            if targeted_preflight_enabled
+            else "source_cache_fresh_simulation_failed"
             if fresh_simulation_exception is not None
             else "source_cache_fresh_simulation_ready"
         ),
         stage_started_at=fresh_started_at,
         cache_source="fresh_simulation",
         hit_table_count=int(len(fresh_hit_tables or ())),
+        targeted_simulation_supported=bool(targeted_simulation_supported),
+        targeted_simulation_used=bool(targeted_simulation_used),
         status=(
             f"exception:{type(fresh_simulation_exception).__name__}"
             if fresh_simulation_exception is not None
@@ -6770,70 +7804,6 @@ def build_geometry_manual_fit_dataset(
             np.asarray(native_background).shape[:2]
         )
 
-        def _fit_detector_coords_to_native_detector_coords(
-            detector_col: float,
-            detector_row: float,
-        ) -> tuple[float | None, float | None]:
-            backend_col = float(detector_col)
-            backend_row = float(detector_row)
-            if len(dynamic_reanchor_backend_shape) >= 2:
-                try:
-                    backend_points = (
-                        gui_geometry_overlay.inverse_transform_points_orientation(
-                        [(float(detector_col), float(detector_row))],
-                        tuple(dynamic_reanchor_backend_shape),
-                        orientation_choice,
-                    )
-                    )
-                except Exception:
-                    return None, None
-                if not backend_points:
-                    return None, None
-                try:
-                    backend_col = float(backend_points[0][0])
-                    backend_row = float(backend_points[0][1])
-                except Exception:
-                    return None, None
-            if not (np.isfinite(backend_col) and np.isfinite(backend_row)):
-                return None, None
-
-            native_mapper = (
-                manual_dataset_bindings.backend_detector_coords_to_native_detector_coords
-            )
-            if callable(native_mapper):
-                try:
-                    native_point = native_mapper(
-                        float(backend_col),
-                        float(backend_row),
-                        native_background.shape,
-                    )
-                except TypeError:
-                    try:
-                        native_point = native_mapper(
-                            float(backend_col),
-                            float(backend_row),
-                        )
-                    except Exception:
-                        native_point = None
-                except Exception:
-                    native_point = None
-                if (
-                    isinstance(native_point, tuple)
-                    and len(native_point) >= 2
-                    and native_point[0] is not None
-                    and native_point[1] is not None
-                ):
-                    try:
-                        native_col = float(native_point[0])
-                        native_row = float(native_point[1])
-                    except Exception:
-                        return None, None
-                    if np.isfinite(native_col) and np.isfinite(native_row):
-                        return float(native_col), float(native_row)
-                return None, None
-
-            return float(backend_col), float(backend_row)
-
         def _native_detector_coords_to_caked_display_coords(
             detector_col: float,
             detector_row: float,
@@ -6922,10 +7892,22 @@ def build_geometry_manual_fit_dataset(
             elif input_frame_key == "fit_detector":
                 native_points: list[tuple[float, float]] = []
                 for detector_col, detector_row in zip(col_arr, row_arr):
-                    native_point = _fit_detector_coords_to_native_detector_coords(
-                        float(detector_col),
-                        float(detector_row),
-                    )
+                    try:
+                        native_point = _fit_detector_coords_to_native_detector_coords(
+                            float(detector_col),
+                            float(detector_row),
+                            backend_shape=dynamic_reanchor_backend_shape,
+                            orientation_choice=orientation_choice,
+                            native_mapper=(
+                                manual_dataset_bindings.backend_detector_coords_to_native_detector_coords
+                            ),
+                            native_shape=native_background.shape,
+                        )
+                    except TypeError:
+                        native_point = _fit_detector_coords_to_native_detector_coords(
+                            float(detector_col),
+                            float(detector_row),
+                        )
                     if (
                         not isinstance(native_point, tuple)
                         or len(native_point) < 2
@@ -10163,6 +11145,7 @@ def _geometry_fit_trace_pair_record(
         "simulated_phi_deg",
         "measured_fit_space_source",
         "simulated_fit_space_source",
+        "fit_space_anchor_override",
         "fit_space_projector_kind",
         "cake_bundle_signature",
         "measured_native_frame_conversion_source",

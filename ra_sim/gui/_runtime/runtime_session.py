@@ -54,6 +54,7 @@ from ra_sim.utils.calculations import (
     IndexofRefraction,
     resolve_index_of_refraction,
     resolve_index_of_refraction_array,
+    source_branch_index_from_phi_deg,
 )
 from ra_sim.utils.parallel import (
     default_reserved_cpu_worker_count,
@@ -108,6 +109,7 @@ from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
     intersection_cache_to_hit_tables,
     load_most_recent_logged_intersection_cache,
+    load_most_recent_logged_intersection_cache_metadata,
     OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
     process_peaks_parallel,
@@ -117,10 +119,17 @@ from ra_sim.simulation.diffraction import (
 from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_DETECTOR_COL,
     CACHE_COL_DETECTOR_ROW,
+    CACHE_COL_H,
+    CACHE_COL_K,
     CACHE_COL_L,
+    CACHE_COL_PHI,
     CURRENT_CAKED_COL_PHI,
     CURRENT_CAKED_COL_TWO_THETA,
     CURRENT_DETECTOR_CACHE_WIDTH,
+    HIT_ROW_COL_H,
+    HIT_ROW_COL_K,
+    HIT_ROW_COL_L,
+    HIT_ROW_COL_PHI,
     LEGACY_CAKED_CACHE_WIDTH,
     LEGACY_CAKED_COL_PHI,
     LEGACY_CAKED_COL_TWO_THETA,
@@ -17840,18 +17849,177 @@ def _geometry_manual_build_source_rows_from_hit_tables(
     return raw_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices
 
 
+def _geometry_fit_targeted_projected_cache_store() -> dict[int, dict[str, dict[str, object]]]:
+    cache_store = getattr(
+        simulation_runtime_state,
+        "geometry_fit_targeted_projected_cache_by_background",
+        None,
+    )
+    if isinstance(cache_store, dict):
+        return cache_store
+    cache_store = {}
+    setattr(
+        simulation_runtime_state,
+        "geometry_fit_targeted_projected_cache_by_background",
+        cache_store,
+    )
+    return cache_store
+
+
+def _geometry_fit_store_targeted_projected_cache_entry(
+    *,
+    background_index: int,
+    key_digest: str,
+    payload: Mapping[str, object] | None,
+) -> None:
+    if not str(key_digest).strip() or not isinstance(payload, Mapping):
+        return
+    cache_store = _geometry_fit_targeted_projected_cache_store()
+    background_store = cache_store.setdefault(int(background_index), {})
+    background_store[str(key_digest)] = copy.deepcopy(dict(payload))
+
+
+def _geometry_fit_load_targeted_projected_cache_entry(
+    *,
+    background_index: int,
+    key_digest: str,
+) -> dict[str, object] | None:
+    cache_store = _geometry_fit_targeted_projected_cache_store()
+    background_store = cache_store.get(int(background_index))
+    if not isinstance(background_store, Mapping):
+        return None
+    payload = background_store.get(str(key_digest))
+    return copy.deepcopy(dict(payload)) if isinstance(payload, Mapping) else None
+
+
+def _geometry_fit_filter_hit_tables_for_required_branch_groups(
+    source_tables: Sequence[object] | None,
+    *,
+    required_branch_group_keys: Sequence[
+        tuple[tuple[int, int, int], int | None, object | None]
+    ]
+    | None,
+) -> tuple[list[object], dict[str, object]]:
+    copied_tables = list(source_tables or ())
+    if not copied_tables:
+        return [], {
+            "total_hit_tables_available": 0,
+            "hit_tables_considered_for_rebinding": 0,
+            "hit_tables_expanded_for_rebinding": 0,
+        }
+    required_keys = list(required_branch_group_keys or ())
+    if not required_keys:
+        return _copy_hit_tables(copied_tables), {
+            "total_hit_tables_available": int(len(copied_tables)),
+            "hit_tables_considered_for_rebinding": int(len(copied_tables)),
+            "hit_tables_expanded_for_rebinding": int(len(copied_tables)),
+        }
+
+    required_hkls = {tuple(key[0]) for key in required_keys}
+    filtered_tables: list[object] = []
+    considered_count = 0
+    expanded_count = 0
+
+    for table in copied_tables:
+        arr = np.asarray(table, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[0] <= 0:
+            continue
+        if is_intersection_cache_table(arr):
+            h_col, k_col, l_col, phi_col = (
+                CACHE_COL_H,
+                CACHE_COL_K,
+                CACHE_COL_L,
+                CACHE_COL_PHI,
+            )
+        else:
+            h_col, k_col, l_col, phi_col = (
+                HIT_ROW_COL_H,
+                HIT_ROW_COL_K,
+                HIT_ROW_COL_L,
+                HIT_ROW_COL_PHI,
+            )
+        if arr.shape[1] <= max(h_col, k_col, l_col, phi_col):
+            continue
+        try:
+            table_hkl = (
+                int(np.rint(float(arr[0, h_col]))),
+                int(np.rint(float(arr[0, k_col]))),
+                int(np.rint(float(arr[0, l_col]))),
+            )
+        except Exception:
+            continue
+        if table_hkl not in required_hkls:
+            continue
+        considered_count += 1
+        matching_keys = [
+            key for key in required_keys if tuple(key[0]) == tuple(table_hkl)
+        ]
+        if not matching_keys:
+            continue
+        allowed_branches = {
+            int(key[1]) for key in matching_keys if key[1] is not None
+        }
+        if not allowed_branches:
+            filtered_tables.append(arr.copy())
+            expanded_count += 1
+            continue
+        branch_mask = np.zeros(arr.shape[0], dtype=bool)
+        for row_idx in range(arr.shape[0]):
+            try:
+                row_phi = float(arr[row_idx, phi_col])
+            except Exception:
+                continue
+            branch_idx = source_branch_index_from_phi_deg(row_phi)
+            if branch_idx in allowed_branches:
+                branch_mask[row_idx] = True
+        if np.any(branch_mask):
+            filtered_tables.append(np.asarray(arr[branch_mask], dtype=np.float64).copy())
+            expanded_count += 1
+
+    return filtered_tables, {
+        "total_hit_tables_available": int(len(copied_tables)),
+        "hit_tables_considered_for_rebinding": int(considered_count),
+        "hit_tables_expanded_for_rebinding": int(expanded_count),
+    }
+
+
 def _geometry_manual_logged_cache_matches_params(
     metadata: Mapping[str, object] | None,
     params_local: Mapping[str, object],
-) -> bool:
+) -> dict[str, object]:
     if not isinstance(metadata, Mapping):
-        return False
+        return {
+            "matches": False,
+            "expected_signature_digest": None,
+            "actual_signature_digest": None,
+            "mismatch_reason": "missing_metadata",
+            "heavy_hit_table_load_attempted": False,
+        }
 
     comparisons: list[tuple[object, float, float]] = []
     comparisons.append((metadata.get("av"), params_local.get("a"), 1.0e-6))
     comparisons.append((metadata.get("cv"), params_local.get("c"), 1.0e-6))
     comparisons.append((metadata.get("wavelength_center"), params_local.get("lambda"), 1.0e-6))
     comparisons.append((metadata.get("theta_center"), params_local.get("theta_initial"), 1.0e-6))
+
+    expected_signature_digest = gui_geometry_fit._geometry_fit_digest_payload(
+        {
+            "a": params_local.get("a"),
+            "c": params_local.get("c"),
+            "lambda": params_local.get("lambda"),
+            "theta_initial": params_local.get("theta_initial"),
+        }
+    )
+    actual_signature_digest = metadata.get("signature_digest")
+    if actual_signature_digest in {None, ""}:
+        actual_signature_digest = gui_geometry_fit._geometry_fit_digest_payload(
+            {
+                "a": metadata.get("av"),
+                "c": metadata.get("cv"),
+                "lambda": metadata.get("wavelength_center"),
+                "theta_initial": metadata.get("theta_center"),
+            }
+        )
 
     matched_checks = 0
     for logged_value, requested_value, tol in comparisons:
@@ -17864,8 +18032,28 @@ def _geometry_manual_logged_cache_matches_params(
             continue
         matched_checks += 1
         if abs(float(logged_float) - float(requested_float)) > float(tol):
-            return False
-    return matched_checks > 0
+            return {
+                "matches": False,
+                "expected_signature_digest": str(expected_signature_digest),
+                "actual_signature_digest": str(actual_signature_digest),
+                "mismatch_reason": "params_mismatch",
+                "heavy_hit_table_load_attempted": False,
+            }
+    if matched_checks <= 0:
+        return {
+            "matches": False,
+            "expected_signature_digest": str(expected_signature_digest),
+            "actual_signature_digest": str(actual_signature_digest),
+            "mismatch_reason": "insufficient_metadata",
+            "heavy_hit_table_load_attempted": False,
+        }
+    return {
+        "matches": True,
+        "expected_signature_digest": str(expected_signature_digest),
+        "actual_signature_digest": str(actual_signature_digest),
+        "mismatch_reason": None,
+        "heavy_hit_table_load_attempted": False,
+    }
 
 
 def _geometry_fit_background_label(background_index: int) -> str:
@@ -17906,8 +18094,40 @@ def _commit_geometry_manual_source_row_rebuild_result(
         dict(rebuild_result.diagnostics) if isinstance(rebuild_result.diagnostics, Mapping) else {}
     )
     lookup_context = str(diagnostics.get("consumer") or consumer or "unspecified")
+    targeted_preflight_enabled = bool(diagnostics.get("targeted_preflight_enabled", False))
+    targeted_cache_key_digest = str(
+        diagnostics.get("required_hkl_branch_keys_digest") or ""
+    ).strip()
 
     if stored_rows:
+        if targeted_preflight_enabled and targeted_cache_key_digest:
+            _geometry_fit_store_targeted_projected_cache_entry(
+                background_index=int(background_idx),
+                key_digest=str(targeted_cache_key_digest),
+                payload={
+                    "requested_signature": rebuild_result.requested_signature,
+                    "requested_signature_summary": rebuild_result.requested_signature_summary,
+                    "stored_rows": [dict(entry) for entry in stored_rows],
+                    "projected_rows": [dict(entry) for entry in projected_rows],
+                    "diagnostics": copy.deepcopy(diagnostics),
+                    "cache_source": str(rebuild_result.rebuild_source or "unknown"),
+                },
+            )
+            if diagnostics:
+                _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
+            _trace_live_cache_event(
+                "source_snapshot",
+                "rebuild",
+                background_index=int(background_idx),
+                outcome="success",
+                consumer=lookup_context,
+                status=str(diagnostics.get("status", "snapshot_hit")),
+                requested_signature_summary=diagnostics.get("requested_signature_summary"),
+                raw_peak_count=int(len(stored_rows)),
+                projected_peak_count=int(len(projected_rows)),
+                rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
+            )
+            return projected_rows or stored_rows
         hit_tables_local = rebuild_result.hit_tables
         q_group_content_signature = None
         if hit_tables_local is not None:
@@ -18024,9 +18244,37 @@ def _geometry_manual_rebuild_source_rows_for_background(
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
+    required_manual_fit_targets = (
+        gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=int(background_idx),
+        )
+        if required_pairs
+        else []
+    )
+    required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
+        required_manual_fit_targets
+    )
+    preflight_mode = (
+        "manual_geometry_targeted" if required_branch_group_keys else "full"
+    )
+    required_branch_group_keys_digest = gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        required_branch_group_keys,
+        background_index=int(background_idx),
+        requested_signature=requested_signature,
+        requested_signature_summary=requested_signature_summary,
+        preflight_mode=preflight_mode,
+    )
 
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
+        *,
+        required_branch_group_keys: Sequence[
+            tuple[tuple[int, int, int], int | None, object | None]
+        ]
+        | None = None,
+        required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+        preflight_mode: str = "full",
     ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
         table_list = list(source_tables or ())
         if not table_list:
@@ -18035,6 +18283,13 @@ def _geometry_manual_rebuild_source_rows_for_background(
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
+        if str(preflight_mode or "full") == "manual_geometry_targeted":
+            hit_tables_local, _filter_diag = (
+                _geometry_fit_filter_hit_tables_for_required_branch_groups(
+                    hit_tables_local,
+                    required_branch_group_keys=required_branch_group_keys,
+                )
+            )
         return _geometry_manual_build_source_rows_from_hit_tables(
             hit_tables_local,
             image_size_value=int(image_size),
@@ -18074,15 +18329,19 @@ def _geometry_manual_rebuild_source_rows_for_background(
         build_live_rows=_build_geometry_fit_live_rows_payload_from_cache,
         get_memory_intersection_cache=get_last_intersection_cache,
         memory_cache_signature=simulation_runtime_state.last_simulation_signature,
+        load_logged_intersection_cache_metadata=(
+            lambda: load_most_recent_logged_intersection_cache_metadata()
+        ),
         load_logged_intersection_cache=(lambda: load_most_recent_logged_intersection_cache()),
         logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
         build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
         simulate_hit_tables=(
-            lambda normalized_params: _simulate_hit_tables_for_fit(
+            lambda normalized_params, **kwargs: _simulate_hit_tables_for_fit(
                 miller,
                 intensities,
                 int(image_size),
                 normalized_params,
+                **kwargs,
             )
         ),
         last_runtime_simulation_diagnostics=(_geometry_manual_last_simulation_diagnostics),
@@ -18092,7 +18351,23 @@ def _geometry_manual_rebuild_source_rows_for_background(
             else None
         ),
         required_pairs=required_pairs,
+        required_branch_group_keys=required_branch_group_keys,
+        required_manual_fit_targets=required_manual_fit_targets,
+        preflight_mode=preflight_mode,
         live_cache_inventory=live_cache_inventory,
+        get_targeted_projected_cache=(
+            lambda key_digest: _geometry_fit_load_targeted_projected_cache_entry(
+                background_index=int(background_idx),
+                key_digest=str(key_digest),
+            )
+        ),
+        store_targeted_projected_cache=(
+            lambda key_digest, payload: _geometry_fit_store_targeted_projected_cache_entry(
+                background_index=int(background_idx),
+                key_digest=str(key_digest),
+                payload=payload,
+            )
+        ),
     )
     return _commit_geometry_manual_source_row_rebuild_result(
         rebuild_result,
@@ -26072,6 +26347,7 @@ def _run_async_geometry_fit_worker_job(
         theta_base: float,
         theta_initial: float,
         stored_rows: Sequence[object] | None,
+        projected_rows: Sequence[object] | None = None,
         cache_source: str,
         diagnostics: Mapping[str, object] | None = None,
         peak_table_lattice: Sequence[object] | None = None,
@@ -26080,7 +26356,9 @@ def _run_async_geometry_fit_worker_job(
         cache_metadata: Mapping[str, object] | None = None,
     ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle:
         copied_stored_rows = _copy_source_rows(stored_rows)
-        copied_projected_rows = _copy_source_rows(_project_source_rows(copied_stored_rows))
+        copied_projected_rows = _copy_source_rows(projected_rows)
+        if not copied_projected_rows:
+            copied_projected_rows = _copy_source_rows(_project_source_rows(copied_stored_rows))
         resolved_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
         resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
         resolved_diagnostics.setdefault(
@@ -26534,6 +26812,12 @@ def _run_async_geometry_fit_worker_job(
         source_tables: Sequence[object] | None,
         *,
         params_local: Mapping[str, object],
+        required_branch_group_keys: Sequence[
+            tuple[tuple[int, int, int], int | None, object | None]
+        ]
+        | None = None,
+        required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+        preflight_mode: str = "full",
     ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
         table_list = list(source_tables or ())
         if not table_list:
@@ -26542,6 +26826,13 @@ def _run_async_geometry_fit_worker_job(
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
+        if str(preflight_mode or "full") == "manual_geometry_targeted":
+            hit_tables_local, _filter_diag = (
+                _geometry_fit_filter_hit_tables_for_required_branch_groups(
+                    hit_tables_local,
+                    required_branch_group_keys=required_branch_group_keys,
+                )
+            )
         return _geometry_manual_build_source_rows_from_hit_tables(
             hit_tables_local,
             image_size_value=int(job_data.get("image_size", image_size)),
@@ -26578,6 +26869,20 @@ def _run_async_geometry_fit_worker_job(
         background_label = dict(job_data.get("background_labels", {}) or {}).get(
             int(background_idx),
             f"background {int(background_idx) + 1}",
+        )
+        required_manual_fit_targets = (
+            gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+                required_pairs,
+                background_index=int(background_idx),
+            )
+            if required_pairs
+            else []
+        )
+        required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
+            required_manual_fit_targets
+        )
+        preflight_mode = (
+            "manual_geometry_targeted" if required_branch_group_keys else "full"
         )
         live_rows_signature = job_data.get("live_rows_signature")
         live_rows_cache_metadata = dict(
@@ -26687,26 +26992,47 @@ def _run_async_geometry_fit_worker_job(
                 )
             ),
             memory_cache_signature=job_data.get("memory_intersection_cache_signature"),
+            load_logged_intersection_cache_metadata=(
+                load_most_recent_logged_intersection_cache_metadata
+            ),
             load_logged_intersection_cache=load_most_recent_logged_intersection_cache,
             logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
             build_source_rows_from_hit_tables=(
-                lambda source_tables: _build_source_rows_for_rebuild(
+                lambda source_tables, **kwargs: _build_source_rows_for_rebuild(
                     source_tables,
                     params_local=params_local,
+                    **kwargs,
                 )
             ),
             simulate_hit_tables=(
-                lambda normalized_params: _simulate_hit_tables_for_fit(
+                lambda normalized_params, **kwargs: _simulate_hit_tables_for_fit(
                     job_data["solver_inputs"].miller,
                     job_data["solver_inputs"].intensities,
                     int(job_data["solver_inputs"].image_size),
                     normalized_params,
+                    **kwargs,
                 )
             ),
             last_runtime_simulation_diagnostics=_last_worker_simulation_diagnostics,
             project_rows=_project_source_rows,
             required_pairs=required_pairs,
+            required_branch_group_keys=required_branch_group_keys,
+            required_manual_fit_targets=required_manual_fit_targets,
+            preflight_mode=preflight_mode,
             live_cache_inventory=job_data.get("live_cache_inventory", {}),
+            get_targeted_projected_cache=(
+                lambda key_digest: _geometry_fit_load_targeted_projected_cache_entry(
+                    background_index=int(background_idx),
+                    key_digest=str(key_digest),
+                )
+            ),
+            store_targeted_projected_cache=(
+                lambda key_digest, payload: _geometry_fit_store_targeted_projected_cache_entry(
+                    background_index=int(background_idx),
+                    key_digest=str(key_digest),
+                    payload=payload,
+                )
+            ),
             stage_callback=stage_callback,
         )
         _set_worker_source_snapshot_diagnostics(**dict(rebuild_result.diagnostics or {}))
@@ -26721,6 +27047,7 @@ def _run_async_geometry_fit_worker_job(
                 theta_base=float(theta_base),
                 theta_initial=float(params_local.get("theta_initial", 0.0)),
                 stored_rows=rebuild_result.stored_rows,
+                projected_rows=rebuild_result.projected_rows,
                 cache_source=str(rebuild_result.rebuild_source or "unknown"),
                 diagnostics=dict(rebuild_result.diagnostics or {}),
                 peak_table_lattice=rebuild_result.peak_table_lattice,

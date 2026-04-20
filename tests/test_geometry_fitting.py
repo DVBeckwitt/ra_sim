@@ -327,6 +327,229 @@ def test_dynamic_point_match_reanchors_measured_anchor_and_reports_motion(
     assert summary["measured_anchor_motion_max_px"] > 0.0
 
 
+def test_dynamic_point_match_exact_projector_blocks_analytic_fallback_and_ignores_stale_sim_display(
+    monkeypatch,
+):
+    projector_calls: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        projector_calls.append(
+            {
+                "anchor_kind": str(anchor_kind),
+                "input_frame": str(input_frame),
+                "cols": cols_arr.tolist(),
+                "rows": rows_arr.tolist(),
+                "local_params": dict(local_params),
+            }
+        )
+        return {
+            "two_theta_deg": cols_arr + (200.0 if anchor_kind == "measured" else 100.0),
+            "phi_deg": rows_arr - (60.0 if anchor_kind == "measured" else 50.0),
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}-{local_params.get('gamma', 0.0)}",
+            "fit_space_local_params_signature": f"lp-{local_params.get('gamma', 0.0)}",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(
+        opt,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic detector fit-space path must not run")
+        ),
+    )
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "peak-0",
+                "hkl": (1, 0, 0),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "fit_source_identity_only": True,
+                "native_col": 30.0,
+                "native_row": 40.0,
+                "sim_col": 999.0,
+                "sim_row": 888.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+    local["gamma"] = 1.5
+
+    residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=32,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert residual.shape == (2,)
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["measured_fit_space_source"] == "dataset_fit_space_projector"
+    assert diagnostics[0]["simulated_fit_space_source"] == "dataset_fit_space_projector"
+    assert diagnostics[0]["measured_detector_input_frame"] == "native_detector"
+    assert diagnostics[0]["simulated_detector_input_frame"] == "fit_detector"
+    assert diagnostics[0]["measured_native_frame_conversion_count"] == 0
+    assert diagnostics[0]["simulated_native_frame_conversion_count"] == 1
+    assert diagnostics[0]["fit_space_projector_kind"] == "exact_caked_bundle"
+    assert diagnostics[0]["cake_bundle_signature"] == "sig-simulated-1.5"
+    assert summary["exact_fit_space_projector_available"] is True
+    assert projector_calls == [
+        {
+            "anchor_kind": "measured",
+            "input_frame": "native_detector",
+            "cols": [30.0],
+            "rows": [40.0],
+            "local_params": dict(local),
+        },
+        {
+            "anchor_kind": "simulated",
+            "input_frame": "fit_detector",
+            "cols": [12.0],
+            "rows": [12.0],
+            "local_params": dict(local),
+        },
+    ]
+
+
+def test_dynamic_point_match_invalid_exact_projector_marks_row_invalid_without_analytic_fallback(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        return {
+            "two_theta_deg": np.full(cols_arr.shape, np.nan, dtype=np.float64),
+            "phi_deg": np.full(rows_arr.shape, np.nan, dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}",
+            "fit_space_local_params_signature": "lp",
+            "valid": False,
+            "invalid_reason": f"bad_{anchor_kind}",
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(
+        opt,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic detector fit-space path must not run")
+        ),
+    )
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "peak-0",
+                "hkl": (1, 0, 0),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "fit_source_identity_only": True,
+                "native_col": 30.0,
+                "native_row": 40.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+
+    residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=32,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["valid"] is False
+    assert diagnostics[0]["measured_fit_space_source"] == "invalid_dataset_fit_space_projector"
+    assert diagnostics[0]["measured_invalid_projection_reason"] == "bad_measured"
+    assert diagnostics[0]["invalid_projection_reason"] == "bad_measured"
+    assert summary["exact_fit_space_projector_available"] is True
+    assert int(summary["invalid_dataset_fit_space_projector_row_count"]) >= 1
+    assert np.all(np.isnan(residual) | np.isfinite(residual))
+
+
 def test_detector_pixels_to_fit_space_matches_zero_tilt_geometry() -> None:
     cols = np.array([10.0, 13.0, 10.0], dtype=np.float64)
     rows = np.array([7.0, 10.0, 13.0], dtype=np.float64)
@@ -553,6 +776,8 @@ def test_fit_space_provenance_summary_counts_native_detector_anchor_sources() ->
     assert int(summary["fit_space_anchor_count_detector"]) == 14
     assert summary["fit_space_anchor_source_counts"] == {
         "cached_fit_space_anchor": 1,
+        "dataset_fit_space_projector": 0,
+        "invalid_dataset_fit_space_projector": 0,
         "native_fit_space_anchor": 2,
         "background_detector_fit_space_anchor": 3,
         "detector_fit_space_anchor": 4,
@@ -1826,6 +2051,8 @@ def test_fit_geometry_parameters_dynamic_point_path_records_fit_space_provenance
     assert int(result.point_match_summary["fit_space_anchor_count_detector"]) == 2
     assert result.point_match_summary["fit_space_anchor_source_counts"] == {
         "cached_fit_space_anchor": 0,
+        "dataset_fit_space_projector": 0,
+        "invalid_dataset_fit_space_projector": 0,
         "native_fit_space_anchor": 0,
         "background_detector_fit_space_anchor": 0,
         "detector_fit_space_anchor": 2,
@@ -3163,6 +3390,64 @@ def test_measured_fit_space_anchor_ignores_sim_native_hint_when_display_anchor_e
     assert anchor is not None
     assert reason == "display_fit_space_anchor"
     assert metadata["anchor_source"] == "display_fit_space_anchor"
+
+
+def test_measured_fit_space_anchor_rejects_ambiguous_background_detector_frame_when_exact_projector_exists(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        opt,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic detector fit-space path must not run")
+        ),
+    )
+
+    def _unexpected_projector(*_args, **_kwargs):
+        raise AssertionError("ambiguous detector frame must not call projector")
+
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=opt.ReflectionSimulationSubset(
+            miller=np.zeros((0, 3), dtype=np.float64),
+            intensities=np.zeros(0, dtype=np.float64),
+            measured_entries=[],
+            original_indices=np.zeros(0, dtype=np.int64),
+            total_reflection_count=0,
+            fixed_source_reflection_count=0,
+            fallback_hkl_count=0,
+            reduced=False,
+        ),
+        experimental_image=np.zeros((4, 4), dtype=np.float64),
+        fit_space_projector=_unexpected_projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        {
+            "background_detector_x": 1083.0,
+            "background_detector_y": 1151.0,
+        },
+        center=(1024.0, 1024.0),
+        detector_distance=250.0,
+        pixel_size=0.1,
+        dataset_ctx=dataset_ctx,
+        local_params={"gamma": 0.0},
+    )
+
+    assert anchor is None
+    assert reason == "invalid_dataset_fit_space_projector"
+    assert metadata["measured_detector_field_name"] == (
+        "background_detector_x/background_detector_y"
+    )
+    assert metadata["measured_detector_input_frame"] is None
+    assert metadata["measured_detector_frame_reason"] == (
+        "ambiguous_background_detector_frame"
+    )
+    assert metadata["fit_space_source"] == "invalid_dataset_fit_space_projector"
+    assert metadata["invalid_projection_reason"] == "ambiguous_measured_detector_frame"
 
 
 def test_resolve_geometry_fit_correspondence_remaps_trusted_full_reflection_row_locator() -> None:

@@ -4033,8 +4033,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         measured_diag_fields = _measured_fit_space_diag_fields(
             measured_anchor_metadata
         )
-        if measured_fit_space_source in fit_space_anchor_source_counts:
-            fit_space_anchor_source_counts[measured_fit_space_source] += 1
+        if measured_reason in fit_space_anchor_source_counts:
+            fit_space_anchor_source_counts[measured_reason] += 1
         if exact_fit_space_projector_available:
             if measured_fit_space_source == "dataset_fit_space_projector":
                 dataset_fit_space_projector_row_count += 1

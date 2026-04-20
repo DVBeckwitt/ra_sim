@@ -5872,6 +5872,474 @@ def test_build_geometry_manual_fit_dataset_projects_raw_detector_rows_into_caked
     assert initial_entry["sim_native"] == (3.0, 4.0)
 
 
+def test_build_geometry_manual_fit_dataset_exact_projector_uses_manual_selection_sequence(
+    monkeypatch,
+) -> None:
+    bundle = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=np.linspace(10.0, 17.0, 8),
+        azimuth_axis=np.linspace(-4.0, 3.0, 8),
+    )
+    call_order: list[tuple[str, float, float]] = []
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "_fit_detector_coords_to_native_detector_coords",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("native_detector input must not convert through fit frame")
+        ),
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "_geometry_fit_resolve_dynamic_reanchor_caked_bundle",
+        lambda **kwargs: bundle,
+    )
+    monkeypatch.setattr(
+        manual_geometry,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            call_order.append(("detector_pixel_to_caked_bin", float(col), float(row)))
+            or (
+                (22.5, -35.5)
+                if live_bundle is bundle and (float(col), float(row)) == (4.0, 6.0)
+                else (21.5, -33.5)
+                if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+                else (None, None)
+            )
+        ),
+    )
+
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=8,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "caked_x": 12.0,
+                "caked_y": 14.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            {
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("caked_x", 0.0)),
+            float(entry.get("caked_y", 0.0)),
+        ),
+        geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        native_detector_coords_to_bundle_detector_coords=lambda col, row: (
+            call_order.append(
+                ("native_detector_coords_to_bundle_detector_coords", float(col), float(row))
+            )
+            or (float(col) + 1.0, float(row) + 2.0)
+        ),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background_image": np.zeros((8, 8), dtype=float),
+            "radial_axis": np.linspace(10.0, 17.0, 8),
+            "azimuth_axis": np.linspace(-4.0, 3.0, 8),
+            "transform_bundle": bundle,
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    call_order.clear()
+    projector = dataset["spec"]["fit_space_projector"]
+    assert callable(projector)
+    result = projector(
+        np.asarray([3.0], dtype=np.float64),
+        np.asarray([4.0], dtype=np.float64),
+        local_params={"gamma": 0.0},
+        anchor_kind="measured",
+        input_frame="native_detector",
+    )
+
+    assert result["valid"] is True
+    assert result["fit_space_source"] == "dataset_fit_space_projector"
+    assert result["input_frame"] == "native_detector"
+    assert result["fit_space_projector_kind"] == "exact_caked_bundle"
+    assert result["native_frame_conversion_count"] == 0
+    assert result["two_theta_deg"].tolist() == [22.5]
+    assert result["phi_deg"].tolist() == [-35.5]
+    assert call_order == [
+        ("native_detector_coords_to_bundle_detector_coords", 3.0, 4.0),
+        ("detector_pixel_to_caked_bin", 4.0, 6.0),
+    ]
+
+
+def test_build_geometry_manual_fit_dataset_exact_projector_converts_fit_detector_once(
+    monkeypatch,
+) -> None:
+    bundle = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=np.linspace(10.0, 17.0, 8),
+        azimuth_axis=np.linspace(-4.0, 3.0, 8),
+    )
+    conversion_calls: list[tuple[float, float]] = []
+    detector_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "_fit_detector_coords_to_native_detector_coords",
+        lambda col, row: (
+            conversion_calls.append((float(col), float(row)))
+            or (float(col) + 10.0, float(row) + 20.0)
+        ),
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "_geometry_fit_resolve_dynamic_reanchor_caked_bundle",
+        lambda **kwargs: bundle,
+    )
+    monkeypatch.setattr(
+        manual_geometry,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            detector_calls.append((float(col), float(row)))
+            or (
+                (24.5, -34.5)
+                if live_bundle is bundle and (float(col), float(row)) == (13.0, 24.0)
+                else (21.5, -33.5)
+                if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+                else (None, None)
+            )
+        ),
+    )
+
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=8,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "caked_x": 12.0,
+                "caked_y": 14.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            {
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("caked_x", 0.0)),
+            float(entry.get("caked_y", 0.0)),
+        ),
+        geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        backend_detector_coords_to_native_detector_coords=lambda col, row, native_shape=None: (
+            float(col),
+            float(row),
+        ),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background_image": np.zeros((8, 8), dtype=float),
+            "radial_axis": np.linspace(10.0, 17.0, 8),
+            "azimuth_axis": np.linspace(-4.0, 3.0, 8),
+            "transform_bundle": bundle,
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    conversion_calls.clear()
+    detector_calls.clear()
+    projector = dataset["spec"]["fit_space_projector"]
+    result = projector(
+        np.asarray([3.0], dtype=np.float64),
+        np.asarray([4.0], dtype=np.float64),
+        local_params={"gamma": 0.0},
+        anchor_kind="simulated",
+        input_frame="fit_detector",
+    )
+
+    assert result["valid"] is True
+    assert result["fit_space_source"] == "dataset_fit_space_projector"
+    assert result["input_frame"] == "fit_detector"
+    assert result["native_frame_conversion_count"] == 1
+    assert conversion_calls == [(3.0, 4.0)]
+    assert detector_calls == [(13.0, 24.0)]
+    assert result["two_theta_deg"].tolist() == [24.5]
+    assert result["phi_deg"].tolist() == [-34.5]
+
+
+def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_params(
+    monkeypatch,
+) -> None:
+    bundle_a = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=np.linspace(10.0, 17.0, 8),
+        azimuth_axis=np.linspace(-4.0, 3.0, 8),
+    )
+    bundle_b = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=np.linspace(11.0, 18.0, 8),
+        azimuth_axis=np.linspace(-3.0, 4.0, 8),
+    )
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "_geometry_fit_resolve_dynamic_reanchor_caked_bundle",
+        lambda **kwargs: (
+            bundle_b
+            if float(dict(kwargs.get("params") or {}).get("gamma", 0.0)) > 0.5
+            else bundle_a
+        ),
+    )
+    monkeypatch.setattr(
+        manual_geometry,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            (22.0, -30.0)
+            if live_bundle is bundle_a
+            else (24.0, -32.0)
+            if live_bundle is bundle_b
+            else (None, None)
+        ),
+    )
+
+    callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 17.0, 8),
+        last_caked_azimuth_values=lambda: np.linspace(-4.0, 3.0, 8),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.ones((8, 8), dtype=float),
+        ai=lambda: object(),
+        caked_transform_bundle=lambda: bundle_a,
+        image_size=lambda: 8,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
+            AssertionError("detector angular maps should not be used")
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic forward fallback should not be used")
+        ),
+    )
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=8,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "caked_x": 12.0,
+                "caked_y": 14.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            {
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("caked_x", 0.0)),
+            float(entry.get("caked_y", 0.0)),
+        ),
+        geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background_image": np.zeros((8, 8), dtype=float),
+            "radial_axis": np.linspace(10.0, 17.0, 8),
+            "azimuth_axis": np.linspace(-4.0, 3.0, 8),
+            "transform_bundle": bundle_a,
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    projector = dataset["spec"]["fit_space_projector"]
+    result_a = projector(
+        np.asarray([3.0], dtype=np.float64),
+        np.asarray([4.0], dtype=np.float64),
+        local_params={"gamma": 0.0},
+        anchor_kind="simulated",
+        input_frame="native_detector",
+    )
+    result_b = projector(
+        np.asarray([3.0], dtype=np.float64),
+        np.asarray([4.0], dtype=np.float64),
+        local_params={"gamma": 1.0},
+        anchor_kind="simulated",
+        input_frame="native_detector",
+    )
+
+    assert result_a["valid"] is True
+    assert result_b["valid"] is True
+    assert result_a["two_theta_deg"].tolist() == [22.0]
+    assert result_b["two_theta_deg"].tolist() == [24.0]
+    assert result_a["cake_bundle_signature"] != result_b["cake_bundle_signature"]
+
+
+def test_copy_geometry_fit_dataset_spec_for_state_strips_fit_space_projector() -> None:
+    copied = geometry_fit._copy_geometry_fit_dataset_spec_for_state(
+        {
+            "dataset_index": 0,
+            "fit_space_projector": lambda *_args, **_kwargs: None,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": "sig-1",
+        }
+    )
+
+    assert "fit_space_projector" not in copied
+    assert copied["fit_space_projector_kind"] == "exact_caked_bundle"
+    assert copied["cake_bundle_signature"] == "sig-1"
+
+
 def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_caked_angles() -> None:
     def _refresh_entry(entry):
         return manual_geometry.refresh_geometry_manual_pair_entry(
@@ -7628,6 +8096,664 @@ def test_rebuild_geometry_fit_source_rows_stage_callback_failure_does_not_abort(
         result.diagnostics["stage_callback_last_failed_stage"]
         == "source_cache_project_rows_ready"
     )
+
+
+def _targeted_required_pair(
+    *,
+    pair_id: str,
+    hkl: tuple[int, int, int],
+    branch_index: int | None,
+    q_group_key: object | None,
+    x: float = 10.0,
+    y: float = 20.0,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    pair = {
+        "pair_id": pair_id,
+        "overlay_match_index": 0,
+        "hkl": hkl,
+        "x": float(x),
+        "y": float(y),
+    }
+    if branch_index is not None:
+        pair["source_branch_index"] = int(branch_index)
+    if q_group_key is not None:
+        pair["q_group_key"] = q_group_key
+    if isinstance(extra, dict):
+        pair.update(extra)
+    return pair
+
+
+def _targeted_source_row(
+    *,
+    hkl: tuple[int, int, int],
+    branch_index: int | None,
+    q_group_key: object | None,
+    sim_col: float,
+    sim_row: float,
+    source_peak_index: int = 0,
+) -> dict[str, object]:
+    row = {
+        "hkl": hkl,
+        "sim_col": float(sim_col),
+        "sim_row": float(sim_row),
+        "source_row_index": int(source_peak_index),
+        "source_peak_index": int(source_peak_index),
+    }
+    if branch_index is not None:
+        row["source_branch_index"] = int(branch_index)
+    if q_group_key is not None:
+        row["q_group_key"] = q_group_key
+    return row
+
+
+def test_targeted_preflight_collects_required_hkl_branch_keys() -> None:
+    targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        [
+            _targeted_required_pair(
+                pair_id="bg0:pair0",
+                hkl=(1, 0, 0),
+                branch_index=1,
+                q_group_key=("q", 1),
+            ),
+            _targeted_required_pair(
+                pair_id="bg0:pair1",
+                hkl=(2, 0, 0),
+                branch_index=None,
+                q_group_key=("q", 2),
+            ),
+            _targeted_required_pair(
+                pair_id="bg0:pair2",
+                hkl=(3, 0, 0),
+                branch_index=None,
+                q_group_key=None,
+            ),
+        ],
+        background_index=0,
+    )
+
+    required_keys = geometry_fit._geometry_fit_required_branch_group_keys(targets)
+
+    assert [target["branch_constraint_status"] for target in targets] == [
+        "constrained",
+        "recovered_from_q_group",
+        "unconstrained_missing_branch",
+    ]
+    assert targets[2]["branch_unconstrained"] is True
+    assert required_keys == [
+        ((1, 0, 0), 1, ("q", 1)),
+        ((2, 0, 0), None, ("q", 2)),
+        ((3, 0, 0), None, None),
+    ]
+
+
+def test_targeted_preflight_does_not_score_unrelated_hkls_or_branches() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        ),
+        _targeted_required_pair(
+            pair_id="bg0:pair1",
+            hkl=(2, 0, 0),
+            branch_index=0,
+            q_group_key=("q", 2),
+        ),
+    ]
+    targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        required_pairs,
+        background_index=0,
+    )
+    required_keys = geometry_fit._geometry_fit_required_branch_group_keys(targets)
+    filtered_rows, counts, matched_keys = (
+        geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=0,
+                    q_group_key=("q", 1),
+                    sim_col=11.0,
+                    sim_row=21.0,
+                    source_peak_index=1,
+                ),
+                _targeted_source_row(
+                    hkl=(2, 0, 0),
+                    branch_index=0,
+                    q_group_key=("q", 2),
+                    sim_col=30.0,
+                    sim_row=40.0,
+                    source_peak_index=2,
+                ),
+                _targeted_source_row(
+                    hkl=(9, 9, 9),
+                    branch_index=0,
+                    q_group_key=("q", 9),
+                    sim_col=50.0,
+                    sim_row=60.0,
+                    source_peak_index=3,
+                ),
+            ],
+            required_keys,
+        )
+    )
+
+    assert counts == {
+        "total_count": 4,
+        "after_hkl_filter_count": 3,
+        "after_branch_filter_count": 2,
+        "unrelated_count": 2,
+    }
+    assert [(row["hkl"], row.get("source_branch_index")) for row in filtered_rows] == [
+        ((1, 0, 0), 1),
+        ((2, 0, 0), 0),
+    ]
+    assert matched_keys == [
+        ((1, 0, 0), 1, ("q", 1)),
+        ((2, 0, 0), 0, ("q", 2)),
+    ]
+
+
+def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> None:
+    first_targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        [
+            _targeted_required_pair(
+                pair_id="bg0:pair0",
+                hkl=(1, 0, 0),
+                branch_index=1,
+                q_group_key=("q", 1),
+                x=10.0,
+                y=20.0,
+            ),
+        ],
+        background_index=0,
+    )
+    moved_targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        [
+            _targeted_required_pair(
+                pair_id="bg0:pair0",
+                hkl=(1, 0, 0),
+                branch_index=1,
+                q_group_key=("q", 1),
+                x=25.0,
+                y=35.0,
+            ),
+        ],
+        background_index=0,
+    )
+    expanded_targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        [
+            _targeted_required_pair(
+                pair_id="bg0:pair0",
+                hkl=(1, 0, 0),
+                branch_index=1,
+                q_group_key=("q", 1),
+                x=10.0,
+                y=20.0,
+            ),
+            _targeted_required_pair(
+                pair_id="bg0:pair1",
+                hkl=(2, 0, 0),
+                branch_index=0,
+                q_group_key=("q", 2),
+                x=30.0,
+                y=40.0,
+            ),
+        ],
+        background_index=0,
+    )
+
+    first_keys = geometry_fit._geometry_fit_required_branch_group_keys(first_targets)
+    moved_keys = geometry_fit._geometry_fit_required_branch_group_keys(moved_targets)
+    expanded_keys = geometry_fit._geometry_fit_required_branch_group_keys(expanded_targets)
+    first_key_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+    )
+    moved_key_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        moved_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+    )
+    expanded_key_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        expanded_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+    )
+
+    assert first_keys == moved_keys
+    assert first_key_digest == moved_key_digest
+    assert (
+        geometry_fit._geometry_fit_manual_target_scoring_digest(first_targets)
+        != geometry_fit._geometry_fit_manual_target_scoring_digest(moved_targets)
+    )
+    assert expanded_keys != first_keys
+    assert expanded_key_digest != first_key_digest
+
+
+def test_targeted_preflight_projects_only_required_candidate_rows() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    projected_row_batches: list[list[dict[str, object]]] = []
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "metadata miss should reject logged cache before heavy load"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=11.0,
+                    sim_row=21.0,
+                    source_peak_index=1,
+                ),
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=0,
+                    q_group_key=("q", 1),
+                    sim_col=12.0,
+                    sim_row=22.0,
+                    source_peak_index=2,
+                ),
+                _targeted_source_row(
+                    hkl=(9, 9, 9),
+                    branch_index=1,
+                    q_group_key=("q", 9),
+                    sim_col=90.0,
+                    sim_row=91.0,
+                    source_peak_index=3,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **_kwargs: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: projected_row_batches.append(
+            [dict(entry) for entry in rows or () if isinstance(entry, dict)]
+        )
+        or list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert [(row["hkl"], row.get("source_branch_index")) for row in result.stored_rows] == [
+        ((1, 0, 0), 1),
+        ((1, 0, 0), 1),
+    ]
+    assert len(projected_row_batches) == 1
+    assert len(projected_row_batches[0]) == 2
+    assert result.diagnostics["total_source_rows_available"] == 4
+    assert result.diagnostics["candidate_rows_after_hkl_filter"] == 3
+    assert result.diagnostics["candidate_rows_after_branch_filter"] == 2
+    assert result.diagnostics["candidate_rows_scored_for_background_distance"] == 2
+    assert result.diagnostics["source_rows_projected_for_rebinding"] == 2
+    assert result.diagnostics["unrelated_projected_row_count_for_rebinding"] == 0
+    assert result.diagnostics["full_source_rows_projected_for_rebinding"] is False
+
+
+def test_targeted_fresh_simulation_receives_required_branch_group_filter() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    captured_kwargs: dict[str, object] = {}
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "fresh targeted simulation should not touch heavy logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs)
+        or [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert captured_kwargs["preflight_mode"] == "manual_geometry_targeted"
+    assert captured_kwargs["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
+    assert result.diagnostics["targeted_simulation_supported"] is True
+    assert result.diagnostics["targeted_simulation_used"] is True
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is True
+
+
+def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_supported() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    build_kwargs: dict[str, object] = {}
+    stage_events: list[tuple[str, dict[str, object]]] = []
+
+    def _simulate_without_targeting(_params):
+        return [object()]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "fallback path should still reject heavy logged cache on metadata miss"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **kwargs: build_kwargs.update(kwargs)
+        or (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+                _targeted_source_row(
+                    hkl=(9, 9, 9),
+                    branch_index=0,
+                    q_group_key=("q", 9),
+                    sim_col=90.0,
+                    sim_row=91.0,
+                    source_peak_index=9,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=_simulate_without_targeting,
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+        stage_callback=lambda stage, payload: stage_events.append(
+            (str(stage), dict(payload))
+        ),
+    )
+
+    assert build_kwargs["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
+    assert [(row["hkl"], row.get("source_branch_index")) for row in result.stored_rows] == [
+        ((1, 0, 0), 1),
+    ]
+    assert result.diagnostics["targeted_simulation_fallback_reason"] == (
+        "simulator_filter_not_supported"
+    )
+    assert result.diagnostics["full_fresh_simulation_fallback_used"] is True
+    assert result.diagnostics["unrelated_scored_row_count_for_rebinding"] == 1
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is False
+    assert [stage for stage, _payload in stage_events] == [
+        "source_cache_target_collection_start",
+        "source_cache_target_collection_ready",
+        "source_cache_targeted_projected_cache_start",
+        "source_cache_targeted_projected_cache_miss",
+        "source_cache_memory_intersection_cache_start",
+        "source_cache_memory_intersection_cache_miss",
+        "source_cache_logged_intersection_cache_start",
+        "source_cache_logged_intersection_cache_miss",
+        "source_cache_targeted_fresh_simulation_start",
+        "source_cache_targeted_fresh_simulation_unsupported",
+        "source_cache_full_simulation_fallback_start",
+        "source_cache_full_simulation_fallback_ready",
+        "source_cache_targeted_fresh_simulation_ready",
+        "source_cache_targeted_source_rows_start",
+        "source_cache_targeted_source_rows_ready",
+        "source_cache_project_rows_start",
+        "source_cache_project_rows_ready",
+    ]
+
+
+def test_full_fresh_simulation_fallback_does_not_pass_targeted_performance_gate() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "fallback path should not attempt heavy logged cache load"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert result.stored_rows
+    assert result.diagnostics["targeted_simulation_fallback_reason"] == (
+        "simulator_filter_not_supported"
+    )
+    assert result.diagnostics["full_fresh_simulation_fallback_used"] is True
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is False
+
+
+def test_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    stage_events: list[tuple[str, dict[str, object]]] = []
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: {
+            "signature_digest": "logged-digest",
+        },
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "params mismatch should reject before loading heavy hit tables"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "expected_signature_digest": "expected-digest",
+            "actual_signature_digest": "logged-digest",
+            "mismatch_reason": "params_mismatch",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                )
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **_kwargs: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+        stage_callback=lambda stage, payload: stage_events.append(
+            (str(stage), dict(payload))
+        ),
+    )
+
+    miss_payload = next(
+        payload
+        for stage, payload in stage_events
+        if stage == "source_cache_logged_intersection_cache_miss"
+    )
+
+    assert result.stored_rows
+    assert miss_payload["status"] == "params_mismatch"
+    assert miss_payload["expected_signature_digest"] == "expected-digest"
+    assert miss_payload["actual_signature_digest"] == "logged-digest"
+    assert miss_payload["mismatch_reason"] == "params_mismatch"
+    assert miss_payload["heavy_hit_table_load_attempted"] is False
 
 
 def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_active_pairs() -> None:

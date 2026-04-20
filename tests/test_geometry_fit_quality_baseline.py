@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -437,37 +438,8 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
         "rms_tolerance_px": 0.25,
         "max_error_tolerance_px": 1.0,
     }
-    assert report["pair_alignment_rows"] == [
-        {
-            "pair_id": "pair[0]",
-            "pair_index": 0,
-            "hkl": [1, 1, 1],
-            "source_branch_index": 1,
-            "source_peak_index": 1,
-            "before_dx_px": 8.0,
-            "before_dy_px": 0.0,
-            "before_distance_px": 8.0,
-            "after_dx_px": 3.0,
-            "after_dy_px": 0.0,
-            "after_distance_px": 3.0,
-            "improved": True,
-        },
-        {
-            "pair_id": "pair[1]",
-            "pair_index": 1,
-            "hkl": [2, 0, 0],
-            "source_branch_index": 0,
-            "source_peak_index": 0,
-            "before_dx_px": 4.0,
-            "before_dy_px": 0.0,
-            "before_distance_px": 4.0,
-            "after_dx_px": 1.0,
-            "after_dy_px": 0.0,
-            "after_distance_px": 1.0,
-            "improved": True,
-        },
-    ]
-    assert report["worst_start_pair"] == {
+    assert len(report["pair_alignment_rows"]) == 2
+    assert report["pair_alignment_rows"][0] | {
         "pair_id": "pair[0]",
         "pair_index": 0,
         "hkl": [1, 1, 1],
@@ -480,7 +452,42 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
         "after_dy_px": 0.0,
         "after_distance_px": 3.0,
         "improved": True,
-    }
+    } == report["pair_alignment_rows"][0]
+    assert report["pair_alignment_rows"][1] | {
+        "pair_id": "pair[1]",
+        "pair_index": 1,
+        "hkl": [2, 0, 0],
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "before_dx_px": 4.0,
+        "before_dy_px": 0.0,
+        "before_distance_px": 4.0,
+        "after_dx_px": 1.0,
+        "after_dy_px": 0.0,
+        "after_distance_px": 1.0,
+        "improved": True,
+    } == report["pair_alignment_rows"][1]
+    for row in report["pair_alignment_rows"]:
+        assert "measured_fit_space_source" in row
+        assert "simulated_fit_space_source" in row
+        assert "fit_space_projector_kind" in row
+        assert "cake_bundle_signature" in row
+        assert "valid" in row
+        assert "invalid_projection_reason" in row
+    assert report["worst_start_pair"] | {
+        "pair_id": "pair[0]",
+        "pair_index": 0,
+        "hkl": [1, 1, 1],
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "before_dx_px": 8.0,
+        "before_dy_px": 0.0,
+        "before_distance_px": 8.0,
+        "after_dx_px": 3.0,
+        "after_dy_px": 0.0,
+        "after_distance_px": 3.0,
+        "improved": True,
+    } == report["worst_start_pair"]
     assert report["overlay_evidence"]["matched_peaks"]["record_count"] == 2
     assert report["overlay_evidence"]["matched_peaks"]["preview"] == [
         {"pair_id": "pair[0]", "measured_point": [100.0, 200.0]},
@@ -511,7 +518,7 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
         elapsed_s=12.5,
         baseline_report_writing_s=0.125,
     )
-    assert compact == {
+    assert compact | {
         "state": "new4_fresh_all",
         "accepted": True,
         "rejection_reason": None,
@@ -555,7 +562,64 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
             "acceptance_diagnostics": 0.5,
             "baseline_report_writing": 0.125,
         },
-    }
+    } == compact
+
+
+def test_validate_manual_caked_fit_space_provenance_rejects_empty_new4_exact_proof() -> None:
+    module = _load_baseline_module()
+
+    violations = module.validate_manual_caked_fit_space_provenance(
+        {
+            "state_name": "new4_fresh_all",
+            "manual_caked_residual_row_count": 0,
+            "dataset_fit_space_projector_row_count": 0,
+            "invalid_dataset_fit_space_projector_row_count": 0,
+            "analytic_detector_fit_space_row_count": 0,
+            "exact_fit_space_projector_available": False,
+            "exact_fit_space_projection_reason": "missing_projector",
+            "pair_alignment_rows": [],
+        }
+    )
+
+    assert "new4 manual_caked_residual_row_count is empty" in violations
+    assert "new4 exact_fit_space_projector_available is false" in violations
+    assert "new4 dataset_fit_space_projector_row_count is empty" in violations
+
+
+def test_validate_manual_caked_fit_space_provenance_accepts_exact_projector_row() -> None:
+    module = _load_baseline_module()
+
+    violations = module.validate_manual_caked_fit_space_provenance(
+        {
+            "state_name": "new4_fresh_all",
+            "manual_caked_residual_row_count": 1,
+            "dataset_fit_space_projector_row_count": 1,
+            "invalid_dataset_fit_space_projector_row_count": 0,
+            "analytic_detector_fit_space_row_count": 0,
+            "exact_fit_space_projector_available": True,
+            "exact_fit_space_projection_reason": None,
+            "pair_alignment_rows": [
+                {
+                    "pair_id": "pair[0]",
+                    "selected_is_minimum_background_distance": True,
+                    "fit_space_projector_kind": "exact_caked_bundle",
+                    "fit_space_anchor_override": False,
+                    "measured_fit_space_source": "dataset_fit_space_projector",
+                    "simulated_fit_space_source": "dataset_fit_space_projector",
+                    "measured_detector_input_frame": "native_detector",
+                    "simulated_detector_input_frame": "fit_detector",
+                    "measured_native_frame_conversion_count": 0,
+                    "simulated_native_frame_conversion_count": 1,
+                    "measured_invalid_projection_reason": None,
+                    "simulated_invalid_projection_reason": None,
+                    "invalid_projection_reason": None,
+                    "cake_bundle_signature": "sig-1",
+                }
+            ],
+        }
+    )
+
+    assert violations == []
 
 
 def test_build_quality_report_falls_back_to_preflight_pairs_and_stderr_reason(
@@ -1600,3 +1664,94 @@ def test_resolve_artifact_paths_rejects_stale_sidecars_reported_by_fresh_log(
     assert log_path == run_dir / reported_log_path.name
     assert trace_path is None
     assert matched_peaks_path is None
+
+
+def test_new4_preflight_and_baseline_stop_gate(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    validate_script = (
+        repo_root / "scripts" / "debug" / "validate_geometry_preflight_rebind.py"
+    )
+    baseline_script = (
+        repo_root / "scripts" / "debug" / "run_geometry_fit_quality_baseline.py"
+    )
+    state_path = (
+        repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+    )
+    fresh_state_path = tmp_path / "new4_fresh_all.json"
+    preflight_report_path = tmp_path / "new4_preflight_report.json"
+    baseline_output_root = tmp_path / "baseline"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(validate_script),
+            "--state",
+            str(state_path),
+            "--background-index",
+            "0",
+            "--mode",
+            "full",
+            "--export-fresh-state",
+            str(fresh_state_path),
+            "--report-path",
+            str(preflight_report_path),
+        ],
+        check=True,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+    preflight_report = json.loads(preflight_report_path.read_text(encoding="utf-8"))
+    targeted_gate = dict(preflight_report.get("targeted_performance_gate", {}))
+
+    assert preflight_report["processed_manual_entry_count"] == 7
+    assert preflight_report["bound_manual_entry_count"] == 7
+    assert preflight_report["missing_manual_entry_count"] == 0
+    assert preflight_report["branch_mismatch_count"] == 0
+    assert preflight_report["background_distance_gate_ok"] is True
+    assert preflight_report["runtime_prepare_ok"] is True
+    assert preflight_report["fresh_export_ok"] is True
+    assert preflight_report["resolved_source_pair_count"] == 7
+    assert targeted_gate
+    assert targeted_gate["ok"] is True
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(baseline_script),
+            str(fresh_state_path),
+            "--output-root",
+            str(baseline_output_root),
+        ],
+        check=True,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+    baseline_report_path = (
+        baseline_output_root
+        / fresh_state_path.stem
+        / f"{fresh_state_path.stem}_quality_report.json"
+    )
+    baseline_report = json.loads(baseline_report_path.read_text(encoding="utf-8"))
+    saved_state_gate = dict(baseline_report.get("saved_state_gate", {}))
+
+    assert baseline_report["matched_fixed_pair_count_after"] == 7
+    assert baseline_report["missing_fixed_pair_count_after"] == 0
+    assert baseline_report["branch_mismatch_count"] == 0
+    assert baseline_report["rejection_reason"] != (
+        "No matched peak pairs were available for the fitted solution."
+    )
+    assert (
+        baseline_report["after_rms_px"]
+        <= baseline_report["before_rms_px"] + 0.25
+    )
+    assert (
+        baseline_report["after_max_error_px"]
+        <= baseline_report["before_max_error_px"] + 1.0
+    )
+    assert saved_state_gate["ok"] is True

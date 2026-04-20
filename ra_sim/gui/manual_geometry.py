@@ -504,6 +504,7 @@ def refresh_geometry_manual_pair_entry(
         source=raw_entry,
     )
     detector_point = native_point
+    detector_point_source = "native_detector_coords"
     if (
         detector_point is None
         and raw_detector_display is not None
@@ -515,6 +516,8 @@ def refresh_geometry_manual_pair_entry(
                 float(raw_detector_display[1]),
             )
         )
+        if detector_point is not None:
+            detector_point_source = "sim_col_raw_inverse_projection"
         if display_point is None:
             display_point = (
                 float(raw_detector_display[0]),
@@ -522,11 +525,15 @@ def refresh_geometry_manual_pair_entry(
             )
     if detector_point is None:
         detector_point = _finite_pair("detector_x", "detector_y")
+        if detector_point is not None:
+            detector_point_source = "detector_fields"
     if detector_point is None:
         detector_point = _finite_pair(
             "background_detector_x",
             "background_detector_y",
         )
+        if detector_point is not None:
+            detector_point_source = "background_detector_fields"
     if (
         detector_point is None
         and display_point is not None
@@ -538,6 +545,8 @@ def refresh_geometry_manual_pair_entry(
                 float(display_point[1]),
             )
         )
+        if detector_point is not None:
+            detector_point_source = "display_point_inverse_projection"
 
     if (
         detector_point is None
@@ -634,6 +643,7 @@ def refresh_geometry_manual_pair_entry(
             float(mapped_detector_point[0]),
             float(mapped_detector_point[1]),
         )
+        detector_point_source = "caked_inverse_projection"
         display_point = (
             float(mapped_display_point[0]),
             float(mapped_display_point[1]),
@@ -648,6 +658,8 @@ def refresh_geometry_manual_pair_entry(
     normalized["detector_y"] = float(detector_row)
     normalized["background_detector_x"] = float(detector_col)
     normalized["background_detector_y"] = float(detector_row)
+    normalized["background_detector_input_frame"] = "native_detector"
+    normalized["background_detector_frame_provenance"] = str(detector_point_source)
     normalized["native_col"] = float(detector_col)
     normalized["native_row"] = float(detector_row)
     normalized["sim_native_x"] = float(detector_col)
@@ -6219,24 +6231,16 @@ def make_runtime_geometry_manual_projection_callbacks(
             )
             legacy_sim_point = _entry_point(entry, "sim_col", "sim_row")
             legacy_xy_point = _entry_point(entry, "x", "y")
-            raw_detector_display = _entry_point(entry, "sim_col_raw", "sim_row_raw")
+            raw_sim_detector_point = _entry_point(entry, "sim_col_raw", "sim_row_raw")
+            raw_detector_display = raw_sim_detector_point
+            raw_detector_display_source = (
+                "sim_col_raw" if raw_sim_detector_point is not None else None
+            )
             if refined_detector_display is not None:
                 raw_detector_display = refined_detector_display
+                raw_detector_display_source = "refined_sim_x"
             elif refined_native_point is None and refined_caked_point is not None:
                 raw_detector_display = None
-            if raw_detector_display is None and legacy_sim_point is not None and (
-                (
-                    caked_point is None
-                    and (
-                        display_detector_candidate is None
-                        or native_point is not None
-                        or not _points_match(legacy_sim_point, display_detector_candidate)
-                    )
-                )
-            ):
-                raw_detector_display = legacy_sim_point
-            if raw_detector_display is None and legacy_xy_point is not None:
-                raw_detector_display = legacy_xy_point
             # display_col/display_row are active-view coordinates. After a GUI
             # state restore they may be detector display pixels, caked axes, or
             # stale overlay coordinates. They are therefore not stable detector
@@ -6244,11 +6248,17 @@ def make_runtime_geometry_manual_projection_callbacks(
             # coordinates. Only explicit detector-space fields, native fields,
             # or caked angle fields are allowed to seed reprojection.
             frozen_display_point = None
+            legacy_matches_display = bool(
+                legacy_sim_point is not None
+                and display_detector_candidate is not None
+                and _points_match(legacy_sim_point, display_detector_candidate)
+            )
             if (
                 raw_detector_display is None
                 and native_point is None
                 and caked_point is None
                 and display_detector_candidate is not None
+                and not legacy_matches_display
             ):
                 frozen_display_point = (
                     float(display_detector_candidate[0]),
@@ -6307,11 +6317,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                         float(projected_native[1]),
                     )
 
-            if (
-                native_point is None
-                and raw_detector_display is not None
-            ):
-                use_background_display_inverse = (
+            if native_point is None and raw_detector_display is not None:
+                use_background_display_inverse = bool(
                     refined_detector_display is not None
                     and abs(
                         float(raw_detector_display[0])
@@ -6333,7 +6340,10 @@ def make_runtime_geometry_manual_projection_callbacks(
                         )
                     except Exception:
                         derived_native = None
-                elif callable(display_to_native_sim_coords):
+                elif (
+                    raw_detector_display_source == "sim_col_raw"
+                    and callable(display_to_native_sim_coords)
+                ):
                     try:
                         derived_native = display_to_native_sim_coords(
                             float(raw_detector_display[0]),
@@ -6434,6 +6444,19 @@ def make_runtime_geometry_manual_projection_callbacks(
                     "sim_native_y",
                 ):
                     entry.pop(stale_key, None)
+            if (
+                native_point is None
+                and not use_caked
+                and refined_detector_display is None
+                and (
+                    legacy_sim_point is not None
+                    or (
+                        raw_sim_detector_point is not None
+                        and raw_detector_display_source != "sim_col_raw"
+                    )
+                )
+            ):
+                continue
             if caked_point is not None:
                 entry["caked_x"] = float(caked_point[0])
                 entry["caked_y"] = float(caked_point[1])

@@ -433,6 +433,11 @@ def _normalize_pair_record(record: Mapping[str, object]) -> dict[str, object]:
         "simulated_fit_space_source": (
             str(record.get("simulated_fit_space_source", "") or "") or None
         ),
+        "fit_space_anchor_override": (
+            bool(record.get("fit_space_anchor_override"))
+            if record.get("fit_space_anchor_override") is not None
+            else False
+        ),
         "fit_space_projector_kind": (
             str(record.get("fit_space_projector_kind", "") or "") or None
         ),
@@ -681,6 +686,9 @@ def _pair_alignment_rows(
                 "simulated_phi_deg": _float_or_none(reference.get("simulated_phi_deg")),
                 "measured_fit_space_source": reference.get("measured_fit_space_source"),
                 "simulated_fit_space_source": reference.get("simulated_fit_space_source"),
+                "fit_space_anchor_override": bool(
+                    reference.get("fit_space_anchor_override", False)
+                ),
                 "fit_space_projector_kind": reference.get("fit_space_projector_kind"),
                 "cake_bundle_signature": reference.get("cake_bundle_signature"),
                 "measured_native_frame_conversion_source": reference.get(
@@ -719,6 +727,136 @@ def _pair_alignment_rows(
             }
         )
     return rows
+
+
+def validate_manual_caked_fit_space_provenance(
+    report_or_rows: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
+) -> list[str]:
+    if isinstance(report_or_rows, Mapping):
+        report = dict(report_or_rows)
+        rows = [
+            dict(entry)
+            for entry in list(report.get("pair_alignment_rows", []) or [])
+            if isinstance(entry, Mapping)
+        ]
+        state_name = str(report.get("state_name", "") or "")
+        exact_available = bool(report.get("exact_fit_space_projector_available", False))
+        exact_reason = str(report.get("exact_fit_space_projection_reason", "") or "")
+        manual_row_count = _int_or_none(report.get("manual_caked_residual_row_count")) or 0
+        dataset_projector_row_count = (
+            _int_or_none(report.get("dataset_fit_space_projector_row_count")) or 0
+        )
+        invalid_projector_row_count = (
+            _int_or_none(report.get("invalid_dataset_fit_space_projector_row_count")) or 0
+        )
+        analytic_row_count = (
+            _int_or_none(report.get("analytic_detector_fit_space_row_count")) or 0
+        )
+    else:
+        report = {}
+        rows = [
+            dict(entry)
+            for entry in list(report_or_rows or [])
+            if isinstance(entry, Mapping)
+        ]
+        state_name = ""
+        exact_available = False
+        exact_reason = ""
+        manual_row_count = len(rows)
+        dataset_projector_row_count = 0
+        invalid_projector_row_count = 0
+        analytic_row_count = 0
+
+    violations: list[str] = []
+    if state_name == "new4_fresh_all" and manual_row_count <= 0:
+        violations.append("new4 manual_caked_residual_row_count is empty")
+    if state_name == "new4_fresh_all" and not exact_available:
+        violations.append("new4 exact_fit_space_projector_available is false")
+    if state_name == "new4_fresh_all" and dataset_projector_row_count <= 0:
+        violations.append("new4 dataset_fit_space_projector_row_count is empty")
+    if state_name == "new4_fresh_all" and invalid_projector_row_count > 0:
+        violations.append("new4 invalid_dataset_fit_space_projector_row_count is nonzero")
+    if state_name == "new4_fresh_all" and analytic_row_count > 0:
+        violations.append("new4 analytic_detector_fit_space_row_count is nonzero")
+    if not exact_available and not exact_reason:
+        violations.append(
+            "exact_fit_space_projector_available is false but reason is missing"
+        )
+
+    for row in rows:
+        pair_id = str(row.get("pair_id", "") or "<unknown>")
+        if row.get("selected_is_minimum_background_distance") is False:
+            violations.append(
+                f"{pair_id}: selected_is_minimum_background_distance is false"
+            )
+        exact_row = str(row.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
+        if not exact_row:
+            continue
+        for field_name in (
+            "measured_fit_space_source",
+            "simulated_fit_space_source",
+            "measured_detector_input_frame",
+            "simulated_detector_input_frame",
+            "measured_native_frame_conversion_count",
+            "simulated_native_frame_conversion_count",
+            "fit_space_projector_kind",
+            "cake_bundle_signature",
+        ):
+            value = row.get(field_name)
+            if value in (None, ""):
+                violations.append(f"{pair_id}: missing required field {field_name}")
+        measured_source = str(row.get("measured_fit_space_source", "") or "")
+        simulated_source = str(row.get("simulated_fit_space_source", "") or "")
+        measured_frame = str(row.get("measured_detector_input_frame", "") or "")
+        simulated_frame = str(row.get("simulated_detector_input_frame", "") or "")
+        measured_count = _int_or_none(row.get("measured_native_frame_conversion_count"))
+        simulated_count = _int_or_none(row.get("simulated_native_frame_conversion_count"))
+
+        if simulated_source != "dataset_fit_space_projector":
+            violations.append(
+                f"{pair_id}: simulated_fit_space_source={simulated_source!r}"
+            )
+        if not bool(row.get("fit_space_anchor_override", False)) and measured_frame != "explicit_override":
+            if measured_source != "dataset_fit_space_projector":
+                violations.append(
+                    f"{pair_id}: measured_fit_space_source={measured_source!r}"
+                )
+        if "analytic_detector_fit_space" in {measured_source, simulated_source}:
+            violations.append(f"{pair_id}: analytic_detector_fit_space present on exact row")
+        if (
+            "invalid_dataset_fit_space_projector" in {measured_source, simulated_source}
+            and "analytic_detector_fit_space" in {measured_source, simulated_source}
+        ):
+            violations.append(
+                f"{pair_id}: invalid_dataset_fit_space_projector coexists with analytic fallback"
+            )
+        if measured_source == "invalid_dataset_fit_space_projector" and not str(
+            row.get("measured_invalid_projection_reason", "")
+            or row.get("invalid_projection_reason", "")
+        ).strip():
+            violations.append(f"{pair_id}: missing measured invalid projection reason")
+        if simulated_source == "invalid_dataset_fit_space_projector" and not str(
+            row.get("simulated_invalid_projection_reason", "")
+            or row.get("invalid_projection_reason", "")
+        ).strip():
+            violations.append(f"{pair_id}: missing simulated invalid projection reason")
+
+        if measured_frame not in {"native_detector", "fit_detector", "explicit_override"}:
+            violations.append(f"{pair_id}: invalid measured_detector_input_frame={measured_frame!r}")
+        if simulated_frame not in {"native_detector", "fit_detector"}:
+            violations.append(f"{pair_id}: invalid simulated_detector_input_frame={simulated_frame!r}")
+        if measured_frame == "native_detector" and measured_count != 0:
+            violations.append(f"{pair_id}: measured native frame count should be 0")
+        if measured_frame == "fit_detector" and measured_count != 1:
+            violations.append(f"{pair_id}: measured fit frame count should be 1")
+        if measured_frame == "explicit_override" and measured_source != "cached_fit_space_anchor":
+            violations.append(f"{pair_id}: explicit override does not use cached_fit_space_anchor")
+        if simulated_frame == "native_detector" and simulated_count != 0:
+            violations.append(f"{pair_id}: simulated native frame count should be 0")
+        if simulated_frame == "fit_detector" and simulated_count != 1:
+            violations.append(f"{pair_id}: simulated fit frame count should be 1")
+
+    return violations
 
 
 def _count_reason_values(
@@ -1433,6 +1571,10 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         matched_statuses=("matched",),
         residual_priority=("detector_residual_px",),
     )
+    background_context = _background_context(
+        artifacts.state_path,
+        artifacts.out_state_path if artifacts.out_state_path.is_file() else None,
+    )
     pair_alignment_rows = _pair_alignment_rows(
         trace_records,
         before_phase=str(before_summary["phase"]),
@@ -1468,10 +1610,6 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
     )
     final_summary = dict(log_artifacts.get("final_summary", {}))
     optimizer_summary = dict(log_artifacts.get("optimizer_summary", {}))
-    background_context = _background_context(
-        artifacts.state_path,
-        artifacts.out_state_path if artifacts.out_state_path.is_file() else None,
-    )
     matched_preview = _load_matched_peaks_preview(artifacts.matched_peaks_path)
     cli_stdout_text = (
         artifacts.cli_stdout_path.read_text(encoding="utf-8")
@@ -1696,6 +1834,105 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
             ),
         },
     }
+    point_match_summary = (
+        dict(run_record.get("point_match_summary", {}))
+        if isinstance(run_record.get("point_match_summary"), Mapping)
+        else {}
+    )
+    manual_caked_rows = [
+        dict(entry)
+        for entry in pair_alignment_rows
+        if str(entry.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
+    ]
+    report.update(
+        {
+            "processed_manual_entry_count": _int_or_none(
+                background_context.get("preflight_processed_manual_entry_count")
+            ),
+            "bound_manual_entry_count": _int_or_none(
+                background_context.get("preflight_valid_count")
+            ),
+            "missing_manual_entry_count": _int_or_none(
+                background_context.get("preflight_missing_manual_entry_count")
+            ),
+            "branch_mismatch_count": _int_or_none(
+                background_context.get("preflight_branch_mismatch_count")
+            ),
+            "background_distance_gate_ok": bool(
+                background_context.get("preflight_background_distance_gate_ok", False)
+            ),
+            "dataset_resolved_source_pair_count": _int_or_none(
+                background_context.get("preflight_dataset_resolved_source_pair_count")
+            ),
+            "manual_caked_residual_row_count": int(len(manual_caked_rows)),
+            "dataset_fit_space_projector_row_count": int(
+                sum(
+                    1
+                    for entry in manual_caked_rows
+                    if "dataset_fit_space_projector"
+                    in {
+                        str(entry.get("measured_fit_space_source", "") or ""),
+                        str(entry.get("simulated_fit_space_source", "") or ""),
+                    }
+                )
+            ),
+            "invalid_dataset_fit_space_projector_row_count": int(
+                sum(
+                    1
+                    for entry in manual_caked_rows
+                    if "invalid_dataset_fit_space_projector"
+                    in {
+                        str(entry.get("measured_fit_space_source", "") or ""),
+                        str(entry.get("simulated_fit_space_source", "") or ""),
+                    }
+                )
+            ),
+            "analytic_detector_fit_space_row_count": int(
+                sum(
+                    1
+                    for entry in manual_caked_rows
+                    if "analytic_detector_fit_space"
+                    in {
+                        str(entry.get("measured_fit_space_source", "") or ""),
+                        str(entry.get("simulated_fit_space_source", "") or ""),
+                    }
+                )
+            ),
+            "cached_fit_space_anchor_row_count": int(
+                sum(
+                    1
+                    for entry in manual_caked_rows
+                    if "cached_fit_space_anchor"
+                    in {
+                        str(entry.get("measured_fit_space_source", "") or ""),
+                        str(entry.get("simulated_fit_space_source", "") or ""),
+                    }
+                )
+            ),
+            "exact_fit_space_projector_available": bool(
+                point_match_summary.get("exact_fit_space_projector_available", False)
+            ),
+            "exact_fit_space_projection_reason": (
+                str(point_match_summary.get("exact_fit_space_projection_reason", "") or "")
+                or (
+                    None
+                    if bool(
+                        point_match_summary.get(
+                            "exact_fit_space_projector_available",
+                            False,
+                        )
+                    )
+                    else "exact_projector_provenance_missing"
+                )
+            ),
+            "fit_space_local_params_signature": point_match_summary.get(
+                "fit_space_local_params_signature"
+            ),
+        }
+    )
+    report["fit_space_provenance_validation"] = validate_manual_caked_fit_space_provenance(
+        report
+    )
     report["saved_state_gate"] = _saved_state_gate_summary(report)
     return _json_safe(report)  # type: ignore[return-value]
 
@@ -1835,6 +2072,32 @@ def _compact_summary_from_report(
             "saved_state_gate_failures": [
                 str(item)
                 for item in list(saved_state_gate.get("failures", []))
+                if str(item).strip()
+            ],
+            "manual_caked_residual_row_count": int(
+                report.get("manual_caked_residual_row_count", 0) or 0
+            ),
+            "dataset_fit_space_projector_row_count": int(
+                report.get("dataset_fit_space_projector_row_count", 0) or 0
+            ),
+            "invalid_dataset_fit_space_projector_row_count": int(
+                report.get("invalid_dataset_fit_space_projector_row_count", 0) or 0
+            ),
+            "analytic_detector_fit_space_row_count": int(
+                report.get("analytic_detector_fit_space_row_count", 0) or 0
+            ),
+            "cached_fit_space_anchor_row_count": int(
+                report.get("cached_fit_space_anchor_row_count", 0) or 0
+            ),
+            "exact_fit_space_projector_available": bool(
+                report.get("exact_fit_space_projector_available", False)
+            ),
+            "exact_fit_space_projection_reason": report.get(
+                "exact_fit_space_projection_reason"
+            ),
+            "fit_space_provenance_validation": [
+                str(item)
+                for item in list(report.get("fit_space_provenance_validation", []) or [])
                 if str(item).strip()
             ],
             "elapsed_s": float(max(0.0, elapsed_s)),
