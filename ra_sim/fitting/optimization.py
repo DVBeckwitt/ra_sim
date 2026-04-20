@@ -43,12 +43,21 @@ RNG = np.random.default_rng(42)
 LOGGER = logging.getLogger(__name__)
 FIT_SPACE_ANCHOR_SOURCE_KEYS: tuple[str, ...] = (
     "cached_fit_space_anchor",
+    "dataset_fit_space_projector",
+    "invalid_dataset_fit_space_projector",
     "native_fit_space_anchor",
     "background_detector_fit_space_anchor",
     "detector_fit_space_anchor",
     "display_fit_space_anchor",
 )
-DETECTOR_DERIVED_FIT_SPACE_ANCHOR_REASONS = frozenset(FIT_SPACE_ANCHOR_SOURCE_KEYS[1:])
+DETECTOR_DERIVED_FIT_SPACE_ANCHOR_REASONS = frozenset(
+    (
+        "native_fit_space_anchor",
+        "background_detector_fit_space_anchor",
+        "detector_fit_space_anchor",
+        "display_fit_space_anchor",
+    )
+)
 
 process_peaks_parallel = getattr(
     _runtime,
@@ -1133,6 +1142,53 @@ class GeometryFitDatasetContext:
     experimental_image: Optional[np.ndarray] = None
     dynamic_reanchor_enabled: bool = False
     dynamic_reanchor_callback: Optional[Callable[..., Mapping[str, object] | None]] = None
+    fit_space_projector: Optional[Callable[..., object]] = None
+    fit_space_projector_kind: str | None = None
+    fit_space_projector_unavailable_reason: str | None = None
+
+
+def _copy_geometry_fit_dataset_context(
+    dataset_ctx: GeometryFitDatasetContext,
+    *,
+    subset: ReflectionSimulationSubset | None = None,
+    experimental_image: np.ndarray | None | object = None,
+    dynamic_reanchor_enabled: bool | None = None,
+    dynamic_reanchor_callback: Callable[..., Mapping[str, object] | None] | None | object = None,
+) -> GeometryFitDatasetContext:
+    return GeometryFitDatasetContext(
+        dataset_index=int(dataset_ctx.dataset_index),
+        label=str(dataset_ctx.label),
+        theta_initial=float(dataset_ctx.theta_initial),
+        subset=(dataset_ctx.subset if subset is None else subset),
+        experimental_image=(
+            dataset_ctx.experimental_image
+            if experimental_image is None
+            else (
+                None
+                if experimental_image is False
+                else np.asarray(experimental_image, dtype=np.float64)
+            )
+        ),
+        dynamic_reanchor_enabled=(
+            bool(dataset_ctx.dynamic_reanchor_enabled)
+            if dynamic_reanchor_enabled is None
+            else bool(dynamic_reanchor_enabled)
+        ),
+        dynamic_reanchor_callback=(
+            dataset_ctx.dynamic_reanchor_callback
+            if dynamic_reanchor_callback is None
+            else (
+                None
+                if dynamic_reanchor_callback is False
+                else dynamic_reanchor_callback
+            )
+        ),
+        fit_space_projector=dataset_ctx.fit_space_projector,
+        fit_space_projector_kind=dataset_ctx.fit_space_projector_kind,
+        fit_space_projector_unavailable_reason=(
+            dataset_ctx.fit_space_projector_unavailable_reason
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -1643,10 +1699,8 @@ def _apply_discrete_mode_to_dataset_contexts(
             reduced=bool(subset.reduced),
         )
         out.append(
-            GeometryFitDatasetContext(
-                dataset_index=int(dataset_ctx.dataset_index),
-                label=str(dataset_ctx.label),
-                theta_initial=float(dataset_ctx.theta_initial),
+            _copy_geometry_fit_dataset_context(
+                dataset_ctx,
                 subset=transformed_subset,
                 experimental_image=_apply_discrete_mode_to_image(
                     dataset_ctx.experimental_image,
@@ -2830,6 +2884,13 @@ def _build_geometry_fit_dataset_contexts(
         dynamic_reanchor_callback = entry.get("dynamic_reanchor_callback", None)
         if not callable(dynamic_reanchor_callback):
             dynamic_reanchor_callback = None
+        fit_space_projector = entry.get("fit_space_projector", None)
+        if not callable(fit_space_projector):
+            fit_space_projector = None
+        fit_space_projector_kind = str(entry.get("fit_space_projector_kind", "") or "") or None
+        fit_space_projector_unavailable_reason = str(
+            entry.get("fit_space_projector_unavailable_reason", "") or ""
+        ) or None
         subset = _prepare_reflection_subset(miller, intensities, measured_local)
         contexts.append(
             GeometryFitDatasetContext(
@@ -2846,6 +2907,11 @@ def _build_geometry_fit_dataset_contexts(
                     dynamic_reanchor_enabled and callable(dynamic_reanchor_callback)
                 ),
                 dynamic_reanchor_callback=dynamic_reanchor_callback,
+                fit_space_projector=fit_space_projector,
+                fit_space_projector_kind=fit_space_projector_kind,
+                fit_space_projector_unavailable_reason=(
+                    fit_space_projector_unavailable_reason
+                ),
             )
         )
     return contexts
@@ -3814,6 +3880,27 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     fit_space_anchor_count_detector = 0
     fit_space_anchor_source_counts = _empty_fit_space_anchor_source_counts()
     fit_space_two_theta_adjustments: List[float] = []
+    manual_caked_residual_row_count = 0
+    dataset_fit_space_projector_row_count = 0
+    invalid_dataset_fit_space_projector_row_count = 0
+    analytic_detector_fit_space_row_count = 0
+    cached_fit_space_anchor_row_count = 0
+    exact_fit_space_projector_available = bool(
+        callable(dataset_ctx.fit_space_projector)
+        and str(dataset_ctx.fit_space_projector_kind or "") == "exact_caked_bundle"
+    )
+    exact_fit_space_projection_reason = (
+        None
+        if exact_fit_space_projector_available
+        else (
+            dataset_ctx.fit_space_projector_unavailable_reason
+            or (
+                "fit_space_projector_not_configured"
+                if not callable(dataset_ctx.fit_space_projector)
+                else "fit_space_projector_not_exact_caked_bundle"
+            )
+        )
+    )
     pixel_size_provenance = _fit_space_pixel_size_provenance(local)
     pixel_size = float(pixel_size_provenance.get("value", np.nan))
     detector_distance = float(local.get("corto_detector", np.nan))
@@ -3850,6 +3937,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
 
     for idx, measured_entry in enumerate(normalized_measured):
         diag = _entry_diag(measured_entry, idx)
+        if exact_fit_space_projector_available:
+            manual_caked_residual_row_count += 1
         priority_fields = _geometry_peak_priority_metadata(
             measured_entry,
             hk0_peak_priority_weight=float(hk0_peak_priority_weight),
@@ -3929,20 +4018,54 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             a_lattice=a_lattice,
             c_lattice=c_lattice,
             wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
+            dataset_ctx=dataset_ctx,
+            local_params=local,
         )
         if measured_fit_anchor is not None:
             if measured_reason == "cached_fit_space_anchor":
                 fit_space_anchor_count_cached += 1
             elif measured_reason in DETECTOR_DERIVED_FIT_SPACE_ANCHOR_REASONS:
                 fit_space_anchor_count_detector += 1
-            if measured_reason in fit_space_anchor_source_counts:
-                fit_space_anchor_source_counts[measured_reason] += 1
+        measured_fit_space_source = str(
+            measured_anchor_metadata.get("fit_space_source", measured_reason)
+            or measured_reason
+        )
+        measured_diag_fields = _measured_fit_space_diag_fields(
+            measured_anchor_metadata
+        )
+        if measured_fit_space_source in fit_space_anchor_source_counts:
+            fit_space_anchor_source_counts[measured_fit_space_source] += 1
+        if exact_fit_space_projector_available:
+            if measured_fit_space_source == "dataset_fit_space_projector":
+                dataset_fit_space_projector_row_count += 1
+            elif measured_fit_space_source == "invalid_dataset_fit_space_projector":
+                invalid_dataset_fit_space_projector_row_count += 1
+            elif measured_fit_space_source == "analytic_detector_fit_space":
+                analytic_detector_fit_space_row_count += 1
+            elif measured_fit_space_source == "cached_fit_space_anchor":
+                cached_fit_space_anchor_row_count += 1
         try:
             two_theta_adjustment_deg = float(
                 measured_anchor_metadata.get("two_theta_adjustment_deg", np.nan)
             )
         except Exception:
             two_theta_adjustment_deg = float("nan")
+        simulated_projection_meta: Dict[str, object] = {
+            "fit_space_source": None,
+            "input_frame": None,
+            "fit_space_projector_kind": dataset_ctx.fit_space_projector_kind,
+            "cake_bundle_signature": None,
+            "native_frame_conversion_source": "",
+            "native_frame_conversion_count": 0,
+            "native_cols": np.asarray([np.nan], dtype=np.float64),
+            "native_rows": np.asarray([np.nan], dtype=np.float64),
+            "invalid_reason": None,
+        }
+        simulated_diag_fields = _simulated_fit_space_diag_fields(
+            simulated_projection_meta,
+            field_name="sim_point",
+            frame_reason="fixed_source_sim_point",
+        )
         if np.isfinite(two_theta_adjustment_deg) and abs(two_theta_adjustment_deg) > 1.0e-12:
             fit_space_two_theta_adjustments.append(float(two_theta_adjustment_deg))
         measured_detector_anchor, detector_reason = _measured_detector_anchor(measured_entry)
@@ -3988,6 +4111,23 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "delta_two_theta_deg": float("nan"),
                         "delta_phi_deg": float("nan"),
                         "angular_distance_deg": float("nan"),
+                        "simulated_two_theta_deg": float("nan"),
+                        "simulated_phi_deg": float("nan"),
+                        **measured_diag_fields,
+                        **simulated_diag_fields,
+                        "fit_space_projector_kind": (
+                            measured_diag_fields.get("fit_space_projector_kind")
+                            or simulated_diag_fields.get("fit_space_projector_kind")
+                        ),
+                        "cake_bundle_signature": (
+                            measured_diag_fields.get("cake_bundle_signature")
+                            or simulated_diag_fields.get("cake_bundle_signature")
+                        ),
+                        "valid": False,
+                        "invalid_projection_reason": (
+                            measured_diag_fields.get("measured_invalid_projection_reason")
+                            or "missing_measured_fit_space_anchor"
+                        ),
                         "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
                         * float(priority_weight),
                         **priority_fields,
@@ -4036,9 +4176,23 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "distance_px": float("nan"),
                         "measured_two_theta_deg": float(measured_two_theta),
                         "measured_phi_deg": float(measured_phi),
+                        "simulated_two_theta_deg": float("nan"),
+                        "simulated_phi_deg": float("nan"),
                         "delta_two_theta_deg": float("nan"),
                         "delta_phi_deg": float("nan"),
                         "angular_distance_deg": float("nan"),
+                        **measured_diag_fields,
+                        **simulated_diag_fields,
+                        "fit_space_projector_kind": (
+                            measured_diag_fields.get("fit_space_projector_kind")
+                            or simulated_diag_fields.get("fit_space_projector_kind")
+                        ),
+                        "cake_bundle_signature": (
+                            measured_diag_fields.get("cake_bundle_signature")
+                            or simulated_diag_fields.get("cake_bundle_signature")
+                        ),
+                        "valid": False,
+                        "invalid_projection_reason": "missing_simulated_detector_point",
                         "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
                         * float(priority_weight),
                         **priority_fields,
@@ -4049,15 +4203,40 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         fixed_source_resolved_count += 1
         sim_col = float(sim_point[0])
         sim_row = float(sim_point[1])
-        sim_two_theta_arr, sim_phi_arr = _detector_pixels_to_fit_space(
-            np.array([sim_col], dtype=np.float64),
-            np.array([sim_row], dtype=np.float64),
-            center=fit_center,
-            detector_distance=detector_distance,
-            pixel_size=pixel_size,
-            gamma_deg=gamma_deg,
-            Gamma_deg=Gamma_deg,
+        sim_two_theta_arr, sim_phi_arr, simulated_projection_meta = (
+            _project_detector_points_to_fit_space(
+                dataset_ctx,
+                np.array([sim_col], dtype=np.float64),
+                np.array([sim_row], dtype=np.float64),
+                local_params=local,
+                anchor_kind="simulated",
+                input_frame="fit_detector",
+                center=fit_center,
+                detector_distance=detector_distance,
+                pixel_size=pixel_size,
+                gamma_deg=gamma_deg,
+                Gamma_deg=Gamma_deg,
+            )
         )
+        simulated_fit_space_source = str(
+            simulated_projection_meta.get(
+                "fit_space_source",
+                "analytic_detector_fit_space",
+            )
+            or "analytic_detector_fit_space"
+        )
+        simulated_diag_fields = _simulated_fit_space_diag_fields(
+            simulated_projection_meta,
+            field_name="sim_point",
+            frame_reason="fixed_source_sim_point",
+        )
+        if exact_fit_space_projector_available:
+            if simulated_fit_space_source == "dataset_fit_space_projector":
+                dataset_fit_space_projector_row_count += 1
+            elif simulated_fit_space_source == "invalid_dataset_fit_space_projector":
+                invalid_dataset_fit_space_projector_row_count += 1
+            elif simulated_fit_space_source == "analytic_detector_fit_space":
+                analytic_detector_fit_space_row_count += 1
         if (
             sim_two_theta_arr.size < 1
             or sim_phi_arr.size < 1
@@ -4102,9 +4281,26 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "distance_px": float("nan"),
                         "measured_two_theta_deg": float(measured_two_theta),
                         "measured_phi_deg": float(measured_phi),
+                        "simulated_two_theta_deg": float("nan"),
+                        "simulated_phi_deg": float("nan"),
                         "delta_two_theta_deg": float("nan"),
                         "delta_phi_deg": float("nan"),
                         "angular_distance_deg": float("nan"),
+                        **measured_diag_fields,
+                        **simulated_diag_fields,
+                        "fit_space_projector_kind": (
+                            simulated_diag_fields.get("fit_space_projector_kind")
+                            or measured_diag_fields.get("fit_space_projector_kind")
+                        ),
+                        "cake_bundle_signature": (
+                            simulated_diag_fields.get("cake_bundle_signature")
+                            or measured_diag_fields.get("cake_bundle_signature")
+                        ),
+                        "valid": False,
+                        "invalid_projection_reason": (
+                            simulated_diag_fields.get("simulated_invalid_projection_reason")
+                            or "invalid_fit_space"
+                        ),
                         "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
                         * float(priority_weight),
                         **priority_fields,
@@ -4200,6 +4396,18 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "delta_two_theta_deg": float(delta_two_theta),
                     "delta_phi_deg": float(delta_phi),
                     "angular_distance_deg": float(angular_distance),
+                    **measured_diag_fields,
+                    **simulated_diag_fields,
+                    "fit_space_projector_kind": (
+                        simulated_diag_fields.get("fit_space_projector_kind")
+                        or measured_diag_fields.get("fit_space_projector_kind")
+                    ),
+                    "cake_bundle_signature": (
+                        simulated_diag_fields.get("cake_bundle_signature")
+                        or measured_diag_fields.get("cake_bundle_signature")
+                    ),
+                    "valid": True,
+                    "invalid_projection_reason": None,
                     **priority_fields,
                 }
             )
@@ -4273,6 +4481,24 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "measured_anchor_reanchor_attempt_count": int(measured_anchor_reanchor_attempt_count),
         "measured_anchor_reanchor_count": int(measured_anchor_reanchor_count),
         "measured_anchor_reanchor_fail_count": int(measured_anchor_reanchor_fail_count),
+        "manual_caked_residual_row_count": int(manual_caked_residual_row_count),
+        "dataset_fit_space_projector_row_count": int(
+            dataset_fit_space_projector_row_count
+        ),
+        "invalid_dataset_fit_space_projector_row_count": int(
+            invalid_dataset_fit_space_projector_row_count
+        ),
+        "analytic_detector_fit_space_row_count": int(
+            analytic_detector_fit_space_row_count
+        ),
+        "cached_fit_space_anchor_row_count": int(
+            cached_fit_space_anchor_row_count
+        ),
+        "exact_fit_space_projector_available": bool(
+            exact_fit_space_projector_available
+        ),
+        "exact_fit_space_projection_reason": exact_fit_space_projection_reason,
+        "fit_space_projector_kind": dataset_ctx.fit_space_projector_kind,
         "_live_cache_records": live_cache_records,
         **_fit_space_provenance_summary(
             local,
@@ -4280,6 +4506,15 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             detector_anchor_count=fit_space_anchor_count_detector,
             anchor_source_counts=fit_space_anchor_source_counts,
             two_theta_adjustments_deg=fit_space_two_theta_adjustments,
+            manual_caked_residual_row_count=manual_caked_residual_row_count,
+            dataset_fit_space_projector_row_count=dataset_fit_space_projector_row_count,
+            invalid_dataset_fit_space_projector_row_count=(
+                invalid_dataset_fit_space_projector_row_count
+            ),
+            analytic_detector_fit_space_row_count=analytic_detector_fit_space_row_count,
+            cached_fit_space_anchor_row_count=cached_fit_space_anchor_row_count,
+            exact_fit_space_projector_available=exact_fit_space_projector_available,
+            exact_fit_space_projection_reason=exact_fit_space_projection_reason,
         ),
     }
     if pixel_distances:
@@ -5933,10 +6168,8 @@ def _build_mosaic_shape_dataset_contexts(
             np.ascontiguousarray(subset_intensities[keep_rows], dtype=np.float64),
             usable_measured_entries,
         )
-        geometry_context = GeometryFitDatasetContext(
-            dataset_index=int(dataset_ctx.dataset_index),
-            label=str(dataset_ctx.label),
-            theta_initial=float(dataset_ctx.theta_initial),
+        geometry_context = _copy_geometry_fit_dataset_context(
+            dataset_ctx,
             subset=point_match_subset,
             experimental_image=experimental_image,
         )
@@ -10957,6 +11190,343 @@ def _measured_detector_anchor(
     )
 
 
+def _project_detector_points_to_fit_space(
+    dataset_ctx: GeometryFitDatasetContext | None,
+    cols: Sequence[float] | np.ndarray,
+    rows: Sequence[float] | np.ndarray,
+    *,
+    local_params: Mapping[str, object],
+    anchor_kind: str,
+    input_frame: str,
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+    gamma_deg: float = 0.0,
+    Gamma_deg: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, Dict[str, object]]:
+    cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+    rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+    meta: Dict[str, object] = {
+        "fit_space_source": "analytic_detector_fit_space",
+        "input_frame": str(input_frame or ""),
+        "fit_space_projector_kind": (
+            dataset_ctx.fit_space_projector_kind
+            if isinstance(dataset_ctx, GeometryFitDatasetContext)
+            else None
+        ),
+        "cake_bundle_signature": None,
+        "fit_space_local_params_signature": None,
+        "valid": True,
+        "invalid_reason": None,
+        "native_frame_conversion_source": "",
+        "native_frame_conversion_count": 0,
+        "native_cols": np.full(cols_arr.shape, np.nan, dtype=np.float64),
+        "native_rows": np.full(cols_arr.shape, np.nan, dtype=np.float64),
+    }
+    nan_two_theta = np.full(cols_arr.shape, np.nan, dtype=np.float64)
+    nan_phi = np.full(cols_arr.shape, np.nan, dtype=np.float64)
+    if cols_arr.shape != rows_arr.shape:
+        meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+        meta["valid"] = False
+        meta["invalid_reason"] = "shape_mismatch"
+        return nan_two_theta, nan_phi, meta
+
+    if isinstance(dataset_ctx, GeometryFitDatasetContext) and callable(
+        dataset_ctx.fit_space_projector
+    ):
+        try:
+            projected = dataset_ctx.fit_space_projector(
+                cols_arr,
+                rows_arr,
+                local_params=dict(local_params),
+                anchor_kind=str(anchor_kind),
+                input_frame=str(input_frame),
+            )
+        except Exception as exc:
+            meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+            meta["valid"] = False
+            meta["invalid_reason"] = f"projector_exception:{type(exc).__name__}"
+            return nan_two_theta, nan_phi, meta
+
+        if isinstance(projected, Mapping):
+            projected_map = dict(projected)
+            required_keys = (
+                "two_theta_deg",
+                "phi_deg",
+                "fit_space_source",
+                "input_frame",
+                "fit_space_projector_kind",
+                "cake_bundle_signature",
+                "valid",
+                "invalid_reason",
+                "native_frame_conversion_source",
+                "native_frame_conversion_count",
+            )
+            missing_keys = [
+                key for key in required_keys if key not in projected_map
+            ]
+            if missing_keys:
+                meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+                meta["valid"] = False
+                meta["invalid_reason"] = (
+                    "missing_projector_metadata:" + ",".join(missing_keys)
+                )
+                return nan_two_theta, nan_phi, meta
+            try:
+                two_theta_arr = np.asarray(
+                    projected_map.get("two_theta_deg"),
+                    dtype=np.float64,
+                ).reshape(-1)
+                phi_arr = np.asarray(
+                    projected_map.get("phi_deg"),
+                    dtype=np.float64,
+                ).reshape(-1)
+            except Exception:
+                meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+                meta["valid"] = False
+                meta["invalid_reason"] = "projector_array_conversion_failed"
+                return nan_two_theta, nan_phi, meta
+            meta.update(
+                {
+                    "fit_space_source": str(
+                        projected_map.get("fit_space_source")
+                        or "dataset_fit_space_projector"
+                    ),
+                    "input_frame": str(projected_map.get("input_frame") or ""),
+                    "fit_space_projector_kind": str(
+                        projected_map.get("fit_space_projector_kind") or ""
+                    )
+                    or dataset_ctx.fit_space_projector_kind,
+                    "cake_bundle_signature": projected_map.get(
+                        "cake_bundle_signature"
+                    ),
+                    "fit_space_local_params_signature": projected_map.get(
+                        "fit_space_local_params_signature"
+                    ),
+                    "valid": bool(projected_map.get("valid", False)),
+                    "invalid_reason": projected_map.get("invalid_reason"),
+                    "native_frame_conversion_source": str(
+                        projected_map.get("native_frame_conversion_source") or ""
+                    ),
+                    "native_frame_conversion_count": int(
+                        projected_map.get("native_frame_conversion_count", 0) or 0
+                    ),
+                    "native_cols": np.asarray(
+                        projected_map.get("native_cols", np.full(cols_arr.shape, np.nan)),
+                        dtype=np.float64,
+                    ).reshape(-1),
+                    "native_rows": np.asarray(
+                        projected_map.get("native_rows", np.full(rows_arr.shape, np.nan)),
+                        dtype=np.float64,
+                    ).reshape(-1),
+                }
+            )
+            if (
+                not bool(meta["valid"])
+                or two_theta_arr.shape != cols_arr.shape
+                or phi_arr.shape != rows_arr.shape
+                or not np.all(np.isfinite(two_theta_arr))
+                or not np.all(np.isfinite(phi_arr))
+            ):
+                meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+                meta["valid"] = False
+                if not meta.get("invalid_reason"):
+                    meta["invalid_reason"] = "invalid_projector_output"
+                return nan_two_theta, nan_phi, meta
+            return two_theta_arr, phi_arr, meta
+
+        if isinstance(projected, tuple) and len(projected) >= 2:
+            try:
+                two_theta_arr = np.asarray(projected[0], dtype=np.float64).reshape(-1)
+                phi_arr = np.asarray(projected[1], dtype=np.float64).reshape(-1)
+            except Exception:
+                meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+                meta["valid"] = False
+                meta["invalid_reason"] = "legacy_tuple_projection_failed"
+                return nan_two_theta, nan_phi, meta
+            if (
+                two_theta_arr.shape != cols_arr.shape
+                or phi_arr.shape != rows_arr.shape
+                or not np.all(np.isfinite(two_theta_arr))
+                or not np.all(np.isfinite(phi_arr))
+            ):
+                meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+                meta["valid"] = False
+                meta["invalid_reason"] = "legacy_tuple_projection_invalid"
+                return nan_two_theta, nan_phi, meta
+            meta.update(
+                {
+                    "fit_space_source": "dataset_fit_space_projector",
+                    "valid": True,
+                }
+            )
+            return two_theta_arr, phi_arr, meta
+
+        meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
+        meta["valid"] = False
+        meta["invalid_reason"] = "unsupported_projector_result"
+        return nan_two_theta, nan_phi, meta
+
+    two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
+        cols_arr,
+        rows_arr,
+        center=center,
+        detector_distance=float(detector_distance),
+        pixel_size=float(pixel_size),
+        gamma_deg=float(gamma_deg),
+        Gamma_deg=float(Gamma_deg),
+    )
+    return two_theta_arr, phi_arr, meta
+
+
+def _measured_fit_space_projection_input(
+    entry: Mapping[str, object],
+) -> Dict[str, object]:
+    def _finite_pair(x_key: str, y_key: str) -> tuple[float, float] | None:
+        try:
+            col = float(entry.get(x_key, np.nan))
+            row = float(entry.get(y_key, np.nan))
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    native_anchor = _finite_pair("native_col", "native_row")
+    if native_anchor is not None:
+        return {
+            "status": "projectable",
+            "field_name": "native_col/native_row",
+            "input_frame": "native_detector",
+            "frame_reason": "entry_native_col_native_row",
+            "col": float(native_anchor[0]),
+            "row": float(native_anchor[1]),
+        }
+
+    background_anchor = _finite_pair("background_detector_x", "background_detector_y")
+    if background_anchor is not None:
+        background_frame = str(
+            entry.get("background_detector_input_frame", "") or ""
+        ).strip()
+        if background_frame == "native_detector":
+            return {
+                "status": "projectable",
+                "field_name": "background_detector_x/background_detector_y",
+                "input_frame": "native_detector",
+                "frame_reason": str(
+                    entry.get("background_detector_frame_provenance", "")
+                    or "background_detector_native_provenance"
+                ),
+                "col": float(background_anchor[0]),
+                "row": float(background_anchor[1]),
+            }
+
+    fit_anchor = _finite_pair("fit_detector_x", "fit_detector_y")
+    if fit_anchor is not None:
+        return {
+            "status": "projectable",
+            "field_name": "fit_detector_x/fit_detector_y",
+            "input_frame": "fit_detector",
+            "frame_reason": "fit_detector_coords",
+            "col": float(fit_anchor[0]),
+            "row": float(fit_anchor[1]),
+        }
+
+    detector_anchor = _finite_pair("detector_x", "detector_y")
+    detector_frame = str(entry.get("detector_input_frame", "") or "").strip()
+    if detector_anchor is not None and detector_frame == "fit_detector":
+        return {
+            "status": "projectable",
+            "field_name": "detector_x/detector_y",
+            "input_frame": "fit_detector",
+            "frame_reason": str(
+                entry.get("detector_input_frame_reason", "") or "detector_fit_frame"
+            ),
+            "col": float(detector_anchor[0]),
+            "row": float(detector_anchor[1]),
+        }
+
+    if background_anchor is not None:
+        return {
+            "status": "ambiguous",
+            "field_name": "background_detector_x/background_detector_y",
+            "input_frame": None,
+            "frame_reason": "ambiguous_background_detector_frame",
+        }
+
+    return {
+        "status": "missing",
+        "field_name": None,
+        "input_frame": None,
+        "frame_reason": "missing_known_detector_frame",
+    }
+
+
+def _measured_fit_space_diag_fields(
+    metadata: Mapping[str, object] | None,
+) -> Dict[str, object]:
+    meta = dict(metadata or {})
+    return {
+        "measured_detector_field_name": meta.get("measured_detector_field_name"),
+        "measured_detector_input_frame": meta.get("measured_detector_input_frame"),
+        "measured_detector_frame_reason": meta.get("measured_detector_frame_reason"),
+        "measured_native_col": meta.get("measured_native_col"),
+        "measured_native_row": meta.get("measured_native_row"),
+        "measured_native_frame_conversion_source": meta.get(
+            "measured_native_frame_conversion_source", ""
+        ),
+        "measured_native_frame_conversion_count": int(
+            meta.get("measured_native_frame_conversion_count", 0) or 0
+        ),
+        "measured_fit_space_source": meta.get(
+            "fit_space_source",
+            meta.get("anchor_source"),
+        ),
+        "fit_space_projector_kind": meta.get("fit_space_projector_kind"),
+        "cake_bundle_signature": meta.get("cake_bundle_signature"),
+        "measured_invalid_projection_reason": meta.get("invalid_projection_reason"),
+    }
+
+
+def _simulated_fit_space_diag_fields(
+    metadata: Mapping[str, object] | None,
+    *,
+    field_name: str,
+    frame_reason: str,
+) -> Dict[str, object]:
+    meta = dict(metadata or {})
+    native_cols = np.asarray(
+        meta.get("native_cols", np.asarray([], dtype=np.float64)),
+        dtype=np.float64,
+    ).reshape(-1)
+    native_rows = np.asarray(
+        meta.get("native_rows", np.asarray([], dtype=np.float64)),
+        dtype=np.float64,
+    ).reshape(-1)
+    return {
+        "simulated_detector_field_name": str(field_name),
+        "simulated_detector_input_frame": meta.get("input_frame"),
+        "simulated_detector_frame_reason": str(frame_reason),
+        "simulated_native_col": (
+            float(native_cols[0]) if native_cols.size >= 1 and np.isfinite(native_cols[0]) else float("nan")
+        ),
+        "simulated_native_row": (
+            float(native_rows[0]) if native_rows.size >= 1 and np.isfinite(native_rows[0]) else float("nan")
+        ),
+        "simulated_native_frame_conversion_source": meta.get(
+            "native_frame_conversion_source",
+            "",
+        ),
+        "simulated_native_frame_conversion_count": int(
+            meta.get("native_frame_conversion_count", 0) or 0
+        ),
+        "simulated_fit_space_source": meta.get("fit_space_source"),
+        "fit_space_projector_kind": meta.get("fit_space_projector_kind"),
+        "cake_bundle_signature": meta.get("cake_bundle_signature"),
+        "simulated_invalid_projection_reason": meta.get("invalid_reason"),
+    }
+
+
 def _wavelength_scalar_from_local(
     local: Mapping[str, object],
 ) -> float:
@@ -11055,6 +11625,13 @@ def _fit_space_provenance_summary(
     detector_anchor_count: int = 0,
     anchor_source_counts: Mapping[str, object] | None = None,
     two_theta_adjustments_deg: Sequence[float] | None = None,
+    manual_caked_residual_row_count: int = 0,
+    dataset_fit_space_projector_row_count: int = 0,
+    invalid_dataset_fit_space_projector_row_count: int = 0,
+    analytic_detector_fit_space_row_count: int = 0,
+    cached_fit_space_anchor_row_count: int = 0,
+    exact_fit_space_projector_available: bool = False,
+    exact_fit_space_projection_reason: str | None = None,
 ) -> Dict[str, object]:
     """Return one public fit-space provenance summary payload."""
 
@@ -11094,11 +11671,79 @@ def _fit_space_provenance_summary(
         "fit_space_anchor_count_cached": int(source_counts["cached_fit_space_anchor"]),
         "fit_space_anchor_count_detector": int(detector_anchor_count),
         "fit_space_anchor_source_counts": dict(source_counts),
+        "manual_caked_residual_row_count": int(manual_caked_residual_row_count),
+        "dataset_fit_space_projector_row_count": int(
+            dataset_fit_space_projector_row_count
+        ),
+        "invalid_dataset_fit_space_projector_row_count": int(
+            invalid_dataset_fit_space_projector_row_count
+        ),
+        "analytic_detector_fit_space_row_count": int(
+            analytic_detector_fit_space_row_count
+        ),
+        "cached_fit_space_anchor_row_count": int(
+            cached_fit_space_anchor_row_count
+        ),
+        "exact_fit_space_projector_available": bool(
+            exact_fit_space_projector_available
+        ),
+        "exact_fit_space_projection_reason": exact_fit_space_projection_reason,
         "fit_space_two_theta_adjustment_count": int(adjustment_count),
         "fit_space_two_theta_adjustment_total_abs_deg": float(total_abs_deg),
         "fit_space_two_theta_adjustment_mean_abs_deg": float(mean_abs_deg),
         "fit_space_two_theta_adjustment_max_abs_deg": float(max_abs_deg),
     }
+
+
+def _merge_exact_fit_space_provenance_counts(
+    summary: Dict[str, object],
+    per_dataset_summaries: Sequence[Mapping[str, object]] | None,
+) -> None:
+    dataset_summaries = [
+        dict(item) for item in (per_dataset_summaries or ()) if isinstance(item, Mapping)
+    ]
+    summary["manual_caked_residual_row_count"] = int(
+        sum(int(item.get("manual_caked_residual_row_count", 0) or 0) for item in dataset_summaries)
+    )
+    summary["dataset_fit_space_projector_row_count"] = int(
+        sum(
+            int(item.get("dataset_fit_space_projector_row_count", 0) or 0)
+            for item in dataset_summaries
+        )
+    )
+    summary["invalid_dataset_fit_space_projector_row_count"] = int(
+        sum(
+            int(item.get("invalid_dataset_fit_space_projector_row_count", 0) or 0)
+            for item in dataset_summaries
+        )
+    )
+    summary["analytic_detector_fit_space_row_count"] = int(
+        sum(
+            int(item.get("analytic_detector_fit_space_row_count", 0) or 0)
+            for item in dataset_summaries
+        )
+    )
+    summary["cached_fit_space_anchor_row_count"] = int(
+        sum(
+            int(item.get("cached_fit_space_anchor_row_count", 0) or 0)
+            for item in dataset_summaries
+        )
+    )
+    summary["exact_fit_space_projector_available"] = bool(
+        any(bool(item.get("exact_fit_space_projector_available", False)) for item in dataset_summaries)
+    )
+    summary["exact_fit_space_projection_reason"] = (
+        None
+        if bool(summary["exact_fit_space_projector_available"])
+        else next(
+            (
+                str(item.get("exact_fit_space_projection_reason"))
+                for item in dataset_summaries
+                if str(item.get("exact_fit_space_projection_reason") or "").strip()
+            ),
+            None,
+        )
+    )
 
 
 def _measured_fit_space_anchor(
@@ -11112,6 +11757,8 @@ def _measured_fit_space_anchor(
     a_lattice: float | None = None,
     c_lattice: float | None = None,
     wavelength: float | None = None,
+    dataset_ctx: GeometryFitDatasetContext | None = None,
+    local_params: Mapping[str, object] | None = None,
 ) -> Tuple[Optional[Tuple[float, float]], str, Dict[str, object]]:
     """Return one measured `(2theta, phi)` anchor plus fit-space provenance."""
 
@@ -11122,6 +11769,23 @@ def _measured_fit_space_anchor(
         "cached_phi_deg": float("nan"),
         "reference_two_theta_deg": float("nan"),
         "current_theoretical_two_theta_deg": float("nan"),
+        "measured_detector_field_name": None,
+        "measured_detector_input_frame": None,
+        "measured_detector_frame_reason": "missing_known_detector_frame",
+        "measured_native_col": float("nan"),
+        "measured_native_row": float("nan"),
+        "measured_native_frame_conversion_source": "",
+        "measured_native_frame_conversion_count": 0,
+        "fit_space_source": "missing",
+        "fit_space_projector_kind": (
+            dataset_ctx.fit_space_projector_kind
+            if isinstance(dataset_ctx, GeometryFitDatasetContext)
+            else None
+        ),
+        "cake_bundle_signature": None,
+        "fit_space_local_params_signature": None,
+        "valid": False,
+        "invalid_projection_reason": None,
     }
 
     try:
@@ -11184,14 +11848,119 @@ def _measured_fit_space_anchor(
         and np.isfinite(base_phi)
     ):
         metadata["anchor_source"] = "cached_fit_space_anchor"
+        metadata["fit_space_source"] = "cached_fit_space_anchor"
         metadata["cached_two_theta_deg"] = float(base_two_theta)
         metadata["cached_phi_deg"] = float(base_phi)
         metadata["two_theta_adjustment_deg"] = 0.0
+        metadata["measured_detector_input_frame"] = "explicit_override"
+        metadata["measured_detector_frame_reason"] = "fit_space_anchor_override"
+        metadata["valid"] = True
         return (
             (float(base_two_theta), float(base_phi)),
             "cached_fit_space_anchor",
             metadata,
         )
+
+    projection_input = _measured_fit_space_projection_input(entry)
+    metadata["measured_detector_field_name"] = projection_input.get("field_name")
+    metadata["measured_detector_input_frame"] = projection_input.get("input_frame")
+    metadata["measured_detector_frame_reason"] = str(
+        projection_input.get("frame_reason", "missing_known_detector_frame")
+    )
+
+    if isinstance(dataset_ctx, GeometryFitDatasetContext) and callable(
+        dataset_ctx.fit_space_projector
+    ):
+        if str(projection_input.get("status", "")) == "projectable":
+            two_theta_arr, phi_arr, projection_meta = _project_detector_points_to_fit_space(
+                dataset_ctx,
+                np.array([projection_input["col"]], dtype=np.float64),
+                np.array([projection_input["row"]], dtype=np.float64),
+                local_params=(dict(local_params) if isinstance(local_params, Mapping) else {}),
+                anchor_kind="measured",
+                input_frame=str(projection_input.get("input_frame", "")),
+                center=center,
+                detector_distance=float(detector_distance),
+                pixel_size=float(pixel_size),
+                gamma_deg=float(gamma_deg),
+                Gamma_deg=float(Gamma_deg),
+            )
+            metadata["anchor_source"] = str(
+                projection_meta.get("fit_space_source", "invalid_dataset_fit_space_projector")
+            )
+            metadata["fit_space_source"] = str(
+                projection_meta.get("fit_space_source", "invalid_dataset_fit_space_projector")
+            )
+            metadata["fit_space_projector_kind"] = projection_meta.get(
+                "fit_space_projector_kind",
+                metadata.get("fit_space_projector_kind"),
+            )
+            metadata["cake_bundle_signature"] = projection_meta.get(
+                "cake_bundle_signature"
+            )
+            metadata["fit_space_local_params_signature"] = projection_meta.get(
+                "fit_space_local_params_signature"
+            )
+            metadata["measured_native_frame_conversion_source"] = str(
+                projection_meta.get("native_frame_conversion_source", "") or ""
+            )
+            metadata["measured_native_frame_conversion_count"] = int(
+                projection_meta.get("native_frame_conversion_count", 0) or 0
+            )
+            native_cols = np.asarray(
+                projection_meta.get("native_cols", np.asarray([], dtype=np.float64)),
+                dtype=np.float64,
+            ).reshape(-1)
+            native_rows = np.asarray(
+                projection_meta.get("native_rows", np.asarray([], dtype=np.float64)),
+                dtype=np.float64,
+            ).reshape(-1)
+            if native_cols.size >= 1 and np.isfinite(native_cols[0]):
+                metadata["measured_native_col"] = float(native_cols[0])
+            if native_rows.size >= 1 and np.isfinite(native_rows[0]):
+                metadata["measured_native_row"] = float(native_rows[0])
+            metadata["invalid_projection_reason"] = projection_meta.get(
+                "invalid_reason"
+            )
+            metadata["valid"] = bool(projection_meta.get("valid", False))
+            metadata["two_theta_adjustment_deg"] = 0.0
+            if (
+                bool(projection_meta.get("valid", False))
+                and two_theta_arr.size >= 1
+                and phi_arr.size >= 1
+                and np.isfinite(two_theta_arr[0])
+                and np.isfinite(phi_arr[0])
+            ):
+                return (
+                    (float(two_theta_arr[0]), float(phi_arr[0])),
+                    str(metadata["fit_space_source"]),
+                    metadata,
+                )
+            return None, str(metadata["fit_space_source"]), metadata
+
+        if str(projection_input.get("status", "")) == "ambiguous":
+            metadata["anchor_source"] = "invalid_dataset_fit_space_projector"
+            metadata["fit_space_source"] = "invalid_dataset_fit_space_projector"
+            metadata["invalid_projection_reason"] = "ambiguous_measured_detector_frame"
+            return None, "invalid_dataset_fit_space_projector", metadata
+
+        if np.isfinite(base_two_theta) and np.isfinite(base_phi):
+            metadata["anchor_source"] = "cached_fit_space_anchor"
+            metadata["fit_space_source"] = "cached_fit_space_anchor"
+            metadata["cached_two_theta_deg"] = float(base_two_theta)
+            metadata["cached_phi_deg"] = float(base_phi)
+            metadata["two_theta_adjustment_deg"] = 0.0
+            metadata["valid"] = True
+            return (
+                (float(base_two_theta), float(base_phi)),
+                "cached_fit_space_anchor",
+                metadata,
+            )
+
+        metadata["anchor_source"] = "invalid_dataset_fit_space_projector"
+        metadata["fit_space_source"] = "invalid_dataset_fit_space_projector"
+        metadata["invalid_projection_reason"] = "missing_known_detector_frame"
+        return None, "invalid_dataset_fit_space_projector", metadata
 
     measured_anchor, measured_reason = _detector_anchor_from_entry(
         entry,
@@ -11205,9 +11974,13 @@ def _measured_fit_space_anchor(
         ("x", "y", "display_fit_space_anchor"),
     )
     if measured_anchor is not None:
-        two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
+        two_theta_arr, phi_arr, projection_meta = _project_detector_points_to_fit_space(
+            dataset_ctx,
             np.array([measured_anchor[0]], dtype=np.float64),
             np.array([measured_anchor[1]], dtype=np.float64),
+            local_params=(dict(local_params) if isinstance(local_params, Mapping) else {}),
+            anchor_kind="measured",
+            input_frame="native_detector",
             center=center,
             detector_distance=float(detector_distance),
             pixel_size=float(pixel_size),
@@ -11220,9 +11993,20 @@ def _measured_fit_space_anchor(
             or not np.isfinite(two_theta_arr[0])
             or not np.isfinite(phi_arr[0])
         ):
-            metadata["anchor_source"] = "invalid_fit_space_anchor"
-            return None, "invalid_fit_space_anchor", metadata
+            metadata["anchor_source"] = str(
+                projection_meta.get("fit_space_source", "invalid_fit_space_anchor")
+            )
+            metadata["fit_space_source"] = str(metadata["anchor_source"])
+            metadata["invalid_projection_reason"] = projection_meta.get(
+                "invalid_reason",
+                "invalid_fit_space_anchor",
+            )
+            return None, str(metadata["anchor_source"]), metadata
         metadata["anchor_source"] = str(measured_reason)
+        metadata["fit_space_source"] = str(
+            projection_meta.get("fit_space_source", "analytic_detector_fit_space")
+        )
+        metadata["valid"] = True
         metadata["two_theta_adjustment_deg"] = 0.0
         return (
             (float(two_theta_arr[0]), float(phi_arr[0])),
@@ -11232,9 +12016,11 @@ def _measured_fit_space_anchor(
 
     if np.isfinite(base_two_theta) and np.isfinite(base_phi):
         metadata["anchor_source"] = "cached_fit_space_anchor"
+        metadata["fit_space_source"] = "cached_fit_space_anchor"
         metadata["cached_two_theta_deg"] = float(base_two_theta)
         metadata["cached_phi_deg"] = float(base_phi)
         metadata["two_theta_adjustment_deg"] = 0.0
+        metadata["valid"] = True
         return (
             (float(base_two_theta), float(base_phi)),
             "cached_fit_space_anchor",
@@ -11242,6 +12028,7 @@ def _measured_fit_space_anchor(
         )
 
     metadata["anchor_source"] = str(measured_reason)
+    metadata["fit_space_source"] = str(measured_reason)
     return None, measured_reason, metadata
 
 
@@ -12633,6 +13420,7 @@ def fit_geometry_parameters(
             np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
+        _merge_exact_fit_space_provenance_counts(summary, per_dataset_summaries)
 
         custom_sigma_values = np.asarray(
             [
@@ -12918,6 +13706,7 @@ def fit_geometry_parameters(
             np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
+        _merge_exact_fit_space_provenance_counts(summary, per_dataset_summaries)
 
         for prefix, diag_key in (
             ("px", "distance_px"),
@@ -13199,6 +13988,7 @@ def fit_geometry_parameters(
             np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
+        _merge_exact_fit_space_provenance_counts(summary, per_dataset_summaries)
 
         custom_sigma_values = np.asarray(
             [
@@ -16236,6 +17026,7 @@ def fit_geometry_parameters(
             np.concatenate(residual_blocks) if residual_blocks else np.array([], dtype=float)
         )
         summary["per_dataset"] = per_dataset_summaries
+        _merge_exact_fit_space_provenance_counts(summary, per_dataset_summaries)
         custom_sigma_values = np.asarray(
             [
                 float(entry.get("measurement_sigma_px", np.nan))

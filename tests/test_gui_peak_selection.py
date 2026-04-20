@@ -1629,7 +1629,7 @@ def test_restore_peak_overlay_lists_rejects_frozen_display_for_mismatched_restor
     assert runtime_state.peak_records == []
 
 
-def test_restore_peak_overlay_lists_allows_frozen_display_without_restored_view_signature_for_legacy_detector_imports() -> None:
+def test_restore_peak_overlay_lists_rejects_frozen_display_without_restored_view_signature_for_legacy_detector_imports() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [
@@ -1650,19 +1650,17 @@ def test_restore_peak_overlay_lists_allows_frozen_display_without_restored_view_
         show_caked=False,
         image_shape=(64, 64),
         native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
-            AssertionError("legacy imported detector rows should use frozen display")
+            AssertionError("ambiguous legacy detector rows should fail closed")
         ),
         view_sig=("detector-view",),
     )
 
-    assert ok is True
-    assert runtime_state.peak_positions == [(30.25, -57.5)]
-    assert runtime_state.peak_records[0]["display_col"] == 30.25
-    assert runtime_state.peak_records[0]["display_row"] == -57.5
-    assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
 
 
-def test_restore_peak_overlay_lists_allows_frozen_display_with_none_restored_view_signature_for_legacy_detector_imports() -> None:
+def test_restore_peak_overlay_lists_rejects_frozen_display_with_none_restored_view_signature_for_legacy_detector_imports() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [
@@ -1684,16 +1682,14 @@ def test_restore_peak_overlay_lists_allows_frozen_display_with_none_restored_vie
         show_caked=False,
         image_shape=(64, 64),
         native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
-            AssertionError("legacy imported detector rows should use frozen display")
+            AssertionError("ambiguous legacy detector rows should fail closed")
         ),
         view_sig=("detector-view",),
     )
 
-    assert ok is True
-    assert runtime_state.peak_positions == [(30.25, -57.5)]
-    assert runtime_state.peak_records[0]["display_col"] == 30.25
-    assert runtime_state.peak_records[0]["display_row"] == -57.5
-    assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
 
 
 def test_restore_peak_overlay_lists_rejects_frozen_caked_restore_without_restored_view_signature_for_legacy_detector_imports() -> None:

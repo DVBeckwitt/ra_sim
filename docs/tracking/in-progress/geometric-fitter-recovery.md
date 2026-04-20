@@ -65,6 +65,15 @@ Current root cause for the failing `new4` baseline:
   mismatches, but fails because the distance gate is scoring the wrong anchor
   and runtime dataset resolution still reports 0 resolved source pairs.
 
+Current live-GUI blocker under verification is no longer correspondence rule
+selection. It is source-cache versus caked-view preflight gating and
+observability after `[geometry-fit] preflight: building source cache for
+background 1`.
+
+Next action: validate real `new4` GUI run now that source-row readiness,
+`source_cache_build_ready`, and caked-view `ready` / `failed` / `timeout`
+signals are split into separate non-gating stages.
+
 The older `new2.json`, `new3.json`, `new2_fresh_all.json`, and
 `new3_fresh_all.json` artifacts are retired as live acceptance gates. They may
 remain only as historical diagnostics or archived notes.

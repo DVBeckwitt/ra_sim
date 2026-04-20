@@ -2270,15 +2270,44 @@ def _geometry_manual_entry_native_point(
     )
 
 
+def _geometry_manual_entry_stronger_native_hint_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("sim_native_x", "sim_native_y"),
+            ("native_col", "native_row"),
+            ("simulated_detector_x", "simulated_detector_y"),
+        ),
+    )
+
+
+def _geometry_manual_entry_resolver_native_hint_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("sim_native_x", "sim_native_y"),
+            ("native_col", "native_row"),
+            ("simulated_detector_x", "simulated_detector_y"),
+            ("detector_x", "detector_y"),
+            ("background_detector_x", "background_detector_y"),
+        ),
+    )
+
+
 def _geometry_manual_entry_saved_detector_hint_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
     return _geometry_manual_finite_point(
         entry,
         (
-            ("background_detector_x", "background_detector_y"),
             ("detector_x", "detector_y"),
-            ("raw_x", "raw_y"),
+            ("background_detector_x", "background_detector_y"),
         ),
     )
 
@@ -2290,6 +2319,13 @@ def _geometry_manual_resolve_nearest_candidate_index(
     prefer_detector_sim_for_stale_entry = _geometry_manual_entry_has_stale_caked_fields(
         entry
     )
+    entry_native_hint = _geometry_manual_entry_resolver_native_hint_point(entry)
+    entry_stronger_native_hint = _geometry_manual_entry_stronger_native_hint_point(
+        entry
+    )
+    native_candidate_point_getter = _geometry_manual_entry_native_point
+    if entry_stronger_native_hint is not None:
+        native_candidate_point_getter = _geometry_manual_entry_resolver_native_hint_point
 
     def _candidate_detector_point(
         candidate: Mapping[str, object] | None,
@@ -2308,12 +2344,14 @@ def _geometry_manual_resolve_nearest_candidate_index(
         tuple[
             Callable[[Mapping[str, object] | None], tuple[float, float] | None],
             Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            bool,
         ],
         ...,
     ] = (
         (
             _geometry_manual_entry_refined_sim_point,
             _geometry_manual_entry_refined_sim_point,
+            False,
         ),
         (
             _geometry_manual_entry_caked_point,
@@ -2321,26 +2359,96 @@ def _geometry_manual_resolve_nearest_candidate_index(
                 candidate,
                 allow_stale=True,
             ),
+            False,
         ),
+    )
+    display_point_getter_pairs: tuple[
+        tuple[
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            bool,
+        ],
+        ...,
+    ] = (
         (
             _geometry_manual_entry_explicit_current_view_display_point,
             _geometry_manual_entry_matching_current_view_point,
+            False,
         ),
-        (
-            _geometry_manual_entry_detector_display_point,
-            _candidate_detector_point,
-        ),
+    )
+    saved_detector_point_getter_pairs: tuple[
+        tuple[
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            bool,
+        ],
+        ...,
+    ] = (
         (
             _geometry_manual_entry_saved_detector_hint_point,
             _geometry_manual_entry_native_point,
-        ),
-        (
-            _geometry_manual_entry_native_point,
-            _geometry_manual_entry_native_point,
+            True,
         ),
     )
+    detector_point_getter_pairs: tuple[
+        tuple[
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            bool,
+        ],
+        ...,
+    ] = (
+        (
+            _geometry_manual_entry_detector_display_point,
+            _candidate_detector_point,
+            False,
+        ),
+    )
+    native_point_getter_pairs: tuple[
+        tuple[
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            bool,
+        ],
+        ...,
+    ] = (
+        (
+            _geometry_manual_entry_resolver_native_hint_point,
+            native_candidate_point_getter,
+            True,
+        ),
+    )
+    if entry_native_hint is not None:
+        native_priority_tail = (
+            display_point_getter_pairs
+            + saved_detector_point_getter_pairs
+            + detector_point_getter_pairs
+        )
+        if entry_stronger_native_hint is None:
+            native_priority_tail = (
+                saved_detector_point_getter_pairs
+                + display_point_getter_pairs
+                + detector_point_getter_pairs
+            )
+        point_getter_pairs = (
+            point_getter_pairs
+            + native_point_getter_pairs
+            + native_priority_tail
+        )
+    else:
+        point_getter_pairs = (
+            point_getter_pairs
+            + display_point_getter_pairs
+            + saved_detector_point_getter_pairs
+            + detector_point_getter_pairs
+            + native_point_getter_pairs
+        )
 
-    for entry_point_getter, candidate_point_getter in point_getter_pairs:
+    for (
+        entry_point_getter,
+        candidate_point_getter,
+        continue_on_tie,
+    ) in point_getter_pairs:
         entry_point = entry_point_getter(entry)
         if entry_point is None:
             continue
@@ -2371,6 +2479,8 @@ def _geometry_manual_resolve_nearest_candidate_index(
             or abs(float(candidate_distances[1][0]) - float(best_distance)) > 1.0e-9
         ):
             return int(best_idx)
+        if bool(continue_on_tie):
+            continue
         return None
 
     return None

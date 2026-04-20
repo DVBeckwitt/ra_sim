@@ -2925,6 +2925,18 @@ def copy_geometry_fit_state_value(value):
     return value
 
 
+def _copy_geometry_fit_dataset_spec_for_state(
+    spec: Mapping[str, object] | None,
+) -> dict[str, object]:
+    copied = (
+        dict(copy_geometry_fit_state_value(dict(spec)))
+        if isinstance(spec, Mapping)
+        else {}
+    )
+    copied.pop("fit_space_projector", None)
+    return copied
+
+
 def current_geometry_fit_ui_params(
     *,
     zb: float,
@@ -4744,6 +4756,24 @@ def build_geometry_manual_fit_dataset(
             )
             if normalized_entry is None:
                 continue
+            background_detector_x = _finite_float(
+                normalized_entry.get("background_detector_x")
+            )
+            background_detector_y = _finite_float(
+                normalized_entry.get("background_detector_y")
+            )
+            if (
+                background_detector_x is not None
+                and background_detector_y is not None
+            ):
+                normalized_entry.setdefault(
+                    "background_detector_frame_provenance",
+                    "geometry_manual_refresh_pair_entry",
+                )
+                normalized_entry.setdefault(
+                    "background_detector_input_frame",
+                    "native_detector",
+                )
             selected_entry_inputs.append(
                 {
                     "raw_saved_entry": (
@@ -6413,6 +6443,10 @@ def build_geometry_manual_fit_dataset(
         ):
             initial_entry["background_detector_x"] = float(detector_anchor[0])
             initial_entry["background_detector_y"] = float(detector_anchor[1])
+            initial_entry["background_detector_input_frame"] = "native_detector"
+            initial_entry["background_detector_frame_provenance"] = (
+                "geometry_manual_refresh_pair_entry"
+            )
             initial_entry["native_col"] = float(detector_anchor[0])
             initial_entry["native_row"] = float(detector_anchor[1])
             measured_entry["x"] = float(detector_anchor[0])
@@ -6500,6 +6534,14 @@ def build_geometry_manual_fit_dataset(
         if np.isfinite(display_col) and np.isfinite(display_row):
             measured_entry["display_col"] = float(display_col)
             measured_entry["display_row"] = float(display_row)
+            measured_entry["fit_detector_x"] = float(display_col)
+            measured_entry["fit_detector_y"] = float(display_row)
+            measured_entry["detector_x"] = float(display_col)
+            measured_entry["detector_y"] = float(display_row)
+            measured_entry["detector_input_frame"] = "fit_detector"
+            measured_entry["detector_input_frame_reason"] = (
+                "apply_orientation_to_entries"
+            )
         measured_entry["fit_source_identity_only"] = True
     for measured_entry, initial_entry in zip(measured_for_fit, initial_pairs_display):
         if not isinstance(measured_entry, dict) or not isinstance(initial_entry, Mapping):
@@ -6523,6 +6565,8 @@ def build_geometry_manual_fit_dataset(
             "source_peak_index",
             "background_detector_x",
             "background_detector_y",
+            "background_detector_input_frame",
+            "background_detector_frame_provenance",
             "native_col",
             "native_row",
             "background_two_theta_deg",
@@ -6549,20 +6593,34 @@ def build_geometry_manual_fit_dataset(
             )
         )
         if native_detector_x is not None and native_detector_y is not None:
-            measured_entry["detector_x"] = float(native_detector_x)
-            measured_entry["detector_y"] = float(native_detector_y)
             measured_entry["background_detector_x"] = float(native_detector_x)
             measured_entry["background_detector_y"] = float(native_detector_y)
             measured_entry["native_col"] = float(native_detector_x)
             measured_entry["native_row"] = float(native_detector_y)
+            measured_entry.setdefault(
+                "background_detector_input_frame",
+                "native_detector",
+            )
+            measured_entry.setdefault(
+                "background_detector_frame_provenance",
+                "geometry_manual_refresh_pair_entry",
+            )
         else:
-            display_col = _finite_float(measured_entry.get("display_col", measured_entry.get("x")))
-            display_row = _finite_float(measured_entry.get("display_row", measured_entry.get("y")))
+            display_col = _finite_float(
+                measured_entry.get("display_col", measured_entry.get("x"))
+            )
+            display_row = _finite_float(
+                measured_entry.get("display_row", measured_entry.get("y"))
+            )
             if display_col is not None and display_row is not None:
                 measured_entry["detector_x"] = float(display_col)
                 measured_entry["detector_y"] = float(display_row)
-                measured_entry["background_detector_x"] = float(display_col)
-                measured_entry["background_detector_y"] = float(display_row)
+                measured_entry["fit_detector_x"] = float(display_col)
+                measured_entry["fit_detector_y"] = float(display_row)
+                measured_entry["detector_input_frame"] = "fit_detector"
+                measured_entry["detector_input_frame_reason"] = (
+                    "apply_orientation_to_entries"
+                )
     backend_background = manual_dataset_bindings.apply_background_backend_orientation(
         native_background
     )
@@ -6592,6 +6650,9 @@ def build_geometry_manual_fit_dataset(
         and experimental_image_for_fit.ndim == 2
         and experimental_image_for_fit.size > 0
     )
+    fit_space_projector = None
+    fit_space_projector_kind: str | None = None
+    fit_space_projector_unavailable_reason = "exact_caked_view_unavailable"
     if callable(manual_dataset_bindings.geometry_manual_match_config):
         try:
             dynamic_reanchor_match_cfg = dict(
@@ -6773,6 +6834,247 @@ def build_geometry_manual_fit_dataset(
 
             return float(backend_col), float(backend_row)
 
+        def _native_detector_coords_to_caked_display_coords(
+            detector_col: float,
+            detector_row: float,
+            *,
+            active_caked_bundle: CakeTransformBundle | None,
+        ) -> tuple[float | None, float | None]:
+            projected = gui_manual_geometry.native_detector_coords_to_caked_display_coords(
+                float(detector_col),
+                float(detector_row),
+                ai=None,
+                get_detector_angular_maps=(lambda _ai: (None, None)),
+                detector_pixel_to_scattering_angles=(
+                    lambda *_args, **_kwargs: (None, None)
+                ),
+                center=None,
+                detector_distance=float("nan"),
+                pixel_size=float("nan"),
+                wrap_phi_range=(lambda value: value),
+                transform_bundle=active_caked_bundle,
+                native_detector_coords_to_bundle_detector_coords=(
+                    manual_dataset_bindings.native_detector_coords_to_bundle_detector_coords
+                ),
+            )
+            if not (
+                isinstance(projected, tuple)
+                and len(projected) >= 2
+                and projected[0] is not None
+                and projected[1] is not None
+            ):
+                return None, None
+            try:
+                two_theta_deg = float(projected[0])
+                phi_deg = float(projected[1])
+            except Exception:
+                return None, None
+            if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg)):
+                return None, None
+            return float(two_theta_deg), float(phi_deg)
+
+        def _project_detector_points_with_active_caked_bundle(
+            cols: object,
+            rows: object,
+            *,
+            local_params: Mapping[str, object] | None,
+            anchor_kind: str,
+            input_frame: str,
+            prefer_rebuild_bundle: bool,
+        ) -> dict[str, object]:
+            del anchor_kind
+            try:
+                col_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+                row_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+            except Exception:
+                col_arr = np.asarray([], dtype=np.float64)
+                row_arr = np.asarray([], dtype=np.float64)
+            invalid_projection = {
+                "two_theta_deg": np.full(col_arr.shape, np.nan, dtype=np.float64),
+                "phi_deg": np.full(col_arr.shape, np.nan, dtype=np.float64),
+                "native_cols": np.full(col_arr.shape, np.nan, dtype=np.float64),
+                "native_rows": np.full(col_arr.shape, np.nan, dtype=np.float64),
+                "fit_space_source": "invalid_dataset_fit_space_projector",
+                "input_frame": str(input_frame or ""),
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "cake_bundle_signature": None,
+                "fit_space_local_params_signature": _geometry_fit_projection_signature(
+                    _geometry_fit_transform_driven_param_payload(local_params)
+                ),
+                "valid": False,
+                "invalid_reason": "",
+                "native_frame_conversion_source": "",
+                "native_frame_conversion_count": 0,
+            }
+            if col_arr.shape != row_arr.shape or col_arr.size <= 0:
+                invalid_projection["invalid_reason"] = "shape_mismatch"
+                return invalid_projection
+            if not np.all(np.isfinite(col_arr)) or not np.all(np.isfinite(row_arr)):
+                invalid_projection["invalid_reason"] = "nonfinite_detector_coords"
+                return invalid_projection
+            input_frame_key = str(input_frame or "").strip().lower()
+            native_cols = np.asarray(col_arr, dtype=np.float64).copy()
+            native_rows = np.asarray(row_arr, dtype=np.float64).copy()
+            native_frame_conversion_source = "identity_native_detector"
+            native_frame_conversion_count = 0
+            if input_frame_key == "native_detector":
+                native_frame_conversion_source = "identity_native_detector"
+            elif input_frame_key == "fit_detector":
+                native_points: list[tuple[float, float]] = []
+                for detector_col, detector_row in zip(col_arr, row_arr):
+                    native_point = _fit_detector_coords_to_native_detector_coords(
+                        float(detector_col),
+                        float(detector_row),
+                    )
+                    if (
+                        not isinstance(native_point, tuple)
+                        or len(native_point) < 2
+                        or native_point[0] is None
+                        or native_point[1] is None
+                    ):
+                        invalid_projection["invalid_reason"] = (
+                            "fit_detector_to_native_failed"
+                        )
+                        invalid_projection["native_frame_conversion_source"] = (
+                            "fit_detector_to_native_detector"
+                        )
+                        invalid_projection["native_frame_conversion_count"] = 1
+                        return invalid_projection
+                    try:
+                        native_col = float(native_point[0])
+                        native_row = float(native_point[1])
+                    except Exception:
+                        invalid_projection["invalid_reason"] = (
+                            "fit_detector_to_native_failed"
+                        )
+                        invalid_projection["native_frame_conversion_source"] = (
+                            "fit_detector_to_native_detector"
+                        )
+                        invalid_projection["native_frame_conversion_count"] = 1
+                        return invalid_projection
+                    if not (np.isfinite(native_col) and np.isfinite(native_row)):
+                        invalid_projection["invalid_reason"] = (
+                            "fit_detector_to_native_failed"
+                        )
+                        invalid_projection["native_frame_conversion_source"] = (
+                            "fit_detector_to_native_detector"
+                        )
+                        invalid_projection["native_frame_conversion_count"] = 1
+                        return invalid_projection
+                    native_points.append((float(native_col), float(native_row)))
+                native_cols = np.asarray(
+                    [point[0] for point in native_points],
+                    dtype=np.float64,
+                )
+                native_rows = np.asarray(
+                    [point[1] for point in native_points],
+                    dtype=np.float64,
+                )
+                native_frame_conversion_source = "fit_detector_to_native_detector"
+                native_frame_conversion_count = 1
+            else:
+                invalid_projection["invalid_reason"] = (
+                    f"unsupported_input_frame:{input_frame_key or 'missing'}"
+                )
+                return invalid_projection
+
+            active_params = (
+                local_params
+                if isinstance(local_params, Mapping)
+                else params_i
+            )
+            active_bundle = _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
+                detector_shape=dynamic_reanchor_native_shape,
+                radial_axis=dynamic_reanchor_radial_axis,
+                azimuth_axis=dynamic_reanchor_azimuth_axis,
+                raw_azimuth_axis=dynamic_reanchor_raw_azimuth_axis,
+                transform_bundle=(
+                    None if prefer_rebuild_bundle else dynamic_reanchor_transform_bundle
+                ),
+                params=active_params,
+            )
+            if not isinstance(active_bundle, CakeTransformBundle):
+                invalid_projection["invalid_reason"] = "missing_exact_caked_bundle"
+                invalid_projection["native_frame_conversion_source"] = (
+                    native_frame_conversion_source
+                )
+                invalid_projection["native_frame_conversion_count"] = int(
+                    native_frame_conversion_count
+                )
+                return invalid_projection
+
+            projected_two_theta: list[float] = []
+            projected_phi: list[float] = []
+            for native_col, native_row in zip(native_cols, native_rows):
+                two_theta_deg, phi_deg = _native_detector_coords_to_caked_display_coords(
+                    float(native_col),
+                    float(native_row),
+                    active_caked_bundle=active_bundle,
+                )
+                if two_theta_deg is None or phi_deg is None:
+                    invalid_projection["invalid_reason"] = (
+                        "native_detector_to_caked_display_failed"
+                    )
+                    invalid_projection["cake_bundle_signature"] = (
+                        _geometry_fit_cake_bundle_signature(
+                            active_bundle,
+                            local_params=active_params,
+                        )
+                    )
+                    invalid_projection["native_frame_conversion_source"] = (
+                        native_frame_conversion_source
+                    )
+                    invalid_projection["native_frame_conversion_count"] = int(
+                        native_frame_conversion_count
+                    )
+                    return invalid_projection
+                projected_two_theta.append(float(two_theta_deg))
+                projected_phi.append(float(phi_deg))
+
+            return {
+                "two_theta_deg": np.asarray(projected_two_theta, dtype=np.float64),
+                "phi_deg": np.asarray(projected_phi, dtype=np.float64),
+                "native_cols": np.asarray(native_cols, dtype=np.float64),
+                "native_rows": np.asarray(native_rows, dtype=np.float64),
+                "fit_space_source": "dataset_fit_space_projector",
+                "input_frame": (
+                    "fit_detector"
+                    if input_frame_key == "fit_detector"
+                    else "native_detector"
+                ),
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "cake_bundle_signature": _geometry_fit_cake_bundle_signature(
+                    active_bundle,
+                    local_params=active_params,
+                ),
+                "fit_space_local_params_signature": _geometry_fit_projection_signature(
+                    _geometry_fit_transform_driven_param_payload(active_params)
+                ),
+                "valid": True,
+                "invalid_reason": None,
+                "native_frame_conversion_source": native_frame_conversion_source,
+                "native_frame_conversion_count": int(
+                    native_frame_conversion_count
+                ),
+            }
+
+        def _fit_space_projector(
+            cols: object,
+            rows: object,
+            *,
+            local_params: Mapping[str, object] | None,
+            anchor_kind: str,
+            input_frame: str,
+        ) -> dict[str, object]:
+            return _project_detector_points_with_active_caked_bundle(
+                cols,
+                rows,
+                local_params=local_params,
+                anchor_kind=anchor_kind,
+                input_frame=input_frame,
+                prefer_rebuild_bundle=True,
+            )
+
         def _dynamic_reanchor_callback(
             measured_entry: Mapping[str, object] | None,
             simulated_detector_point: object,
@@ -6831,49 +7133,31 @@ def build_geometry_manual_fit_dataset(
                 else np.asarray(dynamic_reanchor_detector_image, dtype=np.float64)
             )
             if use_caked_reanchor:
-
-                def _detector_point_to_caked_angles(
-                    detector_col: float,
-                    detector_row: float,
-                ) -> tuple[float, float]:
-                    native_detector_point = _fit_detector_coords_to_native_detector_coords(
-                        float(detector_col),
-                        float(detector_row),
-                    )
-                    if (
-                        not isinstance(native_detector_point, tuple)
-                        or len(native_detector_point) < 2
-                        or native_detector_point[0] is None
-                        or native_detector_point[1] is None
-                    ):
-                        return float("nan"), float("nan")
-                    native_detector_col = float(native_detector_point[0])
-                    native_detector_row = float(native_detector_point[1])
-                    if not (
-                        np.isfinite(native_detector_col)
-                        and np.isfinite(native_detector_row)
-                    ):
-                        return float("nan"), float("nan")
-                    try:
-                        bundle_two_theta, bundle_phi = detector_pixel_to_caked_bin(
-                            active_caked_bundle,
-                            float(native_detector_col),
-                            float(native_detector_row),
-                        )
-                    except Exception:
-                        bundle_two_theta, bundle_phi = (None, None)
-                    if (
-                        bundle_two_theta is None
-                        or bundle_phi is None
-                        or not np.isfinite(float(bundle_two_theta))
-                        or not np.isfinite(float(bundle_phi))
-                    ):
-                        return float("nan"), float("nan")
-                    return float(bundle_two_theta), float(bundle_phi)
-
-                sim_two_theta, sim_phi = _detector_point_to_caked_angles(
-                    float(sim_col),
-                    float(sim_row),
+                sim_projection = _project_detector_points_with_active_caked_bundle(
+                    np.asarray([sim_col], dtype=np.float64),
+                    np.asarray([sim_row], dtype=np.float64),
+                    local_params=active_params,
+                    anchor_kind="simulated",
+                    input_frame="fit_detector",
+                    prefer_rebuild_bundle=False,
+                )
+                sim_two_theta_values = np.asarray(
+                    sim_projection.get("two_theta_deg", []),
+                    dtype=np.float64,
+                ).reshape(-1)
+                sim_phi_values = np.asarray(
+                    sim_projection.get("phi_deg", []),
+                    dtype=np.float64,
+                ).reshape(-1)
+                sim_two_theta = (
+                    float(sim_two_theta_values[0])
+                    if sim_two_theta_values.size >= 1
+                    else float("nan")
+                )
+                sim_phi = (
+                    float(sim_phi_values[0])
+                    if sim_phi_values.size >= 1
+                    else float("nan")
                 )
                 sim_col_local = gui_manual_geometry.caked_axis_to_image_index(
                     float(sim_two_theta),
@@ -6914,22 +7198,52 @@ def build_geometry_manual_fit_dataset(
                         measured_detector_row = _finite_float(
                             measured_entry.get("background_detector_y")
                         )
+                        measured_input_frame = "native_detector"
                         if measured_detector_col is None or measured_detector_row is None:
                             measured_detector_col = _finite_float(
-                                measured_entry.get("detector_x")
+                                measured_entry.get("fit_detector_x")
                             )
                             measured_detector_row = _finite_float(
-                                measured_entry.get("detector_y")
+                                measured_entry.get("fit_detector_y")
                             )
+                            measured_input_frame = "fit_detector"
                         if (
                             measured_detector_col is not None
                             and measured_detector_row is not None
                         ):
-                            measured_two_theta, measured_phi = (
-                                _detector_point_to_caked_angles(
-                                    float(measured_detector_col),
-                                    float(measured_detector_row),
+                            measured_projection = (
+                                _project_detector_points_with_active_caked_bundle(
+                                    np.asarray(
+                                        [measured_detector_col],
+                                        dtype=np.float64,
+                                    ),
+                                    np.asarray(
+                                        [measured_detector_row],
+                                        dtype=np.float64,
+                                    ),
+                                    local_params=active_params,
+                                    anchor_kind="measured",
+                                    input_frame=measured_input_frame,
+                                    prefer_rebuild_bundle=False,
                                 )
+                            )
+                            measured_two_theta_values = np.asarray(
+                                measured_projection.get("two_theta_deg", []),
+                                dtype=np.float64,
+                            ).reshape(-1)
+                            measured_phi_values = np.asarray(
+                                measured_projection.get("phi_deg", []),
+                                dtype=np.float64,
+                            ).reshape(-1)
+                            measured_two_theta = (
+                                float(measured_two_theta_values[0])
+                                if measured_two_theta_values.size >= 1
+                                else float("nan")
+                            )
+                            measured_phi = (
+                                float(measured_phi_values[0])
+                                if measured_phi_values.size >= 1
+                                else float("nan")
                             )
                             if (
                                 np.isfinite(measured_two_theta)
@@ -6997,6 +7311,14 @@ def build_geometry_manual_fit_dataset(
             }
 
         dynamic_reanchor_callback = _dynamic_reanchor_callback
+        if dynamic_reanchor_caked_view_ready and dynamic_reanchor_native_shape is not None:
+            fit_space_projector = _fit_space_projector
+            fit_space_projector_kind = "exact_caked_bundle"
+            fit_space_projector_unavailable_reason = None
+        elif not dynamic_reanchor_caked_view_ready:
+            fit_space_projector_unavailable_reason = "exact_caked_view_unavailable"
+        else:
+            fit_space_projector_unavailable_reason = "native_detector_shape_unavailable"
 
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
@@ -7083,6 +7405,11 @@ def build_geometry_manual_fit_dataset(
             "experimental_image": experimental_image_for_fit,
             "dynamic_reanchor_callback": dynamic_reanchor_callback,
             "dynamic_reanchor_enabled": bool(dynamic_reanchor_enabled),
+            "fit_space_projector": fit_space_projector,
+            "fit_space_projector_kind": fit_space_projector_kind,
+            "fit_space_projector_unavailable_reason": (
+                fit_space_projector_unavailable_reason
+            ),
         },
     }
 
@@ -8535,7 +8862,7 @@ def build_geometry_fit_dataset_cache_payload(
             float(value) for value in prepared_run.background_theta_values
         ],
         "dataset_specs": [
-            copy_geometry_fit_state_value(dict(spec))
+            _copy_geometry_fit_dataset_spec_for_state(spec)
             for spec in (prepared_run.dataset_specs or [])
             if isinstance(spec, Mapping)
         ],
@@ -9819,6 +10146,36 @@ def _geometry_fit_trace_pair_record(
             entry.get("distance_px", np.nan)
         ),
     }
+    for key in (
+        "measured_detector_field_name",
+        "measured_detector_input_frame",
+        "measured_detector_frame_reason",
+        "simulated_detector_field_name",
+        "simulated_detector_input_frame",
+        "simulated_detector_frame_reason",
+        "measured_native_col",
+        "measured_native_row",
+        "simulated_native_col",
+        "simulated_native_row",
+        "measured_two_theta_deg",
+        "measured_phi_deg",
+        "simulated_two_theta_deg",
+        "simulated_phi_deg",
+        "measured_fit_space_source",
+        "simulated_fit_space_source",
+        "fit_space_projector_kind",
+        "cake_bundle_signature",
+        "measured_native_frame_conversion_source",
+        "simulated_native_frame_conversion_source",
+        "measured_native_frame_conversion_count",
+        "simulated_native_frame_conversion_count",
+        "valid",
+        "invalid_projection_reason",
+        "measured_invalid_projection_reason",
+        "simulated_invalid_projection_reason",
+    ):
+        if key in entry:
+            record[str(key)] = _geometry_fit_cache_jsonable(entry.get(key))
     if isinstance(extra, Mapping):
         record.update(
             {

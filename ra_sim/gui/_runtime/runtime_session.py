@@ -27686,6 +27686,9 @@ def _initialize_runtime_controls_block_50() -> None:
             "backend_detector_coords_to_native_detector_coords": (
                 _backend_background_to_native_detector_coords
             ),
+            "native_detector_coords_to_bundle_detector_coords": (
+                _native_detector_coords_to_live_bundle_detector_coords
+            ),
             "geometry_manual_simulated_peaks_for_params": (
                 _geometry_manual_simulated_peaks_for_params
             ),

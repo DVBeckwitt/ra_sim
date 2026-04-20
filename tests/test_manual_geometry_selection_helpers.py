@@ -713,7 +713,458 @@ def test_geometry_manual_resolve_source_entry_index_prefers_legacy_caked_candida
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_ignores_stale_display_coords() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints_over_current_view_display_when_both_exist() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "caked_x": 101.0,
+            "caked_y": 101.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_saved_native_hints_over_current_view_display_when_both_exist() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "caked_x": 101.0,
+            "caked_y": 101.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "sim_native_x": 300.0,
+            "sim_native_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_stronger_native_hints_over_saved_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 500.2,
+            "sim_native_y": 600.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "sim_native_x": 500.0,
+            "sim_native_y": 600.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_hints_over_saved_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 500.2,
+            "sim_native_y": 600.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "simulated_detector_x": 500.0,
+            "simulated_detector_y": 600.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_hints_over_saved_detector_hints_for_mixed_candidates() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.2,
+            "detector_y": 400.2,
+            "simulated_detector_x": 999.0,
+            "simulated_detector_y": 999.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 999.0,
+            "detector_y": 999.0,
+            "simulated_detector_x": 500.2,
+            "simulated_detector_y": 600.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "simulated_detector_x": 500.0,
+            "simulated_detector_y": 600.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_keeps_detector_hint_priority_for_detector_only_entries_with_mixed_candidates() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.2,
+            "detector_y": 400.2,
+            "simulated_detector_x": 999.0,
+            "simulated_detector_y": 999.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 999.0,
+            "detector_y": 999.0,
+            "simulated_detector_x": 300.2,
+            "simulated_detector_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_stronger_native_hint_tie_before_saved_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 500.2,
+            "sim_native_y": 600.0,
+            "caked_x": 100.1,
+            "caked_y": 100.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 499.8,
+            "sim_native_y": 600.0,
+            "caked_x": 200.1,
+            "caked_y": 200.1,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "sim_native_x": 500.0,
+            "sim_native_y": 600.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_simulated_detector_hint_tie_before_saved_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 500.2,
+            "sim_native_y": 600.0,
+            "caked_x": 100.1,
+            "caked_y": 100.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 499.8,
+            "sim_native_y": 600.0,
+            "caked_x": 200.1,
+            "caked_y": 200.1,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "simulated_detector_x": 500.0,
+            "simulated_detector_y": 600.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_mixed_candidate_simulated_detector_hint_tie_before_weaker_detector_anchor() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.2,
+            "detector_y": 400.0,
+            "simulated_detector_x": 500.2,
+            "simulated_detector_y": 600.0,
+            "caked_x": 200.1,
+            "caked_y": 200.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 299.8,
+            "detector_y": 400.0,
+            "simulated_detector_x": 499.8,
+            "simulated_detector_y": 600.0,
+            "caked_x": 100.1,
+            "caked_y": 100.1,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "simulated_detector_x": 500.0,
+            "simulated_detector_y": 600.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_detector_hint_native_tie() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+            "caked_x": 100.1,
+            "caked_y": 100.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+            "caked_x": 200.1,
+            "caked_y": 200.1,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_native_hint_tie() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+            "caked_x": 100.1,
+            "caked_y": 100.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+            "caked_x": 200.1,
+            "caked_y": 200.1,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "display_col": 100.0,
+            "display_row": 100.0,
+            "sim_native_x": 300.0,
+            "sim_native_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 0
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_detector_xy_aliases_when_display_is_stale() -> None:
     candidate_entries = [
         {
             "label": "target",
@@ -751,7 +1202,7 @@ def test_geometry_manual_resolve_source_entry_index_ignores_stale_display_coords
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_view_display_missing() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_view_display_is_missing() -> None:
     candidate_entries = [
         {
             "label": "target",
@@ -784,6 +1235,261 @@ def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_v
     )
 
     assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_legacy_background_detector_candidates() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 13.1,
+            "detector_y": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.2,
+            "detector_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_native_candidates() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "background_detector_x": 13.1,
+            "background_detector_y": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "background_detector_x": 300.2,
+            "background_detector_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_sim_native_candidates() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 13.1,
+            "sim_native_y": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_detector_hints_over_legacy_background_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 13.1,
+            "detector_y": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.2,
+            "detector_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+            "background_detector_x": 13.0,
+            "background_detector_y": 2.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints_over_saved_xy_detector_display() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "sim_col": 101.0,
+            "sim_row": 101.0,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 500.0,
+            "sim_row": 500.0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "x": 100.0,
+            "y": 100.0,
+            "detector_x": 300.0,
+            "detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_falls_back_to_legacy_background_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 13.1,
+            "detector_y": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "detector_x": 300.2,
+            "detector_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "background_detector_x": 300.0,
+            "background_detector_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index == 1
+
+
+def test_geometry_manual_resolve_source_entry_index_does_not_use_raw_display_clicks_as_native_detector_hints() -> None:
+    candidate_entries = [
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 13.1,
+            "sim_native_y": 2.1,
+        },
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "sim_native_x": 300.2,
+            "sim_native_y": 400.2,
+        },
+    ]
+
+    resolved_index = mg.geometry_manual_resolve_source_entry_index(
+        {
+            "label": "target",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "raw_x": 300.0,
+            "raw_y": 400.0,
+        },
+        candidate_entries,
+    )
+
+    assert resolved_index is None
 
 
 def test_current_geometry_manual_match_config_reuses_auto_match_defaults() -> None:
@@ -4834,6 +5540,109 @@ def test_build_geometry_manual_initial_pairs_display_uses_raw_detector_only_rows
     ]
 
 
+def test_build_geometry_manual_initial_pairs_display_uses_detector_xy_only_lookup_rows() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "x": 105.0,
+                    "y": 206.0,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (105.0, 206.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_rejects_detector_xy_lookup_rows_when_they_only_match_caked_view() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "x": 30.25,
+                    "y": -57.5,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
 def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_stale_caked_display() -> None:
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
@@ -4889,7 +5698,62 @@ def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_s
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_without_caked_markers() -> None:
+def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_detector_xy_when_caked_present() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "x": 30.25,
+                    "y": -57.5,
+                    "sim_col_raw": 105.0,
+                    "sim_row_raw": 206.0,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (105.0, 206.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers() -> None:
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -4935,11 +5799,12 @@ def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup
             "overlay_match_index": 0,
             "hkl": (1, 0, 2),
             "bg_display": (9.0, 11.0),
+            "sim_display": (30.25, -57.5),
         }
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_for_non_native_saved_pairs() -> None:
+def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers_for_non_native_saved_pairs() -> None:
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -4983,6 +5848,7 @@ def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup
             "overlay_match_index": 0,
             "hkl": (1, 0, 2),
             "bg_display": (9.0, 11.0),
+            "sim_display": (30.25, -57.5),
         }
     ]
 
@@ -5192,6 +6058,58 @@ def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_look
     ]
 
 
+def test_build_geometry_manual_initial_pairs_display_rejects_simulation_native_lookup_rows_when_they_only_match_caked_view() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "simulated_x": 30.25,
+                    "simulated_y": -57.5,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
 def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows_for_non_native_saved_pairs() -> None:
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
@@ -5290,6 +6208,136 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
             "simulated_lookup": {
                 _source_key(left_candidate): dict(left_candidate),
                 _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["source_branch_index"] == 1
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (182.0, 138.0),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_detector_sim_with_caked_fields() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 182.0,
+        "y": 138.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    left_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_col": 181.0,
+        "sim_row": 95.0,
+        "caked_x": 28.0,
+        "caked_y": -56.5,
+    }
+    right_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(left_candidate): dict(left_candidate),
+                _source_key(right_candidate): dict(right_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["source_branch_index"] == 1
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (182.0, 138.0),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candidate_over_saved_display_only_overlay() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 182.0,
+        "y": 138.0,
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    live_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(live_candidate): dict(live_candidate),
             }
         },
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
@@ -5505,7 +6553,12 @@ def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_
 
     assert measured_display[0]["stale_caked_fields"] is True
     assert initial_pairs_display[0]["bg_display"] == (190.0, 96.0)
-    assert initial_pairs_display[0]["sim_display"] == (190.0, 96.0)
+    assert initial_pairs_display[0] == {
+        "overlay_match_index": 0,
+        "hkl": "",
+        "bg_display": (190.0, 96.0),
+        "sim_display": (190.0, 96.0),
+    }
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for_branchless_legacy_entry() -> None:
@@ -5566,8 +6619,12 @@ def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
     )
 
-    assert initial_pairs_display[0]["bg_display"] == (190.0, 96.0)
-    assert initial_pairs_display[0]["sim_display"] == (181.0, 95.0)
+    assert initial_pairs_display[0] == {
+        "overlay_match_index": 0,
+        "hkl": "",
+        "bg_display": (190.0, 96.0),
+        "sim_display": (190.0, 96.0),
+    }
 
 
 def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_legacy_entry() -> None:
@@ -5943,6 +7000,68 @@ def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_fil
     assert cache_data["active_simulated_peaks"] == []
     assert cache_data["grouped_candidates"] == {}
     assert cache_data["simulated_lookup"] == {}
+
+
+def test_build_geometry_manual_pick_cache_mask_refresh_fails_closed_when_mask_filter_raises() -> None:
+    placed_signature = ("placed", 1)
+    existing_cache = {
+        "placed_signature": placed_signature,
+        "simulated_peaks": [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 4,
+                "source_row_index": 7,
+                "sim_col": 13.5,
+                "sim_row": 15.5,
+            }
+        ],
+    }
+
+    cache_data, _next_sig, _next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((4, 4), dtype=float),
+        existing_cache_signature=("stale",),
+        existing_cache_data=existing_cache,
+        placed_cache_signature_fn=lambda **_kwargs: placed_signature,
+        cache_signature_fn=lambda **_kwargs: ("fresh",),
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        peak_records=[],
+        build_grouped_candidates=lambda entries: (
+            {
+                ("q_group", "primary", 1, 2): [dict(entry) for entry in entries or ()]
+            }
+            if list(entries or ())
+            else {}
+        ),
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        filter_active_rows=lambda _rows: (_ for _ in ()).throw(RuntimeError("mask boom")),
+        project_peaks_to_current_view=None,
+        current_match_config=lambda: {"search_radius_px": 18.0},
+        auto_match_background_context=lambda image, cfg: (
+            {**dict(cfg), "search_radius_px": 18.0},
+            {"image_shape": np.asarray(image).shape},
+        ),
+    )
+
+    assert len(cache_data["simulated_peaks"]) == 1
+    assert cache_data["active_simulated_peaks"] == []
+    assert cache_data["grouped_candidates"] == {}
+    assert cache_data["simulated_lookup"] == {}
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "existing_cache_data.simulated_peaks(mask_refresh)"
+    )
 
 
 def test_build_geometry_manual_initial_pairs_display_fails_closed_when_mask_filter_raises() -> None:
@@ -6541,19 +7660,85 @@ def test_geometry_manual_entry_detector_display_point_rejects_caked_trust_only_s
 
 
 def test_geometry_manual_entry_detector_display_point_uses_explicit_detector_coords_for_caked_entries() -> None:
-    assert mg._geometry_manual_entry_detector_display_point(
-        {
-            "source_reflection_index": 203,
-            "source_reflection_namespace": "full_reflection",
-            "source_reflection_is_full": True,
-            "sim_col": 5.5,
-            "sim_row": 12.25,
-            "sim_col_raw": 100.0,
-            "sim_row_raw": 200.0,
-            "caked_x": 5.5,
-            "caked_y": 12.25,
-        }
+    assert (
+        mg._geometry_manual_entry_detector_display_point(
+            {
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "sim_col": 5.5,
+                "sim_row": 12.25,
+                "sim_col_raw": 100.0,
+                "sim_row_raw": 200.0,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+            }
+        )
     ) == (100.0, 200.0)
+    assert (
+        mg._geometry_manual_entry_detector_display_point(
+            {
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "x": 101.0,
+                "y": 201.0,
+                "sim_col": 5.5,
+                "sim_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+            }
+        )
+    ) == (101.0, 201.0)
+    assert (
+        mg._geometry_manual_entry_detector_display_point(
+            {
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "simulated_x": 102.0,
+                "simulated_y": 202.0,
+                "sim_col": 5.5,
+                "sim_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+            }
+        )
+    ) == (102.0, 202.0)
+
+
+def test_geometry_manual_entry_detector_display_point_rejects_caked_alias_detector_fields() -> None:
+    assert (
+        mg._geometry_manual_entry_detector_display_point(
+            {
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "x": 30.25,
+                "y": -57.5,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+            }
+        )
+        is None
+    )
+    assert (
+        mg._geometry_manual_entry_detector_display_point(
+            {
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "simulated_x": 30.25,
+                "simulated_y": -57.5,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+            }
+        )
+        is None
+    )
+
+
+def test_geometry_manual_entry_detector_display_point_accepts_detector_aliases_when_caked_fields_are_stale() -> None:
     assert mg._geometry_manual_entry_detector_display_point(
         {
             "source_reflection_index": 203,
@@ -6561,12 +7746,39 @@ def test_geometry_manual_entry_detector_display_point_uses_explicit_detector_coo
             "source_reflection_is_full": True,
             "x": 101.0,
             "y": 201.0,
-            "sim_col": 5.5,
-            "sim_row": 12.25,
-            "caked_x": 5.5,
-            "caked_y": 12.25,
+            "caked_x": 101.0,
+            "caked_y": 201.0,
+            "stale_caked_fields": True,
         }
     ) == (101.0, 201.0)
+    assert mg._geometry_manual_entry_detector_display_point(
+        {
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "simulated_x": 102.0,
+            "simulated_y": 202.0,
+            "caked_x": 102.0,
+            "caked_y": 202.0,
+            "stale_caked_fields": True,
+        }
+    ) == (102.0, 202.0)
+
+
+def test_geometry_manual_entry_detector_display_point_uses_branch_aware_detector_sim_with_caked_fields() -> None:
+    assert mg._geometry_manual_entry_detector_display_point(
+        {
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        }
+    ) == (190.0, 96.0)
 
 
 def test_geometry_manual_entry_detector_display_point_rejects_trusted_caked_live_source_sim_coords_without_explicit_detector_fields() -> None:
@@ -6576,6 +7788,22 @@ def test_geometry_manual_entry_detector_display_point_rejects_trusted_caked_live
                 "source_reflection_index": 203,
                 "source_reflection_namespace": "full_reflection",
                 "source_reflection_is_full": True,
+                "sim_col": 190.0,
+                "sim_row": 96.0,
+                "caked_x": 30.25,
+                "caked_y": -57.5,
+            }
+        )
+        is None
+    )
+
+
+def test_geometry_manual_entry_detector_display_point_rejects_source_row_identity_when_branch_only_comes_from_caked_fields() -> None:
+    assert (
+        mg._geometry_manual_entry_detector_display_point(
+            {
+                "source_table_index": 9,
+                "source_row_index": 0,
                 "sim_col": 190.0,
                 "sim_row": 96.0,
                 "caked_x": 30.25,
@@ -8726,7 +9954,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
             "hkl": (-1, 0, 5),
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (182.0, 138.0),
-            "sim_display": (188.0, 94.0),
+            "sim_display": (190.0, 96.0),
         }
     ]
     assert caked_pairs == [

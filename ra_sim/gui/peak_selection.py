@@ -2797,17 +2797,11 @@ def _restore_peak_overlay_lists_from_cached_records(
         else False
     )
     restored_view_sig = cache.get("restored_view_sig") if isinstance(cache, Mapping) else None
-    restored_view_sig_legacy = bool(
-        isinstance(cache, Mapping)
-        and ("restored_view_sig" not in cache or restored_view_sig is None)
-    )
     frozen_display_fallback_allowed = bool(
         cache_restored_from_gui_state
         and isinstance(cache, Mapping)
-        and (
-            restored_view_sig == view_sig
-            or (restored_view_sig_legacy and not bool(show_caked))
-        )
+        and restored_view_sig is not None
+        and restored_view_sig == view_sig
     )
     cache_filtered = (
         bool(

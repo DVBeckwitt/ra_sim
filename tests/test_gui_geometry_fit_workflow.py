@@ -629,10 +629,12 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "y": 41.0,
                     "display_col": 31.0,
                     "display_row": 41.0,
+                    "fit_detector_x": 31.0,
+                    "fit_detector_y": 41.0,
                     "detector_x": 31.0,
                     "detector_y": 41.0,
-                    "background_detector_x": 31.0,
-                    "background_detector_y": 41.0,
+                    "detector_input_frame": "fit_detector",
+                    "detector_input_frame_reason": "apply_orientation_to_entries",
                     "fit_source_identity_only": True,
                     "overlay_match_index": 0,
                     "pair_id": "bg0:pair0",
@@ -644,6 +646,9 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
             "experimental_image": "fit-image",
             "dynamic_reanchor_callback": None,
             "dynamic_reanchor_enabled": False,
+            "fit_space_projector": None,
+            "fit_space_projector_kind": None,
+            "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
         }
     ]
     assert prepared.max_display_markers == 90
@@ -786,6 +791,9 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "experimental_image": "fit-image",
         "dynamic_reanchor_callback": None,
         "dynamic_reanchor_enabled": False,
+        "fit_space_projector": None,
+        "fit_space_projector_kind": None,
+        "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
     }
     assert dataset["measured_for_fit"] == [
         {
@@ -793,10 +801,12 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "y": 41.0,
             "display_col": 31.0,
             "display_row": 41.0,
+            "fit_detector_x": 31.0,
+            "fit_detector_y": 41.0,
             "detector_x": 31.0,
             "detector_y": 41.0,
-            "background_detector_x": 31.0,
-            "background_detector_y": 41.0,
+            "detector_input_frame": "fit_detector",
+            "detector_input_frame_reason": "apply_orientation_to_entries",
             "fit_source_identity_only": True,
             "overlay_match_index": 0,
             "pair_id": "bg0:pair0",
@@ -6356,8 +6366,9 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
     assert dataset["resolved_source_pair_count"] == 1
     assert dataset["spec"]["dynamic_reanchor_enabled"] is True
     assert callable(dataset["spec"]["dynamic_reanchor_callback"])
-    assert dataset["measured_for_fit"][0]["background_detector_x"] == 30.0
-    assert dataset["measured_for_fit"][0]["background_detector_y"] == 40.0
+    assert dataset["measured_for_fit"][0]["fit_detector_x"] == 30.0
+    assert dataset["measured_for_fit"][0]["fit_detector_y"] == 40.0
+    assert dataset["measured_for_fit"][0]["detector_input_frame"] == "fit_detector"
     assert dataset["cache_metadata"]["cache_source"] == "source_snapshot_rebuild"
     assert "rebuild_source:test_rebuild" in dataset["cache_metadata"]["cache_provenance"]
 
@@ -6562,8 +6573,8 @@ def test_geometry_fit_dynamic_reanchor_uses_exact_caked_bundle_without_analytic_
     )
     projector_calls: list[tuple[object, float, float]] = []
     monkeypatch.setattr(
-        geometry_fit,
-        "detector_pixel_to_caked_bin",
+        geometry_fit.gui_manual_geometry,
+        "_detector_pixel_to_caked_bin",
         lambda transform_bundle, col, row: (
             projector_calls.append((transform_bundle, float(col), float(row)))
             or {(50.0, 51.0): (24.5, -34.5)}.get(
@@ -6732,8 +6743,8 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
     )
     projector_calls: list[tuple[object, float, float]] = []
     monkeypatch.setattr(
-        geometry_fit,
-        "detector_pixel_to_caked_bin",
+        geometry_fit.gui_manual_geometry,
+        "_detector_pixel_to_caked_bin",
         lambda transform_bundle, col, row: (
             projector_calls.append((transform_bundle, float(col), float(row)))
             or {
@@ -6936,8 +6947,8 @@ def test_geometry_fit_dynamic_reanchor_missing_or_invalid_bundle_falls_back_to_d
         else None,
     )
     monkeypatch.setattr(
-        geometry_fit,
-        "detector_pixel_to_caked_bin",
+        geometry_fit.gui_manual_geometry,
+        "_detector_pixel_to_caked_bin",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("caked projection should not run without a valid bundle")
         ),
@@ -7118,8 +7129,8 @@ def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
     )
     projector_calls: list[tuple[object, float, float]] = []
     monkeypatch.setattr(
-        geometry_fit,
-        "detector_pixel_to_caked_bin",
+        geometry_fit.gui_manual_geometry,
+        "_detector_pixel_to_caked_bin",
         lambda transform_bundle, col, row: (
             projector_calls.append((transform_bundle, float(col), float(row)))
             or {
@@ -7233,6 +7244,8 @@ def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
     measured_entry.pop("background_detector_y", None)
     measured_entry["detector_x"] = float(measured_fit_point[0])
     measured_entry["detector_y"] = float(measured_fit_point[1])
+    measured_entry["fit_detector_x"] = float(measured_fit_point[0])
+    measured_entry["fit_detector_y"] = float(measured_fit_point[1])
 
     result = callback(
         measured_entry,
@@ -7243,7 +7256,7 @@ def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
 
     assert backend_inverse_calls == [
         (1.0, 2.0, (6, 7)),
-        (3.0, 4.0, (6, 7)),
+        (float(measured_backend_point[0]), float(measured_backend_point[1]), (6, 7)),
     ]
     assert projector_calls == [
         (bundle, 50.0, 51.0),

@@ -413,6 +413,58 @@ def _normalize_pair_record(record: Mapping[str, object]) -> dict[str, object]:
         "source_peak_index": _int_or_none(record.get("source_peak_index")),
         "resolved_peak_index": _int_or_none(record.get("resolved_peak_index")),
         "match_radius_exceeded": bool(record.get("match_radius_exceeded", False)),
+        "measured_detector_field_name": record.get("measured_detector_field_name"),
+        "measured_detector_input_frame": record.get("measured_detector_input_frame"),
+        "measured_detector_frame_reason": record.get("measured_detector_frame_reason"),
+        "simulated_detector_field_name": record.get("simulated_detector_field_name"),
+        "simulated_detector_input_frame": record.get("simulated_detector_input_frame"),
+        "simulated_detector_frame_reason": record.get("simulated_detector_frame_reason"),
+        "measured_native_col": _float_or_none(record.get("measured_native_col")),
+        "measured_native_row": _float_or_none(record.get("measured_native_row")),
+        "simulated_native_col": _float_or_none(record.get("simulated_native_col")),
+        "simulated_native_row": _float_or_none(record.get("simulated_native_row")),
+        "measured_two_theta_deg": _float_or_none(record.get("measured_two_theta_deg")),
+        "measured_phi_deg": _float_or_none(record.get("measured_phi_deg")),
+        "simulated_two_theta_deg": _float_or_none(record.get("simulated_two_theta_deg")),
+        "simulated_phi_deg": _float_or_none(record.get("simulated_phi_deg")),
+        "measured_fit_space_source": (
+            str(record.get("measured_fit_space_source", "") or "") or None
+        ),
+        "simulated_fit_space_source": (
+            str(record.get("simulated_fit_space_source", "") or "") or None
+        ),
+        "fit_space_projector_kind": (
+            str(record.get("fit_space_projector_kind", "") or "") or None
+        ),
+        "cake_bundle_signature": (
+            str(record.get("cake_bundle_signature", "") or "") or None
+        ),
+        "measured_native_frame_conversion_source": (
+            str(record.get("measured_native_frame_conversion_source", "") or "") or None
+        ),
+        "simulated_native_frame_conversion_source": (
+            str(record.get("simulated_native_frame_conversion_source", "") or "") or None
+        ),
+        "measured_native_frame_conversion_count": _int_or_none(
+            record.get("measured_native_frame_conversion_count")
+        ),
+        "simulated_native_frame_conversion_count": _int_or_none(
+            record.get("simulated_native_frame_conversion_count")
+        ),
+        "valid": (
+            bool(record.get("valid"))
+            if record.get("valid") is not None
+            else None
+        ),
+        "invalid_projection_reason": (
+            str(record.get("invalid_projection_reason", "") or "") or None
+        ),
+        "measured_invalid_projection_reason": (
+            str(record.get("measured_invalid_projection_reason", "") or "") or None
+        ),
+        "simulated_invalid_projection_reason": (
+            str(record.get("simulated_invalid_projection_reason", "") or "") or None
+        ),
     }
 
 
@@ -504,6 +556,37 @@ def _pair_sort_key(pair_id: object) -> tuple[int, int, str]:
     return (10**9, 10**9, pair_text)
 
 
+def _pair_index_from_pair_id(pair_id: object) -> int | None:
+    pair_text = str(pair_id or "")
+    match = re.search(r"pair(?:\[(?P<bracket>\d+)\]|(?P<suffix>\d+))$", pair_text)
+    if match is None:
+        return None
+    token = match.group("bracket") or match.group("suffix")
+    if token is None:
+        return None
+    try:
+        return int(token)
+    except Exception:
+        return None
+
+
+def _preflight_slot_lookup(
+    slot_results: Sequence[Mapping[str, object]] | None,
+) -> dict[int, dict[str, object]]:
+    lookup: dict[int, dict[str, object]] = {}
+    for raw_slot in slot_results or ():
+        if not isinstance(raw_slot, Mapping):
+            continue
+        try:
+            slot_index = int(raw_slot.get("slot_index", -1))
+        except Exception:
+            continue
+        if slot_index < 0:
+            continue
+        lookup[int(slot_index)] = dict(raw_slot)
+    return lookup
+
+
 def _pair_alignment_rows(
     trace_records: Sequence[Mapping[str, object]],
     *,
@@ -511,6 +594,7 @@ def _pair_alignment_rows(
     before_residual_priority: Sequence[str],
     after_phase: str,
     after_residual_priority: Sequence[str],
+    preflight_slot_results: Sequence[Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     before_records = {
         str(record.get("pair_id", "") or ""): _normalize_pair_record(record)
@@ -521,15 +605,29 @@ def _pair_alignment_rows(
         for record in _phase_pair_records(trace_records, after_phase)
     }
     pair_ids = sorted(set(before_records) | set(after_records), key=_pair_sort_key)
+    preflight_lookup = _preflight_slot_lookup(preflight_slot_results)
     rows: list[dict[str, object]] = []
     for pair_id in pair_ids:
         before = before_records.get(pair_id, {})
         after = after_records.get(pair_id, {})
         reference = after if after else before
+        slot_result = preflight_lookup.get(
+            _pair_index_from_pair_id(pair_id) or -1,
+            {},
+        )
+        candidate_selection = (
+            dict(slot_result.get("candidate_selection", {}))
+            if isinstance(slot_result.get("candidate_selection"), Mapping)
+            else {}
+        )
         hkl_value = reference.get("hkl")
         hkl_out = tuple(hkl_value) if isinstance(hkl_value, list) else hkl_value
         before_distance = _residual_value(before, before_residual_priority)
         after_distance = _residual_value(after, after_residual_priority)
+        selected_distance = _float_or_none(
+            candidate_selection.get("background_distance_px")
+        )
+        minimum_distance = _float_or_none(candidate_selection.get("best_distance_px"))
         rows.append(
             {
                 "pair_id": pair_id,
@@ -537,6 +635,76 @@ def _pair_alignment_rows(
                 "hkl": _json_safe(hkl_out),
                 "source_branch_index": reference.get("source_branch_index"),
                 "source_peak_index": reference.get("source_peak_index"),
+                "saved_background_current_view_point": _json_safe(
+                    candidate_selection.get("saved_background_current_view_point")
+                ),
+                "selected_live_simulated_current_view_point": _json_safe(
+                    candidate_selection.get(
+                        "selected_live_simulated_current_view_point"
+                    )
+                ),
+                "selected_to_background_distance_px": selected_distance,
+                "minimum_same_hkl_branch_background_distance_px": minimum_distance,
+                "selected_is_minimum_background_distance": bool(
+                    selected_distance is not None
+                    and minimum_distance is not None
+                    and math.isfinite(float(selected_distance))
+                    and math.isfinite(float(minimum_distance))
+                    and abs(float(selected_distance) - float(minimum_distance))
+                    <= 1.0e-6
+                ),
+                "measured_detector_field_name": reference.get(
+                    "measured_detector_field_name"
+                ),
+                "measured_detector_input_frame": reference.get(
+                    "measured_detector_input_frame"
+                ),
+                "measured_detector_frame_reason": reference.get(
+                    "measured_detector_frame_reason"
+                ),
+                "simulated_detector_field_name": reference.get(
+                    "simulated_detector_field_name"
+                ),
+                "simulated_detector_input_frame": reference.get(
+                    "simulated_detector_input_frame"
+                ),
+                "simulated_detector_frame_reason": reference.get(
+                    "simulated_detector_frame_reason"
+                ),
+                "measured_native_col": _float_or_none(reference.get("measured_native_col")),
+                "measured_native_row": _float_or_none(reference.get("measured_native_row")),
+                "simulated_native_col": _float_or_none(reference.get("simulated_native_col")),
+                "simulated_native_row": _float_or_none(reference.get("simulated_native_row")),
+                "measured_two_theta_deg": _float_or_none(reference.get("measured_two_theta_deg")),
+                "measured_phi_deg": _float_or_none(reference.get("measured_phi_deg")),
+                "simulated_two_theta_deg": _float_or_none(reference.get("simulated_two_theta_deg")),
+                "simulated_phi_deg": _float_or_none(reference.get("simulated_phi_deg")),
+                "measured_fit_space_source": reference.get("measured_fit_space_source"),
+                "simulated_fit_space_source": reference.get("simulated_fit_space_source"),
+                "fit_space_projector_kind": reference.get("fit_space_projector_kind"),
+                "cake_bundle_signature": reference.get("cake_bundle_signature"),
+                "measured_native_frame_conversion_source": reference.get(
+                    "measured_native_frame_conversion_source"
+                ),
+                "simulated_native_frame_conversion_source": reference.get(
+                    "simulated_native_frame_conversion_source"
+                ),
+                "measured_native_frame_conversion_count": _int_or_none(
+                    reference.get("measured_native_frame_conversion_count")
+                ),
+                "simulated_native_frame_conversion_count": _int_or_none(
+                    reference.get("simulated_native_frame_conversion_count")
+                ),
+                "valid": reference.get("valid"),
+                "invalid_projection_reason": reference.get("invalid_projection_reason"),
+                "measured_invalid_projection_reason": reference.get(
+                    "measured_invalid_projection_reason"
+                ),
+                "simulated_invalid_projection_reason": reference.get(
+                    "simulated_invalid_projection_reason"
+                ),
+                "residual_before": before_distance,
+                "residual_after": after_distance,
                 "before_dx_px": _float_or_none(before.get("dx_px")),
                 "before_dy_px": _float_or_none(before.get("dy_px")),
                 "before_distance_px": before_distance,
@@ -930,6 +1098,19 @@ def _load_preflight_summary(state_path: Path) -> dict[str, object]:
             "classification": payload.get("classification"),
             "bound_manual_entry_count": int(max(0, bound_manual_entry_count or 0)),
             "processed_manual_entry_count": int(max(0, processed_manual_entry_count or 0)),
+            "dataset_resolved_source_pair_count": _int_or_none(
+                payload.get("dataset_resolved_source_pair_count")
+            ),
+            "background_distance_gate_ok": bool(
+                payload.get("background_distance_gate_ok", False)
+            ),
+            "branch_mismatch_count": _int_or_none(payload.get("branch_mismatch_count")),
+            "missing_manual_entry_count": _int_or_none(
+                payload.get("missing_manual_entry_count")
+            ),
+            "slot_results": [
+                dict(item) for item in slot_results if isinstance(item, Mapping)
+            ],
         }
     return {
         "path": None,
@@ -937,6 +1118,11 @@ def _load_preflight_summary(state_path: Path) -> dict[str, object]:
         "classification": None,
         "bound_manual_entry_count": None,
         "processed_manual_entry_count": None,
+        "dataset_resolved_source_pair_count": None,
+        "background_distance_gate_ok": None,
+        "branch_mismatch_count": None,
+        "missing_manual_entry_count": None,
+        "slot_results": [],
     }
 
 
@@ -986,6 +1172,19 @@ def _background_context(state_path: Path, out_state_path: Path | None) -> dict[s
         "preflight_processed_manual_entry_count": preflight_summary.get(
             "processed_manual_entry_count"
         ),
+        "preflight_dataset_resolved_source_pair_count": preflight_summary.get(
+            "dataset_resolved_source_pair_count"
+        ),
+        "preflight_background_distance_gate_ok": preflight_summary.get(
+            "background_distance_gate_ok"
+        ),
+        "preflight_branch_mismatch_count": preflight_summary.get(
+            "branch_mismatch_count"
+        ),
+        "preflight_missing_manual_entry_count": preflight_summary.get(
+            "missing_manual_entry_count"
+        ),
+        "preflight_slot_results": list(preflight_summary.get("slot_results", []) or []),
     }
 
 
@@ -1243,6 +1442,9 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         after_phase=str(after_summary["phase"]),
         after_residual_priority=tuple(
             str(item) for item in after_summary.get("residual_priority", ())
+        ),
+        preflight_slot_results=list(
+            background_context.get("preflight_slot_results", []) or []
         ),
     )
     worst_start_pair = next(
