@@ -232,12 +232,27 @@ def _normalize_extent(extent: object) -> tuple[float, ...] | None:
     return values
 
 
+def _axis_visible(axis: object, *, fallback: bool = True) -> bool:
+    visible_getter = getattr(axis, "get_visible", None)
+    if callable(visible_getter):
+        try:
+            return bool(visible_getter())
+        except Exception:
+            return bool(fallback)
+    return bool(fallback)
+
+
 def _raw_array_signature(array_like, *, version: object = None) -> object:
-    if version is not None:
-        return version
     arr = _coerce_2d_array(array_like)
     if arr is None:
-        return None
+        return (version, None) if version is not None else None
+    structural_signature = (
+        tuple(int(value) for value in arr.shape),
+        str(arr.dtype),
+        tuple(int(value) for value in getattr(arr, "strides", ()) or ()),
+    )
+    if version is not None:
+        return (version, structural_signature)
     interface = getattr(arr, "__array_interface__", {})
     data = interface.get("data", ())
     pointer = None
@@ -246,9 +261,7 @@ def _raw_array_signature(array_like, *, version: object = None) -> object:
     return (
         id(arr),
         pointer,
-        tuple(int(value) for value in arr.shape),
-        str(arr.dtype),
-        tuple(int(value) for value in getattr(arr, "strides", ()) or ()),
+        *structural_signature,
     )
 
 
@@ -1312,6 +1325,42 @@ class FastPlotViewer:
         item.setVisible(True)
         self._image_sync_states[cache_key] = state
 
+    def _set_plot_axes_visibility(
+        self,
+        *,
+        x_visible: bool,
+        y_visible: bool,
+    ) -> None:
+        plot_item = self._plot_item
+        if plot_item is not None:
+            for axis_name, visible in (("bottom", x_visible), ("left", y_visible)):
+                state_attr = f"_last_{axis_name}_axis_visible"
+                if getattr(self, state_attr, None) == bool(visible):
+                    continue
+                action_name = "showAxis" if bool(visible) else "hideAxis"
+                action = getattr(plot_item, action_name, None)
+                if callable(action):
+                    try:
+                        action(axis_name)
+                    except Exception:
+                        pass
+                setattr(self, state_attr, bool(visible))
+
+        grid_state = (bool(x_visible), bool(y_visible))
+        if getattr(self, "_last_grid_visibility", None) != grid_state:
+            plot_widget = self._plot_widget
+            show_grid = getattr(plot_widget, "showGrid", None)
+            if callable(show_grid):
+                try:
+                    show_grid(
+                        x=bool(x_visible),
+                        y=bool(y_visible),
+                        alpha=(0.2 if any(grid_state) else 0.0),
+                    )
+                except Exception:
+                    pass
+            self._last_grid_visibility = grid_state
+
     def _qt_pen_style(self, linestyle: object):
         qt = getattr(self._QtCore, "Qt", None)
         if qt is None:
@@ -2004,8 +2053,14 @@ class FastPlotViewer:
                 self._transient_curve_specs = ()
 
         title = str(ax.get_title())
-        xlabel = str(ax.get_xlabel() or "X (pixels)")
-        ylabel = str(ax.get_ylabel() or "Y (pixels)")
+        xlabel = str(ax.get_xlabel() or "")
+        ylabel = str(ax.get_ylabel() or "")
+        xaxis_visible = _axis_visible(getattr(ax, "xaxis", None), fallback=bool(xlabel))
+        yaxis_visible = _axis_visible(getattr(ax, "yaxis", None), fallback=bool(ylabel))
+        self._set_plot_axes_visibility(
+            x_visible=xaxis_visible,
+            y_visible=yaxis_visible,
+        )
         if title != self._last_title:
             self._plot_item.setTitle(title)
             self._last_title = title

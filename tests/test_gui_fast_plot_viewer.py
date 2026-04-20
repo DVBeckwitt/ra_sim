@@ -699,6 +699,8 @@ class _FakePlotItem:
         self.label_calls = []
         self.view_box = _FakeViewBox()
         self.items = []
+        self.show_axis_calls = []
+        self.hide_axis_calls = []
 
     def addItem(self, item) -> None:
         self.items.append(item)
@@ -711,6 +713,32 @@ class _FakePlotItem:
 
     def getViewBox(self):
         return self.view_box
+
+    def showAxis(self, axis) -> None:
+        self.show_axis_calls.append(str(axis))
+
+    def hideAxis(self, axis) -> None:
+        self.hide_axis_calls.append(str(axis))
+
+
+class _FakePlotWidget:
+    def __init__(self, plot_item) -> None:
+        self._plot_item = plot_item
+        self.grid_calls = []
+
+    def showGrid(self, **kwargs) -> None:
+        self.grid_calls.append(dict(kwargs))
+
+    def getPlotItem(self):
+        return self._plot_item
+
+
+class _FakeAxisVisibility:
+    def __init__(self, visible: bool = True) -> None:
+        self._visible = bool(visible)
+
+    def get_visible(self):
+        return self._visible
 
 
 class _FakeImageArtist:
@@ -748,6 +776,8 @@ class _FakeImageArtist:
 class _FakeAxes:
     def __init__(self) -> None:
         self.patches = []
+        self.xaxis = _FakeAxisVisibility(True)
+        self.yaxis = _FakeAxisVisibility(True)
 
     def get_title(self):
         return "Simulated Diffraction Pattern"
@@ -774,8 +804,8 @@ def _build_stub_fast_viewer():
     viewer._QtWidgets = None
     viewer._app = None
     viewer._window = None
-    viewer._plot_widget = None
     viewer._plot_item = _FakePlotItem()
+    viewer._plot_widget = _FakePlotWidget(viewer._plot_item)
     viewer._background_item = _FakeImageItem()
     viewer._simulation_item = _FakeImageItem()
     viewer._overlay_item = _FakeImageItem()
@@ -800,6 +830,9 @@ def _build_stub_fast_viewer():
     viewer._embedded_tk_host = None
     viewer._embedded_parent_hwnd = None
     viewer._native_hwnd = None
+    viewer._last_bottom_axis_visible = None
+    viewer._last_left_axis_visible = None
+    viewer._last_grid_visibility = None
     return viewer
 
 
@@ -1142,3 +1175,103 @@ def test_fast_viewer_update_from_matplotlib_skips_unchanged_layer_pushes() -> No
 
     assert viewer._overlay_item.visible is False
     assert len(viewer._simulation_item.set_image_calls) == 1
+
+
+def test_fast_viewer_update_from_matplotlib_refreshes_changed_projected_raster_shape() -> None:
+    viewer = _build_stub_fast_viewer()
+    ax = _FakeAxes()
+    background_artist = _FakeImageArtist(np.ones((4, 4)), clim=(0.0, 2.0))
+    image_artist = _FakeImageArtist(np.full((4, 4), 3.0), clim=(1.0, 5.0))
+    overlay_artist = _FakeImageArtist(
+        np.zeros((4, 4)),
+        clim=(0.0, 1.0),
+        alpha=1.0,
+    )
+
+    viewer.update_from_matplotlib(
+        ax=ax,
+        image_artist=image_artist,
+        background_artist=background_artist,
+        overlay_artist=overlay_artist,
+        marker_artist=None,
+        overlay_model=fast_plot_viewer.FastViewerOverlayModel(),
+        layer_versions={"background": 1, "simulation": 2, "overlay": 3},
+        force_view_range=False,
+    )
+
+    viewer.update_from_matplotlib(
+        ax=ax,
+        image_artist=_FakeImageArtist(np.full((2, 2), 3.0), clim=(1.0, 5.0)),
+        background_artist=background_artist,
+        overlay_artist=overlay_artist,
+        marker_artist=None,
+        overlay_model=fast_plot_viewer.FastViewerOverlayModel(),
+        layer_versions={"background": 1, "simulation": 2, "overlay": 3},
+        force_view_range=False,
+    )
+
+    assert len(viewer._background_item.set_image_calls) == 1
+    assert len(viewer._overlay_item.set_image_calls) == 1
+    assert len(viewer._simulation_item.set_image_calls) == 2
+    assert viewer._simulation_item.set_image_calls[-1][0] == (2, 2)
+
+
+def test_fast_viewer_update_from_matplotlib_preserves_blank_axis_labels() -> None:
+    viewer = _build_stub_fast_viewer()
+    ax = _FakeAxes()
+    ax.get_xlabel = lambda: ""
+    ax.get_ylabel = lambda: ""
+    background_artist = _FakeImageArtist(np.ones((4, 4)), clim=(0.0, 2.0))
+    image_artist = _FakeImageArtist(np.full((4, 4), 3.0), clim=(1.0, 5.0))
+    overlay_artist = _FakeImageArtist(
+        np.zeros((4, 4)),
+        clim=(0.0, 1.0),
+        alpha=1.0,
+    )
+
+    viewer.update_from_matplotlib(
+        ax=ax,
+        image_artist=image_artist,
+        background_artist=background_artist,
+        overlay_artist=overlay_artist,
+        marker_artist=None,
+        overlay_model=fast_plot_viewer.FastViewerOverlayModel(),
+        layer_versions={"background": 1, "simulation": 2, "overlay": 3},
+        force_view_range=False,
+    )
+
+    assert viewer._plot_item.label_calls == [
+        ("bottom", ""),
+        ("left", ""),
+    ]
+
+
+def test_fast_viewer_update_from_matplotlib_hides_detector_axes_and_grid() -> None:
+    viewer = _build_stub_fast_viewer()
+    ax = _FakeAxes()
+    ax.get_xlabel = lambda: ""
+    ax.get_ylabel = lambda: ""
+    ax.xaxis = _FakeAxisVisibility(False)
+    ax.yaxis = _FakeAxisVisibility(False)
+    background_artist = _FakeImageArtist(np.ones((4, 4)), clim=(0.0, 2.0))
+    image_artist = _FakeImageArtist(np.full((4, 4), 3.0), clim=(1.0, 5.0))
+    overlay_artist = _FakeImageArtist(
+        np.zeros((4, 4)),
+        clim=(0.0, 1.0),
+        alpha=1.0,
+    )
+
+    viewer.update_from_matplotlib(
+        ax=ax,
+        image_artist=image_artist,
+        background_artist=background_artist,
+        overlay_artist=overlay_artist,
+        marker_artist=None,
+        overlay_model=fast_plot_viewer.FastViewerOverlayModel(),
+        layer_versions={"background": 1, "simulation": 2, "overlay": 3},
+        force_view_range=False,
+    )
+
+    assert viewer._plot_item.hide_axis_calls == ["bottom", "left"]
+    assert viewer._plot_item.show_axis_calls == []
+    assert viewer._plot_widget.grid_calls == [{"x": False, "y": False, "alpha": 0.0}]

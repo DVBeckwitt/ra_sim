@@ -43,13 +43,13 @@ def set_main_figure_axes_axis_visibility(ax: Any, *, visible: bool) -> None:
             axis="both",
             which="both",
             direction="out",
-            bottom=True,
+            bottom=visible,
             top=False,
-            left=True,
+            left=visible,
             right=False,
-            labelbottom=True,
+            labelbottom=visible,
             labeltop=False,
-            labelleft=True,
+            labelleft=visible,
             labelright=False,
             pad=2,
         )
@@ -59,13 +59,31 @@ def set_main_figure_axes_axis_visibility(ax: Any, *, visible: bool) -> None:
     xaxis = getattr(ax, "xaxis", None)
     if xaxis is not None:
         try:
+            xaxis.set_visible(visible)
+        except Exception:
+            pass
+        try:
             xaxis.set_ticks_position("bottom")
         except Exception:
             pass
     yaxis = getattr(ax, "yaxis", None)
     if yaxis is not None:
         try:
+            yaxis.set_visible(visible)
+        except Exception:
+            pass
+        try:
             yaxis.set_ticks_position("left")
+        except Exception:
+            pass
+
+    if not visible:
+        try:
+            ax.set_xlabel("")
+        except Exception:
+            pass
+        try:
+            ax.set_ylabel("")
         except Exception:
             pass
 

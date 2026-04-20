@@ -2815,8 +2815,6 @@ def _initialize_runtime_plot_block_04() -> None:
 
     ax.set_xlim(0, image_size)
     ax.set_ylim(image_size, 0)
-    ax.set_xlabel("X (pixels)")
-    ax.set_ylabel("Y (pixels)")
     gui_main_figure_chrome.apply_main_figure_axes_chrome(ax)
     canvas.draw()
 
@@ -7357,8 +7355,6 @@ def _apply_main_caked_view_toggle() -> None:
     )
     ax.set_aspect("auto")
     gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
-    ax.set_xlabel("X (pixels)")
-    ax.set_ylabel("Y (pixels)")
     ax.set_title("")
     _sync_primary_raster_geometry(show_caked_image=False)
     gui_main_figure_chrome.apply_main_figure_axes_chrome(
@@ -13712,8 +13708,6 @@ def _apply_primary_figure_display_from_cached_results(
         )
         ax.set_aspect("auto")
         gui_main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
-        ax.set_xlabel("X (pixels)")
-        ax.set_ylabel("Y (pixels)")
         ax.set_title("")
         if isinstance(display_secondary_source, np.ndarray):
             _store_primary_raster_source(

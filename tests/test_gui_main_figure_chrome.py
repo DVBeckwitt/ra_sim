@@ -73,6 +73,8 @@ def test_apply_main_figure_axes_chrome_hides_spines_and_keeps_left_bottom_ticks(
     assert all(not spine.get_visible() for spine in ax.spines.values())
     assert ax.xaxis.get_ticks_position() == "bottom"
     assert ax.yaxis.get_ticks_position() == "left"
+    assert ax.xaxis.get_visible() is False
+    assert ax.yaxis.get_visible() is False
 
 
 def test_apply_main_figure_axes_chrome_keeps_caked_axes_visible_when_requested() -> None:
@@ -102,3 +104,19 @@ def test_set_main_figure_axes_axis_visibility_shows_left_bottom_spines_only() ->
     assert ax.spines["right"].get_visible() is False
     assert ax.xaxis.get_ticks_position() == "bottom"
     assert ax.yaxis.get_ticks_position() == "left"
+    assert ax.xaxis.get_visible() is True
+    assert ax.yaxis.get_visible() is True
+
+
+def test_set_main_figure_axes_axis_visibility_clears_hidden_axis_labels() -> None:
+    fig = Figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    ax.set_xlabel("X (pixels)")
+    ax.set_ylabel("Y (pixels)")
+
+    main_figure_chrome.set_main_figure_axes_axis_visibility(ax, visible=False)
+
+    assert ax.get_xlabel() == ""
+    assert ax.get_ylabel() == ""
+    assert ax.xaxis.get_visible() is False
+    assert ax.yaxis.get_visible() is False
