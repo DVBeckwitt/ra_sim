@@ -17904,6 +17904,17 @@ def _geometry_fit_load_targeted_projected_cache_entry(
     return copy.deepcopy(dict(payload)) if isinstance(payload, Mapping) else None
 
 
+def _geometry_fit_targeted_projection_view_mode() -> str:
+    try:
+        view_mode = _current_app_shell_view_mode()
+    except Exception:
+        view_mode = None
+    normalized_mode = str(view_mode or "").strip().lower()
+    if normalized_mode not in {"detector", "caked", "q_space"}:
+        return "detector"
+    return normalized_mode
+
+
 def _geometry_fit_filter_hit_tables_for_required_branch_groups(
     source_tables: Sequence[object] | None,
     *,
@@ -18110,6 +18121,26 @@ def _commit_geometry_manual_source_row_rebuild_result(
     targeted_cache_key_digest = str(
         diagnostics.get("required_hkl_branch_keys_digest") or ""
     ).strip()
+    rebuild_succeeded = bool(stored_rows or projected_rows) and bool(
+        str(rebuild_result.rebuild_source or "").strip()
+    )
+
+    if not rebuild_succeeded:
+        if diagnostics:
+            _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
+        _trace_live_cache_event(
+            "source_snapshot",
+            "rebuild",
+            background_index=int(background_idx),
+            outcome="failed",
+            consumer=lookup_context,
+            status=str(diagnostics.get("status", "snapshot_rebuild_failed")),
+            requested_signature_summary=diagnostics.get("requested_signature_summary"),
+            raw_peak_count=int(len(stored_rows)),
+            projected_peak_count=int(len(projected_rows)),
+            rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
+        )
+        return []
 
     if stored_rows:
         if targeted_preflight_enabled and targeted_cache_key_digest:
@@ -18117,106 +18148,87 @@ def _commit_geometry_manual_source_row_rebuild_result(
                 background_index=int(background_idx),
                 key_digest=str(targeted_cache_key_digest),
                 payload={
-                    "requested_signature": rebuild_result.requested_signature,
-                    "requested_signature_summary": rebuild_result.requested_signature_summary,
+                    "requested_signature": (
+                        gui_geometry_fit._geometry_fit_cache_jsonable(
+                            rebuild_result.requested_signature
+                        )
+                    ),
+                    "requested_signature_summary": (
+                        gui_geometry_fit._geometry_fit_cache_jsonable(
+                            rebuild_result.requested_signature_summary
+                        )
+                    ),
                     "stored_rows": [dict(entry) for entry in stored_rows],
                     "projected_rows": [dict(entry) for entry in projected_rows],
                     "diagnostics": copy.deepcopy(diagnostics),
                     "cache_source": str(rebuild_result.rebuild_source or "unknown"),
+                    "consumer": str(lookup_context),
+                    "projection_view_mode": str(
+                        _geometry_fit_targeted_projection_view_mode()
+                    ),
                 },
             )
-            if diagnostics:
-                _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
-            _trace_live_cache_event(
-                "source_snapshot",
-                "rebuild",
-                background_index=int(background_idx),
-                outcome="success",
-                consumer=lookup_context,
-                status=str(diagnostics.get("status", "snapshot_hit")),
-                requested_signature_summary=diagnostics.get("requested_signature_summary"),
-                raw_peak_count=int(len(stored_rows)),
-                projected_peak_count=int(len(projected_rows)),
-                rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
+    hit_tables_local = rebuild_result.hit_tables
+    q_group_content_signature = None
+    if hit_tables_local is not None:
+        q_group_content_signature = (
+            gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+                hit_tables_local
             )
-            return projected_rows or stored_rows
-        hit_tables_local = rebuild_result.hit_tables
-        q_group_content_signature = None
-        if hit_tables_local is not None:
-            q_group_content_signature = (
-                gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
-                    hit_tables_local
-                )
-            )
-        if hit_tables_local is not None:
-            try:
-                max_positions_local = hit_tables_to_max_positions(hit_tables_local)
-            except Exception:
-                max_positions_local = np.empty((0, 6), dtype=np.float64)
-            simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
-        else:
-            simulation_runtime_state.stored_max_positions_local = None
-        if q_group_content_signature is None:
-            q_group_content_signature = (
-                gui_geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
-                    stored_rows
-                )
-            )
-        simulation_runtime_state.stored_q_group_content_signature = (
-            q_group_content_signature
         )
-        simulation_runtime_state.stored_source_reflection_indices_local = (
-            list(rebuild_result.source_reflection_indices)
-            if isinstance(rebuild_result.source_reflection_indices, list)
-            else None
-        )
-        if rebuild_result.peak_table_lattice is not None:
-            simulation_runtime_state.stored_peak_table_lattice = list(
-                rebuild_result.peak_table_lattice
+    if hit_tables_local is not None:
+        try:
+            max_positions_local = hit_tables_to_max_positions(hit_tables_local)
+        except Exception:
+            max_positions_local = np.empty((0, 6), dtype=np.float64)
+        simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+    else:
+        simulation_runtime_state.stored_max_positions_local = None
+    if q_group_content_signature is None:
+        q_group_content_signature = (
+            gui_geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+                stored_rows
             )
-        simulation_runtime_state.stored_sim_image = np.zeros(
-            (int(image_size), int(image_size)),
-            dtype=np.float64,
         )
-        if rebuild_result.intersection_cache is not None:
-            simulation_runtime_state.stored_intersection_cache = _copy_intersection_cache_tables(
-                rebuild_result.intersection_cache
-            )
-            _clear_caked_intersection_cache()
-        simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature
-        _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
+    simulation_runtime_state.stored_q_group_content_signature = (
+        q_group_content_signature
+    )
+    simulation_runtime_state.stored_source_reflection_indices_local = (
+        list(rebuild_result.source_reflection_indices)
+        if isinstance(rebuild_result.source_reflection_indices, list)
+        else None
+    )
+    if rebuild_result.peak_table_lattice is not None:
+        simulation_runtime_state.stored_peak_table_lattice = list(
+            rebuild_result.peak_table_lattice
+        )
+    simulation_runtime_state.stored_sim_image = np.zeros(
+        (int(image_size), int(image_size)),
+        dtype=np.float64,
+    )
+    if rebuild_result.intersection_cache is not None:
+        simulation_runtime_state.stored_intersection_cache = _copy_intersection_cache_tables(
+            rebuild_result.intersection_cache
+        )
+        _clear_caked_intersection_cache()
+    simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature
+    _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
 
-        snapshot_payload = {
-            "background_index": int(background_idx),
-            "simulation_signature": rebuild_result.requested_signature,
-            "simulation_signature_summary": _live_cache_signature_summary(
-                rebuild_result.requested_signature
-            ),
-            "rows": [dict(entry) for entry in stored_rows],
-            "row_count": int(len(stored_rows)),
-            "created_from": str(rebuild_result.rebuild_source or "unknown"),
-            "source_reflection_index_count": int(
-                len(rebuild_result.source_reflection_indices or ())
-            ),
-        }
-        if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
-            simulation_runtime_state.source_row_snapshots[int(background_idx)] = snapshot_payload
-
-        if diagnostics:
-            _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
-        _trace_live_cache_event(
-            "source_snapshot",
-            "rebuild",
-            background_index=int(background_idx),
-            outcome="success",
-            consumer=lookup_context,
-            status=str(diagnostics.get("status", "snapshot_hit")),
-            requested_signature_summary=diagnostics.get("requested_signature_summary"),
-            raw_peak_count=int(len(stored_rows)),
-            projected_peak_count=int(len(projected_rows)),
-            rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
-        )
-        return projected_rows
+    snapshot_payload = {
+        "background_index": int(background_idx),
+        "simulation_signature": rebuild_result.requested_signature,
+        "simulation_signature_summary": _live_cache_signature_summary(
+            rebuild_result.requested_signature
+        ),
+        "rows": [dict(entry) for entry in stored_rows],
+        "row_count": int(len(stored_rows)),
+        "created_from": str(rebuild_result.rebuild_source or "unknown"),
+        "source_reflection_index_count": int(
+            len(rebuild_result.source_reflection_indices or ())
+        ),
+    }
+    if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
+        simulation_runtime_state.source_row_snapshots[int(background_idx)] = snapshot_payload
 
     if diagnostics:
         _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
@@ -18224,12 +18236,15 @@ def _commit_geometry_manual_source_row_rebuild_result(
         "source_snapshot",
         "rebuild",
         background_index=int(background_idx),
-        outcome="failed",
+        outcome="success",
         consumer=lookup_context,
-        status=str(diagnostics.get("status", "snapshot_rebuild_failed")),
+        status=str(diagnostics.get("status", "snapshot_hit")),
         requested_signature_summary=diagnostics.get("requested_signature_summary"),
+        raw_peak_count=int(len(stored_rows)),
+        projected_peak_count=int(len(projected_rows)),
+        rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
     )
-    return []
+    return projected_rows or stored_rows
 
 
 def _geometry_manual_rebuild_source_rows_for_background(
@@ -18256,6 +18271,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
+    projection_view_mode = _geometry_fit_targeted_projection_view_mode()
     required_manual_fit_targets = (
         gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
             required_pairs,
@@ -18276,6 +18292,8 @@ def _geometry_manual_rebuild_source_rows_for_background(
         requested_signature=requested_signature,
         requested_signature_summary=requested_signature_summary,
         preflight_mode=preflight_mode,
+        consumer=lookup_context,
+        projection_view_mode=projection_view_mode,
     )
 
     def _build_source_rows_for_rebuild(
@@ -18339,6 +18357,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
         requested_signature_summary=requested_signature_summary,
         can_use_live_runtime_cache=can_use_live_runtime_cache,
         build_live_rows=_build_geometry_fit_live_rows_payload_from_cache,
+        projection_view_mode=projection_view_mode,
         get_memory_intersection_cache=get_last_intersection_cache,
         memory_cache_signature=simulation_runtime_state.last_simulation_signature,
         load_logged_intersection_cache_metadata=(
@@ -18404,6 +18423,12 @@ def _geometry_manual_source_rows_for_background(
         param_set,
     )
     requested_signature_summary = _live_cache_signature_summary(requested_signature)
+    normalized_requested_signature = gui_geometry_fit._geometry_fit_cache_jsonable(
+        requested_signature
+    )
+    normalized_requested_signature_summary = gui_geometry_fit._geometry_fit_cache_jsonable(
+        requested_signature_summary
+    )
     required_manual_fit_targets = (
         gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
             required_pairs,
@@ -18419,12 +18444,15 @@ def _geometry_manual_source_rows_for_background(
         "manual_geometry_targeted" if required_branch_group_keys else "full"
     )
     targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
+    projection_view_mode = _geometry_fit_targeted_projection_view_mode()
     required_branch_group_keys_digest = gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
         required_branch_group_keys,
         background_index=int(background_idx),
-        requested_signature=requested_signature,
-        requested_signature_summary=requested_signature_summary,
+        requested_signature=normalized_requested_signature,
+        requested_signature_summary=normalized_requested_signature_summary,
         preflight_mode=preflight_mode,
+        consumer=lookup_context,
+        projection_view_mode=projection_view_mode,
     )
     manual_target_scoring_digest = gui_geometry_fit._geometry_fit_manual_target_scoring_digest(
         required_manual_fit_targets
@@ -18538,13 +18566,9 @@ def _geometry_manual_source_rows_for_background(
                 key_digest=str(required_branch_group_keys_digest),
                 payload={
                     "background_index": int(background_idx),
-                    "requested_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
-                        requested_signature
-                    ),
+                    "requested_signature": normalized_requested_signature,
                     "requested_signature_summary": (
-                        gui_geometry_fit._geometry_fit_cache_jsonable(
-                            requested_signature_summary
-                        )
+                        normalized_requested_signature_summary
                     ),
                     "required_branch_group_keys_digest": str(
                         required_branch_group_keys_digest
@@ -18553,6 +18577,8 @@ def _geometry_manual_source_rows_for_background(
                         manual_target_scoring_digest
                     ),
                     "preflight_mode": str(preflight_mode),
+                    "consumer": str(lookup_context),
+                    "projection_view_mode": str(projection_view_mode),
                     "stored_rows": normalized_stored_rows,
                     "projected_rows": normalized_projected_rows,
                     "cache_source": str(cache_source),
@@ -18568,13 +18594,9 @@ def _geometry_manual_source_rows_for_background(
             key_digest=str(required_branch_group_keys_digest),
         )
         if isinstance(targeted_cache_payload, Mapping):
-            requested_summary_matches = (
-                targeted_cache_payload.get("requested_signature_summary")
-                == requested_signature_summary
-            )
             requested_signature_matches = (
-                targeted_cache_payload.get("requested_signature") == requested_signature
-                or requested_summary_matches
+                targeted_cache_payload.get("requested_signature")
+                == normalized_requested_signature
             )
             targeted_rows = [
                 dict(entry)
@@ -26298,6 +26320,7 @@ def _build_geometry_fit_async_job(
         "requested_signatures": requested_signatures,
         "requested_signature_summaries": requested_signature_summaries,
         "background_labels": background_labels,
+        "projection_view_mode": _geometry_fit_targeted_projection_view_mode(),
         "theta_base_by_background": theta_base_by_background,
         "theta_initial_by_background": theta_initial_by_background,
         "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
@@ -27310,6 +27333,7 @@ def _run_async_geometry_fit_worker_job(
             ),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
+            projection_view_mode=str(job_data.get("projection_view_mode") or "detector"),
             can_use_live_runtime_cache=(
                 int(background_idx) == int(job_data.get("current_background_index", -1))
             ),

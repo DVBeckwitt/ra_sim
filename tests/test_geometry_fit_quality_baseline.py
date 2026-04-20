@@ -12,17 +12,6 @@ import numpy as np
 import pytest
 
 
-RUN_SLOW_BASELINE_FITS = os.environ.get("RA_SIM_RUN_SLOW_BASELINE_FITS") == "1"
-
-requires_slow_baseline_fit = pytest.mark.skipif(
-    not RUN_SLOW_BASELINE_FITS,
-    reason=(
-        "slow/hanging real geometry baseline fit is opt-in for now; "
-        "set RA_SIM_RUN_SLOW_BASELINE_FITS=1 to run"
-    ),
-)
-
-
 def _load_baseline_module():
     script_path = (
         Path(__file__).resolve().parents[1]
@@ -1766,7 +1755,6 @@ def test_resolve_artifact_paths_rejects_stale_sidecars_reported_by_fresh_log(
 
 
 @pytest.mark.slow_baseline_fit
-@requires_slow_baseline_fit
 def test_new4_preflight_and_baseline_stop_gate(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     validate_script = (

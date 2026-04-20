@@ -3691,6 +3691,201 @@ def test_probe_main_writes_report_file_and_prints_summary_when_report_path_prese
     assert file_payload["slot_results"] == [{"pair_id": "bg0:pair0"}]
 
 
+def test_build_group_cache_source_rows_callback_accepts_manual_pick_cache_consumer(
+    monkeypatch,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    required_pairs = [{"pair_id": "bg0:pair0", "hkl": (1, 0, 0)}]
+    captured: dict[str, object] = {}
+
+    def _fake_build_geometry_manual_pick_cache(**kwargs):
+        captured["rows"] = kwargs["source_rows_for_background"](
+            0,
+            {"theta_initial": 3.0},
+            consumer="manual_pick_cache",
+        )
+        return {"grouped_candidates": {}}, None, None
+
+    def _fake_source_rows(
+        background_index,
+        param_set=None,
+        *,
+        consumer=None,
+        required_pairs=None,
+    ):
+        captured["background_index"] = background_index
+        captured["param_set"] = dict(param_set or {})
+        captured["consumer"] = consumer
+        captured["required_pairs"] = required_pairs
+        return [{"pair_id": "live"}]
+
+    monkeypatch.setattr(
+        probe.gui_manual_geometry,
+        "build_geometry_manual_pick_cache",
+        _fake_build_geometry_manual_pick_cache,
+    )
+
+    cache_data = probe._build_group_cache(
+        background_index=0,
+        params={"theta_initial": 3.0},
+        dataset={"simulation_diagnostics": {"requested_signature": ("sig", 0)}},
+        manual_dataset_bindings=SimpleNamespace(
+            load_background_by_index=lambda _idx: (
+                np.zeros((2, 2)),
+                np.zeros((2, 2)),
+            ),
+            current_background_index=0,
+            geometry_manual_source_rows_for_background=_fake_source_rows,
+            geometry_manual_match_config=lambda: {},
+        ),
+        projection_callbacks=SimpleNamespace(
+            simulated_peaks_for_params=lambda *args, **kwargs: [],
+            pick_candidates=lambda rows: {},
+            simulated_lookup=lambda peaks: {},
+        ),
+        required_pairs=required_pairs,
+    )
+
+    assert cache_data == {"grouped_candidates": {}}
+    assert captured["rows"] == [{"pair_id": "live"}]
+    assert captured["background_index"] == 0
+    assert captured["param_set"] == {"theta_initial": 3.0}
+    assert captured["consumer"] == "manual_pick_cache"
+    assert captured["required_pairs"] == required_pairs
+
+
+def test_current_source_rows_for_background_forwards_saved_entries_as_required_pairs() -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [{"pair_id": "bg0:pair0", "hkl": (1, 0, 0)}]
+    captured: dict[str, object] = {}
+
+    def _fake_source_rows(
+        background_index,
+        param_set=None,
+        *,
+        consumer=None,
+        required_pairs=None,
+    ):
+        captured["background_index"] = background_index
+        captured["param_set"] = dict(param_set or {})
+        captured["consumer"] = consumer
+        captured["required_pairs"] = required_pairs
+        return [{"pair_id": "live"}]
+
+    rows = probe._current_source_rows_for_background(
+        background_index=0,
+        context={
+            "manual_dataset_bindings": SimpleNamespace(
+                geometry_manual_source_rows_for_background=_fake_source_rows
+            ),
+            "params": {"theta_initial": 3.0},
+            "saved_entries": saved_entries,
+            "dataset": {},
+        },
+        consumer="manual_pick_group_probe",
+    )
+
+    assert rows == [{"pair_id": "live"}]
+    assert captured["background_index"] == 0
+    assert captured["param_set"] == {"theta_initial": 3.0}
+    assert captured["consumer"] == "manual_pick_group_probe"
+    assert captured["required_pairs"] == saved_entries
+
+
+def test_build_group_cache_source_rows_callback_tolerates_provider_without_required_pairs(
+    monkeypatch,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    captured: dict[str, object] = {}
+
+    def _fake_build_geometry_manual_pick_cache(**kwargs):
+        captured["rows"] = kwargs["source_rows_for_background"](
+            0,
+            {"theta_initial": 3.0},
+            consumer="manual_pick_cache",
+            required_pairs=[{"pair_id": "bg0:pair0"}],
+        )
+        return {"grouped_candidates": {}}, None, None
+
+    def _fake_source_rows(
+        background_index,
+        param_set=None,
+        *,
+        consumer=None,
+    ):
+        captured["background_index"] = background_index
+        captured["param_set"] = dict(param_set or {})
+        captured["consumer"] = consumer
+        return [{"pair_id": "live"}]
+
+    monkeypatch.setattr(
+        probe.gui_manual_geometry,
+        "build_geometry_manual_pick_cache",
+        _fake_build_geometry_manual_pick_cache,
+    )
+
+    cache_data = probe._build_group_cache(
+        background_index=0,
+        params={"theta_initial": 3.0},
+        dataset={"simulation_diagnostics": {"requested_signature": ("sig", 0)}},
+        manual_dataset_bindings=SimpleNamespace(
+            load_background_by_index=lambda _idx: (
+                np.zeros((2, 2)),
+                np.zeros((2, 2)),
+            ),
+            current_background_index=0,
+            geometry_manual_source_rows_for_background=_fake_source_rows,
+            geometry_manual_match_config=lambda: {},
+        ),
+        projection_callbacks=SimpleNamespace(
+            simulated_peaks_for_params=lambda *args, **kwargs: [],
+            pick_candidates=lambda rows: {},
+            simulated_lookup=lambda peaks: {},
+        ),
+        required_pairs=[{"pair_id": "bg0:pair0", "hkl": (1, 0, 0)}],
+    )
+
+    assert cache_data == {"grouped_candidates": {}}
+    assert captured["rows"] == [{"pair_id": "live"}]
+    assert captured["background_index"] == 0
+    assert captured["param_set"] == {"theta_initial": 3.0}
+    assert captured["consumer"] == "manual_pick_cache"
+
+
+def test_current_source_rows_for_background_tolerates_provider_without_required_pairs() -> None:
+    probe = _load_geometry_preflight_probe_module()
+    captured: dict[str, object] = {}
+
+    def _fake_source_rows(
+        background_index,
+        param_set=None,
+        *,
+        consumer=None,
+    ):
+        captured["background_index"] = background_index
+        captured["param_set"] = dict(param_set or {})
+        captured["consumer"] = consumer
+        return [{"pair_id": "live"}]
+
+    rows = probe._current_source_rows_for_background(
+        background_index=0,
+        context={
+            "manual_dataset_bindings": SimpleNamespace(
+                geometry_manual_source_rows_for_background=_fake_source_rows
+            ),
+            "params": {"theta_initial": 3.0},
+            "saved_entries": [{"pair_id": "bg0:pair0", "hkl": (1, 0, 0)}],
+            "dataset": {},
+        },
+        consumer="manual_pick_group_probe",
+    )
+
+    assert rows == [{"pair_id": "live"}]
+    assert captured["background_index"] == 0
+    assert captured["param_set"] == {"theta_initial": 3.0}
+    assert captured["consumer"] == "manual_pick_group_probe"
+
+
 def test_saved_state_compatibility_validation_handles_two_entry_pair(
     monkeypatch,
     tmp_path,
@@ -8400,6 +8595,33 @@ def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> Non
         requested_signature_summary="sig-summary",
         preflight_mode="manual_geometry_targeted",
     )
+    caked_key_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="caked",
+    )
+    detector_key_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="detector",
+    )
+    other_consumer_key_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="manual_overlay_refresh",
+        projection_view_mode="detector",
+    )
 
     assert first_keys == moved_keys
     assert first_key_digest == moved_key_digest
@@ -8409,6 +8631,8 @@ def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> Non
     )
     assert expanded_keys != first_keys
     assert expanded_key_digest != first_key_digest
+    assert caked_key_digest != detector_key_digest
+    assert other_consumer_key_digest != detector_key_digest
 
 
 def test_targeted_preflight_projects_only_required_candidate_rows() -> None:
@@ -8677,6 +8901,78 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
         "source_cache_project_rows_start",
         "source_cache_project_rows_ready",
     ]
+
+
+def test_targeted_simulation_used_follows_runtime_diagnostics() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    captured_kwargs: dict[str, object] = {}
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "targeted fresh simulation should skip heavy logged cache on metadata miss"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs)
+        or [object()],
+        last_runtime_simulation_diagnostics=lambda: {
+            "status": "success",
+            "targeted_simulation_supported": True,
+            "targeted_simulation_used": False,
+            "targeted_simulation_fallback_reason": "targeted_hkl_filter_empty",
+        },
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert captured_kwargs["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
+    assert result.diagnostics["targeted_simulation_supported"] is True
+    assert result.diagnostics["targeted_simulation_used"] is False
+    assert result.diagnostics["targeted_simulation_fallback_reason"] == (
+        "targeted_hkl_filter_empty"
+    )
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is False
 
 
 def test_full_fresh_simulation_fallback_does_not_pass_targeted_performance_gate() -> None:

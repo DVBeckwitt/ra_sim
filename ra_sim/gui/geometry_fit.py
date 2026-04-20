@@ -1321,11 +1321,19 @@ def _geometry_fit_required_branch_group_keys_digest(
     requested_signature: object = None,
     requested_signature_summary: object = None,
     preflight_mode: str = "full",
+    consumer: str | None = None,
+    projection_view_mode: str | None = None,
 ) -> str:
     return _geometry_fit_digest_payload(
         {
             "background_index": int(background_index),
             "preflight_mode": str(preflight_mode or "full"),
+            "consumer": str(consumer or "unspecified"),
+            "projection_view_mode": (
+                str(projection_view_mode).strip().lower()
+                if projection_view_mode is not None
+                else None
+            ),
             "requested_signature": _geometry_fit_cache_jsonable(requested_signature),
             "requested_signature_summary": _geometry_fit_cache_jsonable(
                 requested_signature_summary
@@ -2088,6 +2096,7 @@ def rebuild_geometry_fit_source_rows(
     | None = None,
     required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
     preflight_mode: str = "full",
+    projection_view_mode: str | None = None,
     live_cache_inventory: Mapping[str, object]
     | Callable[[], Mapping[str, object]]
     | None = None,
@@ -2109,6 +2118,15 @@ def rebuild_geometry_fit_source_rows(
     )
     normalized_params = dict(params_local or {})
     normalized_preflight_mode = str(preflight_mode or "full").strip().lower() or "full"
+    normalized_requested_signature = _geometry_fit_cache_jsonable(requested_signature)
+    normalized_requested_signature_summary = _geometry_fit_cache_jsonable(
+        requested_signature_summary
+    )
+    normalized_projection_view_mode = (
+        str(projection_view_mode).strip().lower()
+        if projection_view_mode is not None and str(projection_view_mode).strip()
+        else None
+    )
     collected_required_manual_fit_targets = [
         dict(entry)
         for entry in (
@@ -2135,9 +2153,11 @@ def rebuild_geometry_fit_source_rows(
     required_branch_group_keys_digest = _geometry_fit_required_branch_group_keys_digest(
         collected_required_branch_group_keys,
         background_index=int(background_idx),
-        requested_signature=requested_signature,
-        requested_signature_summary=requested_signature_summary,
+        requested_signature=normalized_requested_signature,
+        requested_signature_summary=normalized_requested_signature_summary,
         preflight_mode=normalized_preflight_mode,
+        consumer=lookup_context,
+        projection_view_mode=normalized_projection_view_mode,
     )
     manual_target_scoring_digest = _geometry_fit_manual_target_scoring_digest(
         collected_required_manual_fit_targets
@@ -2636,11 +2656,9 @@ def rebuild_geometry_fit_source_rows(
                     str(required_branch_group_keys_digest),
                     {
                         "background_index": int(background_idx),
-                        "requested_signature": _geometry_fit_cache_jsonable(
-                            requested_signature
-                        ),
-                        "requested_signature_summary": _geometry_fit_cache_jsonable(
-                            requested_signature_summary
+                        "requested_signature": normalized_requested_signature,
+                        "requested_signature_summary": (
+                            normalized_requested_signature_summary
                         ),
                         "required_branch_group_keys_digest": str(
                             required_branch_group_keys_digest
@@ -2649,6 +2667,8 @@ def rebuild_geometry_fit_source_rows(
                             manual_target_scoring_digest
                         ),
                         "preflight_mode": str(normalized_preflight_mode),
+                        "consumer": str(lookup_context),
+                        "projection_view_mode": normalized_projection_view_mode,
                         "stored_rows": _copy_rows(stored_rows),
                         "projected_rows": _copy_rows(projected_rows),
                         "cache_source": str(rebuild_source),
@@ -2723,13 +2743,9 @@ def rebuild_geometry_fit_source_rows(
                 targeted_cache_payload = None
         targeted_cache_rows: list[dict[str, object]] = []
         if isinstance(targeted_cache_payload, Mapping):
-            requested_summary_matches = (
-                targeted_cache_payload.get("requested_signature_summary")
-                == requested_signature_summary
-            )
             requested_signature_matches = (
-                targeted_cache_payload.get("requested_signature") == requested_signature
-                or requested_summary_matches
+                targeted_cache_payload.get("requested_signature")
+                == normalized_requested_signature
             )
             projected_payload = targeted_cache_payload.get("projected_rows")
             stored_payload = targeted_cache_payload.get("stored_rows")
@@ -3154,10 +3170,11 @@ def rebuild_geometry_fit_source_rows(
     fresh_simulation_exception: Exception | None = None
     targeted_simulation_used = False
     targeted_simulation_supported = False
+    targeted_simulation_fallback_reason: str | None = None
     if callable(simulate_hit_tables):
         try:
             if targeted_preflight_enabled and collected_required_branch_group_keys:
-                fresh_hit_tables, targeted_simulation_supported = _call_with_optional_keywords(
+                fresh_hit_tables, targeted_keyword_support = _call_with_optional_keywords(
                     simulate_hit_tables,
                     normalized_params,
                     required_branch_group_keys=list(collected_required_branch_group_keys),
@@ -3166,8 +3183,35 @@ def rebuild_geometry_fit_source_rows(
                     ),
                     preflight_mode=normalized_preflight_mode,
                 )
-                targeted_simulation_used = bool(targeted_simulation_supported)
-                if not targeted_simulation_used:
+                runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
+                targeted_simulation_supported = bool(
+                    runtime_simulation_diagnostics.get(
+                        "targeted_simulation_supported",
+                        targeted_keyword_support,
+                    )
+                )
+                targeted_simulation_used = bool(
+                    runtime_simulation_diagnostics.get(
+                        "targeted_simulation_used",
+                        targeted_simulation_supported,
+                    )
+                )
+                targeted_simulation_fallback_reason = (
+                    str(
+                        runtime_simulation_diagnostics.get(
+                            "targeted_simulation_fallback_reason"
+                        )
+                        or ""
+                    ).strip()
+                    or None
+                )
+                if (
+                    targeted_simulation_supported
+                    and not targeted_simulation_used
+                    and targeted_simulation_fallback_reason is None
+                ):
+                    targeted_simulation_fallback_reason = "targeted_filter_not_applied"
+                if not targeted_simulation_supported:
                     _update_targeted_runtime_flags(
                         targeted_simulation_supported=False,
                         targeted_simulation_used=False,
@@ -3197,7 +3241,10 @@ def rebuild_geometry_fit_source_rows(
                 else:
                     _update_targeted_runtime_flags(
                         targeted_simulation_supported=True,
-                        targeted_simulation_used=True,
+                        targeted_simulation_used=bool(targeted_simulation_used),
+                        targeted_simulation_fallback_reason=(
+                            targeted_simulation_fallback_reason
+                        ),
                         cache_source="fresh_simulation",
                     )
             else:

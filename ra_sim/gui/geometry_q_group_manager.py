@@ -1420,10 +1420,14 @@ def simulate_geometry_fit_hit_tables(
         "intensity_count": _array_row_count(filtered_intensity_array),
         "image_size": int(image_size),
         "targeted_simulation_supported": bool(required_branch_keys),
-        "targeted_simulation_used": bool(required_branch_keys),
+        "targeted_simulation_used": False,
     }
     if required_branch_keys and filtered_miller_array.ndim == 2 and filtered_miller_array.shape[1] >= 3:
         required_hkls = {tuple(key[0]) for key in required_branch_keys}
+        diagnostics["targeted_required_hkl_count"] = int(len(required_hkls))
+        diagnostics["targeted_required_branch_group_count"] = int(
+            len(required_branch_keys)
+        )
         keep_mask = np.asarray(
             [
                 tuple(int(np.rint(float(v))) for v in row[:3]) in required_hkls
@@ -1440,12 +1444,17 @@ def simulate_geometry_fit_hit_tables(
                 filtered_intensity_array[keep_mask],
                 dtype=np.float64,
             )
-            diagnostics["targeted_required_hkl_count"] = int(len(required_hkls))
-            diagnostics["targeted_required_branch_group_count"] = int(
-                len(required_branch_keys)
-            )
+            diagnostics["targeted_simulation_used"] = True
             diagnostics["targeted_miller_count_after_filter"] = int(
                 filtered_miller_array.shape[0]
+            )
+        elif keep_mask.shape[0] == filtered_miller_array.shape[0]:
+            diagnostics["targeted_simulation_fallback_reason"] = (
+                "targeted_hkl_filter_empty"
+            )
+        else:
+            diagnostics["targeted_simulation_fallback_reason"] = (
+                "targeted_hkl_filter_unavailable"
             )
 
     mosaic = dict(params_local.get("mosaic_params", {}))
@@ -1823,17 +1832,23 @@ def make_runtime_geometry_fit_simulation_callbacks(
         preflight_mode: str = "full",
     ) -> list[object]:
         try:
+            simulate_kwargs = {
+                "build_geometry_fit_central_mosaic_params": (
+                    build_geometry_fit_central_mosaic_params
+                ),
+                "process_peaks_parallel": process_peaks_parallel_runner,
+                "default_solve_q_steps": default_solve_q_steps,
+                "default_solve_q_rel_tol": default_solve_q_rel_tol,
+                "default_solve_q_mode": default_solve_q_mode,
+            }
+            if required_branch_group_keys is not None:
+                simulate_kwargs["required_branch_group_keys"] = required_branch_group_keys
             result = simulate_geometry_fit_hit_tables(
                 miller_array,
                 intensity_array,
                 image_size,
                 param_set,
-                build_geometry_fit_central_mosaic_params=(build_geometry_fit_central_mosaic_params),
-                process_peaks_parallel=process_peaks_parallel_runner,
-                default_solve_q_steps=default_solve_q_steps,
-                default_solve_q_rel_tol=default_solve_q_rel_tol,
-                default_solve_q_mode=default_solve_q_mode,
-                required_branch_group_keys=required_branch_group_keys,
+                **simulate_kwargs,
             )
         except Exception:
             _set_last_simulation_diagnostics(

@@ -532,6 +532,75 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     assert preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
 
 
+def test_simulate_geometry_fit_hit_tables_marks_empty_target_filter_unused() -> None:
+    def _build_mosaic(_params):
+        return {
+            "beam_x_array": np.asarray([1.0], dtype=float),
+            "beam_y_array": np.asarray([2.0], dtype=float),
+            "theta_array": np.asarray([3.0], dtype=float),
+            "phi_array": np.asarray([4.0], dtype=float),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*_args, **_kwargs):
+        return (
+            np.zeros((32, 32), dtype=float),
+            [
+                np.asarray(
+                    [
+                        [10.0, 1.2, 2.8, 0.0, 2.0, 0.0, 0.0],
+                    ],
+                    dtype=float,
+                )
+            ],
+        )
+
+    hit_tables = geometry_q_group_manager.simulate_geometry_fit_hit_tables(
+        np.asarray([[2.0, 0.0, 0.0]], dtype=float),
+        np.asarray([5.0], dtype=float),
+        32,
+        {
+            "a": 3.0,
+            "c": 5.0,
+            "lambda": 1.54,
+            "corto_detector": 100.0,
+            "gamma": 1.0,
+            "Gamma": 2.0,
+            "chi": 3.0,
+            "psi": 4.0,
+            "psi_z": 5.0,
+            "zs": 6.0,
+            "zb": 7.0,
+            "n2": "n2",
+            "debye_x": 0.1,
+            "debye_y": 0.2,
+            "center": (11.0, 12.0),
+            "theta_initial": 8.0,
+            "cor_angle": 9.0,
+            "optics_mode": 2,
+        },
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        required_branch_group_keys=[((1, 0, 0), 1, ("q", 1))],
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    diagnostics = geometry_q_group_manager._function_last_diagnostics(
+        geometry_q_group_manager.simulate_geometry_fit_hit_tables
+    )
+
+    assert hit_tables == []
+    assert diagnostics["targeted_simulation_supported"] is True
+    assert diagnostics["targeted_simulation_used"] is False
+    assert diagnostics["targeted_simulation_fallback_reason"] == (
+        "targeted_hkl_filter_empty"
+    )
+
+
 def test_simulate_geometry_fit_preview_style_peaks_respects_lattice_and_provenance() -> None:
     def _build_mosaic(_params):
         return {

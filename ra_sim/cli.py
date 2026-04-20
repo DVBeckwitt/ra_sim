@@ -37,7 +37,7 @@ import math
 from pathlib import Path
 import sys
 from types import SimpleNamespace
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
@@ -1320,7 +1320,9 @@ def run_headless_geometry_fit(
         param_set: dict[str, object] | None = None,
         *,
         consumer: str | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
+        del required_pairs
         consumer_name = str(consumer or "unspecified")
         if int(background_index) != int(background_runtime_state.current_background_index):
             source_snapshot_diagnostics_state.clear()

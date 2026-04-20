@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import inspect
 import json
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -2124,6 +2125,12 @@ def _build_group_cache(
     simulation_diagnostics = dataset.get("simulation_diagnostics")
     if isinstance(simulation_diagnostics, Mapping):
         requested_signature = simulation_diagnostics.get("requested_signature")
+
+    source_rows_callback = getattr(
+        manual_dataset_bindings,
+        "geometry_manual_source_rows_for_background",
+        None,
+    )
     cache_data, _next_signature, _next_state = gui_manual_geometry.build_geometry_manual_pick_cache(
         param_set=dict(params),
         prefer_cache=False,
@@ -2145,17 +2152,20 @@ def _build_group_cache(
             disabled_qz_sections=(),
         ),
         source_rows_for_background=(
-            lambda bg_index, param_set=None: (
-                manual_dataset_bindings.geometry_manual_source_rows_for_background(
+            lambda bg_index, param_set=None, **kwargs: (
+                _call_source_rows_for_background(
+                    source_rows_callback,
                     int(bg_index),
                     param_set,
-                    consumer="geometry_fit_group_cache",
-                    required_pairs=required_pairs,
+                    consumer=str(
+                        kwargs.get("consumer") or "geometry_fit_group_cache"
+                    ),
+                    required_pairs=(
+                        kwargs.get("required_pairs")
+                        if kwargs.get("required_pairs") is not None
+                        else required_pairs
+                    ),
                 )
-                if callable(
-                    manual_dataset_bindings.geometry_manual_source_rows_for_background
-                )
-                else []
             )
         ),
         simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
@@ -2725,16 +2735,19 @@ def _current_source_rows_for_background(
 ) -> list[dict[str, object]]:
     manual_dataset_bindings = context["manual_dataset_bindings"]
     params = dict(context["params"])
+    required_pairs = context.get("saved_entries")
     source_rows_for_background = getattr(
         manual_dataset_bindings,
         "geometry_manual_source_rows_for_background",
         None,
     )
     if callable(source_rows_for_background):
-        rows = source_rows_for_background(
+        rows = _call_source_rows_for_background(
+            source_rows_for_background,
             int(background_index),
             params,
             consumer=str(consumer),
+            required_pairs=required_pairs,
         )
         return [dict(entry) for entry in rows or () if isinstance(entry, Mapping)]
     dataset = context["dataset"]
@@ -2743,6 +2756,68 @@ def _current_source_rows_for_background(
         for entry in dataset.get("source_rows_for_trace", ()) or ()
         if isinstance(entry, Mapping)
     ]
+
+
+def _call_source_rows_for_background(
+    callback,
+    background_index: int,
+    param_set,
+    *,
+    consumer: str,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
+):
+    if not callable(callback):
+        return []
+    fallback_kwargs: list[dict[str, object]] = []
+    supported_kwargs: dict[str, object] = {}
+    try:
+        signature = inspect.signature(callback)
+    except Exception:
+        signature = None
+    if signature is not None:
+        parameters = signature.parameters
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        if accepts_var_kwargs or "consumer" in parameters:
+            supported_kwargs["consumer"] = str(consumer)
+        if (
+            required_pairs is not None
+            and (accepts_var_kwargs or "required_pairs" in parameters)
+        ):
+            supported_kwargs["required_pairs"] = required_pairs
+        fallback_kwargs.append(supported_kwargs)
+    else:
+        supported_kwargs = {"consumer": str(consumer)}
+        if required_pairs is not None:
+            supported_kwargs["required_pairs"] = required_pairs
+        fallback_kwargs.extend(
+            [
+                dict(supported_kwargs),
+                {"consumer": str(consumer)},
+                {},
+            ]
+        )
+    attempted: set[tuple[tuple[str, str], ...]] = set()
+    for kwargs in fallback_kwargs:
+        kwargs_key = tuple(
+            sorted((str(key), repr(value)) for key, value in kwargs.items())
+        )
+        if kwargs_key in attempted:
+            continue
+        attempted.add(kwargs_key)
+        try:
+            return callback(
+                int(background_index),
+                param_set,
+                **kwargs,
+            )
+        except TypeError:
+            if signature is not None:
+                raise
+            continue
+    return callback(int(background_index), param_set)
 
 
 def _entry_caked_display_coords(
