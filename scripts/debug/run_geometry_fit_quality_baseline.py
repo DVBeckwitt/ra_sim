@@ -329,6 +329,7 @@ def _normalize_pair_record(record: Mapping[str, object]) -> dict[str, object]:
         "source_branch_index": _int_or_none(record.get("source_branch_index")),
         "source_peak_index": _int_or_none(record.get("source_peak_index")),
         "resolved_peak_index": _int_or_none(record.get("resolved_peak_index")),
+        "match_radius_exceeded": bool(record.get("match_radius_exceeded", False)),
     }
 
 
@@ -388,6 +389,9 @@ def _build_phase_summary(
     worst_pair_ids = [str(record["pair_id"]) for record in worst_records]
     if not worst_pair_ids and unresolved_pair_ids:
         worst_pair_ids = unresolved_pair_ids[:5]
+    outside_radius_count = sum(
+        1 for record in matched if bool(record.get("match_radius_exceeded", False))
+    )
     return {
         "phase": phase,
         "matched_statuses": list(matched_statuses),
@@ -395,6 +399,7 @@ def _build_phase_summary(
         "pair_record_count": len(normalized),
         "matched_count": len(matched),
         "unresolved_count": len(unresolved_pair_ids),
+        "outside_radius_count": int(outside_radius_count),
         "unresolved_pair_ids": unresolved_pair_ids,
         "rms_px": _rms(finite_residuals),
         "max_residual_px": max(finite_residuals) if finite_residuals else None,
@@ -761,6 +766,79 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         )
         or ""
     )
+    full_beam_summary = (
+        dict(run_record.get("full_beam_polish_summary", {}))
+        if isinstance(run_record.get("full_beam_polish_summary"), Mapping)
+        else {}
+    )
+    run_stage_timing_s = (
+        {
+            str(key): _float_or_none(value)
+            for key, value in dict(run_record.get("stage_timing_s", {})).items()
+            if _float_or_none(value) is not None
+        }
+        if isinstance(run_record.get("stage_timing_s"), Mapping)
+        else {}
+    )
+    run_summary = {
+        "dynamic_point_geometry_fit": bool(run_record.get("dynamic_point_geometry_fit", False)),
+        "full_beam_polish_enabled": bool(
+            run_record.get("full_beam_polish_enabled", full_beam_summary.get("enabled", False))
+        ),
+        "full_beam_polish_accepted": bool(
+            run_record.get("full_beam_polish_accepted", full_beam_summary.get("accepted", False))
+        ),
+        "full_beam_start_vector_source": str(
+            run_record.get(
+                "full_beam_start_vector_source",
+                full_beam_summary.get("start_vector_source", ""),
+            )
+            or ""
+        ),
+        "seed_correspondence_count": int(
+            run_record.get(
+                "seed_correspondence_count",
+                full_beam_summary.get("seed_correspondence_count", 0),
+            )
+            or 0
+        ),
+        "nfev": int(run_record.get("nfev", optimizer_summary.get("nfev", 0)) or 0),
+        "matched_fixed_pair_count_before": int(
+            full_beam_summary.get("matched_pair_count_before", before_summary["matched_count"]) or 0
+        ),
+        "matched_fixed_pair_count_after": int(
+            full_beam_summary.get("matched_pair_count_after", after_summary["matched_count"]) or 0
+        ),
+        "missing_fixed_pair_count_after": int(
+            full_beam_summary.get(
+                "missing_pair_count_after",
+                after_summary["unresolved_count"],
+            )
+            or 0
+        ),
+        "outside_radius_count_before": int(
+            full_beam_summary.get(
+                "start_outside_radius_count",
+                before_summary["outside_radius_count"],
+            )
+            or 0
+        ),
+        "outside_radius_count_after": int(
+            full_beam_summary.get(
+                "outside_radius_count_after",
+                after_summary["outside_radius_count"],
+            )
+            or 0
+        ),
+        "branch_mismatch_count": int(
+            full_beam_summary.get(
+                "branch_mismatch_count_after",
+                identity_retention_after_fit["branch_mismatch_count"],
+            )
+            or 0
+        ),
+        "stage_timing_s": run_stage_timing_s,
+    }
     decision_row = {
         "accepted": accepted,
         "rejection_reason": rejection_text,
@@ -795,6 +873,7 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         },
         "background_context": background_context,
         "decision_row": decision_row,
+        "run_summary": run_summary,
         "start_parameters": [
             {
                 "name": entry["name"],
@@ -855,6 +934,106 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         },
     }
     return _json_safe(report)  # type: ignore[return-value]
+
+
+def _compact_summary_from_report(
+    report: Mapping[str, object],
+    *,
+    elapsed_s: float,
+    baseline_report_writing_s: float,
+) -> dict[str, object]:
+    decision = dict(report.get("decision_row", {}))
+    run_summary = (
+        dict(report.get("run_summary", {}))
+        if isinstance(report.get("run_summary"), Mapping)
+        else {}
+    )
+    before_fit = dict(report.get("before_fit", {})) if isinstance(report.get("before_fit"), Mapping) else {}
+    after_fit = dict(report.get("after_fit", {})) if isinstance(report.get("after_fit"), Mapping) else {}
+    identity = (
+        dict(report.get("identity_retention_after_fit", {}))
+        if isinstance(report.get("identity_retention_after_fit"), Mapping)
+        else {}
+    )
+    stage_timing_s = {
+        str(key): float(value)
+        for key, value in dict(run_summary.get("stage_timing_s", {})).items()
+        if _float_or_none(value) is not None
+        for value in [float(_float_or_none(value))]
+    }
+    stage_timing_s["baseline_report_writing"] = float(max(0.0, baseline_report_writing_s))
+    return _json_safe(
+        {
+            "state": str(report.get("state_name", "") or ""),
+            "accepted": bool(decision.get("accepted", False)),
+            "rejection_reason": decision.get("rejection_reason"),
+            "before_rms_px": _float_or_none(decision.get("rms_before_px", before_fit.get("rms_px"))),
+            "after_rms_px": _float_or_none(decision.get("rms_after_px", after_fit.get("rms_px"))),
+            "after_max_px": _float_or_none(
+                decision.get("max_residual_after_px", after_fit.get("max_residual_px"))
+            ),
+            "matched_fixed_pair_count_before": int(
+                run_summary.get(
+                    "matched_fixed_pair_count_before",
+                    decision.get("matched_count_before", before_fit.get("matched_count", 0)),
+                )
+                or 0
+            ),
+            "matched_fixed_pair_count_after": int(
+                run_summary.get(
+                    "matched_fixed_pair_count_after",
+                    decision.get("matched_count_after", after_fit.get("matched_count", 0)),
+                )
+                or 0
+            ),
+            "missing_fixed_pair_count_after": int(
+                run_summary.get(
+                    "missing_fixed_pair_count_after",
+                    after_fit.get("unresolved_count", 0),
+                )
+                or 0
+            ),
+            "outside_radius_count_before": int(
+                run_summary.get(
+                    "outside_radius_count_before",
+                    before_fit.get("outside_radius_count", 0),
+                )
+                or 0
+            ),
+            "outside_radius_count_after": int(
+                run_summary.get(
+                    "outside_radius_count_after",
+                    after_fit.get("outside_radius_count", 0),
+                )
+                or 0
+            ),
+            "branch_mismatch_count": int(
+                run_summary.get(
+                    "branch_mismatch_count",
+                    identity.get("branch_mismatch_count", 0),
+                )
+                or 0
+            ),
+            "dynamic_point_geometry_fit": bool(
+                run_summary.get("dynamic_point_geometry_fit", False)
+            ),
+            "full_beam_polish_enabled": bool(
+                run_summary.get("full_beam_polish_enabled", False)
+            ),
+            "full_beam_polish_accepted": bool(
+                run_summary.get("full_beam_polish_accepted", False)
+            ),
+            "full_beam_start_vector_source": str(
+                run_summary.get("full_beam_start_vector_source", "") or ""
+            ),
+            "seed_correspondence_count": int(
+                run_summary.get("seed_correspondence_count", 0) or 0
+            ),
+            "nfev": int(run_summary.get("nfev", 0) or 0),
+            "elapsed_s": float(max(0.0, elapsed_s)),
+            "stage_timing_s": stage_timing_s,
+        }
+    )
 
 
 def _markdown_pair_rows(entries: Sequence[Mapping[str, object]]) -> list[str]:
@@ -1178,20 +1357,19 @@ def run_baseline(
                 timeout_seconds=state_timeout_seconds,
             )
         report = build_quality_report(artifacts)
+        report_write_started_at = time.monotonic()
         _write_report_files(report, run_dir, state_path.stem)
-        reports.append(dict(report))
-        decision = dict(report.get("decision_row", {}))
+        baseline_report_writing_s = time.monotonic() - report_write_started_at
         elapsed_seconds = time.monotonic() - started_at
-        print(
-            "{name}: finished in {elapsed:.1f}s accepted={accepted} metric={metric} rms_after_px={rms}".format(
-                name=state_path.stem,
-                elapsed=elapsed_seconds,
-                accepted=decision.get("accepted"),
-                metric=decision.get("final_metric_name"),
-                rms=decision.get("rms_after_px"),
-            ),
-            flush=True,
+        compact_summary = _compact_summary_from_report(
+            report,
+            elapsed_s=elapsed_seconds,
+            baseline_report_writing_s=baseline_report_writing_s,
         )
+        report_with_summary = dict(report)
+        report_with_summary["compact_summary"] = dict(compact_summary)
+        reports.append(report_with_summary)
+        print(json.dumps(compact_summary, sort_keys=True), flush=True)
     return reports
 
 
@@ -1240,17 +1418,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RuntimeError as exc:
         print(str(exc), flush=True)
         return 1
-    for report in reports:
-        decision = dict(report.get("decision_row", {}))
-        print(
-            "{name}: accepted={accepted} metric={metric} rms_after_px={rms}".format(
-                name=str(report.get("state_name", "")),
-                accepted=decision.get("accepted"),
-                metric=decision.get("final_metric_name"),
-                rms=decision.get("rms_after_px"),
-            ),
-            flush=True,
-        )
     print(f"Output root: {output_root}", flush=True)
     return 0
 

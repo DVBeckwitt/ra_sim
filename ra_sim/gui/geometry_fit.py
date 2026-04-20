@@ -418,6 +418,7 @@ class GeometryFitPreparedRun:
     start_log_sections: list[tuple[str, list[str]]]
     max_display_markers: int
     geometry_runtime_cfg: dict[str, object]
+    stage_timing_s: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -9198,6 +9199,25 @@ def _build_geometry_fit_trace_records(
 ) -> list[dict[str, object]]:
     """Build the JSONL phase trace for one geometry-fit run."""
 
+    full_beam_summary = getattr(result, "full_beam_polish_summary", None)
+    point_match_summary = getattr(result, "point_match_summary", None)
+    run_stage_timings: dict[str, object] = {}
+    if isinstance(prepared_run.stage_timing_s, Mapping):
+        run_stage_timings.update(
+            {
+                str(key): _geometry_fit_cache_jsonable(value)
+                for key, value in prepared_run.stage_timing_s.items()
+            }
+        )
+    solver_stage_timings = getattr(result, "geometry_fit_stage_timings", None)
+    if isinstance(solver_stage_timings, Mapping):
+        run_stage_timings.update(
+            {
+                str(key): _geometry_fit_cache_jsonable(value)
+                for key, value in solver_stage_timings.items()
+            }
+        )
+
     records: list[dict[str, object]] = [
         {
             "record_type": "run",
@@ -9215,6 +9235,38 @@ def _build_geometry_fit_trace_records(
                 geometry_fit_result_rms(result)
             ),
             "final_metric_name": str(getattr(result, "final_metric_name", "") or ""),
+            "dynamic_point_geometry_fit": bool(
+                getattr(result, "geometry_fit_debug_summary", {}).get(
+                    "dynamic_point_geometry_fit",
+                    False,
+                )
+                if isinstance(getattr(result, "geometry_fit_debug_summary", None), Mapping)
+                else False
+            ),
+            "full_beam_polish_enabled": bool(
+                full_beam_summary.get("enabled", False)
+                if isinstance(full_beam_summary, Mapping)
+                else False
+            ),
+            "full_beam_polish_accepted": bool(
+                full_beam_summary.get("accepted", False)
+                if isinstance(full_beam_summary, Mapping)
+                else False
+            ),
+            "full_beam_start_vector_source": (
+                str(full_beam_summary.get("start_vector_source", "") or "")
+                if isinstance(full_beam_summary, Mapping)
+                else ""
+            ),
+            "seed_correspondence_count": int(
+                full_beam_summary.get("seed_correspondence_count", 0)
+                if isinstance(full_beam_summary, Mapping)
+                else 0
+            ),
+            "nfev": int(getattr(result, "nfev", 0) or 0),
+            "stage_timing_s": run_stage_timings,
+            "point_match_summary": _geometry_fit_cache_jsonable(point_match_summary),
+            "full_beam_polish_summary": _geometry_fit_cache_jsonable(full_beam_summary),
         }
     ]
 
@@ -9389,7 +9441,6 @@ def _build_geometry_fit_trace_records(
                             }
                         )
 
-    full_beam_summary = getattr(result, "full_beam_polish_summary", None)
     seed_records = []
     if isinstance(full_beam_summary, Mapping):
         raw_seed_records = full_beam_summary.get("seed_correspondence_records", ())

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import copy
 import math
+import time
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -2182,6 +2183,7 @@ def run_headless_geometry_fit(
     var_names = list(value_callbacks.current_var_names())
     preserve_live_theta = "theta_initial" not in var_names and "theta_offset" not in var_names
 
+    preflight_started_at = time.monotonic()
     preparation = gui_geometry_fit.prepare_runtime_geometry_fit_run(
         params=params,
         var_names=var_names,
@@ -2207,6 +2209,7 @@ def run_headless_geometry_fit(
     if preparation.prepared_run is None:
         raise RuntimeError(str(preparation.error_text or "Geometry fit preparation failed."))
     prepared_run = preparation.prepared_run
+    preflight_elapsed_s = float(max(0.0, time.monotonic() - preflight_started_at))
     headless_geometry_cfg = gui_geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
         gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
             copy.deepcopy(
@@ -2230,6 +2233,14 @@ def run_headless_geometry_fit(
             geometry_runtime_cfg=headless_geometry_cfg,
         ),
         geometry_runtime_cfg=headless_geometry_cfg,
+        stage_timing_s={
+            **(
+                dict(prepared_run.stage_timing_s)
+                if isinstance(prepared_run.stage_timing_s, Mapping)
+                else {}
+            ),
+            "preflight_rebind": float(preflight_elapsed_s),
+        },
     )
     preparation = replace(preparation, prepared_run=prepared_run)
 

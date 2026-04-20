@@ -94,6 +94,29 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
                         "final_metric_name": "full_beam_fixed_correspondence",
                         "weighted_residual_rms_px": 2.0,
                         "detector_rms_px": 3.5,
+                        "dynamic_point_geometry_fit": True,
+                        "full_beam_polish_enabled": True,
+                        "full_beam_polish_accepted": True,
+                        "full_beam_start_vector_source": "requested_x0",
+                        "seed_correspondence_count": 2,
+                        "nfev": 7,
+                        "stage_timing_s": {
+                            "preflight_rebind": 1.25,
+                            "dynamic_seed": 2.5,
+                            "central_solve": 3.75,
+                            "full_beam_polish": 4.0,
+                            "acceptance_diagnostics": 0.5,
+                        },
+                        "full_beam_polish_summary": {
+                            "matched_pair_count_before": 2,
+                            "matched_pair_count_after": 2,
+                            "missing_pair_count_after": 0,
+                            "start_outside_radius_count": 0,
+                            "outside_radius_count_after": 1,
+                            "branch_mismatch_count_after": 0,
+                            "start_vector_source": "requested_x0",
+                            "seed_correspondence_count": 2,
+                        },
                     }
                 ),
                 json.dumps(
@@ -135,6 +158,7 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
                         "resolved_peak_index": 1,
                         "resolution_kind": "fixed_source",
                         "resolution_reason": "resolved",
+                        "match_radius_exceeded": True,
                     }
                 ),
                 json.dumps(
@@ -242,6 +266,29 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
         "cost": 12.0,
         "robust_cost": 11.0,
     }
+    assert report["before_fit"]["outside_radius_count"] == 0
+    assert report["after_fit"]["outside_radius_count"] == 1
+    assert report["run_summary"] == {
+        "dynamic_point_geometry_fit": True,
+        "full_beam_polish_enabled": True,
+        "full_beam_polish_accepted": True,
+        "full_beam_start_vector_source": "requested_x0",
+        "seed_correspondence_count": 2,
+        "nfev": 7,
+        "matched_fixed_pair_count_before": 2,
+        "matched_fixed_pair_count_after": 2,
+        "missing_fixed_pair_count_after": 0,
+        "outside_radius_count_before": 0,
+        "outside_radius_count_after": 1,
+        "branch_mismatch_count": 0,
+        "stage_timing_s": {
+            "preflight_rebind": 1.25,
+            "dynamic_seed": 2.5,
+            "central_solve": 3.75,
+            "full_beam_polish": 4.0,
+            "acceptance_diagnostics": 0.5,
+        },
+    }
     assert report["overlay_evidence"]["matched_peaks"]["record_count"] == 2
     assert report["overlay_evidence"]["matched_peaks"]["preview"] == [
         {"pair_id": "pair[0]", "measured_point": [100.0, 200.0]},
@@ -266,6 +313,40 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
         "matched_resolution_reason_counts": {"resolved": 2},
         "unmatched_resolution_reason_counts": {},
         "issue_preview": [],
+    }
+    compact = module._compact_summary_from_report(
+        report,
+        elapsed_s=12.5,
+        baseline_report_writing_s=0.125,
+    )
+    assert compact == {
+        "state": "new2_fresh_all",
+        "accepted": True,
+        "rejection_reason": None,
+        "before_rms_px": (80.0 / 2.0) ** 0.5,
+        "after_rms_px": (10.0 / 2.0) ** 0.5,
+        "after_max_px": 3.0,
+        "matched_fixed_pair_count_before": 2,
+        "matched_fixed_pair_count_after": 2,
+        "missing_fixed_pair_count_after": 0,
+        "outside_radius_count_before": 0,
+        "outside_radius_count_after": 1,
+        "branch_mismatch_count": 0,
+        "dynamic_point_geometry_fit": True,
+        "full_beam_polish_enabled": True,
+        "full_beam_polish_accepted": True,
+        "full_beam_start_vector_source": "requested_x0",
+        "seed_correspondence_count": 2,
+        "nfev": 7,
+        "elapsed_s": 12.5,
+        "stage_timing_s": {
+            "preflight_rebind": 1.25,
+            "dynamic_seed": 2.5,
+            "central_solve": 3.75,
+            "full_beam_polish": 4.0,
+            "acceptance_diagnostics": 0.5,
+            "baseline_report_writing": 0.125,
+        },
     }
 
 

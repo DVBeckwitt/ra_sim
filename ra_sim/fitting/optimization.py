@@ -5,6 +5,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 import math
+import time
 from threading import Lock
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -9592,6 +9593,16 @@ def _geometry_fit_prefers_source_row_resolution(
 ) -> bool:
     if not isinstance(entry, Mapping):
         return False
+    if _entry_trusted_full_reflection_identity(entry):
+        source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
+        resolved_table_index = _nonnegative_index(entry.get("resolved_table_index"))
+        pair_id = str(entry.get("pair_id", "") or "").strip()
+        if (
+            source_branch_index in {0, 1}
+            and resolved_table_index is not None
+            and pair_id
+        ):
+            return False
     fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
     if fit_kind != "source_row":
         return False
@@ -13375,6 +13386,7 @@ def fit_geometry_parameters(
         "parameter_entries": parameter_debug_entries,
         "dataset_entries": dataset_debug_entries,
     }
+    geometry_fit_stage_timings: Dict[str, float] = {}
 
     all_candidate_param_names = [
         str(name)
@@ -14596,6 +14608,7 @@ def fit_geometry_parameters(
             "aborted_early": False,
             "trace": trace_points,
         }
+        solve_started_at = time.monotonic()
 
         def _maybe_abort_manual_point_fit(
             x_trial: np.ndarray,
@@ -14809,6 +14822,7 @@ def fit_geometry_parameters(
             result.early_stop_reason = str(exc)
             result.point_match_summary = dict(exc.point_match_summary)
             result.bound_proximity_summary = dict(exc.bound_proximity_summary)
+        progress_state["elapsed_s"] = float(max(0.0, time.monotonic() - solve_started_at))
         progress_state["start_x"] = np.asarray(x_start, dtype=float).tolist()
         try:
             progress_state["end_x"] = np.asarray(result.x, dtype=float).tolist()
@@ -14952,6 +14966,7 @@ def fit_geometry_parameters(
             "aborted_early": False,
             "trace": trace_points,
         }
+        solve_started_at = time.monotonic()
 
         def _maybe_abort_manual_point_fit_u(
             u_trial: np.ndarray,
@@ -15143,6 +15158,7 @@ def fit_geometry_parameters(
                 result_u.x = _u_from_physical(specs, np.asarray(exc.x_trial, dtype=float))
             except Exception:
                 result_u.x = np.asarray(u_start, dtype=float)
+        progress_state["elapsed_s"] = float(max(0.0, time.monotonic() - solve_started_at))
         progress_state["start_u"] = np.asarray(u_start, dtype=float).tolist()
         try:
             progress_state["end_u"] = np.asarray(result_u.x, dtype=float).tolist()
@@ -16014,6 +16030,7 @@ def fit_geometry_parameters(
     ) -> Dict[str, object]:
         nonlocal final_metric_residual_fn
         nonlocal final_metric_point_match_evaluator
+        stage_started_at = time.monotonic()
         summary: Dict[str, object] = {
             "enabled": bool(full_beam_polish_enabled),
             "status": "skipped",
@@ -16113,6 +16130,36 @@ def fit_geometry_parameters(
                 dtype=float,
             )
             point_match_residual = np.asarray(point_match_residual_in, dtype=float).reshape(-1)
+            missing_pair_count = 0
+            total_fixed_pair_count = int(len(matched_entries))
+            if isinstance(point_match_summary_in, Mapping):
+                try:
+                    missing_pair_count = int(point_match_summary_in.get("missing_pair_count", 0))
+                except Exception:
+                    missing_pair_count = 0
+                total_fixed_pair_count = int(
+                    point_match_summary_in.get(
+                        "measured_count",
+                        len(matched_entries) + max(0, int(missing_pair_count)),
+                    )
+                )
+            branch_mismatch_count = 0
+            for entry in matched_entries:
+                try:
+                    source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
+                    resolved_peak_index = _nonnegative_index(entry.get("resolved_peak_index"))
+                except Exception:
+                    source_branch_index = None
+                    resolved_peak_index = None
+                if (
+                    source_branch_index is not None
+                    and resolved_peak_index is not None
+                    and int(source_branch_index) != int(resolved_peak_index)
+                ):
+                    branch_mismatch_count += 1
+            outside_radius_count = int(
+                sum(int(bool(entry.get("match_radius_exceeded", False))) for entry in matched_entries)
+            )
 
             def _rms(distances: np.ndarray) -> float:
                 if not distances.size:
@@ -16132,9 +16179,19 @@ def fit_geometry_parameters(
             out = {
                 "acceptance_metric_scope": "all_resolved_fixed_correspondences",
                 "resolved_fixed_matched_pair_count": int(len(matched_entries)),
-                "match_radius_exceeded_count": int(
-                    sum(int(bool(entry.get("match_radius_exceeded", False))) for entry in matched_entries)
+                "matched_fixed_pair_count": int(len(matched_entries)),
+                "matched_pair_count": int(len(matched_entries)),
+                "missing_fixed_pair_count": int(max(0, int(missing_pair_count))),
+                "missing_pair_count": int(max(0, int(missing_pair_count))),
+                "total_fixed_pair_count": int(
+                    max(
+                        len(matched_entries) + max(0, int(missing_pair_count)),
+                        int(total_fixed_pair_count),
+                    )
                 ),
+                "match_radius_exceeded_count": int(outside_radius_count),
+                "outside_radius_count": int(outside_radius_count),
+                "branch_mismatch_count": int(branch_mismatch_count),
                 "point_match_cost": float(
                     _robust_cost(
                         point_match_residual,
@@ -16289,6 +16346,7 @@ def fit_geometry_parameters(
             np.asarray(current_result.x, dtype=float),
             vector_source="current_result.x",
         )
+        candidate_start_bundles: List[Mapping[str, object]] = [selected_start_bundle]
         candidate_start_vector_sources = [str(selected_start_bundle["vector_source"])]
 
         def _maybe_consider_start_vector(
@@ -16325,6 +16383,7 @@ def fit_geometry_parameters(
                 candidate_x_arr,
                 vector_source=str(vector_source),
             )
+            candidate_start_bundles.append(candidate_bundle)
             candidate_start_vector_sources.append(str(candidate_bundle["vector_source"]))
             if _full_beam_start_bundle_is_better(
                 candidate_bundle,
@@ -16351,6 +16410,81 @@ def fit_geometry_parameters(
                 requested_x0_arr,
                 vector_source="requested_x0",
             )
+
+        def _start_bundle_detector_is_better(
+            candidate: Mapping[str, object],
+            baseline: Mapping[str, object],
+        ) -> bool:
+            candidate_metrics = dict(candidate.get("start_acceptance_metrics", {}))
+            baseline_metrics = dict(baseline.get("start_acceptance_metrics", {}))
+            candidate_rank = (
+                int(candidate_metrics.get("matched_pair_count", candidate.get("start_matched", 0))),
+                -int(candidate_metrics.get("missing_pair_count", 0)),
+                -int(
+                    candidate_metrics.get(
+                        "outside_radius_count",
+                        candidate_metrics.get("match_radius_exceeded_count", 0),
+                    )
+                ),
+                -int(candidate_metrics.get("branch_mismatch_count", 0)),
+            )
+            baseline_rank = (
+                int(baseline_metrics.get("matched_pair_count", baseline.get("start_matched", 0))),
+                -int(baseline_metrics.get("missing_pair_count", 0)),
+                -int(
+                    baseline_metrics.get(
+                        "outside_radius_count",
+                        baseline_metrics.get("match_radius_exceeded_count", 0),
+                    )
+                ),
+                -int(baseline_metrics.get("branch_mismatch_count", 0)),
+            )
+            if candidate_rank != baseline_rank:
+                return bool(candidate_rank > baseline_rank)
+
+            def _bundle_metric(
+                bundle_metrics: Mapping[str, object],
+                key: str,
+            ) -> float:
+                try:
+                    value = float(bundle_metrics.get(key, np.nan))
+                except Exception:
+                    return float("nan")
+                return value if np.isfinite(value) else float("nan")
+
+            for metric_name in (
+                "unweighted_peak_rms_px",
+                "unweighted_peak_max_px",
+                "weighted_rms_px",
+            ):
+                candidate_value = _bundle_metric(candidate_metrics, metric_name)
+                baseline_value = _bundle_metric(baseline_metrics, metric_name)
+                if np.isfinite(candidate_value) and np.isfinite(baseline_value):
+                    if not np.isclose(candidate_value, baseline_value, rtol=0.0, atol=1.0e-12):
+                        return bool(candidate_value < baseline_value)
+                elif np.isfinite(candidate_value) != np.isfinite(baseline_value):
+                    return bool(np.isfinite(candidate_value))
+
+            try:
+                candidate_cost = float(candidate.get("start_cost", np.inf))
+            except Exception:
+                candidate_cost = float("inf")
+            try:
+                baseline_cost = float(baseline.get("start_cost", np.inf))
+            except Exception:
+                baseline_cost = float("inf")
+            if np.isfinite(candidate_cost) and np.isfinite(baseline_cost):
+                if not np.isclose(candidate_cost, baseline_cost, rtol=0.0, atol=1.0e-12):
+                    return bool(candidate_cost < baseline_cost)
+            return bool(np.isfinite(candidate_cost) and not np.isfinite(baseline_cost))
+
+        detector_reference_start_bundle = selected_start_bundle
+        for candidate_bundle in candidate_start_bundles:
+            if _start_bundle_detector_is_better(
+                candidate_bundle,
+                detector_reference_start_bundle,
+            ):
+                detector_reference_start_bundle = candidate_bundle
 
         summary["candidate_start_vector_sources"] = list(candidate_start_vector_sources)
         summary["seed_correspondence_count"] = int(
@@ -16439,6 +16573,68 @@ def fit_geometry_parameters(
         start_acceptance_metrics = dict(
             selected_start_bundle.get("start_acceptance_metrics", {})
         )
+        reference_start_matched = int(detector_reference_start_bundle.get("start_matched", start_matched))
+        reference_start_acceptance_metrics = dict(
+            detector_reference_start_bundle.get(
+                "start_acceptance_metrics",
+                start_acceptance_metrics,
+            )
+        )
+        try:
+            reference_start_point_rms = float(
+                reference_start_acceptance_metrics.get("weighted_rms_px", np.nan)
+            )
+        except Exception:
+            reference_start_point_rms = float("nan")
+        try:
+            reference_start_point_match_cost = float(
+                reference_start_acceptance_metrics.get("point_match_cost", np.nan)
+            )
+        except Exception:
+            reference_start_point_match_cost = float("nan")
+        try:
+            reference_start_unweighted_peak_rms = float(
+                reference_start_acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            reference_start_unweighted_peak_rms = float("nan")
+        try:
+            reference_start_unweighted_peak_max = float(
+                reference_start_acceptance_metrics.get("unweighted_peak_max_px", np.nan)
+            )
+        except Exception:
+            reference_start_unweighted_peak_max = float("nan")
+        reference_start_missing_pair_count = int(
+            reference_start_acceptance_metrics.get("missing_pair_count", 0) or 0
+        )
+        reference_start_total_fixed_pair_count = int(
+            reference_start_acceptance_metrics.get(
+                "total_fixed_pair_count",
+                max(
+                    int(reference_start_matched) + int(reference_start_missing_pair_count),
+                    int(reference_start_matched),
+                ),
+            )
+            or 0
+        )
+        reference_start_fixed_source_resolved_count = int(
+            reference_start_acceptance_metrics.get(
+                "resolved_fixed_matched_pair_count",
+                reference_start_matched,
+            )
+        )
+        reference_start_match_radius_exceeded_count = int(
+            reference_start_acceptance_metrics.get("match_radius_exceeded_count", 0)
+        )
+        reference_start_outside_radius_count = int(
+            reference_start_acceptance_metrics.get(
+                "outside_radius_count",
+                reference_start_match_radius_exceeded_count,
+            )
+        )
+        reference_start_branch_mismatch_count = int(
+            reference_start_acceptance_metrics.get("branch_mismatch_count", 0)
+        )
         summary["matched_pair_count_before"] = int(start_matched)
         summary["fixed_source_resolved_count"] = int(
             selected_start_bundle.get("fixed_source_resolved_count", 0)
@@ -16465,6 +16661,14 @@ def fit_geometry_parameters(
             )
         except Exception:
             start_unweighted_peak_max = float("nan")
+        start_missing_pair_count = int(start_acceptance_metrics.get("missing_pair_count", 0) or 0)
+        start_total_fixed_pair_count = int(
+            start_acceptance_metrics.get(
+                "total_fixed_pair_count",
+                max(int(start_matched) + int(start_missing_pair_count), int(start_matched)),
+            )
+            or 0
+        )
         summary["acceptance_metric_scope"] = str(
             start_acceptance_metrics.get(
                 "acceptance_metric_scope",
@@ -16493,8 +16697,35 @@ def fit_geometry_parameters(
         summary["start_match_radius_exceeded_count"] = int(
             start_acceptance_metrics.get("match_radius_exceeded_count", 0)
         )
+        summary["start_outside_radius_count"] = int(
+            start_acceptance_metrics.get(
+                "outside_radius_count",
+                start_acceptance_metrics.get("match_radius_exceeded_count", 0),
+            )
+        )
+        summary["start_branch_mismatch_count"] = int(
+            start_acceptance_metrics.get("branch_mismatch_count", 0)
+        )
+        summary["start_missing_pair_count"] = int(start_missing_pair_count)
+        summary["start_total_fixed_pair_count"] = int(start_total_fixed_pair_count)
         summary["start_resolved_fixed_matched_pair_count"] = int(
             start_acceptance_metrics.get("resolved_fixed_matched_pair_count", start_matched)
+        )
+        summary["detector_reference_start_vector_source"] = str(
+            detector_reference_start_bundle.get(
+                "vector_source",
+                selected_start_bundle.get("vector_source", "current_result.x"),
+            )
+        )
+        summary["detector_reference_start_rms_px"] = float(reference_start_point_rms)
+        summary["detector_reference_start_peak_max_px"] = float(
+            reference_start_unweighted_peak_max
+        )
+        summary["detector_reference_start_outside_radius_count"] = int(
+            reference_start_outside_radius_count
+        )
+        summary["detector_reference_start_branch_mismatch_count"] = int(
+            reference_start_branch_mismatch_count
         )
 
         start_residual, start_pm_diagnostics, start_pm_summary = _full_beam_point_match_evaluator(
@@ -16526,6 +16757,17 @@ def fit_geometry_parameters(
             start_residual,
             start_pm_diagnostics,
             start_pm_summary,
+        )
+        start_missing_pair_count = int(start_acceptance_metrics.get("missing_pair_count", 0) or 0)
+        start_total_fixed_pair_count = int(
+            start_acceptance_metrics.get(
+                "total_fixed_pair_count",
+                max(int(start_matched) + int(start_missing_pair_count), int(start_matched)),
+            )
+            or 0
+        )
+        start_fixed_source_resolved_count = int(
+            start_acceptance_metrics.get("resolved_fixed_matched_pair_count", start_matched)
         )
         summary["matched_pair_count_before"] = int(start_matched)
         summary["fixed_source_resolved_count"] = int(
@@ -16581,8 +16823,10 @@ def fit_geometry_parameters(
         summary["start_match_radius_exceeded_count"] = int(
             start_acceptance_metrics.get("match_radius_exceeded_count", 0)
         )
+        summary["start_missing_pair_count"] = int(start_missing_pair_count)
+        summary["start_total_fixed_pair_count"] = int(start_total_fixed_pair_count)
         summary["start_resolved_fixed_matched_pair_count"] = int(
-            start_acceptance_metrics.get("resolved_fixed_matched_pair_count", start_matched)
+            start_fixed_source_resolved_count
         )
 
         if int(start_matched) <= 0:
@@ -16611,6 +16855,7 @@ def fit_geometry_parameters(
             return summary
 
         _emit_status("Geometry fit: running full-beam polish")
+        polish_started_at = time.monotonic()
         try:
             polish_result = _run_solver_with_max_nfev(
                 start_x,
@@ -16666,8 +16911,14 @@ def fit_geometry_parameters(
                     "fun": selected_fun,
                 }
             )
+            summary["stage_timing_s"] = {
+                "full_beam_polish": float(max(0.0, time.monotonic() - polish_started_at)),
+                "acceptance_diagnostics": 0.0,
+                "total": float(max(0.0, time.monotonic() - stage_started_at)),
+            }
             return summary
 
+        acceptance_started_at = time.monotonic()
         trial_matched = int(trial_pm_summary.get("matched_pair_count", 0))
         trial_acceptance_metrics = _full_beam_acceptance_metrics(
             trial_residual,
@@ -16697,26 +16948,123 @@ def fit_geometry_parameters(
         except Exception:
             trial_unweighted_peak_max = float("nan")
         point_match_cost_tol = max(
-            1.0e-9 * max(abs(float(start_point_match_cost)), 1.0),
+            1.0e-9 * max(abs(float(reference_start_point_match_cost)), 1.0),
             1.0e-12,
         )
         weighted_rms_tol = max(
-            1.0e-9 * max(abs(float(start_point_rms)), 1.0),
+            1.0e-9 * max(abs(float(reference_start_point_rms)), 1.0),
             1.0e-12,
+        )
+        raw_peak_rms_tol = max(
+            1.0e-6 * max(abs(float(reference_start_unweighted_peak_rms)), 1.0),
+            1.0e-9,
+        )
+        raw_peak_max_tol = max(
+            1.0e-6 * max(abs(float(reference_start_unweighted_peak_max)), 1.0),
+            1.0e-9,
+        )
+        candidate_match_radius_exceeded_count = int(
+            trial_acceptance_metrics.get("match_radius_exceeded_count", 0)
+        )
+        candidate_outside_radius_count = int(
+            trial_acceptance_metrics.get(
+                "outside_radius_count",
+                candidate_match_radius_exceeded_count,
+            )
+        )
+        candidate_missing_pair_count = int(
+            trial_acceptance_metrics.get(
+                "missing_pair_count",
+                max(
+                    0,
+                    int(
+                        trial_acceptance_metrics.get(
+                            "total_fixed_pair_count",
+                            max(
+                                int(trial_matched),
+                                int(reference_start_total_fixed_pair_count),
+                            ),
+                        )
+                    )
+                    - int(trial_matched),
+                ),
+            )
+        )
+        candidate_total_fixed_pair_count = int(
+            trial_acceptance_metrics.get(
+                "total_fixed_pair_count",
+                max(
+                    int(trial_matched) + int(candidate_missing_pair_count),
+                    int(reference_start_total_fixed_pair_count),
+                ),
+            )
+        )
+        candidate_fixed_source_resolved_count = int(
+            trial_acceptance_metrics.get("resolved_fixed_matched_pair_count", trial_matched)
+        )
+        candidate_branch_mismatch_count = int(
+            trial_acceptance_metrics.get("branch_mismatch_count", 0)
+        )
+        candidate_zero_fixed_pair_guard_ok = bool(
+            int(reference_start_fixed_source_resolved_count) <= 0
+            or int(candidate_fixed_source_resolved_count) > 0
         )
         point_match_cost_ok = bool(
             np.isfinite(trial_point_match_cost)
-            and trial_point_match_cost <= float(start_point_match_cost) + point_match_cost_tol
+            and trial_point_match_cost
+            <= float(reference_start_point_match_cost) + point_match_cost_tol
         )
-        matched_ok = bool(trial_matched >= start_matched)
+        matched_ok = bool(trial_matched >= reference_start_matched)
         weighted_rms_ok = bool(
-            not np.isfinite(start_point_rms)
+            not np.isfinite(reference_start_point_rms)
             or (
                 np.isfinite(trial_point_rms)
-                and trial_point_rms <= float(start_point_rms) + weighted_rms_tol
+                and trial_point_rms <= float(reference_start_point_rms) + weighted_rms_tol
             )
         )
-        accepted = bool(point_match_cost_ok and matched_ok and weighted_rms_ok)
+        raw_peak_rms_ok = bool(
+            not np.isfinite(reference_start_unweighted_peak_rms)
+            or (
+                np.isfinite(trial_unweighted_peak_rms)
+                and trial_unweighted_peak_rms
+                <= float(reference_start_unweighted_peak_rms) + raw_peak_rms_tol
+            )
+        )
+        raw_peak_max_ok = bool(
+            not np.isfinite(reference_start_unweighted_peak_max)
+            or (
+                np.isfinite(trial_unweighted_peak_max)
+                and trial_unweighted_peak_max
+                <= float(reference_start_unweighted_peak_max) + raw_peak_max_tol
+            )
+        )
+        match_radius_ok = bool(
+            candidate_match_radius_exceeded_count
+            <= reference_start_match_radius_exceeded_count
+        )
+        outside_radius_ok = bool(
+            candidate_outside_radius_count <= reference_start_outside_radius_count
+        )
+        branch_mismatch_ok = bool(candidate_branch_mismatch_count == 0)
+        matched_nonzero_ok = bool(int(trial_matched) > 0)
+        missing_fixed_pairs_ok = bool(
+            candidate_total_fixed_pair_count <= 0
+            or int(candidate_missing_pair_count) < int(candidate_total_fixed_pair_count)
+        )
+        accepted = bool(
+            candidate_zero_fixed_pair_guard_ok
+            and
+            point_match_cost_ok
+            and matched_ok
+            and weighted_rms_ok
+            and raw_peak_rms_ok
+            and raw_peak_max_ok
+            and match_radius_ok
+            and outside_radius_ok
+            and branch_mismatch_ok
+            and matched_nonzero_ok
+            and missing_fixed_pairs_ok
+        )
         trial_pm_diagnostics_summary = _copy_point_match_diagnostics_for_summary(
             trial_pm_diagnostics
         )
@@ -16729,18 +17077,556 @@ def fit_geometry_parameters(
             selected_cost = float(trial_cost)
             final_metric_residual_fn = _full_beam_residual
             final_metric_point_match_evaluator = _full_beam_point_match_evaluator
+
+        def _detector_space_gate(
+            acceptance_metrics: Mapping[str, object],
+            *,
+            reference_metrics: Mapping[str, object],
+        ) -> Tuple[bool, Dict[str, bool], str]:
+            trial_matched_local = int(
+                acceptance_metrics.get(
+                    "matched_pair_count",
+                    acceptance_metrics.get("resolved_fixed_matched_pair_count", 0),
+                )
+            )
+            trial_missing_local = int(acceptance_metrics.get("missing_pair_count", 0))
+            trial_total_local = int(
+                acceptance_metrics.get(
+                    "total_fixed_pair_count",
+                    max(trial_matched_local + trial_missing_local, trial_matched_local),
+                )
+            )
+            trial_branch_mismatch_local = int(
+                acceptance_metrics.get("branch_mismatch_count", 0)
+            )
+            trial_outside_radius_local = int(
+                acceptance_metrics.get(
+                    "outside_radius_count",
+                    acceptance_metrics.get("match_radius_exceeded_count", 0),
+                )
+            )
+            try:
+                trial_raw_rms_local = float(
+                    acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
+                )
+            except Exception:
+                trial_raw_rms_local = float("nan")
+            try:
+                trial_raw_max_local = float(
+                    acceptance_metrics.get("unweighted_peak_max_px", np.nan)
+                )
+            except Exception:
+                trial_raw_max_local = float("nan")
+            reference_missing_local = int(reference_metrics.get("missing_pair_count", 0))
+            reference_total_local = int(
+                reference_metrics.get(
+                    "total_fixed_pair_count",
+                    max(
+                        int(reference_metrics.get("matched_pair_count", 0))
+                        + int(reference_missing_local),
+                        int(reference_metrics.get("matched_pair_count", 0)),
+                    ),
+                )
+            )
+            reference_outside_radius_local = int(
+                reference_metrics.get(
+                    "outside_radius_count",
+                    reference_metrics.get("match_radius_exceeded_count", 0),
+                )
+            )
+            try:
+                reference_raw_rms_local = float(
+                    reference_metrics.get("unweighted_peak_rms_px", np.nan)
+                )
+            except Exception:
+                reference_raw_rms_local = float("nan")
+            try:
+                reference_raw_max_local = float(
+                    reference_metrics.get("unweighted_peak_max_px", np.nan)
+                )
+            except Exception:
+                reference_raw_max_local = float("nan")
+            matched_nonzero_local = bool(trial_matched_local > 0)
+            missing_fixed_pairs_local = bool(
+                trial_total_local <= 0 or trial_missing_local < trial_total_local
+            )
+            raw_peak_rms_local = bool(
+                not np.isfinite(reference_raw_rms_local)
+                or (
+                    np.isfinite(trial_raw_rms_local)
+                    and trial_raw_rms_local
+                    <= float(reference_raw_rms_local)
+                    + max(
+                        1.0e-6 * max(abs(float(reference_raw_rms_local)), 1.0),
+                        1.0e-9,
+                    )
+                )
+            )
+            raw_peak_max_local = bool(
+                not np.isfinite(reference_raw_max_local)
+                or (
+                    np.isfinite(trial_raw_max_local)
+                    and trial_raw_max_local
+                    <= float(reference_raw_max_local)
+                    + max(
+                        1.0e-6 * max(abs(float(reference_raw_max_local)), 1.0),
+                        1.0e-9,
+                    )
+                )
+            )
+            outside_radius_local = bool(
+                trial_outside_radius_local <= reference_outside_radius_local
+            )
+            branch_mismatch_local = bool(trial_branch_mismatch_local == 0)
+            checks = {
+                "matched_nonzero_ok": bool(matched_nonzero_local),
+                "missing_fixed_pairs_ok": bool(missing_fixed_pairs_local),
+                "raw_peak_rms_ok": bool(raw_peak_rms_local),
+                "raw_peak_max_ok": bool(raw_peak_max_local),
+                "outside_radius_ok": bool(outside_radius_local),
+                "branch_mismatch_ok": bool(branch_mismatch_local),
+            }
+            rejection_reason = ", ".join(
+                part
+                for ok, part in (
+                    (matched_nonzero_local, "no_resolved_fixed_pairs"),
+                    (missing_fixed_pairs_local, "all_fixed_pairs_missing"),
+                    (raw_peak_rms_local, "raw_peak_rms_regressed"),
+                    (raw_peak_max_local, "raw_peak_max_regressed"),
+                    (outside_radius_local, "outside_radius_regressed"),
+                    (branch_mismatch_local, "branch_mismatch_detected"),
+                )
+                if not ok
+            )
+            return bool(all(checks.values())), checks, rejection_reason
+
+        def _fixed_correspondence_summary_for_x(x_trial: np.ndarray) -> Dict[str, object]:
+            x_arr = np.asarray(x_trial, dtype=float)
+            local_trial = _apply_trial_params(x_arr)
+            residual_arr, pm_diagnostics, pm_summary = _full_beam_point_match_evaluator(
+                local_trial,
+                collect_diagnostics=True,
+            )
+            prior_residual = _parameter_prior_residuals(x_arr)
+            if prior_residual.size:
+                if residual_arr.size:
+                    fun = np.concatenate(
+                        [
+                            np.asarray(residual_arr, dtype=float),
+                            np.asarray(prior_residual, dtype=float),
+                        ]
+                    )
+                else:
+                    fun = np.asarray(prior_residual, dtype=float)
+            else:
+                fun = np.asarray(residual_arr, dtype=float)
+            acceptance_metrics = _full_beam_acceptance_metrics(
+                residual_arr,
+                pm_diagnostics,
+                pm_summary,
+            )
+            pm_summary_public = _copy_point_match_summary_for_summary(pm_summary)
+            pm_summary_public["matched_fixed_pair_count"] = int(
+                acceptance_metrics.get(
+                    "matched_fixed_pair_count",
+                    acceptance_metrics.get("resolved_fixed_matched_pair_count", 0),
+                )
+            )
+            pm_summary_public["missing_fixed_pair_count"] = int(
+                acceptance_metrics.get(
+                    "missing_fixed_pair_count",
+                    acceptance_metrics.get("missing_pair_count", 0),
+                )
+            )
+            return {
+                "x": np.asarray(x_arr, dtype=float),
+                "fun": np.asarray(fun, dtype=float),
+                "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
+                    pm_diagnostics
+                ),
+                "point_match_summary": pm_summary_public,
+                "acceptance_metrics": dict(acceptance_metrics),
+                "matched_pair_count": int(
+                    acceptance_metrics.get(
+                        "matched_pair_count",
+                        pm_summary_public.get("matched_pair_count", 0),
+                    )
+                ),
+                "missing_pair_count": int(
+                    acceptance_metrics.get(
+                        "missing_pair_count",
+                        pm_summary_public.get("missing_pair_count", 0),
+                    )
+                ),
+                "matched_fixed_pair_count": int(
+                    acceptance_metrics.get(
+                        "matched_fixed_pair_count",
+                        acceptance_metrics.get("resolved_fixed_matched_pair_count", 0),
+                    )
+                ),
+                "missing_fixed_pair_count": int(
+                    acceptance_metrics.get(
+                        "missing_fixed_pair_count",
+                        acceptance_metrics.get("missing_pair_count", 0),
+                    )
+                ),
+                "outside_radius_count": int(
+                    acceptance_metrics.get(
+                        "outside_radius_count",
+                        acceptance_metrics.get("match_radius_exceeded_count", 0),
+                    )
+                ),
+                "branch_mismatch_count": int(
+                    acceptance_metrics.get("branch_mismatch_count", 0)
+                ),
+                "weighted_rms_px": float(acceptance_metrics.get("weighted_rms_px", np.nan)),
+                "point_match_cost": float(
+                    acceptance_metrics.get("point_match_cost", np.nan)
+                ),
+                "unweighted_peak_rms_px": float(
+                    acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
+                ),
+                "unweighted_peak_max_px": float(
+                    acceptance_metrics.get("unweighted_peak_max_px", np.nan)
+                ),
+            }
+
+        def _detector_space_fallback_summary_for_x(x_trial: np.ndarray) -> Dict[str, object]:
+            try:
+                fixed_summary = _fixed_correspondence_summary_for_x(x_trial)
+                fallback_acceptance_metrics = dict(fixed_summary.get("acceptance_metrics", {}))
+                fallback_accepted, fallback_gate_checks, fallback_rejection_reason = (
+                    _detector_space_gate(
+                        fallback_acceptance_metrics,
+                        reference_metrics=reference_start_acceptance_metrics,
+                    )
+                )
+            except Exception as exc:
+                return {
+                    "accepted": False,
+                    "error": str(exc),
+                    "rejection_reason": str(exc),
+                    "matched_pair_count": 0,
+                    "missing_pair_count": 0,
+                    "outside_radius_count": 0,
+                    "branch_mismatch_count": 0,
+                    "matched_fixed_pair_count": 0,
+                    "missing_fixed_pair_count": 0,
+                    "weighted_rms_px": float("nan"),
+                    "point_match_cost": float("nan"),
+                    "unweighted_peak_rms_px": float("nan"),
+                    "unweighted_peak_max_px": float("nan"),
+                    "point_match_diagnostics": [],
+                    "point_match_summary": {},
+                    "acceptance_metrics": {},
+                }
+            fallback_summary_public = _copy_point_match_summary_for_summary(
+                fixed_summary.get("point_match_summary")
+            )
+            return {
+                "accepted": bool(fallback_accepted),
+                "rejection_reason": (
+                    None
+                    if bool(fallback_accepted)
+                    else str(fallback_rejection_reason or "detector_space_gate_failed")
+                ),
+                "gate_checks": dict(fallback_gate_checks),
+                "matched_pair_count": int(
+                    fixed_summary.get(
+                        "matched_pair_count",
+                        fallback_acceptance_metrics.get(
+                            "matched_pair_count",
+                            fallback_summary_public.get("matched_pair_count", 0),
+                        ),
+                    )
+                ),
+                "missing_pair_count": int(
+                    fixed_summary.get(
+                        "missing_pair_count",
+                        fallback_acceptance_metrics.get(
+                            "missing_pair_count",
+                            fallback_summary_public.get("missing_pair_count", 0),
+                        ),
+                    )
+                ),
+                "matched_fixed_pair_count": int(
+                    fixed_summary.get(
+                        "matched_fixed_pair_count",
+                        fallback_acceptance_metrics.get(
+                            "matched_fixed_pair_count",
+                            fallback_acceptance_metrics.get(
+                                "resolved_fixed_matched_pair_count",
+                                0,
+                            ),
+                        ),
+                    )
+                ),
+                "missing_fixed_pair_count": int(
+                    fixed_summary.get(
+                        "missing_fixed_pair_count",
+                        fallback_acceptance_metrics.get(
+                            "missing_fixed_pair_count",
+                            fallback_acceptance_metrics.get("missing_pair_count", 0),
+                        ),
+                    )
+                ),
+                "outside_radius_count": int(
+                    fixed_summary.get(
+                        "outside_radius_count",
+                        fallback_acceptance_metrics.get(
+                            "outside_radius_count",
+                            fallback_acceptance_metrics.get("match_radius_exceeded_count", 0),
+                        ),
+                    )
+                ),
+                "branch_mismatch_count": int(
+                    fixed_summary.get(
+                        "branch_mismatch_count",
+                        fallback_acceptance_metrics.get("branch_mismatch_count", 0),
+                    )
+                ),
+                "weighted_rms_px": float(fixed_summary.get("weighted_rms_px", np.nan)),
+                "point_match_cost": float(fixed_summary.get("point_match_cost", np.nan)),
+                "unweighted_peak_rms_px": float(
+                    fixed_summary.get("unweighted_peak_rms_px", np.nan)
+                ),
+                "unweighted_peak_max_px": float(
+                    fixed_summary.get("unweighted_peak_max_px", np.nan)
+                ),
+                "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
+                    fixed_summary.get("point_match_diagnostics")
+                ),
+                "point_match_summary": fallback_summary_public,
+                "acceptance_metrics": dict(fallback_acceptance_metrics),
+            }
+
+        def _detector_space_fallback_is_better(
+            candidate_summary: Mapping[str, object],
+            baseline_summary: Mapping[str, object],
+        ) -> bool:
+            candidate_accepted = bool(candidate_summary.get("accepted", False))
+            baseline_accepted = bool(baseline_summary.get("accepted", False))
+            if candidate_accepted != baseline_accepted:
+                return bool(candidate_accepted)
+            if not candidate_accepted:
+                return False
+            candidate_rank = (
+                int(candidate_summary.get("matched_pair_count", 0)),
+                -int(candidate_summary.get("missing_pair_count", 0)),
+                -int(candidate_summary.get("outside_radius_count", 0)),
+                -int(candidate_summary.get("branch_mismatch_count", 0)),
+            )
+            baseline_rank = (
+                int(baseline_summary.get("matched_pair_count", 0)),
+                -int(baseline_summary.get("missing_pair_count", 0)),
+                -int(baseline_summary.get("outside_radius_count", 0)),
+                -int(baseline_summary.get("branch_mismatch_count", 0)),
+            )
+            if candidate_rank != baseline_rank:
+                return bool(candidate_rank > baseline_rank)
+            try:
+                candidate_weighted_rms = float(
+                    candidate_summary.get("weighted_rms_px", np.nan)
+                )
+            except Exception:
+                candidate_weighted_rms = float("nan")
+            try:
+                baseline_weighted_rms = float(
+                    baseline_summary.get("weighted_rms_px", np.nan)
+                )
+            except Exception:
+                baseline_weighted_rms = float("nan")
+            if np.isfinite(candidate_weighted_rms) and np.isfinite(baseline_weighted_rms):
+                if not np.isclose(
+                    candidate_weighted_rms,
+                    baseline_weighted_rms,
+                    rtol=0.0,
+                    atol=1.0e-12,
+                ):
+                    return bool(candidate_weighted_rms < baseline_weighted_rms)
+            elif np.isfinite(candidate_weighted_rms) != np.isfinite(baseline_weighted_rms):
+                return bool(np.isfinite(candidate_weighted_rms))
+            try:
+                candidate_rms = float(candidate_summary.get("unweighted_peak_rms_px", np.nan))
+            except Exception:
+                candidate_rms = float("nan")
+            try:
+                baseline_rms = float(baseline_summary.get("unweighted_peak_rms_px", np.nan))
+            except Exception:
+                baseline_rms = float("nan")
+            if np.isfinite(candidate_rms) and np.isfinite(baseline_rms):
+                if not np.isclose(candidate_rms, baseline_rms, rtol=0.0, atol=1.0e-12):
+                    return bool(candidate_rms < baseline_rms)
+            elif np.isfinite(candidate_rms) != np.isfinite(baseline_rms):
+                return bool(np.isfinite(candidate_rms))
+            try:
+                candidate_peak = float(candidate_summary.get("unweighted_peak_max_px", np.nan))
+            except Exception:
+                candidate_peak = float("nan")
+            try:
+                baseline_peak = float(baseline_summary.get("unweighted_peak_max_px", np.nan))
+            except Exception:
+                baseline_peak = float("nan")
+            if np.isfinite(candidate_peak) and np.isfinite(baseline_peak):
+                return bool(candidate_peak < baseline_peak)
+            return bool(np.isfinite(candidate_peak) and not np.isfinite(baseline_peak))
+
+        current_detector_fallback_summary = {}
+        rejected_start_detector_fallback_summary = {}
+        preserve_rejected_start = False
+        retained_detector_summary: Mapping[str, object] | None = None
+        retained_detector_source = "start_vector"
+        fallback_preservation_reason = None
+        current_fixed_source_resolved_count = int(start_fixed_source_resolved_count)
+        if not accepted and int(start_matched) > 0:
+            current_detector_fallback_summary = _detector_space_fallback_summary_for_x(
+                np.asarray(current_result.x, dtype=float)
+            )
+            rejected_start_detector_fallback_summary = _detector_space_fallback_summary_for_x(
+                selected_x
+            )
+            current_fixed_source_resolved_count = int(
+                dict(current_detector_fallback_summary.get("acceptance_metrics", {})).get(
+                    "resolved_fixed_matched_pair_count",
+                    current_detector_fallback_summary.get("matched_fixed_pair_count", 0),
+                )
+            )
+            preserve_rejected_start = bool(
+                int(start_fixed_source_resolved_count) > 0
+                and int(current_fixed_source_resolved_count) == 0
+            )
+            if preserve_rejected_start:
+                retained_detector_summary = _fixed_correspondence_summary_for_x(selected_x)
+                retained_detector_source = str(
+                    selected_start_bundle.get("vector_source", "start_vector")
+                )
+                selected_x = np.asarray(retained_detector_summary.get("x"), dtype=float)
+                selected_fun = np.asarray(retained_detector_summary.get("fun"), dtype=float)
+                selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(
+                    retained_detector_summary.get("point_match_diagnostics")
+                )
+                selected_pm_summary = _copy_point_match_summary_for_summary(
+                    retained_detector_summary.get("point_match_summary")
+                )
+                selected_cost = float(
+                    _robust_cost(selected_fun, loss=solver_loss, f_scale=solver_f_scale)
+                )
+                final_metric_residual_fn = _full_beam_residual
+                final_metric_point_match_evaluator = _full_beam_point_match_evaluator
+                fallback_preservation_reason = "retained_fixed_correspondence_start"
+            else:
+                retained_detector_summary = current_detector_fallback_summary
+                retained_detector_source = "current_result.x"
+                fallback_preservation_reason = "current_result_retained"
+        if accepted:
+            retained_detector_summary = {
+                "accepted": True,
+                "matched_pair_count": int(trial_matched),
+                "missing_pair_count": int(candidate_missing_pair_count),
+                "matched_fixed_pair_count": int(candidate_fixed_source_resolved_count),
+                "missing_fixed_pair_count": int(candidate_missing_pair_count),
+                "outside_radius_count": int(candidate_outside_radius_count),
+                "branch_mismatch_count": int(candidate_branch_mismatch_count),
+                "weighted_rms_px": float(trial_point_rms),
+                "point_match_cost": float(trial_point_match_cost),
+                "unweighted_peak_rms_px": float(trial_unweighted_peak_rms),
+                "unweighted_peak_max_px": float(trial_unweighted_peak_max),
+                "point_match_diagnostics": trial_pm_diagnostics_summary,
+                "point_match_summary": trial_pm_summary_public,
+                "acceptance_metrics": dict(trial_acceptance_metrics),
+            }
+            retained_detector_source = "full_beam_polish"
+        elif retained_detector_summary is None:
+            retained_detector_summary = {
+                "accepted": False,
+                "matched_pair_count": int(selected_pm_summary.get("matched_pair_count", 0)),
+                "missing_pair_count": int(selected_pm_summary.get("missing_pair_count", 0)),
+                "matched_fixed_pair_count": int(start_fixed_source_resolved_count),
+                "missing_fixed_pair_count": int(start_missing_pair_count),
+                "outside_radius_count": int(start_outside_radius_count),
+                "branch_mismatch_count": int(start_branch_mismatch_count),
+                "weighted_rms_px": float(start_point_rms),
+                "point_match_cost": float(start_point_match_cost),
+                "unweighted_peak_rms_px": float(start_unweighted_peak_rms),
+                "unweighted_peak_max_px": float(start_unweighted_peak_max),
+                "point_match_diagnostics": start_pm_diagnostics_summary,
+                "point_match_summary": start_pm_summary_public,
+                "acceptance_metrics": dict(start_acceptance_metrics),
+            }
+        if not accepted and preserve_rejected_start:
+            fallback_preservation_reason = "retained_fixed_correspondence_start"
+        selected_pm_diagnostics_public = _copy_point_match_diagnostics_for_summary(
+            retained_detector_summary.get("point_match_diagnostics")
+        )
+        selected_pm_summary_public = _copy_point_match_summary_for_summary(
+            retained_detector_summary.get("point_match_summary")
+        )
+        selected_pm_summary_public["matched_fixed_pair_count"] = int(
+            retained_detector_summary.get(
+                "matched_fixed_pair_count",
+                selected_pm_summary_public.get(
+                    "fixed_source_resolved_count",
+                    selected_pm_summary_public.get("matched_pair_count", 0),
+                ),
+            )
+        )
+        selected_pm_summary_public["missing_fixed_pair_count"] = int(
+            retained_detector_summary.get(
+                "missing_fixed_pair_count",
+                selected_pm_summary_public.get("missing_pair_count", 0),
+            )
+        )
+        selected_matched_pair_count = int(
+            retained_detector_summary.get("matched_pair_count", 0)
+        )
+        selected_missing_pair_count = int(
+            retained_detector_summary.get("missing_pair_count", 0)
+        )
+        selected_outside_radius_count = int(
+            retained_detector_summary.get("outside_radius_count", 0)
+        )
+        selected_branch_mismatch_count = int(
+            retained_detector_summary.get("branch_mismatch_count", 0)
+        )
+        selected_weighted_rms = float(
+            retained_detector_summary.get("weighted_rms_px", start_point_rms)
+        )
+        selected_point_match_cost = float(
+            retained_detector_summary.get("point_match_cost", start_point_match_cost)
+        )
+        selected_unweighted_peak_rms = float(
+            retained_detector_summary.get("unweighted_peak_rms_px", start_unweighted_peak_rms)
+        )
+        selected_unweighted_peak_max = float(
+            retained_detector_summary.get("unweighted_peak_max_px", start_unweighted_peak_max)
+        )
         summary.update(
             {
-                "status": "accepted" if accepted else "rejected",
+                "status": (
+                    "accepted"
+                    if accepted
+                    else ("retained_start" if preserve_rejected_start else "rejected")
+                ),
                 "reason": (
                     "accepted"
                     if accepted
                     else ", ".join(
                         part
                         for ok, part in (
+                            (
+                                candidate_zero_fixed_pair_guard_ok,
+                                "candidate_lost_all_fixed_pairs",
+                            ),
                             (point_match_cost_ok, "point_match_cost_regressed"),
                             (matched_ok, "resolved_fixed_pairs_decreased"),
                             (weighted_rms_ok, "weighted_rms_regressed"),
+                            (raw_peak_rms_ok, "raw_peak_rms_regressed"),
+                            (raw_peak_max_ok, "raw_peak_max_regressed"),
+                            (match_radius_ok, "match_radius_exceeded_regressed"),
+                            (outside_radius_ok, "outside_radius_regressed"),
+                            (branch_mismatch_ok, "branch_mismatch_detected"),
+                            (matched_nonzero_ok, "no_resolved_fixed_pairs"),
+                            (missing_fixed_pairs_ok, "all_fixed_pairs_missing"),
                         )
                         if not ok
                     )
@@ -16750,33 +17636,27 @@ def fit_geometry_parameters(
                 "final_cost": float(selected_cost),
                 "candidate_cost": float(trial_cost),
                 "start_point_match_cost": float(start_point_match_cost),
-                "final_point_match_cost": float(
-                    trial_point_match_cost if accepted else start_point_match_cost
-                ),
+                "final_point_match_cost": float(selected_point_match_cost),
                 "candidate_point_match_cost": float(trial_point_match_cost),
                 "start_rms_px": float(start_point_rms),
                 "start_weighted_rms_px": float(start_point_rms),
-                "final_rms_px": float(trial_point_rms if accepted else start_point_rms),
-                "final_weighted_rms_px": float(
-                    trial_point_rms if accepted else start_point_rms
-                ),
+                "final_rms_px": float(selected_weighted_rms),
+                "final_weighted_rms_px": float(selected_weighted_rms),
                 "start_peak_max_px": float(start_unweighted_peak_max),
                 "start_unweighted_peak_rms_px": float(start_unweighted_peak_rms),
                 "start_unweighted_peak_max_px": float(start_unweighted_peak_max),
-                "final_peak_max_px": float(
-                    trial_unweighted_peak_max if accepted else start_unweighted_peak_max
-                ),
-                "final_unweighted_peak_rms_px": float(
-                    trial_unweighted_peak_rms if accepted else start_unweighted_peak_rms
-                ),
-                "final_unweighted_peak_max_px": float(
-                    trial_unweighted_peak_max if accepted else start_unweighted_peak_max
-                ),
+                "final_peak_max_px": float(selected_unweighted_peak_max),
+                "final_unweighted_peak_rms_px": float(selected_unweighted_peak_rms),
+                "final_unweighted_peak_max_px": float(selected_unweighted_peak_max),
                 "nfev": int(getattr(polish_result, "nfev", 0)),
                 "success": bool(getattr(polish_result, "success", False)),
                 "message": str(getattr(polish_result, "message", "")),
-                "matched_pair_count_after": int(selected_pm_summary.get("matched_pair_count", 0)),
+                "matched_pair_count_after": int(selected_matched_pair_count),
+                "missing_pair_count_after": int(selected_missing_pair_count),
+                "outside_radius_count_after": int(selected_outside_radius_count),
+                "branch_mismatch_count_after": int(selected_branch_mismatch_count),
                 "candidate_matched_pair_count": int(trial_matched),
+                "candidate_missing_pair_count": int(candidate_missing_pair_count),
                 "candidate_rms_px": float(trial_point_rms),
                 "candidate_weighted_rms_px": float(trial_point_rms),
                 "candidate_peak_max_px": float(trial_unweighted_peak_max),
@@ -16795,28 +17675,54 @@ def fit_geometry_parameters(
                     )
                 ),
                 "candidate_match_radius_exceeded_count": int(
-                    trial_acceptance_metrics.get("match_radius_exceeded_count", 0)
+                    candidate_match_radius_exceeded_count
                 ),
+                "candidate_outside_radius_count": int(candidate_outside_radius_count),
+                "candidate_branch_mismatch_count": int(candidate_branch_mismatch_count),
                 "candidate_resolved_fixed_matched_pair_count": int(
                     trial_acceptance_metrics.get(
                         "resolved_fixed_matched_pair_count",
                         trial_matched,
                     )
                 ),
+                "selected_start_fixed_source_resolved_count": int(
+                    start_fixed_source_resolved_count
+                ),
+                "current_fixed_source_resolved_count": int(current_fixed_source_resolved_count),
+                "candidate_fixed_source_resolved_count": int(
+                    candidate_fixed_source_resolved_count
+                ),
+                "retained_start_vector_source": str(
+                    selected_start_bundle.get("vector_source", "current_result.x")
+                ),
                 "start_point_match_diagnostics": start_pm_diagnostics_summary,
                 "start_point_match_summary": start_pm_summary_public,
                 "candidate_point_match_diagnostics": trial_pm_diagnostics_summary,
                 "candidate_point_match_summary": trial_pm_summary_public,
-                "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
-                    selected_pm_diagnostics
+                "point_match_diagnostics": selected_pm_diagnostics_public,
+                "point_match_summary": selected_pm_summary_public,
+                "preserved_start_on_reject": bool(preserve_rejected_start),
+                "retained_detector_source": str(retained_detector_source),
+                "fallback_preservation_reason": fallback_preservation_reason,
+                "current_detector_fallback_summary": dict(
+                    current_detector_fallback_summary
                 ),
-                "point_match_summary": _copy_point_match_summary_for_summary(
-                    selected_pm_summary
+                "rejected_start_detector_fallback_summary": dict(
+                    rejected_start_detector_fallback_summary
                 ),
                 "fun": selected_fun,
+                "stage_timing_s": {
+                    "full_beam_polish": float(
+                        max(0.0, acceptance_started_at - polish_started_at)
+                    ),
+                    "acceptance_diagnostics": float(
+                        max(0.0, time.monotonic() - acceptance_started_at)
+                    ),
+                    "total": float(max(0.0, time.monotonic() - stage_started_at)),
+                },
             }
         )
-        if accepted:
+        if accepted or preserve_rejected_start:
             summary["x"] = selected_x
         return summary
 
@@ -18135,6 +19041,7 @@ def fit_geometry_parameters(
             "Geometry fit: running normalized-u multistart solve "
             f"(modes={len(discrete_modes)}, vars={len(active_specs)})"
         )
+        dynamic_seed_started_at = time.monotonic()
         for mode_index, mode in enumerate(discrete_modes):
             mode_label = _format_discrete_mode_label(mode)
             dataset_contexts = _apply_discrete_mode_to_dataset_contexts(
@@ -18291,6 +19198,9 @@ def fit_geometry_parameters(
                     best_cost = float(trial_cost)
                     best_mode = dict(mode)
                     best_mode_contexts = list(dataset_contexts)
+        geometry_fit_stage_timings["dynamic_seed"] = float(
+            max(0.0, time.monotonic() - dynamic_seed_started_at)
+        )
 
     if best_result is None:
         best_result = _build_probe_result(
@@ -18319,6 +19229,13 @@ def fit_geometry_parameters(
         "prescored": int(prescore_record_count),
         "solved": int(solve_record_count),
     }
+    if isinstance(getattr(result, "geometry_fit_progress", None), Mapping):
+        try:
+            geometry_fit_stage_timings["central_solve"] = float(
+                getattr(result, "geometry_fit_progress").get("elapsed_s", np.nan)
+            )
+        except Exception:
+            pass
     _emit_status(
         "Geometry fit: multistart summary selected_mode={mode} "
         "prescored={prescored} solved={solved}".format(
@@ -18984,12 +19901,36 @@ def fit_geometry_parameters(
                 "status": "failed",
                 "reason": f"unexpected_exception: {exc}",
                 "accepted": False,
+                "preserved_start_on_reject": False,
                 "match_radius_px": float(full_beam_polish_match_radius_px),
             }
+        retained_start_status = (
+            str(full_beam_polish_summary.get("status", "")).strip().lower() == "retained_start"
+        )
+        preserve_rejected_start = bool(
+            full_beam_polish_summary.get("preserved_start_on_reject", False)
+        )
         refined_x = full_beam_polish_summary.get("x")
-        if full_beam_polish_summary.get("accepted") and refined_x is not None:
+        if refined_x is not None and (
+            full_beam_polish_summary.get("accepted") or preserve_rejected_start
+        ):
             result.x = np.asarray(refined_x, dtype=float)
-            _append_result_message(result, "Full-beam polish accepted")
+            if full_beam_polish_summary.get("accepted"):
+                _append_result_message(result, "Full-beam polish accepted")
+            else:
+                result.fun = np.asarray(
+                    final_metric_residual_fn(np.asarray(result.x, dtype=float)),
+                    dtype=float,
+                )
+                _append_result_message(
+                    result,
+                    (
+                        "Full-beam polish candidate rejected; retained fixed-correspondence "
+                        "start because current result lost all fixed peak pairs"
+                        if retained_start_status
+                        else "Full-beam polish rejected; preserved fixed-correspondence seed"
+                    ),
+                )
     if point_match_mode:
         residual_fn = final_metric_residual_fn
     ridge_refinement_summary: Dict[str, object] = {
@@ -19052,6 +19993,13 @@ def fit_geometry_parameters(
     result.auto_freeze_summary = auto_freeze_summary
     result.selective_thaw_summary = selective_thaw_summary
     result.full_beam_polish_summary = full_beam_polish_summary
+    result.geometry_fit_stage_timings = dict(geometry_fit_stage_timings)
+    if isinstance(full_beam_polish_summary.get("stage_timing_s"), Mapping):
+        for key, value in dict(full_beam_polish_summary.get("stage_timing_s", {})).items():
+            try:
+                result.geometry_fit_stage_timings[str(key)] = float(value)
+            except Exception:
+                continue
     result.optimizer_method = str(solver_method)
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
@@ -19064,7 +20012,10 @@ def fit_geometry_parameters(
         "selected_mode": dict(best_mode),
         "selected_label": _format_discrete_mode_label(best_mode),
     }
-    if point_match_mode and bool(full_beam_polish_summary.get("accepted", False)):
+    if point_match_mode and (
+        bool(full_beam_polish_summary.get("accepted", False))
+        or str(full_beam_polish_summary.get("status", "")).strip().lower() == "retained_start"
+    ):
         result.final_metric_name = "full_beam_fixed_correspondence"
     elif point_match_mode and dynamic_point_geometry_fit:
         result.final_metric_name = "dynamic_angular_point_match"
@@ -19076,6 +20027,8 @@ def fit_geometry_parameters(
         final_metric_fun = full_beam_polish_summary.get("fun")
         final_metric_x = full_beam_polish_summary.get("x")
         if (
+            bool(full_beam_polish_summary.get("accepted", False))
+            and
             isinstance(final_metric_fun, np.ndarray)
             and isinstance(final_metric_x, np.ndarray)
             and np.asarray(final_metric_x, dtype=float).shape
@@ -19133,6 +20086,15 @@ def fit_geometry_parameters(
             )
             point_match_summary["seed_rms_px"] = float(
                 full_beam_polish_summary.get("seed_rms_px", np.nan)
+            )
+            point_match_summary["matched_fixed_pair_count"] = int(
+                point_match_summary.get(
+                    "fixed_source_resolved_count",
+                    point_match_summary.get("matched_pair_count", 0),
+                )
+            )
+            point_match_summary["missing_fixed_pair_count"] = int(
+                point_match_summary.get("missing_pair_count", 0)
             )
             point_match_summary["final_full_beam_rms_px"] = float(
                 point_match_summary.get("unweighted_peak_rms_px", np.nan)
