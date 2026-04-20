@@ -1,19 +1,22 @@
-# Simulated peak overlay recovery status
+# Simulated peak overlay recovery history
 
-Status: in-progress
-Type: bug
+Status: archived
+Type: investigation
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-04-18
+Last updated: 2026-04-19
 
-This page tracks the unresolved simulated-peak overlay bug in the GUI. Use it
-as the short resume document if chat history is lost.
+This page preserves the original in-progress investigation log for the
+simulated-peak overlay bug behind issue `#248`. It is archived as debugging
+history now that the finished resolution lives in
+`Manual Qr/Qz and HKL picker alignment`.
 
 See also:
 
 - [tracking hub](../index.md)
 - [docs index](../../index.md)
+- [resolved summary](sim-peak-overlay-recovery.md)
 - [GUI workflow](../../gui-workflow.md)
 - [Architecture guide](../../architecture.md)
 - [Canonical simulation/fitting reference](../../simulation_and_fitting.md)

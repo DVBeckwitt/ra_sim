@@ -53,6 +53,10 @@ caked-view cache. Detector/caked view switches must not invalidate or filter
 the Qr/Qz group universe. CIF, unit-cell, or simulation-hit-table changes do
 invalidate it.
 
+Resolved picker behavior depends on keeping structural simulation truth
+separate from current-view projection. Group membership comes from structural
+state; detector or caked coordinates are derived later for the active view.
+
 Caked manual picking uses two different coordinate responsibilities:
 
 - simulated Qr/Qz and HKL seed positions start from simulation-native detector

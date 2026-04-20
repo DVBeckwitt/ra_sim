@@ -15,19 +15,35 @@ See also:
 
 - [tracking hub](../index.md)
 - [docs index](../../index.md)
+- [investigation history](sim-peak-overlay-recovery-history.md)
 - [GUI workflow](../../gui-workflow.md)
 - [Debug and cache guide](../../debug-and-cache.md)
 - [Geometry fitting from picked spots](../../simulation_and_fitting.md#geometry-fitting-from-picked-spots)
 
 ## Resolution Summary
 
-Manual Qr/Qz group selection and HKL selection are now expected to behave the
-same way in detector view and caked `(2theta, phi)` view. The final solution was
-to separate structural simulation truth from current-view projection, then make
-both pickers consume the same current-view simulated-candidate payload.
+Manual Qr/Qz group selection and HKL selection now behave the same way in
+detector view and caked `(2theta, phi)` view. The final solution separated
+structural simulation truth from current-view projection, then made both
+pickers consume the same current-view simulated-candidate payload.
 
 User confirmation on 2026-04-19: Qr selection is working correctly, and the
 entire Qr/HKL picker problem is resolved.
+
+## Implementation Summary
+
+The fix landed in four connected steps:
+
+- move Qr/Qz group membership onto structural simulation state keyed by active
+  CIF/lattice hit tables instead of live detector/caked preview rows;
+- rebuild caked manual-pick candidates from stored simulation rows and
+  `stored_max_positions_local` when current live rows are empty after caked
+  integration refresh;
+- keep detector/display aliases in detector space, keep caked aliases in
+  angular space, and project caked targets from simulation-native detector
+  branch pixels through the live caked simulation transform;
+- route HKL hit testing and selected-marker placement through the same shared
+  simulated candidate payload already used by the corrected Qr/manual picker.
 
 ## Qr/Qz Root Causes
 
