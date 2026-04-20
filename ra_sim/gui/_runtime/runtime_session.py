@@ -3480,10 +3480,6 @@ def _refine_geometry_manual_pair_entry_from_cache(
         )
     if not isinstance(resolved_source_entry, dict):
         return updated_entry
-    source_key: tuple[object, ...] | None = _geometry_manual_candidate_source_key(
-        resolved_source_entry
-    ) or _geometry_manual_candidate_source_key(updated_entry)
-
     try:
         seed_tth = float(
             resolved_source_entry.get(
@@ -3590,30 +3586,6 @@ def _refine_geometry_manual_pair_entry_from_cache(
             updated_entry["refined_sim_x"] = float(refined_display[0])
             updated_entry["refined_sim_y"] = float(refined_display[1])
 
-    gui_manual_geometry.update_geometry_manual_peak_record_cache(
-        simulation_runtime_state.peak_records,
-        source_key=source_key,
-        source_entry=resolved_source_entry,
-        refined_caked=(float(refined_tth), float(refined_phi)),
-        refined_native=(
-            (
-                float(updated_entry["refined_sim_native_x"]),
-                float(updated_entry["refined_sim_native_y"]),
-            )
-            if "refined_sim_native_x" in updated_entry and "refined_sim_native_y" in updated_entry
-            else None
-        ),
-        refined_display=(
-            (
-                float(updated_entry["refined_sim_x"]),
-                float(updated_entry["refined_sim_y"]),
-            )
-            if "refined_sim_x" in updated_entry and "refined_sim_y" in updated_entry
-            else None
-        ),
-        peak_positions=simulation_runtime_state.peak_positions,
-        peak_overlay_cache=simulation_runtime_state.peak_overlay_cache,
-    )
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
     return updated_entry
@@ -3724,10 +3696,6 @@ def _refine_current_geometry_manual_pairs() -> None:
             updated_entries.append(entry)
             skipped_count += 1
             continue
-        source_key = _geometry_manual_candidate_source_key(
-            source_entry
-        ) or _geometry_manual_candidate_source_key(entry)
-
         try:
             seed_tth = float(source_entry.get("caked_x", source_entry.get("two_theta_deg", np.nan)))
             seed_phi = float(source_entry.get("caked_y", source_entry.get("phi_deg", np.nan)))
@@ -3834,30 +3802,6 @@ def _refine_current_geometry_manual_pairs() -> None:
                 entry["refined_sim_x"] = float(refined_display[0])
                 entry["refined_sim_y"] = float(refined_display[1])
 
-        gui_manual_geometry.update_geometry_manual_peak_record_cache(
-            simulation_runtime_state.peak_records,
-            source_key=source_key,
-            source_entry=source_entry,
-            refined_caked=(float(refined_tth), float(refined_phi)),
-            refined_native=(
-                (
-                    float(entry["refined_sim_native_x"]),
-                    float(entry["refined_sim_native_y"]),
-                )
-                if "refined_sim_native_x" in entry and "refined_sim_native_y" in entry
-                else None
-            ),
-            refined_display=(
-                (
-                    float(entry["refined_sim_x"]),
-                    float(entry["refined_sim_y"]),
-                )
-                if "refined_sim_x" in entry and "refined_sim_y" in entry
-                else None
-            ),
-            peak_positions=simulation_runtime_state.peak_positions,
-            peak_overlay_cache=simulation_runtime_state.peak_overlay_cache,
-        )
         updated_entries.append(entry)
 
     if refined_count <= 0:
