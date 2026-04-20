@@ -4,16 +4,30 @@ This subtree keeps long-form repo-local context for substantial efforts.
 GitHub Issues are the unit of work. GitHub Projects hold live backlog, status,
 and roadmap views. Do not use this page as a second backlog.
 
+## Current fitter roadmap
+
+The active sequence is:
+
+1. get the geometric fitter working,
+2. get the mosaic fitter working,
+3. get the structure-factor fitter working,
+4. get the stacking-fault fitter working.
+
+The geometric fitter is the only active implementation project. The other
+fitters are planned work and must stay blocked until their upstream acceptance
+gates are green.
+
 ## In progress
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Grouped-pick recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-17 | [grouped-pick-recovery.md](in-progress/grouped-pick-recovery.md) |
+| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-20 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
-continue grouped-pick recovery. Manual Qr/Qz and HKL picker alignment for
-[#248](https://github.com/DVBeckwitt/ra_sim/issues/248) is finished; archive
-notes below record how it was fixed.
+finish the `new4.json` saved-state baseline for geometry fitting. The old
+`new2` and `new3` saved-state gates are retired. Manual Qr/Qz and HKL picker
+alignment for [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) is
+resolved and archived below.
 
 ## Known bugs
 
@@ -25,7 +39,9 @@ notes below record how it was fixed.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| - | - | - | - | - | - | - |
+| Mosaic fitter recovery | feature | - | none | p1 | 2026-04-20 | [mosaic-fitter.md](planned-features/mosaic-fitter.md) |
+| Structure-factor fitter recovery | feature | - | none | p2 | 2026-04-20 | [structure-factor-fitter.md](planned-features/structure-factor-fitter.md) |
+| Stacking-fault fitter recovery | feature | - | none | p2 | 2026-04-20 | [stacking-fault-fitter.md](planned-features/stacking-fault-fitter.md) |
 
 ## Archive
 

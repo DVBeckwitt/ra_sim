@@ -3,8 +3,8 @@
   <p><strong>DWBA forward simulation and refinement for 2D oriented powder diffraction</strong></p>
   <p>
     RA-SIM is research software for modeling grazing-incidence diffraction on area
-    detectors, calibrating detector geometry, and refining mosaic, stacking-disorder,
-    and crystallographic parameters against experimental images.
+    detectors, calibrating detector geometry, and refining mosaic, structure-factor,
+    and stacking-disorder parameters against experimental images.
   </p>
   <p>
     <a href="https://github.com/DVBeckwitt/ra_sim/actions/workflows/ci.yml">
@@ -64,7 +64,7 @@ The repository is shaped around three core workflows:
 
 - detector-space forward simulation for 2D grazing-incidence diffraction
 - hBN calibrant fitting to estimate beam center, tilt, and geometry hints
-- iterative geometry, mosaic-shape, and structural refinement against measured images
+- iterative geometry, mosaic-shape, structure-factor, and stacking-fault refinement against measured images
 
 ### Highlights
 
@@ -332,7 +332,7 @@ or `py -m ra_sim`; it is not the installed `ra-sim` console script.
 2. Launch the main GUI and load the experimental background.
 3. Match detector-space features first.
 4. Use radial, azimuthal, and caked views to validate the alignment.
-5. Refine mosaic, stacking, and structural parameters once geometry is stable.
+5. Refine mosaic, structure-factor, and stacking-fault parameters once geometry is stable.
 6. Save parameter snapshots or GUI state files so the run can be reproduced headlessly.
 
 ### CLI Examples

@@ -99,13 +99,13 @@ initial geometry before refining diffraction parameters.
 ### Parameters panel
 
 The parameters panel is the control surface for geometry, lattice, mosaic,
-beam, stacking, occupancy, and fitting controls.
+structure-factor, stacking-fault, occupancy, beam, and fitting controls.
 
 In practice:
 
 1. Use the geometry controls until detector-space features land correctly.
 2. Check integrations to verify widths and intensity trends.
-3. Refine mosaic and structural terms only after the geometry is stable.
+3. Refine mosaic, structure-factor, and stacking-fault terms only after the geometry is stable.
 
 The `Fit Mosaic Shapes` action is geometry-locked. It reuses the exact
 multi-background dataset bundle from the last successful manual geometry fit,
@@ -235,10 +235,10 @@ for every scattering experiment or every optics regime.
    continuously when geometry parameters change.
 7. The fitting workflow is staged because not all parameters are equally
    identifiable at the same time. Geometry is anchored first from peak
-   positions, then matching logic organizes correspondences, and only after that
-   do mosaic-shape and image-space refinements spend effort on broader profile
-   details. This prevents width, background, or intensity nuisance terms from
-   compensating for basic geometry mistakes.
+   positions, then matching logic organizes correspondences. Mosaic shape is
+   refined next, followed by structure-factor terms and then stacking-fault
+   terms. This prevents width, background, intensity, or disorder nuisance
+   terms from compensating for basic geometry mistakes.
 8. The hBN calibrant path is separate because rings constrain detector geometry
    differently from sparse Bragg spots. Ring distortion is a global geometric
    signal, so ellipse fitting and projective tilt correction are the natural

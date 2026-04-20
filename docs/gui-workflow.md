@@ -16,7 +16,7 @@ See also:
 - Simulation view: primary detector-space workspace for global geometric agreement
 - Integration views: radial, azimuthal, and caked diagnostics after the detector pattern is roughly aligned
 - Calibrant view: hBN ellipse-fitting workflow used to estimate beam center and detector tilt
-- Parameters panel: controls for geometry, mosaic, stacking, occupancy, beam, and fit settings
+- Parameters panel: controls for geometry, mosaic, structure factor, stacking fault, occupancy, beam, and fit settings
 
 ## Typical Workflow
 
@@ -24,7 +24,7 @@ See also:
 2. Launch the main GUI and load the experimental background.
 3. Align detector-space features before trusting reduced-coordinate plots.
 4. Use integration views to validate widths, radial positions, and intensity balance.
-5. Refine mosaic, stacking, and structure after geometry is stable.
+5. Refine mosaic, structure factor, and stacking fault terms only after geometry is stable.
 6. Save parameter snapshots so iterations stay reproducible.
 
 ## Headless Counterparts
