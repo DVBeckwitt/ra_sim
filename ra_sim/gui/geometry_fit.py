@@ -976,10 +976,10 @@ def _geometry_fit_source_entry_hkl_matches(
     candidate_hkl = _geometry_fit_normalized_hkl(
         candidate.get("hkl") if isinstance(candidate, Mapping) else None
     )
-    return (
-        entry_hkl is None
-        or candidate_hkl is None
-        or tuple(int(v) for v in candidate_hkl) == tuple(int(v) for v in entry_hkl)
+    if candidate_hkl is None:
+        return False
+    return entry_hkl is None or tuple(int(v) for v in candidate_hkl) == tuple(
+        int(v) for v in entry_hkl
     )
 
 
@@ -4523,6 +4523,45 @@ def build_geometry_manual_fit_dataset(
     ) -> tuple[int, int] | None:
         return _geometry_fit_source_peak_key(entry)
 
+    def _source_locator_payload(
+        entry: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        if not isinstance(entry, Mapping):
+            return {
+                "source_reflection_index": None,
+                "source_reflection_namespace": None,
+                "source_reflection_is_full": None,
+                "source_table_index": None,
+                "source_row_index": None,
+                "source_branch_index": None,
+                "source_peak_index": None,
+            }
+        return {
+            "source_reflection_index": entry.get("source_reflection_index"),
+            "source_reflection_namespace": entry.get("source_reflection_namespace"),
+            "source_reflection_is_full": entry.get("source_reflection_is_full"),
+            "source_table_index": entry.get("source_table_index"),
+            "source_row_index": entry.get("source_row_index"),
+            "source_branch_index": _source_branch_index(entry),
+            "source_peak_index": entry.get("source_peak_index"),
+        }
+
+    def _source_locator_identity_match(
+        saved_entry: Mapping[str, object] | None,
+        candidate: Mapping[str, object] | None,
+    ) -> bool:
+        saved_locator = _source_locator_payload(saved_entry)
+        candidate_locator = _source_locator_payload(candidate)
+        comparable_keys = [
+            key for key, value in saved_locator.items() if value is not None
+        ]
+        if not comparable_keys:
+            return False
+        return all(
+            candidate_locator.get(key) == saved_locator.get(key)
+            for key in comparable_keys
+        )
+
     def _normalized_hkl(
         value: object,
     ) -> tuple[int, int, int] | None:
@@ -4597,16 +4636,57 @@ def build_geometry_manual_fit_dataset(
             )
             if current_view_point is not None:
                 return current_view_point
-        else:
-            current_view_point = _entry_point(entry, "sim_col", "sim_row")
-            if current_view_point is not None:
-                return current_view_point
-        current_view_point = _entry_point(entry, "display_col", "display_row")
+            return None
+        current_view_point = _entry_point(entry, "sim_col", "sim_row")
         if current_view_point is not None:
             return current_view_point
-        if use_caked_display:
-            return _entry_point(entry, "sim_col", "sim_row")
+        has_measured_background_hint = any(
+            key in entry
+            for key in ("x", "y", "raw_x", "raw_y", "detector_x", "detector_y")
+        )
+        has_live_simulated_shape = any(
+            key in entry
+            for key in (
+                "source_reflection_index",
+                "source_table_index",
+                "source_row_index",
+                "source_peak_index",
+                "sim_col",
+                "sim_row",
+                "sim_col_raw",
+                "sim_row_raw",
+                "native_col",
+                "native_row",
+            )
+        )
+        if has_live_simulated_shape and not has_measured_background_hint:
+            current_view_point = _entry_point(entry, "display_col", "display_row")
+            if current_view_point is not None:
+                return current_view_point
         return None
+
+    def _candidate_current_view_frame(
+        entry: Mapping[str, object] | None,
+    ) -> str | None:
+        if not isinstance(entry, Mapping):
+            return None
+        if use_caked_display:
+            return "caked_display" if _candidate_current_view_point(entry) is not None else None
+        return "current_view_display" if _candidate_current_view_point(entry) is not None else None
+
+    def _background_current_view_frame(
+        entry: Mapping[str, object] | None,
+    ) -> str | None:
+        if use_caked_display:
+            return (
+                "caked_display"
+                if (
+                    _entry_point(entry, "raw_caked_x", "raw_caked_y") is not None
+                    or _entry_point(entry, "caked_x", "caked_y") is not None
+                )
+                else None
+            )
+        return "current_view_display" if _entry_display_point(entry) is not None else None
 
     def _source_entry_branch_matches(
         entry: Mapping[str, object] | None,
@@ -4625,6 +4705,28 @@ def build_geometry_manual_fit_dataset(
         candidate: Mapping[str, object] | None,
     ) -> bool:
         return _geometry_fit_source_entry_hkl_matches(entry, candidate)
+
+    def _filter_hkl_candidates(
+        entry: Mapping[str, object] | None,
+        candidates: Sequence[dict[str, object]] | None,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+        filtered: list[dict[str, object]] = []
+        excluded_missing_hkl: list[dict[str, object]] = []
+        excluded_mismatched_hkl: list[dict[str, object]] = []
+        target_hkl = _normalized_hkl(entry.get("hkl") if isinstance(entry, Mapping) else None)
+        for raw_candidate in candidates or ():
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            candidate = dict(raw_candidate)
+            candidate_hkl = _normalized_hkl(candidate.get("hkl"))
+            if candidate_hkl is None:
+                excluded_missing_hkl.append(candidate)
+                continue
+            if target_hkl is not None and tuple(candidate_hkl) != tuple(target_hkl):
+                excluded_mismatched_hkl.append(candidate)
+                continue
+            filtered.append(candidate)
+        return filtered, excluded_missing_hkl, excluded_mismatched_hkl
 
     def _resolve_cached_source_entry(
         entry: Mapping[str, object] | None,
@@ -4693,29 +4795,36 @@ def build_geometry_manual_fit_dataset(
             return resolved
 
         candidate_pool, _candidate_pool_source = _resolve_source_entry_candidate_pool(entry)
+        candidate_pool, _missing_hkl_candidates, _mismatched_hkl_candidates = _filter_hkl_candidates(
+            entry,
+            candidate_pool,
+        )
         candidate_pool = _filter_branch_candidates(entry, candidate_pool)
         if not candidate_pool:
             return None
-        if len(candidate_pool) == 1:
-            return dict(candidate_pool[0])
 
-        display_point = _entry_saved_simulated_current_view_point(entry)
+        display_point = _entry_display_point(entry)
         if display_point is None:
-            display_point = _entry_display_point(entry)
+            display_point = _entry_saved_simulated_current_view_point(entry)
         if display_point is None:
             return dict(candidate_pool[0])
 
-        def _distance_sq(candidate: Mapping[str, object]) -> float:
+        scored_candidates: list[tuple[float, dict[str, object]]] = []
+        for candidate in candidate_pool:
             candidate_point = _candidate_current_view_point(candidate)
             if candidate_point is None:
-                return float("inf")
-            return float(
+                continue
+            distance_sq = float(
                 (float(candidate_point[0]) - float(display_point[0])) ** 2
                 + (float(candidate_point[1]) - float(display_point[1])) ** 2
             )
+            if np.isfinite(distance_sq):
+                scored_candidates.append((distance_sq, dict(candidate)))
 
-        candidate_pool.sort(key=_distance_sq)
-        return dict(candidate_pool[0]) if candidate_pool else None
+        if not scored_candidates:
+            return None
+        scored_candidates.sort(key=lambda item: float(item[0]))
+        return dict(scored_candidates[0][1])
 
     def _normalized_q_group_key(
         value: object,
@@ -4915,14 +5024,9 @@ def build_geometry_manual_fit_dataset(
         candidate_pool = [candidate for candidate in (candidates or ()) if isinstance(candidate, Mapping)]
         for frame_name, point, tolerance in (
             (
-                "refined_sim_native",
-                _entry_point(entry, "refined_sim_native_x", "refined_sim_native_y"),
+                "measured_display",
+                _entry_display_point(entry),
                 float(GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX),
-            ),
-            (
-                "refined_sim_caked",
-                _entry_point(entry, "refined_sim_caked_x", "refined_sim_caked_y"),
-                float(GEOMETRY_FIT_LEGACY_REBIND_CAKED_TIE_TOLERANCE),
             ),
             (
                 "refined_sim_display",
@@ -4930,13 +5034,22 @@ def build_geometry_manual_fit_dataset(
                 float(GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX),
             ),
             (
-                "measured_detector",
-                _entry_point(entry, "detector_x", "detector_y"),
+                "refined_sim_native",
+                _entry_point(entry, "refined_sim_native_x", "refined_sim_native_y"),
                 float(GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX),
             ),
             (
-                "measured_display",
-                _entry_display_point(entry),
+                "refined_sim_caked",
+                (
+                    _entry_point(entry, "refined_sim_caked_x", "refined_sim_caked_y")
+                    if use_caked_display
+                    else None
+                ),
+                float(GEOMETRY_FIT_LEGACY_REBIND_CAKED_TIE_TOLERANCE),
+            ),
+            (
+                "measured_detector",
+                _entry_point(entry, "detector_x", "detector_y"),
                 float(GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX),
             ),
         ):
@@ -4968,6 +5081,36 @@ def build_geometry_manual_fit_dataset(
             int(branch_idx) if branch_idx in {0, 1} else sentinel,
         )
 
+    def _dedupe_geometry_tied_candidates(
+        candidates: Sequence[Mapping[str, object]] | None,
+        *,
+        frame_name: str,
+    ) -> list[dict[str, object]]:
+        unique_candidates: dict[tuple[object, ...], dict[str, object]] = {}
+        for raw_candidate in candidates or ():
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            candidate = dict(raw_candidate)
+            dedupe_key = (
+                _normalized_hkl(candidate.get("hkl")),
+                _source_branch_index(candidate),
+                str(frame_name),
+                _candidate_point_for_frame(candidate, frame_name=str(frame_name)),
+                tuple(sorted(_source_locator_payload(candidate).items())),
+            )
+            existing = unique_candidates.get(dedupe_key)
+            if existing is None or _candidate_sort_identity(candidate) < _candidate_sort_identity(
+                existing
+            ):
+                unique_candidates[dedupe_key] = candidate
+        return [
+            dict(candidate)
+            for _key, candidate in sorted(
+                unique_candidates.items(),
+                key=lambda item: _candidate_sort_identity(item[1]),
+            )
+        ]
+
     def _resolve_legacy_dense_source_entry(
         entry: Mapping[str, object] | None,
         *,
@@ -4982,6 +5125,9 @@ def build_geometry_manual_fit_dataset(
             ),
         }
         working_entry = _legacy_dense_working_entry(entry, raw_saved_entry)
+        saved_identity_entry = (
+            raw_saved_entry if isinstance(raw_saved_entry, Mapping) else entry
+        )
         diagnostics["legacy_working_entry"] = _geometry_fit_compact_source_resolution_entry_payload(
             working_entry
         )
@@ -4991,10 +5137,21 @@ def build_geometry_manual_fit_dataset(
         candidate_pool, candidate_pool_source = _resolve_source_entry_candidate_pool(
             working_entry
         )
+        candidate_pool, missing_hkl_candidates, mismatched_hkl_candidates = _filter_hkl_candidates(
+            working_entry,
+            candidate_pool,
+        )
         diagnostics["legacy_candidate_pool_source"] = candidate_pool_source
         diagnostics["legacy_candidate_count_initial"] = int(len(candidate_pool))
         diagnostics["legacy_candidate_inventory"] = _geometry_fit_trace_candidate_inventory(
             candidate_pool
+        )
+        diagnostics["legacy_candidate_count_after_hkl"] = int(len(candidate_pool))
+        diagnostics["legacy_excluded_missing_hkl_candidates"] = (
+            _geometry_fit_trace_candidate_inventory(missing_hkl_candidates)
+        )
+        diagnostics["legacy_excluded_mismatched_hkl_candidates"] = (
+            _geometry_fit_trace_candidate_inventory(mismatched_hkl_candidates)
         )
         if not candidate_pool:
             diagnostics["legacy_failure_reason"] = "legacy_rebind_missing_candidate_pool"
@@ -5046,7 +5203,9 @@ def build_geometry_manual_fit_dataset(
                 )
                 return None, None, diagnostics
 
-            scored_candidates: list[tuple[float, dict[str, object]]] = []
+            scored_candidates: list[
+                tuple[float, dict[str, object], tuple[float, float]]
+            ] = []
             for candidate in branch_candidates:
                 candidate_point = _candidate_point_for_frame(
                     candidate,
@@ -5068,7 +5227,13 @@ def build_geometry_manual_fit_dataset(
                         "legacy_rebind_nonfinite_geometry_score"
                     )
                     return None, None, diagnostics
-                scored_candidates.append((float(score), dict(candidate)))
+                scored_candidates.append(
+                    (
+                        float(score),
+                        dict(candidate),
+                        (float(candidate_point[0]), float(candidate_point[1])),
+                    )
+                )
 
             scored_candidates.sort(
                 key=lambda item: (
@@ -5086,8 +5251,17 @@ def build_geometry_manual_fit_dataset(
                         or {}
                     ),
                     "score": float(score),
+                    "frame_name": str(geometry_hint_source),
+                    "candidate_point": [
+                        float(candidate_point[0]),
+                        float(candidate_point[1]),
+                    ],
+                    "saved_target_point": [
+                        float(geometry_target_point[0]),
+                        float(geometry_target_point[1]),
+                    ],
                 }
-                for score, candidate in scored_candidates
+                for score, candidate, candidate_point in scored_candidates
             ]
             best_score = float(scored_candidates[0][0])
             second_best_score = (
@@ -5099,15 +5273,46 @@ def build_geometry_manual_fit_dataset(
             diagnostics["legacy_second_best_score"] = second_best_score
             tied_best = [
                 candidate
-                for score, candidate in scored_candidates
+                for score, candidate, _candidate_point in scored_candidates
                 if abs(float(score) - float(best_score)) <= float(tie_tolerance)
             ]
-            if len(tied_best) != 1:
+            deduped_tied_best = _dedupe_geometry_tied_candidates(
+                tied_best,
+                frame_name=str(geometry_hint_source),
+            )
+            if len(deduped_tied_best) == 1:
+                chosen_live_row = dict(deduped_tied_best[0])
+                if len(tied_best) > 1:
+                    diagnostics["legacy_selection_tie_breaker"] = (
+                        "duplicate_live_rows_canonicalized"
+                    )
+            elif len(deduped_tied_best) > 1:
+                identity_tied = [
+                    dict(candidate)
+                    for candidate in deduped_tied_best
+                    if _source_locator_identity_match(saved_identity_entry, candidate)
+                ]
+                if len(identity_tied) == 1:
+                    chosen_live_row = dict(identity_tied[0])
+                    diagnostics["legacy_selection_tie_breaker"] = (
+                        "saved_source_identity"
+                    )
+                else:
+                    diagnostics["legacy_failure_reason"] = (
+                        "legacy_rebind_ambiguous_geometry_tie"
+                    )
+                    diagnostics["legacy_geometry_tied_candidates"] = (
+                        _geometry_fit_trace_candidate_inventory(deduped_tied_best)
+                    )
+                    diagnostics["legacy_geometry_identity_tied_candidates"] = (
+                        _geometry_fit_trace_candidate_inventory(identity_tied)
+                    )
+                    return None, None, diagnostics
+            if chosen_live_row is None:
                 diagnostics["legacy_failure_reason"] = (
                     "legacy_rebind_ambiguous_geometry_tie"
                 )
                 return None, None, diagnostics
-            chosen_live_row = dict(scored_candidates[0][1])
 
         canonical_live_row = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
             chosen_live_row,
@@ -5141,6 +5346,44 @@ def build_geometry_manual_fit_dataset(
 
         diagnostics["legacy_chosen_live_row"] = (
             _geometry_fit_compact_source_resolution_entry_payload(canonical_live_row)
+        )
+        diagnostics["legacy_selected_source_identity_fields"] = _source_locator_payload(
+            canonical_live_row
+        )
+        diagnostics["legacy_saved_background_current_view_point"] = (
+            _geometry_fit_cache_jsonable(_entry_display_point(entry))
+        )
+        diagnostics["legacy_saved_background_current_view_frame"] = (
+            _background_current_view_frame(entry)
+        )
+        diagnostics["legacy_selected_live_simulated_current_view_point"] = (
+            _geometry_fit_cache_jsonable(_candidate_current_view_point(canonical_live_row))
+        )
+        diagnostics["legacy_selected_live_simulated_current_view_frame"] = (
+            _candidate_current_view_frame(canonical_live_row)
+        )
+        diagnostics["legacy_selected_to_background_distance_px"] = (
+            float(
+                math.hypot(
+                    float(_candidate_current_view_point(canonical_live_row)[0])
+                    - float(_entry_display_point(entry)[0]),
+                    float(_candidate_current_view_point(canonical_live_row)[1])
+                    - float(_entry_display_point(entry)[1]),
+                )
+            )
+            if _candidate_current_view_frame(canonical_live_row)
+            == _background_current_view_frame(entry)
+            and _candidate_current_view_point(canonical_live_row) is not None
+            and _entry_display_point(entry) is not None
+            else None
+        )
+        diagnostics["legacy_saved_simulated_detector_hint"] = _geometry_fit_cache_jsonable(
+            _entry_point(
+                saved_identity_entry,
+                "refined_sim_native_x",
+                "refined_sim_native_y",
+            )
+            or _entry_saved_simulated_current_view_point(saved_identity_entry)
         )
         diagnostics["legacy_fit_bound_entry"] = (
             _geometry_fit_compact_source_resolution_entry_payload(fit_bound_entry)
@@ -5249,17 +5492,23 @@ def build_geometry_manual_fit_dataset(
         fit_resolution_kind = _resolved_source_kind(entry, fit_source_entry)
         legacy_resolution_trace: dict[str, object] | None = None
         if fit_source_entry is None:
-            promoted_source_entry, promoted_resolution_kind, legacy_resolution_trace = _resolve_legacy_dense_source_entry(
-                entry,
-                raw_saved_entry=raw_saved_entry,
-            )
-            if isinstance(promoted_source_entry, Mapping):
-                fit_source_entry = dict(promoted_source_entry)
-                fit_resolution_kind = str(
-                    promoted_resolution_kind or "legacy_dense_source_rebind"
+            if isinstance(legacy_working_entry, Mapping):
+                promoted_source_entry, promoted_resolution_kind, legacy_resolution_trace = _resolve_legacy_dense_source_entry(
+                    entry,
+                    raw_saved_entry=raw_saved_entry,
                 )
-                overlay_source_entry = dict(promoted_source_entry)
-                overlay_kind = str(fit_resolution_kind)
+                if isinstance(promoted_source_entry, Mapping):
+                    fit_source_entry = dict(promoted_source_entry)
+                    fit_resolution_kind = str(
+                        promoted_resolution_kind or "legacy_dense_source_rebind"
+                    )
+                    overlay_source_entry = dict(promoted_source_entry)
+                    overlay_kind = str(fit_resolution_kind)
+            else:
+                promoted_source_entry = _resolve_source_entry(entry)
+                if isinstance(promoted_source_entry, Mapping):
+                    fit_source_entry = dict(promoted_source_entry)
+                    fit_resolution_kind = _resolved_source_kind(entry, fit_source_entry)
         selected_records.append(
             {
                 "entry": entry,
@@ -5383,6 +5632,44 @@ def build_geometry_manual_fit_dataset(
             entry,
             overlay_source_entry,
         )
+        legacy_selected_live_row = (
+            dict(legacy_resolution_trace.get("legacy_chosen_live_row"))
+            if isinstance(legacy_resolution_trace, Mapping)
+            and isinstance(legacy_resolution_trace.get("legacy_chosen_live_row"), Mapping)
+            else None
+        )
+        selected_source_entry_for_diag = (
+            legacy_selected_live_row
+            if isinstance(legacy_selected_live_row, Mapping)
+            else (
+                fit_source_entry
+                if isinstance(fit_source_entry, Mapping)
+                else overlay_source_entry
+            )
+        )
+        saved_background_current_view_point = _entry_display_point(entry)
+        saved_background_current_view_frame = _background_current_view_frame(entry)
+        selected_live_simulated_current_view_point = _candidate_current_view_point(
+            selected_source_entry_for_diag
+        )
+        selected_live_simulated_current_view_frame = _candidate_current_view_frame(
+            selected_source_entry_for_diag
+        )
+        selected_to_background_distance_px = (
+            float(
+                math.hypot(
+                    float(selected_live_simulated_current_view_point[0])
+                    - float(saved_background_current_view_point[0]),
+                    float(selected_live_simulated_current_view_point[1])
+                    - float(saved_background_current_view_point[1]),
+                )
+            )
+            if selected_live_simulated_current_view_point is not None
+            and saved_background_current_view_point is not None
+            and selected_live_simulated_current_view_frame
+            == saved_background_current_view_frame
+            else None
+        )
         saved_branch_index, saved_branch_source = _source_branch_resolution(saved_entry_for_diag)
         strict_branch_index, strict_branch_source = _source_branch_resolution(
             strict_source_entry
@@ -5409,6 +5696,16 @@ def build_geometry_manual_fit_dataset(
             "saved_hkl": _normalized_hkl(saved_entry_for_diag.get("hkl")),
             "saved_q_group_key": saved_entry_for_diag.get("q_group_key"),
             "saved_display_point": _entry_display_point(entry),
+            "saved_background_current_view_point": saved_background_current_view_point,
+            "saved_background_current_view_frame": saved_background_current_view_frame,
+            "saved_simulated_detector_hint": (
+                _entry_point(
+                    saved_entry_for_diag,
+                    "refined_sim_native_x",
+                    "refined_sim_native_y",
+                )
+                or _entry_saved_simulated_current_view_point(saved_entry_for_diag)
+            ),
             "strict_resolved": isinstance(strict_source_entry, Mapping),
             "fit_resolved": isinstance(fit_source_entry, Mapping),
             "fit_resolution_kind": str(
@@ -5423,6 +5720,16 @@ def build_geometry_manual_fit_dataset(
             "fit_source_peak_key": _source_peak_key(fit_source_entry),
             "fit_source_branch_index": fit_branch_index,
             "fit_source_branch_source": fit_branch_source,
+            "selected_candidate_source_identity_fields": _source_locator_payload(
+                selected_source_entry_for_diag
+            ),
+            "selected_live_simulated_current_view_point": (
+                selected_live_simulated_current_view_point
+            ),
+            "selected_live_simulated_current_view_frame": (
+                selected_live_simulated_current_view_frame
+            ),
+            "selected_to_background_distance_px": selected_to_background_distance_px,
             "fit_source_reflection_index": (
                 fit_source_entry.get("source_reflection_index")
                 if isinstance(fit_source_entry, Mapping)

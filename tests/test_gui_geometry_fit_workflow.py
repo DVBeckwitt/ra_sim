@@ -583,7 +583,14 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     lambda params, *, prefer_cache: [{"dummy": True}]
                 ),
                 geometry_manual_simulated_lookup=lambda _peaks: {
-                    (1, 2): {"sim_col": 9.0, "sim_row": 8.0}
+                    (1, 2): {
+                        "hkl": (1, 1, 0),
+                        "q_group_key": ("q", 1),
+                        "sim_col": 9.0,
+                        "sim_row": 8.0,
+                        "sim_col_raw": 9.0,
+                        "sim_row_raw": 8.0,
+                    }
                 },
                 geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
                 unrotate_display_peaks=(
@@ -720,7 +727,14 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         apply_background_backend_orientation=_apply_background_backend_orientation,
         geometry_manual_simulated_peaks_for_params=_simulated_peaks_for_params,
         geometry_manual_simulated_lookup=lambda _simulated_peaks: {
-            (1, 2): {"sim_col": 9.0, "sim_row": 8.0}
+            (1, 2): {
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "sim_col": 9.0,
+                "sim_row": 8.0,
+                "sim_col_raw": 9.0,
+                "sim_row_raw": 8.0,
+            }
         },
         geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
         unrotate_display_peaks=_unrotate_display_peaks,
@@ -873,16 +887,24 @@ def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_grou
         geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [{"dummy": True}],
         geometry_manual_simulated_lookup=lambda _peaks: {
             (1, 2): {
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
                 "source_table_index": 1,
                 "source_row_index": 2,
                 "sim_col": 50.0,
                 "sim_row": 60.0,
+                "sim_col_raw": 50.0,
+                "sim_row_raw": 60.0,
             },
             (2, 4): {
+                "hkl": (-1, 1, 0),
+                "q_group_key": ("q", 1),
                 "source_table_index": 2,
                 "source_row_index": 4,
                 "sim_col": 10.0,
                 "sim_row": 15.0,
+                "sim_col_raw": 10.0,
+                "sim_row_raw": 15.0,
             },
         },
         geometry_manual_entry_display_coords=_entry_display_coords,
@@ -1676,10 +1698,289 @@ def test_build_geometry_manual_fit_dataset_rebinds_mirrored_legacy_dense_pairs_b
     assert diag0["legacy_branch_hint_source"] == "refined_sim_caked_y"
     assert diag1["fit_resolution_kind"] == "legacy_dense_q_group_rebind"
     assert diag1["legacy_branch_hint_source"] == "refined_sim_caked_y"
-    assert diag1["legacy_geometry_hint_source"] == "refined_sim_display"
+    assert diag1["legacy_geometry_hint_source"] == "measured_display"
     assert diag1["legacy_candidate_count_initial"] == 3
     assert diag1["legacy_candidate_count_after_branch"] == 2
     assert diag1["legacy_chosen_live_row"]["source_reflection_index"] == 204
+
+
+def test_build_geometry_manual_fit_dataset_prefers_background_nearest_candidate_over_stale_identity() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q", 5),
+            "source_table_index": 203,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 203,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+            "caked_y": 9.0,
+            "refined_sim_caked_y": 9.0,
+            "refined_sim_x": 2500.0,
+            "refined_sim_y": 2500.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 2504.0,
+            "sim_row": 2497.0,
+        },
+        {
+            "q_group_key": ("q", 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 1003.0,
+            "sim_row": 998.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    measured_entry = dataset["measured_for_fit"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert measured_entry["source_reflection_index"] == 204
+    assert measured_entry["source_branch_index"] == 1
+    assert diag["fit_resolution_kind"] == "legacy_dense_q_group_rebind"
+    assert diag["legacy_geometry_hint_source"] == "measured_display"
+    assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
+    assert diag["selected_live_simulated_current_view_point"] == (1003.0, 998.0)
+    assert diag["selected_to_background_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+    assert diag["saved_simulated_detector_hint"] == (2500.0, 2500.0)
+
+
+def test_build_geometry_manual_fit_dataset_rebinds_nonlegacy_stale_source_by_background_point() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 999,
+            "source_reflection_index": 999,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+            "refined_sim_x": 2500.0,
+            "refined_sim_y": 2500.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 2504.0,
+            "sim_row": 2497.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 1003.0,
+            "sim_row": 998.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+        refresh_pairs=False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    measured_entry = dataset["measured_for_fit"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert measured_entry["source_reflection_index"] == 204
+    assert measured_entry["source_branch_index"] == 1
+    assert diag["strict_resolved"] is False
+    assert diag["fit_resolved"] is True
+    assert diag["fit_resolution_kind"] == "q_group_fallback"
+    assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
+    assert diag["selected_live_simulated_current_view_point"] == (1003.0, 998.0)
+    assert diag["selected_to_background_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+
+
+def test_build_geometry_manual_fit_dataset_skips_cached_candidate_with_missing_hkl() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 2504.0,
+            "sim_row": 2497.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 1003.0,
+            "sim_row": 998.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+        refresh_pairs=False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    measured_entry = dataset["measured_for_fit"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert measured_entry["source_reflection_index"] == 204
+    assert diag["strict_resolved"] is False
+    assert diag["fit_resolved"] is True
+    assert diag["fit_resolution_kind"] == "q_group_fallback"
+    assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
+
+
+def test_build_geometry_manual_fit_dataset_rejects_nonlegacy_candidates_without_current_view_point() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "native_col": 2504.0,
+            "native_row": 2497.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "native_col": 1003.0,
+            "native_row": 998.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+        refresh_pairs=False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 0
+    assert "source_reflection_index" not in dataset["measured_for_fit"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert diag["strict_resolved"] is False
+    assert diag["fit_resolved"] is False
+    assert diag["fit_resolution_kind"] is None
 
 
 def test_build_geometry_manual_fit_dataset_fails_closed_on_legacy_dense_geometry_tie() -> None:
@@ -1748,7 +2049,7 @@ def test_build_geometry_manual_fit_dataset_fails_closed_on_legacy_dense_geometry
     assert diag["fit_resolved"] is False
     assert diag["fit_resolution_kind"] is None
     assert diag["failure_reason"] == "legacy_rebind_ambiguous_geometry_tie"
-    assert diag["legacy_geometry_hint_source"] == "refined_sim_display"
+    assert diag["legacy_geometry_hint_source"] == "measured_display"
     assert diag["legacy_candidate_count_after_branch"] == 2
     assert diag["legacy_best_score"] == pytest.approx(0.0)
     assert diag["legacy_second_best_score"] == pytest.approx(5.0e-7)
@@ -2586,8 +2887,8 @@ def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -
             "hkl": (-1, 0, 5),
             "source_branch_index": 1,
             "source_peak_index": 1,
-            "refined_sim_x": 10.0,
-            "refined_sim_y": 10.0,
+            "x": 10.0,
+            "y": 10.0,
         },
         grouped_candidates={
             ("q_group", "primary", 1, 5): [
@@ -2617,14 +2918,228 @@ def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -
                 },
             ]
         },
+        saved_background_current_view_point=(10.0, 10.0),
+        saved_background_current_view_frame="current_view_display",
     )
 
     assert result["ok"] is False
     assert result["selection_status"] == "ambiguous_live_row_selection"
+    assert result["selection_coordinate_frame"] == "current_view_px"
     assert len(result["tied_candidate_inventory"]) == 2
 
 
-def test_select_live_candidate_for_saved_entry_prefers_detector_near_candidate() -> None:
+def test_select_live_candidate_for_saved_entry_prefers_current_view_near_candidate() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    result = probe._select_live_candidate_for_saved_entry(
+        saved_entry={
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_peak_index": 1,
+            "x": 1000.0,
+            "y": 1000.0,
+            "refined_sim_native_x": 2500.0,
+            "refined_sim_native_y": 2500.0,
+        },
+        grouped_candidates={
+            ("q_group", "primary", 1, 5): [
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "native_col": 2504.0,
+                    "native_row": 2497.0,
+                    "display_col": 2504.0,
+                    "display_row": 2497.0,
+                    "sim_col": 1003.0,
+                    "sim_row": 998.0,
+                },
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 204,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "native_col": 1003.0,
+                    "native_row": 998.0,
+                    "display_col": 1003.0,
+                    "display_row": 998.0,
+                    "sim_col": 2504.0,
+                    "sim_row": 2497.0,
+                },
+            ]
+        },
+        saved_background_current_view_point=(1000.0, 1000.0),
+        saved_background_current_view_frame="current_view_display",
+    )
+
+    assert result["ok"] is True
+    assert result["selected_candidate"]["source_reflection_index"] == 203
+    assert result["selection_coordinate_frame"] == "current_view_px"
+    assert result["background_distance_reference_frame"] == "current_view_display"
+    assert result["background_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+    assert result["best_distance_px"] == result["background_distance_px"]
+    inventory_by_source = {
+        entry["source_reflection_index"]: entry
+        for entry in result["matching_branch_candidate_inventory"]
+    }
+    assert inventory_by_source[203]["coordinate_frame"] == "current_view_px"
+    assert inventory_by_source[204]["coordinate_frame"] == "current_view_px"
+    assert inventory_by_source[204][
+        "distance_to_saved_background_current_view_point_px"
+    ] == pytest.approx((1504.0**2 + 1497.0**2) ** 0.5)
+    assert inventory_by_source[203][
+        "distance_to_saved_background_current_view_point_px"
+    ] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+    assert inventory_by_source[203][
+        "distance_to_saved_sim_detector_hint_px"
+    ] == pytest.approx((4.0**2 + 3.0**2) ** 0.5)
+    assert inventory_by_source[204][
+        "distance_to_saved_sim_detector_hint_px"
+    ] == pytest.approx((1497.0**2 + 1502.0**2) ** 0.5)
+
+
+def test_select_live_candidate_for_saved_entry_prefers_live_simulated_current_view_point_over_display_aliases() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    result = probe._select_live_candidate_for_saved_entry(
+        saved_entry={
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_peak_index": 1,
+            "refined_sim_native_x": 2500.0,
+            "refined_sim_native_y": 2500.0,
+            "caked_x": 29.861040445064752,
+            "caked_y": -59.079850372490654,
+        },
+        grouped_candidates={
+            ("q_group", "primary", 1, 5): [
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "native_col": 2504.0,
+                    "native_row": 2497.0,
+                    "display_col": 29.861040445064752,
+                    "display_row": -59.079850372490654,
+                    "sim_col": 300.0,
+                    "sim_row": -200.0,
+                },
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 204,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "native_col": 1003.0,
+                    "native_row": 998.0,
+                    "display_col": 300.0,
+                    "display_row": -200.0,
+                    "sim_col": 29.861040445064752,
+                    "sim_row": -59.079850372490654,
+                },
+            ]
+        },
+        saved_background_current_view_point=(29.861040445064752, -59.079850372490654),
+        saved_background_current_view_frame="current_view_display",
+    )
+
+    assert result["ok"] is True
+    assert result["selected_candidate"]["source_reflection_index"] == 204
+    assert result["selection_coordinate_frame"] == "current_view_px"
+    assert result["background_distance_reference_frame"] == "current_view_display"
+    assert result["background_distance_px"] == pytest.approx(0.0)
+    inventory_by_source = {
+        entry["source_reflection_index"]: entry
+        for entry in result["matching_branch_candidate_inventory"]
+    }
+    assert inventory_by_source[204][
+        "distance_to_saved_background_current_view_point_px"
+    ] == pytest.approx(0.0)
+    assert inventory_by_source[203][
+        "distance_to_saved_background_current_view_point_px"
+    ] == pytest.approx(
+        ((300.0 - 29.861040445064752) ** 2 + (-200.0 + 59.079850372490654) ** 2) ** 0.5
+    )
+    assert inventory_by_source[204][
+        "distance_to_saved_sim_detector_hint_px"
+    ] == pytest.approx((1497.0**2 + 1502.0**2) ** 0.5)
+
+
+def test_select_live_candidate_for_saved_entry_ignores_background_shaped_display_only_candidate() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    result = probe._select_live_candidate_for_saved_entry(
+        saved_entry={
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "x": 1000.0,
+            "y": 1000.0,
+        },
+        grouped_candidates={
+            ("q_group", "primary", 1, 5): [
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "x": 1000.0,
+                    "y": 1000.0,
+                    "display_col": 1000.0,
+                    "display_row": 1000.0,
+                },
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 204,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "sim_col": 1003.0,
+                    "sim_row": 998.0,
+                },
+            ]
+        },
+        saved_background_current_view_point=(1000.0, 1000.0),
+        saved_background_current_view_frame="current_view_display",
+    )
+
+    assert result["ok"] is True
+    assert result["selected_candidate"]["source_reflection_index"] == 204
+    inventory_by_source = {
+        entry["source_reflection_index"]: entry
+        for entry in result["matching_branch_candidate_inventory"]
+    }
+    assert inventory_by_source[203]["selected_live_simulated_current_view_frame"] is None
+    assert np.isfinite(
+        inventory_by_source[204]["distance_to_saved_background_current_view_point_px"]
+    )
+    assert not np.isfinite(
+        inventory_by_source[203]["distance_to_saved_background_current_view_point_px"]
+    )
+
+
+def test_select_live_candidate_for_saved_entry_falls_back_to_detector_native_without_saved_current_view() -> None:
     probe = _load_geometry_preflight_probe_module()
 
     result = probe._select_live_candidate_for_saved_entry(
@@ -2662,17 +3177,216 @@ def test_select_live_candidate_for_saved_entry_prefers_detector_near_candidate()
                 },
             ]
         },
+        saved_background_current_view_point=None,
+        saved_background_current_view_frame=None,
     )
 
     assert result["ok"] is True
     assert result["selected_candidate"]["source_reflection_index"] == 204
+    assert result["selection_coordinate_frame"] == "detector_native_px"
+    assert result["background_distance_reference_frame"] == "native_detector"
     assert result["best_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
-    assert result["matching_branch_candidate_inventory"][0][
+    inventory_by_source = {
+        entry["source_reflection_index"]: entry
+        for entry in result["matching_branch_candidate_inventory"]
+    }
+    assert inventory_by_source[203]["coordinate_frame"] == "detector_native_px"
+    assert inventory_by_source[204]["coordinate_frame"] == "detector_native_px"
+    assert inventory_by_source[203][
         "distance_to_saved_sim_detector_hint_px"
     ] == pytest.approx((1505.0**2 + 1515.0**2) ** 0.5)
-    assert result["matching_branch_candidate_inventory"][1][
+    assert inventory_by_source[204][
         "distance_to_saved_sim_detector_hint_px"
     ] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+    assert (
+        "distance_to_saved_background_current_view_point_px"
+        not in inventory_by_source[204]
+    )
+
+
+def test_run_fresh_slot_validation_prefers_saved_xy_over_raw_xy_and_display_for_current_view_target() -> None:
+    probe = _load_geometry_preflight_probe_module()
+    captured: dict[str, object] = {}
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 1822.0,
+        "y": 1375.0,
+        "raw_x": 291.0,
+        "raw_y": 173.0,
+        "display_col": 99.0,
+        "display_row": 88.0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    def _fake_select_live_candidate_for_saved_entry(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": False,
+            "failure_stage": "grouped_candidate_regeneration",
+            "selection_status": "missing_live_candidate",
+        }
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        probe,
+        "_select_live_candidate_for_saved_entry",
+        _fake_select_live_candidate_for_saved_entry,
+    )
+    try:
+        result = probe._run_fresh_slot_validation(
+            context={
+                "saved_entries": [dict(saved_entry)],
+                "raw_saved_entries": [dict(saved_entry)],
+            },
+            background_index=0,
+            slot_index=0,
+            runtime={
+                "projection_callbacks": SimpleNamespace(
+                    pick_uses_caked_space=lambda: False,
+                ),
+                "group_cache": {},
+                "current_source_rows": [],
+                "grouped_candidates": {},
+                "grouped_candidate_source": "pick_cache",
+            },
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert captured["saved_background_current_view_point"] == pytest.approx((1822.0, 1375.0))
+    assert captured["saved_background_current_view_frame"] == "current_view_display"
+    assert result["saved_entry"]["saved_background_current_view_point"] == pytest.approx(
+        [1822.0, 1375.0]
+    )
+    assert result["saved_entry"]["saved_background_current_view_frame"] == (
+        "current_view_display"
+    )
+
+
+def test_run_fresh_slot_validation_uses_display_point_as_last_noncaked_current_view_fallback() -> None:
+    probe = _load_geometry_preflight_probe_module()
+    captured: dict[str, object] = {}
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "display_col": 91.0,
+        "display_row": 82.0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    def _fake_select_live_candidate_for_saved_entry(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": False,
+            "failure_stage": "grouped_candidate_regeneration",
+            "selection_status": "missing_live_candidate",
+        }
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        probe,
+        "_select_live_candidate_for_saved_entry",
+        _fake_select_live_candidate_for_saved_entry,
+    )
+    try:
+        result = probe._run_fresh_slot_validation(
+            context={
+                "saved_entries": [dict(saved_entry)],
+                "raw_saved_entries": [dict(saved_entry)],
+            },
+            background_index=0,
+            slot_index=0,
+            runtime={
+                "projection_callbacks": SimpleNamespace(
+                    pick_uses_caked_space=lambda: False,
+                ),
+                "group_cache": {},
+                "current_source_rows": [],
+                "grouped_candidates": {},
+                "grouped_candidate_source": "pick_cache",
+            },
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert captured["saved_background_current_view_point"] == pytest.approx((91.0, 82.0))
+    assert captured["saved_background_current_view_frame"] == "current_view_display"
+    assert result["saved_entry"]["saved_background_current_view_point"] == pytest.approx(
+        [91.0, 82.0]
+    )
+    assert result["saved_entry"]["saved_background_current_view_frame"] == (
+        "current_view_display"
+    )
+
+
+def test_run_fresh_slot_validation_passes_caked_saved_current_view_point_to_selection() -> None:
+    probe = _load_geometry_preflight_probe_module()
+    captured: dict[str, object] = {}
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 1822.0,
+        "y": 1375.0,
+        "caked_x": 29.861040445064752,
+        "caked_y": -59.079850372490654,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    def _fake_select_live_candidate_for_saved_entry(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": False,
+            "failure_stage": "grouped_candidate_regeneration",
+            "selection_status": "missing_live_candidate",
+        }
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        probe,
+        "_select_live_candidate_for_saved_entry",
+        _fake_select_live_candidate_for_saved_entry,
+    )
+    try:
+        result = probe._run_fresh_slot_validation(
+            context={
+                "saved_entries": [dict(saved_entry)],
+                "raw_saved_entries": [dict(saved_entry)],
+            },
+            background_index=0,
+            slot_index=0,
+            runtime={
+                "projection_callbacks": SimpleNamespace(
+                    pick_uses_caked_space=lambda: True,
+                ),
+                "group_cache": {},
+                "current_source_rows": [],
+                "grouped_candidates": {},
+                "grouped_candidate_source": "pick_cache",
+            },
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert captured["saved_background_current_view_point"] == pytest.approx(
+        (29.861040445064752, -59.079850372490654)
+    )
+    assert captured["saved_background_current_view_frame"] == "caked_display"
+    assert result["saved_entry"]["saved_background_current_view_point"] == pytest.approx(
+        [29.861040445064752, -59.079850372490654]
+    )
+    assert result["saved_entry"]["saved_background_current_view_frame"] == (
+        "caked_display"
+    )
 
 
 def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None:
@@ -3081,6 +3795,7 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": float(slot_index) + 0.25,
                 "best_distance_px": float(slot_index) + 0.25,
                 "selected_candidate": dict(selected_candidate),
             },
@@ -3147,12 +3862,23 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
     assert result["isolated_rebind_ok"] is True
     assert result["fresh_export_ok"] is True
     assert result["compatibility_ok"] is True
+    assert result["background_distance_gate_ok"] is True
+    assert result["background_distances_all_finite"] is True
+    assert result["background_distance_px"] == [
+        float(slot_index) + 0.25 for slot_index in range(9)
+    ]
+    assert result["max_background_distance_px"] == pytest.approx(8.25)
+    assert result["background_distance_gate_threshold_px"] == pytest.approx(100.0)
+    assert result["deprecated_aliases_present"] is True
     assert result["detector_distance_gate_ok"] is True
     assert result["candidate_distance_gate_ok"] is True
     assert result["candidate_distances_all_finite"] is True
-    assert result["candidate_distance_px"] == [float(slot_index) + 0.25 for slot_index in range(9)]
-    assert result["max_candidate_distance_px"] == pytest.approx(8.25)
-    assert result["candidate_distance_gate_threshold_px"] == pytest.approx(100.0)
+    assert result["candidate_distance_px"] == result["background_distance_px"]
+    assert result["max_candidate_distance_px"] == result["max_background_distance_px"]
+    assert (
+        result["candidate_distance_gate_threshold_px"]
+        == result["background_distance_gate_threshold_px"]
+    )
     assert result["slot_results"][0]["saved_to_selected_identity_delta_classification"] == (
         "legacy_saved_identity_canonicalized"
     )
@@ -3242,6 +3968,7 @@ def test_fresh_contract_validation_validates_temp_state_before_export(
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 1.25,
                 "best_distance_px": 1.25,
                 "selected_candidate": {
                     "pair_id": "bg0:pair0",
@@ -3382,6 +4109,7 @@ def test_fresh_contract_validation_does_not_export_when_temp_state_fails_compati
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 1.25,
                 "best_distance_px": 1.25,
                 "selected_candidate": {
                     "pair_id": "bg0:pair0",
@@ -3519,6 +4247,7 @@ def test_fresh_contract_validation_reports_export_write_failure_without_crashing
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 1.25,
                 "best_distance_px": 1.25,
                 "selected_candidate": {
                     "pair_id": "bg0:pair0",
@@ -3657,6 +4386,7 @@ def test_fresh_contract_validation_reports_temp_state_save_failure_without_crash
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 1.25,
                 "best_distance_px": 1.25,
                 "selected_candidate": dict(saved_entry),
             },
@@ -3849,6 +4579,7 @@ def test_fresh_all_contract_validation_reports_export_write_failure_without_cras
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 4.0,
                 "best_distance_px": 4.0,
                 "selected_candidate": {
                     "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
@@ -3964,6 +4695,7 @@ def test_fresh_all_contract_validation_reports_temp_state_save_failure_without_c
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 4.0,
                 "best_distance_px": 4.0,
                 "selected_candidate": {
                     "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
@@ -4074,6 +4806,7 @@ def test_fresh_all_contract_validation_classifies_runtime_prepare_isolated_rebin
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 4.0,
                 "best_distance_px": 4.0,
                 "selected_candidate": {
                     "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
@@ -4108,7 +4841,9 @@ def test_fresh_all_contract_validation_classifies_runtime_prepare_isolated_rebin
     assert "exported_fresh_state_path" not in result
     assert export_path.exists() is False
     assert result["compatibility_ok"] is True
+    assert result["background_distance_gate_ok"] is True
     assert result["detector_distance_gate_ok"] is True
+    assert result["max_background_distance_px"] == pytest.approx(4.0)
     assert result["max_candidate_distance_px"] == pytest.approx(4.0)
 
 
@@ -4171,6 +4906,7 @@ def test_fresh_all_contract_validation_fails_detector_distance_gate_when_candida
             "candidate_selection": {
                 "ok": True,
                 "selection_status": "selected",
+                "background_distance_px": 12.0 if int(kwargs["slot_index"]) == 0 else 150.0,
                 "best_distance_px": 12.0 if int(kwargs["slot_index"]) == 0 else 150.0,
                 "selected_candidate": {
                     "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
@@ -4199,11 +4935,18 @@ def test_fresh_all_contract_validation_fails_detector_distance_gate_when_candida
     assert result["isolated_rebind_ok"] is True
     assert result["compatibility_ok"] is True
     assert result["fresh_export_ok"] is True
+    assert result["background_distance_gate_ok"] is False
+    assert result["background_distance_px"] == [12.0, 150.0]
+    assert result["max_background_distance_px"] == pytest.approx(150.0)
+    assert result["background_distance_gate_threshold_px"] == pytest.approx(100.0)
     assert result["detector_distance_gate_ok"] is False
     assert result["candidate_distance_gate_ok"] is False
-    assert result["candidate_distance_px"] == [12.0, 150.0]
-    assert result["max_candidate_distance_px"] == pytest.approx(150.0)
-    assert result["candidate_distance_gate_threshold_px"] == pytest.approx(100.0)
+    assert result["candidate_distance_px"] == result["background_distance_px"]
+    assert result["max_candidate_distance_px"] == result["max_background_distance_px"]
+    assert (
+        result["candidate_distance_gate_threshold_px"]
+        == result["background_distance_gate_threshold_px"]
+    )
 
 
 def test_downstream_identity_validation_rejects_non_canonical_input(

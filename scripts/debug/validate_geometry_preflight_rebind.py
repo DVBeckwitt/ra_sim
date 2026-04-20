@@ -346,21 +346,46 @@ def _saved_simulated_display_hint(
     return None
 
 
-def _saved_click_hint(
+def _saved_background_current_view_point_frame(
+    entry: Mapping[str, object] | None,
+    *,
+    use_caked_space: bool,
+) -> tuple[tuple[float, float] | None, str | None]:
+    if bool(use_caked_space):
+        for keys in (("raw_caked_x", "raw_caked_y"), ("caked_x", "caked_y")):
+            point = _finite_point(entry, *keys)
+            if point is not None:
+                return point, "caked_display"
+        return None, None
+    for keys in (("x", "y"), ("raw_x", "raw_y"), ("display_col", "display_row")):
+        point = _finite_point(entry, *keys)
+        if point is not None:
+            return point, "current_view_display"
+    return None, None
+
+
+def _saved_background_current_view_point(
     entry: Mapping[str, object] | None,
     *,
     use_caked_space: bool,
 ) -> tuple[float, float] | None:
-    key_sets = (
-        (("raw_caked_x", "raw_caked_y"), ("caked_x", "caked_y"))
-        if bool(use_caked_space)
-        else (("raw_x", "raw_y"), ("x", "y"))
+    point, _frame = _saved_background_current_view_point_frame(
+        entry,
+        use_caked_space=use_caked_space,
     )
-    for keys in key_sets:
-        hint = _finite_point(entry, *keys)
-        if hint is not None:
-            return hint
-    return None
+    return point
+
+
+def _saved_background_current_view_frame(
+    entry: Mapping[str, object] | None,
+    *,
+    use_caked_space: bool,
+) -> str | None:
+    _point, frame = _saved_background_current_view_point_frame(
+        entry,
+        use_caked_space=use_caked_space,
+    )
+    return frame
 
 
 def _saved_simulated_detector_hint(
@@ -415,10 +440,80 @@ def _candidate_detector_native_point(
     return None
 
 
+def _looks_like_live_simulated_candidate(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    has_measured_background_hint = any(
+        key in entry
+        for key in (
+            "x",
+            "y",
+            "raw_x",
+            "raw_y",
+            "detector_x",
+            "detector_y",
+            "background_detector_x",
+            "background_detector_y",
+        )
+    )
+    has_live_simulated_shape = any(
+        key in entry
+        for key in (
+            "source_reflection_index",
+            "source_table_index",
+            "source_row_index",
+            "source_peak_index",
+            "sim_col",
+            "sim_row",
+            "sim_col_raw",
+            "sim_row_raw",
+            "native_col",
+            "native_row",
+        )
+    )
+    return bool(has_live_simulated_shape and not has_measured_background_hint)
+
+
+def _candidate_current_view_point_frame(
+    entry: Mapping[str, object] | None,
+) -> tuple[tuple[float, float] | None, str | None]:
+    caked_point = _finite_point(entry, "caked_x", "caked_y")
+    if caked_point is None:
+        caked_point = _finite_point(entry, "raw_caked_x", "raw_caked_y")
+    if caked_point is None:
+        caked_point = _finite_point(entry, "two_theta_deg", "phi_deg")
+    if caked_point is not None:
+        return None, None
+
+    sim_point = _finite_point(entry, "sim_col", "sim_row")
+    if sim_point is not None:
+        return sim_point, "current_view_display"
+    display_point = _finite_point(entry, "display_col", "display_row")
+    if display_point is not None and _looks_like_live_simulated_candidate(entry):
+        return display_point, "current_view_display"
+    return None, None
+
+
+def _candidate_current_view_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    point, _frame = _candidate_current_view_point_frame(entry)
+    return point
+
+
+def _candidate_current_view_frame(
+    entry: Mapping[str, object] | None,
+) -> str | None:
+    _point, frame = _candidate_current_view_point_frame(entry)
+    return frame
+
+
 def _candidate_detector_display_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    return _candidate_detector_native_point(entry)
+    return _candidate_current_view_point(entry)
 
 
 def _candidate_detector_native_distance(
@@ -432,6 +527,37 @@ def _candidate_detector_display_distance(
     detector_hint: tuple[float, float] | None,
     candidate: Mapping[str, object] | None,
 ) -> float:
+    return _detector_distance(detector_hint, _candidate_detector_display_point(candidate))
+
+
+def _candidate_background_distance(
+    background_point: tuple[float, float] | None,
+    *,
+    background_frame: str | None,
+    candidate: Mapping[str, object] | None,
+) -> float:
+    candidate_point, candidate_frame = _candidate_current_view_point_frame(candidate)
+    if background_frame is None or candidate_frame is None:
+        return float("nan")
+    if str(background_frame) != str(candidate_frame):
+        return float("nan")
+    return _detector_distance(background_point, candidate_point)
+
+
+def _candidate_selection_distance(
+    *,
+    background_point: tuple[float, float] | None,
+    background_frame: str | None,
+    detector_hint: tuple[float, float] | None,
+    candidate: Mapping[str, object] | None,
+    use_current_view_distance: bool,
+) -> float:
+    if bool(use_current_view_distance):
+        return _candidate_background_distance(
+            background_point,
+            background_frame=background_frame,
+            candidate=candidate,
+        )
     return _candidate_detector_native_distance(detector_hint, candidate)
 
 
@@ -461,10 +587,15 @@ def _compact_entry(
     display_hint: tuple[float, float] | None = None,
     detector_hint: tuple[float, float] | None = None,
     measured_detector_point: tuple[float, float] | None = None,
+    background_point: tuple[float, float] | None = None,
+    selection_coordinate_frame: str | None = None,
+    selection_reference_frame: str | None = None,
 ) -> dict[str, object] | None:
     if not isinstance(entry, Mapping):
         return None
     detector_native = _candidate_detector_native_point(entry)
+    current_view_point = _candidate_current_view_point(entry)
+    current_view_frame = _candidate_current_view_frame(entry)
     payload = {
         "candidate_source_key": gui_manual_geometry.geometry_manual_candidate_source_key(
             dict(entry)
@@ -484,11 +615,15 @@ def _compact_entry(
         "sim_row": entry.get("sim_row"),
         "sim_col_raw": entry.get("sim_col_raw"),
         "sim_row_raw": entry.get("sim_row_raw"),
+        "selected_live_simulated_current_view_point": _point_payload(current_view_point),
+        "selected_live_simulated_current_view_frame": current_view_frame,
         "selected_live_simulated_detector_point": _point_payload(detector_native),
         "sim_detector_display": _point_payload(detector_native),
         "caked_x": entry.get("caked_x"),
         "caked_y": entry.get("caked_y"),
     }
+    if selection_coordinate_frame is not None:
+        payload["coordinate_frame"] = selection_coordinate_frame
     if display_hint is not None:
         payload["distance_to_saved_display_hint_px"] = (
             gui_manual_geometry.geometry_manual_candidate_distance_to_point(
@@ -506,6 +641,19 @@ def _compact_entry(
             measured_detector_point,
             detector_native,
         )
+    if background_point is not None:
+        distance_to_saved_background = _candidate_background_distance(
+            background_point,
+            background_frame=selection_reference_frame,
+            candidate=entry,
+        )
+        payload["saved_background_current_view_frame"] = selection_reference_frame
+        payload["distance_to_saved_background_reference_frame"] = selection_reference_frame
+        payload["distance_to_saved_background_candidate_frame"] = current_view_frame
+        payload["distance_to_saved_background_current_view_point_px"] = (
+            distance_to_saved_background
+        )
+        payload["distance_to_saved_display_hint_px"] = distance_to_saved_background
     return payload
 
 
@@ -531,14 +679,85 @@ def _source_locator_payload(
     }
 
 
+def _source_locator_identity_match(
+    saved_entry: Mapping[str, object] | None,
+    candidate: Mapping[str, object] | None,
+) -> bool:
+    saved_locator = _source_locator_payload(saved_entry)
+    candidate_locator = _source_locator_payload(candidate)
+    comparable_keys = [
+        key for key, value in saved_locator.items() if value is not None
+    ]
+    if not comparable_keys:
+        return False
+    return all(candidate_locator.get(key) == saved_locator.get(key) for key in comparable_keys)
+
+
+def _candidate_duplicate_tie_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[object, ...] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    return (
+        _normalize_hkl(entry.get("hkl")),
+        _normalized_branch_index(entry),
+        _candidate_current_view_frame(entry),
+        _candidate_current_view_point(entry),
+        tuple(sorted(_source_locator_payload(entry).items())),
+    )
+
+
+def _dedupe_tied_candidates(
+    candidates: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    unique_candidates: dict[tuple[object, ...], dict[str, object]] = {}
+    for raw_candidate in candidates or ():
+        if not isinstance(raw_candidate, Mapping):
+            continue
+        candidate = dict(raw_candidate)
+        dedupe_key = _candidate_duplicate_tie_key(candidate)
+        if dedupe_key is None:
+            dedupe_key = (
+                gui_manual_geometry.geometry_manual_candidate_source_key(candidate),
+            )
+        existing = unique_candidates.get(dedupe_key)
+        if existing is None:
+            unique_candidates[dedupe_key] = candidate
+            continue
+        existing_key = repr(gui_manual_geometry.geometry_manual_candidate_source_key(existing))
+        candidate_key = repr(gui_manual_geometry.geometry_manual_candidate_source_key(candidate))
+        if candidate_key < existing_key:
+            unique_candidates[dedupe_key] = candidate
+    return [
+        dict(candidate)
+        for _key, candidate in sorted(
+            unique_candidates.items(),
+            key=lambda item: repr(gui_manual_geometry.geometry_manual_candidate_source_key(item[1])),
+        )
+    ]
+
+
 def _slot_detector_diagnostic(
     *,
     pair_id: str,
     saved_entry: Mapping[str, object] | None,
     selected_candidate: Mapping[str, object] | None,
+    saved_background_current_view_point: tuple[float, float] | None = None,
+    saved_background_current_view_frame: str | None = None,
 ) -> dict[str, object]:
     saved_simulated_detector_hint = _saved_simulated_detector_hint(saved_entry)
     saved_measured_detector_point = _saved_measured_detector_point(saved_entry)
+    selection_coordinate_frame = (
+        "current_view_px"
+        if saved_background_current_view_point is not None
+        else "detector_native_px"
+    )
+    selected_live_simulated_current_view_point = _candidate_current_view_point(
+        selected_candidate
+    )
+    selected_live_simulated_current_view_frame = _candidate_current_view_frame(
+        selected_candidate
+    )
     selected_live_simulated_detector_point = _candidate_detector_native_point(selected_candidate)
     selected_locator = _source_locator_payload(selected_candidate)
     return {
@@ -557,9 +776,24 @@ def _slot_detector_diagnostic(
         "saved_source_identity_fields": _source_locator_payload(saved_entry),
         "selected_live_source_identity_fields": selected_locator,
         "saved_measured_detector_point": _point_payload(saved_measured_detector_point),
+        "saved_background_current_view_point": _point_payload(
+            saved_background_current_view_point
+        ),
+        "saved_background_current_view_frame": saved_background_current_view_frame,
         "saved_simulated_detector_hint": _point_payload(saved_simulated_detector_hint),
+        "selected_live_simulated_current_view_point": _point_payload(
+            selected_live_simulated_current_view_point
+        ),
+        "selected_live_simulated_current_view_frame": (
+            selected_live_simulated_current_view_frame
+        ),
         "selected_live_simulated_detector_point": _point_payload(
             selected_live_simulated_detector_point
+        ),
+        "selected_to_background_distance_px": _candidate_background_distance(
+            saved_background_current_view_point,
+            background_frame=saved_background_current_view_frame,
+            candidate=selected_candidate,
         ),
         "selected_to_saved_sim_distance_px": _detector_distance(
             saved_simulated_detector_hint,
@@ -580,7 +814,7 @@ def _slot_detector_diagnostic(
         "source_row_index": selected_locator.get("source_row_index"),
         "source_peak_index": selected_locator.get("source_peak_index"),
         "source_branch_index": selected_locator.get("source_branch_index"),
-        "coordinate_frame": "raw_detector_px",
+        "coordinate_frame": selection_coordinate_frame,
     }
 
 
@@ -601,7 +835,7 @@ def _merged_saved_entry_for_slot(
     return saved_entry
 
 
-def _candidate_distance_threshold_px(
+def _background_distance_threshold_px(
     saved_entries: Sequence[Mapping[str, object]],
 ) -> float:
     placement_errors = [
@@ -660,14 +894,27 @@ def _select_live_candidate_for_saved_entry(
     *,
     saved_entry: Mapping[str, object],
     grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+    saved_background_current_view_point: tuple[float, float] | None = None,
+    saved_background_current_view_frame: str | None = None,
     tie_tolerance_px: float = gui_geometry_fit.GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX,
 ) -> dict[str, object]:
+    background_point = saved_background_current_view_point
+    use_current_view_distance = background_point is not None
+    selection_coordinate_frame = (
+        "current_view_px" if use_current_view_distance else "detector_native_px"
+    )
+    selection_reference_frame = (
+        saved_background_current_view_frame or "current_view_display"
+        if use_current_view_distance
+        else "native_detector"
+    )
     detector_hint = _saved_simulated_detector_hint(saved_entry)
     measured_detector_point = _saved_measured_detector_point(saved_entry)
     target_hkl = _normalize_hkl(saved_entry.get("hkl"))
     target_branch = _normalized_branch_index(saved_entry)
     inventory = _group_inventory(grouped_candidates)
     matching_candidates: list[dict[str, object]] = []
+    excluded_missing_hkl_inventory: list[dict[str, object]] = []
     if isinstance(grouped_candidates, Mapping):
         for group_key, raw_entries in grouped_candidates.items():
             normalized_group_key = _normalize_q_group_key(group_key)
@@ -675,64 +922,224 @@ def _select_live_candidate_for_saved_entry(
                 if not isinstance(raw_entry, Mapping):
                     continue
                 entry = dict(raw_entry)
-                if target_hkl is not None and _normalize_hkl(entry.get("hkl")) != target_hkl:
+                candidate_hkl = _normalize_hkl(entry.get("hkl"))
+                if target_hkl is not None and candidate_hkl is None:
+                    entry["q_group_key"] = normalized_group_key
+                    excluded_missing_hkl_inventory.append(
+                        {
+                            **(
+                                _compact_entry(
+                                    entry,
+                                    background_point=background_point,
+                                    selection_reference_frame=(
+                                        saved_background_current_view_frame
+                                    ),
+                                )
+                                or {}
+                            ),
+                            "candidate_hkl_status": "missing_or_invalid",
+                        }
+                    )
+                    continue
+                if target_hkl is not None and candidate_hkl != target_hkl:
                     continue
                 if target_branch is not None and _normalized_branch_index(entry) != target_branch:
                     continue
                 entry["q_group_key"] = normalized_group_key
                 matching_candidates.append(entry)
 
+    scored_candidates = [
+        (
+            entry,
+            _candidate_selection_distance(
+                background_point=background_point,
+                background_frame=saved_background_current_view_frame,
+                detector_hint=detector_hint,
+                candidate=entry,
+                use_current_view_distance=use_current_view_distance,
+            ),
+        )
+        for entry in matching_candidates
+    ]
+    scored_candidates.sort(
+        key=lambda item: (
+            float(item[1]) if np.isfinite(float(item[1])) else float("inf"),
+            repr(gui_manual_geometry.geometry_manual_candidate_source_key(item[0])),
+        )
+    )
     candidate_inventory = [
         _compact_entry(
             entry,
             detector_hint=detector_hint,
             measured_detector_point=measured_detector_point,
+            background_point=background_point if use_current_view_distance else None,
+            selection_coordinate_frame=selection_coordinate_frame,
+            selection_reference_frame=selection_reference_frame,
         )
-        for entry in matching_candidates
+        for entry, _distance in scored_candidates
     ]
     finite_candidates = [
-        (entry, _candidate_detector_native_distance(detector_hint, entry))
-        for entry in matching_candidates
-        if np.isfinite(_candidate_detector_native_distance(detector_hint, entry))
+        (entry, float(distance))
+        for entry, distance in scored_candidates
+        if np.isfinite(float(distance))
     ]
     if not finite_candidates:
         return {
             "ok": False,
             "failure_stage": "grouped_candidate_regeneration",
             "selection_status": "missing_live_candidate",
+            "saved_background_current_view_point": background_point,
             "saved_simulated_detector_hint": detector_hint,
             "saved_measured_detector_point": measured_detector_point,
             "saved_target_hkl": target_hkl,
             "saved_target_branch_index": target_branch,
+            "selection_coordinate_frame": selection_coordinate_frame,
             "group_inventory": inventory,
+            "excluded_missing_hkl_candidate_inventory": excluded_missing_hkl_inventory,
             "matching_branch_candidate_inventory": candidate_inventory,
         }
 
-    finite_candidates.sort(key=lambda item: item[1])
     best_entry, best_distance = finite_candidates[0]
     tied_entries = [
         dict(entry)
         for entry, distance in finite_candidates
         if abs(float(distance) - float(best_distance)) <= float(tie_tolerance_px)
     ]
-    if len(tied_entries) > 1:
+    deduped_tied_entries = _dedupe_tied_candidates(tied_entries)
+    if len(deduped_tied_entries) == 1:
+        selected_entry = dict(deduped_tied_entries[0])
+        selection_tie_breaker = (
+            "duplicate_live_rows_canonicalized"
+            if len(tied_entries) > 1
+            else None
+        )
+        result = {
+            "ok": True,
+            "selection_status": "selected",
+            "saved_background_current_view_point": background_point,
+            "saved_background_current_view_frame": saved_background_current_view_frame,
+            "saved_simulated_detector_hint": detector_hint,
+            "saved_measured_detector_point": measured_detector_point,
+            "saved_target_hkl": target_hkl,
+            "saved_target_branch_index": target_branch,
+            "background_distance_px": float(best_distance),
+            "best_distance_px": float(best_distance),
+            "selection_coordinate_frame": selection_coordinate_frame,
+            "background_distance_reference_frame": selection_reference_frame,
+            "background_distance_candidate_frame": (
+                _candidate_current_view_frame(selected_entry)
+                if use_current_view_distance
+                else "native_detector"
+            ),
+            "selected_candidate": selected_entry,
+            "group_key": _normalize_q_group_key(selected_entry.get("q_group_key")),
+            "group_inventory": inventory,
+            "excluded_missing_hkl_candidate_inventory": excluded_missing_hkl_inventory,
+            "matching_branch_candidate_inventory": candidate_inventory,
+        }
+        if selection_tie_breaker is not None:
+            result["selection_tie_breaker"] = selection_tie_breaker
+            result["tied_candidate_inventory"] = [
+                _compact_entry(
+                        entry,
+                        detector_hint=detector_hint,
+                        measured_detector_point=measured_detector_point,
+                        background_point=(
+                            background_point if use_current_view_distance else None
+                        ),
+                        selection_coordinate_frame=selection_coordinate_frame,
+                        selection_reference_frame=selection_reference_frame,
+                    )
+                    for entry in tied_entries
+                ]
+        return result
+    if len(deduped_tied_entries) > 1:
+        identity_tied_entries = [
+            dict(entry)
+            for entry in deduped_tied_entries
+            if _source_locator_identity_match(saved_entry, entry)
+        ]
+        if len(identity_tied_entries) == 1:
+            selected_entry = dict(identity_tied_entries[0])
+            return {
+                "ok": True,
+                "selection_status": "selected",
+                "selection_tie_breaker": "saved_source_identity",
+                "saved_background_current_view_point": background_point,
+                "saved_background_current_view_frame": saved_background_current_view_frame,
+                "saved_simulated_detector_hint": detector_hint,
+                "saved_measured_detector_point": measured_detector_point,
+                "saved_target_hkl": target_hkl,
+                "saved_target_branch_index": target_branch,
+                "background_distance_px": float(best_distance),
+                "best_distance_px": float(best_distance),
+                "selection_coordinate_frame": selection_coordinate_frame,
+                "background_distance_reference_frame": selection_reference_frame,
+                "background_distance_candidate_frame": (
+                    _candidate_current_view_frame(selected_entry)
+                    if use_current_view_distance
+                    else "native_detector"
+                ),
+                "selected_candidate": selected_entry,
+                "group_key": _normalize_q_group_key(selected_entry.get("q_group_key")),
+                "group_inventory": inventory,
+                "excluded_missing_hkl_candidate_inventory": excluded_missing_hkl_inventory,
+                "matching_branch_candidate_inventory": candidate_inventory,
+                "tied_candidate_inventory": [
+                    _compact_entry(
+                        entry,
+                        detector_hint=detector_hint,
+                        measured_detector_point=measured_detector_point,
+                        background_point=(
+                            background_point if use_current_view_distance else None
+                        ),
+                        selection_coordinate_frame=selection_coordinate_frame,
+                        selection_reference_frame=selection_reference_frame,
+                    )
+                    for entry in tied_entries
+                ],
+            }
         return {
             "ok": False,
             "failure_stage": "resolved_live_row_selection",
             "selection_status": "ambiguous_live_row_selection",
+            "saved_background_current_view_point": background_point,
+            "saved_background_current_view_frame": saved_background_current_view_frame,
             "saved_simulated_detector_hint": detector_hint,
             "saved_measured_detector_point": measured_detector_point,
             "saved_target_hkl": target_hkl,
             "saved_target_branch_index": target_branch,
             "tie_tolerance_px": float(tie_tolerance_px),
+            "background_distance_px": float(best_distance),
             "best_distance_px": float(best_distance),
+            "selection_coordinate_frame": selection_coordinate_frame,
+            "background_distance_reference_frame": selection_reference_frame,
             "group_inventory": inventory,
+            "excluded_missing_hkl_candidate_inventory": excluded_missing_hkl_inventory,
             "matching_branch_candidate_inventory": candidate_inventory,
+            "identity_tied_candidate_inventory": [
+                _compact_entry(
+                    entry,
+                    detector_hint=detector_hint,
+                    measured_detector_point=measured_detector_point,
+                    background_point=(
+                        background_point if use_current_view_distance else None
+                    ),
+                    selection_coordinate_frame=selection_coordinate_frame,
+                    selection_reference_frame=selection_reference_frame,
+                )
+                for entry in identity_tied_entries
+            ],
             "tied_candidate_inventory": [
                 _compact_entry(
                     entry,
                     detector_hint=detector_hint,
                     measured_detector_point=measured_detector_point,
+                    background_point=(
+                        background_point if use_current_view_distance else None
+                    ),
+                    selection_coordinate_frame=selection_coordinate_frame,
+                    selection_reference_frame=selection_reference_frame,
                 )
                 for entry in tied_entries
             ],
@@ -741,14 +1148,25 @@ def _select_live_candidate_for_saved_entry(
     return {
         "ok": True,
         "selection_status": "selected",
+        "saved_background_current_view_point": background_point,
+        "saved_background_current_view_frame": saved_background_current_view_frame,
         "saved_simulated_detector_hint": detector_hint,
         "saved_measured_detector_point": measured_detector_point,
         "saved_target_hkl": target_hkl,
         "saved_target_branch_index": target_branch,
+        "background_distance_px": float(best_distance),
         "best_distance_px": float(best_distance),
+        "selection_coordinate_frame": selection_coordinate_frame,
+        "background_distance_reference_frame": selection_reference_frame,
+        "background_distance_candidate_frame": (
+            _candidate_current_view_frame(best_entry)
+            if use_current_view_distance
+            else "native_detector"
+        ),
         "selected_candidate": dict(best_entry),
         "group_key": _normalize_q_group_key(best_entry.get("q_group_key")),
         "group_inventory": inventory,
+        "excluded_missing_hkl_candidate_inventory": excluded_missing_hkl_inventory,
         "matching_branch_candidate_inventory": candidate_inventory,
     }
 
@@ -2665,11 +3083,22 @@ def _run_fresh_slot_validation(
         slot_index=int(slot_index),
     )
     pair_id = f"bg{int(background_index)}:pair{int(slot_index)}"
+    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
     saved_simulated_detector_hint = _saved_simulated_detector_hint(saved_entry)
     saved_measured_detector_point = _saved_measured_detector_point(saved_entry)
+    saved_background_current_view_point = _saved_background_current_view_point(
+        saved_entry,
+        use_caked_space=use_caked_space,
+    )
+    saved_background_current_view_frame = _saved_background_current_view_frame(
+        saved_entry,
+        use_caked_space=use_caked_space,
+    )
     selected_candidate_result = _select_live_candidate_for_saved_entry(
         saved_entry=saved_entry,
         grouped_candidates=grouped_candidates,
+        saved_background_current_view_point=saved_background_current_view_point,
+        saved_background_current_view_frame=saved_background_current_view_frame,
     )
     result["saved_entry"] = {
         **dict(saved_entry),
@@ -2677,18 +3106,28 @@ def _run_fresh_slot_validation(
         "q_group_key": _normalize_q_group_key(saved_entry.get("q_group_key")),
         "saved_source_identity_fields": _source_locator_payload(saved_entry),
         "saved_measured_detector_point": _point_payload(saved_measured_detector_point),
+        "saved_background_current_view_point": _point_payload(
+            saved_background_current_view_point
+        ),
+        "saved_background_current_view_frame": saved_background_current_view_frame,
         "saved_simulated_detector_hint": _point_payload(saved_simulated_detector_hint),
     }
     result["grouped_candidate_source"] = grouped_candidate_source
     result["rebind_ok"] = False
+    current_live_candidates = [
+        dict(entry)
+        for entry in current_source_rows
+        if _normalize_hkl(entry.get("hkl")) == _normalize_hkl(saved_entry.get("hkl"))
+    ]
     result["current_live_source_row_inventory"] = [
         _compact_entry(
             entry,
             detector_hint=saved_simulated_detector_hint,
             measured_detector_point=saved_measured_detector_point,
+            background_point=saved_background_current_view_point,
+            selection_reference_frame=saved_background_current_view_frame,
         )
-        for entry in current_source_rows
-        if _normalize_hkl(entry.get("hkl")) == _normalize_hkl(saved_entry.get("hkl"))
+        for entry in current_live_candidates
     ]
     result["candidate_selection"] = selected_candidate_result
     if not bool(selected_candidate_result.get("ok", False)):
@@ -2726,6 +3165,8 @@ def _run_fresh_slot_validation(
         pair_id=pair_id,
         saved_entry=saved_entry,
         selected_candidate=selected_candidate,
+        saved_background_current_view_point=saved_background_current_view_point,
+        saved_background_current_view_frame=saved_background_current_view_frame,
     )
 
     selected_group_key = _normalize_q_group_key(selected_candidate.get("q_group_key"))
@@ -2735,8 +3176,10 @@ def _run_fresh_slot_validation(
         if isinstance(entry, Mapping)
     ]
     display_background = projection_callbacks.current_background_image()
-    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
-    click_hint = _saved_click_hint(saved_entry, use_caked_space=use_caked_space)
+    click_hint = _saved_background_current_view_point(
+        saved_entry,
+        use_caked_space=use_caked_space,
+    )
     if click_hint is None:
         result["ok"] = False
         result["classification"] = "seam_failure"
@@ -2832,6 +3275,8 @@ def _run_fresh_slot_validation(
             selected_candidate,
             detector_hint=saved_simulated_detector_hint,
             measured_detector_point=saved_measured_detector_point,
+            background_point=saved_background_current_view_point,
+            selection_reference_frame=saved_background_current_view_frame,
         ),
         "emitted_pair": dict(emitted_pair) if isinstance(emitted_pair, Mapping) else None,
         "expected_identity": expected_identity,
@@ -3167,13 +3612,22 @@ def _run_fresh_all_contract_validation(
     missing_manual_entry_count = int(
         max(0, processed_manual_entry_count - bound_manual_entry_count)
     )
-    candidate_distances_px = [
-        _float_or_none(dict(slot_result.get("candidate_selection", {})).get("best_distance_px"))
+    background_distances_px = [
+        _float_or_none(
+            dict(slot_result.get("candidate_selection", {})).get("background_distance_px")
+        )
+        if _float_or_none(
+            dict(slot_result.get("candidate_selection", {})).get("background_distance_px")
+        )
+        is not None
+        else _float_or_none(
+            dict(slot_result.get("candidate_selection", {})).get("best_distance_px")
+        )
         for slot_result in slot_results
     ]
-    finite_candidate_distances_px = [
+    finite_background_distances_px = [
         float(distance)
-        for distance in candidate_distances_px
+        for distance in background_distances_px
         if distance is not None and np.isfinite(distance)
     ]
     merged_saved_entries = [
@@ -3184,9 +3638,13 @@ def _run_fresh_all_contract_validation(
         )
         for slot_index in range(len(saved_entries))
     ]
-    candidate_distance_gate_threshold_px = _candidate_distance_threshold_px(merged_saved_entries)
-    max_candidate_distance_px = (
-        float(max(finite_candidate_distances_px)) if finite_candidate_distances_px else None
+    background_distance_gate_threshold_px = _background_distance_threshold_px(
+        merged_saved_entries
+    )
+    max_background_distance_px = (
+        float(max(finite_background_distances_px))
+        if finite_background_distances_px
+        else None
     )
     branch_mismatch_count = 0
     for slot_result in slot_results:
@@ -3209,15 +3667,16 @@ def _run_fresh_all_contract_validation(
         ):
             branch_mismatch_count += 1
     runtime_prepare_ok = bool(context.get("runtime_prepare_ok", False))
-    candidate_distances_all_finite = bool(
+    background_distances_all_finite = bool(
         processed_manual_entry_count > 0
-        and len(candidate_distances_px) == processed_manual_entry_count
-        and len(finite_candidate_distances_px) == processed_manual_entry_count
+        and len(background_distances_px) == processed_manual_entry_count
+        and len(finite_background_distances_px) == processed_manual_entry_count
     )
-    detector_distance_gate_ok = bool(
-        candidate_distances_all_finite
-        and max_candidate_distance_px is not None
-        and float(max_candidate_distance_px) <= float(candidate_distance_gate_threshold_px)
+    background_distance_gate_ok = bool(
+        background_distances_all_finite
+        and max_background_distance_px is not None
+        and float(max_background_distance_px)
+        <= float(background_distance_gate_threshold_px)
     )
     isolated_rebind_ok = bool(
         processed_manual_entry_count > 0
@@ -3229,12 +3688,30 @@ def _run_fresh_all_contract_validation(
     result["bound_manual_entry_count"] = bound_manual_entry_count
     result["missing_manual_entry_count"] = missing_manual_entry_count
     result["branch_mismatch_count"] = int(branch_mismatch_count)
-    result["candidate_distance_px"] = list(candidate_distances_px)
-    result["candidate_distances_all_finite"] = candidate_distances_all_finite
-    result["candidate_distance_gate_threshold_px"] = float(candidate_distance_gate_threshold_px)
-    result["max_candidate_distance_px"] = max_candidate_distance_px
-    result["detector_distance_gate_ok"] = detector_distance_gate_ok
-    result["candidate_distance_gate_ok"] = detector_distance_gate_ok
+    result["background_distance_px"] = list(background_distances_px)
+    result["background_distances_all_finite"] = background_distances_all_finite
+    result["background_distance_gate_threshold_px"] = float(
+        background_distance_gate_threshold_px
+    )
+    result["max_background_distance_px"] = max_background_distance_px
+    result["background_distance_gate_ok"] = background_distance_gate_ok
+    result["deprecated_aliases_present"] = True
+    result["candidate_distance_px"] = list(result["background_distance_px"])
+    result["candidate_distances_all_finite"] = bool(
+        result["background_distances_all_finite"]
+    )
+    result["candidate_distance_gate_threshold_px"] = float(
+        result["background_distance_gate_threshold_px"]
+    )
+    result["max_candidate_distance_px"] = result["max_background_distance_px"]
+    result["detector_distance_gate_ok"] = bool(result["background_distance_gate_ok"])
+    result["candidate_distance_gate_ok"] = bool(result["background_distance_gate_ok"])
+    detector_distance_gate_ok = bool(result["detector_distance_gate_ok"])
+    candidate_distances_all_finite = bool(result["candidate_distances_all_finite"])
+    max_candidate_distance_px = result["max_candidate_distance_px"]
+    candidate_distance_gate_threshold_px = float(
+        result["candidate_distance_gate_threshold_px"]
+    )
     result["runtime_prepare_ok"] = runtime_prepare_ok
     result["isolated_rebind_ok"] = isolated_rebind_ok
     result["fresh_state_export_written"] = False
@@ -3285,7 +3762,7 @@ def _run_fresh_all_contract_validation(
         runtime_prepare_ok
         and isolated_rebind_ok
         and compatibility_ok
-        and detector_distance_gate_ok
+        and background_distance_gate_ok
     )
     if provisional_ok and export_fresh_state_path is not None and fresh_state is not None:
         export_path = export_fresh_state_path.expanduser().resolve()

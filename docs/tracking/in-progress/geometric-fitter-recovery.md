@@ -14,6 +14,12 @@ current GUI saved state. The current acceptance path is no longer the older
 `new2` or `new3` diagnostic states. The canonical state for this pass is
 `new4.json`, followed by a freshly regenerated `new4_fresh_all.json` export.
 
+The saved measured background point is the target. The live simulated point is
+the movable candidate. For saved-pair recovery, select the live simulated row
+that minimizes target-to-candidate display-space distance after normalized HKL
+and branch filtering. Saved source identity is stale after regeneration and may
+only break true ties or serve as diagnostics.
+
 The next projects are intentionally blocked behind this one:
 
 1. geometric fitter
@@ -48,6 +54,16 @@ Known `new4.json` contract:
 The empty transient rows are expected. The validator and baseline runner must
 regenerate live simulation/source rows from the saved manual pairs rather than
 requiring saved GUI peak rows.
+
+Current root cause for the failing `new4` baseline:
+
+- preflight rebinding still anchors selection on stale saved simulated hints,
+  not the saved measured background point,
+- runtime source rebinding still prefers stale refined-sim hints ahead of the
+  measured background display point,
+- `new4_preflight_report.json` already binds 7 of 7 entries with 0 branch
+  mismatches, but fails because the distance gate is scoring the wrong anchor
+  and runtime dataset resolution still reports 0 resolved source pairs.
 
 The older `new2.json`, `new3.json`, `new2_fresh_all.json`, and
 `new3_fresh_all.json` artifacts are retired as live acceptance gates. They may
@@ -91,6 +107,8 @@ Preflight must prove:
 - live simulation/source rows are regenerated despite empty saved
   `peak_records` and `q_group_rows`,
 - branch mismatches are `0`,
+- `background_distance_gate_ok` is true using saved measured background points
+  against live simulated display points in the same frame,
 - the fresh export is written cleanly.
 
 Define `preflight_valid_count` as the number of bg0 manual entries with
@@ -128,14 +146,18 @@ Capture at least:
 
 Gate requirements:
 
-- `matched_fixed_pair_count_after == preflight_valid_count`.
+- Correspondence acceptance:
+  `matched_fixed_pair_count_after == preflight_valid_count`.
 - `missing_fixed_pair_count_after <= missing_fixed_pair_count_before`.
 - `branch_mismatch_count == 0`.
+- `resolved_source_pair_count == preflight_valid_count`.
 - Top-level rejection reason is not
   `No matched peak pairs were available for the fitted solution.`
-- `after_rms_px` stays close to or improves the measured before-fit RMS.
+- Fit-quality acceptance:
+  `after_rms_px` stays close to or improves the measured before-fit RMS.
 - After-fit max error stays close to or improves the measured before-fit max
-  error.
+  error. If correspondence is correct but fit quality regresses, keep artifacts
+  and treat that as a separate fitter-quality issue, not a rebinding failure.
 
 For canonical `new4.json`, expected passing fixed-pair shape is:
 
@@ -151,7 +173,8 @@ fit against its own fresh before-fit values.
 The older `new2` and `new3` states are historical diagnostics only and must not
 drive current acceptance decisions.
 
-Treat the saved-state baseline as passed only when detector-space evidence shows
+Treat the saved-state baseline as passed only when background-to-live-simulated
+display-space correspondence is correct and detector-space evidence then shows
 either:
 
 - a real residual improvement against the fresh before-fit detector baseline, or
@@ -159,7 +182,11 @@ either:
   retained start and that retained start already satisfies the fixed-pair gate.
 
 Keep a candidate ledger for every saved-state run. Final selection must be
-explainable from that ledger in raw detector space.
+explainable from the saved background point to the live simulated candidate in
+the active display frame. Report `background_distance_px`,
+`max_background_distance_px`, and `background_distance_gate_ok`. Old
+`candidate_*` / `detector_*` gate names may remain only as exact deprecated
+aliases while downstream consumers migrate.
 
 `retained_start_safe_fallback` is not a fit-quality pass by default. It is only
 acceptable when the raw-detector candidate ledger proves the retained start is

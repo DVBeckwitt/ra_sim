@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T10:52:04",
+  "saved_at": "2026-04-20T14:47:10",
   "state": {
     "analysis_range": {
       "delta_qr": 0.01,
@@ -73,7 +73,7 @@
                 3
               ],
               "label": "0,0,3",
-              "placement_error_px": 1.746755917274677,
+              "placement_error_px": 0.25474563293487584,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -82,9 +82,9 @@
               ],
               "qr": 0.0,
               "qz": 0.6581548855285879,
-              "raw_x": 1454.1376303301367,
-              "raw_y": 1471.4809625458752,
-              "sigma_px": 1.9009619234835027,
+              "raw_x": 1455.246663897277,
+              "raw_y": 1472.9363426415914,
+              "sigma_px": 0.7920829107482312,
               "source_branch_index": 0,
               "source_label": "primary",
               "source_peak_index": 0,
@@ -105,7 +105,7 @@
                 5
               ],
               "label": "-1,0,5",
-              "placement_error_px": 4.438436728183654,
+              "placement_error_px": 0.8583202251987531,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -114,9 +114,9 @@
               ],
               "qr": 1.7511941725650184,
               "qz": 1.0969248092143131,
-              "raw_x": 1094.7610558503877,
-              "raw_y": 1369.31570250686,
-              "sigma_px": 4.501357638545245,
+              "raw_x": 1099.4480074178325,
+              "raw_y": 1367.2678777680248,
+              "sigma_px": 1.1398305176583219,
               "source_branch_index": 0,
               "source_label": "primary",
               "source_peak_index": 0,
@@ -129,7 +129,7 @@
               "y": 1368.0
             },
             {
-              "detector_x": 1382.0,
+              "detector_x": 1376.0,
               "detector_y": 1177.0,
               "hkl": [
                 -1,
@@ -137,7 +137,7 @@
                 5
               ],
               "label": "-1,0,5",
-              "placement_error_px": 8.362106974807348,
+              "placement_error_px": 1.3763522975169626,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -146,9 +146,9 @@
               ],
               "qr": 1.7511941725650184,
               "qz": 1.0969248092143131,
-              "raw_x": 1822.9355882686052,
-              "raw_y": 1390.3096033388947,
-              "sigma_px": 8.39567347257632,
+              "raw_x": 1821.9936837473379,
+              "raw_y": 1374.6236621955957,
+              "sigma_px": 1.5674328205317833,
               "source_branch_index": 1,
               "source_label": "primary",
               "source_peak_index": 1,
@@ -158,7 +158,7 @@
               "source_row_index": 0,
               "source_table_index": 203,
               "x": 1822.0,
-              "y": 1382.0
+              "y": 1376.0
             },
             {
               "detector_x": 1082.0,
@@ -169,7 +169,7 @@
                 10
               ],
               "label": "-1,0,10",
-              "placement_error_px": 4.601900493934838,
+              "placement_error_px": 0.9265872988714056,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -178,9 +178,9 @@
               ],
               "qr": 1.7511941725650184,
               "qz": 2.1938496184286262,
-              "raw_x": 1079.8108061597068,
-              "raw_y": 1080.0952314774422,
-              "sigma_px": 4.662616020655968,
+              "raw_x": 1084.7218823668009,
+              "raw_y": 1081.4190956439036,
+              "sigma_px": 1.1920838990733025,
               "source_branch_index": 0,
               "source_label": "primary",
               "source_peak_index": 0,
@@ -201,7 +201,7 @@
                 10
               ],
               "label": "-1,0,10",
-              "placement_error_px": 7.004223736680717,
+              "placement_error_px": 1.185480653023513,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -210,9 +210,9 @@
               ],
               "qr": 1.7511941725650184,
               "qz": 2.1938496184286262,
-              "raw_x": 1846.298941639309,
-              "raw_y": 1089.794523574689,
-              "sigma_px": 7.04426363458109,
+              "raw_x": 1848.0465669515438,
+              "raw_y": 1081.8154342999576,
+              "sigma_px": 1.4028058948739326,
               "source_branch_index": 1,
               "source_label": "primary",
               "source_peak_index": 1,
@@ -225,15 +225,15 @@
               "y": 1083.0
             },
             {
-              "detector_x": 429.0,
-              "detector_y": 1783.0,
+              "detector_x": 437.0,
+              "detector_y": 1789.0,
               "hkl": [
                 -1,
                 0,
                 16
               ],
               "label": "-1,0,16",
-              "placement_error_px": 1.4820058307087525,
+              "placement_error_px": 2.8240617387305216,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -242,9 +242,9 @@
               ],
               "qr": 1.7511941725650184,
               "qz": 3.510159389485802,
-              "raw_x": 1215.1179727807619,
-              "raw_y": 427.80904690823786,
-              "sigma_px": 1.6609760029135698,
+              "raw_x": 1211.4533088564194,
+              "raw_y": 434.5785917171996,
+              "sigma_px": 2.9219556300809324,
               "source_branch_index": 0,
               "source_label": "primary",
               "source_peak_index": 0,
@@ -253,19 +253,19 @@
               "source_reflection_namespace": "full_reflection",
               "source_row_index": 0,
               "source_table_index": 227,
-              "x": 1216.0,
-              "y": 429.0
+              "x": 1210.0,
+              "y": 437.0
             },
             {
-              "detector_x": 426.0,
-              "detector_y": 1294.0,
+              "detector_x": 420.0,
+              "detector_y": 1262.0,
               "hkl": [
                 -1,
                 0,
                 16
               ],
               "label": "-1,0,16",
-              "placement_error_px": 1.1853317220472992,
+              "placement_error_px": 4.81952789604663,
               "q_group_key": [
                 "q_group",
                 "primary",
@@ -274,9 +274,9 @@
               ],
               "qr": 1.7511941725650184,
               "qz": 3.510159389485802,
-              "raw_x": 1706.1714284640875,
-              "raw_y": 426.181015592746,
-              "sigma_px": 1.4026800388155582,
+              "raw_x": 1738.867290909798,
+              "raw_y": 424.4430928190797,
+              "sigma_px": 4.877535150131842,
               "source_branch_index": 1,
               "source_label": "primary",
               "source_peak_index": 1,
@@ -285,8 +285,8 @@
               "source_reflection_namespace": "full_reflection",
               "source_row_index": 0,
               "source_table_index": 228,
-              "x": 1705.0,
-              "y": 426.0
+              "x": 1737.0,
+              "y": 420.0
             }
           ]
         }

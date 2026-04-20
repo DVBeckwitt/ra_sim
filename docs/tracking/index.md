@@ -24,10 +24,12 @@ gates are green.
 | Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-20 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
-finish the `new4.json` saved-state baseline for geometry fitting. The old
-`new2` and `new3` saved-state gates are retired. Manual Qr/Qz and HKL picker
-alignment for [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) is
-resolved and archived below.
+finish the `new4.json` saved-state baseline by rebinding saved manual pairs to
+the nearest live simulated candidate to each measured background point after
+normalized HKL and branch filtering. The old `new2` and `new3` saved-state
+gates are retired. Manual Qr/Qz and HKL picker alignment for
+[#248](https://github.com/DVBeckwitt/ra_sim/issues/248) is resolved and
+archived below.
 
 ## Known bugs
 
