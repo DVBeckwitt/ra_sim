@@ -3095,16 +3095,14 @@ def current_geometry_manual_match_config(
     return manual_cfg
 
 
-def geometry_manual_pick_cache_signature(
+def geometry_manual_pick_placed_cache_signature(
     *,
     source_snapshot_signature: object,
     background_index: int,
     background_image: object | None,
     use_caked_space: bool,
-    geometry_preview_excluded_q_groups: Sequence[object] | None,
-    geometry_q_group_cached_entries: Sequence[object] | None,
 ) -> tuple[object, ...]:
-    """Return a stable cache signature for reusable manual-pick state."""
+    """Return stable signature for placed manual-pick rows before Q-group masks."""
 
     bg_token = None
     if background_image is not None:
@@ -3120,20 +3118,42 @@ def geometry_manual_pick_cache_signature(
             str(raw_arr.dtype),
         )
 
-    excluded_keys = tuple(
-        sorted(repr(key) for key in (geometry_preview_excluded_q_groups or ()))
-    )
-    try:
-        listed_group_count = len(geometry_q_group_cached_entries or ())
-    except Exception:
-        listed_group_count = 0
     return (
         source_snapshot_signature,
         int(background_index),
         bool(use_caked_space),
         bg_token,
-        int(listed_group_count),
-        excluded_keys,
+    )
+
+
+def geometry_manual_pick_cache_signature(
+    *,
+    placed_cache_signature: object,
+    disabled_qr_sets: Sequence[object] | None,
+    disabled_qz_sections: Sequence[object] | None,
+) -> tuple[object, ...]:
+    """Return stable signature for filtered active manual-pick rows."""
+
+    normalized_qr_sets = sorted(
+        {
+            parent_key
+            for raw_key in disabled_qr_sets or ()
+            if (parent_key := gui_controllers.qr_set_mask_key(raw_key)) is not None
+        },
+        key=lambda item: (str(item[0]), int(item[1])),
+    )
+    normalized_qz_sections = sorted(
+        {
+            child_key
+            for raw_key in disabled_qz_sections or ()
+            if (child_key := gui_controllers.qz_section_mask_key(raw_key)) is not None
+        },
+        key=lambda item: (str(item[0]), int(item[1]), int(item[2])),
+    )
+    return (
+        placed_cache_signature,
+        tuple(normalized_qr_sets),
+        tuple(normalized_qz_sections),
     )
 
 
@@ -3149,12 +3169,9 @@ def _manual_pick_cache_groups_reusable(
         return True
     if len(existing_signature) != len(current_signature):
         return False
-    if len(existing_signature) < 6:
+    if len(existing_signature) < 4:
         return False
-    return (
-        existing_signature[:3] == current_signature[:3]
-        and existing_signature[4:] == current_signature[4:]
-    )
+    return bool(existing_signature[:3] == current_signature[:3])
 
 
 def _manual_pick_cache_normalized_hkl(
@@ -3481,6 +3498,7 @@ def build_geometry_manual_pick_cache(
     background_image: object | None,
     existing_cache_signature: object = None,
     existing_cache_data: dict[str, object] | None = None,
+    placed_cache_signature_fn: Callable[..., tuple[object, ...]] | None = None,
     cache_signature_fn: Callable[..., tuple[object, ...]],
     source_rows_for_background: Callable[
         [int, dict[str, object] | None],
@@ -3497,6 +3515,11 @@ def build_geometry_manual_pick_cache(
         [Sequence[dict[str, object]] | None],
         GeometryManualLookupMap,
     ],
+    filter_active_rows: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     project_peaks_to_current_view: Callable[
         [Sequence[dict[str, object]] | None],
         list[dict[str, object]],
@@ -3513,6 +3536,12 @@ def build_geometry_manual_pick_cache(
 
     bg_index = int(background_index)
     current_bg_index = int(current_background_index)
+    if placed_cache_signature_fn is None:
+        placed_cache_signature_fn = cache_signature_fn
+    if filter_active_rows is None:
+        filter_active_rows = lambda rows: [
+            dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
+        ]
     cache_action = "rebuilt"
     cache_source = "source_snapshot_unavailable"
     cache_provenance = ["source_snapshot_unavailable"]
@@ -3520,6 +3549,11 @@ def build_geometry_manual_pick_cache(
         None
         if prefer_cache
         else "prefer_cache disabled; rebuilding manual-pick cache."
+    )
+    placed_cache_sig = placed_cache_signature_fn(
+        param_set=param_set,
+        background_index=bg_index,
+        background_image=background_image,
     )
     cache_sig = cache_signature_fn(
         param_set=param_set,
@@ -3531,7 +3565,6 @@ def build_geometry_manual_pick_cache(
         and bg_index == current_bg_index
         and existing_cache_signature == cache_sig
         and isinstance(existing_cache_data, dict)
-        and dict(existing_cache_data.get("grouped_candidates", {}))
     ):
         return existing_cache_data, existing_cache_signature, existing_cache_data
 
@@ -3542,8 +3575,16 @@ def build_geometry_manual_pick_cache(
         cached_signature = existing_cache_data.get("signature")
         if isinstance(cached_signature, tuple):
             resolved_existing_signature = cached_signature
+    resolved_existing_placed_signature = (
+        existing_cache_data.get("placed_signature")
+        if isinstance(existing_cache_data, dict)
+        else None
+    )
+    if not isinstance(resolved_existing_placed_signature, tuple):
+        resolved_existing_placed_signature = resolved_existing_signature
 
     simulated_peaks: list[dict[str, object]] = []
+    active_simulated_peaks: list[dict[str, object]] = []
     grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
     simulated_lookup: GeometryManualLookupMap = {}
     reuse_requires_caked_projection = bool(
@@ -3558,7 +3599,7 @@ def build_geometry_manual_pick_cache(
         provenance: Sequence[str],
         stale_reason_override: str | None = None,
     ) -> bool:
-        nonlocal simulated_peaks, grouped_candidates, simulated_lookup
+        nonlocal simulated_peaks, active_simulated_peaks, grouped_candidates, simulated_lookup
         nonlocal cache_action, cache_source, cache_provenance, stale_reason
 
         normalized_rows = [
@@ -3575,13 +3616,18 @@ def build_geometry_manual_pick_cache(
                     )
                 except Exception:
                     normalized_rows = []
-        candidate_groups = build_grouped_candidates(normalized_rows)
-        if not candidate_groups:
+        if not normalized_rows:
             return False
 
+        filtered_active_rows = filter_active_rows(normalized_rows)
+        candidate_groups = build_grouped_candidates(filtered_active_rows)
+
         simulated_peaks = normalized_rows
+        active_simulated_peaks = [
+            dict(entry) for entry in filtered_active_rows if isinstance(entry, Mapping)
+        ]
         grouped_candidates = candidate_groups
-        simulated_lookup = build_simulated_lookup(simulated_peaks)
+        simulated_lookup = build_simulated_lookup(active_simulated_peaks)
         cache_action = str(action)
         cache_source = str(source)
         cache_provenance = [str(step) for step in provenance]
@@ -3673,8 +3719,8 @@ def build_geometry_manual_pick_cache(
         ):
             pass
         else:
-            stale_reason = "cached preview groups were empty."
-    if prefer_cache and bg_index == current_bg_index and not grouped_candidates:
+            stale_reason = "cached preview rows were empty."
+    if prefer_cache and bg_index == current_bg_index and not simulated_peaks:
         cached_simulated_peaks = geometry_manual_live_peak_candidates_from_records(
             peak_records
         )
@@ -3692,7 +3738,7 @@ def build_geometry_manual_pick_cache(
             pass
         elif stale_reason is None:
             stale_reason = "live peak records were empty."
-    if prefer_cache and not grouped_candidates:
+    if prefer_cache and not simulated_peaks:
         cached_simulated_peaks = (
             [
                 dict(entry)
@@ -3720,7 +3766,7 @@ def build_geometry_manual_pick_cache(
             pass
         elif stale_reason is None and callable(source_rows_for_background):
             stale_reason = "source snapshot rows were empty."
-    if prefer_cache and not grouped_candidates and bg_index == current_bg_index:
+    if prefer_cache and not simulated_peaks and bg_index == current_bg_index:
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
             param_set=param_set,
@@ -3740,11 +3786,35 @@ def build_geometry_manual_pick_cache(
             pass
     if (
         prefer_cache
-        and not grouped_candidates
+        and not simulated_peaks
+        and isinstance(existing_cache_data, dict)
+        and resolved_existing_placed_signature == placed_cache_sig
+    ):
+        cached_simulated_peaks = [
+            dict(entry)
+            for entry in (existing_cache_data.get("simulated_peaks", ()) or ())
+            if isinstance(entry, dict)
+        ]
+        if _apply_candidate_source(
+            cached_simulated_peaks,
+            action="reused",
+            source="existing_cache_data.simulated_peaks(mask_refresh)",
+            provenance=[
+                "existing_cache_data.simulated_peaks",
+                "filter_active_rows",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            stale_reason_override="reused placed candidates; rebuilt active mask cache.",
+        ):
+            pass
+    if (
+        prefer_cache
+        and not simulated_peaks
         and isinstance(existing_cache_data, dict)
         and _manual_pick_cache_groups_reusable(
-            resolved_existing_signature,
-            cache_sig,
+            resolved_existing_placed_signature,
+            placed_cache_sig,
         )
     ):
         cached_simulated_peaks = [
@@ -3787,7 +3857,7 @@ def build_geometry_manual_pick_cache(
                 "background-only cache signature change; "
                 "cached simulated peaks could not be reprojected."
             )
-    if not prefer_cache and not grouped_candidates and bg_index == current_bg_index:
+    if not prefer_cache and not simulated_peaks and bg_index == current_bg_index:
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
             param_set=param_set,
@@ -3805,7 +3875,7 @@ def build_geometry_manual_pick_cache(
             stale_reason_override=stale_reason,
         ):
             pass
-    if not grouped_candidates and stale_reason is None:
+    if not simulated_peaks and stale_reason is None:
         stale_reason = (
             "source snapshot rows were unavailable; no reusable cached "
             "grouped candidates were available."
@@ -3825,7 +3895,9 @@ def build_geometry_manual_pick_cache(
 
     cache_result = {
         "signature": cache_sig,
+        "placed_signature": placed_cache_sig,
         "simulated_peaks": [dict(entry) for entry in simulated_peaks],
+        "active_simulated_peaks": [dict(entry) for entry in active_simulated_peaks],
         "simulated_lookup": _geometry_manual_copy_lookup(simulated_lookup),
         "grouped_candidates": {
             key: [dict(entry) for entry in entries]
@@ -3838,7 +3910,7 @@ def build_geometry_manual_pick_cache(
             stale_reason=stale_reason,
             cache_source=cache_source,
             cache_provenance=cache_provenance,
-            simulated_peaks=simulated_peaks,
+            simulated_peaks=active_simulated_peaks,
             grouped_candidates=grouped_candidates,
             background_index=bg_index,
             current_background_index=current_bg_index,
@@ -5015,6 +5087,11 @@ def build_geometry_manual_initial_pairs_display(
         [dict[str, object] | None],
         tuple[float, float] | None,
     ],
+    filter_active_rows: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Build overlay-ready manual geometry pairs for one background image."""
 
@@ -5080,7 +5157,12 @@ def build_geometry_manual_initial_pairs_display(
                     for entry in (projected_source_rows or ())
                     if isinstance(entry, Mapping)
                 ]
-            simulated_lookup = build_simulated_lookup(normalized_source_rows)
+            active_source_rows = (
+                filter_active_rows(normalized_source_rows)
+                if callable(filter_active_rows)
+                else normalized_source_rows
+            )
+            simulated_lookup = build_simulated_lookup(active_source_rows)
 
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
@@ -5172,8 +5254,13 @@ def make_runtime_geometry_manual_cache_callbacks(
         [dict[str, object] | None],
         tuple[float, float] | None,
     ],
-    geometry_preview_excluded_q_groups: Callable[[], object] | object = (),
-    geometry_q_group_cached_entries: Callable[[], object] | object = (),
+    disabled_qr_sets: Callable[[], object] | object = (),
+    disabled_qz_sections: Callable[[], object] | object = (),
+    filter_active_rows: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     stored_max_positions_local: Callable[[], object] | object = (),
     stored_peak_table_lattice: Callable[[], object] | object = (),
     peak_records: Callable[[], object] | object = (),
@@ -5203,7 +5290,23 @@ def make_runtime_geometry_manual_cache_callbacks(
     def _current_match_config() -> dict[str, object]:
         return current_geometry_manual_match_config(fit_config)
 
-    def _pick_cache_signature(
+    def _filter_active_rows(
+        candidate_rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        normalized_rows = [
+            dict(entry) for entry in (candidate_rows or ()) if isinstance(entry, Mapping)
+        ]
+        if not callable(filter_active_rows):
+            return normalized_rows
+        try:
+            filtered_rows = filter_active_rows(normalized_rows)
+        except Exception:
+            filtered_rows = normalized_rows
+        return [
+            dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)
+        ]
+
+    def _placed_pick_cache_signature(
         *,
         param_set: dict[str, object] | None = None,
         background_index: int | None = None,
@@ -5223,7 +5326,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             source_snapshot_signature = _resolve_runtime_value(
                 last_simulation_signature
             )
-        return geometry_manual_pick_cache_signature(
+        return geometry_manual_pick_placed_cache_signature(
             source_snapshot_signature=source_snapshot_signature,
             background_index=resolved_background_index,
             background_image=(
@@ -5232,12 +5335,22 @@ def make_runtime_geometry_manual_cache_callbacks(
                 else background_image
             ),
             use_caked_space=_manual_pick_uses_caked_space(),
-            geometry_preview_excluded_q_groups=_resolve_runtime_value(
-                geometry_preview_excluded_q_groups
+        )
+
+    def _pick_cache_signature(
+        *,
+        param_set: dict[str, object] | None = None,
+        background_index: int | None = None,
+        background_image: object | None = None,
+    ) -> tuple[object, ...]:
+        return geometry_manual_pick_cache_signature(
+            placed_cache_signature=_placed_pick_cache_signature(
+                param_set=param_set,
+                background_index=background_index,
+                background_image=background_image,
             ),
-            geometry_q_group_cached_entries=_resolve_runtime_value(
-                geometry_q_group_cached_entries
-            ),
+            disabled_qr_sets=_resolve_runtime_value(disabled_qr_sets),
+            disabled_qz_sections=_resolve_runtime_value(disabled_qz_sections),
         )
 
     def _get_pick_cache(
@@ -5261,12 +5374,14 @@ def make_runtime_geometry_manual_cache_callbacks(
             background_image=background_local,
             existing_cache_signature=_resolve_runtime_value(current_cache_signature),
             existing_cache_data=_resolve_runtime_value(current_cache_data),
+            placed_cache_signature_fn=_placed_pick_cache_signature,
             cache_signature_fn=_pick_cache_signature,
             source_rows_for_background=source_rows_for_background,
             simulated_peaks_for_params=simulated_peaks_for_params,
             peak_records=_resolve_runtime_value(peak_records),
             build_grouped_candidates=build_grouped_candidates,
             build_simulated_lookup=build_simulated_lookup,
+            filter_active_rows=_filter_active_rows,
             project_peaks_to_current_view=project_peaks_to_current_view,
             current_match_config=_current_match_config,
             auto_match_background_context=auto_match_background_context,
@@ -5297,6 +5412,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             build_simulated_lookup=build_simulated_lookup,
             project_peaks_to_current_view=project_peaks_to_current_view,
             entry_display_coords=entry_display_coords,
+            filter_active_rows=_filter_active_rows,
         )
 
     return GeometryManualRuntimeCacheCallbacks(
@@ -5703,6 +5819,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                 raw_detector_display = legacy_sim_point
             if raw_detector_display is None and legacy_xy_point is not None:
                 raw_detector_display = legacy_xy_point
+            if raw_detector_display is None and display_detector_candidate is not None:
+                raw_detector_display = display_detector_candidate
             for stale_key in (
                 "caked_x",
                 "caked_y",
@@ -6124,12 +6242,7 @@ def make_runtime_geometry_manual_projection_callbacks(
         if callable(filter_simulated_peaks):
             filtered_result = filter_simulated_peaks(simulated_peaks)
             if isinstance(filtered_result, tuple) and filtered_result:
-                filtered_candidate_entries = list(filtered_result[0] or [])
-                # Manual picking should still be able to target the nearest
-                # central-beam Qr/Qz group when the selector filter is stale
-                # or currently excludes every available group.
-                if _group_entries(filtered_candidate_entries):
-                    filtered_entries = filtered_candidate_entries
+                filtered_entries = list(filtered_result[0] or [])
         collapsed_entries = list(filtered_entries)
         if callable(collapse_simulated_peaks):
             collapsed_result = collapse_simulated_peaks(
@@ -6137,9 +6250,7 @@ def make_runtime_geometry_manual_projection_callbacks(
                 merge_radius_px=float(merge_radius_px),
             )
             if isinstance(collapsed_result, tuple) and collapsed_result:
-                collapsed_candidate_entries = list(collapsed_result[0] or [])
-                if _group_entries(collapsed_candidate_entries):
-                    collapsed_entries = collapsed_candidate_entries
+                collapsed_entries = list(collapsed_result[0] or [])
 
         return _group_entries(collapsed_entries)
 

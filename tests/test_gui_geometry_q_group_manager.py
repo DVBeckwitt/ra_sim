@@ -945,11 +945,12 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         stored_sim_image=np.zeros((20, 30), dtype=float),
         stored_peak_table_lattice=[(3.0, 5.0, "primary")],
     )
-    preview_state = state.GeometryPreviewState(
-        excluded_q_groups={("q_group", "primary", 1, 0)}
-    )
+    preview_state = state.GeometryPreviewState()
     q_group_state = state.GeometryQGroupState(
-        cached_entries=[_entry(("q_group", "primary", 1, 0), peak_count=2, total_intensity=10.0)]
+        disabled_qz_sections={("primary", 1, 0)},
+        cached_entries=[
+            _entry(("q_group", "primary", 1, 0), peak_count=2, total_intensity=10.0)
+        ],
     )
     live = {
         "primary_a": 7.0,
@@ -1039,7 +1040,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert bundle.export_rows() == [{"row": True}]
     assert "primary" in bundle.format_line(q_group_state.cached_entries[0])
     assert bundle.current_min_matches() == 4
-    assert bundle.excluded_count() == 1
+    assert bundle.excluded_count(q_group_state.cached_entries) == 1
     assert bundle.build_window_status() == "status-text"
     assert bundle.build_preview_exclude_button_label() == "button-label"
     preview_entry = {
@@ -1081,7 +1082,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         ([{"seed": True}],),
         {
             "listed_keys": {("q_group", "primary", 1, 0)},
-            "excluded_q_groups": {("q_group", "primary", 1, 0)},
+            "q_group_state": q_group_state,
         },
     ) in calls
     assert (
@@ -2333,6 +2334,9 @@ def test_geometry_q_group_manager_live_preview_exclusions_keep_legacy_aliases() 
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "primary", 1, 1)
+    q_group_state = state.GeometryQGroupState(
+        disabled_qz_sections={("primary", 1, 1)}
+    )
     filtered, excluded_count, total_groups = (
         geometry_q_group_manager.filter_geometry_fit_simulated_peaks(
             [
@@ -2342,7 +2346,7 @@ def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exc
                 {"hkl": "bad"},
             ],
             listed_keys=[key1, key2],
-            excluded_q_groups={key2},
+            q_group_state=q_group_state,
         )
     )
 
@@ -2413,8 +2417,9 @@ def test_geometry_q_group_manager_collapses_degenerate_simulated_peaks() -> None
 def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
-    preview_state = state.GeometryPreviewState(excluded_q_groups={key2})
+    preview_state = state.GeometryPreviewState()
     q_group_state = state.GeometryQGroupState(
+        disabled_qz_sections={("secondary", 2, 1)},
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
             _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
@@ -3098,47 +3103,48 @@ def test_geometry_q_group_manager_toggle_and_bulk_enable_update_preview_state() 
 
     assert (
         geometry_q_group_manager.apply_geometry_q_group_checkbox_change(
-            preview_state,
+            q_group_state,
             key1,
             _FakeVar(False),
         )
-        == "Excluded"
+        == "Disabled"
     )
-    assert preview_state.excluded_q_groups == {key1}
+    assert q_group_state.disabled_qz_sections == {("primary", 1, 0)}
 
     assert (
         geometry_q_group_manager.apply_geometry_q_group_checkbox_change(
-            preview_state,
+            q_group_state,
             key1,
             _FakeVar(True),
         )
-        == "Included"
+        == "Enabled"
     )
-    assert preview_state.excluded_q_groups == set()
+    assert q_group_state.disabled_qz_sections == set()
 
     action, count = geometry_q_group_manager.set_all_geometry_q_groups_enabled(
         preview_state,
         q_group_state,
         enabled=False,
     )
-    assert (action, count) == ("Excluded", 2)
-    assert preview_state.excluded_q_groups == {key1, key2}
+    assert (action, count) == ("Disabled", 2)
+    assert q_group_state.disabled_qr_sets == {("primary", 1), ("secondary", 2)}
 
     action, count = geometry_q_group_manager.set_all_geometry_q_groups_enabled(
         preview_state,
         q_group_state,
         enabled=True,
     )
-    assert (action, count) == ("Included", 2)
-    assert preview_state.excluded_q_groups == set()
+    assert (action, count) == ("Enabled", 2)
+    assert q_group_state.disabled_qr_sets == set()
 
 
 def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
     key3 = ("q_group", "primary", 3, 2)
-    preview_state = state.GeometryPreviewState(excluded_q_groups={key2})
+    preview_state = state.GeometryPreviewState()
     q_group_state = state.GeometryQGroupState(
+        disabled_qz_sections={("secondary", 2, 1)},
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
             _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
@@ -3151,6 +3157,7 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
     )
     payload = geometry_q_group_manager.build_geometry_q_group_save_payload(
         export_rows,
+        q_group_state=q_group_state,
         saved_at="2026-03-26T12:00:00",
     )
     saved_state, error = geometry_q_group_manager.load_geometry_q_group_saved_state(
@@ -3162,9 +3169,13 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
     assert export_rows[0]["included"] is True
     assert export_rows[1]["included"] is False
     assert "Qr=" in export_rows[0]["display_label"]
-    assert saved_state == {key1: True, key2: False}
+    assert saved_state == {
+        "saved_rows": {key1: True, key2: False},
+        "disabled_qr_sets": [],
+        "disabled_qz_sections": [("secondary", 2, 1)],
+        "explicit_masks_present": True,
+    }
 
-    target_preview_state = state.GeometryPreviewState()
     target_q_group_state = state.GeometryQGroupState(
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
@@ -3174,7 +3185,7 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
     )
 
     summary, error = geometry_q_group_manager.apply_loaded_geometry_q_group_saved_state(
-        preview_state=target_preview_state,
+        preview_state=state.GeometryPreviewState(),
         q_group_state=target_q_group_state,
         saved_state=saved_state,
     )
@@ -3186,7 +3197,8 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
         "current_only": 1,
         "saved_only": 0,
     }
-    assert target_preview_state.excluded_q_groups == {key2, key3}
+    assert target_q_group_state.disabled_qz_sections == {("secondary", 2, 1)}
+    assert target_q_group_state.disabled_qr_sets == set()
 
 
 def test_geometry_q_group_manager_load_helpers_report_validation_errors() -> None:
@@ -3206,11 +3218,15 @@ def test_geometry_q_group_manager_load_helpers_report_validation_errors() -> Non
 def test_geometry_q_group_manager_checkbox_side_effects_update_status() -> None:
     key1 = ("q_group", "primary", 1, 0)
     preview_state = state.GeometryPreviewState()
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[_entry(key1, peak_count=1, total_intensity=1.0)]
+    )
     events = []
 
     changed = (
         geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
             preview_state=preview_state,
+            q_group_state=q_group_state,
             group_key=key1,
             row_var=_FakeVar(False),
             invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
@@ -3223,12 +3239,12 @@ def test_geometry_q_group_manager_checkbox_side_effects_update_status() -> None:
     )
 
     assert changed is True
-    assert preview_state.excluded_q_groups == {key1}
+    assert q_group_state.disabled_qz_sections == {("primary", 1, 0)}
     assert events == [
         "invalidate",
         "label",
         "status",
-        "Excluded one Qr/Qz group for geometry fitting.",
+        "Disabled one Qr/Qz group.",
     ]
 
 
@@ -3285,7 +3301,8 @@ def test_geometry_q_group_manager_bulk_enable_side_effects_cover_empty_and_live_
     )
 
     assert changed is True
-    assert preview_state.excluded_q_groups == {key1, key2}
+    assert q_group_state.disabled_qr_sets == {("primary", 1), ("secondary", 2)}
+    assert preview_state.excluded_q_groups == set()
     assert events == ["invalidate", "label", "refresh", "live"]
 
 
@@ -3313,9 +3330,12 @@ def test_geometry_q_group_manager_request_update_side_effects_marks_refresh() ->
 def test_geometry_q_group_manager_snapshot_replace_side_effects_trim_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
-    stale_key = ("q_group", "stale", 9, 9)
-    preview_state = state.GeometryPreviewState(excluded_q_groups={key1, stale_key})
-    q_group_state = state.GeometryQGroupState()
+    preview_state = state.GeometryPreviewState(
+        excluded_q_groups={key1, ("q_group", "stale", 9, 9)}
+    )
+    q_group_state = state.GeometryQGroupState(
+        disabled_qz_sections={("primary", 1, 0), ("stale", 9, 9)}
+    )
     events = []
 
     entries = (
@@ -3335,7 +3355,11 @@ def test_geometry_q_group_manager_snapshot_replace_side_effects_trim_exclusions(
 
     assert [entry["key"] for entry in entries] == [key1, key2]
     assert q_group_state.cached_entries == entries
-    assert preview_state.excluded_q_groups == {key1}
+    assert q_group_state.disabled_qz_sections == {("primary", 1, 0)}
+    assert preview_state.excluded_q_groups == {
+        key1,
+        ("q_group", "stale", 9, 9),
+    }
     assert events == ["invalidate", "label"]
 
 
@@ -3414,12 +3438,12 @@ def test_geometry_q_group_manager_preview_exclusion_toggle_and_clear_helpers() -
     )
 
     assert preview_state.excluded_keys == set()
-    assert preview_state.excluded_q_groups == set()
+    assert preview_state.excluded_q_groups == {q_group_key}
     assert clear_events == [
         "invalidate",
         "label",
         "refresh",
-        "Reset all Qr/Qz geometry-fit selections.",
+        "Reset live preview pair exclusions.",
     ]
 
     callback_only_entry = {
@@ -3798,9 +3822,10 @@ def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window
     monkeypatch,
 ) -> None:
     key1 = ("q_group", "primary", 1, 0)
-    stale_key = ("q_group", "stale", 9, 9)
-    preview_state = state.GeometryPreviewState(excluded_q_groups={key1, stale_key})
-    q_group_state = state.GeometryQGroupState()
+    preview_state = state.GeometryPreviewState()
+    q_group_state = state.GeometryQGroupState(
+        disabled_qz_sections={("primary", 1, 0), ("stale", 9, 9)}
+    )
     events = []
 
     monkeypatch.setattr(
@@ -3835,7 +3860,7 @@ def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window
 
     assert [entry["key"] for entry in entries] == [key1]
     assert q_group_state.cached_entries == entries
-    assert preview_state.excluded_q_groups == {key1}
+    assert q_group_state.disabled_qz_sections == {("primary", 1, 0)}
     assert events == ["invalidate", "label", "refresh"]
 
 
@@ -3955,8 +3980,9 @@ def test_geometry_q_group_manager_live_preview_toggle_helper_covers_disabled_sch
 def test_geometry_q_group_manager_save_dialog_workflow_writes_payload_and_reports_status() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
-    preview_state = state.GeometryPreviewState(excluded_q_groups={key2})
+    preview_state = state.GeometryPreviewState()
     q_group_state = state.GeometryQGroupState(
+        disabled_qz_sections={("secondary", 2, 1)},
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
             _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
@@ -4008,6 +4034,9 @@ def test_geometry_q_group_manager_load_dialog_workflow_applies_state_and_refresh
             {"key": ["q_group", "primary", 1, 0], "included": True},
             {"key": ["q_group", "secondary", 2, 1], "included": False},
         ],
+        q_group_state=state.GeometryQGroupState(
+            disabled_qz_sections={("secondary", 2, 1)}
+        ),
         saved_at="2026-03-26T12:00:00",
     )
 
@@ -4020,6 +4049,7 @@ def test_geometry_q_group_manager_load_dialog_workflow_applies_state_and_refresh
         q_group_state=q_group_state,
         file_dialog_dir="C:/dialogs",
         askopenfilename=_askopenfilename,
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
         update_geometry_preview_exclude_button_label=lambda: events.append("label"),
         refresh_geometry_q_group_window=lambda: events.append("refresh"),
         live_geometry_preview_enabled=lambda: True,
@@ -4029,14 +4059,14 @@ def test_geometry_q_group_manager_load_dialog_workflow_applies_state_and_refresh
     )
 
     assert loaded is True
-    assert preview_state.excluded_q_groups == {key2, key3}
+    assert q_group_state.disabled_qz_sections == {("secondary", 2, 1)}
     assert events[0][0] == "dialog"
     assert events[0][1]["initialdir"] == "C:/dialogs"
     assert events[1] == ("load", "C:/tmp/selector.json")
-    assert events[2:5] == ["label", "refresh", "live"]
+    assert events[2:6] == ["invalidate", "label", "refresh", "live"]
     assert (
-        events[5]
-        == "Loaded Qr/Qz peak list from selector.json: matched 2, enabled 1, current-only excluded 1, saved-only missing 0."
+        events[6]
+        == "Loaded Qr/Qz peak list from selector.json: matched 2, enabled 1, current-only unmatched 1, saved-only missing 0."
     )
 
 

@@ -3992,22 +3992,26 @@ def test_match_geometry_manual_group_to_background_builds_source_lookup() -> Non
 
 
 def test_geometry_manual_pick_cache_signature_tracks_background_state() -> None:
-    signature = mg.geometry_manual_pick_cache_signature(
+    placed_signature = mg.geometry_manual_pick_placed_cache_signature(
         source_snapshot_signature=("sim", 7),
         background_index=2,
         background_image=np.zeros((6, 5), dtype=np.float32),
         use_caked_space=True,
-        geometry_preview_excluded_q_groups=[("q_group", "primary", 1, 0)],
-        geometry_q_group_cached_entries=[{"key": ("q_group", "primary", 1, 0)}],
+    )
+    signature = mg.geometry_manual_pick_cache_signature(
+        placed_cache_signature=placed_signature,
+        disabled_qr_sets=[("primary", 1)],
+        disabled_qz_sections=[("primary", 1, 0)],
     )
 
-    assert signature[0] == ("sim", 7)
-    assert signature[1] == 2
-    assert signature[2] is True
-    assert signature[3][1] == (6, 5)
-    assert signature[3][3] == "float32"
-    assert signature[4] == 1
-    assert signature[5] == ("('q_group', 'primary', 1, 0)",)
+    assert placed_signature[0] == ("sim", 7)
+    assert placed_signature[1] == 2
+    assert placed_signature[2] is True
+    assert placed_signature[3][1] == (6, 5)
+    assert placed_signature[3][3] == "float32"
+    assert signature[0] == placed_signature
+    assert signature[1] == (("primary", 1),)
+    assert signature[2] == (("primary", 1, 0),)
 
 
 def test_build_geometry_manual_pick_cache_reuses_existing_current_background_state() -> None:
@@ -4039,16 +4043,17 @@ def test_build_geometry_manual_pick_cache_reuses_existing_current_background_sta
 
 def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty() -> None:
     simulation_calls: list[bool] = []
+    existing_cache_data = {
+        "grouped_candidates": {},
+        "simulated_lookup": {},
+    }
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
         background_index=0,
         current_background_index=0,
         background_image=np.zeros((3, 3), dtype=float),
         existing_cache_signature=("cached",),
-        existing_cache_data={
-            "grouped_candidates": {},
-            "simulated_lookup": {},
-        },
+        existing_cache_data=existing_cache_data,
         cache_signature_fn=lambda **_kwargs: ("cached",),
         simulated_peaks_for_params=lambda *_args, prefer_cache=False, **_kwargs: (
             simulation_calls.append(bool(prefer_cache))
@@ -4077,10 +4082,11 @@ def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty(
         current_match_config=lambda: {"search_radius_px": 24.0},
     )
 
-    assert simulation_calls == [True]
-    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
+    assert simulation_calls == []
+    assert cache_data is existing_cache_data
+    assert cache_data["grouped_candidates"] == {}
     assert next_sig == ("cached",)
-    assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
+    assert next_state is existing_cache_data
 
 
 def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cache_is_preferred() -> None:
@@ -4226,9 +4232,7 @@ def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_
     assert cache_data["cache_metadata"]["cache_source"] == (
         "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
     )
-    assert cache_data["cache_metadata"]["stale_reason"] == (
-        "cached preview groups were empty."
-    )
+    assert cache_data["cache_metadata"]["stale_reason"] == "cached preview rows were empty."
     assert cache_data["cache_metadata"]["table_summaries"][0][
         "representative_row_indices_kept"
     ] == [2]
@@ -5287,8 +5291,9 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
         current_background_index=lambda: 0,
         current_background_image=lambda: np.zeros((4, 4), dtype=float),
         use_caked_space=lambda: False,
-        geometry_preview_excluded_q_groups=lambda: [("q_group", "primary", 1, 0)],
-        geometry_q_group_cached_entries=lambda: [{"key": ("q_group", "primary", 1, 0)}],
+        disabled_qr_sets=lambda: [],
+        disabled_qz_sections=lambda: [],
+        filter_active_rows=lambda rows: [dict(entry) for entry in rows or ()],
         stored_max_positions_local=lambda: [{"x": 1.0}],
         stored_peak_table_lattice=lambda: [{"hkl": (1, 0, 0)}],
         current_cache_signature=lambda: cache_state["signature"],
@@ -5556,17 +5561,17 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view(
     assert projected[0]["caked_y"] == 2.0
     assert projected[0]["sim_col"] == 3.0
     assert projected[0]["sim_row"] == 4.0
-    assert projected[0]["display_col"] == 3.0
-    assert projected[0]["display_row"] == 4.0
+    assert projected[0]["display_col"] == 13.0
+    assert projected[0]["display_row"] == 2.0
     assert projected[0]["sim_col_local"] == 3.0
     assert projected[0]["sim_row_local"] == 4.0
 
     grouped = callbacks.pick_candidates(projected)
     assert list(grouped) == [("q_group", "primary", 1, 0)]
-    assert grouped[("q_group", "primary", 1, 0)][0]["display_col"] == 3.0
+    assert grouped[("q_group", "primary", 1, 0)][0]["display_col"] == 13.0
 
     lookup = callbacks.simulated_lookup(projected)
-    assert lookup[_source_key(projected[0])]["display_row"] == 4.0
+    assert lookup[_source_key(projected[0])]["display_row"] == 2.0
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_caked_rows_from_raw_coords(
@@ -5644,8 +5649,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
             "raw_caked_y": 2.0,
             "two_theta_deg": 13.0,
             "phi_deg": 2.0,
-            "display_col": 3.0,
-            "display_row": 4.0,
+            "display_col": 13.0,
+            "display_row": 2.0,
             "sim_col_global": 13.0,
             "sim_row_global": 2.0,
             "sim_col_local": 3.0,
@@ -5730,8 +5735,8 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "raw_caked_y": -9.0,
             "two_theta_deg": 17.0,
             "phi_deg": -9.0,
-            "display_col": 3.0,
-            "display_row": 4.0,
+            "display_col": 17.0,
+            "display_row": -9.0,
             "sim_col_global": 17.0,
             "sim_row_global": -9.0,
             "sim_col_local": 7.0,
@@ -5794,8 +5799,8 @@ def test_project_peaks_to_current_view_converts_detector_display_rows_for_caked_
     projected_entry = projected[0]
     assert projected_entry["sim_col"] == 4.0
     assert projected_entry["sim_row"] == 5.0
-    assert projected_entry["display_col"] == 4.0
-    assert projected_entry["display_row"] == 5.0
+    assert projected_entry["display_col"] == 12.5
+    assert projected_entry["display_row"] == -3.0
     assert projected_entry["caked_x"] == 12.5
     assert projected_entry["caked_y"] == -3.0
 
@@ -6065,8 +6070,8 @@ def test_project_peaks_to_current_view_prefers_simulation_native_caked_mapping()
     assert projected[0]["caked_y"] == -26.0
     assert projected[0]["two_theta_deg"] == 23.0
     assert projected[0]["phi_deg"] == -26.0
-    assert projected[0]["display_col"] == 3.0
-    assert projected[0]["display_row"] == 4.0
+    assert projected[0]["display_col"] == 23.0
+    assert projected[0]["display_row"] == -26.0
 
 
 def test_project_peaks_to_current_view_recomputes_caked_angles_from_native_detector_coords(
@@ -6140,8 +6145,8 @@ def test_project_peaks_to_current_view_recomputes_caked_angles_from_native_detec
     assert projected_entry["caked_y"] == 13.5
     assert projected_entry["raw_caked_x"] == 11.5
     assert projected_entry["raw_caked_y"] == 13.5
-    assert projected_entry["display_col"] == 3.0
-    assert projected_entry["display_row"] == 4.0
+    assert projected_entry["display_col"] == 11.5
+    assert projected_entry["display_row"] == 13.5
     assert projected_entry["sim_col_global"] == 11.5
     assert projected_entry["sim_row_global"] == 13.5
     assert projected_entry["sim_col_local"] == 1.5
@@ -6239,9 +6244,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_
     )
 
     assert filter_calls == [1]
-    assert collapse_calls == [1]
-    assert list(grouped) == [("q_group", "primary", 1, 0)]
-    assert grouped[("q_group", "primary", 1, 0)][0]["sim_row"] == 4.0
+    assert collapse_calls == [0]
+    assert grouped == {}
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_inverse_lut(

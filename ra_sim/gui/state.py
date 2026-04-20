@@ -642,6 +642,12 @@ class GeometryQGroupState:
 
     row_vars: dict[tuple[object, ...], Any] = field(default_factory=dict)
     cached_entries: list[dict[str, object]] = field(default_factory=list)
+    disabled_qr_sets: set[tuple[str, int]] = field(default_factory=set)
+    disabled_qz_sections: set[tuple[str, int, int]] = field(default_factory=set)
+    pending_legacy_disabled_qz_sections: set[tuple[str, int, int]] = field(
+        default_factory=set
+    )
+    mask_revision: int = 0
     refresh_requested: bool = False
 
 
@@ -967,6 +973,7 @@ class SimulationRuntimeState:
     last_res2_sim: Any = None
     ai_cache: dict[str, object] = field(default_factory=dict)
     peak_positions: list[tuple[float, float]] = field(default_factory=list)
+    peak_positions_filtered: bool = False
     peak_millers: list[tuple[int, int, int]] = field(default_factory=list)
     peak_intensities: list[float] = field(default_factory=list)
     peak_records: list[dict[str, object]] = field(default_factory=list)

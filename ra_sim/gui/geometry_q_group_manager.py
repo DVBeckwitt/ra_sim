@@ -2413,7 +2413,7 @@ def make_runtime_geometry_q_group_value_callbacks(
         return filter_geometry_fit_simulated_peaks(
             simulated_peaks,
             listed_keys=gui_controllers.listed_geometry_q_group_keys(q_group_state),
-            excluded_q_groups=getattr(preview_state, "excluded_q_groups", set()),
+            q_group_state=q_group_state,
         )
 
     def _collapse_simulated_peaks(
@@ -2595,7 +2595,7 @@ def filter_geometry_fit_simulated_peaks(
     simulated_peaks: Sequence[dict[str, object]] | None,
     *,
     listed_keys: Sequence[tuple[object, ...]] | None = None,
-    excluded_q_groups: Sequence[tuple[object, ...]] | set[tuple[object, ...]] | None = None,
+    q_group_state,
 ) -> tuple[list[dict[str, object]], int, int]:
     """Apply the current Qr/Qz selector state to geometry-fit seeds."""
 
@@ -2606,7 +2606,6 @@ def filter_geometry_fit_simulated_peaks(
     restrict_to_listed = bool(listed_keys_local)
     if restrict_to_listed:
         available_keys = set(listed_keys_local)
-    excluded_q_group_keys = set(excluded_q_groups or ())
 
     for raw_entry in simulated_peaks or []:
         if not isinstance(raw_entry, dict):
@@ -2622,7 +2621,7 @@ def filter_geometry_fit_simulated_peaks(
             continue
         if not restrict_to_listed:
             available_keys.add(group_key)
-        if group_key in excluded_q_group_keys:
+        if not gui_controllers.effective_q_group_enabled_state(entry, q_group_state):
             excluded_count += 1
             continue
         filtered.append(entry)
@@ -2838,6 +2837,26 @@ def current_geometry_auto_match_min_matches(
     return max(1, int(min_matches))
 
 
+def _effective_disabled_geometry_q_group_keys(
+    q_group_state,
+    entries: Sequence[dict[str, object]] | None = None,
+) -> set[tuple[object, ...]]:
+    """Return listed structural child keys that are effectively disabled by masks."""
+
+    rows = (
+        list(entries)
+        if entries is not None
+        else gui_controllers.listed_geometry_q_group_entries(q_group_state)
+    )
+    return {
+        key
+        for entry in rows
+        if isinstance(entry, Mapping)
+        and (key := entry.get("key")) is not None
+        and not gui_controllers.effective_q_group_enabled_state(entry, q_group_state)
+    }
+
+
 def build_live_geometry_preview_auto_match_config(
     fit_config: Mapping[str, object] | None,
 ) -> dict[str, object]:
@@ -2874,13 +2893,7 @@ def geometry_q_group_excluded_count(
 ) -> int:
     """Count excluded Qr/Qz rows, optionally scoped to one entry list."""
 
-    keys = gui_controllers.listed_geometry_q_group_keys(q_group_state, entries)
-    if not keys:
-        return gui_controllers.count_geometry_preview_excluded_q_groups(preview_state)
-    return gui_controllers.count_geometry_preview_excluded_q_groups(
-        preview_state,
-        keys,
-    )
+    return int(len(_effective_disabled_geometry_q_group_keys(q_group_state, entries)))
 
 
 def build_geometry_preview_exclude_button_label(
@@ -2917,9 +2930,8 @@ def build_geometry_q_group_window_status_text(
         if entries is not None
         else gui_controllers.listed_geometry_q_group_entries(q_group_state)
     )
-    excluded_q_groups = getattr(preview_state, "excluded_q_groups", set())
     total_count = len(rows)
-    included_rows = [entry for entry in rows if entry.get("key") not in excluded_q_groups]
+    included_rows = gui_controllers.filter_enabled_q_group_rows(rows, q_group_state)
     selected_peak_count = int(
         sum(_coerce_int(entry.get("peak_count", 0), 0) for entry in included_rows)
     )
@@ -2984,7 +2996,10 @@ def refresh_geometry_q_group_window(
     return gui_views.refresh_geometry_q_group_window(
         view_state=view_state,
         entries=entries,
-        excluded_q_groups=getattr(preview_state, "excluded_q_groups", set()),
+        excluded_q_groups=_effective_disabled_geometry_q_group_keys(
+            q_group_state,
+            entries,
+        ),
         status_text=build_geometry_q_group_window_status_text(
             preview_state=preview_state,
             q_group_state=q_group_state,
@@ -3006,21 +3021,24 @@ def refresh_geometry_q_group_window(
 
 
 def apply_geometry_q_group_checkbox_change(
-    preview_state,
+    q_group_state,
     group_key: tuple[object, ...] | None,
     row_var: object,
+    *,
+    entries: Sequence[dict[str, object]] | None = None,
 ) -> str | None:
     """Apply one Qr/Qz include/exclude toggle from the selector window."""
 
     if group_key is None:
         return None
-    included = _row_var_value(row_var)
-    gui_controllers.set_geometry_preview_q_group_included(
-        preview_state,
+    enabled = _row_var_value(row_var)
+    gui_controllers.set_geometry_q_group_row_enabled(
+        q_group_state,
         group_key,
-        included=included,
+        enabled=enabled,
+        entries=entries,
     )
-    return "Included" if included else "Excluded"
+    return "Enabled" if enabled else "Disabled"
 
 
 def set_all_geometry_q_groups_enabled(
@@ -3033,14 +3051,28 @@ def set_all_geometry_q_groups_enabled(
 
     entries = gui_controllers.listed_geometry_q_group_entries(q_group_state)
     if enabled:
-        gui_controllers.clear_geometry_preview_excluded_q_groups(preview_state)
-        action = "Included"
+        gui_controllers.clear_geometry_q_group_masks(q_group_state)
+        action = "Enabled"
     else:
-        gui_controllers.replace_geometry_preview_excluded_q_groups(
-            preview_state,
-            [entry["key"] for entry in entries if entry.get("key") is not None],
+        gui_controllers.replace_geometry_q_group_masks(
+            q_group_state,
+            disabled_qr_sets=sorted(
+                {
+                    parent_key
+                    for entry in entries
+                    if (
+                        parent_key := gui_controllers.qr_set_mask_key(
+                            entry.get("key")
+                            if isinstance(entry, Mapping)
+                            else entry
+                        )
+                    )
+                    is not None
+                }
+            ),
+            disabled_qz_sections=[],
         )
-        action = "Excluded"
+        action = "Disabled"
     return action, len(entries)
 
 
@@ -3064,10 +3096,12 @@ def replace_geometry_q_group_entries_snapshot_with_side_effects(
         q_group_state,
         entries,
     )
-    gui_controllers.retain_geometry_preview_excluded_q_groups(
-        preview_state,
-        gui_controllers.listed_geometry_q_group_keys(q_group_state),
+    current_entries = gui_controllers.listed_geometry_q_group_entries(q_group_state)
+    gui_controllers.resolve_pending_geometry_q_group_legacy_masks(
+        q_group_state,
+        current_entries,
     )
+    gui_controllers.prune_geometry_q_group_masks(q_group_state, current_entries)
     invalidate_geometry_manual_pick_cache()
     update_geometry_preview_exclude_button_label()
     return gui_controllers.listed_geometry_q_group_entries(q_group_state)
@@ -3154,7 +3188,6 @@ def build_geometry_q_group_export_rows(
         if entries is not None
         else gui_controllers.listed_geometry_q_group_entries(q_group_state)
     )
-    excluded_q_groups = getattr(preview_state, "excluded_q_groups", set())
     for entry in source_entries:
         if not isinstance(entry, Mapping):
             continue
@@ -3173,7 +3206,9 @@ def build_geometry_q_group_export_rows(
         rows.append(
             {
                 "key": serialized_key,
-                "included": bool(group_key not in excluded_q_groups),
+                "included": bool(
+                    gui_controllers.effective_q_group_enabled_state(entry, q_group_state)
+                ),
                 "source_label": str(entry.get("source_label", "")),
                 "qr": geometry_q_group_float_for_json(entry.get("qr", np.nan)),
                 "qz": geometry_q_group_float_for_json(entry.get("qz", np.nan)),
@@ -3192,23 +3227,41 @@ def build_geometry_q_group_export_rows(
 def build_geometry_q_group_save_payload(
     export_rows: Sequence[Mapping[str, object]],
     *,
+    q_group_state,
     saved_at: str,
 ) -> dict[str, object]:
     """Build the JSON payload written by the Qr/Qz selector save action."""
 
+    disabled_qr_sets, disabled_qz_sections = gui_controllers.normalized_geometry_q_group_masks(
+        q_group_state
+    )
     return {
         "type": "ra_sim.geometry_q_group_selection",
-        "version": 1,
+        "version": 2,
         "saved_at": str(saved_at),
         "row_count": int(len(export_rows)),
         "included_count": int(sum(1 for row in export_rows if bool(row.get("included", False)))),
+        "disabled_qr_sets": [
+            [str(source_label), int(m_index)]
+            for source_label, m_index in sorted(
+                disabled_qr_sets,
+                key=lambda item: (str(item[0]), int(item[1])),
+            )
+        ],
+        "disabled_qz_sections": [
+            [str(source_label), int(m_index), int(gz_index)]
+            for source_label, m_index, gz_index in sorted(
+                disabled_qz_sections,
+                key=lambda item: (str(item[0]), int(item[1]), int(item[2])),
+            )
+        ],
         "rows": [dict(row) for row in export_rows],
     }
 
 
 def load_geometry_q_group_saved_state(
     payload: object,
-) -> tuple[dict[tuple[object, ...], bool] | None, str | None]:
+) -> tuple[dict[str, object] | None, str | None]:
     """Validate one saved selector payload and rebuild its inclusion map."""
 
     if not isinstance(payload, Mapping):
@@ -3217,8 +3270,8 @@ def load_geometry_q_group_saved_state(
         return None, "Invalid Qr/Qz peak list file type."
 
     saved_rows = payload.get("rows", [])
-    if not isinstance(saved_rows, list) or not saved_rows:
-        return None, "Loaded Qr/Qz peak list is empty."
+    if not isinstance(saved_rows, list):
+        saved_rows = []
 
     saved_state: dict[tuple[object, ...], bool] = {}
     for row in saved_rows:
@@ -3229,16 +3282,41 @@ def load_geometry_q_group_saved_state(
             continue
         saved_state[group_key] = bool(row.get("included", True))
 
-    if not saved_state:
+    disabled_qr_sets = {
+        parent_key
+        for raw_key in payload.get("disabled_qr_sets", []) or []
+        if (parent_key := gui_controllers.qr_set_mask_key(raw_key)) is not None
+    }
+    disabled_qz_sections = {
+        child_key
+        for raw_key in payload.get("disabled_qz_sections", []) or []
+        if (child_key := gui_controllers.qz_section_mask_key(raw_key)) is not None
+    }
+    explicit_masks_present = bool(
+        "disabled_qr_sets" in payload or "disabled_qz_sections" in payload
+    )
+
+    if not saved_state and not explicit_masks_present:
         return None, "Loaded Qr/Qz peak list does not contain any valid rows."
-    return saved_state, None
+    return {
+        "saved_rows": saved_state,
+        "disabled_qr_sets": sorted(
+            disabled_qr_sets,
+            key=lambda item: (str(item[0]), int(item[1])),
+        ),
+        "disabled_qz_sections": sorted(
+            disabled_qz_sections,
+            key=lambda item: (str(item[0]), int(item[1]), int(item[2])),
+        ),
+        "explicit_masks_present": bool(explicit_masks_present),
+    }, None
 
 
 def apply_loaded_geometry_q_group_saved_state(
     *,
     preview_state,
     q_group_state,
-    saved_state: Mapping[tuple[object, ...], bool] | None,
+    saved_state: Mapping[str, object] | None,
 ) -> tuple[dict[str, int] | None, str | None]:
     """Apply one loaded selector inclusion map to the current listed rows."""
 
@@ -3257,24 +3335,55 @@ def apply_loaded_geometry_q_group_saved_state(
             'Press "Update Listed Peaks" first.'
         )
 
+    saved_rows = saved_state.get("saved_rows", {})
+    if not isinstance(saved_rows, Mapping):
+        saved_rows = {}
     current_key_set = set(current_keys)
-    matched_keys = current_key_set.intersection(saved_state.keys())
-    if not matched_keys:
+    matched_keys = current_key_set.intersection(saved_rows.keys())
+    if saved_rows and not matched_keys:
         return None, "Loaded Qr/Qz peak list does not match any currently listed groups."
 
-    gui_controllers.replace_geometry_preview_excluded_q_groups(
-        preview_state,
-        [
+    if bool(saved_state.get("explicit_masks_present", False)):
+        gui_controllers.replace_geometry_q_group_masks(
+            q_group_state,
+            disabled_qr_sets=saved_state.get("disabled_qr_sets", ()),
+            disabled_qz_sections=saved_state.get("disabled_qz_sections", ()),
+        )
+    else:
+        legacy_disabled_children = [
             key
-            for key in current_keys
-            if (key not in saved_state) or (not bool(saved_state.get(key, False)))
-        ],
-    )
+            for key, included in saved_rows.items()
+            if not bool(included)
+        ]
+        gui_controllers.replace_geometry_q_group_masks(
+            q_group_state,
+            disabled_qr_sets=[],
+            disabled_qz_sections=[],
+        )
+        gui_controllers.queue_geometry_q_group_legacy_disabled_sections(
+            q_group_state,
+            legacy_disabled_children,
+        )
+        gui_controllers.resolve_pending_geometry_q_group_legacy_masks(
+            q_group_state,
+            current_entries,
+        )
+
+    gui_controllers.prune_geometry_q_group_masks(q_group_state, current_entries)
+    enabled_rows = gui_controllers.filter_enabled_q_group_rows(current_entries, q_group_state)
     return {
-        "matched_total": int(len(matched_keys)),
-        "included_total": int(sum(1 for key in matched_keys if bool(saved_state.get(key, False)))),
-        "current_only": int(sum(1 for key in current_keys if key not in saved_state)),
-        "saved_only": int(sum(1 for key in saved_state if key not in current_key_set)),
+        "matched_total": int(len(matched_keys) if saved_rows else len(current_keys)),
+        "included_total": int(
+            sum(1 for key in matched_keys if bool(saved_rows.get(key, False)))
+            if saved_rows
+            else len(enabled_rows)
+        ),
+        "current_only": int(sum(1 for key in current_keys if key not in saved_rows))
+        if saved_rows
+        else 0,
+        "saved_only": int(sum(1 for key in saved_rows if key not in current_key_set))
+        if saved_rows
+        else 0,
     }, None
 
 
@@ -4339,7 +4448,6 @@ def clear_live_geometry_preview_exclusions_with_side_effects(
         preview_state._live_geometry_preview_exclusion_groups = []
     if hasattr(preview_state, "_live_geometry_preview_excluded_key_groups"):
         preview_state._live_geometry_preview_excluded_key_groups = {}
-    gui_controllers.clear_geometry_preview_excluded_q_groups(preview_state)
     invalidate_geometry_manual_pick_cache()
     update_geometry_preview_exclude_button_label()
     refresh_geometry_q_group_window()
@@ -4348,7 +4456,7 @@ def clear_live_geometry_preview_exclusions_with_side_effects(
     else:
         _set_status_text(
             set_status_text,
-            "Reset all Qr/Qz geometry-fit selections.",
+            "Reset live preview pair exclusions.",
         )
 
 
@@ -4603,6 +4711,7 @@ def on_runtime_geometry_q_group_checkbox_changed(
 
     return apply_geometry_q_group_checkbox_change_with_side_effects(
         preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
         group_key=group_key,
         row_var=row_var,
         invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
@@ -4722,6 +4831,7 @@ def load_geometry_q_group_selection_runtime(
         q_group_state=bindings.q_group_state,
         file_dialog_dir=bindings.file_dialog_dir,
         askopenfilename=bindings.askopenfilename,
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
         update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
         refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(bindings),
         live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
@@ -5016,6 +5126,7 @@ def _load_json_payload(file_path: str) -> object:
 def apply_geometry_q_group_checkbox_change_with_side_effects(
     *,
     preview_state,
+    q_group_state,
     group_key: tuple[object, ...] | None,
     row_var: object,
     invalidate_geometry_manual_pick_cache: Callable[[], None],
@@ -5028,9 +5139,10 @@ def apply_geometry_q_group_checkbox_change_with_side_effects(
     """Apply one checkbox toggle and the dependent live-preview/status effects."""
 
     action = apply_geometry_q_group_checkbox_change(
-        preview_state,
+        q_group_state,
         group_key,
         row_var,
+        entries=gui_controllers.listed_geometry_q_group_entries(q_group_state),
     )
     if action is None:
         return False
@@ -5044,7 +5156,7 @@ def apply_geometry_q_group_checkbox_change_with_side_effects(
     else:
         _set_status_text(
             set_status_text,
-            f"{action} one Qr/Qz group for geometry fitting.",
+            f"{action} one Qr/Qz group.",
         )
     return True
 
@@ -5084,7 +5196,7 @@ def set_all_geometry_q_groups_enabled_with_side_effects(
     else:
         _set_status_text(
             set_status_text,
-            f"{action} {count} Qr/Qz groups for geometry fitting.",
+            f"{action} {count} Qr/Qz groups.",
         )
     return True
 
@@ -5146,6 +5258,7 @@ def save_geometry_q_group_selection_with_dialog(
 
     payload = build_geometry_q_group_save_payload(
         export_rows,
+        q_group_state=q_group_state,
         saved_at=now_value.isoformat(timespec="seconds"),
     )
     writer = save_payload or _save_json_payload
@@ -5171,6 +5284,7 @@ def load_geometry_q_group_selection_with_dialog(
     q_group_state,
     file_dialog_dir: object,
     askopenfilename: Callable[..., object],
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
     update_geometry_preview_exclude_button_label: Callable[[], None],
     refresh_geometry_q_group_window: Callable[[], None],
     live_geometry_preview_enabled: Callable[[], bool],
@@ -5213,6 +5327,7 @@ def load_geometry_q_group_selection_with_dialog(
         _set_status_text(set_status_text, error)
         return False
 
+    invalidate_geometry_manual_pick_cache()
     update_geometry_preview_exclude_button_label()
     refresh_geometry_q_group_window()
     if live_geometry_preview_enabled():
@@ -5223,7 +5338,7 @@ def load_geometry_q_group_selection_with_dialog(
         (
             f"Loaded Qr/Qz peak list from {Path(str(file_path)).name}: "
             f"matched {summary['matched_total']}, enabled {summary['included_total']}, "
-            f"current-only excluded {summary['current_only']}, "
+            f"current-only unmatched {summary['current_only']}, "
             f"saved-only missing {summary['saved_only']}."
         ),
     )

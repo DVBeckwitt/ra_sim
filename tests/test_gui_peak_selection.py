@@ -1285,6 +1285,7 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
             "intensities": [],
             "records": [dict(record)],
             "click_spatial_index": None,
+            "peak_positions_filtered": True,
             "restored_from_gui_state": True,
         },
         peak_records=[dict(record)],
@@ -1319,6 +1320,8 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
         1.5,
         2,
     )
+    assert runtime_state.peak_positions_filtered is True
+    assert runtime_state.peak_overlay_cache["peak_positions_filtered"] is True
     assert runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert runtime_state.peak_overlay_cache["click_spatial_index"] is not None
 
@@ -1346,6 +1349,7 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_
             "intensities": [],
             "records": [dict(record)],
             "click_spatial_index": None,
+            "peak_positions_filtered": True,
             "restored_from_gui_state": True,
         },
         peak_records=[dict(record)],
@@ -1372,6 +1376,7 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_
 
     assert ok is True
     assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_positions_filtered is True
     assert runtime_state.peak_records[0]["sim_col"] == 110.0
     assert runtime_state.peak_records[0]["sim_row"] == 220.0
     assert runtime_state.peak_records[0]["display_col"] == 110.0
@@ -1397,6 +1402,7 @@ def test_peak_selection_runtime_peak_overlay_data_keeps_detector_coords_when_res
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [dict(record)],
+            "peak_positions_filtered": True,
             "restored_from_gui_state": True,
         },
         peak_records=[dict(record)],
@@ -1450,6 +1456,7 @@ def test_peak_selection_runtime_peak_overlay_data_skips_ambiguous_restored_rows(
             "intensities": [],
             "records": [dict(stable_record), dict(ambiguous_record)],
             "click_spatial_index": None,
+            "peak_positions_filtered": True,
             "restored_from_gui_state": True,
         },
         peak_records=[dict(stable_record), dict(ambiguous_record)],
@@ -2481,6 +2488,7 @@ def test_select_peak_from_canvas_click_selects_nearest_cached_peak_without_repro
                 "native_row": 201.0,
             },
         ],
+        peak_positions_filtered=True,
     )
     peak_state = state.PeakSelectionState(hkl_pick_armed=True)
     ensured = []
@@ -2767,6 +2775,7 @@ def test_find_peak_record_for_canvas_click_falls_back_to_peak_positions_when_can
                 "intensity": 5.0,
             }
         ],
+        peak_positions_filtered=True,
     )
     payload = peak_selection.build_hkl_pick_simulation_point_payload(
         [
@@ -2877,6 +2886,7 @@ def test_find_peak_record_for_canvas_click_preserves_peak_positions_miss_without
         peak_millers=[(1, 0, 2)],
         peak_intensities=[5.0],
         peak_records=[],
+        peak_positions_filtered=True,
     )
 
     best_i, peak_record, best_dist, within_window = (
@@ -2905,6 +2915,7 @@ def test_find_peak_record_for_canvas_click_prefers_nearer_peak_positions_miss_wh
         peak_millers=[(1, 0, 2)],
         peak_intensities=[5.0],
         peak_records=[],
+        peak_positions_filtered=True,
     )
     payload = peak_selection.build_hkl_pick_simulation_point_payload(
         [
@@ -3195,6 +3206,7 @@ def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cach
                     "caked_y": -44.0,
                 }
             ],
+            "peak_positions_filtered": True,
             "restored_from_gui_state": True,
         }
     )
@@ -3249,7 +3261,8 @@ def test_restore_peak_overlay_lists_prefers_detector_display_projection_for_dete
                     "sim_col_raw": 110.0,
                     "sim_row_raw": 220.0,
                 }
-            ]
+            ],
+            "peak_positions_filtered": True,
         }
     )
     sim_display_calls: list[tuple[float, float, tuple[int, int]]] = []
@@ -3271,10 +3284,47 @@ def test_restore_peak_overlay_lists_prefers_detector_display_projection_for_dete
 
     assert ok is True
     assert runtime_state.peak_positions == [(20.0, 40.0)]
+    assert runtime_state.peak_positions_filtered is True
     assert runtime_state.peak_records[0]["display_col"] == 20.0
     assert runtime_state.peak_records[0]["display_row"] == 40.0
     assert detector_display_calls == [(10.0, 20.0)]
     assert sim_display_calls == []
+
+
+def test_restore_peak_overlay_lists_preserves_unfiltered_cache_provenance() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "hkl": (1, 0, 2),
+                    "intensity": 8.0,
+                    "native_col": 10.0,
+                    "native_row": 20.0,
+                    "sim_col_raw": 110.0,
+                    "sim_row_raw": 220.0,
+                }
+            ],
+            "peak_positions_filtered": False,
+        }
+    )
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=False,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("detector restore should use detector display projection")
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(20.0, 40.0)]
+    assert runtime_state.peak_positions_filtered is False
+    assert runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
 
 
 def test_resolve_peak_record_display_coords_projects_native_detector_coords_in_caked_view() -> None:
@@ -3345,6 +3395,7 @@ def test_select_peak_from_canvas_click_uses_detector_display_inverse_in_detector
         peak_millers=[(1, 0, 2)],
         peak_intensities=[8.0],
         peak_records=[{"native_col": 10.0, "native_row": 20.0}],
+        peak_positions_filtered=True,
     )
     peak_state = state.PeakSelectionState()
     picked_calls: list[dict[str, object]] = []
@@ -3385,6 +3436,7 @@ def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_return
         peak_millers=[(1, 0, 2)],
         peak_intensities=[8.0],
         peak_records=[{"native_col": 10.0, "native_row": 20.0}],
+        peak_positions_filtered=True,
     )
     peak_state = state.PeakSelectionState()
     picked_calls: list[dict[str, object]] = []
@@ -3424,6 +3476,7 @@ def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_return
         peak_millers=[(1, 0, 2)],
         peak_intensities=[8.0],
         peak_records=[{"native_col": 10.0, "native_row": 20.0}],
+        peak_positions_filtered=True,
     )
     peak_state = state.PeakSelectionState()
     picked_calls: list[dict[str, object]] = []
@@ -3469,6 +3522,7 @@ def test_select_peak_from_canvas_click_uses_100x100_square_search_window() -> No
                 "native_row": 50.0,
             }
         ],
+        peak_positions_filtered=True,
     )
     peak_state = state.PeakSelectionState(hkl_pick_armed=True)
     ensured = []
@@ -3669,7 +3723,7 @@ def test_select_peak_from_canvas_click_uses_intersection_cache_centers_for_neare
     sync_calls = []
 
     def ensure_peak_overlay_data(*, force: bool = False) -> bool:
-        return peak_selection.ensure_runtime_peak_overlay_data(
+        ok = peak_selection.ensure_runtime_peak_overlay_data(
             runtime_state,
             primary_a=5.0,
             primary_c=7.0,
@@ -3686,6 +3740,8 @@ def test_select_peak_from_canvas_click_uses_intersection_cache_centers_for_neare
             min_separation_px=0.0,
             force=force,
         )
+        runtime_state.peak_positions_filtered = bool(ok)
+        return ok
 
     ok = peak_selection.select_peak_from_canvas_click(
         runtime_state,
@@ -3775,7 +3831,7 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
         return True
 
     def _ensure_detector_overlay(*, force: bool = False) -> bool:
-        return peak_selection.ensure_runtime_peak_overlay_data(
+        ok = peak_selection.ensure_runtime_peak_overlay_data(
             runtime_state,
             primary_a=5.0,
             primary_c=7.0,
@@ -3791,6 +3847,8 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
             caked_view_enabled_factory=False,
             force=force,
         )
+        runtime_state.peak_positions_filtered = bool(ok)
+        return ok
 
     detector_ok = peak_selection.select_peak_from_canvas_click(
         runtime_state,
@@ -3837,7 +3895,7 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
     )
 
     def _ensure_caked_overlay(*, force: bool = False) -> bool:
-        return peak_selection.ensure_runtime_peak_overlay_data(
+        ok = peak_selection.ensure_runtime_peak_overlay_data(
             runtime_state,
             primary_a=5.0,
             primary_c=7.0,
@@ -3855,6 +3913,8 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
             ),
             force=force,
         )
+        runtime_state.peak_positions_filtered = bool(ok)
+        return ok
 
     caked_ok = peak_selection.select_peak_from_canvas_click(
         runtime_state,

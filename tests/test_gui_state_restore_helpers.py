@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ra_sim.gui import state_io
+from ra_sim.gui import controllers, state, state_io
 
 
 class _DisplayRecorder:
@@ -267,6 +267,8 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
             {"x": _Var(0.1), "y": _Var(0.2), "z": _Var(0.3)},
         ],
         geometry_q_group_rows=[{"key": ["q", 1], "included": True}],
+        geometry_disabled_qr_sets=[("primary", 1)],
+        geometry_disabled_qz_sections=[("primary", 1, 2)],
         geometry_manual_pairs=[{"background_index": 0, "entries": []}],
         geometry_peak_records=[
             {
@@ -296,6 +298,8 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
         {"x": 0.1, "y": 0.2, "z": 0.3}
     ]
     assert snapshot["geometry"]["selected_hkl_target"] == [1, 2, 3]
+    assert snapshot["geometry"]["disabled_qr_sets"] == [["primary", 1]]
+    assert snapshot["geometry"]["disabled_qz_sections"] == [["primary", 1, 2]]
     assert snapshot["geometry"]["peak_records"] == [
         {
             "display_col": 10.0,
@@ -309,6 +313,7 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
 
 def test_apply_gui_state_geometry_restores_peak_cache_when_present() -> None:
     restored_peak_records: list[object] = []
+    q_group_state = state.GeometryQGroupState()
 
     updated = state_io.apply_gui_state_geometry(
         {
@@ -321,7 +326,7 @@ def test_apply_gui_state_geometry_restores_peak_cache_when_present() -> None:
             ],
             "manual_pairs": [],
         },
-        geometry_preview_excluded_q_groups=set(),
+        q_group_state=q_group_state,
         geometry_q_group_key_from_jsonable=lambda value: tuple(value) if isinstance(value, list) else None,
         invalidate_geometry_manual_pick_cache=lambda: None,
         apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
@@ -340,6 +345,150 @@ def test_apply_gui_state_geometry_restores_peak_cache_when_present() -> None:
             "hkl": [1, 0, 2],
         }
     ]
+
+
+def test_replace_geometry_q_group_masks_normalizes_parent_keys_from_rows() -> None:
+    q_group_state = state.GeometryQGroupState()
+
+    changed = controllers.replace_geometry_q_group_masks(
+        q_group_state,
+        disabled_qr_sets=[
+            {"q_group_key": ("q_group", "PRIMARY", 1.0, 8)},
+            ("secondary", 2.0),
+            ("q_group", "primary", 3.0, 9),
+            ("primary", 4.5),
+        ],
+    )
+
+    assert changed is True
+    assert q_group_state.disabled_qr_sets == {
+        ("primary", 1),
+        ("secondary", 2),
+        ("primary", 3),
+    }
+
+
+def test_apply_gui_state_geometry_filters_restored_peak_cache_after_masks() -> None:
+    restored_peak_records: list[object] = []
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[
+            {"key": ("q_group", "primary", 1, 8)},
+            {"key": ("q_group", "primary", 2, 8)},
+        ]
+    )
+
+    updated = state_io.apply_gui_state_geometry(
+        {
+            "disabled_qr_sets": [["primary", 1]],
+            "peak_records": [
+                {
+                    "display_col": 10.0,
+                    "display_row": 20.0,
+                    "hkl": [1, 0, 8],
+                    "q_group_key": ("q_group", "primary", 1, 8),
+                },
+                {
+                    "display_col": 30.0,
+                    "display_row": 40.0,
+                    "hkl": [2, 0, 8],
+                    "q_group_key": ("q_group", "primary", 2, 8),
+                },
+                {
+                    "display_col": 50.0,
+                    "display_row": 60.0,
+                    "hkl": [9, 9, 9],
+                },
+            ],
+            "manual_pairs": [],
+        },
+        q_group_state=q_group_state,
+        geometry_q_group_key_from_jsonable=lambda value: tuple(value) if isinstance(value, list) else None,
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
+        replace_runtime_peak_cache=lambda rows: restored_peak_records.extend(
+            list(rows or ())
+        ),
+        current_background_index=0,
+        selected_hkl_target=None,
+    )
+
+    assert updated["warnings"] == []
+    assert q_group_state.disabled_qr_sets == {("primary", 1)}
+    assert restored_peak_records == [
+        {
+            "display_col": 30.0,
+            "display_row": 40.0,
+            "hkl": [2, 0, 8],
+            "q_group_key": ("q_group", "primary", 2, 8),
+        }
+    ]
+
+
+def test_apply_gui_state_geometry_preserves_explicit_masks_until_structural_refresh() -> None:
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[
+            {"key": ("q_group", "stale", 99, 1)},
+        ]
+    )
+
+    updated = state_io.apply_gui_state_geometry(
+        {
+            "disabled_qr_sets": [["primary", 1]],
+            "disabled_qz_sections": [["primary", 2, 8]],
+            "manual_pairs": [],
+        },
+        q_group_state=q_group_state,
+        geometry_q_group_key_from_jsonable=lambda value: tuple(value) if isinstance(value, list) else None,
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
+        replace_runtime_peak_cache=lambda _rows: None,
+        current_background_index=0,
+        selected_hkl_target=None,
+    )
+
+    assert updated["warnings"] == []
+    assert q_group_state.disabled_qr_sets == {("primary", 1)}
+    assert q_group_state.disabled_qz_sections == {("primary", 2, 8)}
+    assert q_group_state.refresh_requested is True
+
+
+def test_apply_gui_state_geometry_defers_legacy_mask_resolution_until_structural_refresh() -> None:
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[
+            {"key": ("q_group", "stale", 99, 1)},
+        ]
+    )
+
+    updated = state_io.apply_gui_state_geometry(
+        {
+            "q_group_rows": [
+                {
+                    "key": ["q_group", "primary", 1, 8],
+                    "included": False,
+                },
+                {
+                    "key": ["q_group", "primary", 1, 9],
+                    "included": True,
+                },
+            ],
+            "manual_pairs": [],
+        },
+        q_group_state=q_group_state,
+        geometry_q_group_key_from_jsonable=lambda value: tuple(value) if isinstance(value, list) else None,
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
+        replace_runtime_peak_cache=lambda _rows: None,
+        current_background_index=0,
+        selected_hkl_target=None,
+    )
+
+    assert updated["warnings"] == []
+    assert q_group_state.disabled_qr_sets == set()
+    assert q_group_state.disabled_qz_sections == set()
+    assert q_group_state.pending_legacy_disabled_qz_sections == {
+        ("primary", 1, 8)
+    }
+    assert q_group_state.refresh_requested is True
 
 
 def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:

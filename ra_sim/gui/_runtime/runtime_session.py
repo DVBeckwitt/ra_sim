@@ -5976,8 +5976,14 @@ def _initialize_runtime_controls_block_04() -> None:
             ),
             current_background_image=_current_geometry_manual_pick_background_image,
             use_caked_space=_geometry_manual_pick_uses_caked_space,
-            geometry_preview_excluded_q_groups=(lambda: geometry_preview_state.excluded_q_groups),
-            geometry_q_group_cached_entries=(lambda: geometry_q_group_state.cached_entries),
+            disabled_qr_sets=(lambda: geometry_q_group_state.disabled_qr_sets),
+            disabled_qz_sections=(lambda: geometry_q_group_state.disabled_qz_sections),
+            filter_active_rows=(
+                lambda rows: gui_controllers.filter_enabled_q_group_rows(
+                    rows,
+                    geometry_q_group_state,
+                )
+            ),
             stored_max_positions_local=(
                 lambda: simulation_runtime_state.stored_max_positions_local
             ),
@@ -6209,10 +6215,11 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
         payload_cache["payload"] = payload
         return payload
 
-    # Fallback for early startup before the cache has been built.  This is the
-    # same projected candidate source used to populate the Qr picker cache.
+    # Early-startup fallback stays valid only if it rebuilds rows through the
+    # same active Qr/manual candidate filter used by the picker cache.
     provider = globals().get("_geometry_manual_simulated_peaks_for_params")
-    if callable(provider):
+    pick_candidates_provider = globals().get("_geometry_manual_pick_candidates")
+    if callable(provider) and callable(pick_candidates_provider):
         try:
             raw_rows = provider(param_set, prefer_cache=True)
         except TypeError:
@@ -6223,7 +6230,14 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
         except Exception:
             raw_rows = []
         if isinstance(raw_rows, (list, tuple)):
-            rows = [dict(entry) for entry in raw_rows if isinstance(entry, dict)]
+            grouped_rows = pick_candidates_provider(raw_rows)
+            rows = []
+            if isinstance(grouped_rows, dict):
+                for entries in grouped_rows.values():
+                    if isinstance(entries, (list, tuple)):
+                        rows.extend(
+                            dict(entry) for entry in entries if isinstance(entry, dict)
+                        )
             signature = (
                 "provider",
                 (
@@ -16198,6 +16212,7 @@ def _replace_gui_state_peak_cache(
 
     simulation_runtime_state.peak_records = restored_records
     simulation_runtime_state.peak_positions = restored_positions
+    simulation_runtime_state.peak_positions_filtered = True
     simulation_runtime_state.peak_millers = restored_millers
     simulation_runtime_state.peak_intensities = restored_intensities
     simulation_runtime_state.selected_peak_record = None
@@ -16209,6 +16224,7 @@ def _replace_gui_state_peak_cache(
             "intensities": list(restored_intensities),
             "records": [dict(record) for record in restored_records],
             "click_spatial_index": None,
+            "peak_positions_filtered": True,
             "restored_from_gui_state": bool(restored_records),
         }
     else:
@@ -16223,6 +16239,8 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         occ_vars=_occupancy_control_vars(),
         atom_site_fract_vars=_atom_site_fractional_control_vars(),
         geometry_q_group_rows=_geometry_q_group_export_rows(),
+        geometry_disabled_qr_sets=geometry_q_group_state.disabled_qr_sets,
+        geometry_disabled_qz_sections=geometry_q_group_state.disabled_qz_sections,
         geometry_manual_pairs=_geometry_manual_pairs_export_rows(),
         geometry_peak_records=simulation_runtime_state.peak_records,
         selected_hkl_target=peak_selection_state.selected_hkl_target,
@@ -16362,7 +16380,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     geometry_state = gui_state_io.apply_gui_state_geometry(
         snapshot.get("geometry", {}),
-        geometry_preview_excluded_q_groups=geometry_preview_state.excluded_q_groups,
+        q_group_state=geometry_q_group_state,
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         apply_geometry_manual_pairs_snapshot=_apply_geometry_manual_pairs_snapshot,
@@ -17629,6 +17647,7 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
 
     simulation_runtime_state.peak_records = restored_records
     simulation_runtime_state.peak_positions = restored_positions
+    simulation_runtime_state.peak_positions_filtered = False
     simulation_runtime_state.peak_millers = restored_millers
     simulation_runtime_state.peak_intensities = restored_intensities
     simulation_runtime_state.selected_peak_record = None
@@ -17643,6 +17662,7 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
             "intensities": list(restored_intensities),
             "records": [dict(record) for record in restored_records],
             "click_spatial_index": None,
+            "peak_positions_filtered": False,
             "restored_from_gui_state": False,
         }
     else:

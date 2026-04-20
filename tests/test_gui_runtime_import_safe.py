@@ -1371,6 +1371,7 @@ def test_runtime_session_replace_gui_state_peak_cache_reprojects_detector_view_f
     assert projection_calls[0][0]["native_col"] == 190.0
     assert projection_calls[0][0]["native_row"] == 96.0
     assert simulation_runtime_state.peak_positions == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_positions_filtered is True
     assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
     assert simulation_runtime_state.peak_intensities == [3.0]
     assert simulation_runtime_state.selected_peak_record is None
@@ -1383,6 +1384,7 @@ def test_runtime_session_replace_gui_state_peak_cache_reprojects_detector_view_f
     assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
     assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 190.0
     assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 96.0
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is True
     assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert invalidated == [True]
 
@@ -1479,6 +1481,7 @@ def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projec
     assert projection_calls == [0, 1]
     assert len(simulation_runtime_state.peak_records) == 1
     assert simulation_runtime_state.peak_positions == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_positions_filtered is True
     assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
     assert simulation_runtime_state.peak_intensities == [3.0]
     assert simulation_runtime_state.selected_peak_record is None
@@ -1488,6 +1491,7 @@ def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projec
     assert simulation_runtime_state.peak_records[0]["display_row"] == 96.0
     assert len(simulation_runtime_state.peak_overlay_cache["records"]) == 1
     assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is True
     assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert invalidated == [True]
 
@@ -1604,6 +1608,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
         caked_state = _restore_state(source_row, use_caked_display=True)
 
         assert caked_state.peak_positions == [expected_position]
+        assert caked_state.peak_positions_filtered is False
         assert caked_state.peak_millers == [(-1, 0, 5)]
         assert caked_state.peak_intensities == [7.0]
         assert caked_state.selected_peak_record is None
@@ -1618,6 +1623,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
         assert caked_state.peak_overlay_cache["positions"] == [expected_position]
         assert caked_state.peak_overlay_cache["records"][0]["display_col"] == 100.0
         assert caked_state.peak_overlay_cache["records"][0]["display_row"] == 200.0
+        assert caked_state.peak_overlay_cache["peak_positions_filtered"] is False
 
     detector_state = _restore_state(
         {
@@ -1633,6 +1639,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
     )
 
     assert detector_state.peak_positions == [(100.0, 200.0)]
+    assert detector_state.peak_positions_filtered is False
     assert detector_state.peak_millers == [(-1, 0, 5)]
     assert detector_state.peak_intensities == [7.0]
     assert detector_state.selected_peak_record is None
@@ -1647,6 +1654,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
     assert detector_state.peak_overlay_cache["positions"] == [(100.0, 200.0)]
     assert detector_state.peak_overlay_cache["records"][0]["display_col"] == 100.0
     assert detector_state.peak_overlay_cache["records"][0]["display_row"] == 200.0
+    assert detector_state.peak_overlay_cache["peak_positions_filtered"] is False
 
     assert len(projection_calls) == 4
     assert invalidated == [True, True, True, True]

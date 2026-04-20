@@ -1608,6 +1608,485 @@ def count_geometry_preview_excluded_q_groups(
     return int(sum(1 for key in normalized if key in state.excluded_q_groups))
 
 
+def _normalize_geometry_q_group_integer(
+    value: object,
+    *,
+    tol: float = 1.0e-6,
+) -> int | None:
+    """Return one integer-only Qr/Qz mask component when the value is valid."""
+
+    try:
+        numeric = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(numeric):
+        return None
+    rounded = int(round(numeric))
+    if abs(float(numeric) - float(rounded)) > float(tol):
+        return None
+    return int(rounded)
+
+
+def normalize_geometry_q_group_key(
+    key_or_row: object,
+) -> tuple[str, int, int] | None:
+    """Return canonical ``(source_label, m_index, gz_index)`` identity for one Q-group."""
+
+    candidate = key_or_row
+    if isinstance(key_or_row, Mapping):
+        candidate = key_or_row.get("q_group_key", key_or_row.get("key"))
+    if not isinstance(candidate, (list, tuple)):
+        return None
+
+    if len(candidate) >= 3 and str(candidate[0]) != "q_group":
+        source_label = normalize_bragg_qr_source_label(
+            str(candidate[0]) if candidate[0] is not None else "primary"
+        )
+        m_index = _normalize_geometry_q_group_integer(candidate[1])
+        gz_index = _normalize_geometry_q_group_integer(candidate[2])
+        if m_index is None or gz_index is None:
+            return None
+        return str(source_label), int(m_index), int(gz_index)
+
+    if len(candidate) < 4:
+        return None
+    if str(candidate[0]) != "q_group":
+        return None
+
+    source_label = normalize_bragg_qr_source_label(
+        str(candidate[1]) if candidate[1] is not None else "primary"
+    )
+    m_index = _normalize_geometry_q_group_integer(candidate[2])
+    gz_index = _normalize_geometry_q_group_integer(candidate[3])
+    if m_index is None or gz_index is None:
+        return None
+    return str(source_label), int(m_index), int(gz_index)
+
+
+def qr_set_mask_key(
+    key_or_row: object,
+) -> tuple[str, int] | None:
+    """Return canonical ``(source_label, m_index)`` parent identity for one Q-group."""
+
+    candidate = key_or_row
+    if isinstance(key_or_row, Mapping):
+        candidate = key_or_row.get("q_group_key", key_or_row.get("key"))
+    if isinstance(candidate, (list, tuple)) and len(candidate) >= 2 and str(candidate[0]) != "q_group":
+        source_label = normalize_bragg_qr_source_label(
+            str(candidate[0]) if candidate[0] is not None else "primary"
+        )
+        m_index = _normalize_geometry_q_group_integer(candidate[1])
+        if m_index is None:
+            return None
+        return str(source_label), int(m_index)
+
+    normalized = normalize_geometry_q_group_key(key_or_row)
+    if normalized is None:
+        return None
+    return str(normalized[0]), int(normalized[1])
+
+
+def qz_section_mask_key(
+    key_or_row: object,
+) -> tuple[str, int, int] | None:
+    """Return canonical child-section identity for one Q-group mask entry."""
+
+    normalized = normalize_geometry_q_group_key(key_or_row)
+    if normalized is None:
+        return None
+    return (
+        str(normalized[0]),
+        int(normalized[1]),
+        int(normalized[2]),
+    )
+
+
+def normalized_geometry_q_group_masks(
+    state: GeometryQGroupState,
+) -> tuple[set[tuple[str, int]], set[tuple[str, int, int]]]:
+    """Return detached normalized Qr/Qz disabled masks from one selector state."""
+
+    disabled_qr_sets = {
+        normalized
+        for raw_key in state.disabled_qr_sets
+        if (normalized := qr_set_mask_key(raw_key)) is not None
+    }
+    disabled_qz_sections = {
+        normalized
+        for raw_key in state.disabled_qz_sections
+        if (normalized := qz_section_mask_key(raw_key)) is not None
+    }
+    return (
+        {
+            (str(source_label), int(m_index))
+            for source_label, m_index in disabled_qr_sets
+        },
+        {
+            (str(source_label), int(m_index), int(gz_index))
+            for source_label, m_index, gz_index in disabled_qz_sections
+        },
+    )
+
+
+def _geometry_q_group_parent_child_keys(
+    entries: Sequence[object] | None,
+) -> tuple[set[tuple[str, int]], set[tuple[str, int, int]], dict[tuple[str, int], set[tuple[str, int, int]]]]:
+    """Return canonical parent/child identity sets for one structural Q-group universe."""
+
+    child_keys: set[tuple[str, int, int]] = set()
+    parent_keys: set[tuple[str, int]] = set()
+    children_by_parent: dict[tuple[str, int], set[tuple[str, int, int]]] = defaultdict(set)
+    for raw_entry in entries or ():
+        child_key = qz_section_mask_key(raw_entry)
+        if child_key is None:
+            continue
+        parent_key = (str(child_key[0]), int(child_key[1]))
+        child_keys.add(child_key)
+        parent_keys.add(parent_key)
+        children_by_parent[parent_key].add(child_key)
+    return parent_keys, child_keys, children_by_parent
+
+
+def _geometry_q_group_masks_changed(
+    state: GeometryQGroupState,
+    *,
+    disabled_qr_sets: set[tuple[str, int]],
+    disabled_qz_sections: set[tuple[str, int, int]],
+    pending_legacy_disabled_qz_sections: set[tuple[str, int, int]] | None = None,
+) -> bool:
+    if pending_legacy_disabled_qz_sections is None:
+        pending_legacy_disabled_qz_sections = set(state.pending_legacy_disabled_qz_sections)
+    return bool(
+        state.disabled_qr_sets != disabled_qr_sets
+        or state.disabled_qz_sections != disabled_qz_sections
+        or state.pending_legacy_disabled_qz_sections != pending_legacy_disabled_qz_sections
+    )
+
+
+def bump_geometry_q_group_mask_revision(state: GeometryQGroupState) -> int:
+    """Increment the runtime-only Q-group mask revision and return the new value."""
+
+    state.mask_revision = int(state.mask_revision) + 1
+    return int(state.mask_revision)
+
+
+def replace_geometry_q_group_masks(
+    state: GeometryQGroupState,
+    *,
+    disabled_qr_sets: Sequence[object] | None = None,
+    disabled_qz_sections: Sequence[object] | None = None,
+    clear_pending_legacy: bool = True,
+) -> bool:
+    """Replace explicit Q-group masks in place after canonical normalization."""
+
+    normalized_qr_sets = {
+        normalized
+        for raw_key in disabled_qr_sets or ()
+        if (normalized := qr_set_mask_key(raw_key)) is not None
+    }
+    normalized_qz_sections = {
+        normalized
+        for raw_key in disabled_qz_sections or ()
+        if (normalized := qz_section_mask_key(raw_key)) is not None
+    }
+    pending_legacy = (
+        set()
+        if clear_pending_legacy
+        else {
+            normalized
+            for raw_key in state.pending_legacy_disabled_qz_sections
+            if (normalized := qz_section_mask_key(raw_key)) is not None
+        }
+    )
+    normalized_qr_sets_final = {
+        (str(source_label), int(m_index))
+        for source_label, m_index in normalized_qr_sets
+    }
+    normalized_qz_sections_final = {
+        (str(source_label), int(m_index), int(gz_index))
+        for source_label, m_index, gz_index in normalized_qz_sections
+    }
+    if not _geometry_q_group_masks_changed(
+        state,
+        disabled_qr_sets=normalized_qr_sets_final,
+        disabled_qz_sections=normalized_qz_sections_final,
+        pending_legacy_disabled_qz_sections=pending_legacy,
+    ):
+        return False
+
+    state.disabled_qr_sets = normalized_qr_sets_final
+    state.disabled_qz_sections = normalized_qz_sections_final
+    state.pending_legacy_disabled_qz_sections = pending_legacy
+    bump_geometry_q_group_mask_revision(state)
+    return True
+
+
+def queue_geometry_q_group_legacy_disabled_sections(
+    state: GeometryQGroupState,
+    disabled_qz_sections: Sequence[object] | None,
+) -> bool:
+    """Store legacy child disables until structural rows are available for resolution."""
+
+    normalized_pending = {
+        normalized
+        for raw_key in disabled_qz_sections or ()
+        if (normalized := qz_section_mask_key(raw_key)) is not None
+    }
+    if normalized_pending == set(state.pending_legacy_disabled_qz_sections):
+        return False
+    state.pending_legacy_disabled_qz_sections = normalized_pending
+    bump_geometry_q_group_mask_revision(state)
+    return True
+
+
+def clear_geometry_q_group_masks(state: GeometryQGroupState) -> bool:
+    """Clear all Qr/Qz selector masks without touching structural entries."""
+
+    if not (
+        state.disabled_qr_sets
+        or state.disabled_qz_sections
+        or state.pending_legacy_disabled_qz_sections
+    ):
+        return False
+    state.disabled_qr_sets.clear()
+    state.disabled_qz_sections.clear()
+    state.pending_legacy_disabled_qz_sections.clear()
+    bump_geometry_q_group_mask_revision(state)
+    return True
+
+
+def effective_q_group_enabled_state(
+    key_or_row: object,
+    q_group_state: GeometryQGroupState,
+) -> bool:
+    """Return whether one child Qr/Qz row is effectively enabled."""
+
+    child_key = qz_section_mask_key(key_or_row)
+    if child_key is None:
+        return False
+    normalized_qr_sets, normalized_qz_sections = normalized_geometry_q_group_masks(
+        q_group_state
+    )
+    parent_key = (str(child_key[0]), int(child_key[1]))
+    return bool(
+        parent_key not in normalized_qr_sets and child_key not in normalized_qz_sections
+    )
+
+
+def filter_enabled_q_group_rows(
+    rows: Sequence[object] | None,
+    q_group_state: GeometryQGroupState,
+    *,
+    copy_rows: bool = True,
+) -> list[dict[str, object]]:
+    """Return shallow-copied enabled rows only, preserving order and coordinates."""
+
+    filtered_rows: list[dict[str, object]] = []
+    for raw_row in rows or ():
+        if not isinstance(raw_row, Mapping):
+            continue
+        if not effective_q_group_enabled_state(raw_row, q_group_state):
+            continue
+        filtered_rows.append(dict(raw_row) if copy_rows else raw_row)
+    return filtered_rows
+
+
+def summarize_qr_set_state(
+    entries: Sequence[object] | None,
+    q_group_state: GeometryQGroupState,
+) -> dict[tuple[str, int], dict[str, object]]:
+    """Summarize child enablement per canonical ``(source_label, m_index)`` parent set."""
+
+    summary: dict[tuple[str, int], dict[str, object]] = {}
+    normalized_qr_sets, _normalized_qz_sections = normalized_geometry_q_group_masks(
+        q_group_state
+    )
+    for raw_entry in entries or ():
+        child_key = qz_section_mask_key(raw_entry)
+        if child_key is None:
+            continue
+        parent_key = (str(child_key[0]), int(child_key[1]))
+        bucket = summary.setdefault(
+            parent_key,
+            {
+                "enabled_count": 0,
+                "total_count": 0,
+                "parent_disabled": bool(parent_key in normalized_qr_sets),
+                "parent_state": "off" if parent_key in normalized_qr_sets else "on",
+            },
+        )
+        bucket["total_count"] = int(bucket["total_count"]) + 1
+        if effective_q_group_enabled_state(child_key, q_group_state):
+            bucket["enabled_count"] = int(bucket["enabled_count"]) + 1
+
+    for bucket in summary.values():
+        enabled_count = int(bucket["enabled_count"])
+        total_count = int(bucket["total_count"])
+        parent_disabled = bool(bucket["parent_disabled"])
+        if total_count <= 0 or enabled_count <= 0:
+            bucket["parent_state"] = "off"
+        elif parent_disabled or enabled_count < total_count:
+            bucket["parent_state"] = "partial"
+        else:
+            bucket["parent_state"] = "on"
+    return summary
+
+
+def prune_geometry_q_group_masks(
+    q_group_state: GeometryQGroupState,
+    entries: Sequence[object] | None,
+) -> bool:
+    """Prune explicit and pending Q-group masks against one structural child universe."""
+
+    parent_keys, child_keys, _children_by_parent = _geometry_q_group_parent_child_keys(entries)
+    if not parent_keys and not child_keys:
+        return False
+
+    normalized_qr_sets, normalized_qz_sections = normalized_geometry_q_group_masks(
+        q_group_state
+    )
+    pending_legacy = {
+        normalized
+        for raw_key in q_group_state.pending_legacy_disabled_qz_sections
+        if (normalized := qz_section_mask_key(raw_key)) is not None
+    }
+    next_qr_sets = {
+        (str(source_label), int(m_index))
+        for source_label, m_index in normalized_qr_sets
+        if (str(source_label), int(m_index)) in parent_keys
+    }
+    next_qz_sections = {
+        (str(source_label), int(m_index), int(gz_index))
+        for source_label, m_index, gz_index in normalized_qz_sections
+        if (str(source_label), int(m_index), int(gz_index)) in child_keys
+    }
+    next_pending_legacy = {
+        (str(source_label), int(m_index), int(gz_index))
+        for source_label, m_index, gz_index in pending_legacy
+        if (str(source_label), int(m_index), int(gz_index)) in child_keys
+    }
+    if not _geometry_q_group_masks_changed(
+        q_group_state,
+        disabled_qr_sets=next_qr_sets,
+        disabled_qz_sections=next_qz_sections,
+        pending_legacy_disabled_qz_sections=next_pending_legacy,
+    ):
+        return False
+
+    q_group_state.disabled_qr_sets = next_qr_sets
+    q_group_state.disabled_qz_sections = next_qz_sections
+    q_group_state.pending_legacy_disabled_qz_sections = next_pending_legacy
+    bump_geometry_q_group_mask_revision(q_group_state)
+    return True
+
+
+def resolve_pending_geometry_q_group_legacy_masks(
+    q_group_state: GeometryQGroupState,
+    entries: Sequence[object] | None,
+) -> bool:
+    """Resolve deferred legacy child disables into explicit parent/child mask sets."""
+
+    parent_keys, child_keys, children_by_parent = _geometry_q_group_parent_child_keys(entries)
+    if not parent_keys and not child_keys:
+        return False
+
+    pending_legacy = {
+        normalized
+        for raw_key in q_group_state.pending_legacy_disabled_qz_sections
+        if (normalized := qz_section_mask_key(raw_key)) is not None
+    }
+    if not pending_legacy:
+        return False
+
+    normalized_qr_sets, normalized_qz_sections = normalized_geometry_q_group_masks(
+        q_group_state
+    )
+    synthesized_qr_sets: set[tuple[str, int]] = set()
+    next_qz_sections = set(normalized_qz_sections)
+    for parent_key, parent_children in children_by_parent.items():
+        valid_parent_children = {
+            child_key for child_key in parent_children if child_key in child_keys
+        }
+        if valid_parent_children and valid_parent_children.issubset(pending_legacy):
+            synthesized_qr_sets.add(parent_key)
+            continue
+        next_qz_sections.update(
+            child_key for child_key in pending_legacy if child_key[:2] == parent_key
+        )
+
+    next_qr_sets = {
+        (str(source_label), int(m_index))
+        for source_label, m_index in normalized_qr_sets.union(synthesized_qr_sets)
+        if (str(source_label), int(m_index)) in parent_keys
+    }
+    next_qz_sections = {
+        (str(source_label), int(m_index), int(gz_index))
+        for source_label, m_index, gz_index in next_qz_sections
+        if (str(source_label), int(m_index), int(gz_index)) in child_keys
+        and (str(source_label), int(m_index)) not in synthesized_qr_sets
+    }
+    if not _geometry_q_group_masks_changed(
+        q_group_state,
+        disabled_qr_sets=next_qr_sets,
+        disabled_qz_sections=next_qz_sections,
+        pending_legacy_disabled_qz_sections=set(),
+    ):
+        return False
+
+    q_group_state.disabled_qr_sets = next_qr_sets
+    q_group_state.disabled_qz_sections = next_qz_sections
+    q_group_state.pending_legacy_disabled_qz_sections.clear()
+    bump_geometry_q_group_mask_revision(q_group_state)
+    return True
+
+
+def set_geometry_q_group_row_enabled(
+    q_group_state: GeometryQGroupState,
+    group_key: object,
+    *,
+    enabled: bool,
+    entries: Sequence[object] | None = None,
+) -> bool:
+    """Enable or disable one child Qr/Qz row while preserving parent overrides."""
+
+    child_key = qz_section_mask_key(group_key)
+    if child_key is None:
+        return False
+
+    normalized_qr_sets, normalized_qz_sections = normalized_geometry_q_group_masks(
+        q_group_state
+    )
+    parent_key = (str(child_key[0]), int(child_key[1]))
+    next_qr_sets = set(normalized_qr_sets)
+    next_qz_sections = set(normalized_qz_sections)
+
+    if enabled:
+        if parent_key in next_qr_sets:
+            _parent_keys, _child_keys, children_by_parent = _geometry_q_group_parent_child_keys(
+                entries if entries is not None else q_group_state.cached_entries
+            )
+            sibling_children = children_by_parent.get(parent_key, set())
+            next_qr_sets.discard(parent_key)
+            next_qz_sections.update(sibling_children)
+        next_qz_sections.discard(child_key)
+    else:
+        next_qz_sections.add(child_key)
+
+    if not _geometry_q_group_masks_changed(
+        q_group_state,
+        disabled_qr_sets=next_qr_sets,
+        disabled_qz_sections=next_qz_sections,
+        pending_legacy_disabled_qz_sections=set(),
+    ):
+        return False
+
+    q_group_state.disabled_qr_sets = next_qr_sets
+    q_group_state.disabled_qz_sections = next_qz_sections
+    q_group_state.pending_legacy_disabled_qz_sections.clear()
+    bump_geometry_q_group_mask_revision(q_group_state)
+    return True
+
+
 def request_geometry_preview_skip_once(state: GeometryPreviewState) -> None:
     """Skip one live-preview refresh on the next update cycle."""
 

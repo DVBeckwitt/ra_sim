@@ -67,6 +67,7 @@ def _empty_peak_overlay_cache() -> dict[str, object]:
         "intensities": [],
         "records": [],
         "click_spatial_index": None,
+        "peak_positions_filtered": False,
         "restored_from_gui_state": False,
     }
 
@@ -1152,6 +1153,7 @@ def simulate_ideal_hkl_native_center(
 
 def _clear_peak_overlay_lists(simulation_runtime_state) -> None:
     simulation_runtime_state.peak_positions.clear()
+    simulation_runtime_state.peak_positions_filtered = False
     simulation_runtime_state.peak_millers.clear()
     simulation_runtime_state.peak_intensities.clear()
     simulation_runtime_state.peak_records.clear()
@@ -1625,6 +1627,7 @@ def ensure_runtime_peak_overlay_data(
         simulation_runtime_state.peak_positions.extend(
             list(simulation_runtime_state.peak_overlay_cache.get("positions", ()))
         )
+        simulation_runtime_state.peak_positions_filtered = False
         simulation_runtime_state.peak_millers.extend(
             list(simulation_runtime_state.peak_overlay_cache.get("millers", ()))
         )
@@ -1858,6 +1861,7 @@ def ensure_runtime_peak_overlay_data(
                     "click_spatial_index": _build_peak_click_spatial_index(
                         simulation_runtime_state.peak_positions
                     ),
+                    "peak_positions_filtered": False,
                     "restored_from_gui_state": False,
                 }
             )
@@ -2777,6 +2781,16 @@ def _restore_peak_overlay_lists_from_cached_records(
     """Rebuild live overlay lists from imported cached peak records."""
 
     cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
+    cache_filtered = (
+        bool(
+            cache.get(
+                "peak_positions_filtered",
+                cache.get("restored_from_gui_state", False),
+            )
+        )
+        if isinstance(cache, Mapping)
+        else False
+    )
     raw_records = cache.get("records") if isinstance(cache, Mapping) else None
     if not isinstance(raw_records, (list, tuple)):
         raw_records = getattr(simulation_runtime_state, "peak_records", ())
@@ -2880,6 +2894,7 @@ def _restore_peak_overlay_lists_from_cached_records(
 
     _clear_peak_overlay_lists(simulation_runtime_state)
     simulation_runtime_state.peak_positions.extend(restored_positions)
+    simulation_runtime_state.peak_positions_filtered = cache_filtered
     simulation_runtime_state.peak_millers.extend(restored_millers)
     simulation_runtime_state.peak_intensities.extend(restored_intensities)
     simulation_runtime_state.peak_records.extend(restored_records)
@@ -2895,6 +2910,7 @@ def _restore_peak_overlay_lists_from_cached_records(
                 "click_spatial_index": _build_peak_click_spatial_index(
                     restored_positions
                 ),
+                "peak_positions_filtered": cache_filtered,
                 "restored_from_gui_state": bool(restored_records),
             }
         )
@@ -3405,7 +3421,7 @@ def find_peak_record_for_canvas_click(
         False,
     )
     fallback_valid = False
-    if simulation_runtime_state.peak_positions:
+    if bool(getattr(simulation_runtime_state, "peak_positions_filtered", False)) and simulation_runtime_state.peak_positions:
         best_i, best_d2, within_window = _nearest_peak_index_for_click(
             simulation_runtime_state,
             float(click_col),

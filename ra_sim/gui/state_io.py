@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from . import controllers as gui_controllers
+
 
 GUI_STATE_EXCLUDED_VAR_NAMES = {
     "background_file_status_var",
@@ -243,6 +245,8 @@ def collect_full_gui_state_snapshot(
     occ_vars: Sequence[object],
     atom_site_fract_vars: Sequence[object],
     geometry_q_group_rows: Sequence[dict[str, object]],
+    geometry_disabled_qr_sets: Sequence[object],
+    geometry_disabled_qz_sections: Sequence[object],
     geometry_manual_pairs: Sequence[dict[str, object]],
     geometry_peak_records: Sequence[dict[str, object]] | None,
     selected_hkl_target: object,
@@ -292,8 +296,34 @@ def collect_full_gui_state_snapshot(
             }
         )
 
+    normalized_disabled_qr_sets: set[tuple[str, int]] = set()
+    for raw_key in geometry_disabled_qr_sets or ():
+        parent_key = gui_controllers.qr_set_mask_key(raw_key)
+        if parent_key is not None:
+            normalized_disabled_qr_sets.add(parent_key)
+
+    normalized_disabled_qz_sections: set[tuple[str, int, int]] = set()
+    for raw_key in geometry_disabled_qz_sections or ():
+        child_key = gui_controllers.qz_section_mask_key(raw_key)
+        if child_key is not None:
+            normalized_disabled_qz_sections.add(child_key)
+
     geometry_state: dict[str, object] = {
         "q_group_rows": list(geometry_q_group_rows),
+        "disabled_qr_sets": [
+            [str(source_label), int(m_index)]
+            for source_label, m_index in sorted(
+                normalized_disabled_qr_sets,
+                key=lambda item: (str(item[0]), int(item[1])),
+            )
+        ],
+        "disabled_qz_sections": [
+            [str(source_label), int(m_index), int(gz_index)]
+            for source_label, m_index, gz_index in sorted(
+                normalized_disabled_qz_sections,
+                key=lambda item: (str(item[0]), int(item[1]), int(item[2])),
+            )
+        ],
         "manual_pairs": list(geometry_manual_pairs),
         "peak_records": [
             dict(record)
@@ -608,7 +638,7 @@ def apply_gui_state_flags(
 def apply_gui_state_geometry(
     geometry_state: Mapping[str, object] | None,
     *,
-    geometry_preview_excluded_q_groups: set[tuple[object, ...]],
+    q_group_state,
     geometry_q_group_key_from_jsonable: Callable[
         [object], tuple[object, ...] | None
     ],
@@ -628,18 +658,32 @@ def apply_gui_state_geometry(
             "warnings": warnings,
         }
 
-    if "peak_records" in geometry_state and callable(replace_runtime_peak_cache):
-        raw_peak_records = geometry_state.get("peak_records")
-        try:
-            replace_runtime_peak_cache(
-                raw_peak_records if isinstance(raw_peak_records, list) else []
-            )
-        except Exception as exc:
-            warnings.append(f"peak cache: {exc}")
+    raw_peak_records = geometry_state.get("peak_records")
 
     saved_rows = geometry_state.get("q_group_rows", [])
-    if isinstance(saved_rows, list):
-        geometry_preview_excluded_q_groups.clear()
+    disabled_qr_sets = [
+        raw_key
+        for raw_key in (geometry_state.get("disabled_qr_sets", []) or [])
+        if gui_controllers.qr_set_mask_key(raw_key) is not None
+    ]
+    disabled_qz_sections = [
+        raw_key
+        for raw_key in (geometry_state.get("disabled_qz_sections", []) or [])
+        if gui_controllers.qz_section_mask_key(raw_key) is not None
+    ]
+    explicit_masks_present = bool(
+        "disabled_qr_sets" in geometry_state or "disabled_qz_sections" in geometry_state
+    )
+    if explicit_masks_present:
+        gui_controllers.replace_geometry_q_group_masks(
+            q_group_state,
+            disabled_qr_sets=disabled_qr_sets,
+            disabled_qz_sections=disabled_qz_sections,
+        )
+        gui_controllers.request_geometry_q_group_refresh(q_group_state)
+        invalidate_geometry_manual_pick_cache()
+    elif isinstance(saved_rows, list):
+        legacy_disabled_children: list[tuple[object, ...]] = []
         for row in saved_rows:
             if not isinstance(row, Mapping):
                 continue
@@ -647,8 +691,56 @@ def apply_gui_state_geometry(
             if group_key is None:
                 continue
             if not bool(row.get("included", True)):
-                geometry_preview_excluded_q_groups.add(group_key)
+                legacy_disabled_children.append(group_key)
+        gui_controllers.replace_geometry_q_group_masks(
+            q_group_state,
+            disabled_qr_sets=[],
+            disabled_qz_sections=[],
+        )
+        gui_controllers.queue_geometry_q_group_legacy_disabled_sections(
+            q_group_state,
+            legacy_disabled_children,
+        )
+        gui_controllers.request_geometry_q_group_refresh(q_group_state)
         invalidate_geometry_manual_pick_cache()
+
+    if "peak_records" in geometry_state and callable(replace_runtime_peak_cache):
+        restored_peak_records = (
+            list(raw_peak_records)
+            if isinstance(raw_peak_records, list)
+            else []
+        )
+        normalized_qr_sets, normalized_qz_sections = (
+            gui_controllers.normalized_geometry_q_group_masks(q_group_state)
+        )
+        pending_legacy_qz_sections = {
+            pending_key
+            for raw_key in (
+                getattr(q_group_state, "pending_legacy_disabled_qz_sections", ()) or ()
+            )
+            if (pending_key := gui_controllers.qz_section_mask_key(raw_key)) is not None
+        }
+        if normalized_qr_sets or normalized_qz_sections or pending_legacy_qz_sections:
+            filtered_peak_records: list[object] = []
+            for raw_record in restored_peak_records:
+                if not isinstance(raw_record, Mapping):
+                    continue
+                child_key = gui_controllers.qz_section_mask_key(raw_record)
+                if child_key is None:
+                    continue
+                parent_key = (str(child_key[0]), int(child_key[1]))
+                if parent_key in normalized_qr_sets:
+                    continue
+                if child_key in normalized_qz_sections:
+                    continue
+                if child_key in pending_legacy_qz_sections:
+                    continue
+                filtered_peak_records.append(dict(raw_record))
+            restored_peak_records = filtered_peak_records
+        try:
+            replace_runtime_peak_cache(restored_peak_records)
+        except Exception as exc:
+            warnings.append(f"peak cache: {exc}")
 
     target_hkl = geometry_state.get("selected_hkl_target")
     if isinstance(target_hkl, (list, tuple)) and len(target_hkl) >= 3:
