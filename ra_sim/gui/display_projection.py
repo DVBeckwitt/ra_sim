@@ -117,10 +117,15 @@ def normalize_display_raster_size_limit(
 def default_display_raster_size(image_size: Any) -> int:
     """Return the default display cap for one image size."""
 
-    return normalize_display_raster_size_limit(
+    image_limit = normalize_display_raster_size_limit(
         image_size,
         fallback=MAX_DISPLAY_RASTER_SIZE,
     )
+    default_limit = normalize_display_raster_size_limit(
+        MAX_DISPLAY_RASTER_SIZE / 4.0,
+        fallback=MAX_DISPLAY_RASTER_SIZE / 4.0,
+    )
+    return min(image_limit, default_limit)
 
 
 def _finite_pair(

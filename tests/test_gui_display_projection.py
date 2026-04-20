@@ -28,6 +28,11 @@ def test_normalize_display_raster_size_limit_clamps_to_supported_range() -> None
     )
 
 
+def test_default_display_raster_size_uses_one_quarter_of_supported_maximum() -> None:
+    assert display_projection.default_display_raster_size(3000) == 750
+    assert display_projection.default_display_raster_size(500) == 500
+
+
 def test_downsample_raster_for_display_returns_original_when_limit_is_large() -> None:
     image = np.arange(25, dtype=float).reshape(5, 5)
 
