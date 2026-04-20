@@ -1,5 +1,6 @@
 """Core diffraction routines used by the simulator."""
 
+import hashlib
 import json
 import os
 import time
@@ -451,6 +452,24 @@ def _write_intersection_cache_log(
     }
     if isinstance(cache_metadata, dict) and cache_metadata:
         metadata.update(cache_metadata)
+    metadata.setdefault(
+        "signature_digest",
+        hashlib.blake2b(
+            json.dumps(
+                {
+                    "av": metadata.get("av"),
+                    "cv": metadata.get("cv"),
+                    "theta_center": metadata.get("theta_center"),
+                    "phi_center": metadata.get("phi_center"),
+                    "wavelength_center": metadata.get("wavelength_center"),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8"),
+            digest_size=16,
+        ).hexdigest(),
+    )
 
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -6290,6 +6309,24 @@ def load_logged_intersection_cache(
     return cache_tables, metadata
 
 
+def load_logged_intersection_cache_metadata(
+    log_dir: str | Path,
+) -> dict[str, object]:
+    """Load only the metadata for one persisted intersection-cache directory."""
+
+    resolved_dir = Path(log_dir).expanduser()
+    try:
+        with (resolved_dir / "meta.json").open("r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except Exception:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    metadata = dict(loaded)
+    metadata.setdefault("log_dir", str(resolved_dir))
+    return metadata
+
+
 def load_most_recent_logged_intersection_cache(
     log_root: str | Path | None = None,
 ) -> tuple[list[np.ndarray], dict[str, object]]:
@@ -6315,6 +6352,32 @@ def load_most_recent_logged_intersection_cache(
             metadata.setdefault("log_dir", str(log_dir))
             return cache_tables, metadata
     return [], {}
+
+
+def load_most_recent_logged_intersection_cache_metadata(
+    log_root: str | Path | None = None,
+) -> dict[str, object]:
+    """Load only metadata for the newest persisted intersection-cache log."""
+
+    if log_root is None:
+        root = _resolve_intersection_cache_log_root() / "intersection_cache"
+    else:
+        root = Path(log_root).expanduser()
+    try:
+        log_dirs = sorted(
+            (path for path in root.glob("intersection_cache_*") if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        return {}
+
+    for log_dir in log_dirs:
+        metadata = load_logged_intersection_cache_metadata(log_dir)
+        if metadata:
+            metadata.setdefault("log_dir", str(log_dir))
+            return metadata
+    return {}
 
 
 def _intersection_cache_target_row_count(table: np.ndarray) -> int:

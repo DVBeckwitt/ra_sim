@@ -1539,6 +1539,39 @@ def _geometry_fit_filter_entries_for_required_branch_groups(
     }, matched_keys
 
 
+def _geometry_fit_targeted_performance_gate_payload(
+    payload: Mapping[str, object] | None,
+) -> dict[str, object]:
+    gate_payload = dict(payload or {})
+    ok = bool(
+        gate_payload.get("targeted_preflight_enabled", False)
+        and str(gate_payload.get("preflight_mode") or "full")
+        == "manual_geometry_targeted"
+        and int(gate_payload.get("unrelated_projected_row_count_for_rebinding", 0) or 0)
+        == 0
+        and int(gate_payload.get("unrelated_scored_row_count_for_rebinding", 0) or 0)
+        == 0
+        and not bool(gate_payload.get("full_source_rows_built_for_rebinding", False))
+        and not bool(
+            gate_payload.get("full_source_rows_projected_for_rebinding", False)
+        )
+        and (
+            bool(gate_payload.get("targeted_cache_hit", False))
+            or bool(gate_payload.get("targeted_simulation_used", False))
+        )
+    )
+    if bool(gate_payload.get("full_fresh_simulation_fallback_used", False)):
+        ok = False
+    if (
+        str(gate_payload.get("targeted_simulation_fallback_reason") or "")
+        == "simulator_filter_not_supported"
+        and not bool(gate_payload.get("targeted_cache_hit", False))
+    ):
+        ok = False
+    gate_payload["ok"] = bool(ok)
+    return gate_payload
+
+
 def _geometry_fit_is_canonical_live_source_entry(
     entry: Mapping[str, object] | None,
 ) -> tuple[bool, str | None]:
@@ -2174,30 +2207,7 @@ def rebuild_geometry_fit_source_rows(
     def _targeted_gate_payload() -> dict[str, object]:
         payload = dict(targeted_runtime_flags)
         payload["preflight_mode"] = normalized_preflight_mode
-        ok = bool(
-            payload.get("targeted_preflight_enabled", False)
-            and str(payload.get("preflight_mode", "")) == "manual_geometry_targeted"
-            and int(payload.get("unrelated_projected_row_count_for_rebinding", 0) or 0)
-            == 0
-            and int(payload.get("unrelated_scored_row_count_for_rebinding", 0) or 0)
-            == 0
-            and not bool(payload.get("full_source_rows_built_for_rebinding", False))
-            and not bool(payload.get("full_source_rows_projected_for_rebinding", False))
-            and (
-                bool(payload.get("targeted_cache_hit", False))
-                or bool(payload.get("targeted_simulation_used", False))
-            )
-        )
-        if bool(payload.get("full_fresh_simulation_fallback_used", False)):
-            ok = False
-        if (
-            str(payload.get("targeted_simulation_fallback_reason") or "")
-            == "simulator_filter_not_supported"
-            and not bool(payload.get("targeted_cache_hit", False))
-        ):
-            ok = False
-        payload["ok"] = bool(ok)
-        return payload
+        return _geometry_fit_targeted_performance_gate_payload(payload)
 
     def _update_targeted_runtime_flags(**fields: object) -> None:
         for key, value in fields.items():

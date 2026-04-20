@@ -2115,6 +2115,7 @@ def _build_group_cache(
     dataset: Mapping[str, object],
     manual_dataset_bindings,
     projection_callbacks,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     _native_bg, display_bg = manual_dataset_bindings.load_background_by_index(
         int(background_index)
@@ -2143,7 +2144,20 @@ def _build_group_cache(
             disabled_qr_sets=(),
             disabled_qz_sections=(),
         ),
-        source_rows_for_background=manual_dataset_bindings.geometry_manual_source_rows_for_background,
+        source_rows_for_background=(
+            lambda bg_index, param_set=None: (
+                manual_dataset_bindings.geometry_manual_source_rows_for_background(
+                    int(bg_index),
+                    param_set,
+                    consumer="geometry_fit_group_cache",
+                    required_pairs=required_pairs,
+                )
+                if callable(
+                    manual_dataset_bindings.geometry_manual_source_rows_for_background
+                )
+                else []
+            )
+        ),
         simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
         peak_records=[],
         build_grouped_candidates=projection_callbacks.pick_candidates,
@@ -2489,6 +2503,15 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
     result["dataset_resolved_source_pair_count"] = int(
         dataset.get("resolved_source_pair_count", 0) or 0
     )
+    simulation_diagnostics = (
+        dict(dataset.get("simulation_diagnostics", {}))
+        if isinstance(dataset.get("simulation_diagnostics"), Mapping)
+        else {}
+    )
+    if isinstance(simulation_diagnostics.get("targeted_performance_gate"), Mapping):
+        result["targeted_performance_gate"] = dict(
+            simulation_diagnostics.get("targeted_performance_gate", {})
+        )
     try:
         group_cache = _build_group_cache(
             background_index=int(background_index),
@@ -2496,6 +2519,7 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
             dataset=dataset,
             manual_dataset_bindings=manual_dataset_bindings,
             projection_callbacks=projection_callbacks,
+            required_pairs=saved_entries,
         )
     except Exception as exc:
         result["ok"] = False
@@ -3678,6 +3702,15 @@ def _run_fresh_all_contract_validation(
         and float(max_background_distance_px)
         <= float(background_distance_gate_threshold_px)
     )
+    targeted_performance_gate = (
+        dict(context.get("targeted_performance_gate", {}))
+        if isinstance(context.get("targeted_performance_gate"), Mapping)
+        else {}
+    )
+    targeted_performance_gate_ok = bool(
+        not targeted_performance_gate
+        or bool(targeted_performance_gate.get("ok", False))
+    )
     isolated_rebind_ok = bool(
         processed_manual_entry_count > 0
         and bound_manual_entry_count == processed_manual_entry_count
@@ -3695,6 +3728,8 @@ def _run_fresh_all_contract_validation(
     )
     result["max_background_distance_px"] = max_background_distance_px
     result["background_distance_gate_ok"] = background_distance_gate_ok
+    if targeted_performance_gate:
+        result["targeted_performance_gate"] = targeted_performance_gate
     result["deprecated_aliases_present"] = True
     result["candidate_distance_px"] = list(result["background_distance_px"])
     result["candidate_distances_all_finite"] = bool(
@@ -3763,6 +3798,7 @@ def _run_fresh_all_contract_validation(
         and isolated_rebind_ok
         and compatibility_ok
         and background_distance_gate_ok
+        and targeted_performance_gate_ok
     )
     if provisional_ok and export_fresh_state_path is not None and fresh_state is not None:
         export_path = export_fresh_state_path.expanduser().resolve()
@@ -3795,6 +3831,8 @@ def _run_fresh_all_contract_validation(
         result["classification"] = "fresh_all_contract_export_fail"
     elif not runtime_prepare_ok and isolated_rebind_ok:
         result["classification"] = "runtime_prepare_failed_but_isolated_rebind_ok"
+    elif targeted_performance_gate and not targeted_performance_gate_ok:
+        result["classification"] = "targeted_performance_gate_failed"
     else:
         result["classification"] = "pass" if result["ok"] else "seam_failure"
     if not result["ok"] and not isinstance(result.get("failed_pair"), Mapping):
@@ -3810,6 +3848,7 @@ def _run_fresh_all_contract_validation(
                 "fresh_export_ok": fresh_export_ok,
                 "compatibility_ok": compatibility_ok,
                 "detector_distance_gate_ok": detector_distance_gate_ok,
+                "targeted_performance_gate_ok": targeted_performance_gate_ok,
                 "processed_manual_entry_count": processed_manual_entry_count,
                 "bound_manual_entry_count": bound_manual_entry_count,
                 "missing_manual_entry_count": missing_manual_entry_count,
@@ -4182,12 +4221,18 @@ def main() -> int:
         "--export-fresh-state",
         help="Optional path to write the validated fresh one-pair state.",
     )
+    parser.add_argument(
+        "--report-path",
+        help="Optional path to write the JSON report produced by this command.",
+    )
     args = parser.parse_args()
 
     resolved_state_path = Path(args.state).expanduser().resolve()
     export_fresh_state_path = (
         Path(args.export_fresh_state) if args.export_fresh_state else None
     )
+    raw_report_path = getattr(args, "report_path", None)
+    report_path = Path(raw_report_path).expanduser().resolve() if raw_report_path else None
     requested_mode = str(args.mode)
     effective_mode = "fresh-all" if requested_mode == "full" else requested_mode
     if (
@@ -4232,7 +4277,38 @@ def main() -> int:
         requested_mode=requested_mode,
         effective_mode=effective_mode,
     )
-    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    rendered = json.dumps(result, indent=2, sort_keys=True, default=str)
+    if report_path is not None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(rendered + "\n", encoding="utf-8")
+        print(
+            json.dumps(
+                {
+                    "ok": bool(result.get("ok", False)),
+                    "classification": result.get("classification"),
+                    "background_index": result.get("background_index"),
+                    "processed_manual_entry_count": result.get(
+                        "processed_manual_entry_count"
+                    ),
+                    "bound_manual_entry_count": result.get(
+                        "bound_manual_entry_count"
+                    ),
+                    "resolved_source_pair_count": result.get(
+                        "resolved_source_pair_count"
+                    ),
+                    "targeted_performance_gate_ok": (
+                        result.get("targeted_performance_gate", {}) or {}
+                    ).get("ok")
+                    if isinstance(result.get("targeted_performance_gate"), Mapping)
+                    else None,
+                    "report_path": str(report_path),
+                },
+                sort_keys=True,
+                default=str,
+            )
+        )
+    else:
+        print(rendered)
     return 0 if bool(result.get("ok", False)) else 1
 
 

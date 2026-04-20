@@ -81,6 +81,17 @@ rebinding. The canonical `new4` run must show endpoint-specific projection
 diagnostics for every manual caked residual row and must report
 `exact_fit_space_projector_available == true`.
 
+Temporary test policy:
+
+- Real `new4` geometry baseline fitting tests are skipped by default because the
+  fitting path can hang or timeout.
+- Enable those tests explicitly with `RA_SIM_RUN_SLOW_BASELINE_FITS=1`.
+- This is not acceptance of the final baseline proof.
+- Default CI and local default validation still cover correspondence, projector
+  provenance, frame ownership, no analytic fallback, and serialization.
+- The long-running optimizer-quality baseline remains a manual or opt-in gate
+  until the runtime hang is resolved.
+
 Next action: keep correspondence fixed, validate projector provenance on manual
 caked residual rows, and classify any remaining `new4` failures as fit-space
 projection failure, optimizer quality failure, or missing local

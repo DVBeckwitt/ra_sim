@@ -149,6 +149,134 @@ def _drain_geometry_fit_worker_events(event_queue) -> list[dict[str, object]]:
             return events
 
 
+def _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session) -> SimpleNamespace:
+    simulation_state = SimpleNamespace(
+        geometry_fit_targeted_projected_cache_by_background={},
+        geometry_fit_caking_ai_cache={},
+        analysis_preview_bins=(4, 4),
+        source_row_snapshots={},
+        last_simulation_signature=None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_source_snapshot_diagnostics_state",
+        {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=1, osc_files=["bg0.osc"]),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {
+            "a": 4.143,
+            "c": 28.64,
+            "lambda": 1.54,
+            "theta_initial": 0.0,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_source_snapshot_signature_for_background",
+        lambda index, params: ("sig", int(index), float(params.get("a", 0.0))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_cache_signature_summary",
+        lambda signature: f"sig-summary:{signature!r}",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_cache_inventory_snapshot",
+        lambda: {"source_snapshot_count": 0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_background_label",
+        lambda index: f"bg{int(index)}.osc",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_live_preview_simulated_peaks_from_cache",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_last_live_preview_cache_metadata",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "get_last_intersection_cache",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "is_intersection_cache_table",
+        lambda _table: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_copy_hit_tables",
+        lambda tables: list(tables or ()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_filter_hit_tables_for_required_branch_groups",
+        lambda hit_tables, required_branch_group_keys=None: (
+            list(hit_tables or ()),
+            {
+                "total_hit_tables_available": int(len(hit_tables or ())),
+                "hit_tables_considered_for_rebinding": int(len(hit_tables or ())),
+                "hit_tables_expanded_for_rebinding": int(len(hit_tables or ())),
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda rows: [dict(entry) for entry in rows or () if isinstance(entry, dict)],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_trace_live_cache_event",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_last_simulation_diagnostics",
+        lambda: {"status": "success"},
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "miller", [], raising=False)
+    monkeypatch.setattr(runtime_session, "intensities", [], raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    return simulation_state
+
+
 def _top_level_import_targets(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     targets: list[str] = []
@@ -10550,6 +10678,261 @@ def test_runtime_session_source_cache_caked_timeout_does_not_hide_row_cache_succ
     assert "source_cache_build_ready" in kinds
     assert "source_cache_caked_view_timeout" in kinds
     assert kinds.index("source_cache_build_ready") < kinds.index("source_cache_caked_view_timeout")
+
+
+def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    job = _make_geometry_fit_worker_job(runtime_session)
+    job["live_rows_by_background"] = {0: []}
+    dataset_calls: list[int] = []
+
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_analysis_integrator",
+        lambda _cfg: object(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_worker_caked_projection_view",
+        lambda **_kwargs: {
+            "radial_axis": np.asarray([1.0, 2.0], dtype=float),
+            "azimuth_axis": np.asarray([3.0, 4.0], dtype=float),
+            "transform_bundle": object(),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.ones((2, 2), dtype=float),
+            "radial": np.asarray([1.0, 2.0], dtype=float),
+            "azimuth": np.asarray([3.0, 4.0], dtype=float),
+            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=float),
+            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
+            "transform_bundle": object(),
+            "detector_shape": (4, 4),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda background_index, **_kwargs: dataset_calls.append(int(background_index)) or {},
+    )
+
+    def _prepare_geometry_fit_run(**kwargs):
+        kwargs["build_dataset"](
+            0,
+            theta_base=0.0,
+            base_fit_params={"theta_initial": 0.0},
+            orientation_cfg={},
+            stage_callback=kwargs.get("stage_callback"),
+        )
+        return runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache_metadata",
+        lambda: {
+            "signature_digest": "logged-digest",
+            "av": 9.999,
+            "cv": 28.64,
+            "wavelength_center": 1.54,
+            "theta_center": 0.0,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache",
+        lambda: pytest.fail(
+            "params mismatch should reject before heavy hit-table load"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "is_intersection_cache_table",
+        lambda _table: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_copy_hit_tables",
+        lambda tables: list(tables or ()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_filter_hit_tables_for_required_branch_groups",
+        lambda hit_tables, required_branch_group_keys=None: (
+            list(hit_tables or ()),
+            {
+                "total_hit_tables_available": int(len(hit_tables or ())),
+                "hit_tables_considered_for_rebinding": int(len(hit_tables or ())),
+                "hit_tables_expanded_for_rebinding": int(len(hit_tables or ())),
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_simulate_hit_tables_for_fit",
+        lambda *_args, **_kwargs: [object()],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_build_source_rows_from_hit_tables",
+        lambda *_args, **_kwargs: (
+            [_geometry_fit_worker_live_row()],
+            [],
+            [],
+        ),
+        raising=False,
+    )
+
+    runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    miss_payload = next(
+        dict(event.get("payload") or {})
+        for event in events
+        if str(event.get("kind")) == "source_cache_logged_intersection_cache_miss"
+    )
+
+    assert dataset_calls == [0]
+    assert miss_payload["status"] == "params_mismatch"
+    assert miss_payload["expected_signature_digest"]
+    assert miss_payload["actual_signature_digest"] == "logged-digest"
+    assert miss_payload["mismatch_reason"] == "params_mismatch"
+    assert miss_payload["heavy_hit_table_load_attempted"] is False
+
+
+def test_second_unchanged_preflight_reuses_targeted_projected_cache(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    required_pairs = [_geometry_fit_worker_required_pair()]
+    first_project_calls: list[int] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache_metadata",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache",
+        lambda: pytest.fail("uncached first targeted preflight should skip heavy logged cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_simulate_hit_tables_for_fit",
+        lambda *_args, **_kwargs: [object()],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_build_source_rows_from_hit_tables",
+        lambda *_args, **_kwargs: (
+            [_geometry_fit_worker_live_row()],
+            [],
+            [],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda rows: first_project_calls.append(int(len(rows or ())))
+        or [dict(entry) for entry in rows or () if isinstance(entry, dict)],
+        raising=False,
+    )
+
+    first_rows = runtime_session._geometry_manual_rebuild_source_rows_for_background(
+        0,
+        consumer="geometry_fit_dataset",
+        required_pairs=required_pairs,
+    )
+    first_diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert first_rows
+    assert first_project_calls == [1]
+    assert first_diagnostics["targeted_cache_hit"] is False
+    assert first_diagnostics["targeted_simulation_used"] is True
+    assert first_diagnostics["targeted_performance_gate"]["ok"] is True
+    assert simulation_state.geometry_fit_targeted_projected_cache_by_background[0]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_simulate_hit_tables_for_fit",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unchanged second targeted preflight should reuse projected cache"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_build_source_rows_from_hit_tables",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unchanged second targeted preflight should not rebuild source rows"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda rows: pytest.fail(
+            "unchanged second targeted preflight should not reproject targeted rows"
+        ),
+        raising=False,
+    )
+
+    second_rows = runtime_session._geometry_manual_rebuild_source_rows_for_background(
+        0,
+        consumer="geometry_fit_dataset",
+        required_pairs=required_pairs,
+    )
+    second_diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert second_rows == first_rows
+    assert second_diagnostics["targeted_cache_hit"] is True
+    assert second_diagnostics["cache_source"] == "targeted_projected_cache"
+    assert second_diagnostics["targeted_simulation_used"] is False
+    assert second_diagnostics["full_source_rows_built_for_rebinding"] is False
+    assert second_diagnostics["full_source_rows_projected_for_rebinding"] is False
+    assert second_diagnostics["targeted_performance_gate"]["ok"] is True
 
 
 def test_runtime_session_late_caked_event_is_drained_after_worker_exit(monkeypatch) -> None:

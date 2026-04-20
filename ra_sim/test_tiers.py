@@ -25,6 +25,7 @@ FAST_TEST_FILES = (
 INTEGRATION_TEST_FILES = (
     "test_cli_headless.py",
     "test_geometry_fit_landscape.py",
+    "test_geometry_fit_quality_baseline.py",
     "test_geometry_fitting.py",
     "test_gui_geometry_fit_workflow.py",
     "test_hbn_fitter_bundle_export.py",

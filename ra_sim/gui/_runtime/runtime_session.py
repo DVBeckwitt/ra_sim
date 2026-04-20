@@ -16311,7 +16311,19 @@ def _replace_gui_state_peak_cache(
             )
         except Exception:
             detector_point = None
-        if detector_point is not None:
+        native_hint_point = None
+        if bool(use_caked_display):
+            try:
+                native_hint_point = (
+                    gui_manual_geometry._geometry_manual_entry_stronger_native_hint_point(
+                        record
+                    )
+                )
+            except Exception:
+                native_hint_point = None
+        if detector_point is not None and (
+            not bool(use_caked_display) or native_hint_point is not None
+        ):
             normalized_record["sim_col"] = float(detector_point[0])
             normalized_record["sim_row"] = float(detector_point[1])
             normalized_record["sim_col_raw"] = float(detector_point[0])
@@ -18392,6 +18404,242 @@ def _geometry_manual_source_rows_for_background(
         param_set,
     )
     requested_signature_summary = _live_cache_signature_summary(requested_signature)
+    required_manual_fit_targets = (
+        gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=int(background_idx),
+        )
+        if required_pairs
+        else []
+    )
+    required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
+        required_manual_fit_targets
+    )
+    preflight_mode = (
+        "manual_geometry_targeted" if required_branch_group_keys else "full"
+    )
+    targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
+    required_branch_group_keys_digest = gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        required_branch_group_keys,
+        background_index=int(background_idx),
+        requested_signature=requested_signature,
+        requested_signature_summary=requested_signature_summary,
+        preflight_mode=preflight_mode,
+    )
+    manual_target_scoring_digest = gui_geometry_fit._geometry_fit_manual_target_scoring_digest(
+        required_manual_fit_targets
+    )
+
+    def _targeted_lookup_flags(
+        *,
+        total_source_rows_available: int,
+        source_rows_considered_for_rebinding: int,
+        source_rows_projected_for_rebinding: int,
+        candidate_rows_after_hkl_filter: int,
+        candidate_rows_after_branch_filter: int,
+        candidate_rows_scored_for_background_distance: int,
+        unrelated_projected_row_count_for_rebinding: int,
+        unrelated_scored_row_count_for_rebinding: int,
+        targeted_cache_hit: bool,
+        cache_source: str,
+        targeted_simulation_supported: bool = False,
+        targeted_simulation_used: bool = False,
+        targeted_simulation_fallback_reason: str | None = None,
+        total_hit_tables_available: int = 0,
+        hit_tables_considered_for_rebinding: int = 0,
+        hit_tables_expanded_for_rebinding: int = 0,
+        full_source_rows_built_for_rebinding: bool = False,
+        full_source_rows_projected_for_rebinding: bool = False,
+        full_fresh_simulation_fallback_used: bool = False,
+    ) -> dict[str, object]:
+        payload = {
+            "preflight_mode": str(preflight_mode),
+            "targeted_preflight_enabled": bool(targeted_preflight_enabled),
+            "targeted_simulation_supported": bool(targeted_simulation_supported),
+            "targeted_simulation_used": bool(targeted_simulation_used),
+            "targeted_simulation_fallback_reason": (
+                str(targeted_simulation_fallback_reason)
+                if targeted_simulation_fallback_reason is not None
+                else None
+            ),
+            "targeted_cache_hit": bool(targeted_cache_hit),
+            "cache_source": str(cache_source),
+            "required_manual_pair_count": int(len(required_manual_fit_targets)),
+            "required_hkl_branch_group_count": int(len(required_branch_group_keys)),
+            "required_hkl_branch_keys_digest": str(required_branch_group_keys_digest),
+            "manual_target_scoring_digest": str(manual_target_scoring_digest),
+            "total_hit_tables_available": int(total_hit_tables_available),
+            "hit_tables_considered_for_rebinding": int(
+                hit_tables_considered_for_rebinding
+            ),
+            "hit_tables_expanded_for_rebinding": int(
+                hit_tables_expanded_for_rebinding
+            ),
+            "total_source_rows_available": int(total_source_rows_available),
+            "source_rows_considered_for_rebinding": int(
+                source_rows_considered_for_rebinding
+            ),
+            "source_rows_projected_for_rebinding": int(
+                source_rows_projected_for_rebinding
+            ),
+            "candidate_rows_after_hkl_filter": int(candidate_rows_after_hkl_filter),
+            "candidate_rows_after_branch_filter": int(
+                candidate_rows_after_branch_filter
+            ),
+            "candidate_rows_scored_for_background_distance": int(
+                candidate_rows_scored_for_background_distance
+            ),
+            "unrelated_projected_row_count_for_rebinding": int(
+                unrelated_projected_row_count_for_rebinding
+            ),
+            "unrelated_scored_row_count_for_rebinding": int(
+                unrelated_scored_row_count_for_rebinding
+            ),
+            "full_source_rows_built_for_rebinding": bool(
+                full_source_rows_built_for_rebinding
+            ),
+            "full_source_rows_projected_for_rebinding": bool(
+                full_source_rows_projected_for_rebinding
+            ),
+            "full_fresh_simulation_fallback_used": bool(
+                full_fresh_simulation_fallback_used
+            ),
+            "required_manual_fit_targets": copy.deepcopy(required_manual_fit_targets),
+        }
+        payload["targeted_performance_gate"] = (
+            gui_geometry_fit._geometry_fit_targeted_performance_gate_payload(payload)
+        )
+        return payload
+
+    def _store_targeted_projected_cache(
+        *,
+        stored_rows: Sequence[Mapping[str, object]] | None,
+        projected_rows: Sequence[Mapping[str, object]] | None,
+        cache_source: str,
+        diagnostics: Mapping[str, object] | None = None,
+    ) -> None:
+        if not targeted_preflight_enabled:
+            return
+        normalized_stored_rows = [
+            dict(entry)
+            for entry in (stored_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+        normalized_projected_rows = [
+            dict(entry)
+            for entry in (projected_rows or ())
+            if isinstance(entry, Mapping)
+        ]
+        if not normalized_stored_rows and not normalized_projected_rows:
+            return
+        try:
+            _geometry_fit_store_targeted_projected_cache_entry(
+                background_index=int(background_idx),
+                key_digest=str(required_branch_group_keys_digest),
+                payload={
+                    "background_index": int(background_idx),
+                    "requested_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
+                        requested_signature
+                    ),
+                    "requested_signature_summary": (
+                        gui_geometry_fit._geometry_fit_cache_jsonable(
+                            requested_signature_summary
+                        )
+                    ),
+                    "required_branch_group_keys_digest": str(
+                        required_branch_group_keys_digest
+                    ),
+                    "manual_target_scoring_digest": str(
+                        manual_target_scoring_digest
+                    ),
+                    "preflight_mode": str(preflight_mode),
+                    "stored_rows": normalized_stored_rows,
+                    "projected_rows": normalized_projected_rows,
+                    "cache_source": str(cache_source),
+                    "diagnostics": copy.deepcopy(dict(diagnostics or {})),
+                },
+            )
+        except Exception:
+            pass
+
+    if targeted_preflight_enabled:
+        targeted_cache_payload = _geometry_fit_load_targeted_projected_cache_entry(
+            background_index=int(background_idx),
+            key_digest=str(required_branch_group_keys_digest),
+        )
+        if isinstance(targeted_cache_payload, Mapping):
+            requested_summary_matches = (
+                targeted_cache_payload.get("requested_signature_summary")
+                == requested_signature_summary
+            )
+            requested_signature_matches = (
+                targeted_cache_payload.get("requested_signature") == requested_signature
+                or requested_summary_matches
+            )
+            targeted_rows = [
+                dict(entry)
+                for entry in (
+                    targeted_cache_payload.get("projected_rows")
+                    or targeted_cache_payload.get("stored_rows")
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            ]
+            if requested_signature_matches and targeted_rows:
+                live_cache_inventory = _live_cache_inventory_snapshot()
+                targeted_flags = _targeted_lookup_flags(
+                    total_source_rows_available=int(len(targeted_rows)),
+                    source_rows_considered_for_rebinding=int(len(targeted_rows)),
+                    source_rows_projected_for_rebinding=0,
+                    candidate_rows_after_hkl_filter=int(len(targeted_rows)),
+                    candidate_rows_after_branch_filter=int(len(targeted_rows)),
+                    candidate_rows_scored_for_background_distance=int(
+                        len(targeted_rows)
+                    ),
+                    unrelated_projected_row_count_for_rebinding=0,
+                    unrelated_scored_row_count_for_rebinding=0,
+                    targeted_cache_hit=True,
+                    cache_source="targeted_projected_cache",
+                )
+                _set_geometry_manual_source_snapshot_diagnostics(
+                    source="source_snapshot",
+                    cache_family="source_snapshot",
+                    action="lookup",
+                    consumer=lookup_context,
+                    status="snapshot_hit",
+                    background_index=int(background_idx),
+                    requested_signature=requested_signature,
+                    requested_signature_summary=requested_signature_summary,
+                    snapshot_signature=requested_signature,
+                    stored_signature_summary=requested_signature_summary,
+                    raw_peak_count=int(len(targeted_rows)),
+                    projected_peak_count=int(len(targeted_rows)),
+                    created_from=str(
+                        targeted_cache_payload.get("cache_source")
+                        or "targeted_projected_cache"
+                    ),
+                    signature_match=True,
+                    live_cache_inventory=live_cache_inventory,
+                    **targeted_flags,
+                )
+                _trace_live_cache_event(
+                    "source_snapshot",
+                    "lookup",
+                    background_index=int(background_idx),
+                    outcome="hit",
+                    consumer=lookup_context,
+                    status="snapshot_hit",
+                    requested_signature_summary=requested_signature_summary,
+                    stored_signature_summary=requested_signature_summary,
+                    created_from=str(
+                        targeted_cache_payload.get("cache_source")
+                        or "targeted_projected_cache"
+                    ),
+                    raw_peak_count=int(len(targeted_rows)),
+                    projected_peak_count=int(len(targeted_rows)),
+                    signature_match=True,
+                )
+                return targeted_rows
     snapshot = dict(simulation_runtime_state.source_row_snapshots.get(background_idx) or {})
     if not snapshot:
         live_cache_inventory = _live_cache_inventory_snapshot()
@@ -18526,9 +18774,25 @@ def _geometry_manual_source_rows_for_background(
             if rebuilt_rows:
                 return rebuilt_rows
         return []
+    filtered_rows = [dict(entry) for entry in raw_rows]
+    filter_diagnostics = {
+        "total_count": int(len(filtered_rows)),
+        "after_hkl_filter_count": int(len(filtered_rows)),
+        "after_branch_filter_count": int(len(filtered_rows)),
+        "unrelated_count": 0,
+    }
+    if targeted_preflight_enabled:
+        (
+            filtered_rows,
+            filter_diagnostics,
+            _matched_required_keys,
+        ) = gui_geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            raw_rows,
+            required_branch_group_keys,
+        )
     snapshot_validation = (
         gui_geometry_fit.validate_geometry_fit_live_source_rows(
-            raw_rows,
+            filtered_rows,
             required_pairs=required_pairs,
         )
         if required_pairs
@@ -18536,6 +18800,31 @@ def _geometry_manual_source_rows_for_background(
     )
     if required_pairs and not bool(snapshot_validation.get("valid", False)):
         live_cache_inventory = _live_cache_inventory_snapshot()
+        targeted_flags = (
+            _targeted_lookup_flags(
+                total_source_rows_available=int(len(raw_rows)),
+                source_rows_considered_for_rebinding=int(len(filtered_rows)),
+                source_rows_projected_for_rebinding=0,
+                candidate_rows_after_hkl_filter=int(
+                    filter_diagnostics.get("after_hkl_filter_count", len(filtered_rows))
+                ),
+                candidate_rows_after_branch_filter=int(
+                    filter_diagnostics.get(
+                        "after_branch_filter_count",
+                        len(filtered_rows),
+                    )
+                ),
+                candidate_rows_scored_for_background_distance=int(len(filtered_rows)),
+                unrelated_projected_row_count_for_rebinding=0,
+                unrelated_scored_row_count_for_rebinding=int(
+                    filter_diagnostics.get("unrelated_count", 0)
+                ),
+                targeted_cache_hit=True,
+                cache_source="source_snapshot",
+            )
+            if targeted_preflight_enabled
+            else {}
+        )
         _set_geometry_manual_source_snapshot_diagnostics(
             source="source_snapshot",
             cache_family="source_snapshot",
@@ -18553,6 +18842,7 @@ def _geometry_manual_source_rows_for_background(
             signature_match=True,
             live_cache_inventory=live_cache_inventory,
             live_runtime_cache_validation=snapshot_validation,
+            **targeted_flags,
         )
         _trace_live_cache_event(
             "source_snapshot",
@@ -18579,13 +18869,46 @@ def _geometry_manual_source_rows_for_background(
             if rebuilt_rows:
                 return rebuilt_rows
         return []
+    projected_projection_count = 0
+    rows_to_project = filtered_rows if targeted_preflight_enabled else raw_rows
     projected_rows = (
-        _project_geometry_manual_peaks_to_current_view(raw_rows)
+        _project_geometry_manual_peaks_to_current_view(rows_to_project)
         if callable(_project_geometry_manual_peaks_to_current_view)
-        else raw_rows
+        else rows_to_project
     )
-    projected_rows = [dict(entry) for entry in (projected_rows or ()) if isinstance(entry, dict)]
+    if callable(_project_geometry_manual_peaks_to_current_view):
+        projected_projection_count = int(len(rows_to_project))
+    projected_rows = [
+        dict(entry) for entry in (projected_rows or ()) if isinstance(entry, dict)
+    ]
     live_cache_inventory = _live_cache_inventory_snapshot()
+    targeted_flags = (
+        _targeted_lookup_flags(
+            total_source_rows_available=int(len(raw_rows)),
+            source_rows_considered_for_rebinding=int(len(filtered_rows)),
+            source_rows_projected_for_rebinding=int(projected_projection_count),
+            candidate_rows_after_hkl_filter=int(
+                filter_diagnostics.get("after_hkl_filter_count", len(filtered_rows))
+            ),
+            candidate_rows_after_branch_filter=int(
+                filter_diagnostics.get("after_branch_filter_count", len(filtered_rows))
+            ),
+            candidate_rows_scored_for_background_distance=int(len(projected_rows)),
+            unrelated_projected_row_count_for_rebinding=0,
+            unrelated_scored_row_count_for_rebinding=0,
+            targeted_cache_hit=bool(targeted_preflight_enabled),
+            cache_source="source_snapshot",
+        )
+        if targeted_preflight_enabled
+        else {}
+    )
+    if targeted_preflight_enabled:
+        _store_targeted_projected_cache(
+            stored_rows=filtered_rows,
+            projected_rows=projected_rows,
+            cache_source="source_snapshot",
+            diagnostics=targeted_flags,
+        )
     _set_geometry_manual_source_snapshot_diagnostics(
         source="source_snapshot",
         cache_family="source_snapshot",
@@ -18603,6 +18926,7 @@ def _geometry_manual_source_rows_for_background(
         signature_match=True,
         live_cache_inventory=live_cache_inventory,
         live_runtime_cache_validation=snapshot_validation,
+        **targeted_flags,
     )
     _trace_live_cache_event(
         "source_snapshot",
@@ -25455,10 +25779,14 @@ def _clear_geometry_fit_worker_events() -> None:
 
 
 def _clear_geometry_fit_late_event_tail_state(*, clear_pending: bool = True) -> None:
-    gui_controllers.clear_tk_after_token(
-        root,
-        getattr(simulation_runtime_state, "geometry_fit_late_event_poll_token", None),
+    late_event_poll_token = getattr(
+        simulation_runtime_state, "geometry_fit_late_event_poll_token", None
     )
+    if late_event_poll_token is not None:
+        gui_controllers.clear_tk_after_token(
+            root,
+            late_event_poll_token,
+        )
     simulation_runtime_state.geometry_fit_late_event_poll_token = None
     try:
         current_generation = int(

@@ -1401,18 +1401,52 @@ def simulate_geometry_fit_hit_tables(
     default_solve_q_steps: int,
     default_solve_q_rel_tol: float,
     default_solve_q_mode: int,
+    required_branch_group_keys: Sequence[
+        tuple[tuple[int, int, int], int | None, object | None]
+    ]
+    | None = None,
 ) -> list[object]:
     """Simulate once and return raw hit tables for geometry-fit helpers."""
 
     params_local = dict(param_set)
+    filtered_miller_array = np.asarray(miller_array, dtype=np.float64)
+    filtered_intensity_array = np.asarray(intensity_array, dtype=np.float64)
+    required_branch_keys = list(required_branch_group_keys or ())
     diagnostics: dict[str, object] = {
         "stage": "simulate_hit_tables",
-        "miller_shape": _array_shape_list(miller_array),
-        "miller_count": _array_row_count(miller_array),
-        "intensity_shape": _array_shape_list(intensity_array),
-        "intensity_count": _array_row_count(intensity_array),
+        "miller_shape": _array_shape_list(filtered_miller_array),
+        "miller_count": _array_row_count(filtered_miller_array),
+        "intensity_shape": _array_shape_list(filtered_intensity_array),
+        "intensity_count": _array_row_count(filtered_intensity_array),
         "image_size": int(image_size),
+        "targeted_simulation_supported": bool(required_branch_keys),
+        "targeted_simulation_used": bool(required_branch_keys),
     }
+    if required_branch_keys and filtered_miller_array.ndim == 2 and filtered_miller_array.shape[1] >= 3:
+        required_hkls = {tuple(key[0]) for key in required_branch_keys}
+        keep_mask = np.asarray(
+            [
+                tuple(int(np.rint(float(v))) for v in row[:3]) in required_hkls
+                for row in filtered_miller_array
+            ],
+            dtype=bool,
+        )
+        if keep_mask.shape[0] == filtered_miller_array.shape[0] and np.any(keep_mask):
+            filtered_miller_array = np.asarray(
+                filtered_miller_array[keep_mask],
+                dtype=np.float64,
+            )
+            filtered_intensity_array = np.asarray(
+                filtered_intensity_array[keep_mask],
+                dtype=np.float64,
+            )
+            diagnostics["targeted_required_hkl_count"] = int(len(required_hkls))
+            diagnostics["targeted_required_branch_group_count"] = int(
+                len(required_branch_keys)
+            )
+            diagnostics["targeted_miller_count_after_filter"] = int(
+                filtered_miller_array.shape[0]
+            )
 
     mosaic = dict(params_local.get("mosaic_params", {}))
     if not mosaic and callable(build_geometry_fit_central_mosaic_params):
@@ -1449,8 +1483,8 @@ def simulate_geometry_fit_hit_tables(
     try:
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
         _, hit_tables, *_ = process_peaks_parallel(
-            miller_array,
-            intensity_array,
+            filtered_miller_array,
+            filtered_intensity_array,
             image_size,
             float(params_local["a"]),
             float(params_local["c"]),
@@ -1502,6 +1536,42 @@ def simulate_geometry_fit_hit_tables(
         raise
 
     hit_table_list = list(hit_tables)
+    if required_branch_keys:
+        required_hkls = {tuple(key[0]) for key in required_branch_keys}
+        required_branches_by_hkl: dict[tuple[int, int, int], set[int]] = {}
+        for key in required_branch_keys:
+            if key[1] is None:
+                continue
+            required_branches_by_hkl.setdefault(tuple(key[0]), set()).add(int(key[1]))
+        filtered_hit_tables: list[object] = []
+        for table in hit_table_list:
+            arr = np.asarray(table, dtype=np.float64)
+            if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] < 7:
+                continue
+            try:
+                table_hkl = (
+                    int(np.rint(float(arr[0, 4]))),
+                    int(np.rint(float(arr[0, 5]))),
+                    int(np.rint(float(arr[0, 6]))),
+                )
+            except Exception:
+                continue
+            if table_hkl not in required_hkls:
+                continue
+            allowed_branches = required_branches_by_hkl.get(table_hkl, set())
+            if not allowed_branches:
+                filtered_hit_tables.append(np.asarray(arr, dtype=np.float64).copy())
+                continue
+            branch_mask = np.zeros(arr.shape[0], dtype=bool)
+            for row_idx in range(arr.shape[0]):
+                branch_idx = source_branch_index_from_phi_deg(float(arr[row_idx, 3]))
+                if branch_idx in allowed_branches:
+                    branch_mask[row_idx] = True
+            if np.any(branch_mask):
+                filtered_hit_tables.append(
+                    np.asarray(arr[branch_mask], dtype=np.float64).copy()
+                )
+        hit_table_list = filtered_hit_tables
     hit_row_counts = [int(len(geometry_reference_hit_rows(table))) for table in hit_table_list]
     row_count_preview = _geometry_fit_row_count_preview(hit_row_counts)
     diagnostics.update(
@@ -1744,6 +1814,13 @@ def make_runtime_geometry_fit_simulation_callbacks(
         intensity_array: np.ndarray,
         image_size: int,
         param_set: Mapping[str, object] | dict[str, object],
+        *,
+        required_branch_group_keys: Sequence[
+            tuple[tuple[int, int, int], int | None, object | None]
+        ]
+        | None = None,
+        required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+        preflight_mode: str = "full",
     ) -> list[object]:
         try:
             result = simulate_geometry_fit_hit_tables(
@@ -1756,6 +1833,7 @@ def make_runtime_geometry_fit_simulation_callbacks(
                 default_solve_q_steps=default_solve_q_steps,
                 default_solve_q_rel_tol=default_solve_q_rel_tol,
                 default_solve_q_mode=default_solve_q_mode,
+                required_branch_group_keys=required_branch_group_keys,
             )
         except Exception:
             _set_last_simulation_diagnostics(

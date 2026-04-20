@@ -3626,6 +3626,71 @@ def test_probe_main_aliases_full_to_fresh_all(
     assert "aliases fresh-all" in payload["mode_note"]
 
 
+def test_probe_main_writes_report_file_and_prints_summary_when_report_path_present(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    report_path = tmp_path / "report.json"
+
+    monkeypatch.setattr(
+        probe.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: SimpleNamespace(
+            state=str(tmp_path / "dummy.json"),
+            background_index=0,
+            mode="full",
+            sentinel_slot_index=1,
+            export_fresh_state=None,
+            report_path=str(report_path),
+        ),
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_all_contract_validation",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "classification": "pass",
+            "background_index": 0,
+            "processed_manual_entry_count": 7,
+            "bound_manual_entry_count": 7,
+            "resolved_source_pair_count": 7,
+            "targeted_performance_gate": {"ok": True},
+            "slot_results": [{"pair_id": "bg0:pair0"}],
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_contract_validation",
+        lambda *args, **kwargs: pytest.fail("fresh sentinel path should not run"),
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: pytest.fail("compatibility path should not run"),
+    )
+
+    exit_code = probe.main()
+    stdout_payload = json.loads(capsys.readouterr().out)
+    file_payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert stdout_payload == {
+        "background_index": 0,
+        "bound_manual_entry_count": 7,
+        "classification": "pass",
+        "ok": True,
+        "processed_manual_entry_count": 7,
+        "report_path": str(report_path.resolve()),
+        "resolved_source_pair_count": 7,
+        "targeted_performance_gate_ok": True,
+    }
+    assert file_payload["requested_mode"] == "full"
+    assert file_payload["effective_mode"] == "fresh-all"
+    assert file_payload["slot_results"] == [{"pair_id": "bg0:pair0"}]
+
+
 def test_saved_state_compatibility_validation_handles_two_entry_pair(
     monkeypatch,
     tmp_path,

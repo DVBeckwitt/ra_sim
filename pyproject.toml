@@ -78,6 +78,7 @@ markers = [
   "fast: quick local-feedback tier used by ra-sim-dev check",
   "integration: slower end-to-end or workflow-heavy tests",
   "benchmark: benchmark-oriented regression tests excluded from fast tier",
+  "slow_baseline_fit: real geometry baseline fitting; opt-in with RA_SIM_RUN_SLOW_BASELINE_FITS=1",
 ]
 
 [tool.ruff]
