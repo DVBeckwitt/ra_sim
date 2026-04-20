@@ -1812,9 +1812,13 @@ def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_l
     assert refined_entry["refined_sim_y"] == -57.5
     assert peak_records[0]["display_col"] == 181.0
     assert peak_records[0]["display_row"] == 95.0
-    assert peak_records[1]["display_col"] == 30.25
-    assert peak_records[1]["display_row"] == -57.5
-    assert peak_positions == [(181.0, 95.0), (30.25, -57.5)]
+    assert peak_records[1]["display_col"] == 190.0
+    assert peak_records[1]["display_row"] == 96.0
+    assert peak_positions == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 190.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["click_spatial_index"] == {"position_count": 2}
     assert runtime_session.geometry_runtime_state.manual_pick_cache_signature is None
     assert runtime_session.geometry_runtime_state.manual_pick_cache_data == {}
 
@@ -2056,10 +2060,15 @@ def test_runtime_session_refine_current_manual_pairs_uses_branch_aware_lookup(
     assert saved_after_refine[0][1]["source_branch_index"] == 1
     assert saved_after_refine[0][1]["refined_sim_caked_x"] == 30.25
     assert saved_after_refine[0][1]["refined_sim_caked_y"] == -57.5
-    assert peak_records[0]["display_col"] == 29.0
-    assert peak_records[0]["display_row"] == -58.5
-    assert peak_records[1]["display_col"] == 30.25
-    assert peak_records[1]["display_row"] == -57.5
+    assert peak_records[0]["display_col"] == 181.0
+    assert peak_records[0]["display_row"] == 95.0
+    assert peak_records[1]["display_col"] == 190.0
+    assert peak_records[1]["display_row"] == 96.0
+    assert peak_positions == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 190.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["click_spatial_index"] == {"position_count": 2}
     assert runtime_session.geometry_runtime_state.manual_pick_cache_signature is None
     assert runtime_session.geometry_runtime_state.manual_pick_cache_data == {}
     assert side_effects == [
@@ -2330,8 +2339,12 @@ def test_runtime_session_refine_current_manual_pairs_ignores_stale_caked_coords_
     assert saved_after_refine[0][0]["refined_sim_caked_y"] == -57.5
     assert peak_records_by_branch[0]["display_col"] == 181.0
     assert peak_records_by_branch[0]["display_row"] == 95.0
-    assert peak_records_by_branch[1]["display_col"] == 30.25
-    assert peak_records_by_branch[1]["display_row"] == -57.5
+    assert peak_records_by_branch[1]["display_col"] == 190.0
+    assert peak_records_by_branch[1]["display_row"] == 96.0
+    assert peak_overlay_cache["records"][0]["display_col"] == 181.0
+    assert peak_overlay_cache["records"][1]["display_col"] == 190.0
+    assert peak_overlay_cache["positions"] == [(181.0, 95.0), (190.0, 96.0)]
+    assert peak_overlay_cache["click_spatial_index"] == {"position_count": 2}
     assert runtime_session.geometry_runtime_state.manual_pick_cache_signature is None
     assert runtime_session.geometry_runtime_state.manual_pick_cache_data == {}
     assert side_effects == [

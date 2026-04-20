@@ -7795,10 +7795,10 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         "source_peak_index": 1,
         "source_table_index": 9,
         "source_row_index": 0,
-        "sim_col": 190.0,
-        "sim_row": 96.0,
-        "caked_x": 30.25,
-        "caked_y": -57.5,
+        "sim_col": 188.0,
+        "sim_row": 94.0,
+        "caked_x": 29.75,
+        "caked_y": -57.8,
     }
     saved_entry_sets: list[list[dict[str, object]]] = []
 
@@ -7850,6 +7850,10 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
     assert handled is True
     assert next_session == {}
     emitted_pair = dict(saved_entry_sets[-1][0])
+    assert emitted_pair["refined_sim_x"] == 190.0
+    assert emitted_pair["refined_sim_y"] == 96.0
+    assert emitted_pair["refined_sim_caked_x"] == 30.25
+    assert emitted_pair["refined_sim_caked_y"] == -57.5
 
     detector_measured, detector_pairs = mg.build_geometry_manual_initial_pairs_display(
         0,
@@ -7900,7 +7904,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
             "hkl": (-1, 0, 5),
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
+            "sim_display": (188.0, 94.0),
         }
     ]
     assert caked_pairs == [
@@ -7909,7 +7913,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
             "hkl": (-1, 0, 5),
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (29.5, -58.0),
-            "sim_display": (30.25, -57.5),
+            "sim_display": (29.75, -57.8),
         }
     ]
 

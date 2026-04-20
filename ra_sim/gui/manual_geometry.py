@@ -5180,16 +5180,22 @@ def build_geometry_manual_initial_pairs_display(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
-        _copy_q_values_from_sources(initial_entry, entry)
         bg_coords = entry_display_coords(entry)
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
-        sim_entry = geometry_manual_lookup_source_entry(simulated_lookup, entry)
-        sim_entry = geometry_manual_apply_refined_simulated_override(
-            entry,
-            sim_entry,
-            prefer_caked_display=use_caked_display,
+        sim_source_entry = geometry_manual_lookup_source_entry(simulated_lookup, entry)
+        sim_entry = (
+            dict(sim_source_entry)
+            if isinstance(sim_source_entry, Mapping)
+            else None
         )
+        if sim_entry is None:
+            sim_entry = geometry_manual_apply_refined_simulated_override(
+                entry,
+                None,
+                prefer_caked_display=use_caked_display,
+            )
+        _copy_q_values_from_sources(initial_entry, entry, sim_source_entry, sim_entry)
         if isinstance(sim_entry, dict) and callable(project_peaks_to_current_view):
             try:
                 projected_sim_entries = project_peaks_to_current_view([sim_entry])
