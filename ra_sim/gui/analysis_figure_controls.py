@@ -103,6 +103,87 @@ def _scroll_step(event: object) -> float:
     return 0.0
 
 
+def _event_axis_pixel_position(axis: object, event: object) -> tuple[float, float] | None:
+    bbox = getattr(axis, "bbox", None)
+    if bbox is None:
+        return None
+    try:
+        bbox_x0 = float(bbox.x0)
+        bbox_y0 = float(bbox.y0)
+        bbox_width = float(bbox.width)
+        bbox_height = float(bbox.height)
+        event_x = float(getattr(event, "x", math.nan))
+        event_y = float(getattr(event, "y", math.nan))
+    except Exception:
+        return None
+    if (
+        not math.isfinite(bbox_width)
+        or not math.isfinite(bbox_height)
+        or bbox_width <= 0.0
+        or bbox_height <= 0.0
+        or not math.isfinite(event_x)
+        or not math.isfinite(event_y)
+    ):
+        return None
+    clamped_x = min(max(event_x, bbox_x0), bbox_x0 + bbox_width)
+    clamped_y = min(max(event_y, bbox_y0), bbox_y0 + bbox_height)
+    return (float(clamped_x), float(clamped_y))
+
+
+def _event_axis_anchor_fractions_or_none(
+    axis: object,
+    event: object,
+) -> tuple[float, float] | None:
+    if getattr(event, "inaxes", None) is not axis:
+        return None
+    pixel_position = _event_axis_pixel_position(axis, event)
+    bbox = getattr(axis, "bbox", None)
+    if pixel_position is None or bbox is None:
+        return None
+    try:
+        bbox_x0 = float(bbox.x0)
+        bbox_y0 = float(bbox.y0)
+        bbox_width = float(bbox.width)
+        bbox_height = float(bbox.height)
+    except Exception:
+        return None
+    if (
+        not math.isfinite(bbox_width)
+        or not math.isfinite(bbox_height)
+        or bbox_width <= 0.0
+        or bbox_height <= 0.0
+    ):
+        return None
+    return (
+        min(max((float(pixel_position[0]) - bbox_x0) / bbox_width, 0.0), 1.0),
+        min(max((float(pixel_position[1]) - bbox_y0) / bbox_height, 0.0), 1.0),
+    )
+
+
+def _limits_anchor_from_fraction(
+    limits: tuple[float, float],
+    fraction: float,
+) -> float:
+    return float(limits[0]) + ((float(limits[1]) - float(limits[0])) * float(fraction))
+
+
+def _event_axis_fraction_anchor(
+    axis: object,
+    event: object,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> tuple[float, float] | None:
+    fractions = _event_axis_anchor_fractions_or_none(axis, event)
+    if fractions is None:
+        return None
+    anchor_fraction_x, anchor_fraction_y = fractions
+    return (
+        _limits_anchor_from_fraction(xlim, anchor_fraction_x),
+        _limits_anchor_from_fraction(ylim, anchor_fraction_y),
+    )
+
+
 def _zoom_limits_about_anchor(
     limits: tuple[float, float],
     *,
@@ -234,10 +315,26 @@ def create_analysis_figure_interactions(
 
         anchor_x = getattr(event, "xdata", None)
         anchor_y = getattr(event, "ydata", None)
-        if anchor_x is None or not math.isfinite(float(anchor_x)):
-            anchor_x = (float(xlim[0]) + float(xlim[1])) / 2.0
-        if anchor_y is None or not math.isfinite(float(anchor_y)):
-            anchor_y = (float(ylim[0]) + float(ylim[1])) / 2.0
+        try:
+            anchor_x = float(anchor_x)
+        except Exception:
+            anchor_x = math.nan
+        try:
+            anchor_y = float(anchor_y)
+        except Exception:
+            anchor_y = math.nan
+        if not math.isfinite(anchor_x) or not math.isfinite(anchor_y):
+            fraction_anchor = _event_axis_fraction_anchor(
+                axis,
+                event,
+                xlim=xlim,
+                ylim=ylim,
+            )
+            if fraction_anchor is not None:
+                anchor_x, anchor_y = fraction_anchor
+            else:
+                anchor_x = (float(xlim[0]) + float(xlim[1])) / 2.0
+                anchor_y = (float(ylim[0]) + float(ylim[1])) / 2.0
 
         if step > 0.0:
             scale = 1.0 / (_ZOOM_BASE ** float(step))

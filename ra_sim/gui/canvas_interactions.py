@@ -233,11 +233,7 @@ def _axis_limits(axis: Any) -> tuple[tuple[float, float], tuple[float, float]] |
         ylim = tuple(float(value) for value in get_ylim())
     except Exception:
         return None
-    if (
-        len(xlim) != 2
-        or len(ylim) != 2
-        or not all(np.isfinite(value) for value in (*xlim, *ylim))
-    ):
+    if len(xlim) != 2 or len(ylim) != 2 or not all(np.isfinite(value) for value in (*xlim, *ylim)):
         return None
     return (xlim, ylim)
 
@@ -478,27 +474,27 @@ def _event_axis_pixel_position(axis: Any, event: Any) -> tuple[float, float] | N
     return clamped_x, clamped_y
 
 
-def _event_axis_anchor_fractions(axis: Any, event: Any) -> tuple[float, float]:
+def _event_axis_anchor_fractions_or_none(axis: Any, event: Any) -> tuple[float, float] | None:
     if getattr(event, "inaxes", None) is not axis:
-        return 0.5, 0.5
+        return None
     pixel_position = _event_axis_pixel_position(axis, event)
     bbox = getattr(axis, "bbox", None)
     if pixel_position is None or bbox is None:
-        return 0.5, 0.5
+        return None
     try:
         bbox_x0 = float(bbox.x0)
         bbox_y0 = float(bbox.y0)
         bbox_width = float(bbox.width)
         bbox_height = float(bbox.height)
     except Exception:
-        return 0.5, 0.5
+        return None
     if (
         not np.isfinite(bbox_width)
         or not np.isfinite(bbox_height)
         or bbox_width <= 0.0
         or bbox_height <= 0.0
     ):
-        return 0.5, 0.5
+        return None
     anchor_fraction_x = float(
         np.clip(
             (float(pixel_position[0]) - bbox_x0) / bbox_width,
@@ -514,6 +510,50 @@ def _event_axis_anchor_fractions(axis: Any, event: Any) -> tuple[float, float]:
         )
     )
     return anchor_fraction_x, anchor_fraction_y
+
+
+def _event_axis_anchor_fractions(axis: Any, event: Any) -> tuple[float, float]:
+    fractions = _event_axis_anchor_fractions_or_none(axis, event)
+    if fractions is None:
+        return 0.5, 0.5
+    return fractions
+
+
+def _limits_anchor_from_fraction(
+    limits: tuple[float, float],
+    fraction: float,
+) -> float:
+    return float(limits[0]) + ((float(limits[1]) - float(limits[0])) * float(fraction))
+
+
+def _event_axis_data_anchor(axis: Any, event: Any) -> tuple[float, float] | None:
+    if getattr(event, "inaxes", None) is not axis:
+        return None
+    try:
+        event_xdata = float(getattr(event, "xdata", np.nan))
+        event_ydata = float(getattr(event, "ydata", np.nan))
+    except Exception:
+        return None
+    if not np.isfinite(event_xdata) or not np.isfinite(event_ydata):
+        return None
+    return (event_xdata, event_ydata)
+
+
+def _event_axis_fraction_anchor(
+    axis: Any,
+    event: Any,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> tuple[float, float] | None:
+    fractions = _event_axis_anchor_fractions_or_none(axis, event)
+    if fractions is None:
+        return None
+    anchor_fraction_x, anchor_fraction_y = fractions
+    return (
+        _limits_anchor_from_fraction(xlim, anchor_fraction_x),
+        _limits_anchor_from_fraction(ylim, anchor_fraction_y),
+    )
 
 
 def _update_pan_session(
@@ -537,11 +577,7 @@ def _update_pan_session(
     delta_x: float | None = None
     delta_y: float | None = None
     pixel_position = _event_axis_pixel_position(bindings.axis, event)
-    if (
-        pixel_position is not None
-        and np.isfinite(x_anchor_px)
-        and np.isfinite(y_anchor_px)
-    ):
+    if pixel_position is not None and np.isfinite(x_anchor_px) and np.isfinite(y_anchor_px):
         bbox = getattr(bindings.axis, "bbox", None)
         try:
             bbox_width = float(getattr(bbox, "width", np.nan))
@@ -727,9 +763,8 @@ def handle_runtime_canvas_click(
             float(manual_pick_coords[0]),
             float(manual_pick_coords[1]),
         )
-        if (
-            not _runtime_caked_view_enabled(bindings)
-            and bool(bindings.manual_pick_session_active())
+        if not _runtime_caked_view_enabled(bindings) and bool(
+            bindings.manual_pick_session_active()
         ):
             _set_manual_pick_skip_release_once(bindings, True)
         return True
@@ -894,9 +929,8 @@ def handle_runtime_canvas_motion(
     if getattr(event, "button", None) == 3:
         return False
 
-    if (
-        bool(bindings.geometry_runtime_state.manual_pick_armed)
-        and bool(bindings.manual_pick_session_active())
+    if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
+        bindings.manual_pick_session_active()
     ):
         manual_pick_coords = _manual_pick_click_coords(bindings, event)
         if not _runtime_caked_view_enabled(bindings):
@@ -991,57 +1025,43 @@ def handle_runtime_canvas_scroll(
     if not np.isfinite(step) or abs(step) <= 0.0:
         return False
 
-    try:
-        event_xdata = float(getattr(event, "xdata", np.nan))
-        event_ydata = float(getattr(event, "ydata", np.nan))
-    except Exception:
-        event_xdata = np.nan
-        event_ydata = np.nan
-
     center_x = 0.5 * (float(xlim[0]) + float(xlim[1]))
     center_y = 0.5 * (float(ylim[0]) + float(ylim[1]))
+    detector_anchor = None
     if not _runtime_caked_view_enabled(bindings):
-        # Detector pans can leave blank margins around the raster. When that happens,
-        # zooming about the raw axis midpoint makes the detector image appear to drift
-        # because the visible detector content is no longer centered within the axes.
-        # Anchor detector zoom to the center of the currently visible detector content
-        # instead of the full view window.
         detector_anchor = _detector_view_zoom_anchor(
             bindings,
             xlim=xlim,
             ylim=ylim,
         )
-        if detector_anchor is not None:
-            anchor_x, anchor_y = detector_anchor
-        else:
-            anchor_x = center_x
-            anchor_y = center_y
-    elif preview_limits is not None:
-        # Legacy Matplotlib preview keeps event.xdata/ydata stale until commit.
-        anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
+    fallback_anchor_x, fallback_anchor_y = detector_anchor or (center_x, center_y)
+
+    if preview_limits is not None:
+        # Preview scrolls can keep event.xdata/ydata stale until commit.
+        event_anchor = _event_axis_fraction_anchor(
             bindings.axis,
             event,
+            xlim=xlim,
+            ylim=ylim,
         )
-        anchor_x = float(xlim[0]) + (
-            (float(xlim[1]) - float(xlim[0])) * float(anchor_fraction_x)
-        )
-        anchor_y = float(ylim[0]) + (
-            (float(ylim[1]) - float(ylim[0])) * float(anchor_fraction_y)
-        )
-    elif (
-        getattr(event, "inaxes", None) is bindings.axis
-        and np.isfinite(event_xdata)
-        and np.isfinite(event_ydata)
-    ):
-        anchor_x = float(event_xdata)
-        anchor_y = float(event_ydata)
     else:
-        anchor_x = center_x
-        anchor_y = center_y
+        event_anchor = _event_axis_data_anchor(bindings.axis, event)
+        if event_anchor is None:
+            event_anchor = _event_axis_fraction_anchor(
+                bindings.axis,
+                event,
+                xlim=xlim,
+                ylim=ylim,
+            )
+
+    if event_anchor is None:
+        anchor_x, anchor_y = fallback_anchor_x, fallback_anchor_y
+    else:
+        anchor_x, anchor_y = event_anchor
 
     zoom_base = 1.2
     if step > 0.0:
-        scale = 1.0 / (zoom_base**float(step))
+        scale = 1.0 / (zoom_base ** float(step))
     else:
         scale = zoom_base ** abs(float(step))
 
@@ -1128,28 +1148,14 @@ def make_runtime_canvas_interaction_bindings_factory(
             detector_view_limits=_resolve_runtime_value(detector_view_limits_factory),
             analysis_peak_state=analysis_peak_state,
             analysis_peak_callbacks=analysis_peak_callbacks,
-            set_geometry_status_text=_resolve_runtime_value(
-                set_geometry_status_text_factory
-            ),
+            set_geometry_status_text=_resolve_runtime_value(set_geometry_status_text_factory),
             draw_idle=_resolve_runtime_value(draw_idle_factory),
-            begin_live_interaction=_resolve_runtime_value(
-                begin_live_interaction_factory
-            ),
-            touch_live_interaction=_resolve_runtime_value(
-                touch_live_interaction_factory
-            ),
-            end_live_interaction=_resolve_runtime_value(
-                end_live_interaction_factory
-            ),
-            preview_view_limits=_resolve_runtime_value(
-                preview_view_limits_factory
-            ),
-            commit_preview_view=_resolve_runtime_value(
-                commit_preview_view_factory
-            ),
-            clear_preview_view=_resolve_runtime_value(
-                clear_preview_view_factory
-            ),
+            begin_live_interaction=_resolve_runtime_value(begin_live_interaction_factory),
+            touch_live_interaction=_resolve_runtime_value(touch_live_interaction_factory),
+            end_live_interaction=_resolve_runtime_value(end_live_interaction_factory),
+            preview_view_limits=_resolve_runtime_value(preview_view_limits_factory),
+            commit_preview_view=_resolve_runtime_value(commit_preview_view_factory),
+            clear_preview_view=_resolve_runtime_value(clear_preview_view_factory),
         )
 
     return _build_bindings

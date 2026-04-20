@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from ra_sim.gui import analysis_figure_controls
+
+
+class _FakeBbox:
+    def __init__(self) -> None:
+        self.x0 = 10.0
+        self.y0 = 20.0
+        self.width = 200.0
+        self.height = 100.0
 
 
 class _FakeAxis:
@@ -13,6 +23,7 @@ class _FakeAxis:
         ylim: tuple[float, float] = (0.0, 20.0),
     ) -> None:
         self.calls: list[str] = []
+        self.bbox = _FakeBbox()
         self.xlim = tuple(float(value) for value in xlim)
         self.ylim = tuple(float(value) for value in ylim)
 
@@ -134,11 +145,13 @@ def test_create_analysis_figure_interactions_scroll_zoom_and_double_click_reset(
             button="up",
             xdata=10.0,
             ydata=70.0,
+            x=130.0,
+            y=80.0,
         )
     )
 
-    assert abs(azimuth_axis.xlim[1] - azimuth_axis.xlim[0]) < 100.0
-    assert abs(azimuth_axis.ylim[1] - azimuth_axis.ylim[0]) < 100.0
+    assert azimuth_axis.xlim == pytest.approx((-40.0, 43.333333333333336))
+    assert azimuth_axis.ylim == pytest.approx((20.0, 103.33333333333334))
     assert radial_axis.xlim == (0.0, 12.0)
     assert radial_axis.ylim == (0.0, 24.0)
 
@@ -153,3 +166,31 @@ def test_create_analysis_figure_interactions_scroll_zoom_and_double_click_reset(
     )
 
     assert reset_calls == ["reset"]
+
+
+def test_create_analysis_figure_interactions_scroll_uses_cursor_pixels_when_axis_data_missing() -> (
+    None
+):
+    radial_axis = _FakeAxis(xlim=(0.0, 12.0), ylim=(0.0, 24.0))
+    canvas = _FakeCanvas()
+
+    analysis_figure_controls.create_analysis_figure_interactions(
+        canvas=canvas,
+        axes=(radial_axis,),
+    )
+
+    canvas.connections["scroll_event"](
+        SimpleNamespace(
+            inaxes=radial_axis,
+            step=1.0,
+            button="up",
+            xdata=None,
+            ydata=None,
+            x=160.0,
+            y=70.0,
+        )
+    )
+
+    assert radial_axis.xlim == pytest.approx((1.5, 11.5))
+    assert radial_axis.ylim == pytest.approx((2.0, 22.0))
+    assert canvas.draw_idle_calls == 1
