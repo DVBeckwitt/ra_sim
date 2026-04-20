@@ -3644,7 +3644,10 @@ def build_geometry_manual_pick_cache(
         if not normalized_rows:
             return False
 
-        filtered_active_rows = filter_active_rows(normalized_rows)
+        try:
+            filtered_active_rows = filter_active_rows(normalized_rows)
+        except Exception:
+            filtered_active_rows = normalized_rows
         candidate_groups = build_grouped_candidates(filtered_active_rows)
 
         simulated_peaks = normalized_rows
@@ -5163,13 +5166,21 @@ def build_geometry_manual_initial_pairs_display(
         def _live_detector_display_point(
             candidate: Mapping[str, object] | None,
         ) -> tuple[float, float] | None:
-            return _geometry_manual_finite_point(
+            detector_point = _geometry_manual_finite_point(
                 candidate,
                 (
                     ("refined_sim_x", "refined_sim_y"),
-                    ("display_col", "display_row"),
-                    ("sim_col", "sim_row"),
+                    ("sim_col_raw", "sim_row_raw"),
+                    ("simulated_x", "simulated_y"),
                 ),
+            )
+            if detector_point is not None:
+                return detector_point
+            if _geometry_manual_entry_has_caked_evidence(candidate):
+                return None
+            return _geometry_manual_finite_point(
+                candidate,
+                (("sim_col", "sim_row"),),
             )
 
         def _saved_native_detector_point(
@@ -5190,13 +5201,21 @@ def build_geometry_manual_initial_pairs_display(
         def _saved_native_overlay_detector_point(
             candidate: Mapping[str, object] | None,
         ) -> tuple[float, float] | None:
-            return _geometry_manual_finite_point(
+            detector_point = _geometry_manual_finite_point(
                 candidate,
                 (
                     ("refined_sim_x", "refined_sim_y"),
-                    ("display_col", "display_row"),
-                    ("sim_col", "sim_row"),
+                    ("sim_col_raw", "sim_row_raw"),
+                    ("simulated_x", "simulated_y"),
                 ),
+            )
+            if detector_point is not None:
+                return detector_point
+            if _geometry_manual_entry_has_caked_evidence(candidate):
+                return None
+            return _geometry_manual_finite_point(
+                candidate,
+                (("sim_col", "sim_row"),),
             )
 
         saved_native_detector_point = _geometry_manual_finite_point(
@@ -5294,11 +5313,13 @@ def build_geometry_manual_initial_pairs_display(
                     for entry in (projected_source_rows or ())
                     if isinstance(entry, Mapping)
                 ]
-            active_source_rows = (
-                filter_active_rows(normalized_source_rows)
-                if callable(filter_active_rows)
-                else normalized_source_rows
-            )
+            if callable(filter_active_rows):
+                try:
+                    active_source_rows = filter_active_rows(normalized_source_rows)
+                except Exception:
+                    active_source_rows = normalized_source_rows
+            else:
+                active_source_rows = normalized_source_rows
             simulated_lookup = build_simulated_lookup(active_source_rows)
 
     measured_display: list[dict[str, object]] = []
@@ -5449,7 +5470,7 @@ def make_runtime_geometry_manual_cache_callbacks(
         try:
             filtered_rows = filter_active_rows(normalized_rows)
         except Exception:
-            filtered_rows = []
+            filtered_rows = normalized_rows
         return [
             dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)
         ]

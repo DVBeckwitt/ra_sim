@@ -4847,59 +4847,212 @@ def test_full_beam_polish_rejects_objective_aligned_improvement_when_raw_peak_me
     assert outlier_candidate["distance_px"] > outlier_start["distance_px"]
 
 
-def test_full_beam_polish_no_op_selection_uses_seeded_start_when_winner_is_not_current_result():
-    candidate_ledger = [
-        {
-            "candidate_name": "central_point_result",
-            "x_vector_source": "current_result.x",
-            "valid_raw_detector_candidate": False,
-            "rms_px": np.nan,
-            "max_px": np.nan,
-            "outside_radius_count": 0,
-            "weighted_objective": 400.0,
-        },
-        {
-            "candidate_name": "main_solve_start",
-            "x_vector_source": "geometry_fit_progress.start_x",
-            "valid_raw_detector_candidate": True,
-            "matched_fixed_pair_count": 2,
-            "missing_fixed_pair_count": 0,
-            "branch_mismatch_count": 0,
-            "rms_px": 0.0,
-            "max_px": 0.0,
-            "outside_radius_count": 0,
-            "weighted_objective": 0.0,
-        },
-        {
-            "candidate_name": "full_beam_polish_result",
-            "x_vector_source": "full_beam_polish",
-            "valid_raw_detector_candidate": True,
-            "matched_fixed_pair_count": 2,
-            "missing_fixed_pair_count": 0,
-            "branch_mismatch_count": 0,
-            "rms_px": 24.041630560342615,
-            "max_px": 34.0,
-            "outside_radius_count": 1,
-            "weighted_objective": 0.0005780000000000001,
-        },
-    ]
+def test_full_beam_polish_no_op_selection_uses_seeded_start_when_winner_is_not_current_result(
+    monkeypatch,
+):
+    solve_calls = []
+    original_point_match_evaluator = opt._evaluate_geometry_fit_dataset_point_matches
 
-    best_valid_raw_candidate = opt._best_valid_raw_detector_candidate(candidate_ledger)
-    start_entry, no_op_optimum = opt._should_select_no_op_start_candidate(
-        candidate_ledger,
-        start_candidate_name="main_solve_start",
-        start_candidate_source="geometry_fit_progress.start_x",
-        accepted=False,
-        preserve_rejected_start=False,
-        best_valid_raw_candidate=best_valid_raw_candidate,
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+
+        def _hit_tables(first_x: float, second_x: float):
+            return [
+                np.array(
+                    [[10.0, first_x, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.array(
+                    [[10.0, second_x, 8.0, 0.0, 0.0, 1.0, 0.0]],
+                    dtype=np.float64,
+                ),
+            ]
+
+        if abs(gamma - 0.0) < 1.0e-9:
+            hit_tables = _hit_tables(4.0, 8.0)
+        elif abs(gamma - 1.0) < 1.0e-9:
+            hit_tables = _hit_tables(5.0, 10.0)
+        elif abs(gamma - 2.0) < 1.0e-9:
+            hit_tables = _hit_tables(4.0, 42.0)
+        else:
+            hit_tables = [
+                np.empty((0, 7), dtype=np.float64),
+                np.empty((0, 7), dtype=np.float64),
+            ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        call_index = len(solve_calls)
+        x = np.array([1.0], dtype=float) if call_index == 0 else np.array([2.0], dtype=float)
+        solve_calls.append(x.copy())
+        fun = (
+            np.zeros(1, dtype=float)
+            if call_index == 0
+            else np.asarray(residual_fn(x), dtype=float)
+        )
+        return opt.OptimizeResult(
+            x=x,
+            fun=fun,
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def wrapped_point_match_evaluator(local, dataset_ctx, **kwargs):
+        gamma = float(local.get("gamma", np.nan))
+        if abs(gamma - 1.0) < 1.0e-9:
+            return np.array([], dtype=float), [], {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "dataset_label": str(dataset_ctx.label),
+                "theta_initial_deg": float(kwargs.get("theta_value", 0.0)),
+                "measured_count": 2,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "matched_pair_count": 0,
+                "missing_pair_count": 2,
+                "unweighted_peak_rms_px": float("nan"),
+                "unweighted_peak_mean_px": float("nan"),
+                "unweighted_peak_median_px": float("nan"),
+                "unweighted_peak_max_px": float("nan"),
+                "outside_radius_count": 0,
+                "point_match_cost": 400.0,
+                "weighted_rms_px": float("nan"),
+            }
+        residual, diagnostics, summary = original_point_match_evaluator(
+            local,
+            dataset_ctx,
+            **kwargs,
+        )
+        if abs(gamma - 0.0) < 1.0e-9:
+            for entry in diagnostics:
+                hkl = tuple(entry.get("hkl", ()))
+                if hkl == (1, 0, 0):
+                    entry["source_row_index"] = 0
+                    entry["source_table_index"] = entry.get("resolved_table_index", 0)
+                elif hkl == (0, 1, 0):
+                    entry["source_row_index"] = 0
+                    entry["source_table_index"] = entry.get("resolved_table_index", 1)
+        return residual, diagnostics, summary
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+    monkeypatch.setattr(
+        opt,
+        "_evaluate_geometry_fit_dataset_point_matches",
+        wrapped_point_match_evaluator,
     )
 
-    assert best_valid_raw_candidate is candidate_ledger[1]
-    assert start_entry is candidate_ledger[1]
-    assert no_op_optimum is True
-    assert str(start_entry["candidate_name"]) == "main_solve_start"
-    assert str(start_entry["x_vector_source"]) == "geometry_fit_progress.start_x"
-    assert str(start_entry["x_vector_source"]) != "current_result.x"
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+    intensities = np.array([25.0, 20.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    measured = [
+        {
+            "label": "1,0,0",
+            "hkl": (1, 0, 0),
+            "x": 4.0,
+            "y": 4.0,
+            "sigma_px": 1.0,
+        },
+        {
+            "label": "0,1,0",
+            "hkl": (0, 1, 0),
+            "x": 8.0,
+            "y": 8.0,
+            "sigma_px": 1.0,
+        },
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "loss": "linear",
+                "weighted_matching": False,
+                "use_measurement_uncertainty": True,
+                "stagnation_probe": False,
+            },
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert len(solve_calls) >= 2
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
+    assert result.final_metric_name == "full_beam_fixed_correspondence"
+    assert str(result.full_beam_polish_summary["status"]) == "no_op_optimum"
+    assert str(result.full_beam_polish_summary["selection_status"]) == "no_op_optimum"
+    assert bool(result.full_beam_polish_summary["fit_quality_passed"]) is True
+    assert bool(result.full_beam_polish_summary["preserved_start_on_reject"]) is False
+    assert str(result.full_beam_polish_summary["reason"]) == (
+        "no_valid_candidate_improved_raw_detector_alignment"
+    )
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_name"])
+        == "main_solve_start"
+    )
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_source"])
+        == "geometry_fit_progress.start_x"
+    )
+    assert (
+        str(result.full_beam_polish_summary["start_vector_source"])
+        == "geometry_fit_progress.start_x"
+    )
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_name"])
+        == str(result.full_beam_polish_summary["best_valid_raw_detector_candidate_name"])
+    )
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_source"])
+        == str(result.full_beam_polish_summary["best_valid_raw_detector_candidate_source"])
+    )
+    ledger = list(result.full_beam_polish_summary["candidate_ledger"])
+    selected_entry = next(entry for entry in ledger if entry["selected"] is True)
+    assert str(selected_entry["candidate_name"]) == "main_solve_start"
+    assert str(selected_entry["x_vector_source"]) == "geometry_fit_progress.start_x"
+    assert any(
+        entry["candidate_name"] == "central_point_result"
+        and entry["x_vector_source"] == "current_result.x"
+        and entry["valid_raw_detector_candidate"] is False
+        for entry in ledger
+    )
+    assert any(
+        entry["candidate_name"] == "full_beam_polish_result"
+        and entry["x_vector_source"] == "full_beam_polish"
+        and entry["valid_raw_detector_candidate"] is True
+        and entry["selected"] is False
+        for entry in ledger
+    )
+    assert np.allclose(np.asarray(result.fun, dtype=float), 0.0)
+    assert int(result.point_match_summary["matched_pair_count"]) == 2
+    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 2
+    assert int(result.point_match_summary.get("missing_fixed_pair_count", 0)) == 0
+    assert str(result.point_match_summary["metric_name"]) == "full_beam_fixed_correspondence"
 
 
 def test_full_beam_polish_rejection_retains_fixed_correspondence_start_when_current_result_loses_all_fixed_pairs(

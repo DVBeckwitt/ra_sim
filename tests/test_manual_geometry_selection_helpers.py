@@ -4783,7 +4783,7 @@ def test_build_geometry_manual_initial_pairs_display_rejects_native_only_detecto
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_raw_detector_only_rows() -> None:
+def test_build_geometry_manual_initial_pairs_display_uses_raw_detector_only_rows() -> None:
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -4829,6 +4829,414 @@ def test_build_geometry_manual_initial_pairs_display_rejects_raw_detector_only_r
             "overlay_match_index": 0,
             "hkl": (1, 0, 2),
             "bg_display": (9.0, 11.0),
+            "sim_display": (105.0, 206.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_stale_caked_display() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "sim_col_raw": 105.0,
+                    "sim_row_raw": 206.0,
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (105.0, 206.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_without_caked_markers() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_for_non_native_saved_pairs() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_with_caked_markers() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_native_saved_pairs() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "sim_col": 30.25,
+                    "sim_row": -57.5,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_non_native_saved_pairs() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "sim_col": 30.25,
+                    "sim_row": -57.5,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "refined_sim_native_x": 105.0,
+                "refined_sim_native_y": 206.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "simulated_x": 105.0,
+                    "simulated_y": 206.0,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (105.0, 206.0),
+        }
+    ]
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows_for_non_native_saved_pairs() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(
+                    {
+                        "source_table_index": 4,
+                        "source_row_index": 7,
+                    }
+                ): {
+                    "simulated_x": 105.0,
+                    "simulated_y": 206.0,
+                },
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (105.0, 206.0),
         }
     ]
 
@@ -5535,6 +5943,53 @@ def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_fil
     assert cache_data["active_simulated_peaks"] == []
     assert cache_data["grouped_candidates"] == {}
     assert cache_data["simulated_lookup"] == {}
+
+
+def test_build_geometry_manual_initial_pairs_display_fails_closed_when_mask_filter_raises() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=False,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        source_rows_for_background=lambda *_args, **_kwargs: [
+            {
+                "source_table_index": 4,
+                "source_row_index": 7,
+                "sim_col": 13.5,
+                "sim_row": 15.5,
+            }
+        ],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda entries: {
+            _source_key(entry): dict(entry) for entry in entries or ()
+        },
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+        filter_active_rows=lambda _rows: (_ for _ in ()).throw(RuntimeError("mask boom")),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+        }
+    ]
 
 
 def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when_other_sources_are_empty() -> None:
