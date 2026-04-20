@@ -1379,8 +1379,8 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_
     assert runtime_state.peak_positions_filtered is True
     assert runtime_state.peak_records[0]["sim_col"] == 110.0
     assert runtime_state.peak_records[0]["sim_row"] == 220.0
-    assert runtime_state.peak_records[0]["display_col"] == 110.0
-    assert runtime_state.peak_records[0]["display_row"] == 220.0
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
     assert runtime_state.peak_records[0]["caked_x"] == 30.25
     assert runtime_state.peak_records[0]["caked_y"] == -57.5
     assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
@@ -1427,13 +1427,13 @@ def test_peak_selection_runtime_peak_overlay_data_keeps_detector_coords_when_res
     assert runtime_state.peak_positions == [(30.25, -57.5)]
     assert runtime_state.peak_records[0]["sim_col"] == 110.0
     assert runtime_state.peak_records[0]["sim_row"] == 220.0
-    assert runtime_state.peak_records[0]["display_col"] == 110.0
-    assert runtime_state.peak_records[0]["display_row"] == 220.0
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
     assert runtime_state.peak_records[0]["caked_x"] == 30.25
     assert runtime_state.peak_records[0]["caked_y"] == -57.5
 
 
-def test_peak_selection_runtime_peak_overlay_data_skips_ambiguous_restored_rows() -> None:
+def test_peak_selection_runtime_peak_overlay_data_preserves_frozen_detector_restored_rows() -> None:
     stable_record = {
         "display_col": 110.0,
         "display_row": 220.0,
@@ -1459,9 +1459,15 @@ def test_peak_selection_runtime_peak_overlay_data_skips_ambiguous_restored_rows(
             "peak_positions_filtered": True,
             "restored_from_gui_state": True,
         },
-        peak_records=[dict(stable_record), dict(ambiguous_record)],
+        peak_records=[],
         stored_max_positions_local=None,
         stored_sim_image=None,
+    )
+    runtime_state.peak_overlay_cache["restored_view_sig"] = (
+        peak_selection._peak_overlay_restored_view_signature(
+            runtime_state,
+            show_caked=False,
+        )
     )
 
     ok = peak_selection.ensure_runtime_peak_overlay_data(
@@ -1478,11 +1484,281 @@ def test_peak_selection_runtime_peak_overlay_data_skips_ambiguous_restored_rows(
     )
 
     assert ok is True
-    assert runtime_state.peak_positions == [(110.0, 220.0)]
-    assert runtime_state.peak_millers == [(1, 0, 2)]
-    assert len(runtime_state.peak_records) == 1
+    assert runtime_state.peak_positions == [(110.0, 220.0), (30.25, -57.5)]
+    assert runtime_state.peak_millers == [(1, 0, 2), (2, 0, 3)]
+    assert len(runtime_state.peak_records) == 2
     assert runtime_state.peak_records[0]["display_col"] == 110.0
-    assert runtime_state.peak_overlay_cache["positions"] == [(110.0, 220.0)]
+    assert runtime_state.peak_records[1]["display_col"] == 30.25
+    assert runtime_state.peak_records[1]["display_row"] == -57.5
+    assert "sim_col" not in runtime_state.peak_records[1]
+    assert "sim_row" not in runtime_state.peak_records[1]
+    assert "sim_col_raw" not in runtime_state.peak_records[1]
+    assert "sim_row_raw" not in runtime_state.peak_records[1]
+    assert runtime_state.peak_overlay_cache["positions"] == [
+        (110.0, 220.0),
+        (30.25, -57.5),
+    ]
+
+
+def test_peak_selection_runtime_peak_overlay_data_preserves_frozen_caked_restored_rows() -> None:
+    record = {
+        "display_col": 30.25,
+        "display_row": -57.5,
+        "caked_x": 30.25,
+        "caked_y": -57.5,
+        "hkl": [2, 0, 3],
+        "intensity": 5.0,
+    }
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "sig": None,
+            "positions": [],
+            "millers": [],
+            "intensities": [],
+            "records": [dict(record)],
+            "click_spatial_index": None,
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+        },
+        peak_records=[],
+        stored_max_positions_local=None,
+        stored_sim_image=None,
+    )
+    runtime_state.peak_overlay_cache["restored_view_sig"] = (
+        peak_selection._peak_overlay_restored_view_signature(
+            runtime_state,
+            show_caked=True,
+        )
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("frozen caked restore should not use detector projection")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("restored GUI-state cache should avoid legacy peak rebuild")
+        ),
+        caked_view_enabled_factory=True,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
+    assert runtime_state.peak_records[0]["caked_x"] == 30.25
+    assert runtime_state.peak_records[0]["caked_y"] == -57.5
+    assert "sim_col" not in runtime_state.peak_records[0]
+    assert "sim_row" not in runtime_state.peak_records[0]
+    assert "sim_col_raw" not in runtime_state.peak_records[0]
+    assert "sim_row_raw" not in runtime_state.peak_records[0]
+
+
+def test_restore_peak_overlay_lists_does_not_revive_legacy_sim_for_restored_gui_state_caked_rows() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "sim_col": 30.25,
+                    "sim_row": -57.5,
+                    "hkl": (2, 0, 3),
+                    "intensity": 5.0,
+                }
+            ],
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+            "restored_view_sig": ("caked-view",),
+        }
+    )
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("frozen caked restore should not use detector projection")
+        ),
+        view_sig=("caked-view",),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
+    assert runtime_state.peak_records[0]["caked_x"] == 30.25
+    assert runtime_state.peak_records[0]["caked_y"] == -57.5
+    assert "sim_col" not in runtime_state.peak_records[0]
+    assert "sim_row" not in runtime_state.peak_records[0]
+    assert "sim_col_raw" not in runtime_state.peak_records[0]
+    assert "sim_row_raw" not in runtime_state.peak_records[0]
+
+
+def test_restore_peak_overlay_lists_rejects_frozen_display_for_mismatched_restored_view() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "hkl": (2, 0, 3),
+                    "intensity": 5.0,
+                }
+            ],
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+            "restored_view_sig": ("detector-view",),
+        }
+    )
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("mismatched frozen caked restore should not project")
+        ),
+        view_sig=("caked-view",),
+    )
+
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
+
+
+def test_restore_peak_overlay_lists_allows_frozen_display_without_restored_view_signature_for_legacy_detector_imports() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "hkl": (2, 0, 3),
+                    "intensity": 5.0,
+                }
+            ],
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+        }
+    )
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=False,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("legacy imported detector rows should use frozen display")
+        ),
+        view_sig=("detector-view",),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
+    assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
+
+
+def test_restore_peak_overlay_lists_allows_frozen_display_with_none_restored_view_signature_for_legacy_detector_imports() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "hkl": (2, 0, 3),
+                    "intensity": 5.0,
+                }
+            ],
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+            "restored_view_sig": None,
+        }
+    )
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=False,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("legacy imported detector rows should use frozen display")
+        ),
+        view_sig=("detector-view",),
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(30.25, -57.5)]
+    assert runtime_state.peak_records[0]["display_col"] == 30.25
+    assert runtime_state.peak_records[0]["display_row"] == -57.5
+    assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
+
+
+def test_restore_peak_overlay_lists_rejects_frozen_caked_restore_without_restored_view_signature_for_legacy_detector_imports() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [
+                {
+                    "display_col": 30.25,
+                    "display_row": -57.5,
+                    "hkl": (2, 0, 3),
+                    "intensity": 5.0,
+                }
+            ],
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+        }
+    )
+
+    ok = peak_selection._restore_peak_overlay_lists_from_cached_records(
+        runtime_state,
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("legacy detector rows should not revive in caked view")
+        ),
+        view_sig=("caked-view",),
+    )
+
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
+
+
+def test_peak_selection_runtime_peak_overlay_data_preserves_imported_cache_flag_when_restore_yields_no_rows() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_overlay_cache={
+            "records": [{"display_col": 10.0, "display_row": 20.0, "intensity": 5.0}],
+            "restored_from_gui_state": True,
+        },
+        peak_records=[{"display_col": 10.0, "display_row": 20.0, "intensity": 5.0}],
+        stored_max_positions_local=None,
+        stored_sim_image=None,
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("empty restored cache should not use detector projection")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("empty restored cache should not use legacy peak rebuild")
+        ),
+    )
+
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_millers == []
+    assert runtime_state.peak_intensities == []
+    assert runtime_state.peak_records == []
+    assert runtime_state.peak_positions_filtered is False
+    assert runtime_state.peak_overlay_cache["records"] == []
+    assert runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
+    assert runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
 
 
 def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:
@@ -2545,6 +2821,55 @@ def test_select_peak_from_canvas_click_selects_nearest_cached_peak_without_repro
     assert status_messages == []
 
 
+def test_find_peak_record_for_canvas_click_uses_restored_gui_state_peak_position_fallback() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 12.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[5.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 10.0,
+                "display_row": 12.0,
+                "native_col": 100.0,
+                "native_row": 101.0,
+            }
+        ],
+        peak_positions_filtered=True,
+        peak_overlay_cache={
+            "records": [
+                {
+                    "hkl": (1, 0, 2),
+                    "display_col": 10.0,
+                    "display_row": 12.0,
+                    "native_col": 100.0,
+                    "native_row": 101.0,
+                }
+            ],
+            "peak_positions_filtered": True,
+            "restored_from_gui_state": True,
+        },
+    )
+    ensured: list[dict[str, object]] = []
+
+    result = peak_selection.find_peak_record_for_canvas_click(
+        runtime_state,
+        9.8,
+        12.4,
+        ensure_peak_overlay_data=lambda **kwargs: ensured.append(kwargs) or True,
+        max_axis_distance_px=3.0,
+        simulation_point_candidates=None,
+        use_caked_display=False,
+    )
+
+    assert ensured == [{"force": False}]
+    assert result[0] == 0
+    assert result[1] is not None
+    assert result[1]["hkl"] == (1, 0, 2)
+    assert result[2] == pytest.approx(np.hypot(0.2, -0.4))
+    assert result[3] is True
+
+
 def test_select_peak_from_canvas_click_prefers_qr_picker_simulation_points() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(10.0, 10.0)],
@@ -3387,6 +3712,53 @@ def test_resolve_peak_record_display_coords_prefers_explicit_caked_coords() -> N
 
     assert display_point == (30.25, -57.5)
     assert projector_calls == []
+
+
+def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_when_allowed_in_caked_view() -> None:
+    display_point = peak_selection._resolve_peak_record_display_coords(
+        {
+            "display_col": 9.5,
+            "display_row": 11.5,
+        },
+        show_caked=True,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=None,
+        allow_frozen_display_fallback=True,
+    )
+
+    assert display_point == (9.5, 11.5)
+
+
+def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_in_detector_view_without_caked_markers() -> None:
+    display_point = peak_selection._resolve_peak_record_display_coords(
+        {
+            "display_col": 9.5,
+            "display_row": 11.5,
+        },
+        show_caked=False,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=None,
+        allow_frozen_display_fallback=True,
+    )
+
+    assert display_point == (9.5, 11.5)
+
+
+def test_resolve_peak_record_display_coords_rejects_frozen_display_fallback_in_detector_view_for_caked_rows() -> None:
+    display_point = peak_selection._resolve_peak_record_display_coords(
+        {
+            "display_col": 9.5,
+            "display_row": 11.5,
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        },
+        show_caked=False,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=None,
+        allow_frozen_display_fallback=True,
+    )
+
+    assert display_point is None
 
 
 def test_select_peak_from_canvas_click_uses_detector_display_inverse_in_detector_view() -> None:

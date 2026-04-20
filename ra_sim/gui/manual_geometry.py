@@ -2133,13 +2133,21 @@ def _geometry_manual_entry_explicit_current_view_display_point(
 def _geometry_manual_entry_detector_display_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    return _geometry_manual_finite_point(
+    detector_point = _geometry_manual_finite_point(
         entry,
         (
             ("x", "y"),
-            ("sim_col", "sim_row"),
+            ("sim_col_raw", "sim_row_raw"),
             ("simulated_x", "simulated_y"),
         ),
+    )
+    if detector_point is not None:
+        return detector_point
+    if _geometry_manual_entry_has_caked_evidence(entry):
+        return None
+    return _geometry_manual_finite_point(
+        entry,
+        (("sim_col", "sim_row"),),
     )
 
 
@@ -2214,6 +2222,23 @@ def _geometry_manual_resolve_nearest_candidate_index(
     entry: Mapping[str, object] | None,
     indexed_candidates: Sequence[tuple[int, Mapping[str, object]]],
 ) -> int | None:
+    prefer_detector_sim_for_stale_entry = _geometry_manual_entry_has_stale_caked_fields(
+        entry
+    )
+
+    def _candidate_detector_point(
+        candidate: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        detector_point = _geometry_manual_entry_detector_display_point(candidate)
+        if detector_point is not None:
+            return detector_point
+        if not prefer_detector_sim_for_stale_entry:
+            return None
+        return _geometry_manual_finite_point(
+            candidate,
+            (("sim_col", "sim_row"),),
+        )
+
     point_getter_pairs: tuple[
         tuple[
             Callable[[Mapping[str, object] | None], tuple[float, float] | None],
@@ -2238,7 +2263,7 @@ def _geometry_manual_resolve_nearest_candidate_index(
         ),
         (
             _geometry_manual_entry_detector_display_point,
-            _geometry_manual_entry_detector_display_point,
+            _candidate_detector_point,
         ),
         (
             _geometry_manual_entry_native_point,
@@ -4339,7 +4364,7 @@ def geometry_manual_preview_due(
 
 
 def geometry_manual_refine_preview_point(
-    candidate: dict[str, object] | None,
+    source_entry: dict[str, object] | None,
     raw_col: float,
     raw_row: float,
     *,
@@ -4412,7 +4437,7 @@ def geometry_manual_refine_preview_point(
             and np.isfinite(raw_col_local)
             and np.isfinite(raw_row_local)
         ):
-            seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
+            seed_entry = dict(source_entry) if isinstance(source_entry, dict) else {}
             _preserve_sim_seed(seed_entry, "sim_col", float(raw_col))
             _preserve_sim_seed(seed_entry, "sim_row", float(raw_row))
             _preserve_sim_seed(seed_entry, "sim_col_global", float(raw_col))
@@ -4460,7 +4485,7 @@ def geometry_manual_refine_preview_point(
         and bool(background_context.get("img_valid", False))
         and callable(match_simulated_peaks_to_peak_context)
     ):
-        seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
+        seed_entry = dict(source_entry) if isinstance(source_entry, dict) else {}
         _preserve_sim_seed(seed_entry, "sim_col", float(raw_col))
         _preserve_sim_seed(seed_entry, "sim_row", float(raw_row))
         try:
@@ -5106,6 +5131,118 @@ def build_geometry_manual_initial_pairs_display(
     else:
         params_local = {}
 
+    def _initial_overlay_sim_display_point(
+        saved_entry: Mapping[str, object] | None,
+        resolved_sim_entry: Mapping[str, object] | None,
+        projected_sim_entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        def _saved_caked_sim_point(
+            candidate: Mapping[str, object] | None,
+        ) -> tuple[float, float] | None:
+            return _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_caked_x", "refined_sim_caked_y"),
+                    ("simulated_two_theta_deg", "simulated_phi_deg"),
+                ),
+            )
+
+        def _live_caked_point(
+            candidate: Mapping[str, object] | None,
+        ) -> tuple[float, float] | None:
+            return _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_caked_x", "refined_sim_caked_y"),
+                    ("caked_x", "caked_y"),
+                    ("raw_caked_x", "raw_caked_y"),
+                    ("two_theta_deg", "phi_deg"),
+                ),
+            )
+
+        def _live_detector_display_point(
+            candidate: Mapping[str, object] | None,
+        ) -> tuple[float, float] | None:
+            return _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_x", "refined_sim_y"),
+                    ("display_col", "display_row"),
+                    ("sim_col", "sim_row"),
+                ),
+            )
+
+        def _saved_native_detector_point(
+            candidate: Mapping[str, object] | None,
+        ) -> tuple[float, float] | None:
+            return _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_native_x", "refined_sim_native_y"),
+                    ("native_col", "native_row"),
+                    ("sim_native_x", "sim_native_y"),
+                    ("detector_x", "detector_y"),
+                    ("background_detector_x", "background_detector_y"),
+                    ("simulated_detector_x", "simulated_detector_y"),
+                ),
+            )
+
+        def _saved_native_overlay_detector_point(
+            candidate: Mapping[str, object] | None,
+        ) -> tuple[float, float] | None:
+            return _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_x", "refined_sim_y"),
+                    ("display_col", "display_row"),
+                    ("sim_col", "sim_row"),
+                ),
+            )
+
+        saved_native_detector_point = _geometry_manual_finite_point(
+            saved_entry,
+            (("refined_sim_native_x", "refined_sim_native_y"),),
+        )
+
+        if bool(use_caked_display):
+            if saved_native_detector_point is not None:
+                projected_caked_point = _live_caked_point(projected_sim_entry)
+                if projected_caked_point is not None:
+                    return projected_caked_point
+            resolved_caked_point = _live_caked_point(resolved_sim_entry)
+            if resolved_caked_point is not None:
+                return resolved_caked_point
+            projected_caked_point = _live_caked_point(projected_sim_entry)
+            if projected_caked_point is not None:
+                return projected_caked_point
+            return _saved_caked_sim_point(saved_entry)
+
+        if saved_native_detector_point is not None:
+            projected_saved_native_point = _saved_native_overlay_detector_point(
+                projected_sim_entry
+            )
+            if projected_saved_native_point is not None:
+                return projected_saved_native_point
+            resolved_saved_native_point = _saved_native_overlay_detector_point(
+                resolved_sim_entry
+            )
+            if resolved_saved_native_point is not None:
+                return resolved_saved_native_point
+            return None
+
+        resolved_detector_point = _live_detector_display_point(resolved_sim_entry)
+        if resolved_detector_point is not None:
+            return resolved_detector_point
+
+        projected_detector_point = _live_detector_display_point(projected_sim_entry)
+        if projected_detector_point is not None:
+            return projected_detector_point
+
+        return _geometry_manual_finite_point(
+            saved_entry,
+            (("refined_sim_x", "refined_sim_y"),),
+        )
+
     if prefer_cache and int(background_index) == int(current_background_index):
         cache_data = get_cache_data(
             param_set=params_local,
@@ -5184,17 +5321,21 @@ def build_geometry_manual_initial_pairs_display(
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         sim_source_entry = geometry_manual_lookup_source_entry(simulated_lookup, entry)
+        overlay_sim_source_entry = (
+            dict(sim_source_entry)
+            if isinstance(sim_source_entry, Mapping)
+            else None
+        )
         sim_entry = (
             dict(sim_source_entry)
             if isinstance(sim_source_entry, Mapping)
             else None
         )
-        if sim_entry is None:
-            sim_entry = geometry_manual_apply_refined_simulated_override(
-                entry,
-                None,
-                prefer_caked_display=use_caked_display,
-            )
+        sim_entry = geometry_manual_apply_refined_simulated_override(
+            entry,
+            sim_entry,
+            prefer_caked_display=use_caked_display,
+        )
         _copy_q_values_from_sources(initial_entry, entry, sim_source_entry, sim_entry)
         if isinstance(sim_entry, dict) and callable(project_peaks_to_current_view):
             try:
@@ -5212,9 +5353,10 @@ def build_geometry_manual_initial_pairs_display(
             if isinstance(projected_sim_entry, dict):
                 sim_entry = projected_sim_entry
         if isinstance(sim_entry, dict):
-            sim_display = _geometry_manual_entry_active_view_point(
+            sim_display = _initial_overlay_sim_display_point(
+                entry,
+                overlay_sim_source_entry,
                 sim_entry,
-                use_caked_display=bool(use_caked_display),
             )
             if sim_display is not None:
                 initial_entry["sim_display"] = (
@@ -5307,7 +5449,7 @@ def make_runtime_geometry_manual_cache_callbacks(
         try:
             filtered_rows = filter_active_rows(normalized_rows)
         except Exception:
-            filtered_rows = normalized_rows
+            filtered_rows = []
         return [
             dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)
         ]
@@ -5817,16 +5959,35 @@ def make_runtime_geometry_manual_projection_callbacks(
             elif refined_native_point is None and refined_caked_point is not None:
                 raw_detector_display = None
             if raw_detector_display is None and legacy_sim_point is not None and (
-                display_detector_candidate is None
-                or native_point is not None
-                or caked_point is not None
-                or not _points_match(legacy_sim_point, display_detector_candidate)
+                (
+                    caked_point is None
+                    and (
+                        display_detector_candidate is None
+                        or native_point is not None
+                        or not _points_match(legacy_sim_point, display_detector_candidate)
+                    )
+                )
             ):
                 raw_detector_display = legacy_sim_point
             if raw_detector_display is None and legacy_xy_point is not None:
                 raw_detector_display = legacy_xy_point
-            if raw_detector_display is None and display_detector_candidate is not None:
-                raw_detector_display = display_detector_candidate
+            # display_col/display_row are active-view coordinates. After a GUI
+            # state restore they may be detector display pixels, caked axes, or
+            # stale overlay coordinates. They are therefore not stable detector
+            # provenance and must not be converted back into native detector
+            # coordinates. Only explicit detector-space fields, native fields,
+            # or caked angle fields are allowed to seed reprojection.
+            frozen_display_point = None
+            if (
+                raw_detector_display is None
+                and native_point is None
+                and caked_point is None
+                and display_detector_candidate is not None
+            ):
+                frozen_display_point = (
+                    float(display_detector_candidate[0]),
+                    float(display_detector_candidate[1]),
+                )
             for stale_key in (
                 "caked_x",
                 "caked_y",
@@ -5991,6 +6152,22 @@ def make_runtime_geometry_manual_projection_callbacks(
                 entry["sim_row_raw"] = float(raw_detector_display[1])
                 entry["sim_col"] = float(raw_detector_display[0])
                 entry["sim_row"] = float(raw_detector_display[1])
+            else:
+                for stale_key in (
+                    "sim_col_raw",
+                    "sim_row_raw",
+                    "sim_col",
+                    "sim_row",
+                ):
+                    entry.pop(stale_key, None)
+            if native_point is None:
+                for stale_key in (
+                    "native_col",
+                    "native_row",
+                    "sim_native_x",
+                    "sim_native_y",
+                ):
+                    entry.pop(stale_key, None)
             if caked_point is not None:
                 entry["caked_x"] = float(caked_point[0])
                 entry["caked_y"] = float(caked_point[1])
@@ -6000,21 +6177,30 @@ def make_runtime_geometry_manual_projection_callbacks(
                 entry["phi_deg"] = float(caked_point[1])
 
             if use_caked:
-                if caked_point is not None:
-                    entry["display_col"] = float(caked_point[0])
-                    entry["display_row"] = float(caked_point[1])
-                    entry["sim_col_global"] = float(caked_point[0])
-                    entry["sim_row_global"] = float(caked_point[1])
+                active_caked_point = caked_point or frozen_display_point
+                if active_caked_point is not None:
+                    entry["display_col"] = float(active_caked_point[0])
+                    entry["display_row"] = float(active_caked_point[1])
+                    if caked_point is None:
+                        entry["caked_x"] = float(active_caked_point[0])
+                        entry["caked_y"] = float(active_caked_point[1])
+                    entry["sim_col_global"] = float(active_caked_point[0])
+                    entry["sim_row_global"] = float(active_caked_point[1])
                     entry["sim_col_local"] = float(
-                        caked_axis_to_image_index(float(caked_point[0]), radial_axis)
+                        caked_axis_to_image_index(float(active_caked_point[0]), radial_axis)
                     )
                     entry["sim_row_local"] = float(
-                        caked_axis_to_image_index(float(caked_point[1]), azimuth_axis)
+                        caked_axis_to_image_index(float(active_caked_point[1]), azimuth_axis)
                     )
                     projected.append(entry)
                 continue
 
             if raw_detector_display is None:
+                if frozen_display_point is not None:
+                    entry["display_col"] = float(frozen_display_point[0])
+                    entry["display_row"] = float(frozen_display_point[1])
+                    projected.append(entry)
+                    continue
                 continue
             entry["sim_col"] = float(raw_detector_display[0])
             entry["sim_row"] = float(raw_detector_display[1])

@@ -620,6 +620,8 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                 {
                     "x": 31.0,
                     "y": 41.0,
+                    "display_col": 31.0,
+                    "display_row": 41.0,
                     "detector_x": 31.0,
                     "detector_y": 41.0,
                     "background_detector_x": 31.0,
@@ -775,6 +777,8 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         {
             "x": 31.0,
             "y": 41.0,
+            "display_col": 31.0,
+            "display_row": 41.0,
             "detector_x": 31.0,
             "detector_y": 41.0,
             "background_detector_x": 31.0,
@@ -1114,15 +1118,15 @@ def _make_legacy_dense_manual_dataset_bindings(
     )
 
 
-def _load_new2_probe_module():
+def _load_geometry_preflight_probe_module():
     script_path = (
         Path(__file__).resolve().parents[1]
         / "scripts"
         / "debug"
-        / "validate_new2_preflight_rebind.py"
+        / "validate_geometry_preflight_rebind.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "validate_new2_preflight_rebind",
+        "validate_geometry_preflight_rebind",
         script_path,
     )
     module = importlib.util.module_from_spec(spec)
@@ -2575,7 +2579,7 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
 
 
 def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
 
     result = probe._select_live_candidate_for_saved_entry(
         saved_entry={
@@ -2620,8 +2624,59 @@ def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -
     assert len(result["tied_candidate_inventory"]) == 2
 
 
+def test_select_live_candidate_for_saved_entry_prefers_detector_near_candidate() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    result = probe._select_live_candidate_for_saved_entry(
+        saved_entry={
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "detector_x": 1000.0,
+            "detector_y": 1000.0,
+            "refined_sim_native_x": 1005.0,
+            "refined_sim_native_y": 1010.0,
+        },
+        grouped_candidates={
+            ("q_group", "primary", 1, 5): [
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 203,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "native_col": 2510.0,
+                    "native_row": 2525.0,
+                },
+                {
+                    "hkl": (-1, 0, 5),
+                    "source_reflection_index": 204,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "native_col": 1008.0,
+                    "native_row": 1012.0,
+                },
+            ]
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["selected_candidate"]["source_reflection_index"] == 204
+    assert result["best_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+    assert result["matching_branch_candidate_inventory"][0][
+        "distance_to_saved_sim_detector_hint_px"
+    ] == pytest.approx((1505.0**2 + 1515.0**2) ** 0.5)
+    assert result["matching_branch_candidate_inventory"][1][
+        "distance_to_saved_sim_detector_hint_px"
+    ] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+
+
 def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
 
     result = probe._compatibility_probe_slot_indices(
         [
@@ -2644,7 +2699,51 @@ def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None
 
 
 def test_saved_to_selected_identity_delta_reports_legacy_canonicalization() -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
+
+    saved_entry = {
+        "pair_id": "bg0:pair1",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": None,
+        "source_reflection_namespace": None,
+        "source_reflection_is_full": False,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    selected_entry = {
+        "pair_id": "selected-live-row",
+        "hkl": (-1, 0, 5),
+        "source_reflection_index": 214,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+    delta, classification = probe._classify_saved_to_selected_identity_delta(
+        saved_entry,
+        selected_entry,
+    )
+
+    assert classification == "legacy_saved_identity_canonicalized"
+    assert delta == {
+        "source_reflection_index": {
+            "saved": None,
+            "selected": 214,
+        },
+        "source_reflection_namespace": {
+            "saved": None,
+            "selected": "full_reflection",
+        },
+        "source_reflection_is_full": {
+            "saved": False,
+            "selected": True,
+        }
+    }
+
+
+def test_saved_to_selected_identity_delta_rejects_conflicting_trusted_reflection_id() -> None:
+    probe = _load_geometry_preflight_probe_module()
 
     saved_entry = {
         "pair_id": "bg0:pair1",
@@ -2670,11 +2769,89 @@ def test_saved_to_selected_identity_delta_reports_legacy_canonicalization() -> N
         selected_entry,
     )
 
-    assert classification == "legacy_saved_identity_canonicalized"
+    assert classification == "identity_drift"
     assert delta == {
         "source_reflection_index": {
             "saved": 15,
             "selected": 214,
+        }
+    }
+
+
+def test_saved_to_selected_identity_delta_accepts_legacy_table_index_alias() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "hkl": (0, 0, 3),
+        "source_reflection_index": 10,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_table_index": 10,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    selected_entry = {
+        "pair_id": "selected-live-row",
+        "hkl": (0, 0, 3),
+        "source_reflection_index": 411,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_table_index": 411,
+        "source_row_index": 0,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+
+    delta, classification = probe._classify_saved_to_selected_identity_delta(
+        saved_entry,
+        selected_entry,
+    )
+
+    assert classification == "legacy_saved_identity_canonicalized"
+    assert delta == {
+        "source_reflection_index": {
+            "saved": 10,
+            "selected": 411,
+        }
+    }
+
+
+def test_saved_to_selected_identity_delta_rejects_alias_without_row_provenance() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "hkl": (0, 0, 3),
+        "source_reflection_index": 10,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_table_index": 10,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    selected_entry = {
+        "pair_id": "selected-live-row",
+        "hkl": (0, 0, 3),
+        "source_reflection_index": 411,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+
+    delta, classification = probe._classify_saved_to_selected_identity_delta(
+        saved_entry,
+        selected_entry,
+    )
+
+    assert classification == "identity_drift"
+    assert delta == {
+        "source_reflection_index": {
+            "saved": 10,
+            "selected": 411,
         }
     }
 
@@ -2684,7 +2861,7 @@ def test_probe_main_aliases_full_to_fresh_all(
     capsys,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     calls: list[str] = []
 
     monkeypatch.setattr(
@@ -2729,7 +2906,7 @@ def test_saved_state_compatibility_validation_handles_two_entry_pair(
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
             "q_group_key": ("q_group", "primary", 1, 5),
@@ -2810,7 +2987,7 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
             "pair_id": f"bg0:pair{slot_index}",
@@ -2824,7 +3001,7 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
         }
         for slot_index in range(9)
     ]
-    state_path = tmp_path / "new2_like.json"
+    state_path = tmp_path / "geometry_probe_state.json"
     context = {
         "ok": True,
         "state_path": str(state_path),
@@ -2832,6 +3009,7 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
         "saved_pair_count": len(saved_entries),
         "captured_preflight_error_text": None,
         "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
         "dataset_pair_count": len(saved_entries),
         "dataset_resolved_source_pair_count": len(saved_entries),
         "harness_validation": {"valid": True},
@@ -2876,7 +3054,7 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
     )
 
     def _fake_run_fresh_slot_validation(*, context, background_index, slot_index, runtime):
-        emitted_pair = {
+        selected_candidate = {
             "pair_id": f"bg0:pair{int(slot_index)}",
             "q_group_key": ("q_group", "primary", 1, int(slot_index) + 1),
             "hkl": (-1, 0, int(slot_index) + 1),
@@ -2886,10 +3064,26 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
             "source_branch_index": int(slot_index) % 2,
             "source_peak_index": int(slot_index) % 2,
         }
+        emitted_pair = {
+            **selected_candidate,
+        }
         return {
             "ok": True,
+            "rebind_ok": True,
             "classification": "pass",
             "slot_index": int(slot_index),
+            "saved_entry": {
+                "pair_id": f"bg0:pair{int(slot_index)}",
+                "hkl": (-1, 0, int(slot_index) + 1),
+                "source_branch_index": int(slot_index) % 2,
+                "source_peak_index": int(slot_index) % 2,
+            },
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": float(slot_index) + 0.25,
+                "selected_candidate": dict(selected_candidate),
+            },
             "saved_to_selected_identity_delta": (
                 {
                     "source_reflection_index": {
@@ -2945,6 +3139,20 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
     assert result["ok"] is True
     assert result["classification"] == "pass"
     assert len(result["slot_results"]) == 9
+    assert result["processed_manual_entry_count"] == 9
+    assert result["bound_manual_entry_count"] == 9
+    assert result["missing_manual_entry_count"] == 0
+    assert result["branch_mismatch_count"] == 0
+    assert result["runtime_prepare_ok"] is True
+    assert result["isolated_rebind_ok"] is True
+    assert result["fresh_export_ok"] is True
+    assert result["compatibility_ok"] is True
+    assert result["detector_distance_gate_ok"] is True
+    assert result["candidate_distance_gate_ok"] is True
+    assert result["candidate_distances_all_finite"] is True
+    assert result["candidate_distance_px"] == [float(slot_index) + 0.25 for slot_index in range(9)]
+    assert result["max_candidate_distance_px"] == pytest.approx(8.25)
+    assert result["candidate_distance_gate_threshold_px"] == pytest.approx(100.0)
     assert result["slot_results"][0]["saved_to_selected_identity_delta_classification"] == (
         "legacy_saved_identity_canonicalized"
     )
@@ -2952,14 +3160,1057 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
         "saved_identity_already_canonical"
     )
     assert result["exported_fresh_state_path"] == str(export_path.resolve())
+    assert result["fresh_state_export_written"] is True
     assert result["exported_state_compatibility"]["ok"] is True
+
+
+def test_fresh_contract_validation_validates_temp_state_before_export(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "q_group_key": ("q_group", "primary", 1, 1),
+        "hkl": (-1, 0, 1),
+        "source_reflection_index": 10,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": 1,
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": 1,
+        "dataset_resolved_source_pair_count": 1,
+        "harness_validation": {"valid": True},
+        "saved_entries": [saved_entry],
+        "saved_state": {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(saved_entry)],
+                    }
+                ],
+                "peak_records": ["stale"],
+                "q_group_rows": ["stale"],
+            },
+        },
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entry),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 1.25,
+                "selected_candidate": {
+                    "pair_id": "bg0:pair0",
+                    "q_group_key": ("q_group", "primary", 1, 1),
+                    "hkl": (-1, 0, 1),
+                    "source_branch_index": 0,
+                    "source_peak_index": 0,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": {
+                "pair_id": "bg0:pair0",
+                "q_group_key": ("q_group", "primary", 1, 1),
+                "hkl": (-1, 0, 1),
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            },
+        },
+    )
+
+    compatibility_paths: list[Path] = []
+
+    def _fake_compatibility(checked_state_path, background_index):
+        checked_path = Path(checked_state_path).resolve()
+        compatibility_paths.append(checked_path)
+        exported_state = load_gui_state_file(checked_path)["state"]
+        manual_pairs = exported_state["geometry"]["manual_pairs"]
+        assert len(manual_pairs) == 1
+        assert [entry["pair_id"] for entry in manual_pairs[0]["entries"]] == ["bg0:pair0"]
+        assert exported_state["geometry"]["peak_records"] == []
+        assert exported_state["geometry"]["q_group_rows"] == []
+        return {
+            "ok": True,
+            "classification": "pass",
+            "checked_slot_indices": [0],
+        }
+
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        _fake_compatibility,
+    )
+
+    export_path = tmp_path / "fresh_export.json"
+    result = probe._run_fresh_contract_validation(
+        state_path,
+        background_index=0,
+        sentinel_slot_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert len(compatibility_paths) == 1
+    assert compatibility_paths[0] != state_path.resolve()
+    assert compatibility_paths[0] != export_path.resolve()
+    assert result["ok"] is True
+    assert result["classification"] == "pass"
+    assert result["compatibility_ok"] is True
+    assert result["fresh_export_ok"] is True
+    assert result["fresh_state_export_written"] is True
+    assert result["exported_fresh_state_path"] == str(export_path.resolve())
+    assert result["exported_state_compatibility"]["ok"] is True
+    assert export_path.exists() is True
+
+
+def test_fresh_contract_validation_does_not_export_when_temp_state_fails_compatibility(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "q_group_key": ("q_group", "primary", 1, 1),
+        "hkl": (-1, 0, 1),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": 1,
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": 1,
+        "dataset_resolved_source_pair_count": 1,
+        "harness_validation": {"valid": True},
+        "saved_entries": [saved_entry],
+        "saved_state": {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(saved_entry)],
+                    }
+                ],
+                "peak_records": ["stale"],
+                "q_group_rows": ["stale"],
+            },
+        },
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entry),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 1.25,
+                "selected_candidate": {
+                    "pair_id": "bg0:pair0",
+                    "q_group_key": ("q_group", "primary", 1, 1),
+                    "hkl": (-1, 0, 1),
+                    "source_branch_index": 0,
+                    "source_peak_index": 0,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": {
+                "pair_id": "bg0:pair0",
+                "q_group_key": ("q_group", "primary", 1, 1),
+                "hkl": (-1, 0, 1),
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            },
+        },
+    )
+
+    compatibility_paths: list[Path] = []
+
+    def _fake_compatibility(checked_state_path, background_index):
+        checked_path = Path(checked_state_path).resolve()
+        compatibility_paths.append(checked_path)
+        exported_state = load_gui_state_file(checked_path)["state"]
+        assert exported_state["geometry"]["peak_records"] == []
+        assert exported_state["geometry"]["q_group_rows"] == []
+        return {
+            "ok": False,
+            "classification": "seam_failure",
+            "failed_pair": {"failure_stage": "compatibility"},
+        }
+
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        _fake_compatibility,
+    )
+
+    export_path = tmp_path / "should_not_write_fresh.json"
+    result = probe._run_fresh_contract_validation(
+        state_path,
+        background_index=0,
+        sentinel_slot_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert len(compatibility_paths) == 1
+    assert compatibility_paths[0] != state_path.resolve()
+    assert compatibility_paths[0] != export_path.resolve()
+    assert result["ok"] is False
+    assert result["classification"] == "fresh_contract_state_compatibility_fail"
+    assert result["compatibility_ok"] is False
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert "exported_fresh_state_path" not in result
+    assert result["failed_pair"]["failure_stage"] == "compatibility"
+    assert export_path.exists() is False
+
+
+def test_fresh_contract_validation_reports_export_write_failure_without_crashing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "q_group_key": ("q_group", "primary", 1, 1),
+        "hkl": (-1, 0, 1),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": 1,
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": 1,
+        "dataset_resolved_source_pair_count": 1,
+        "harness_validation": {"valid": True},
+        "saved_entries": [saved_entry],
+        "saved_state": {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(saved_entry)],
+                    }
+                ],
+                "peak_records": [],
+                "q_group_rows": [],
+            },
+        },
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entry),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 1.25,
+                "selected_candidate": {
+                    "pair_id": "bg0:pair0",
+                    "q_group_key": ("q_group", "primary", 1, 1),
+                    "hkl": (-1, 0, 1),
+                    "source_branch_index": 0,
+                    "source_peak_index": 0,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": dict(saved_entry),
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "classification": "pass",
+            "checked_slot_indices": [0],
+        },
+    )
+
+    export_path = tmp_path / "fresh_export.json"
+    previous_export_state = {"sentinel": "keep-me"}
+    save_gui_state_file(export_path, previous_export_state)
+    original_save_gui_state_file = probe.save_gui_state_file
+
+    def _save_with_export_failure(path, state):
+        resolved_path = Path(path).resolve()
+        if (
+            resolved_path.parent == export_path.resolve().parent
+            and resolved_path.name.startswith(f"{export_path.name}.")
+            and resolved_path.suffix == ".tmp"
+        ):
+            resolved_path.write_text("partial", encoding="utf-8")
+            raise OSError("disk full")
+        return original_save_gui_state_file(path, state)
+
+    monkeypatch.setattr(probe, "save_gui_state_file", _save_with_export_failure)
+
+    result = probe._run_fresh_contract_validation(
+        state_path,
+        background_index=0,
+        sentinel_slot_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "fresh_contract_export_fail"
+    assert result["compatibility_ok"] is True
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert "exported_fresh_state_path" not in result
+    assert result["failed_pair"]["failure_stage"] == "fresh_contract_export"
+    assert result["failed_pair"]["error_type"] == "OSError"
+    assert result["failed_pair"]["error_text"] == "disk full"
+    assert result["failed_pair"]["partial_target_removed"] is True
+    assert export_path.exists() is True
+    assert load_gui_state_file(export_path)["state"] == previous_export_state
+
+
+def test_fresh_contract_validation_reports_temp_state_save_failure_without_crashing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "q_group_key": ("q_group", "primary", 1, 1),
+        "hkl": (-1, 0, 1),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": 1,
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": 1,
+        "dataset_resolved_source_pair_count": 1,
+        "harness_validation": {"valid": True},
+        "saved_entries": [saved_entry],
+        "saved_state": {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(saved_entry)],
+                    }
+                ],
+                "peak_records": [],
+                "q_group_rows": [],
+            },
+        },
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entry),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 1.25,
+                "selected_candidate": dict(saved_entry),
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": dict(saved_entry),
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: pytest.fail("compatibility should not run after temp-save failure"),
+    )
+
+    original_save_gui_state_file = probe.save_gui_state_file
+
+    def _save_with_temp_failure(path, state):
+        resolved_path = Path(path).resolve()
+        if (
+            resolved_path.name.startswith("fresh_state.json.")
+            and resolved_path.suffix == ".tmp"
+        ):
+            raise OSError("temp disk full")
+        return original_save_gui_state_file(path, state)
+
+    monkeypatch.setattr(probe, "save_gui_state_file", _save_with_temp_failure)
+
+    export_path = tmp_path / "should_not_write_fresh.json"
+    result = probe._run_fresh_contract_validation(
+        state_path,
+        background_index=0,
+        sentinel_slot_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "fresh_contract_temp_save_fail"
+    assert result["compatibility_ok"] is False
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert result["exported_state_compatibility"]["classification"] == "temp_state_save_failed"
+    assert result["state_compatibility"]["classification"] == "temp_state_save_failed"
+    assert result["failed_pair"]["failure_stage"] == "fresh_contract_temp_state_save"
+    assert result["failed_pair"]["error_type"] == "OSError"
+    assert result["failed_pair"]["error_text"] == "temp disk full"
+    assert export_path.exists() is False
+
+
+def test_fresh_contract_validation_slot_failure_keeps_explicit_status_fields(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": 1,
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": 1,
+        "dataset_resolved_source_pair_count": 1,
+        "harness_validation": {"valid": True},
+        "saved_entries": [{"pair_id": "bg0:pair0"}],
+        "saved_state": {"geometry": {"manual_pairs": []}},
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": False,
+            "classification": "slot_fail",
+            "failed_pair": {"failure_stage": "slot_validation"},
+        },
+    )
+
+    export_path = tmp_path / "should_not_write_fresh.json"
+    result = probe._run_fresh_contract_validation(
+        state_path,
+        background_index=0,
+        sentinel_slot_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "slot_fail"
+    assert result["compatibility_ok"] is False
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert result["state_compatibility"]["classification"] == "skipped_due_to_slot_failure"
+    assert result["exported_state_compatibility"]["classification"] == "skipped_due_to_slot_failure"
+    assert result["failed_pair"]["failure_stage"] == "slot_validation"
+    assert export_path.exists() is False
+
+
+def test_fresh_all_contract_validation_reports_export_write_failure_without_crashing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [
+        {
+            "pair_id": f"bg0:pair{slot_index}",
+            "q_group_key": ("q_group", "primary", 1, slot_index + 1),
+            "hkl": (-1, 0, slot_index + 1),
+            "source_branch_index": slot_index % 2,
+            "source_peak_index": slot_index % 2,
+            "placement_error_px": 10.0,
+        }
+        for slot_index in range(2)
+    ]
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": len(saved_entries),
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": len(saved_entries),
+        "dataset_resolved_source_pair_count": len(saved_entries),
+        "harness_validation": {"valid": True},
+        "saved_entries": saved_entries,
+        "saved_state": {
+            "files": {
+                "background_files": ["C:/tmp/bg0.osc"],
+                "current_background_index": 0,
+            },
+            "variables": {
+                "geometry_fit_background_selection_var": "current",
+            },
+            "geometry": {
+                "manual_pairs": [
+                    {
+                        "background_index": 0,
+                        "background_name": "bg0",
+                        "background_path": "C:/tmp/bg0.osc",
+                        "entries": [dict(entry) for entry in saved_entries],
+                    }
+                ],
+                "peak_records": [],
+                "q_group_rows": [],
+            },
+        },
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entries[int(kwargs["slot_index"])]),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 4.0,
+                "selected_candidate": {
+                    "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
+                    "source_branch_index": int(kwargs["slot_index"]) % 2,
+                    "source_peak_index": int(kwargs["slot_index"]) % 2,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": {"pair_id": f"bg0:pair{int(kwargs['slot_index'])}"},
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: {"ok": True, "classification": "pass"},
+    )
+
+    export_path = tmp_path / "fresh_all_export.json"
+    previous_export_state = {"sentinel": "keep-me-too"}
+    save_gui_state_file(export_path, previous_export_state)
+    original_save_gui_state_file = probe.save_gui_state_file
+
+    def _save_with_export_failure(path, state):
+        resolved_path = Path(path).resolve()
+        if (
+            resolved_path.parent == export_path.resolve().parent
+            and resolved_path.name.startswith(f"{export_path.name}.")
+            and resolved_path.suffix == ".tmp"
+        ):
+            resolved_path.write_text("partial", encoding="utf-8")
+            raise OSError("disk full")
+        return original_save_gui_state_file(path, state)
+
+    monkeypatch.setattr(probe, "save_gui_state_file", _save_with_export_failure)
+
+    result = probe._run_fresh_all_contract_validation(
+        state_path,
+        background_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "fresh_all_contract_export_fail"
+    assert result["compatibility_ok"] is True
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert "exported_fresh_state_path" not in result
+    assert result["failed_pair"]["failure_stage"] == "fresh_all_contract_export"
+    assert result["failed_pair"]["error_type"] == "OSError"
+    assert result["failed_pair"]["error_text"] == "disk full"
+    assert result["failed_pair"]["partial_target_removed"] is True
+    assert export_path.exists() is True
+    assert load_gui_state_file(export_path)["state"] == previous_export_state
+
+
+def test_fresh_all_contract_validation_reports_temp_state_save_failure_without_crashing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [
+        {
+            "pair_id": f"bg0:pair{slot_index}",
+            "q_group_key": ("q_group", "primary", 1, slot_index + 1),
+            "hkl": (-1, 0, slot_index + 1),
+            "source_branch_index": slot_index % 2,
+            "source_peak_index": slot_index % 2,
+            "placement_error_px": 10.0,
+        }
+        for slot_index in range(2)
+    ]
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": len(saved_entries),
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": len(saved_entries),
+        "dataset_resolved_source_pair_count": len(saved_entries),
+        "harness_validation": {"valid": True},
+        "saved_entries": saved_entries,
+        "saved_state": {"geometry": {"manual_pairs": []}},
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entries[int(kwargs["slot_index"])]),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 4.0,
+                "selected_candidate": {
+                    "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
+                    "source_branch_index": int(kwargs["slot_index"]) % 2,
+                    "source_peak_index": int(kwargs["slot_index"]) % 2,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": {"pair_id": f"bg0:pair{int(kwargs['slot_index'])}"},
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: pytest.fail("compatibility should not run after temp-save failure"),
+    )
+
+    original_save_gui_state_file = probe.save_gui_state_file
+
+    def _save_with_temp_failure(path, state):
+        resolved_path = Path(path).resolve()
+        if (
+            resolved_path.name.startswith("fresh_all_state.json.")
+            and resolved_path.suffix == ".tmp"
+        ):
+            raise OSError("temp disk full")
+        return original_save_gui_state_file(path, state)
+
+    monkeypatch.setattr(probe, "save_gui_state_file", _save_with_temp_failure)
+
+    export_path = tmp_path / "should_not_write_fresh_all.json"
+    result = probe._run_fresh_all_contract_validation(
+        state_path,
+        background_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "fresh_all_contract_temp_save_fail"
+    assert result["compatibility_ok"] is False
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert result["exported_state_compatibility"]["classification"] == "temp_state_save_failed"
+    assert result["state_compatibility"]["classification"] == "temp_state_save_failed"
+    assert result["failed_pair"]["failure_stage"] == "fresh_all_contract_temp_state_save"
+    assert result["failed_pair"]["error_type"] == "OSError"
+    assert result["failed_pair"]["error_text"] == "temp disk full"
+    assert export_path.exists() is False
+
+
+def test_fresh_all_contract_validation_classifies_runtime_prepare_isolated_rebind_only(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [
+        {
+            "pair_id": f"bg0:pair{slot_index}",
+            "q_group_key": ("q_group", "primary", 1, slot_index + 1),
+            "hkl": (-1, 0, slot_index + 1),
+            "source_branch_index": slot_index % 2,
+            "source_peak_index": slot_index % 2,
+            "placement_error_px": 10.0,
+        }
+        for slot_index in range(2)
+    ]
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": len(saved_entries),
+        "captured_preflight_error_text": "Geometry fit unavailable: saved manual pairs no longer resolve.",
+        "used_isolated_background_dataset": True,
+        "runtime_prepare_ok": False,
+        "dataset_pair_count": len(saved_entries),
+        "dataset_resolved_source_pair_count": len(saved_entries),
+        "harness_validation": {"valid": True},
+        "saved_entries": saved_entries,
+        "saved_state": {"geometry": {"manual_pairs": []}},
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entries[int(kwargs["slot_index"])]),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 4.0,
+                "selected_candidate": {
+                    "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
+                    "source_branch_index": int(kwargs["slot_index"]) % 2,
+                    "source_peak_index": int(kwargs["slot_index"]) % 2,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": {"pair_id": f"bg0:pair{int(kwargs['slot_index'])}"},
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: {"ok": True, "classification": "pass"},
+    )
+
+    export_path = tmp_path / "should_not_write_fresh_all.json"
+    result = probe._run_fresh_all_contract_validation(
+        state_path,
+        background_index=0,
+        export_fresh_state_path=export_path,
+    )
+
+    assert result["ok"] is False
+    assert result["classification"] == "runtime_prepare_failed_but_isolated_rebind_ok"
+    assert result["runtime_prepare_ok"] is False
+    assert result["isolated_rebind_ok"] is True
+    assert result["fresh_export_ok"] is False
+    assert result["fresh_state_export_written"] is False
+    assert "exported_fresh_state_path" not in result
+    assert export_path.exists() is False
+    assert result["compatibility_ok"] is True
+    assert result["detector_distance_gate_ok"] is True
+    assert result["max_candidate_distance_px"] == pytest.approx(4.0)
+
+
+def test_fresh_all_contract_validation_fails_detector_distance_gate_when_candidates_are_far(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [
+        {
+            "pair_id": f"bg0:pair{slot_index}",
+            "q_group_key": ("q_group", "primary", 1, slot_index + 1),
+            "hkl": (-1, 0, slot_index + 1),
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "placement_error_px": 8.0,
+        }
+        for slot_index in range(2)
+    ]
+    state_path = tmp_path / "geometry_probe_state.json"
+    context = {
+        "ok": True,
+        "state_path": str(state_path),
+        "background_index": 0,
+        "saved_pair_count": len(saved_entries),
+        "captured_preflight_error_text": None,
+        "used_isolated_background_dataset": False,
+        "runtime_prepare_ok": True,
+        "dataset_pair_count": len(saved_entries),
+        "dataset_resolved_source_pair_count": len(saved_entries),
+        "harness_validation": {"valid": True},
+        "saved_entries": saved_entries,
+        "saved_state": {"geometry": {"manual_pairs": []}},
+        "dataset": {},
+        "group_cache": {},
+        "manual_dataset_bindings": SimpleNamespace(
+            geometry_manual_entry_display_coords=lambda entry: (0.0, 0.0)
+        ),
+    }
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        lambda state_path, background_index: context,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_prepare_fresh_slot_runtime",
+        lambda **kwargs: {"prepared": True},
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_fresh_slot_validation",
+        lambda **kwargs: {
+            "ok": True,
+            "rebind_ok": True,
+            "classification": "pass",
+            "slot_index": int(kwargs["slot_index"]),
+            "saved_entry": dict(saved_entries[int(kwargs["slot_index"])]),
+            "candidate_selection": {
+                "ok": True,
+                "selection_status": "selected",
+                "best_distance_px": 12.0 if int(kwargs["slot_index"]) == 0 else 150.0,
+                "selected_candidate": {
+                    "hkl": (-1, 0, int(kwargs["slot_index"]) + 1),
+                    "source_branch_index": 0,
+                    "source_peak_index": 0,
+                },
+            },
+            "saved_to_selected_identity_delta": {},
+            "saved_to_selected_identity_delta_classification": "saved_identity_already_canonical",
+            "emitted_pair": {"pair_id": f"bg0:pair{int(kwargs['slot_index'])}"},
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_run_saved_state_compatibility_validation",
+        lambda *args, **kwargs: {"ok": True, "classification": "pass"},
+    )
+
+    result = probe._run_fresh_all_contract_validation(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["ok"] is False
+    assert result["runtime_prepare_ok"] is True
+    assert result["isolated_rebind_ok"] is True
+    assert result["compatibility_ok"] is True
+    assert result["fresh_export_ok"] is True
+    assert result["detector_distance_gate_ok"] is False
+    assert result["candidate_distance_gate_ok"] is False
+    assert result["candidate_distance_px"] == [12.0, 150.0]
+    assert result["max_candidate_distance_px"] == pytest.approx(150.0)
+    assert result["candidate_distance_gate_threshold_px"] == pytest.approx(100.0)
 
 
 def test_downstream_identity_validation_rejects_non_canonical_input(
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     state_path = _write_probe_state(
         tmp_path,
         entries=[
@@ -2997,7 +4248,7 @@ def test_downstream_identity_validation_stops_at_subset_drift(
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -3103,7 +4354,7 @@ def test_downstream_identity_validation_preserves_canonical_identity(
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -3234,7 +4485,7 @@ def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagno
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -3427,7 +4678,7 @@ def test_downstream_identity_validation_promotes_coverage_mismatch_classificatio
     monkeypatch,
     tmp_path,
 ) -> None:
-    probe = _load_new2_probe_module()
+    probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -10049,6 +11300,49 @@ def test_finalize_runtime_geometry_fit_execution_writes_trace_for_rejected_run(
             }
         ],
         full_beam_polish_summary={
+            "fit_quality_passed": False,
+            "selection_status": "retained_start_safe_fallback",
+            "selected_candidate_name": "retained_start_safe_fallback",
+            "selected_candidate_source": "requested_x0",
+            "best_valid_raw_detector_candidate_name": "requested_start",
+            "best_valid_raw_detector_candidate_source": "requested_x0",
+            "constraint_count": 2,
+            "active_fit_variable_count": 1,
+            "active_fit_variables": ["gamma"],
+            "candidate_ledger": [
+                {
+                    "candidate_name": "requested_start",
+                    "x_vector_source": "requested_x0",
+                    "matched_pair_count": 1,
+                    "missing_pair_count": 0,
+                    "branch_mismatch_count": 0,
+                    "rms_px": 22.360679775,
+                    "median_px": 22.360679775,
+                    "max_px": 22.360679775,
+                    "outside_radius_count": 0,
+                    "weighted_objective": 5.0,
+                    "accepted_or_rejected": "accepted",
+                    "rejection_reason": None,
+                    "valid_raw_detector_candidate": True,
+                    "selected": False,
+                },
+                {
+                    "candidate_name": "retained_start_safe_fallback",
+                    "x_vector_source": "requested_x0",
+                    "matched_pair_count": 1,
+                    "missing_pair_count": 0,
+                    "branch_mismatch_count": 0,
+                    "rms_px": 22.360679775,
+                    "median_px": 22.360679775,
+                    "max_px": 22.360679775,
+                    "outside_radius_count": 0,
+                    "weighted_objective": 5.0,
+                    "accepted_or_rejected": "accepted",
+                    "rejection_reason": None,
+                    "valid_raw_detector_candidate": True,
+                    "selected": True,
+                },
+            ],
             "seed_correspondence_records": [
                 {
                     "dataset_index": 0,
@@ -10143,6 +11437,16 @@ def test_finalize_runtime_geometry_fit_execution_writes_trace_for_rejected_run(
         record["record_type"] == "run"
         and record["fit_run_id"] == "20260328_130005"
         and record["accepted"] is False
+        and record["fit_quality_passed"] is False
+        and record["selection_status"] == "retained_start_safe_fallback"
+        and record["selected_candidate_name"] == "retained_start_safe_fallback"
+        and record["selected_candidate_source"] == "requested_x0"
+        and record["best_valid_raw_detector_candidate_name"] == "requested_start"
+        and record["best_valid_raw_detector_candidate_source"] == "requested_x0"
+        and record["constraint_count"] == 2
+        and record["active_fit_variable_count"] == 1
+        and record["active_fit_variables"] == ["gamma"]
+        and len(record["candidate_ledger"]) == 2
         for record in records
     )
     assert any(

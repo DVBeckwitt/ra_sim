@@ -407,7 +407,7 @@ def test_detector_pixels_to_fit_space_ignores_gamma_and_Gamma() -> None:
     assert np.allclose(tilted_phi, base_phi, atol=1.0e-12)
 
 
-def test_measured_fit_space_anchor_prefers_detector_anchor_over_cached_fit_space() -> None:
+def test_measured_fit_space_anchor_prefers_background_detector_anchor_over_cached_fit_space() -> None:
     center = [10.0, 10.0]
     entry = {
         "detector_x": 13.0,
@@ -424,11 +424,11 @@ def test_measured_fit_space_anchor_prefers_detector_anchor_over_cached_fit_space
         detector_distance=5.0,
         pixel_size=2.0,
     )
-    expected = opt._pixel_to_angles(13.0, 7.0, center, 5.0, 2.0)
+    expected = opt._pixel_to_angles(14.0, 6.0, center, 5.0, 2.0)
 
-    assert reason == "detector_fit_space_anchor"
+    assert reason == "background_detector_fit_space_anchor"
     assert anchor == pytest.approx(expected)
-    assert metadata["anchor_source"] == "detector_fit_space_anchor"
+    assert metadata["anchor_source"] == "background_detector_fit_space_anchor"
 
     fallback_entry = {
         "background_detector_x": 14.0,
@@ -533,6 +533,31 @@ def test_measured_fit_space_anchor_prefers_explicit_fit_space_override_over_dete
     assert metadata["anchor_source"] == "cached_fit_space_anchor"
     assert metadata["cached_two_theta_deg"] == pytest.approx(20.0)
     assert metadata["cached_phi_deg"] == pytest.approx(5.0)
+
+
+def test_fit_space_provenance_summary_counts_native_detector_anchor_sources() -> None:
+    summary = opt._fit_space_provenance_summary(
+        {},
+        cached_anchor_count=1,
+        detector_anchor_count=99,
+        anchor_source_counts={
+            "cached_fit_space_anchor": 1,
+            "native_fit_space_anchor": 2,
+            "background_detector_fit_space_anchor": 3,
+            "detector_fit_space_anchor": 4,
+            "display_fit_space_anchor": 5,
+        },
+    )
+
+    assert int(summary["fit_space_anchor_count_cached"]) == 1
+    assert int(summary["fit_space_anchor_count_detector"]) == 14
+    assert summary["fit_space_anchor_source_counts"] == {
+        "cached_fit_space_anchor": 1,
+        "native_fit_space_anchor": 2,
+        "background_detector_fit_space_anchor": 3,
+        "detector_fit_space_anchor": 4,
+        "display_fit_space_anchor": 5,
+    }
 
 
 def test_dynamic_point_match_reanchor_does_not_mutate_measured_entries(monkeypatch):
@@ -1801,7 +1826,10 @@ def test_fit_geometry_parameters_dynamic_point_path_records_fit_space_provenance
     assert int(result.point_match_summary["fit_space_anchor_count_detector"]) == 2
     assert result.point_match_summary["fit_space_anchor_source_counts"] == {
         "cached_fit_space_anchor": 0,
+        "native_fit_space_anchor": 0,
+        "background_detector_fit_space_anchor": 0,
         "detector_fit_space_anchor": 2,
+        "display_fit_space_anchor": 0,
     }
     assert int(result.point_match_summary["fit_space_two_theta_adjustment_count"]) == 0
     assert float(
@@ -2070,6 +2098,43 @@ def test_simulate_and_compare_hkl_falls_back_when_in_range_source_indices_point_
     assert meas_coords == [(4.0, 4.0)]
     assert sim_millers == [(2, 0, 0)]
     assert meas_millers == [(2, 0, 0)]
+
+
+def test_simulate_and_compare_hkl_fixed_source_match_uses_detector_anchor(monkeypatch):
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 99.0,
+            "y": 98.0,
+            "background_detector_x": 4.0,
+            "background_detector_y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "fit_source_resolution_kind": "source_row",
+        }
+    ]
+
+    distances, sim_coords, meas_coords, sim_millers, meas_millers = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+    )
+
+    assert distances.size == 2
+    assert np.allclose(distances, 0.0)
+    assert sim_coords == [(4.0, 4.0)]
+    assert meas_coords == [(4.0, 4.0)]
+    assert sim_millers == [(1, 0, 0)]
+    assert meas_millers == [(1, 0, 0)]
 
 
 def test_resolve_fixed_source_matches_prefers_source_reflection_index() -> None:
@@ -2465,6 +2530,8 @@ def _run_identity_bridge_case(
     *,
     trusted: bool,
     enable_full_beam_polish: bool = True,
+    display_point: tuple[float, float] = (8.0, 8.0),
+    detector_point: tuple[float, float] | None = None,
 ) -> dict[str, object]:
     _install_identity_bridge_solver_stubs(monkeypatch)
 
@@ -2479,10 +2546,21 @@ def _run_identity_bridge_case(
         "fit_run_id": "fit-123",
         "label": "1,0,0",
         "hkl": (1, 0, 0),
-        "x": 8.0,
-        "y": 8.0,
+        "x": float(display_point[0]),
+        "y": float(display_point[1]),
         "sigma_px": 1.0,
     }
+    if detector_point is not None:
+        input_pair.update(
+            {
+                "detector_x": float(detector_point[0]),
+                "detector_y": float(detector_point[1]),
+                "background_detector_x": float(detector_point[0]),
+                "background_detector_y": float(detector_point[1]),
+                "native_col": float(detector_point[0]),
+                "native_row": float(detector_point[1]),
+            }
+        )
     if trusted:
         input_pair.update(
             {
@@ -2608,6 +2686,27 @@ def test_point_match_diagnostics_preserve_trusted_identity_payload(
     assert point_diag.get("source_row_index_namespace") == "full_hit_table"
     assert point_diag.get("source_peak_index_namespace") == "branch_index"
     assert point_diag.get("source_branch_index_namespace") == "branch_index"
+
+
+def test_full_beam_seed_correspondence_prefers_detector_anchor_over_display_xy(
+    monkeypatch,
+) -> None:
+    case = _run_identity_bridge_case(
+        monkeypatch,
+        trusted=True,
+        display_point=(80.0, 80.0),
+        detector_point=(8.0, 8.0),
+    )
+
+    point_diag = dict(case["point_diag"])
+    seed_record = dict(case["seed_record"])
+    start_diag = dict(case["result"].full_beam_polish_summary["start_point_match_diagnostics"][0])
+
+    for record in (point_diag, seed_record, start_diag):
+        assert float(record["measured_x"]) == 8.0
+        assert float(record["measured_y"]) == 8.0
+    assert float(point_diag["distance_px"]) == 0.0
+    assert float(start_diag["distance_px"]) == 0.0
 
 
 def test_fixed_correspondence_path_remaps_trusted_full_reflection_indices_without_polish(
@@ -2948,6 +3047,124 @@ def test_geometry_fit_correspondence_simulated_point_allows_untrusted_local_row_
     assert reason == "resolved_source_row"
 
 
+def test_measured_detector_anchor_prefers_native_detector_coords() -> None:
+    anchor, reason = opt._measured_detector_anchor(
+        {
+            "native_col": 1083.0,
+            "native_row": 1151.0,
+            "background_detector_x": 1083.0,
+            "background_detector_y": 1151.0,
+            "detector_x": 1848.0,
+            "detector_y": 1083.0,
+            "x": 1848.0,
+            "y": 1083.0,
+        }
+    )
+
+    assert anchor == (1083.0, 1151.0)
+    assert reason == "resolved_native_anchor"
+
+
+def test_measured_detector_anchor_prefers_background_detector_over_sim_native_hint() -> None:
+    anchor, reason = opt._measured_detector_anchor(
+        {
+            "background_detector_x": 1083.0,
+            "background_detector_y": 1151.0,
+            "sim_native_x": 1501.0,
+            "sim_native_y": 1602.0,
+            "x": 1848.0,
+            "y": 1083.0,
+        }
+    )
+
+    assert anchor == (1083.0, 1151.0)
+    assert reason == "resolved_background_detector_anchor"
+
+
+def test_measured_detector_anchor_prefers_background_detector_over_detector_coords() -> None:
+    anchor, reason = opt._measured_detector_anchor(
+        {
+            "background_detector_x": 1083.0,
+            "background_detector_y": 1151.0,
+            "detector_x": 1848.0,
+            "detector_y": 1083.0,
+            "x": 1848.0,
+            "y": 1083.0,
+        }
+    )
+
+    assert anchor == (1083.0, 1151.0)
+    assert reason == "resolved_background_detector_anchor"
+
+
+def test_measured_detector_anchor_ignores_sim_native_hint_when_display_anchor_exists() -> None:
+    anchor, reason = opt._measured_detector_anchor(
+        {
+            "sim_native_x": 1501.0,
+            "sim_native_y": 1602.0,
+            "x": 1848.0,
+            "y": 1083.0,
+        }
+    )
+
+    assert anchor == (1848.0, 1083.0)
+    assert reason == "resolved_display_anchor"
+
+
+def test_measured_fit_space_anchor_prefers_background_detector_over_sim_native_hint() -> None:
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        {
+            "background_detector_x": 1083.0,
+            "background_detector_y": 1151.0,
+            "sim_native_x": 1501.0,
+            "sim_native_y": 1602.0,
+        },
+        center=(1024.0, 1024.0),
+        detector_distance=250.0,
+        pixel_size=0.1,
+    )
+
+    assert anchor is not None
+    assert reason == "background_detector_fit_space_anchor"
+    assert metadata["anchor_source"] == "background_detector_fit_space_anchor"
+
+
+def test_measured_fit_space_anchor_prefers_background_detector_over_detector_coords() -> None:
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        {
+            "background_detector_x": 1083.0,
+            "background_detector_y": 1151.0,
+            "detector_x": 1848.0,
+            "detector_y": 1083.0,
+        },
+        center=(1024.0, 1024.0),
+        detector_distance=250.0,
+        pixel_size=0.1,
+    )
+
+    assert anchor is not None
+    assert reason == "background_detector_fit_space_anchor"
+    assert metadata["anchor_source"] == "background_detector_fit_space_anchor"
+
+
+def test_measured_fit_space_anchor_ignores_sim_native_hint_when_display_anchor_exists() -> None:
+    anchor, reason, metadata = opt._measured_fit_space_anchor(
+        {
+            "sim_native_x": 1501.0,
+            "sim_native_y": 1602.0,
+            "x": 1848.0,
+            "y": 1083.0,
+        },
+        center=(1024.0, 1024.0),
+        detector_distance=250.0,
+        pixel_size=0.1,
+    )
+
+    assert anchor is not None
+    assert reason == "display_fit_space_anchor"
+    assert metadata["anchor_source"] == "display_fit_space_anchor"
+
+
 def test_resolve_geometry_fit_correspondence_remaps_trusted_full_reflection_row_locator() -> None:
     point, payload = opt._resolve_geometry_fit_correspondence(
         {
@@ -3207,6 +3424,32 @@ def test_build_measured_dict_skips_malformed_entries():
         (1, 0, 0): [(4.0, 5.0)],
         (2, 1, 0): [(6.0, 7.0)],
         (3, 0, 0): [(8.0, 9.0)],
+    }
+
+
+def test_build_measured_dict_prefers_detector_anchor_when_present():
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "x": 40.0,
+            "y": 50.0,
+            "background_detector_x": 4.0,
+            "background_detector_y": 5.0,
+        },
+        {
+            "hkl": (2, 0, 0),
+            "x": 60.0,
+            "y": 70.0,
+            "detector_x": 6.0,
+            "detector_y": 7.0,
+        },
+    ]
+
+    measured_dict = opt.build_measured_dict(measured)
+
+    assert measured_dict == {
+        (1, 0, 0): [(4.0, 5.0)],
+        (2, 0, 0): [(6.0, 7.0)],
     }
 
 
@@ -3948,17 +4191,241 @@ def test_full_beam_polish_rejects_match_count_regression(monkeypatch):
     assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
-    assert str(result.full_beam_polish_summary["status"]) == "rejected"
-    reason_text = str(result.full_beam_polish_summary["reason"])
+    assert str(result.full_beam_polish_summary["status"]) == "no_op_optimum"
     assert (
-        "matched_pairs_decreased" in reason_text
-        or "resolved_fixed_pairs_decreased" in reason_text
+        str(result.full_beam_polish_summary["selection_status"]) == "no_op_optimum"
+    )
+    assert bool(result.full_beam_polish_summary["fit_quality_passed"]) is True
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_name"])
+        != "full_beam_polish_result"
+    )
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_name"])
+        == str(result.full_beam_polish_summary["best_valid_raw_detector_candidate_name"])
+    )
+    assert (
+        str(result.full_beam_polish_summary["selected_candidate_source"])
+        == str(result.full_beam_polish_summary["best_valid_raw_detector_candidate_source"])
+    )
+    assert (
+        str(result.full_beam_polish_summary["reason"])
+        == "no_valid_candidate_improved_raw_detector_alignment"
     )
     assert np.isfinite(float(result.full_beam_polish_summary["candidate_cost"]))
     assert np.isfinite(float(result.full_beam_polish_summary["start_cost"]))
     assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 2
     assert int(result.full_beam_polish_summary["candidate_matched_pair_count"]) == 1
     assert int(result.point_match_summary["matched_pair_count"]) == 2
+
+
+def test_full_beam_polish_selects_best_valid_raw_candidate_when_fixed_pairs_hold():
+    dynamic_point_result = {
+        "candidate_name": "dynamic_point_result",
+        "x_vector_source": "current_result.x",
+        "valid_raw_detector_candidate": True,
+        "matched_fixed_pair_count": 7,
+        "missing_fixed_pair_count": 0,
+        "branch_mismatch_count": 0,
+        "rms_px": 88.7671,
+        "max_px": 186.0813,
+        "outside_radius_count": 2,
+        "weighted_objective": 1.0,
+    }
+    full_beam_polish_result = {
+        "candidate_name": "full_beam_polish_result",
+        "x_vector_source": "full_beam_polish",
+        "valid_raw_detector_candidate": True,
+        "matched_fixed_pair_count": 7,
+        "missing_fixed_pair_count": 0,
+        "branch_mismatch_count": 0,
+        "rms_px": 4.8773,
+        "max_px": 8.3621,
+        "outside_radius_count": 0,
+        "weighted_objective": 50.0,
+    }
+    rejected_start = {
+        "candidate_name": "requested_start",
+        "x_vector_source": "requested_x0",
+        "valid_raw_detector_candidate": False,
+        "matched_fixed_pair_count": 6,
+        "missing_fixed_pair_count": 1,
+        "branch_mismatch_count": 1,
+        "rms_px": 4.5,
+        "max_px": 8.0,
+        "outside_radius_count": 0,
+        "weighted_objective": 0.5,
+    }
+
+    ledger = [
+        dynamic_point_result,
+        full_beam_polish_result,
+        rejected_start,
+    ]
+
+    best_valid_raw_candidate = opt._best_valid_raw_detector_candidate(ledger)
+
+    assert best_valid_raw_candidate is full_beam_polish_result
+    assert (
+        opt._raw_detector_alignment_is_better(
+            full_beam_polish_result,
+            dynamic_point_result,
+        )
+        is True
+    )
+    assert (
+        opt._should_promote_best_valid_full_beam_candidate(
+            accepted=False,
+            preserve_rejected_start=False,
+            no_op_optimum=False,
+            best_valid_raw_candidate=best_valid_raw_candidate,
+        )
+        is True
+    )
+
+
+def test_full_beam_polish_duplicate_fixed_picks_keep_full_beam_candidate_valid(
+    monkeypatch,
+) -> None:
+    solve_calls = []
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        beam_x_array = np.asarray(args[16], dtype=np.float64)
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+
+        if beam_x_array.size > 1 and gamma >= 0.5:
+            hit_tables = [
+                np.array(
+                    [[10.0, 4.2, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.array(
+                    [[10.0, 8.2, 8.0, 0.0, 0.0, 1.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.empty((0, 7), dtype=np.float64),
+            ]
+        else:
+            hit_tables = [
+                np.array(
+                    [[10.0, 6.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.array(
+                    [[10.0, 10.0, 8.0, 0.0, 0.0, 1.0, 0.0]],
+                    dtype=np.float64,
+                ),
+                np.array(
+                    [[10.0, 4.4, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                ),
+            ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        call_index = len(solve_calls)
+        x = np.array([0.0], dtype=float) if call_index == 0 else np.array([1.0], dtype=float)
+        solve_calls.append(x.copy())
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 24
+    miller = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    intensities = np.array([25.0, 20.0, 15.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    measured = [
+        {
+            "label": "1,0,0",
+            "hkl": (1, 0, 0),
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "sigma_px": 1.0,
+        },
+        {
+            "label": "0,1,0",
+            "hkl": (0, 1, 0),
+            "x": 8.0,
+            "y": 8.0,
+            "source_table_index": 1,
+            "source_row_index": 0,
+            "sigma_px": 1.0,
+        },
+        {
+            "label": "1,0,0-dup",
+            "hkl": (1, 0, 0),
+            "x": 4.5,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "sigma_px": 1.0,
+        },
+    ]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "loss": "linear",
+                "weighted_matching": False,
+                "use_measurement_uncertainty": True,
+                "stagnation_probe": False,
+            },
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert len(solve_calls) >= 2
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0]))
+    summary = dict(result.full_beam_polish_summary)
+    assert bool(summary["accepted"]) is True
+    assert str(summary["selected_candidate_name"]) == "full_beam_polish_result"
+    assert str(summary["best_valid_raw_detector_candidate_name"]) == "full_beam_polish_result"
+    assert str(summary["best_valid_raw_detector_candidate_source"]) == "full_beam_polish"
+    ledger = list(summary["candidate_ledger"])
+    full_entry = next(entry for entry in ledger if entry["candidate_name"] == "full_beam_polish_result")
+    assert full_entry["valid_raw_detector_candidate"] is True
+    assert full_entry["rejection_reason"] is None
+    assert int(full_entry["matched_fixed_pair_count"]) == 2
+    assert full_entry["selected"] is True
+    assert int(summary["candidate_fixed_source_resolved_count"]) == 2
+    assert int(summary["candidate_resolved_fixed_matched_pair_count"]) == 2
 
 
 def test_full_beam_polish_rejects_objective_aligned_metric_regression(monkeypatch):
@@ -4074,9 +4541,37 @@ def test_full_beam_polish_rejects_objective_aligned_metric_regression(monkeypatc
     assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
-    assert str(result.full_beam_polish_summary["status"]) == "rejected"
-    assert "point_match_cost_regressed" in str(result.full_beam_polish_summary["reason"])
-    assert "weighted_rms_regressed" in str(result.full_beam_polish_summary["reason"])
+    assert str(result.full_beam_polish_summary["status"]) == "no_op_optimum"
+    assert str(result.full_beam_polish_summary["selection_status"]) == "no_op_optimum"
+    assert bool(result.full_beam_polish_summary["fit_quality_passed"]) is True
+    assert str(result.full_beam_polish_summary["reason"]) == (
+        "no_valid_candidate_improved_raw_detector_alignment"
+    )
+    assert str(result.full_beam_polish_summary["selected_candidate_name"]) != (
+        "full_beam_polish_result"
+    )
+    assert str(result.full_beam_polish_summary["selected_candidate_name"]) == str(
+        result.full_beam_polish_summary["best_valid_raw_detector_candidate_name"]
+    )
+    assert str(result.full_beam_polish_summary["selected_candidate_source"]) == str(
+        result.full_beam_polish_summary["best_valid_raw_detector_candidate_source"]
+    )
+    ledger = list(result.full_beam_polish_summary["candidate_ledger"])
+    selected_entry = next(entry for entry in ledger if entry["selected"] is True)
+    assert len(ledger) >= 2
+    assert any(
+        entry["candidate_name"] == selected_entry["candidate_name"]
+        and entry["x_vector_source"] == selected_entry["x_vector_source"]
+        and entry["selected"] is True
+        and entry["valid_raw_detector_candidate"] is True
+        for entry in ledger
+    )
+    assert any(
+        entry["candidate_name"] == "full_beam_polish_result"
+        and entry["valid_raw_detector_candidate"] is True
+        and float(entry["rms_px"]) > 1.0
+        for entry in ledger
+    )
     assert float(result.full_beam_polish_summary["candidate_cost"]) > float(
         result.full_beam_polish_summary["start_cost"]
     )
@@ -4121,7 +4616,13 @@ def test_full_beam_polish_rejects_objective_aligned_metric_regression(monkeypatc
         ),
         np.sqrt(8.0),
     )
+    assert result.final_metric_name == "full_beam_fixed_correspondence"
     assert int(result.point_match_summary["matched_pair_count"]) == 2
+    assert str(result.point_match_summary["metric_name"]) == "full_beam_fixed_correspondence"
+    assert len(result.point_match_diagnostics) == 2
+    for diag in result.point_match_diagnostics:
+        assert diag["match_kind"] == "full_beam_fixed"
+        assert diag["match_status"] == "matched"
 
 
 def test_full_beam_polish_rejects_objective_aligned_improvement_when_raw_peak_metrics_regress(
@@ -4135,7 +4636,7 @@ def test_full_beam_polish_rejects_objective_aligned_improvement_when_raw_peak_me
         beam_x_array = np.asarray(args[16], dtype=np.float64)
         image = np.zeros((image_size, image_size), dtype=np.float64)
 
-        if beam_x_array.size > 1 and gamma >= 0.5:
+        if beam_x_array.size > 1 and gamma >= 0.75:
             hit_tables = [
                 np.array(
                     [[10.0, 4.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
@@ -4246,8 +4747,18 @@ def test_full_beam_polish_rejects_objective_aligned_improvement_when_raw_peak_me
     assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
-    assert str(result.full_beam_polish_summary["status"]) == "rejected"
-    assert result.final_metric_name == "central_point_match"
+    assert str(result.full_beam_polish_summary["status"]) == "no_op_optimum"
+    assert str(result.full_beam_polish_summary["selection_status"]) == "no_op_optimum"
+    assert bool(result.full_beam_polish_summary["fit_quality_passed"]) is True
+    assert result.final_metric_name == "full_beam_fixed_correspondence"
+    assert np.allclose(
+        np.asarray(result.full_beam_polish_summary["x"], dtype=float),
+        np.asarray(result.x, dtype=float),
+    )
+    assert np.allclose(
+        np.asarray(result.full_beam_polish_summary["fun"], dtype=float),
+        np.asarray(result.fun, dtype=float),
+    )
     assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 2
     assert int(result.full_beam_polish_summary["matched_pair_count_after"]) == 2
     assert str(result.full_beam_polish_summary["acceptance_metric_scope"]) == (
@@ -4267,10 +4778,35 @@ def test_full_beam_polish_rejects_objective_aligned_improvement_when_raw_peak_me
     assert float(result.full_beam_polish_summary["candidate_weighted_rms_px"]) < float(
         result.full_beam_polish_summary["start_weighted_rms_px"]
     )
-    reason_text = str(result.full_beam_polish_summary["reason"])
-    assert "raw_peak_rms_regressed" in reason_text
-    assert "raw_peak_max_regressed" in reason_text
-    assert "match_radius_exceeded_regressed" not in reason_text
+    assert str(result.full_beam_polish_summary["reason"]) == (
+        "no_valid_candidate_improved_raw_detector_alignment"
+    )
+    assert str(result.full_beam_polish_summary["selected_candidate_name"]) == (
+        "central_point_result"
+    )
+    assert str(result.full_beam_polish_summary["selected_candidate_source"]) == (
+        "current_result.x"
+    )
+    assert str(result.full_beam_polish_summary["start_vector_source"]) == "current_result.x"
+    assert str(result.full_beam_polish_summary["selected_candidate_name"]) == str(
+        result.full_beam_polish_summary["best_valid_raw_detector_candidate_name"]
+    )
+    assert str(result.full_beam_polish_summary["selected_candidate_source"]) == str(
+        result.full_beam_polish_summary["best_valid_raw_detector_candidate_source"]
+    )
+    ledger = list(result.full_beam_polish_summary["candidate_ledger"])
+    selected_entry = next(entry for entry in ledger if entry["selected"] is True)
+    assert str(selected_entry["x_vector_source"]) == "current_result.x"
+    assert str(selected_entry["x_vector_source"]) == str(
+        result.full_beam_polish_summary["selected_candidate_source"]
+    )
+    assert any(
+        entry["candidate_name"] == "full_beam_polish_result"
+        and entry["valid_raw_detector_candidate"] is True
+        and float(entry["weighted_objective"])
+        < float(selected_entry["weighted_objective"])
+        for entry in ledger
+    )
     assert float(result.full_beam_polish_summary["candidate_all_match_rms_px"]) > float(
         result.full_beam_polish_summary["start_all_match_rms_px"]
     )
@@ -4309,6 +4845,61 @@ def test_full_beam_polish_rejects_objective_aligned_improvement_when_raw_peak_me
     assert bool(outlier_start["match_radius_exceeded"]) is True
     assert bool(outlier_candidate["match_radius_exceeded"]) is True
     assert outlier_candidate["distance_px"] > outlier_start["distance_px"]
+
+
+def test_full_beam_polish_no_op_selection_uses_seeded_start_when_winner_is_not_current_result():
+    candidate_ledger = [
+        {
+            "candidate_name": "central_point_result",
+            "x_vector_source": "current_result.x",
+            "valid_raw_detector_candidate": False,
+            "rms_px": np.nan,
+            "max_px": np.nan,
+            "outside_radius_count": 0,
+            "weighted_objective": 400.0,
+        },
+        {
+            "candidate_name": "main_solve_start",
+            "x_vector_source": "geometry_fit_progress.start_x",
+            "valid_raw_detector_candidate": True,
+            "matched_fixed_pair_count": 2,
+            "missing_fixed_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "rms_px": 0.0,
+            "max_px": 0.0,
+            "outside_radius_count": 0,
+            "weighted_objective": 0.0,
+        },
+        {
+            "candidate_name": "full_beam_polish_result",
+            "x_vector_source": "full_beam_polish",
+            "valid_raw_detector_candidate": True,
+            "matched_fixed_pair_count": 2,
+            "missing_fixed_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "rms_px": 24.041630560342615,
+            "max_px": 34.0,
+            "outside_radius_count": 1,
+            "weighted_objective": 0.0005780000000000001,
+        },
+    ]
+
+    best_valid_raw_candidate = opt._best_valid_raw_detector_candidate(candidate_ledger)
+    start_entry, no_op_optimum = opt._should_select_no_op_start_candidate(
+        candidate_ledger,
+        start_candidate_name="main_solve_start",
+        start_candidate_source="geometry_fit_progress.start_x",
+        accepted=False,
+        preserve_rejected_start=False,
+        best_valid_raw_candidate=best_valid_raw_candidate,
+    )
+
+    assert best_valid_raw_candidate is candidate_ledger[1]
+    assert start_entry is candidate_ledger[1]
+    assert no_op_optimum is True
+    assert str(start_entry["candidate_name"]) == "main_solve_start"
+    assert str(start_entry["x_vector_source"]) == "geometry_fit_progress.start_x"
+    assert str(start_entry["x_vector_source"]) != "current_result.x"
 
 
 def test_full_beam_polish_rejection_retains_fixed_correspondence_start_when_current_result_loses_all_fixed_pairs(
@@ -4427,7 +5018,9 @@ def test_full_beam_polish_rejection_retains_fixed_correspondence_start_when_curr
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
     assert bool(result.full_beam_polish_summary["preserved_start_on_reject"]) is True
-    assert str(result.full_beam_polish_summary["status"]) == "retained_start"
+    assert str(result.full_beam_polish_summary["status"]) == "retained_start_safe_fallback"
+    assert str(result.full_beam_polish_summary["selection_status"]) == "retained_start_safe_fallback"
+    assert bool(result.full_beam_polish_summary["fit_quality_passed"]) is False
     assert str(result.full_beam_polish_summary["start_vector_source"]) != "current_result.x"
     assert len(list(result.full_beam_polish_summary["candidate_start_vector_sources"])) >= 2
     assert "resolved_fixed_pairs_decreased" in str(result.full_beam_polish_summary["reason"])
@@ -4464,6 +5057,32 @@ def test_full_beam_polish_rejection_retains_fixed_correspondence_start_when_curr
         rms=float(result.rms_px),
     )
     assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
+
+
+def test_raw_detector_candidate_selector_prefers_lower_max_error_over_better_median() -> None:
+    candidate_a = {
+        "candidate_name": "candidate_a",
+        "matched_fixed_pair_count": 7,
+        "branch_mismatch_count": 0,
+        "rms_px": 4.0,
+        "median_px": 3.5,
+        "max_px": 12.0,
+        "outside_radius_count": 0,
+        "weighted_objective": 8.0,
+    }
+    candidate_b = {
+        "candidate_name": "candidate_b",
+        "matched_fixed_pair_count": 7,
+        "branch_mismatch_count": 0,
+        "rms_px": 4.0,
+        "median_px": 3.9,
+        "max_px": 6.0,
+        "outside_radius_count": 0,
+        "weighted_objective": 8.5,
+    }
+
+    assert opt._raw_detector_candidate_is_better(candidate_b, candidate_a) is True
+    assert opt._raw_detector_candidate_is_better(candidate_a, candidate_b) is False
 
 
 def test_full_beam_polish_rejection_preserves_detector_bad_start_when_no_better_reference_exists(
@@ -4582,7 +5201,9 @@ def test_full_beam_polish_rejection_preserves_detector_bad_start_when_no_better_
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
     assert bool(result.full_beam_polish_summary["preserved_start_on_reject"]) is True
-    assert str(result.full_beam_polish_summary["status"]) == "retained_start"
+    assert str(result.full_beam_polish_summary["status"]) == "retained_start_safe_fallback"
+    assert str(result.full_beam_polish_summary["selection_status"]) == "retained_start_safe_fallback"
+    assert bool(result.full_beam_polish_summary["fit_quality_passed"]) is False
     assert str(result.full_beam_polish_summary["start_vector_source"]) != "current_result.x"
     assert len(list(result.full_beam_polish_summary["candidate_start_vector_sources"])) >= 2
     assert "resolved_fixed_pairs_decreased" in str(result.full_beam_polish_summary["reason"])

@@ -1371,20 +1371,24 @@ def test_runtime_session_replace_gui_state_peak_cache_reprojects_detector_view_f
     assert projection_calls[0][0]["native_col"] == 190.0
     assert projection_calls[0][0]["native_row"] == 96.0
     assert simulation_runtime_state.peak_positions == [(190.0, 96.0)]
-    assert simulation_runtime_state.peak_positions_filtered is True
+    assert simulation_runtime_state.peak_positions_filtered is False
     assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
     assert simulation_runtime_state.peak_intensities == [3.0]
     assert simulation_runtime_state.selected_peak_record is None
     assert simulation_runtime_state.peak_records[0]["sim_col"] == 190.0
     assert simulation_runtime_state.peak_records[0]["sim_row"] == 96.0
+    assert simulation_runtime_state.peak_records[0]["sim_col_raw"] == 190.0
+    assert simulation_runtime_state.peak_records[0]["sim_row_raw"] == 96.0
     assert simulation_runtime_state.peak_records[0]["display_col"] == 190.0
     assert simulation_runtime_state.peak_records[0]["display_row"] == 96.0
     assert simulation_runtime_state.peak_records[0]["native_col"] == 190.0
     assert simulation_runtime_state.peak_records[0]["native_row"] == 96.0
     assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_col_raw"] == 190.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_row_raw"] == 96.0
     assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 190.0
     assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 96.0
-    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is True
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
     assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert invalidated == [True]
 
@@ -1481,7 +1485,7 @@ def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projec
     assert projection_calls == [0, 1]
     assert len(simulation_runtime_state.peak_records) == 1
     assert simulation_runtime_state.peak_positions == [(190.0, 96.0)]
-    assert simulation_runtime_state.peak_positions_filtered is True
+    assert simulation_runtime_state.peak_positions_filtered is False
     assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
     assert simulation_runtime_state.peak_intensities == [3.0]
     assert simulation_runtime_state.selected_peak_record is None
@@ -1491,9 +1495,642 @@ def test_runtime_session_replace_gui_state_peak_cache_skips_bad_rows_when_projec
     assert simulation_runtime_state.peak_records[0]["display_row"] == 96.0
     assert len(simulation_runtime_state.peak_overlay_cache["records"]) == 1
     assert simulation_runtime_state.peak_overlay_cache["positions"] == [(190.0, 96.0)]
-    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is True
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
     assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
     assert invalidated == [True]
+
+
+def test_runtime_session_replace_gui_state_peak_cache_marks_empty_import_as_restored(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[{"stale": True}],
+        peak_positions=[(1.0, 2.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[4.0],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={"records": [{"stale": True}], "positions": [(1.0, 2.0)]},
+    )
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache([])
+
+    expected_sig = runtime_session.gui_peak_selection._peak_overlay_restored_view_signature(
+        simulation_runtime_state,
+        show_caked=False,
+    )
+    assert simulation_runtime_state.peak_records == []
+    assert simulation_runtime_state.peak_positions == []
+    assert simulation_runtime_state.peak_positions_filtered is False
+    assert simulation_runtime_state.peak_millers == []
+    assert simulation_runtime_state.peak_intensities == []
+    assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == []
+    assert simulation_runtime_state.peak_overlay_cache["records"] == []
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert simulation_runtime_state.peak_overlay_cache["restored_view_sig"] == expected_sig
+    assert invalidated == [True]
+
+
+def test_runtime_session_replace_gui_state_peak_cache_uses_caked_active_coords(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_millers=[],
+        peak_intensities=[],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={},
+    )
+    invalidated: list[bool] = []
+    projection_inputs: list[list[dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "filter_enabled_q_group_rows",
+        lambda rows, _state: [dict(entry) for entry in rows or () if isinstance(entry, dict)],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_active_caked_primary_view",
+        lambda: True,
+        raising=False,
+    )
+
+    def _project_to_caked(records):
+        projection_inputs.append([dict(record) for record in records or () if isinstance(record, dict)])
+        projected: list[dict[str, object]] = []
+        for record in records or ():
+            if not isinstance(record, dict):
+                continue
+            projected.append(
+                {
+                    **dict(record),
+                    "sim_col_raw": 100.0,
+                    "sim_row_raw": 200.0,
+                    "sim_col": 100.0,
+                    "sim_row": 200.0,
+                    "display_col": 5.5,
+                    "display_row": 12.25,
+                    "caked_x": 5.5,
+                    "caked_y": 12.25,
+                }
+            )
+        return projected
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        _project_to_caked,
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache(
+        [
+            {
+                "sim_col": 100.0,
+                "sim_row": 200.0,
+                "display_col": 5.5,
+                "display_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+                "native_col": 100.0,
+                "native_row": 200.0,
+                "hkl": [-1, 0, 5],
+                "intensity": 7.0,
+                "q_group_key": ["q_group", "primary", 1.0, 5],
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+            }
+        ]
+    )
+
+    expected_sig = runtime_session.gui_peak_selection._peak_overlay_restored_view_signature(
+        simulation_runtime_state,
+        show_caked=True,
+    )
+    assert simulation_runtime_state.peak_positions == [(5.5, 12.25)]
+    assert simulation_runtime_state.peak_positions_filtered is False
+    assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
+    assert simulation_runtime_state.peak_intensities == [7.0]
+    assert simulation_runtime_state.selected_peak_record is None
+    assert projection_inputs == [
+        [
+            {
+                "sim_col": 100.0,
+                "sim_row": 200.0,
+                "display_col": 5.5,
+                "display_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+                "native_col": 100.0,
+                "native_row": 200.0,
+                "hkl": (-1, 0, 5),
+                "intensity": 7.0,
+                "weight": 7.0,
+                "q_group_key": ("q_group", "primary", 1.0, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        ]
+    ]
+    assert simulation_runtime_state.peak_records[0]["sim_col_raw"] == 100.0
+    assert simulation_runtime_state.peak_records[0]["sim_row_raw"] == 200.0
+    assert simulation_runtime_state.peak_records[0]["sim_col"] == 100.0
+    assert simulation_runtime_state.peak_records[0]["sim_row"] == 200.0
+    assert simulation_runtime_state.peak_records[0]["display_col"] == 5.5
+    assert simulation_runtime_state.peak_records[0]["display_row"] == 12.25
+    assert simulation_runtime_state.peak_records[0]["native_col"] == 100.0
+    assert simulation_runtime_state.peak_records[0]["native_row"] == 200.0
+    assert "source_reflection_index" not in simulation_runtime_state.peak_records[0]
+    assert "source_reflection_namespace" not in simulation_runtime_state.peak_records[0]
+    assert "source_reflection_is_full" not in simulation_runtime_state.peak_records[0]
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == [(5.5, 12.25)]
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_col_raw"] == 100.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_row_raw"] == 200.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_col"] == 100.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_row"] == 200.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 5.5
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 12.25
+    assert "source_reflection_index" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "source_reflection_namespace" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "source_reflection_is_full" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert simulation_runtime_state.peak_overlay_cache["restored_view_sig"] == expected_sig
+    assert invalidated == [True]
+
+
+def test_runtime_session_replace_gui_state_peak_cache_does_not_write_caked_display_into_sim_coords(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_millers=[],
+        peak_intensities=[],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={},
+    )
+    invalidated: list[bool] = []
+    projection_inputs: list[list[dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_active_caked_primary_view",
+        lambda: True,
+        raising=False,
+    )
+
+    def _project_to_caked_display_only(records):
+        projection_inputs.append([dict(record) for record in records or () if isinstance(record, dict)])
+        projected: list[dict[str, object]] = []
+        for record in records or ():
+            if not isinstance(record, dict):
+                continue
+            projected.append(
+                {
+                    **dict(record),
+                    "display_col": 5.5,
+                    "display_row": 12.25,
+                    "caked_x": 5.5,
+                    "caked_y": 12.25,
+                }
+            )
+        return projected
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        _project_to_caked_display_only,
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache(
+        [
+            {
+                "sim_col": 88.0,
+                "sim_row": 144.0,
+                "display_col": 5.5,
+                "display_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+                "hkl": [-1, 0, 5],
+                "intensity": 7.0,
+                "q_group_key": ["q_group", "primary", 1.0, 5],
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "source_reflection_index": 203,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+            }
+        ]
+    )
+
+    expected_sig = runtime_session.gui_peak_selection._peak_overlay_restored_view_signature(
+        simulation_runtime_state,
+        show_caked=True,
+    )
+    assert simulation_runtime_state.peak_positions == [(5.5, 12.25)]
+    assert simulation_runtime_state.peak_positions_filtered is False
+    assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
+    assert simulation_runtime_state.peak_intensities == [7.0]
+    assert simulation_runtime_state.selected_peak_record is None
+    assert projection_inputs == [
+        [
+            {
+                "sim_col": 88.0,
+                "sim_row": 144.0,
+                "display_col": 5.5,
+                "display_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+                "hkl": (-1, 0, 5),
+                "intensity": 7.0,
+                "weight": 7.0,
+                "q_group_key": ("q_group", "primary", 1.0, 5),
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        ]
+    ]
+    assert simulation_runtime_state.peak_records[0]["display_col"] == 5.5
+    assert simulation_runtime_state.peak_records[0]["display_row"] == 12.25
+    assert "sim_col" not in simulation_runtime_state.peak_records[0]
+    assert "sim_row" not in simulation_runtime_state.peak_records[0]
+    assert "sim_col_raw" not in simulation_runtime_state.peak_records[0]
+    assert "sim_row_raw" not in simulation_runtime_state.peak_records[0]
+    assert "source_reflection_index" not in simulation_runtime_state.peak_records[0]
+    assert "source_reflection_namespace" not in simulation_runtime_state.peak_records[0]
+    assert "source_reflection_is_full" not in simulation_runtime_state.peak_records[0]
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == [(5.5, 12.25)]
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_col"] == 5.5
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["display_row"] == 12.25
+    assert "sim_col" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "sim_row" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "sim_col_raw" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "sim_row_raw" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "source_reflection_index" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "source_reflection_namespace" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert "source_reflection_is_full" not in simulation_runtime_state.peak_overlay_cache["records"][0]
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert simulation_runtime_state.peak_overlay_cache["restored_view_sig"] == expected_sig
+    assert invalidated == [True]
+
+
+def test_runtime_session_replace_gui_state_peak_cache_rehydrates_legacy_detector_only_raw_aliases(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_millers=[],
+        peak_intensities=[],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={},
+    )
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_active_caked_primary_view",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda records: [dict(record) for record in records or () if isinstance(record, dict)],
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache(
+        [
+            {
+                "sim_col": 12.0,
+                "sim_row": 34.0,
+                "display_col": 12.0,
+                "display_row": 34.0,
+                "hkl": [-1, 0, 5],
+                "intensity": 2.5,
+            }
+        ]
+    )
+
+    assert simulation_runtime_state.peak_positions == [(12.0, 34.0)]
+    assert simulation_runtime_state.peak_positions_filtered is False
+    assert simulation_runtime_state.peak_records[0]["sim_col"] == 12.0
+    assert simulation_runtime_state.peak_records[0]["sim_row"] == 34.0
+    assert simulation_runtime_state.peak_records[0]["sim_col_raw"] == 12.0
+    assert simulation_runtime_state.peak_records[0]["sim_row_raw"] == 34.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_col"] == 12.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_row"] == 34.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_col_raw"] == 12.0
+    assert simulation_runtime_state.peak_overlay_cache["records"][0]["sim_row_raw"] == 34.0
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is False
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert invalidated == [True]
+
+
+def test_runtime_session_replace_gui_state_peak_cache_skips_rows_without_safe_active_view_point(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[{"stale": True}],
+        peak_positions=[(1.0, 2.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[4.0],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={"records": [{"stale": True}], "positions": [(1.0, 2.0)]},
+    )
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_active_caked_primary_view",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda records: [
+            {
+                **dict(record),
+                "display_col": 5.5,
+                "display_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+                "stale_caked_fields": True,
+            }
+            for record in records or ()
+            if isinstance(record, dict)
+        ],
+        raising=False,
+    )
+
+    runtime_session._replace_gui_state_peak_cache(
+        [
+            {
+                "sim_col": 88.0,
+                "sim_row": 144.0,
+                "display_col": 5.5,
+                "display_row": 12.25,
+                "caked_x": 5.5,
+                "caked_y": 12.25,
+                "hkl": [-1, 0, 5],
+                "intensity": 7.0,
+            }
+        ]
+    )
+
+    expected_sig = runtime_session.gui_peak_selection._peak_overlay_restored_view_signature(
+        simulation_runtime_state,
+        show_caked=True,
+    )
+    assert simulation_runtime_state.peak_records == []
+    assert simulation_runtime_state.peak_positions == []
+    assert simulation_runtime_state.peak_millers == []
+    assert simulation_runtime_state.peak_intensities == []
+    assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.peak_overlay_cache["records"] == []
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == []
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is True
+    assert simulation_runtime_state.peak_overlay_cache["restored_view_sig"] == expected_sig
+    assert invalidated == [True]
+
+
+def test_runtime_session_collect_full_gui_state_snapshot_strips_peak_record_trust_fields(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    peak_records = [
+        {
+            "display_col": 10.0,
+            "display_row": 20.0,
+            "sim_col": 30.0,
+            "sim_row": 40.0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+        }
+    ]
+
+    monkeypatch.setattr(runtime_session, "_gui_state_variable_items", lambda: {}, raising=False)
+    monkeypatch.setattr(runtime_session, "_occupancy_control_vars", lambda: [], raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_atom_site_fractional_control_vars",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_q_group_export_rows",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pairs_export_rows",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(disabled_qr_sets=set(), disabled_qz_sections=set()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(peak_records=peak_records),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_state",
+        SimpleNamespace(selected_hkl_target=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_primary_cif_path",
+        lambda: "primary.cif",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "structure_model_state",
+        SimpleNamespace(cif_file2=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(
+            osc_files=[],
+            current_background_index=0,
+            visible=True,
+            backend_rotation_k=0,
+            backend_flip_x=False,
+            backend_flip_y=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "display_controls_state",
+        SimpleNamespace(
+            background_limits_user_override=False,
+            simulation_limits_user_override=False,
+            scale_factor_user_override=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_roi_values",
+        lambda: {"integrate_selected_qr_rod": False},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_state_io,
+        "collect_full_gui_state_snapshot",
+        lambda **kwargs: dict(kwargs),
+    )
+
+    snapshot = runtime_session._collect_full_gui_state_snapshot()
+
+    assert snapshot["geometry_peak_records"] == [
+        {
+            "display_col": 10.0,
+            "display_row": 20.0,
+            "sim_col": 30.0,
+            "sim_row": 40.0,
+        }
+    ]
+    assert snapshot["analysis_range"] == {"integrate_selected_qr_rod": False}
+    assert peak_records[0]["source_reflection_index"] == 203
+    assert peak_records[0]["source_reflection_namespace"] == "full_reflection"
+    assert peak_records[0]["source_reflection_is_full"] is True
 
 
 def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_view_coords(
@@ -1515,6 +2152,49 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
         "_invalidate_geometry_manual_pick_cache",
         lambda: invalidated.append(True),
         raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "filter_enabled_q_group_rows",
+        lambda rows, _state: [dict(entry) for entry in rows or () if isinstance(entry, dict)],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(disabled_qr_sets=set(), disabled_qz_sections=set()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_canonicalize_live_source_entry",
+        lambda entry, **_kwargs: (
+            {
+                **dict(entry),
+                "hkl": tuple(entry.get("hkl", ())),
+            }
+            if isinstance(entry, dict)
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "_geometry_manual_entry_active_view_point",
+        lambda entry, *, use_caked_display: (
+            (
+                float(entry["caked_x"]),
+                float(entry["caked_y"]),
+            )
+            if use_caked_display and "caked_x" in entry and "caked_y" in entry
+            else (
+                (float(entry["raw_caked_x"]), float(entry["raw_caked_y"]))
+                if use_caked_display and "raw_caked_x" in entry and "raw_caked_y" in entry
+                else (
+                    (float(entry["two_theta_deg"]), float(entry["phi_deg"]))
+                    if use_caked_display and "two_theta_deg" in entry and "phi_deg" in entry
+                    else (float(entry["sim_col"]), float(entry["sim_row"]))
+                )
+            )
+        ),
     )
 
     def _project_preserving_coords(records):
@@ -1538,6 +2218,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
         "native_col": 100.0,
         "native_row": 200.0,
         "hkl": [-1, 0, 5],
+        "q_group_key": ("q_group", "primary", 1, 5),
         "weight": 7.0,
         "source_table_index": 9,
         "source_row_index": 0,
@@ -1608,7 +2289,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
         caked_state = _restore_state(source_row, use_caked_display=True)
 
         assert caked_state.peak_positions == [expected_position]
-        assert caked_state.peak_positions_filtered is False
+        assert caked_state.peak_positions_filtered is True
         assert caked_state.peak_millers == [(-1, 0, 5)]
         assert caked_state.peak_intensities == [7.0]
         assert caked_state.selected_peak_record is None
@@ -1623,7 +2304,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
         assert caked_state.peak_overlay_cache["positions"] == [expected_position]
         assert caked_state.peak_overlay_cache["records"][0]["display_col"] == 100.0
         assert caked_state.peak_overlay_cache["records"][0]["display_row"] == 200.0
-        assert caked_state.peak_overlay_cache["peak_positions_filtered"] is False
+        assert caked_state.peak_overlay_cache["peak_positions_filtered"] is True
 
     detector_state = _restore_state(
         {
@@ -1639,7 +2320,7 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
     )
 
     assert detector_state.peak_positions == [(100.0, 200.0)]
-    assert detector_state.peak_positions_filtered is False
+    assert detector_state.peak_positions_filtered is True
     assert detector_state.peak_millers == [(-1, 0, 5)]
     assert detector_state.peak_intensities == [7.0]
     assert detector_state.selected_peak_record is None
@@ -1654,10 +2335,122 @@ def test_runtime_session_set_runtime_peak_cache_from_source_rows_uses_active_vie
     assert detector_state.peak_overlay_cache["positions"] == [(100.0, 200.0)]
     assert detector_state.peak_overlay_cache["records"][0]["display_col"] == 100.0
     assert detector_state.peak_overlay_cache["records"][0]["display_row"] == 200.0
-    assert detector_state.peak_overlay_cache["peak_positions_filtered"] is False
+    assert detector_state.peak_overlay_cache["peak_positions_filtered"] is True
 
     assert len(projection_calls) == 4
     assert invalidated == [True, True, True, True]
+
+
+def test_runtime_session_set_runtime_peak_cache_from_source_rows_falls_back_when_q_group_filter_raises(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    simulation_runtime_state = SimpleNamespace(
+        peak_records=[{"stale": True}],
+        peak_positions=[(1.0, 2.0)],
+        peak_millers=[(9, 9, 9)],
+        peak_intensities=[4.0],
+        selected_peak_record={"stale": True},
+        peak_overlay_cache={"records": [{"stale": True}], "positions": [(1.0, 2.0)]},
+    )
+    invalidated: list[bool] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        simulation_runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_geometry_manual_pick_cache",
+        lambda: invalidated.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "filter_enabled_q_group_rows",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("mask boom")),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(disabled_qr_sets=set(), disabled_qz_sections=set()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_active_caked_primary_view",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_canonicalize_live_source_entry",
+        lambda entry, **_kwargs: (
+            {
+                **dict(entry),
+                "hkl": tuple(entry.get("hkl", ())),
+            }
+            if isinstance(entry, dict)
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "_geometry_manual_entry_active_view_point",
+        lambda entry, *, use_caked_display: (
+            float(entry["sim_col"]),
+            float(entry["sim_row"]),
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda records: [dict(record) for record in records or () if isinstance(record, dict)],
+        raising=False,
+    )
+
+    runtime_session._geometry_manual_set_runtime_peak_cache_from_source_rows(
+        [
+            {
+                "display_col": 100.0,
+                "display_row": 200.0,
+                "sim_col": 100.0,
+                "sim_row": 200.0,
+                "sim_col_raw": 100.0,
+                "sim_row_raw": 200.0,
+                "native_col": 100.0,
+                "native_row": 200.0,
+                "hkl": [-1, 0, 5],
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "weight": 7.0,
+                "source_table_index": 9,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        ]
+    )
+
+    assert simulation_runtime_state.peak_positions == [(100.0, 200.0)]
+    assert simulation_runtime_state.peak_positions_filtered is True
+    assert simulation_runtime_state.peak_millers == [(-1, 0, 5)]
+    assert simulation_runtime_state.peak_intensities == [7.0]
+    assert simulation_runtime_state.selected_peak_record is None
+    assert simulation_runtime_state.peak_records[0]["sim_col"] == 100.0
+    assert simulation_runtime_state.peak_records[0]["sim_row"] == 200.0
+    assert simulation_runtime_state.peak_overlay_cache["positions"] == [(100.0, 200.0)]
+    assert simulation_runtime_state.peak_overlay_cache["peak_positions_filtered"] is True
+    assert simulation_runtime_state.peak_overlay_cache["restored_from_gui_state"] is False
+    assert invalidated == [True]
 
 
 def test_runtime_session_refine_manual_pair_entry_from_cache_uses_branch_aware_lookup(
@@ -10176,6 +10969,13 @@ def test_runtime_session_hkl_pick_cache_rebuilds_when_provider_row_content_chang
     payload_factory.__globals__["_geometry_manual_simulated_peaks_for_params"] = (
         lambda *_args, **_kwargs: provider_rows
     )
+    payload_factory.__globals__["_geometry_manual_pick_candidates"] = (
+        lambda raw_rows: {
+            ("q_group", "primary", 1, 2): [
+                dict(entry) for entry in raw_rows if isinstance(entry, dict)
+            ]
+        }
+    )
     payload_factory.__globals__["_hkl_pick_simulation_points_payload_cache"] = {}
 
     first_payload = payload_factory()
@@ -10330,3 +11130,74 @@ def test_runtime_trust_field_assignments_stay_in_manual_geometry() -> None:
             offenders.extend(f"{rel_path}:{line}:{field_name}" for field_name, line in hits)
 
     assert offenders == []
+
+
+def test_runtime_session_logged_measurement_match_uses_lookup_point_before_fit() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    picked_frames = [
+        {
+            "label": "1,0,0",
+            "fit": (5.0, 6.0),
+            "lookup": (90.0, 91.0),
+        },
+        {
+            "label": "1,0,0",
+            "fit": (50.0, 60.0),
+            "lookup": (5.0, 6.0),
+            "native": (7.0, 8.0),
+        },
+    ]
+
+    matched = runtime_session._find_picked_frame_for_logged_measurement(
+        picked_frames,
+        label="1,0,0",
+        measured_point=(5.0, 6.0),
+    )
+
+    assert matched is picked_frames[1]
+
+
+def test_runtime_session_builds_logged_lookup_point_from_detector_anchor() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    lookup = runtime_session._build_picked_frame_lookup_point(
+        {
+            "label": "1,0,0",
+            "x": 50.0,
+            "y": 60.0,
+            "background_detector_x": 5.0,
+            "background_detector_y": 6.0,
+        }
+    )
+
+    assert lookup == pytest.approx((5.0, 6.0))
+
+
+def test_runtime_session_formats_logged_measurement_context_without_mislabeling_lookup() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    text = runtime_session._format_logged_measurement_context(
+        {
+            "display": (1.0, 2.0),
+            "native": (3.0, 4.0),
+            "fit": (50.0, 60.0),
+        },
+        measured_point=(5.0, 6.0),
+    )
+
+    assert "display=(1.000, 2.000)" in text
+    assert "native=(3.000, 4.000)" in text
+    assert "lookup=(5.000, 6.000)" in text
+    assert "fit=(50.000, 60.000)" in text
+    assert "fit=(5.000, 6.000)" not in text
+
+
+def test_runtime_session_formats_unmatched_logged_measurement_as_lookup_only() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    text = runtime_session._format_logged_measurement_context(
+        None,
+        measured_point=(5.0, 6.0),
+    )
+
+    assert text == "lookup=(5.000, 6.000)"

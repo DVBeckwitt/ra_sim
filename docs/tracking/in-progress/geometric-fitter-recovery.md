@@ -145,21 +145,25 @@ For canonical `new4.json`, expected passing fixed-pair shape is:
 Do not reuse the old 6 to 8 px RMS band. Measure `new4` first and compare the
 fit against its own fresh before-fit values.
 
-## Solver patch rule
+## Alignment-first gate
 
-Do not touch `ra_sim/fitting/optimization.py` unless `new4_fresh_all.json`
-reproduces the exact all-missing fixed-correspondence failure shape:
+`new4.json` and its regenerated `new4_fresh_all.json` export are the live gate.
+The older `new2` and `new3` states are historical diagnostics only and must not
+drive current acceptance decisions.
 
-- the requested or retained start vector has fixed-source matches,
-- the current/final vector has zero fixed-source matches under the
-  fixed-correspondence evaluator,
-- full-beam polish candidate is rejected,
-- top-level failure says no matched peak pairs.
+Treat the saved-state baseline as passed only when detector-space evidence shows
+either:
 
-If that exact shape appears, add the retained-start regression first, then patch
-only the retained-start path. If `new4` passes, stop without applying the old
-new2/new3 retained-start patch. If `new4` fails differently, diagnose that new
-failure shape first.
+- a real residual improvement against the fresh before-fit detector baseline, or
+- a proven no-op optimum where the best valid raw-detector candidate is the
+  retained start and that retained start already satisfies the fixed-pair gate.
+
+Keep a candidate ledger for every saved-state run. Final selection must be
+explainable from that ledger in raw detector space.
+
+`retained_start_safe_fallback` is not a fit-quality pass by default. It is only
+acceptable when the raw-detector candidate ledger proves the retained start is
+the best valid no-op optimum instead of a masked timeout or degraded solve.
 
 ## Out of scope for this pass
 

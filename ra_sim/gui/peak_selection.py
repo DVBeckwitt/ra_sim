@@ -2665,6 +2665,7 @@ def _resolve_peak_record_display_coords(
     show_caked: bool,
     image_shape: tuple[int, int],
     native_sim_to_display_coords: Callable[..., tuple[float, float]] | None,
+    allow_frozen_display_fallback: bool = False,
     native_detector_coords_to_caked_display_coords: Callable[
         [float, float], tuple[float, float] | None
     ]
@@ -2703,6 +2704,7 @@ def _resolve_peak_record_display_coords(
         "sim_native_y",
     )
     raw_detector_display = _point("sim_col_raw", "sim_row_raw")
+    explicit_display_point = _point("display_col", "display_row")
     caked_point = (
         _point("caked_x", "caked_y")
         or _point("raw_caked_x", "raw_caked_y")
@@ -2723,6 +2725,8 @@ def _resolve_peak_record_display_coords(
             projected_point = _projected_caked_point(projected)
             if projected_point is not None:
                 return projected_point
+        if bool(allow_frozen_display_fallback) and explicit_display_point is not None:
+            return explicit_display_point
         return None
 
     if native_point is not None and callable(native_detector_coords_to_detector_display_coords):
@@ -2759,6 +2763,12 @@ def _resolve_peak_record_display_coords(
             return (float(projected[0]), float(projected[1]))
     if raw_detector_display is not None:
         return raw_detector_display
+    if (
+        bool(allow_frozen_display_fallback)
+        and explicit_display_point is not None
+        and caked_point is None
+    ):
+        return explicit_display_point
     return None
 
 
@@ -2781,11 +2791,29 @@ def _restore_peak_overlay_lists_from_cached_records(
     """Rebuild live overlay lists from imported cached peak records."""
 
     cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
+    cache_restored_from_gui_state = (
+        bool(cache.get("restored_from_gui_state", False))
+        if isinstance(cache, Mapping)
+        else False
+    )
+    restored_view_sig = cache.get("restored_view_sig") if isinstance(cache, Mapping) else None
+    restored_view_sig_legacy = bool(
+        isinstance(cache, Mapping)
+        and ("restored_view_sig" not in cache or restored_view_sig is None)
+    )
+    frozen_display_fallback_allowed = bool(
+        cache_restored_from_gui_state
+        and isinstance(cache, Mapping)
+        and (
+            restored_view_sig == view_sig
+            or (restored_view_sig_legacy and not bool(show_caked))
+        )
+    )
     cache_filtered = (
         bool(
             cache.get(
                 "peak_positions_filtered",
-                cache.get("restored_from_gui_state", False),
+                False,
             )
         )
         if isinstance(cache, Mapping)
@@ -2808,6 +2836,7 @@ def _restore_peak_overlay_lists_from_cached_records(
             show_caked=bool(show_caked),
             image_shape=image_shape,
             native_sim_to_display_coords=native_sim_to_display_coords,
+            allow_frozen_display_fallback=frozen_display_fallback_allowed,
             native_detector_coords_to_caked_display_coords=(
                 native_detector_coords_to_caked_display_coords
             ),
@@ -2818,7 +2847,9 @@ def _restore_peak_overlay_lists_from_cached_records(
         if display_point is None:
             continue
 
-        if bool(show_caked):
+        if not bool(show_caked) and not cache_restored_from_gui_state:
+            detector_display_point = display_point
+        else:
             detector_display_point = _resolve_peak_record_display_coords(
                 raw_record,
                 show_caked=False,
@@ -2831,8 +2862,46 @@ def _restore_peak_overlay_lists_from_cached_records(
                     native_detector_coords_to_detector_display_coords
                 ),
             )
-        else:
-            detector_display_point = display_point
+            explicit_detector_point = gui_manual_geometry._geometry_manual_finite_point(
+                raw_record,
+                (
+                    ("x", "y"),
+                    ("sim_col_raw", "sim_row_raw"),
+                    ("simulated_x", "simulated_y"),
+                ),
+            )
+            native_detector_point = gui_manual_geometry._geometry_manual_entry_native_point(
+                raw_record
+            )
+            if detector_display_point is None and (
+                not cache_restored_from_gui_state
+                or explicit_detector_point is not None
+                or native_detector_point is not None
+            ):
+                legacy_detector_point = gui_manual_geometry._geometry_manual_finite_point(
+                    raw_record,
+                    (("sim_col", "sim_row"),),
+                )
+                if legacy_detector_point is not None:
+                    active_view_point = (
+                        gui_manual_geometry._geometry_manual_entry_matching_current_view_point(
+                            raw_record
+                        )
+                        if bool(show_caked)
+                        else gui_manual_geometry._geometry_manual_entry_explicit_current_view_display_point(
+                            raw_record
+                        )
+                    )
+                    if active_view_point is None or (
+                        abs(float(legacy_detector_point[0]) - float(active_view_point[0]))
+                        > 1.0e-9
+                        or abs(float(legacy_detector_point[1]) - float(active_view_point[1]))
+                        > 1.0e-9
+                    ):
+                        detector_display_point = (
+                            float(legacy_detector_point[0]),
+                            float(legacy_detector_point[1]),
+                        )
 
         hkl_value = raw_record.get("hkl")
         if not isinstance(hkl_value, (list, tuple)) or len(hkl_value) < 3:
@@ -2874,18 +2943,23 @@ def _restore_peak_overlay_lists_from_cached_records(
             record["sim_row_raw"] = float(detector_display_point[1])
             record["display_col"] = float(detector_display_point[0])
             record["display_row"] = float(detector_display_point[1])
-        elif not bool(show_caked):
-            record["sim_col"] = float(display_point[0])
-            record["sim_row"] = float(display_point[1])
+        else:
+            record.pop("sim_col", None)
+            record.pop("sim_row", None)
+            record.pop("sim_col_raw", None)
+            record.pop("sim_row_raw", None)
+        if bool(show_caked):
             record["display_col"] = float(display_point[0])
             record["display_row"] = float(display_point[1])
-        if bool(show_caked):
             record["caked_x"] = float(display_point[0])
             record["caked_y"] = float(display_point[1])
             record.setdefault("raw_caked_x", float(display_point[0]))
             record.setdefault("raw_caked_y", float(display_point[1]))
             record.setdefault("two_theta_deg", float(display_point[0]))
             record.setdefault("phi_deg", float(display_point[1]))
+        else:
+            record["display_col"] = float(display_point[0])
+            record["display_row"] = float(display_point[1])
 
         restored_records.append(record)
         restored_positions.append((float(display_point[0]), float(display_point[1])))
@@ -2911,7 +2985,7 @@ def _restore_peak_overlay_lists_from_cached_records(
                     restored_positions
                 ),
                 "peak_positions_filtered": cache_filtered,
-                "restored_from_gui_state": bool(restored_records),
+                "restored_from_gui_state": cache_restored_from_gui_state,
             }
         )
 

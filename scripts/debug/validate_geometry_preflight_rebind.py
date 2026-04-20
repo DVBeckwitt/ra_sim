@@ -62,7 +62,7 @@ def _finalize_cli_result(
         str(requested_mode).strip().lower() == "full"
         and str(effective_mode).strip().lower() == "fresh-all"
     ):
-        payload["mode_note"] = "full now aliases fresh-all milestone-6 gate"
+        payload["mode_note"] = "full now aliases fresh-all new4 detector-alignment preflight gate"
     return payload
 
 
@@ -70,6 +70,58 @@ def _stable_digest(payload: object) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+
+
+def _try_save_gui_state_file(
+    path: Path,
+    state: Mapping[str, object],
+    *,
+    failure_stage: str,
+    create_parent: bool = False,
+    remove_partial_target: bool = False,
+) -> dict[str, object] | None:
+    target_path = Path(path).expanduser().resolve()
+    target_exists_before = target_path.exists()
+    temp_save_path = None
+    try:
+        if create_parent:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            delete=False,
+            dir=target_path.parent,
+            prefix=f"{target_path.name}.",
+            suffix=".tmp",
+            encoding="utf-8",
+        ) as handle:
+            temp_save_path = Path(handle.name).resolve()
+        save_gui_state_file(temp_save_path, dict(state))
+        temp_save_path.replace(target_path)
+    except Exception as exc:
+        partial_target_removed = False
+        try:
+            if temp_save_path is not None and temp_save_path.exists():
+                temp_save_path.unlink()
+            if (
+                remove_partial_target
+                and not target_exists_before
+                and target_path.exists()
+            ):
+                target_path.unlink()
+            partial_target_removed = bool(
+                (temp_save_path is None or not temp_save_path.exists())
+                and (target_exists_before or not target_path.exists())
+            )
+        except Exception:
+            partial_target_removed = False
+        return {
+            "failure_stage": str(failure_stage),
+            "save_path": str(target_path),
+            "error_type": type(exc).__name__,
+            "error_text": str(exc),
+            "partial_target_removed": partial_target_removed,
+        }
+    return None
 
 
 def _normalize_hkl(value: object) -> tuple[int, int, int] | None:
@@ -260,6 +312,26 @@ def _empty_saved_sequence(value: object) -> bool:
     return isinstance(value, (list, tuple)) and len(value) == 0
 
 
+def _point_payload(point: tuple[float, float] | None) -> list[float] | None:
+    if point is None:
+        return None
+    return [float(point[0]), float(point[1])]
+
+
+def _detector_distance(
+    reference_point: tuple[float, float] | None,
+    candidate_point: tuple[float, float] | None,
+) -> float:
+    if reference_point is None or candidate_point is None:
+        return float("nan")
+    return float(
+        np.hypot(
+            float(candidate_point[0]) - float(reference_point[0]),
+            float(candidate_point[1]) - float(reference_point[1]),
+        )
+    )
+
+
 def _saved_simulated_display_hint(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
@@ -291,31 +363,76 @@ def _saved_click_hint(
     return None
 
 
-def _candidate_detector_display_point(
+def _saved_simulated_detector_hint(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    for keys in (("sim_col_raw", "sim_row_raw"), ("sim_col", "sim_row")):
+    for keys in (
+        ("refined_sim_native_x", "refined_sim_native_y"),
+        ("simulated_detector_x", "simulated_detector_y"),
+        ("sim_col_raw", "sim_row_raw"),
+        ("sim_col", "sim_row"),
+    ):
+        hint = _finite_point(entry, *keys)
+        if hint is not None:
+            return hint
+    for keys in (
+        ("refined_sim_x", "refined_sim_y"),
+        ("raw_x", "raw_y"),
+        ("x", "y"),
+    ):
+        hint = _finite_point(entry, *keys)
+        if hint is not None:
+            return hint
+    return None
+
+
+def _saved_measured_detector_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for keys in (
+        ("native_col", "native_row"),
+        ("background_detector_x", "background_detector_y"),
+        ("detector_x", "detector_y"),
+        ("x", "y"),
+    ):
         point = _finite_point(entry, *keys)
         if point is not None:
             return point
     return None
 
 
+def _candidate_detector_native_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for keys in (
+        ("native_col", "native_row"),
+        ("sim_col_raw", "sim_row_raw"),
+        ("sim_col", "sim_row"),
+    ):
+        point = _finite_point(entry, *keys)
+        if point is not None:
+            return point
+    return None
+
+
+def _candidate_detector_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _candidate_detector_native_point(entry)
+
+
+def _candidate_detector_native_distance(
+    detector_hint: tuple[float, float] | None,
+    candidate: Mapping[str, object] | None,
+) -> float:
+    return _detector_distance(detector_hint, _candidate_detector_native_point(candidate))
+
+
 def _candidate_detector_display_distance(
     detector_hint: tuple[float, float] | None,
     candidate: Mapping[str, object] | None,
 ) -> float:
-    if detector_hint is None:
-        return float("nan")
-    candidate_point = _candidate_detector_display_point(candidate)
-    if candidate_point is None:
-        return float("nan")
-    return float(
-        np.hypot(
-            float(candidate_point[0]) - float(detector_hint[0]),
-            float(candidate_point[1]) - float(detector_hint[1]),
-        )
-    )
+    return _candidate_detector_native_distance(detector_hint, candidate)
 
 
 def _display_hint(
@@ -342,11 +459,12 @@ def _compact_entry(
     entry: Mapping[str, object] | None,
     *,
     display_hint: tuple[float, float] | None = None,
-    detector_display_hint: tuple[float, float] | None = None,
+    detector_hint: tuple[float, float] | None = None,
+    measured_detector_point: tuple[float, float] | None = None,
 ) -> dict[str, object] | None:
     if not isinstance(entry, Mapping):
         return None
-    detector_display = _candidate_detector_display_point(entry)
+    detector_native = _candidate_detector_native_point(entry)
     payload = {
         "candidate_source_key": gui_manual_geometry.geometry_manual_candidate_source_key(
             dict(entry)
@@ -360,11 +478,14 @@ def _compact_entry(
         "source_reflection_is_full": entry.get("source_reflection_is_full"),
         "source_branch_index": entry.get("source_branch_index"),
         "source_peak_index": entry.get("source_peak_index"),
+        "native_col": entry.get("native_col"),
+        "native_row": entry.get("native_row"),
         "sim_col": entry.get("sim_col"),
         "sim_row": entry.get("sim_row"),
         "sim_col_raw": entry.get("sim_col_raw"),
         "sim_row_raw": entry.get("sim_row_raw"),
-        "sim_detector_display": list(detector_display) if detector_display is not None else None,
+        "selected_live_simulated_detector_point": _point_payload(detector_native),
+        "sim_detector_display": _point_payload(detector_native),
         "caked_x": entry.get("caked_x"),
         "caked_y": entry.get("caked_y"),
     }
@@ -376,12 +497,126 @@ def _compact_entry(
                 dict(entry),
             )
         )
-    if detector_display_hint is not None:
-        payload["distance_to_saved_sim_hint_px"] = _candidate_detector_display_distance(
-            detector_display_hint,
-            entry,
+    if detector_hint is not None:
+        distance_to_saved_sim = _candidate_detector_native_distance(detector_hint, entry)
+        payload["distance_to_saved_sim_detector_hint_px"] = distance_to_saved_sim
+        payload["distance_to_saved_sim_hint_px"] = distance_to_saved_sim
+    if measured_detector_point is not None:
+        payload["distance_to_saved_measured_detector_point_px"] = _detector_distance(
+            measured_detector_point,
+            detector_native,
         )
     return payload
+
+
+def _source_locator_payload(
+    entry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    if not isinstance(entry, Mapping):
+        return {
+            "source_reflection_namespace": None,
+            "source_reflection_index": None,
+            "source_table_index": None,
+            "source_row_index": None,
+            "source_peak_index": None,
+            "source_branch_index": None,
+        }
+    return {
+        "source_reflection_namespace": entry.get("source_reflection_namespace"),
+        "source_reflection_index": entry.get("source_reflection_index"),
+        "source_table_index": entry.get("source_table_index"),
+        "source_row_index": entry.get("source_row_index"),
+        "source_peak_index": entry.get("source_peak_index"),
+        "source_branch_index": entry.get("source_branch_index"),
+    }
+
+
+def _slot_detector_diagnostic(
+    *,
+    pair_id: str,
+    saved_entry: Mapping[str, object] | None,
+    selected_candidate: Mapping[str, object] | None,
+) -> dict[str, object]:
+    saved_simulated_detector_hint = _saved_simulated_detector_hint(saved_entry)
+    saved_measured_detector_point = _saved_measured_detector_point(saved_entry)
+    selected_live_simulated_detector_point = _candidate_detector_native_point(selected_candidate)
+    selected_locator = _source_locator_payload(selected_candidate)
+    return {
+        "pair_id": pair_id,
+        "hkl": _normalize_hkl(
+            (selected_candidate or {}).get("hkl")
+            if isinstance(selected_candidate, Mapping)
+            else (saved_entry or {}).get("hkl")
+        ),
+        "q_group_key": _normalize_q_group_key(
+            (selected_candidate or {}).get("q_group_key")
+            if isinstance(selected_candidate, Mapping)
+            and _normalize_q_group_key(selected_candidate.get("q_group_key")) is not None
+            else (saved_entry or {}).get("q_group_key")
+        ),
+        "saved_source_identity_fields": _source_locator_payload(saved_entry),
+        "selected_live_source_identity_fields": selected_locator,
+        "saved_measured_detector_point": _point_payload(saved_measured_detector_point),
+        "saved_simulated_detector_hint": _point_payload(saved_simulated_detector_hint),
+        "selected_live_simulated_detector_point": _point_payload(
+            selected_live_simulated_detector_point
+        ),
+        "selected_to_saved_sim_distance_px": _detector_distance(
+            saved_simulated_detector_hint,
+            selected_live_simulated_detector_point,
+        ),
+        "selected_to_measured_distance_px": _detector_distance(
+            saved_measured_detector_point,
+            selected_live_simulated_detector_point,
+        ),
+        "branch_index": (
+            _normalized_branch_index(selected_candidate)
+            if isinstance(selected_candidate, Mapping)
+            else _normalized_branch_index(saved_entry)
+        ),
+        "source_reflection_namespace": selected_locator.get("source_reflection_namespace"),
+        "source_reflection_index": selected_locator.get("source_reflection_index"),
+        "source_table_index": selected_locator.get("source_table_index"),
+        "source_row_index": selected_locator.get("source_row_index"),
+        "source_peak_index": selected_locator.get("source_peak_index"),
+        "source_branch_index": selected_locator.get("source_branch_index"),
+        "coordinate_frame": "raw_detector_px",
+    }
+
+
+def _merged_saved_entry_for_slot(
+    *,
+    raw_saved_entries: Sequence[Mapping[str, object]],
+    saved_entries: Sequence[Mapping[str, object]],
+    slot_index: int,
+) -> dict[str, object]:
+    saved_entry = (
+        dict(raw_saved_entries[int(slot_index)])
+        if int(slot_index) < len(raw_saved_entries)
+        and isinstance(raw_saved_entries[int(slot_index)], Mapping)
+        else {}
+    )
+    if int(slot_index) < len(saved_entries) and isinstance(saved_entries[int(slot_index)], Mapping):
+        saved_entry.update(dict(saved_entries[int(slot_index)]))
+    return saved_entry
+
+
+def _candidate_distance_threshold_px(
+    saved_entries: Sequence[Mapping[str, object]],
+) -> float:
+    placement_errors = [
+        _float_or_none(entry.get("placement_error_px"))
+        for entry in saved_entries
+        if isinstance(entry, Mapping)
+    ]
+    finite_placement_errors = [
+        float(value)
+        for value in placement_errors
+        if value is not None and np.isfinite(value)
+    ]
+    if not finite_placement_errors:
+        return 100.0
+    return float(max(100.0, 3.0 * max(finite_placement_errors)))
 
 
 def _group_inventory(
@@ -427,7 +662,8 @@ def _select_live_candidate_for_saved_entry(
     grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
     tie_tolerance_px: float = gui_geometry_fit.GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX,
 ) -> dict[str, object]:
-    detector_hint = _saved_simulated_display_hint(saved_entry)
+    detector_hint = _saved_simulated_detector_hint(saved_entry)
+    measured_detector_point = _saved_measured_detector_point(saved_entry)
     target_hkl = _normalize_hkl(saved_entry.get("hkl"))
     target_branch = _normalized_branch_index(saved_entry)
     inventory = _group_inventory(grouped_candidates)
@@ -447,20 +683,25 @@ def _select_live_candidate_for_saved_entry(
                 matching_candidates.append(entry)
 
     candidate_inventory = [
-        _compact_entry(entry, detector_display_hint=detector_hint)
+        _compact_entry(
+            entry,
+            detector_hint=detector_hint,
+            measured_detector_point=measured_detector_point,
+        )
         for entry in matching_candidates
     ]
     finite_candidates = [
-        (entry, _candidate_detector_display_distance(detector_hint, entry))
+        (entry, _candidate_detector_native_distance(detector_hint, entry))
         for entry in matching_candidates
-        if np.isfinite(_candidate_detector_display_distance(detector_hint, entry))
+        if np.isfinite(_candidate_detector_native_distance(detector_hint, entry))
     ]
     if not finite_candidates:
         return {
             "ok": False,
             "failure_stage": "grouped_candidate_regeneration",
             "selection_status": "missing_live_candidate",
-            "saved_simulated_display_hint": detector_hint,
+            "saved_simulated_detector_hint": detector_hint,
+            "saved_measured_detector_point": measured_detector_point,
             "saved_target_hkl": target_hkl,
             "saved_target_branch_index": target_branch,
             "group_inventory": inventory,
@@ -479,7 +720,8 @@ def _select_live_candidate_for_saved_entry(
             "ok": False,
             "failure_stage": "resolved_live_row_selection",
             "selection_status": "ambiguous_live_row_selection",
-            "saved_simulated_display_hint": detector_hint,
+            "saved_simulated_detector_hint": detector_hint,
+            "saved_measured_detector_point": measured_detector_point,
             "saved_target_hkl": target_hkl,
             "saved_target_branch_index": target_branch,
             "tie_tolerance_px": float(tie_tolerance_px),
@@ -487,7 +729,11 @@ def _select_live_candidate_for_saved_entry(
             "group_inventory": inventory,
             "matching_branch_candidate_inventory": candidate_inventory,
             "tied_candidate_inventory": [
-                _compact_entry(entry, detector_display_hint=detector_hint)
+                _compact_entry(
+                    entry,
+                    detector_hint=detector_hint,
+                    measured_detector_point=measured_detector_point,
+                )
                 for entry in tied_entries
             ],
         }
@@ -495,7 +741,8 @@ def _select_live_candidate_for_saved_entry(
     return {
         "ok": True,
         "selection_status": "selected",
-        "saved_simulated_display_hint": detector_hint,
+        "saved_simulated_detector_hint": detector_hint,
+        "saved_measured_detector_point": measured_detector_point,
         "saved_target_hkl": target_hkl,
         "saved_target_branch_index": target_branch,
         "best_distance_px": float(best_distance),
@@ -1466,15 +1713,17 @@ def _build_group_cache(
         background_image=display_bg,
         existing_cache_signature=None,
         existing_cache_data=None,
-        cache_signature_fn=lambda **kwargs: (
-            gui_manual_geometry.geometry_manual_pick_cache_signature(
-                source_snapshot_signature=requested_signature,
-                background_index=int(kwargs["background_index"]),
-                background_image=kwargs["background_image"],
-                use_caked_space=False,
-                geometry_preview_excluded_q_groups=(),
-                geometry_q_group_cached_entries=(),
-            )
+        cache_signature_fn=lambda **kwargs: gui_manual_geometry.geometry_manual_pick_cache_signature(
+            placed_cache_signature=(
+                gui_manual_geometry.geometry_manual_pick_placed_cache_signature(
+                    source_snapshot_signature=requested_signature,
+                    background_index=int(kwargs["background_index"]),
+                    background_image=kwargs["background_image"],
+                    use_caked_space=False,
+                )
+            ),
+            disabled_qr_sets=(),
+            disabled_qz_sections=(),
         ),
         source_rows_for_background=manual_dataset_bindings.geometry_manual_source_rows_for_background,
         simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
@@ -1545,20 +1794,35 @@ def _validate_harness(
         else None
     )
     cache_signature = group_cache.get("signature")
+    placed_cache_signature = (
+        cache_signature[0]
+        if isinstance(cache_signature, tuple) and len(cache_signature) > 0
+        else None
+    )
+    source_snapshot_signature_match = bool(
+        requested_signature is not None
+        and (
+            cache_signature == requested_signature
+            or (
+                isinstance(placed_cache_signature, tuple)
+                and len(placed_cache_signature) > 0
+                and placed_cache_signature[0] == requested_signature
+            )
+        )
+    )
     return {
         "valid": bool(
             expected_background_path == actual_background_path
-            and requested_signature is not None
-            and isinstance(cache_signature, tuple)
-            and len(cache_signature) > 0
-            and cache_signature[0] == requested_signature
+            and source_snapshot_signature_match
         ),
         "background_index": int(background_index),
         "expected_background_path": expected_background_path,
         "actual_background_path": actual_background_path,
         "param_digest": _stable_digest(dict(params)),
         "requested_signature_digest": _stable_digest(requested_signature),
+        "placed_cache_signature_digest": _stable_digest(placed_cache_signature),
         "group_cache_signature_digest": _stable_digest(cache_signature),
+        "source_snapshot_signature_match": source_snapshot_signature_match,
     }
 
 
@@ -1761,6 +2025,10 @@ def _build_single_background_dataset(
 def _prepare_validation_context(state_path: Path, background_index: int) -> dict[str, object]:
     payload = load_gui_state_file(state_path)
     saved_state = dict(payload["state"])
+    raw_saved_entries = _saved_entries_for_background(
+        saved_state,
+        background_index=int(background_index),
+    )
     captured = _capture_preflight(saved_state=saved_state, state_path=state_path)
     prepare_kwargs = dict(captured["prepare_kwargs"])
     prepare_result = captured["prepare_result"]
@@ -1772,12 +2040,14 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
     saved_entries = list(
         manual_dataset_bindings.geometry_manual_pairs_for_index(int(background_index)) or ()
     )
+    runtime_prepare_ok = bool(prepared_run is not None and not prepare_result.error_text)
     result: dict[str, object] = {
         "state_path": str(state_path),
         "background_index": int(background_index),
         "saved_pair_count": int(len(saved_entries)),
         "captured_preflight_error_text": prepare_result.error_text,
         "used_isolated_background_dataset": prepared_run is None,
+        "runtime_prepare_ok": runtime_prepare_ok,
     }
     try:
         if prepared_run is not None:
@@ -1837,6 +2107,7 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
     result["dataset"] = dataset
     result["group_cache"] = group_cache
     result["saved_entries"] = saved_entries
+    result["raw_saved_entries"] = raw_saved_entries
     return result
 
 
@@ -1864,6 +2135,7 @@ def _run_saved_state_compatibility_validation(
             "dataset",
             "group_cache",
             "saved_entries",
+            "raw_saved_entries",
         }
     }
 
@@ -2169,28 +2441,77 @@ def _trusted_full_reflection_identity_payload(
     )
 
 
+def _legacy_untrusted_reflection_identity_payload(
+    payload: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    return (
+        payload.get("source_reflection_index") is None
+        and bool(payload.get("source_reflection_is_full", False)) is not True
+    )
+
+
+def _legacy_reflection_identity_alias_payload(
+    saved_entry: Mapping[str, object] | None,
+    payload: Mapping[str, object] | None,
+    selected_entry: Mapping[str, object] | None,
+) -> bool:
+    if (
+        not isinstance(saved_entry, Mapping)
+        or not isinstance(payload, Mapping)
+        or not isinstance(selected_entry, Mapping)
+    ):
+        return False
+    reflection_index = payload.get("source_reflection_index")
+    source_table_index = saved_entry.get("source_table_index")
+    source_row_index = saved_entry.get("source_row_index")
+    if (
+        reflection_index is None
+        or source_table_index is None
+        or source_row_index is None
+    ):
+        return False
+    if reflection_index != source_table_index:
+        return False
+    selected_table_index = selected_entry.get("source_table_index")
+    selected_row_index = selected_entry.get("source_row_index")
+    if selected_table_index is None or selected_row_index is None:
+        return False
+    return (
+        selected_entry.get("source_branch_index") == saved_entry.get("source_branch_index")
+        and selected_entry.get("source_peak_index") == saved_entry.get("source_peak_index")
+    )
+
+
 def _classify_saved_to_selected_identity_delta(
     saved_entry: Mapping[str, object] | None,
     selected_entry: Mapping[str, object] | None,
 ) -> tuple[dict[str, dict[str, object]], str]:
     delta = _saved_to_selected_identity_delta(saved_entry, selected_entry)
+    saved_identity = _comparable_identity_payload(saved_entry)
+    selected_identity = _comparable_identity_payload(selected_entry)
     if not delta:
         return delta, "saved_identity_already_canonical"
     if "hkl" in delta:
         return delta, "hkl_drift"
+    if "source_branch_index" in delta or "source_peak_index" in delta:
+        return delta, "branch_drift"
+    if set(delta.keys()).issubset(
+        {"source_reflection_index", "source_reflection_namespace", "source_reflection_is_full"}
+    ) and _trusted_full_reflection_identity_payload(selected_identity) and (
+        _legacy_untrusted_reflection_identity_payload(saved_identity)
+        or _legacy_reflection_identity_alias_payload(
+            saved_entry,
+            saved_identity,
+            selected_entry,
+        )
+    ):
+        return delta, "legacy_saved_identity_canonicalized"
     if "source_reflection_namespace" in delta:
         return delta, "namespace_drift"
     if "source_reflection_is_full" in delta:
         return delta, "full_trust_drift"
-    if "source_branch_index" in delta or "source_peak_index" in delta:
-        return delta, "branch_drift"
-    if set(delta.keys()) == {"source_reflection_index"}:
-        saved_identity = _comparable_identity_payload(saved_entry)
-        selected_identity = _comparable_identity_payload(selected_entry)
-        if _trusted_full_reflection_identity_payload(
-            saved_identity
-        ) and _trusted_full_reflection_identity_payload(selected_identity):
-            return delta, "legacy_saved_identity_canonicalized"
     return delta, "identity_drift"
 
 
@@ -2306,6 +2627,7 @@ def _run_fresh_slot_validation(
     runtime: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     saved_entries = list(context["saved_entries"])
+    raw_saved_entries = list(context.get("raw_saved_entries", ()) or ())
     result = {
         "slot_index": int(slot_index),
     }
@@ -2337,24 +2659,33 @@ def _run_fresh_slot_validation(
     grouped_candidates = dict(prepared_runtime.get("grouped_candidates", {}) or {})
     grouped_candidate_source = prepared_runtime.get("grouped_candidate_source")
 
-    saved_entry = dict(saved_entries[int(slot_index)])
+    saved_entry = _merged_saved_entry_for_slot(
+        raw_saved_entries=raw_saved_entries,
+        saved_entries=saved_entries,
+        slot_index=int(slot_index),
+    )
+    pair_id = f"bg{int(background_index)}:pair{int(slot_index)}"
+    saved_simulated_detector_hint = _saved_simulated_detector_hint(saved_entry)
+    saved_measured_detector_point = _saved_measured_detector_point(saved_entry)
     selected_candidate_result = _select_live_candidate_for_saved_entry(
         saved_entry=saved_entry,
         grouped_candidates=grouped_candidates,
     )
     result["saved_entry"] = {
-        **_identity_payload(
-            saved_entry,
-            pair_id=f"bg{int(background_index)}:pair{int(slot_index)}",
-        ),
+        **dict(saved_entry),
+        **_identity_payload(saved_entry, pair_id=pair_id),
         "q_group_key": _normalize_q_group_key(saved_entry.get("q_group_key")),
-        "saved_simulated_display_hint": _saved_simulated_display_hint(saved_entry),
+        "saved_source_identity_fields": _source_locator_payload(saved_entry),
+        "saved_measured_detector_point": _point_payload(saved_measured_detector_point),
+        "saved_simulated_detector_hint": _point_payload(saved_simulated_detector_hint),
     }
     result["grouped_candidate_source"] = grouped_candidate_source
+    result["rebind_ok"] = False
     result["current_live_source_row_inventory"] = [
         _compact_entry(
             entry,
-            detector_display_hint=_saved_simulated_display_hint(saved_entry),
+            detector_hint=saved_simulated_detector_hint,
+            measured_detector_point=saved_measured_detector_point,
         )
         for entry in current_source_rows
         if _normalize_hkl(entry.get("hkl")) == _normalize_hkl(saved_entry.get("hkl"))
@@ -2390,6 +2721,12 @@ def _run_fresh_slot_validation(
             "selected_identity": _comparable_identity_payload(selected_candidate),
         }
         return result
+    result["rebind_ok"] = True
+    result["detector_space_diagnostic"] = _slot_detector_diagnostic(
+        pair_id=pair_id,
+        saved_entry=saved_entry,
+        selected_candidate=selected_candidate,
+    )
 
     selected_group_key = _normalize_q_group_key(selected_candidate.get("q_group_key"))
     group_entries = [
@@ -2493,11 +2830,13 @@ def _run_fresh_slot_validation(
         ),
         "selected_candidate": _compact_entry(
             selected_candidate,
-            detector_display_hint=_saved_simulated_display_hint(saved_entry),
+            detector_hint=saved_simulated_detector_hint,
+            measured_detector_point=saved_measured_detector_point,
         ),
         "emitted_pair": dict(emitted_pair) if isinstance(emitted_pair, Mapping) else None,
         "expected_identity": expected_identity,
         "actual_identity": emitted_identity,
+        "detector_space_diagnostic": dict(result["detector_space_diagnostic"]),
     }
     result["fresh_emission"] = fresh_emission
     if (
@@ -2628,14 +2967,25 @@ def _run_fresh_slot_validation(
         background_index=int(background_index),
         emitted_pairs=[dict(emitted_pair)],
     )
-    with tempfile.TemporaryDirectory(prefix="new2_fresh_probe_") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="geometry_fresh_probe_") as tmp_dir:
         temp_state_path = Path(tmp_dir) / "fresh_one_pair_state.json"
-        save_gui_state_file(temp_state_path, fresh_state)
-        fresh_preflight = _run_single_slot_preflight_validation(
+        temp_save_error = _try_save_gui_state_file(
             temp_state_path,
-            background_index=int(background_index),
-            slot_index=0,
+            fresh_state,
+            failure_stage="fresh_one_pair_temp_state_save",
         )
+        if temp_save_error is None:
+            fresh_preflight = _run_single_slot_preflight_validation(
+                temp_state_path,
+                background_index=int(background_index),
+                slot_index=0,
+            )
+        else:
+            fresh_preflight = {
+                "ok": False,
+                "classification": "temp_state_save_failed",
+                "failed_pair": temp_save_error,
+            }
     result["fresh_one_pair_preflight"] = fresh_preflight
     if not bool(fresh_preflight.get("ok", False)):
         result["ok"] = False
@@ -2662,6 +3012,17 @@ def _run_fresh_contract_validation(
 
     result = _public_context_fields(context)
     result["sentinel_slot_index"] = int(sentinel_slot_index)
+    slot_failed_pair = None
+    skipped_compatibility = {
+        "ok": False,
+        "classification": "skipped_due_to_slot_failure",
+    }
+    result["fresh_state_export_written"] = False
+    result["fresh_export_ok"] = bool(export_fresh_state_path is None)
+    result["compatibility_ok"] = False
+    result["exported_state_compatibility"] = skipped_compatibility
+    result["state_compatibility"] = _compatibility_summary(skipped_compatibility)
+    temp_save_error = None
     runtime = _prepare_fresh_slot_runtime(
         context=context,
         background_index=int(background_index),
@@ -2673,7 +3034,13 @@ def _run_fresh_contract_validation(
         runtime=runtime,
     )
     result.update(slot_result)
+    if isinstance(slot_result.get("failed_pair"), Mapping):
+        slot_failed_pair = dict(slot_result["failed_pair"])
+        skipped_compatibility["failed_pair"] = slot_failed_pair
+        result["exported_state_compatibility"] = skipped_compatibility
+        result["state_compatibility"] = _compatibility_summary(skipped_compatibility)
     if not bool(slot_result.get("ok", False)):
+        result["ok"] = False
         return result
 
     emitted_pair = slot_result.get("emitted_pair")
@@ -2682,23 +3049,69 @@ def _run_fresh_contract_validation(
         background_index=int(background_index),
         emitted_pairs=[dict(emitted_pair)] if isinstance(emitted_pair, Mapping) else [],
     )
-    if export_fresh_state_path is not None:
-        export_fresh_state_path = export_fresh_state_path.expanduser().resolve()
-        export_fresh_state_path.parent.mkdir(parents=True, exist_ok=True)
-        save_gui_state_file(export_fresh_state_path, fresh_state)
-        result["exported_fresh_state_path"] = str(export_fresh_state_path)
+    with tempfile.TemporaryDirectory(prefix="geometry_fresh_probe_") as tmp_dir:
+        temp_state_path = Path(tmp_dir) / "fresh_state.json"
+        temp_save_error = _try_save_gui_state_file(
+            temp_state_path,
+            fresh_state,
+            failure_stage="fresh_contract_temp_state_save",
+        )
+        if temp_save_error is None:
+            compatibility = _run_saved_state_compatibility_validation(
+                temp_state_path,
+                int(background_index),
+            )
+        else:
+            compatibility = {
+                "ok": False,
+                "classification": "temp_state_save_failed",
+                "failed_pair": temp_save_error,
+            }
 
-    compatibility = _run_saved_state_compatibility_validation(
-        state_path,
-        int(background_index),
+    compatibility_ok = bool(compatibility.get("ok", False))
+    if compatibility_ok and export_fresh_state_path is not None:
+        export_path = export_fresh_state_path.expanduser().resolve()
+        export_save_error = _try_save_gui_state_file(
+            export_path,
+            fresh_state,
+            failure_stage="fresh_contract_export",
+            create_parent=True,
+            remove_partial_target=True,
+        )
+        if export_save_error is None:
+            result["exported_fresh_state_path"] = str(export_path)
+            result["fresh_state_export_written"] = bool(export_path.is_file())
+        else:
+            export_save_error.setdefault("compatibility_ok", compatibility_ok)
+            export_save_error.setdefault("fresh_export_ok", False)
+            result["failed_pair"] = export_save_error
+    fresh_export_ok = bool(
+        export_fresh_state_path is None or result.get("fresh_state_export_written", False)
     )
-    result["new2_compatibility"] = _compatibility_summary(compatibility)
-    result["classification"] = (
-        "fresh_contract_pass"
-        if bool(compatibility.get("ok", False))
-        else "fresh_contract_pass_new2_compatibility_fail"
-    )
-    result["ok"] = True
+    result["fresh_export_ok"] = fresh_export_ok
+    result["compatibility_ok"] = compatibility_ok
+    result["exported_state_compatibility"] = compatibility
+    result["state_compatibility"] = _compatibility_summary(compatibility)
+    result["ok"] = bool(compatibility_ok and fresh_export_ok)
+    if temp_save_error is not None:
+        result["classification"] = "fresh_contract_temp_save_fail"
+        result["failed_pair"] = temp_save_error
+    elif not compatibility_ok:
+        result["classification"] = "fresh_contract_state_compatibility_fail"
+        result["failed_pair"] = compatibility.get("failed_pair", compatibility)
+    elif not fresh_export_ok:
+        result["classification"] = "fresh_contract_export_fail"
+        failed_pair = (
+            dict(result["failed_pair"])
+            if isinstance(result.get("failed_pair"), Mapping)
+            else {}
+        )
+        failed_pair.setdefault("failure_stage", "fresh_contract_export")
+        failed_pair.setdefault("compatibility_ok", compatibility_ok)
+        failed_pair.setdefault("fresh_export_ok", fresh_export_ok)
+        result["failed_pair"] = failed_pair
+    else:
+        result["classification"] = "pass"
     return result
 
 
@@ -2713,6 +3126,11 @@ def _run_fresh_all_contract_validation(
         return context
 
     saved_entries = list(context["saved_entries"])
+    raw_saved_entries = [
+        dict(entry)
+        for entry in context.get("raw_saved_entries", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
     result = _public_context_fields(context)
     runtime = _prepare_fresh_slot_runtime(
         context=context,
@@ -2720,6 +3138,8 @@ def _run_fresh_all_contract_validation(
     )
     slot_results: list[dict[str, object]] = []
     emitted_pairs: list[dict[str, object]] = []
+    failed_slot_index: int | None = None
+    failed_pair: Mapping[str, object] | None = None
     for slot_index in range(len(saved_entries)):
         slot_result = _run_fresh_slot_validation(
             context=context,
@@ -2728,47 +3148,202 @@ def _run_fresh_all_contract_validation(
             runtime=runtime,
         )
         slot_results.append(slot_result)
-        if not bool(slot_result.get("ok", False)):
-            result["ok"] = False
-            result["classification"] = "seam_failure"
-            result["slot_results"] = slot_results
-            result["failed_slot_index"] = int(slot_index)
-            result["failed_pair"] = slot_result.get("failed_pair", slot_result)
-            return result
         emitted_pair = slot_result.get("emitted_pair")
         if isinstance(emitted_pair, Mapping):
             emitted_pairs.append(dict(emitted_pair))
-
-    result["slot_results"] = slot_results
-    fresh_state = _build_fresh_pair_state(
-        saved_state=context["saved_state"],
-        background_index=int(background_index),
-        emitted_pairs=emitted_pairs,
-    )
-
-    if export_fresh_state_path is not None:
-        export_path = export_fresh_state_path.expanduser().resolve()
-        export_path.parent.mkdir(parents=True, exist_ok=True)
-        save_gui_state_file(export_path, fresh_state)
-        result["exported_fresh_state_path"] = str(export_path)
-        compatibility = _run_saved_state_compatibility_validation(
-            export_path,
-            int(background_index),
-        )
-    else:
-        with tempfile.TemporaryDirectory(prefix="new2_fresh_all_probe_") as tmp_dir:
-            temp_state_path = Path(tmp_dir) / "fresh_all_state.json"
-            save_gui_state_file(temp_state_path, fresh_state)
-            compatibility = _run_saved_state_compatibility_validation(
-                temp_state_path,
-                int(background_index),
+        if failed_slot_index is None and not bool(slot_result.get("ok", False)):
+            failed_slot_index = int(slot_index)
+            failed_pair = (
+                slot_result.get("failed_pair")
+                if isinstance(slot_result.get("failed_pair"), Mapping)
+                else slot_result
             )
 
+    result["slot_results"] = slot_results
+    processed_manual_entry_count = int(len(saved_entries))
+    bound_manual_entry_count = int(
+        sum(1 for slot_result in slot_results if bool(slot_result.get("rebind_ok", False)))
+    )
+    missing_manual_entry_count = int(
+        max(0, processed_manual_entry_count - bound_manual_entry_count)
+    )
+    candidate_distances_px = [
+        _float_or_none(dict(slot_result.get("candidate_selection", {})).get("best_distance_px"))
+        for slot_result in slot_results
+    ]
+    finite_candidate_distances_px = [
+        float(distance)
+        for distance in candidate_distances_px
+        if distance is not None and np.isfinite(distance)
+    ]
+    merged_saved_entries = [
+        _merged_saved_entry_for_slot(
+            raw_saved_entries=raw_saved_entries,
+            saved_entries=saved_entries,
+            slot_index=slot_index,
+        )
+        for slot_index in range(len(saved_entries))
+    ]
+    candidate_distance_gate_threshold_px = _candidate_distance_threshold_px(merged_saved_entries)
+    max_candidate_distance_px = (
+        float(max(finite_candidate_distances_px)) if finite_candidate_distances_px else None
+    )
+    branch_mismatch_count = 0
+    for slot_result in slot_results:
+        saved_entry = (
+            dict(slot_result.get("saved_entry", {}))
+            if isinstance(slot_result.get("saved_entry"), Mapping)
+            else {}
+        )
+        selected_candidate = (
+            dict(dict(slot_result.get("candidate_selection", {})).get("selected_candidate", {}))
+            if isinstance(dict(slot_result.get("candidate_selection", {})).get("selected_candidate"), Mapping)
+            else {}
+        )
+        saved_branch_index = _normalized_branch_index(saved_entry)
+        selected_branch_index = _normalized_branch_index(selected_candidate)
+        if (
+            saved_branch_index is not None
+            and selected_branch_index is not None
+            and int(saved_branch_index) != int(selected_branch_index)
+        ):
+            branch_mismatch_count += 1
+    runtime_prepare_ok = bool(context.get("runtime_prepare_ok", False))
+    candidate_distances_all_finite = bool(
+        processed_manual_entry_count > 0
+        and len(candidate_distances_px) == processed_manual_entry_count
+        and len(finite_candidate_distances_px) == processed_manual_entry_count
+    )
+    detector_distance_gate_ok = bool(
+        candidate_distances_all_finite
+        and max_candidate_distance_px is not None
+        and float(max_candidate_distance_px) <= float(candidate_distance_gate_threshold_px)
+    )
+    isolated_rebind_ok = bool(
+        processed_manual_entry_count > 0
+        and bound_manual_entry_count == processed_manual_entry_count
+        and missing_manual_entry_count == 0
+        and int(branch_mismatch_count) == 0
+    )
+    result["processed_manual_entry_count"] = processed_manual_entry_count
+    result["bound_manual_entry_count"] = bound_manual_entry_count
+    result["missing_manual_entry_count"] = missing_manual_entry_count
+    result["branch_mismatch_count"] = int(branch_mismatch_count)
+    result["candidate_distance_px"] = list(candidate_distances_px)
+    result["candidate_distances_all_finite"] = candidate_distances_all_finite
+    result["candidate_distance_gate_threshold_px"] = float(candidate_distance_gate_threshold_px)
+    result["max_candidate_distance_px"] = max_candidate_distance_px
+    result["detector_distance_gate_ok"] = detector_distance_gate_ok
+    result["candidate_distance_gate_ok"] = detector_distance_gate_ok
+    result["runtime_prepare_ok"] = runtime_prepare_ok
+    result["isolated_rebind_ok"] = isolated_rebind_ok
+    result["fresh_state_export_written"] = False
+    result["fresh_export_ok"] = bool(export_fresh_state_path is None)
+    result["compatibility_ok"] = False
+    result["exported_state_compatibility"] = {
+        "ok": False,
+        "classification": "missing",
+    }
+    result["state_compatibility"] = _compatibility_summary(None)
+    temp_save_error = None
+
+    if failed_slot_index is None:
+        fresh_state = _build_fresh_pair_state(
+            saved_state=context["saved_state"],
+            background_index=int(background_index),
+            emitted_pairs=emitted_pairs,
+        )
+        with tempfile.TemporaryDirectory(prefix="geometry_fresh_all_probe_") as tmp_dir:
+            temp_state_path = Path(tmp_dir) / "fresh_all_state.json"
+            temp_save_error = _try_save_gui_state_file(
+                temp_state_path,
+                fresh_state,
+                failure_stage="fresh_all_contract_temp_state_save",
+            )
+            if temp_save_error is None:
+                compatibility = _run_saved_state_compatibility_validation(
+                    temp_state_path,
+                    int(background_index),
+                )
+            else:
+                compatibility = {
+                    "ok": False,
+                    "classification": "temp_state_save_failed",
+                    "failed_pair": temp_save_error,
+                }
+    else:
+        fresh_state = None
+        compatibility = {
+            "ok": False,
+            "classification": "skipped_due_to_slot_failure",
+            "failed_pair": failed_pair,
+        }
+        result["failed_slot_index"] = int(failed_slot_index)
+
+    compatibility_ok = bool(compatibility.get("ok", False))
+    provisional_ok = bool(
+        runtime_prepare_ok
+        and isolated_rebind_ok
+        and compatibility_ok
+        and detector_distance_gate_ok
+    )
+    if provisional_ok and export_fresh_state_path is not None and fresh_state is not None:
+        export_path = export_fresh_state_path.expanduser().resolve()
+        export_save_error = _try_save_gui_state_file(
+            export_path,
+            fresh_state,
+            failure_stage="fresh_all_contract_export",
+            create_parent=True,
+            remove_partial_target=True,
+        )
+        if export_save_error is None:
+            result["exported_fresh_state_path"] = str(export_path)
+            result["fresh_state_export_written"] = bool(export_path.is_file())
+        else:
+            export_save_error.setdefault("compatibility_ok", compatibility_ok)
+            export_save_error.setdefault("fresh_export_ok", False)
+            result["failed_pair"] = export_save_error
+    fresh_export_ok = bool(
+        export_fresh_state_path is None or result.get("fresh_state_export_written", False)
+    )
+    result["fresh_export_ok"] = fresh_export_ok
+    result["compatibility_ok"] = compatibility_ok
     result["exported_state_compatibility"] = compatibility
-    result["ok"] = bool(compatibility.get("ok", False))
-    result["classification"] = "pass" if result["ok"] else "seam_failure"
-    if not result["ok"]:
-        result["failed_pair"] = compatibility.get("failed_pair", compatibility)
+    result["state_compatibility"] = _compatibility_summary(compatibility)
+    result["ok"] = bool(provisional_ok and fresh_export_ok)
+    if temp_save_error is not None:
+        result["classification"] = "fresh_all_contract_temp_save_fail"
+        result["failed_pair"] = temp_save_error
+    elif not fresh_export_ok and provisional_ok:
+        result["classification"] = "fresh_all_contract_export_fail"
+    elif not runtime_prepare_ok and isolated_rebind_ok:
+        result["classification"] = "runtime_prepare_failed_but_isolated_rebind_ok"
+    else:
+        result["classification"] = "pass" if result["ok"] else "seam_failure"
+    if not result["ok"] and not isinstance(result.get("failed_pair"), Mapping):
+        result["failed_pair"] = (
+            failed_pair
+            if failed_slot_index is not None and isinstance(failed_pair, Mapping)
+            else compatibility.get("failed_pair", compatibility)
+            if not compatibility_ok
+            else {
+                "failure_stage": "fresh_all_summary_gate",
+                "runtime_prepare_ok": runtime_prepare_ok,
+                "isolated_rebind_ok": isolated_rebind_ok,
+                "fresh_export_ok": fresh_export_ok,
+                "compatibility_ok": compatibility_ok,
+                "detector_distance_gate_ok": detector_distance_gate_ok,
+                "processed_manual_entry_count": processed_manual_entry_count,
+                "bound_manual_entry_count": bound_manual_entry_count,
+                "missing_manual_entry_count": missing_manual_entry_count,
+                "branch_mismatch_count": int(branch_mismatch_count),
+                "candidate_distances_all_finite": candidate_distances_all_finite,
+                "max_candidate_distance_px": max_candidate_distance_px,
+                "candidate_distance_gate_threshold_px": float(
+                    candidate_distance_gate_threshold_px
+                ),
+            }
+        )
     return result
 
 

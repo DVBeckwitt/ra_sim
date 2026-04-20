@@ -5692,6 +5692,10 @@ def build_geometry_manual_fit_dataset(
             and np.isfinite(float(detector_anchor[0]))
             and np.isfinite(float(detector_anchor[1]))
         ):
+            initial_entry["background_detector_x"] = float(detector_anchor[0])
+            initial_entry["background_detector_y"] = float(detector_anchor[1])
+            initial_entry["native_col"] = float(detector_anchor[0])
+            initial_entry["native_row"] = float(detector_anchor[1])
             measured_entry["x"] = float(detector_anchor[0])
             measured_entry["y"] = float(detector_anchor[1])
         try:
@@ -5770,15 +5774,13 @@ def build_geometry_manual_fit_dataset(
         if not isinstance(measured_entry, dict):
             continue
         try:
-            detector_x = float(measured_entry.get("x"))
-            detector_y = float(measured_entry.get("y"))
+            display_col = float(measured_entry.get("x"))
+            display_row = float(measured_entry.get("y"))
         except Exception:
             continue
-        if np.isfinite(detector_x) and np.isfinite(detector_y):
-            measured_entry["detector_x"] = float(detector_x)
-            measured_entry["detector_y"] = float(detector_y)
-            measured_entry["background_detector_x"] = float(detector_x)
-            measured_entry["background_detector_y"] = float(detector_y)
+        if np.isfinite(display_col) and np.isfinite(display_row):
+            measured_entry["display_col"] = float(display_col)
+            measured_entry["display_row"] = float(display_row)
         measured_entry["fit_source_identity_only"] = True
     for measured_entry, initial_entry in zip(measured_for_fit, initial_pairs_display):
         if not isinstance(measured_entry, dict) or not isinstance(initial_entry, Mapping):
@@ -5802,6 +5804,8 @@ def build_geometry_manual_fit_dataset(
             "source_peak_index",
             "background_detector_x",
             "background_detector_y",
+            "native_col",
+            "native_row",
             "background_two_theta_deg",
             "background_phi_deg",
             "background_reference_two_theta_deg",
@@ -5813,6 +5817,33 @@ def build_geometry_manual_fit_dataset(
         ):
             if key in initial_entry:
                 measured_entry[key] = initial_entry.get(key)
+        native_detector_x = _finite_float(
+            measured_entry.get(
+                "background_detector_x",
+                measured_entry.get("native_col"),
+            )
+        )
+        native_detector_y = _finite_float(
+            measured_entry.get(
+                "background_detector_y",
+                measured_entry.get("native_row"),
+            )
+        )
+        if native_detector_x is not None and native_detector_y is not None:
+            measured_entry["detector_x"] = float(native_detector_x)
+            measured_entry["detector_y"] = float(native_detector_y)
+            measured_entry["background_detector_x"] = float(native_detector_x)
+            measured_entry["background_detector_y"] = float(native_detector_y)
+            measured_entry["native_col"] = float(native_detector_x)
+            measured_entry["native_row"] = float(native_detector_y)
+        else:
+            display_col = _finite_float(measured_entry.get("display_col", measured_entry.get("x")))
+            display_row = _finite_float(measured_entry.get("display_row", measured_entry.get("y")))
+            if display_col is not None and display_row is not None:
+                measured_entry["detector_x"] = float(display_col)
+                measured_entry["detector_y"] = float(display_row)
+                measured_entry["background_detector_x"] = float(display_col)
+                measured_entry["background_detector_y"] = float(display_row)
     backend_background = manual_dataset_bindings.apply_background_backend_orientation(
         native_background
     )
@@ -8947,6 +8978,27 @@ def _geometry_fit_trace_pair_record(
         entry.get("pair_id")
         or f"pair[{int(entry.get('overlay_match_index', 0) or 0)}]"
     )
+    simulated_point = _geometry_fit_trace_simulated_point(entry)
+    measured_point = _geometry_fit_trace_measured_point(entry)
+    dx_px = _geometry_fit_metric_float(entry.get("dx_px", np.nan))
+    dy_px = _geometry_fit_metric_float(entry.get("dy_px", np.nan))
+    if (
+        (not np.isfinite(dx_px) or not np.isfinite(dy_px))
+        and isinstance(simulated_point, list)
+        and len(simulated_point) == 2
+        and isinstance(measured_point, list)
+        and len(measured_point) == 2
+        and simulated_point[0] is not None
+        and simulated_point[1] is not None
+        and measured_point[0] is not None
+        and measured_point[1] is not None
+    ):
+        dx_px = _geometry_fit_metric_float(
+            float(simulated_point[0]) - float(measured_point[0])
+        )
+        dy_px = _geometry_fit_metric_float(
+            float(simulated_point[1]) - float(measured_point[1])
+        )
     record: dict[str, object] = {
         "record_type": str(record_type),
         "fit_run_id": str(fit_run_id),
@@ -9039,8 +9091,10 @@ def _geometry_fit_trace_pair_record(
             if _geometry_fit_source_peak_key(entry) is not None
             else None
         ),
-        "simulated_point": _geometry_fit_trace_simulated_point(entry),
-        "measured_point": _geometry_fit_trace_measured_point(entry),
+        "simulated_point": simulated_point,
+        "measured_point": measured_point,
+        "dx_px": dx_px,
+        "dy_px": dy_px,
         "optimizer_residual_px": _geometry_fit_trace_optimizer_residual_px(entry),
         "detector_residual_px": _geometry_fit_metric_float(
             entry.get("distance_px", np.nan)
@@ -9201,6 +9255,12 @@ def _build_geometry_fit_trace_records(
 
     full_beam_summary = getattr(result, "full_beam_polish_summary", None)
     point_match_summary = getattr(result, "point_match_summary", None)
+    debug_summary = getattr(result, "geometry_fit_debug_summary", None)
+    debug_vars = (
+        [str(name) for name in debug_summary.get("var_names", ()) or ()]
+        if isinstance(debug_summary, Mapping)
+        else []
+    )
     run_stage_timings: dict[str, object] = {}
     if isinstance(prepared_run.stage_timing_s, Mapping):
         run_stage_timings.update(
@@ -9234,7 +9294,57 @@ def _build_geometry_fit_trace_records(
             "detector_rms_px": _geometry_fit_metric_float(
                 geometry_fit_result_rms(result)
             ),
+            "fit_quality_passed": bool(
+                full_beam_summary.get("fit_quality_passed", False)
+                if isinstance(full_beam_summary, Mapping)
+                else False
+            ),
             "final_metric_name": str(getattr(result, "final_metric_name", "") or ""),
+            "selection_status": (
+                str(full_beam_summary.get("selection_status", "") or "")
+                if isinstance(full_beam_summary, Mapping)
+                else ""
+            ),
+            "selected_candidate_name": (
+                str(full_beam_summary.get("selected_candidate_name", "") or "")
+                if isinstance(full_beam_summary, Mapping)
+                else ""
+            ),
+            "selected_candidate_source": (
+                str(full_beam_summary.get("selected_candidate_source", "") or "")
+                if isinstance(full_beam_summary, Mapping)
+                else ""
+            ),
+            "best_valid_raw_detector_candidate_name": (
+                str(full_beam_summary.get("best_valid_raw_detector_candidate_name", "") or "")
+                if isinstance(full_beam_summary, Mapping)
+                else ""
+            ),
+            "best_valid_raw_detector_candidate_source": (
+                str(full_beam_summary.get("best_valid_raw_detector_candidate_source", "") or "")
+                if isinstance(full_beam_summary, Mapping)
+                else ""
+            ),
+            "constraint_count": int(
+                full_beam_summary.get("constraint_count", 0)
+                if isinstance(full_beam_summary, Mapping)
+                else 0
+            ),
+            "active_fit_variable_count": int(
+                full_beam_summary.get("active_fit_variable_count", len(debug_vars))
+                if isinstance(full_beam_summary, Mapping)
+                else len(debug_vars)
+            ),
+            "active_fit_variables": _geometry_fit_cache_jsonable(
+                full_beam_summary.get("active_fit_variables", debug_vars)
+                if isinstance(full_beam_summary, Mapping)
+                else debug_vars
+            ),
+            "candidate_ledger": _geometry_fit_cache_jsonable(
+                full_beam_summary.get("candidate_ledger")
+                if isinstance(full_beam_summary, Mapping)
+                else None
+            ),
             "dynamic_point_geometry_fit": bool(
                 getattr(result, "geometry_fit_debug_summary", {}).get(
                     "dynamic_point_geometry_fit",
@@ -9491,6 +9601,62 @@ def _build_geometry_fit_trace_records(
                         0,
                         int(dataset.get("pair_count", 0) or 0)
                         - len(dataset_seed_records),
+                    ),
+                )
+            )
+
+    start_point_records = []
+    if isinstance(full_beam_summary, Mapping):
+        raw_start_point_records = full_beam_summary.get("start_point_match_diagnostics", ())
+        if isinstance(raw_start_point_records, Sequence) and not isinstance(
+            raw_start_point_records,
+            (str, bytes, bytearray),
+        ):
+            start_point_records = [
+                dict(entry)
+                for entry in raw_start_point_records
+                if isinstance(entry, Mapping)
+            ]
+    for entry in start_point_records:
+        dataset_index = int(entry.get("dataset_index", 0) or 0)
+        dataset = next(
+            (
+                dict(item)
+                for item in prepared_run.dataset_infos or []
+                if isinstance(item, Mapping)
+                and int(item.get("dataset_index", -1)) == int(dataset_index)
+            ),
+            {"dataset_index": int(dataset_index)},
+        )
+        records.append(
+            _geometry_fit_trace_pair_record(
+                phase="requested_start_correspondence",
+                dataset_info=dataset,
+                entry=entry,
+                fit_run_id=str(fit_run_id),
+            )
+        )
+    if start_point_records:
+        for raw_dataset in prepared_run.dataset_infos or []:
+            if not isinstance(raw_dataset, Mapping):
+                continue
+            dataset = dict(raw_dataset)
+            dataset_start_records = [
+                dict(entry)
+                for entry in start_point_records
+                if int(entry.get("dataset_index", 0) or 0)
+                == int(dataset.get("dataset_index", 0) or 0)
+            ]
+            records.append(
+                _geometry_fit_phase_summary_record(
+                    phase="requested_start_correspondence",
+                    dataset_info=dataset,
+                    entries=dataset_start_records,
+                    fit_run_id=str(fit_run_id),
+                    dropped_pair_count=max(
+                        0,
+                        int(dataset.get("pair_count", 0) or 0)
+                        - len(dataset_start_records),
                     ),
                 )
             )

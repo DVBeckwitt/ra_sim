@@ -76,6 +76,7 @@ from ra_sim.io.data_loading import (
     save_gui_state_file,
 )
 from ra_sim.fitting.optimization import (
+    _measured_detector_anchor,
     build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
@@ -2075,6 +2076,101 @@ def _geometry_overlay_frame_diagnostics(
     )
 
 
+def _build_picked_frame_lookup_point(entry: object) -> tuple[float, float] | None:
+    point = None
+    if isinstance(entry, dict):
+        try:
+            point, _reason = _measured_detector_anchor(entry)
+        except Exception:
+            point = None
+        if point is None:
+            try:
+                point = (
+                    float(entry.get("x", np.nan)),
+                    float(entry.get("y", np.nan)),
+                )
+            except Exception:
+                point = None
+    elif isinstance(entry, (list, tuple)) and len(entry) >= 5:
+        try:
+            point = (float(entry[3]), float(entry[4]))
+        except Exception:
+            point = None
+    if point is None:
+        return None
+    try:
+        x_val = float(point[0])
+        y_val = float(point[1])
+    except Exception:
+        return None
+    if not (np.isfinite(x_val) and np.isfinite(y_val)):
+        return None
+    return float(x_val), float(y_val)
+
+
+def _point_matches_logged_measurement(
+    point: object,
+    *,
+    measured_point: tuple[float, float],
+) -> bool:
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return False
+    try:
+        px = float(point[0])
+        py = float(point[1])
+    except Exception:
+        return False
+    mx, my = measured_point
+    return math.isclose(px, mx, abs_tol=1e-9) and math.isclose(py, my, abs_tol=1e-9)
+
+
+def _find_picked_frame_for_logged_measurement(
+    picked_frames: Sequence[dict[str, object]],
+    *,
+    label: str,
+    measured_point: tuple[float, float],
+) -> dict[str, object] | None:
+    candidates = [
+        frame
+        for frame in picked_frames
+        if isinstance(frame, dict) and str(frame.get("label")) == str(label)
+    ]
+    for point_key in ("lookup", "native", "fit"):
+        for frame in candidates:
+            if _point_matches_logged_measurement(
+                frame.get(point_key),
+                measured_point=measured_point,
+            ):
+                return frame
+    return None
+
+
+def _format_logged_measurement_context(
+    frame_entry: Mapping[str, object] | None,
+    *,
+    measured_point: tuple[float, float],
+) -> str:
+    mx, my = measured_point
+    if not isinstance(frame_entry, Mapping):
+        return f"lookup=({mx:.3f}, {my:.3f})"
+    parts = [
+        f"display=({float(frame_entry['display'][0]):.3f}, {float(frame_entry['display'][1]):.3f})",
+        f"native=({float(frame_entry['native'][0]):.3f}, {float(frame_entry['native'][1]):.3f})",
+        f"lookup=({mx:.3f}, {my:.3f})",
+    ]
+    fit_point = frame_entry.get("fit")
+    if isinstance(fit_point, (list, tuple)) and len(fit_point) >= 2:
+        try:
+            fit_x = float(fit_point[0])
+            fit_y = float(fit_point[1])
+        except Exception:
+            fit_x = float("nan")
+            fit_y = float("nan")
+        if np.isfinite(fit_x) and np.isfinite(fit_y):
+            parts.append(f"fit=({fit_x:.3f}, {fit_y:.3f})")
+    return ", ".join(parts)
+
+
 # Measured peaks are collected interactively in the current GUI workflow.
 # Keep this list for compatibility, but avoid loading a large file at startup.
 def _initialize_runtime_root_block_01() -> None:
@@ -3515,9 +3611,9 @@ def _refine_geometry_manual_pair_entry_from_cache(
         return updated_entry
 
     refined_tth, refined_phi = gui_manual_geometry.geometry_manual_refine_preview_point(
-        dict(resolved_source_entry),
-        float(seed_tth),
-        float(seed_phi),
+        source_entry=resolved_source_entry,
+        raw_col=float(seed_tth),
+        raw_row=float(seed_phi),
         display_background=caked_sim_image,
         cache_data=sim_refine_cache,
         use_caked_space=True,
@@ -3723,9 +3819,9 @@ def _refine_current_geometry_manual_pairs() -> None:
             continue
 
         refined_tth, refined_phi = gui_manual_geometry.geometry_manual_refine_preview_point(
-            dict(source_entry),
-            float(seed_tth),
-            float(seed_phi),
+            source_entry=source_entry,
+            raw_col=float(seed_tth),
+            raw_row=float(seed_phi),
             display_background=caked_sim_image,
             cache_data=sim_refine_cache,
             use_caked_space=True,
@@ -10297,15 +10393,28 @@ def _extract_fit_quality_text() -> str:
 
 
 def _current_app_shell_view_mode() -> str:
+    shell_view_state = globals().get("app_shell_view_state")
     selected_mode = (
-        str(getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")() or "detector")
+        str(
+            getattr(
+                getattr(shell_view_state, "view_mode_var", None),
+                "get",
+                lambda: "detector",
+            )()
+            or "detector"
+        )
         .strip()
         .lower()
     )
     if selected_mode not in {"detector", "caked", "q_space"}:
         selected_mode = "detector"
+    analysis_controls_state = globals().get("analysis_view_controls_view_state")
     show_caked = bool(
-        getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
+        getattr(
+            getattr(analysis_controls_state, "show_caked_2d_var", None),
+            "get",
+            lambda: False,
+        )()
     )
     if selected_mode == "q_space":
         return "q_space"
@@ -16051,6 +16160,30 @@ def _restore_gui_state_peak_record(
     return record
 
 
+def _sanitize_gui_state_peak_record(
+    record: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    if not isinstance(record, Mapping):
+        return None
+    sanitized = dict(record)
+    try:
+        gui_manual_geometry._strip_live_source_trust_fields(sanitized)
+    except Exception:
+        sanitized.pop("source_reflection_index", None)
+        sanitized.pop("source_reflection_namespace", None)
+        sanitized.pop("source_reflection_is_full", None)
+    return sanitized
+
+
+def _exportable_gui_state_peak_records() -> list[dict[str, object]]:
+    export_records: list[dict[str, object]] = []
+    for raw_record in simulation_runtime_state.peak_records or ():
+        sanitized = _sanitize_gui_state_peak_record(raw_record)
+        if sanitized is not None:
+            export_records.append(sanitized)
+    return export_records
+
+
 def _replace_gui_state_peak_cache(
     peak_records: Sequence[object] | None,
 ) -> None:
@@ -16059,6 +16192,9 @@ def _replace_gui_state_peak_cache(
     normalized_records: list[dict[str, object]] = []
     for raw_record in peak_records or ():
         record = _restore_gui_state_peak_record(raw_record)
+        if record is None:
+            continue
+        record = _sanitize_gui_state_peak_record(record)
         if record is None:
             continue
 
@@ -16090,6 +16226,14 @@ def _replace_gui_state_peak_cache(
     restored_positions: list[tuple[float, float]] = []
     restored_millers: list[tuple[int, int, int]] = []
     restored_intensities: list[float] = []
+    use_caked_display = bool(_active_caked_primary_view())
+    try:
+        restored_view_sig = gui_peak_selection._peak_overlay_restored_view_signature(
+            simulation_runtime_state,
+            show_caked=use_caked_display,
+        )
+    except Exception:
+        restored_view_sig = None
     for normalized_record in normalized_records:
         projected_record: Mapping[str, object] | None = None
         if callable(_project_geometry_manual_peaks_to_current_view):
@@ -16108,8 +16252,17 @@ def _replace_gui_state_peak_cache(
         if not isinstance(record, Mapping):
             continue
         try:
-            display_col = float(record.get("sim_col", record.get("display_col", np.nan)))
-            display_row = float(record.get("sim_row", record.get("display_row", np.nan)))
+            active_point = gui_manual_geometry._geometry_manual_entry_active_view_point(
+                record,
+                use_caked_display=use_caked_display,
+            )
+        except Exception:
+            active_point = None
+        if active_point is None:
+            continue
+        try:
+            display_col = float(active_point[0])
+            display_row = float(active_point[1])
         except Exception:
             continue
         if not (np.isfinite(display_col) and np.isfinite(display_row)):
@@ -16134,9 +16287,25 @@ def _replace_gui_state_peak_cache(
         if not np.isfinite(intensity):
             intensity = 0.0
 
-        normalized_record = dict(record)
-        normalized_record["sim_col"] = float(display_col)
-        normalized_record["sim_row"] = float(display_row)
+        normalized_record = _sanitize_gui_state_peak_record(record)
+        if normalized_record is None:
+            continue
+        try:
+            detector_point = gui_manual_geometry._geometry_manual_entry_detector_display_point(
+                record
+            )
+        except Exception:
+            detector_point = None
+        if detector_point is not None:
+            normalized_record["sim_col"] = float(detector_point[0])
+            normalized_record["sim_row"] = float(detector_point[1])
+            normalized_record["sim_col_raw"] = float(detector_point[0])
+            normalized_record["sim_row_raw"] = float(detector_point[1])
+        else:
+            normalized_record.pop("sim_col", None)
+            normalized_record.pop("sim_row", None)
+            normalized_record.pop("sim_col_raw", None)
+            normalized_record.pop("sim_row_raw", None)
         normalized_record["display_col"] = float(display_col)
         normalized_record["display_row"] = float(display_row)
         normalized_record["hkl"] = hkl_triplet
@@ -16150,7 +16319,7 @@ def _replace_gui_state_peak_cache(
 
     simulation_runtime_state.peak_records = restored_records
     simulation_runtime_state.peak_positions = restored_positions
-    simulation_runtime_state.peak_positions_filtered = True
+    simulation_runtime_state.peak_positions_filtered = False
     simulation_runtime_state.peak_millers = restored_millers
     simulation_runtime_state.peak_intensities = restored_intensities
     simulation_runtime_state.selected_peak_record = None
@@ -16162,11 +16331,17 @@ def _replace_gui_state_peak_cache(
             "intensities": list(restored_intensities),
             "records": [dict(record) for record in restored_records],
             "click_spatial_index": None,
-            "peak_positions_filtered": True,
-            "restored_from_gui_state": bool(restored_records),
+            "peak_positions_filtered": False,
+            "restored_from_gui_state": True,
+            "restored_view_sig": restored_view_sig,
         }
     else:
-        simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
+        simulation_runtime_state.peak_overlay_cache = {
+            **_empty_peak_overlay_cache(),
+            "peak_positions_filtered": False,
+            "restored_from_gui_state": True,
+            "restored_view_sig": restored_view_sig,
+        }
     _invalidate_geometry_manual_pick_cache()
 
 
@@ -16180,7 +16355,7 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         geometry_disabled_qr_sets=geometry_q_group_state.disabled_qr_sets,
         geometry_disabled_qz_sections=geometry_q_group_state.disabled_qz_sections,
         geometry_manual_pairs=_geometry_manual_pairs_export_rows(),
-        geometry_peak_records=simulation_runtime_state.peak_records,
+        geometry_peak_records=_exportable_gui_state_peak_records(),
         selected_hkl_target=peak_selection_state.selected_hkl_target,
         primary_cif_path=_current_primary_cif_path(),
         secondary_cif_path=structure_model_state.cif_file2,
@@ -17523,6 +17698,15 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
             projected_rows = [
                 dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)
             ]
+    try:
+        projected_rows = gui_controllers.filter_enabled_q_group_rows(
+            projected_rows,
+            geometry_q_group_state,
+        )
+    except Exception:
+        projected_rows = [
+            dict(entry) for entry in projected_rows or () if isinstance(entry, Mapping)
+        ]
 
     restored_records: list[dict[str, object]] = []
     restored_positions: list[tuple[float, float]] = []
@@ -17585,7 +17769,7 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
 
     simulation_runtime_state.peak_records = restored_records
     simulation_runtime_state.peak_positions = restored_positions
-    simulation_runtime_state.peak_positions_filtered = False
+    simulation_runtime_state.peak_positions_filtered = True
     simulation_runtime_state.peak_millers = restored_millers
     simulation_runtime_state.peak_intensities = restored_intensities
     simulation_runtime_state.selected_peak_record = None
@@ -17600,7 +17784,7 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
             "intensities": list(restored_intensities),
             "records": [dict(record) for record in restored_records],
             "click_spatial_index": None,
-            "peak_positions_filtered": False,
+            "peak_positions_filtered": True,
             "restored_from_gui_state": False,
         }
     else:
@@ -20123,6 +20307,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                         frame_entry["fit"] = (float(entry_fit.get("x")), float(entry_fit.get("y")))
                     elif isinstance(entry_fit, (list, tuple)) and len(entry_fit) >= 5:
                         frame_entry["fit"] = (float(entry_fit[3]), float(entry_fit[4]))
+                    lookup_point = _build_picked_frame_lookup_point(entry_fit)
+                    if lookup_point is not None:
+                        frame_entry["lookup"] = lookup_point
                 _log_section(
                     "Measured peaks used for fitting (after orientation):",
                     [
@@ -20235,26 +20422,14 @@ def _legacy_auto_match_on_fit_geometry_click():
 
                                 dist, dx, dy, sx, sy = best
 
-                                frame_entry = next(
-                                    (
-                                        fr
-                                        for fr in picked_frames
-                                        if math.isclose(
-                                            fr.get("fit", (mx, my))[0], mx, abs_tol=1e-9
-                                        )
-                                        and math.isclose(
-                                            fr.get("fit", (mx, my))[1], my, abs_tol=1e-9
-                                        )
-                                        and fr.get("label") == f"{key[0]},{key[1]},{key[2]}"
-                                    ),
-                                    None,
+                                frame_entry = _find_picked_frame_for_logged_measurement(
+                                    picked_frames,
+                                    label=f"{key[0]},{key[1]},{key[2]}",
+                                    measured_point=(float(mx), float(my)),
                                 )
-                                disp_part = (
-                                    f"display=({frame_entry['display'][0]:.3f}, {frame_entry['display'][1]:.3f}), "
-                                    f"native=({frame_entry['native'][0]:.3f}, {frame_entry['native'][1]:.3f}), "
-                                    f"fit=({mx:.3f}, {my:.3f})"
-                                    if frame_entry
-                                    else f"fit=({mx:.3f}, {my:.3f})"
+                                disp_part = _format_logged_measurement_context(
+                                    frame_entry,
+                                    measured_point=(float(mx), float(my)),
                                 )
 
                                 rows.append(
