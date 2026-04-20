@@ -19,6 +19,7 @@ import concurrent.futures
 import queue
 import faulthandler
 import re
+import threading
 import traceback
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, replace
@@ -2349,6 +2350,7 @@ def _shutdown_gui():
         simulation_runtime_state.geometry_fit_poll_token,
     )
     simulation_runtime_state.geometry_fit_poll_token = None
+    _clear_geometry_fit_late_event_tail_state()
 
     worker_future = simulation_runtime_state.worker_future
     if worker_future is not None:
@@ -13569,6 +13571,10 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.geometry_fit_ready_result = None
     simulation_runtime_state.geometry_fit_error_text = None
     simulation_runtime_state.geometry_fit_event_queue = queue.SimpleQueue()
+    simulation_runtime_state.geometry_fit_late_event_poll_token = None
+    simulation_runtime_state.geometry_fit_pending_late_event_tokens = set()
+    simulation_runtime_state.geometry_fit_pending_late_event_deadlines = {}
+    simulation_runtime_state.geometry_fit_late_event_tail_generation = 0
     simulation_runtime_state.interaction_drag_active = False
     simulation_runtime_state.interaction_settle_token = None
     simulation_runtime_state.interaction_drag_requires_settled_update = False
@@ -25173,6 +25179,144 @@ def _clear_geometry_fit_worker_events() -> None:
             break
 
 
+def _clear_geometry_fit_late_event_tail_state(*, clear_pending: bool = True) -> None:
+    gui_controllers.clear_tk_after_token(
+        root,
+        getattr(simulation_runtime_state, "geometry_fit_late_event_poll_token", None),
+    )
+    simulation_runtime_state.geometry_fit_late_event_poll_token = None
+    try:
+        current_generation = int(
+            getattr(simulation_runtime_state, "geometry_fit_late_event_tail_generation", 0)
+        )
+    except Exception:
+        current_generation = 0
+    simulation_runtime_state.geometry_fit_late_event_tail_generation = (
+        int(current_generation) + 1
+    )
+    if clear_pending:
+        simulation_runtime_state.geometry_fit_pending_late_event_tokens = set()
+        simulation_runtime_state.geometry_fit_pending_late_event_deadlines = {}
+    elif not _geometry_fit_pending_late_event_tokens():
+        simulation_runtime_state.geometry_fit_pending_late_event_deadlines = {}
+
+
+def _geometry_fit_source_cache_event_token(
+    payload_mapping: Mapping[str, object],
+) -> tuple[int, int, int] | None:
+    try:
+        job_id = int(payload_mapping.get("job_id", -1))
+        background_index = int(payload_mapping.get("background_index", -1))
+        generation_id = int(payload_mapping.get("source_cache_generation_id", -1))
+    except Exception:
+        return None
+    if job_id < 0 or background_index < 0 or generation_id < 0:
+        return None
+    return (job_id, background_index, generation_id)
+
+
+def _geometry_fit_pending_late_event_tokens() -> set[tuple[int, int, int]]:
+    tokens = getattr(simulation_runtime_state, "geometry_fit_pending_late_event_tokens", None)
+    if isinstance(tokens, set):
+        return tokens
+    resolved_tokens: set[tuple[int, int, int]] = set()
+    simulation_runtime_state.geometry_fit_pending_late_event_tokens = resolved_tokens
+    return resolved_tokens
+
+
+def _geometry_fit_pending_late_event_deadlines() -> dict[tuple[int, int, int], float]:
+    deadlines = getattr(
+        simulation_runtime_state,
+        "geometry_fit_pending_late_event_deadlines",
+        None,
+    )
+    if isinstance(deadlines, dict):
+        return deadlines
+    resolved_deadlines: dict[tuple[int, int, int], float] = {}
+    simulation_runtime_state.geometry_fit_pending_late_event_deadlines = (
+        resolved_deadlines
+    )
+    return resolved_deadlines
+
+
+def _geometry_fit_late_event_tail_generation() -> int:
+    try:
+        return int(getattr(simulation_runtime_state, "geometry_fit_late_event_tail_generation", 0))
+    except Exception:
+        return 0
+
+
+def _prune_geometry_fit_pending_late_event_tokens() -> set[tuple[int, int, int]]:
+    pending_tokens = _geometry_fit_pending_late_event_tokens()
+    pending_deadlines = _geometry_fit_pending_late_event_deadlines()
+    current_time = float(perf_counter())
+    expired_tokens = [
+        token
+        for token in tuple(pending_tokens)
+        if current_time >= float(pending_deadlines.get(token, float("inf")))
+    ]
+    for token in expired_tokens:
+        pending_tokens.discard(token)
+        pending_deadlines.pop(token, None)
+    if not pending_tokens:
+        pending_deadlines.clear()
+    return pending_tokens
+
+
+def _schedule_geometry_fit_late_event_tail_drain() -> None:
+    pending_tokens = _prune_geometry_fit_pending_late_event_tokens()
+    if not pending_tokens:
+        _clear_geometry_fit_late_event_tail_state(clear_pending=False)
+        return
+    if (
+        getattr(simulation_runtime_state, "geometry_fit_active_job", None) is not None
+        or getattr(simulation_runtime_state, "geometry_fit_future", None) is not None
+    ):
+        return
+    if getattr(simulation_runtime_state, "geometry_fit_late_event_poll_token", None) is not None:
+        return
+    poll_delay_ms = int(globals().get("SIMULATION_WORKER_POLL_MS", 40) or 40)
+    expected_generation = _geometry_fit_late_event_tail_generation()
+
+    def _poll_expected_generation() -> None:
+        _poll_geometry_fit_late_event_tail(expected_generation=expected_generation)
+
+    try:
+        simulation_runtime_state.geometry_fit_late_event_poll_token = root.after(
+            poll_delay_ms,
+            _poll_expected_generation,
+        )
+    except Exception:
+        simulation_runtime_state.geometry_fit_late_event_poll_token = None
+
+
+def _poll_geometry_fit_late_event_tail(*, expected_generation: int | None = None) -> None:
+    simulation_runtime_state.geometry_fit_late_event_poll_token = None
+    if (
+        expected_generation is not None
+        and int(expected_generation) != _geometry_fit_late_event_tail_generation()
+    ):
+        return
+    if (
+        getattr(simulation_runtime_state, "geometry_fit_active_job", None) is not None
+        or getattr(simulation_runtime_state, "geometry_fit_future", None) is not None
+    ):
+        return
+    if not _prune_geometry_fit_pending_late_event_tokens():
+        _clear_geometry_fit_late_event_tail_state(clear_pending=False)
+        return
+    _drain_geometry_fit_worker_events(job_id=None)
+    if (
+        expected_generation is not None
+        and int(expected_generation) != _geometry_fit_late_event_tail_generation()
+    ):
+        return
+    if _prune_geometry_fit_pending_late_event_tokens():
+        _schedule_geometry_fit_late_event_tail_drain()
+    else:
+        _clear_geometry_fit_late_event_tail_state(clear_pending=False)
+
+
 def _geometry_fit_worker_action_result(
     job: Mapping[str, object],
     *,
@@ -25596,11 +25740,74 @@ def _build_geometry_fit_async_job(
     }
 
 
+def _format_source_cache_worker_event_message(
+    event_kind: str,
+    payload_mapping: Mapping[str, object],
+) -> str:
+    if not str(event_kind or "").startswith("source_cache_"):
+        return ""
+    message_text = str(payload_mapping.get("message", "") or "").strip()
+    if message_text:
+        return message_text
+
+    try:
+        background_number = int(payload_mapping.get("background_index", -1)) + 1
+    except Exception:
+        background_number = None
+    row_count = payload_mapping.get("row_count")
+    hit_table_count = payload_mapping.get("hit_table_count")
+    cache_source = str(payload_mapping.get("cache_source", "") or "").strip()
+    status = str(payload_mapping.get("status", "") or "").strip()
+    elapsed_s = payload_mapping.get("elapsed_s")
+    stage_elapsed_s = payload_mapping.get("stage_elapsed_s")
+    late = bool(payload_mapping.get("late", False))
+    generation_id = payload_mapping.get("source_cache_generation_id")
+
+    parts: list[str] = []
+    if background_number is not None and background_number > 0:
+        parts.append(f"background {int(background_number)}")
+    if status:
+        parts.append(f"status={status}")
+    if row_count is not None:
+        try:
+            parts.append(f"rows={int(row_count)}")
+        except Exception:
+            pass
+    if hit_table_count is not None:
+        try:
+            parts.append(f"hit_tables={int(hit_table_count)}")
+        except Exception:
+            pass
+    if cache_source:
+        parts.append(f"cache_source={cache_source}")
+    if elapsed_s is not None:
+        try:
+            parts.append(f"elapsed={float(elapsed_s):.3f}s")
+        except Exception:
+            pass
+    if stage_elapsed_s is not None:
+        try:
+            parts.append(f"stage={float(stage_elapsed_s):.3f}s")
+        except Exception:
+            pass
+    if generation_id is not None:
+        try:
+            parts.append(f"generation={int(generation_id)}")
+        except Exception:
+            pass
+    if late:
+        parts.append("late=true")
+
+    suffix = f" ({', '.join(parts)})" if parts else ""
+    return f"preflight: {str(event_kind)}{suffix}"
+
+
 def _handle_geometry_fit_worker_event(kind: str, payload: object) -> None:
     """Apply one geometry-fit worker event on the Tk/main thread."""
 
     event_kind = str(kind or "")
     payload_mapping = payload if isinstance(payload, Mapping) else {}
+    late_token = _geometry_fit_source_cache_event_token(payload_mapping)
     if event_kind == "cmd_line":
         text = str(payload_mapping.get("text", "") or "").strip()
         if text:
@@ -25619,14 +25826,46 @@ def _handle_geometry_fit_worker_event(kind: str, payload: object) -> None:
         return
 
     message_text = str(payload_mapping.get("message", "") or "")
-    if message_text:
+    source_cache_message = _format_source_cache_worker_event_message(
+        event_kind,
+        payload_mapping,
+    )
+    if event_kind == "source_cache_caked_view_timeout" and late_token is not None:
+        _geometry_fit_pending_late_event_tokens().add(late_token)
+        late_event_grace_s = float(
+            globals().get("GEOMETRY_FIT_LATE_CAKED_EVENT_GRACE_S", 15.0) or 15.0
+        )
+        _geometry_fit_pending_late_event_deadlines()[late_token] = float(
+            perf_counter() + max(0.0, late_event_grace_s)
+        )
+        _schedule_geometry_fit_late_event_tail_drain()
+    elif (
+        event_kind in {"source_cache_caked_view_ready", "source_cache_caked_view_failed"}
+        and bool(payload_mapping.get("late", False))
+        and late_token is not None
+    ):
+        _geometry_fit_pending_late_event_tokens().discard(late_token)
+        _geometry_fit_pending_late_event_deadlines().pop(late_token, None)
+        if _geometry_fit_pending_late_event_tokens():
+            _schedule_geometry_fit_late_event_tail_drain()
+        else:
+            _clear_geometry_fit_late_event_tail_state(clear_pending=False)
+    if event_kind.startswith("source_cache_") and source_cache_message:
+        _geometry_fit_cmd_line(source_cache_message)
+    if event_kind in {
+        "source_cache_build_start",
+        "source_cache_bundle_failed",
+        "source_cache_rows_ready",
+        "source_cache_build_ready",
+        "source_cache_caked_view_start",
+        "source_cache_caked_view_ready",
+        "source_cache_caked_view_failed",
+        "source_cache_caked_view_timeout",
+    }:
+        if source_cache_message and not bool(payload_mapping.get("late", False)):
+            progress_label_geometry.config(text=source_cache_message)
+    elif message_text:
         progress_label_geometry.config(text=message_text)
-        if event_kind in {
-            "source_cache_build_start",
-            "source_cache_build_ready",
-            "source_cache_build_failed",
-        }:
-            _geometry_fit_cmd_line(message_text)
     if event_kind == "preflight_failure":
         error_text = str(
             payload_mapping.get("error_text") or payload_mapping.get("message") or ""
@@ -25658,9 +25897,15 @@ def _drain_geometry_fit_worker_events(*, job_id: int | None = None) -> None:
             event_job_id = -1
         if job_id is not None and int(job_id) != int(event_job_id):
             continue
+        payload = event.get("payload")
+        if isinstance(payload, Mapping):
+            resolved_payload = dict(payload)
+            resolved_payload.setdefault("job_id", int(event_job_id))
+        else:
+            resolved_payload = payload
         _handle_geometry_fit_worker_event(
             str(event.get("kind", "") or ""),
-            event.get("payload"),
+            resolved_payload,
         )
 
 
@@ -25703,6 +25948,36 @@ def _run_async_geometry_fit_worker_job(
     worker_geometry_fit_caking_sig: (
         tuple[float | None, float | None, float | None, float | None] | None
     ) = None
+    source_cache_generation_lock = threading.Lock()
+    source_cache_generation_by_background = dict(
+        job_data.get("source_cache_generation_by_background", {}) or {}
+    )
+    caked_view_timeout_s = 5.0
+
+    def _current_source_cache_generation(background_index: int) -> int:
+        with source_cache_generation_lock:
+            return int(source_cache_generation_by_background.get(int(background_index), 0))
+
+    def _advance_source_cache_generation(background_index: int) -> int:
+        with source_cache_generation_lock:
+            next_generation = (
+                int(source_cache_generation_by_background.get(int(background_index), 0)) + 1
+            )
+            source_cache_generation_by_background[int(background_index)] = int(
+                next_generation
+            )
+            job_data["source_cache_generation_by_background"] = dict(
+                source_cache_generation_by_background
+            )
+            return int(next_generation)
+
+    def _source_cache_generation_matches(
+        background_index: int,
+        generation_id: int | None,
+    ) -> bool:
+        if generation_id is None:
+            return True
+        return int(_current_source_cache_generation(background_index)) == int(generation_id)
 
     def _set_worker_source_snapshot_diagnostics(**kwargs) -> None:
         worker_source_snapshot_diagnostics.clear()
@@ -25777,7 +26052,7 @@ def _run_async_geometry_fit_worker_job(
 
     def _store_worker_background_cache_bundle(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
-    ) -> None:
+    ) -> int:
         worker_background_cache_by_index[int(bundle.background_index)] = bundle
         worker_source_row_snapshots[int(bundle.background_index)] = {
             "background_index": int(bundle.background_index),
@@ -25786,6 +26061,7 @@ def _run_async_geometry_fit_worker_job(
             "row_count": int(len(bundle.stored_rows or ())),
             "created_from": str(bundle.cache_source or "geometry_fit_background_cache"),
         }
+        return _advance_source_cache_generation(int(bundle.background_index))
 
     def _build_geometry_fit_background_cache_bundle(
         *,
@@ -25915,20 +26191,88 @@ def _run_async_geometry_fit_worker_job(
 
     def _store_worker_caked_view_for_background(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+        *,
+        stage_callback: gui_geometry_fit.GeometryFitStageCallback | None = None,
+        source_cache_generation_id: int | None = None,
     ) -> dict[str, object]:
+        helper_started_at = perf_counter()
+        background_idx = int(bundle.background_index)
+        resolved_background_label = str(bundle.background_label or f"background {background_idx + 1}")
+        row_count = int(len(bundle.projected_rows or bundle.stored_rows or ()))
+
+        def _emit_caked_stage(
+            stage: str,
+            *,
+            stage_started_at: float | None = None,
+            **payload: object,
+        ) -> None:
+            event_payload = {
+                "background_index": int(background_idx),
+                "background_label": resolved_background_label,
+                "source_cache_generation_id": (
+                    int(source_cache_generation_id)
+                    if source_cache_generation_id is not None
+                    else None
+                ),
+                "row_count": int(row_count),
+                "elapsed_s": float(max(0.0, perf_counter() - helper_started_at)),
+                **payload,
+            }
+            if stage_started_at is not None:
+                event_payload["stage_elapsed_s"] = float(
+                    max(0.0, perf_counter() - stage_started_at)
+                )
+            gui_geometry_fit._emit_geometry_fit_stage_event(
+                stage_callback,
+                str(stage),
+                **event_payload,
+            )
+
+        def _caked_result(
+            status: str,
+            *,
+            caked_view_stored: bool,
+            roi_enabled: bool = False,
+            roi_used_restricted_cake: bool = False,
+            roi_pixel_count: int = 0,
+            roi_fraction: float = 0.0,
+            roi_fallback_reason: str | None = None,
+            roi_half_width_px: float = 0.0,
+        ) -> dict[str, object]:
+            return {
+                "background_index": int(background_idx),
+                "background_label": resolved_background_label,
+                "source_cache_generation_id": (
+                    int(source_cache_generation_id)
+                    if source_cache_generation_id is not None
+                    else None
+                ),
+                "row_count": int(row_count),
+                "caked_view_stored": bool(caked_view_stored),
+                "caked_view_status": str(status),
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": (
+                    str(roi_fallback_reason)
+                    if roi_fallback_reason is not None
+                    else None
+                ),
+                "roi_half_width_px": float(roi_half_width_px),
+                "elapsed_s": float(max(0.0, perf_counter() - helper_started_at)),
+            }
+
         caked_views_by_background = job_data.setdefault("caked_views_by_background", {})
         background_images = dict(job_data.get("background_images", {}) or {})
         background_payload = dict(background_images.get(int(bundle.background_index)) or {})
         native_background = background_payload.get("native")
         if native_background is None:
-            return {
-                "roi_enabled": False,
-                "roi_used_restricted_cake": False,
-                "roi_pixel_count": 0,
-                "roi_fraction": 0.0,
-                "roi_fallback_reason": "missing_native_background",
-                "roi_half_width_px": 0.0,
-            }
+            return _caked_result(
+                "missing_native_background",
+                caked_view_stored=False,
+                roi_fallback_reason="missing_native_background",
+            )
 
         backend_background = np.asarray(native_background, dtype=np.float64)
         apply_backend_orientation = job_data.get("apply_background_backend_orientation")
@@ -25979,6 +26323,8 @@ def _run_async_geometry_fit_worker_job(
             )
             if isinstance(precomputed_caked_view, dict):
                 background_caked_view.update(precomputed_caked_view)
+        roi_selection_started_at = perf_counter()
+        _emit_caked_stage("source_cache_caked_roi_selection_start")
         roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection(
             bundle.stored_rows,
             required_pairs=list(
@@ -26004,6 +26350,19 @@ def _run_async_geometry_fit_worker_job(
         roi_half_width_px = float(roi_selection.get("half_width_px", 0.0) or 0.0)
         roi_fallback_reason = roi_selection.get("fallback_reason")
         roi_used_restricted_cake = bool(roi_selection.get("valid", False))
+        _emit_caked_stage(
+            "source_cache_caked_roi_selection_ready",
+            stage_started_at=roi_selection_started_at,
+            status="ready",
+            roi_enabled=bool(roi_enabled),
+            roi_used_restricted_cake=bool(roi_used_restricted_cake),
+            roi_pixel_count=int(roi_pixel_count),
+            roi_fraction=float(roi_fraction),
+            roi_fallback_reason=(
+                str(roi_fallback_reason) if roi_fallback_reason is not None else None
+            ),
+            roi_half_width_px=float(roi_half_width_px),
+        )
 
         rows = cols = None
         if roi_used_restricted_cake:
@@ -26017,38 +26376,74 @@ def _run_async_geometry_fit_worker_job(
 
         ai = worker_ai
         if ai is None:
-            return {
-                "roi_enabled": bool(roi_enabled),
-                "roi_used_restricted_cake": False,
-                "roi_pixel_count": int(roi_pixel_count),
-                "roi_fraction": float(roi_fraction),
-                "roi_fallback_reason": "missing_integrator",
-                "roi_half_width_px": float(roi_half_width_px),
-            }
+            return _caked_result(
+                "missing_integrator",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_integrator",
+                roi_half_width_px=float(roi_half_width_px),
+            )
 
-        try:
-            with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
-                res2 = caking(
-                    backend_background,
-                    ai,
-                    rows=rows,
-                    cols=cols,
+        res2 = None
+        if roi_used_restricted_cake:
+            restricted_started_at = perf_counter()
+            _emit_caked_stage(
+                "source_cache_restricted_cake_start",
+                roi_pixel_count=int(roi_pixel_count),
+            )
+            try:
+                with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+                    res2 = caking(
+                        backend_background,
+                        ai,
+                        rows=rows,
+                        cols=cols,
+                    )
+                _emit_caked_stage(
+                    "source_cache_restricted_cake_ready",
+                    stage_started_at=restricted_started_at,
+                    status="ready",
+                    roi_pixel_count=int(roi_pixel_count),
                 )
-        except Exception as exc:
-            if roi_used_restricted_cake:
+            except Exception as exc:
+                _emit_caked_stage(
+                    "source_cache_restricted_cake_failed",
+                    stage_started_at=restricted_started_at,
+                    status=f"exception:{type(exc).__name__}",
+                    roi_pixel_count=int(roi_pixel_count),
+                )
                 roi_used_restricted_cake = False
                 roi_fallback_reason = f"restricted_cake_exception:{type(exc).__name__}"
+
+        if res2 is None:
+            full_started_at = perf_counter()
+            _emit_caked_stage("source_cache_full_cake_start")
+            try:
                 with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
                     res2 = caking(backend_background, ai)
-            else:
-                return {
-                    "roi_enabled": bool(roi_enabled),
-                    "roi_used_restricted_cake": False,
-                    "roi_pixel_count": int(roi_pixel_count),
-                    "roi_fraction": float(roi_fraction),
-                    "roi_fallback_reason": f"full_cake_exception:{type(exc).__name__}",
-                    "roi_half_width_px": float(roi_half_width_px),
-                }
+                _emit_caked_stage(
+                    "source_cache_full_cake_ready",
+                    stage_started_at=full_started_at,
+                    status="ready",
+                )
+            except Exception as exc:
+                _emit_caked_stage(
+                    "source_cache_full_cake_failed",
+                    stage_started_at=full_started_at,
+                    status=f"exception:{type(exc).__name__}",
+                )
+                return _caked_result(
+                    f"full_cake_exception:{type(exc).__name__}",
+                    caked_view_stored=False,
+                    roi_enabled=bool(roi_enabled),
+                    roi_used_restricted_cake=False,
+                    roi_pixel_count=int(roi_pixel_count),
+                    roi_fraction=float(roi_fraction),
+                    roi_fallback_reason=f"full_cake_exception:{type(exc).__name__}",
+                    roi_half_width_px=float(roi_half_width_px),
+                )
 
         caked_payload = _prepare_caked_display_payload(
             res2,
@@ -26056,14 +26451,33 @@ def _run_async_geometry_fit_worker_job(
             detector_shape=backend_background.shape,
         )
         if not isinstance(caked_payload, Mapping):
-            return {
-                "roi_enabled": bool(roi_enabled),
-                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
-                "roi_pixel_count": int(roi_pixel_count),
-                "roi_fraction": float(roi_fraction),
-                "roi_fallback_reason": "invalid_caked_payload",
-                "roi_half_width_px": float(roi_half_width_px),
-            }
+            return _caked_result(
+                "invalid_caked_payload",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="invalid_caked_payload",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+
+        if not _source_cache_generation_matches(
+            background_idx,
+            source_cache_generation_id,
+        ):
+            return _caked_result(
+                "stale_generation",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=(
+                    str(roi_fallback_reason) if roi_fallback_reason is not None else None
+                ),
+                roi_half_width_px=float(roi_half_width_px),
+            )
 
         try:
             caked_views_by_background[int(bundle.background_index)] = {
@@ -26092,25 +26506,29 @@ def _run_async_geometry_fit_worker_job(
                 "roi_half_width_px": float(roi_half_width_px),
             }
         except Exception:
-            return {
-                "roi_enabled": bool(roi_enabled),
-                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
-                "roi_pixel_count": int(roi_pixel_count),
-                "roi_fraction": float(roi_fraction),
-                "roi_fallback_reason": "store_caked_payload_failed",
-                "roi_half_width_px": float(roi_half_width_px),
-            }
+            return _caked_result(
+                "store_caked_payload_failed",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="store_caked_payload_failed",
+                roi_half_width_px=float(roi_half_width_px),
+            )
 
-        return {
-            "roi_enabled": bool(roi_enabled),
-            "roi_used_restricted_cake": bool(roi_used_restricted_cake),
-            "roi_pixel_count": int(roi_pixel_count),
-            "roi_fraction": float(roi_fraction),
-            "roi_fallback_reason": (
+        return _caked_result(
+            "stored",
+            caked_view_stored=True,
+            roi_enabled=bool(roi_enabled),
+            roi_used_restricted_cake=bool(roi_used_restricted_cake),
+            roi_pixel_count=int(roi_pixel_count),
+            roi_fraction=float(roi_fraction),
+            roi_fallback_reason=(
                 str(roi_fallback_reason) if roi_fallback_reason is not None else None
             ),
-            "roi_half_width_px": float(roi_half_width_px),
-        }
+            roi_half_width_px=float(roi_half_width_px),
+        )
 
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
@@ -26139,6 +26557,7 @@ def _run_async_geometry_fit_worker_job(
         consumer: str = "geometry_fit_preflight_cache",
         prior_diagnostics: Mapping[str, object] | None = None,
         required_pairs: Sequence[Mapping[str, object]] | None = None,
+        stage_callback: gui_geometry_fit.GeometryFitStageCallback | None = None,
     ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle | None:
         background_idx = int(background_index)
         params_local = dict(job_data.get("params", {}) or {})
@@ -26288,6 +26707,7 @@ def _run_async_geometry_fit_worker_job(
             project_rows=_project_source_rows,
             required_pairs=required_pairs,
             live_cache_inventory=job_data.get("live_cache_inventory", {}),
+            stage_callback=stage_callback,
         )
         _set_worker_source_snapshot_diagnostics(**dict(rebuild_result.diagnostics or {}))
         worker_simulation_diagnostics.clear()
@@ -26311,6 +26731,152 @@ def _run_async_geometry_fit_worker_job(
             _store_worker_background_cache_bundle(bundle)
             return bundle
         return None
+
+    def _emit_source_cache_caked_view_event(
+        kind: str,
+        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        payload: Mapping[str, object] | None = None,
+        late: bool = False,
+    ) -> None:
+        resolved_payload = dict(payload or {})
+        resolved_payload.setdefault("background_index", int(bundle.background_index))
+        resolved_payload.setdefault("background_label", str(bundle.background_label))
+        resolved_payload.setdefault(
+            "source_cache_generation_id",
+            int(source_cache_generation_id),
+        )
+        resolved_payload.setdefault(
+            "row_count",
+            int(len(bundle.projected_rows or bundle.stored_rows or ())),
+        )
+        resolved_payload.setdefault(
+            "elapsed_s",
+            float(max(0.0, perf_counter() - started_at)),
+        )
+        if late:
+            resolved_payload["late"] = True
+        if kind == "source_cache_caked_view_ready":
+            resolved_payload.setdefault(
+                "message",
+                (
+                    "preflight: caked view storage ready for "
+                    f"background {int(bundle.background_index) + 1} "
+                    f"(status={str(resolved_payload.get('caked_view_status', 'stored'))})"
+                ),
+            )
+        elif kind == "source_cache_caked_view_timeout":
+            resolved_payload.setdefault(
+                "status",
+                "timeout",
+            )
+            resolved_payload.setdefault(
+                "message",
+                (
+                    "preflight: caked view storage timeout for "
+                    f"background {int(bundle.background_index) + 1} "
+                    f"(waited {float(caked_view_timeout_s):.1f}s)"
+                ),
+            )
+        else:
+            resolved_payload.setdefault(
+                "message",
+                (
+                    "preflight: caked view storage failed for "
+                    f"background {int(bundle.background_index) + 1} "
+                    f"(status={str(resolved_payload.get('caked_view_status', resolved_payload.get('status', 'failed')))})"
+                ),
+            )
+        _emit_worker_event(str(kind), resolved_payload)
+
+    def _start_non_gating_caked_view_task(
+        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        stage_callback: gui_geometry_fit.GeometryFitStageCallback | None = None,
+    ) -> tuple[Callable[[float], dict[str, object] | None], Callable[[], None]]:
+        task_state_lock = threading.Lock()
+        timeout_announced = threading.Event()
+        task_state: dict[str, object] = {
+            "done": False,
+            "timed_out": False,
+            "outcome": None,
+        }
+
+        def _worker() -> None:
+            try:
+                outcome = _store_worker_caked_view_for_background(
+                    bundle,
+                    stage_callback=stage_callback,
+                    source_cache_generation_id=source_cache_generation_id,
+                )
+            except Exception as exc:
+                outcome = {
+                    "caked_view_stored": False,
+                    "caked_view_status": f"exception:{type(exc).__name__}",
+                    "status": f"exception:{type(exc).__name__}",
+                    "background_index": int(bundle.background_index),
+                    "background_label": str(bundle.background_label),
+                    "source_cache_generation_id": int(source_cache_generation_id),
+                    "row_count": int(len(bundle.projected_rows or bundle.stored_rows or ())),
+                    "elapsed_s": float(max(0.0, perf_counter() - started_at)),
+                }
+
+            should_emit_late = False
+            with task_state_lock:
+                task_state["done"] = True
+                task_state["outcome"] = dict(outcome or {})
+                should_emit_late = bool(task_state.get("timed_out", False))
+            if not should_emit_late:
+                return
+            if not _source_cache_generation_matches(
+                int(bundle.background_index),
+                int(source_cache_generation_id),
+            ):
+                return
+            timeout_announced.wait()
+            resolved_outcome = dict(outcome or {})
+            event_kind = (
+                "source_cache_caked_view_ready"
+                if bool(resolved_outcome.get("caked_view_stored", False))
+                else "source_cache_caked_view_failed"
+            )
+            _emit_source_cache_caked_view_event(
+                event_kind,
+                bundle,
+                source_cache_generation_id=int(source_cache_generation_id),
+                started_at=started_at,
+                payload=resolved_outcome,
+                late=True,
+            )
+
+        threading.Thread(
+            target=_worker,
+            name=f"geometry-fit-caked-{job_id}-{int(bundle.background_index)}",
+            daemon=True,
+        ).start()
+
+        def _await_initial_result(timeout_s: float) -> dict[str, object] | None:
+            deadline = perf_counter() + max(0.0, float(timeout_s))
+            while perf_counter() < deadline:
+                with task_state_lock:
+                    if bool(task_state.get("done", False)):
+                        outcome = dict(task_state.get("outcome") or {})
+                        task_state["outcome"] = None
+                        return outcome
+                threading.Event().wait(0.01)
+            with task_state_lock:
+                if bool(task_state.get("done", False)):
+                    outcome = dict(task_state.get("outcome") or {})
+                    task_state["outcome"] = None
+                    return outcome
+                task_state["timed_out"] = True
+            return None
+
+        return _await_initial_result, timeout_announced.set
 
     def _rebuild_source_rows_for_background_worker(
         background_index: int,
@@ -26486,30 +27052,49 @@ def _run_async_geometry_fit_worker_job(
     def _prebuild_required_background_caches() -> None:
         required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
         for background_idx in required_indices:
+            prebuild_started_at = perf_counter()
             background_label = dict(job_data.get("background_labels", {}) or {}).get(
                 int(background_idx),
                 f"background {int(background_idx) + 1}",
+            )
+            required_pairs = list(
+                dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                    int(background_idx),
+                    (),
+                )
+                or ()
             )
             _emit_worker_event(
                 "source_cache_build_start",
                 {
                     "background_index": int(background_idx),
                     "background_label": str(background_label),
+                    "elapsed_s": 0.0,
                     "message": (
                         f"preflight: building source cache for background {int(background_idx) + 1}"
+                    ),
+                },
+            )
+            bundle_started_at = perf_counter()
+            _emit_worker_event(
+                "source_cache_bundle_start",
+                {
+                    "background_index": int(background_idx),
+                    "background_label": str(background_label),
+                    "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
+                    "status": "starting",
+                    "required_pair_count": int(len(required_pairs)),
+                    "message": (
+                        "preflight: source cache bundle start for "
+                        f"background {int(background_idx) + 1}"
                     ),
                 },
             )
             bundle = _prebuild_background_cache_bundle_worker(
                 int(background_idx),
                 theta_base=float(_theta_base_for_background_worker(int(background_idx))),
-                required_pairs=list(
-                    dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
-                        int(background_idx),
-                        (),
-                    )
-                    or ()
-                ),
+                required_pairs=required_pairs,
+                stage_callback=_stage_callback,
             )
             if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
                 failure_status = str(
@@ -26519,35 +27104,116 @@ def _run_async_geometry_fit_worker_job(
                     )
                 )
                 _emit_worker_event(
-                    "source_cache_build_failed",
+                    "source_cache_bundle_failed",
                     {
                         "background_index": int(background_idx),
                         "background_label": str(background_label),
                         "status": failure_status,
+                        "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
+                        "stage_elapsed_s": float(
+                            max(0.0, perf_counter() - bundle_started_at)
+                        ),
                         "message": (
-                            "preflight: source cache failed for "
+                            "preflight: source cache bundle failed for "
                             f"background {int(background_idx) + 1} "
                             f"(status={failure_status})"
                         ),
                     },
                 )
                 continue
+            bundle_row_count = int(len(bundle.projected_rows or bundle.stored_rows or ()))
+            source_cache_generation_id = int(
+                _current_source_cache_generation(int(background_idx))
+            )
+            bundle_payload = {
+                "background_index": int(background_idx),
+                "background_label": str(background_label),
+                "source_cache_generation_id": int(source_cache_generation_id),
+                "cache_source": str(bundle.cache_source or "unknown"),
+                "row_count": int(bundle_row_count),
+                "required_pair_count": int(len(required_pairs)),
+                "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
+                "stage_elapsed_s": float(max(0.0, perf_counter() - bundle_started_at)),
+            }
+            _emit_worker_event(
+                "source_cache_bundle_ready",
+                {
+                    **bundle_payload,
+                    "status": "ready",
+                    "message": (
+                        "preflight: source cache bundle ready for "
+                        f"background {int(background_idx) + 1} "
+                        f"({int(bundle_row_count)} rows via {str(bundle.cache_source or 'unknown')})"
+                    ),
+                },
+            )
+            _emit_worker_event(
+                "source_cache_rows_ready",
+                {
+                    **bundle_payload,
+                    "status": "rows_ready",
+                    "message": (
+                        "preflight: source cache rows ready for "
+                        f"background {int(background_idx) + 1} "
+                        f"({int(bundle_row_count)} rows via {str(bundle.cache_source or 'unknown')})"
+                    ),
+                },
+            )
             _emit_worker_event(
                 "source_cache_build_ready",
                 {
-                    "background_index": int(background_idx),
-                    "background_label": str(background_label),
-                    "cache_source": str(bundle.cache_source or "unknown"),
-                    "row_count": int(len(bundle.projected_rows or ())),
-                    **dict(_store_worker_caked_view_for_background(bundle) or {}),
+                    **bundle_payload,
+                    "status": "ready",
                     "message": (
                         "preflight: source cache ready for "
                         f"background {int(background_idx) + 1} "
-                        f"({int(len(bundle.projected_rows or ()))} rows via "
+                        f"({int(bundle_row_count)} rows via "
                         f"{str(bundle.cache_source or 'unknown')})"
                     ),
                 },
             )
+            caked_started_at = perf_counter()
+            _emit_worker_event(
+                "source_cache_caked_view_start",
+                {
+                    **bundle_payload,
+                    "status": "starting",
+                    "message": (
+                        "preflight: caked view storage start for "
+                        f"background {int(background_idx) + 1}"
+                    ),
+                },
+            )
+            await_caked_result, announce_caked_timeout = _start_non_gating_caked_view_task(
+                bundle,
+                source_cache_generation_id=int(source_cache_generation_id),
+                started_at=caked_started_at,
+                stage_callback=_stage_callback,
+            )
+            caked_outcome = await_caked_result(float(caked_view_timeout_s))
+            if isinstance(caked_outcome, Mapping):
+                resolved_caked_outcome = dict(caked_outcome)
+                event_kind = (
+                    "source_cache_caked_view_ready"
+                    if bool(resolved_caked_outcome.get("caked_view_stored", False))
+                    else "source_cache_caked_view_failed"
+                )
+                _emit_source_cache_caked_view_event(
+                    event_kind,
+                    bundle,
+                    source_cache_generation_id=int(source_cache_generation_id),
+                    started_at=caked_started_at,
+                    payload=resolved_caked_outcome,
+                )
+            else:
+                _emit_source_cache_caked_view_event(
+                    "source_cache_caked_view_timeout",
+                    bundle,
+                    source_cache_generation_id=int(source_cache_generation_id),
+                    started_at=caked_started_at,
+                    payload={"status": "timeout"},
+                )
+                announce_caked_timeout()
 
     worker_manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=list(job_data.get("osc_files", ()) or ()),
@@ -26767,6 +27433,7 @@ def _run_async_geometry_fit_worker_job(
 
 
 def _submit_async_geometry_fit_job(job: dict[str, object]) -> None:
+    _clear_geometry_fit_late_event_tail_state()
     simulation_runtime_state.geometry_fit_active_job = dict(job)
     simulation_runtime_state.geometry_fit_ready_result = None
     simulation_runtime_state.geometry_fit_future = _ensure_geometry_fit_worker_executor().submit(
@@ -26797,6 +27464,7 @@ def _finish_geometry_fit_async_job(
     _set_geometry_fit_button_running(False)
     if action_result is not None:
         _show_geometry_fit_action_notice(action_result)
+    _schedule_geometry_fit_late_event_tail_drain()
 
 
 def _consume_ready_geometry_fit_result() -> None:

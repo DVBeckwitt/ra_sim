@@ -7405,6 +7405,218 @@ def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_require
     ]
 
 
+def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live_runtime_cache() -> None:
+    live_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        }
+    ]
+    stage_events: list[tuple[str, dict[str, object]]] = []
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=True,
+        build_live_rows=lambda: list(live_rows),
+        get_memory_intersection_cache=lambda: pytest.fail(
+            "accepted live runtime cache should not touch memory cache"
+        ),
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "accepted live runtime cache should not touch logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: pytest.fail(
+            "accepted live runtime cache should not check logged cache params"
+        ),
+        build_source_rows_from_hit_tables=lambda _tables: pytest.fail(
+            "accepted live runtime cache should not rebuild source rows"
+        ),
+        simulate_hit_tables=lambda _params: pytest.fail(
+            "accepted live runtime cache should not run fresh simulation"
+        ),
+        last_runtime_simulation_diagnostics=lambda: {"status": "unused"},
+        project_rows=None,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("q", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        ],
+        live_cache_inventory={"source_snapshot_count": 1},
+        stage_callback=lambda stage, payload: stage_events.append(
+            (str(stage), dict(payload))
+        ),
+    )
+
+    assert result.rebuild_source == "live_runtime_cache"
+    assert [stage for stage, _payload in stage_events] == [
+        "source_cache_live_runtime_cache_validation_start",
+        "source_cache_live_runtime_cache_validation_ready",
+        "source_cache_live_runtime_cache_accepted",
+        "source_cache_project_rows_start",
+        "source_cache_project_rows_ready",
+    ]
+    accepted_payload = stage_events[2][1]
+    assert accepted_payload["row_count"] == 1
+    assert accepted_payload["required_pair_count"] == 1
+    assert accepted_payload["validated_pair_count"] == 1
+
+
+def test_validate_geometry_fit_live_source_rows_rejection_counts_follow_hkl_then_branch() -> None:
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [
+            {
+                "hkl": (1, 0, 0),
+                "q_group_key": ("q", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 0,
+            },
+            {
+                "hkl": (2, 0, 0),
+                "q_group_key": ("q", 2),
+                "source_reflection_index": 8,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 1,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            },
+        ],
+        required_pairs=[
+            {
+                "pair_id": "hkl-miss",
+                "overlay_match_index": 0,
+                "hkl": (9, 9, 9),
+                "q_group_key": ("q", 1),
+                "source_reflection_index": 70,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_branch_index": 1,
+            },
+            {
+                "pair_id": "branch-miss",
+                "overlay_match_index": 1,
+                "hkl": (2, 0, 0),
+                "q_group_key": ("q", 2),
+                "source_reflection_index": 80,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_branch_index": 0,
+            },
+        ],
+    )
+
+    assert validation["valid"] is False
+    assert validation["missing_required_pair_count"] == 2
+    assert validation["hkl_missing_candidate_count"] == 1
+    assert validation["branch_mismatch_count"] == 1
+    pair_failures = {
+        str(entry["pair_id"]): dict(entry) for entry in validation["pair_failures"]
+    }
+    assert pair_failures["hkl-miss"]["candidate_count_total"] == 1
+    assert pair_failures["hkl-miss"]["candidate_count_after_hkl_filter"] == 0
+    assert pair_failures["hkl-miss"]["candidate_count_after_branch_filter"] == 0
+    assert pair_failures["branch-miss"]["candidate_count_total"] == 1
+    assert pair_failures["branch-miss"]["candidate_count_after_hkl_filter"] == 1
+    assert pair_failures["branch-miss"]["candidate_count_after_branch_filter"] == 0
+
+
+def test_rebuild_geometry_fit_source_rows_stage_callback_failure_does_not_abort() -> None:
+    live_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        }
+    ]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=True,
+        build_live_rows=lambda: list(live_rows),
+        get_memory_intersection_cache=lambda: pytest.fail(
+            "stage callback failure should not force memory cache fallback"
+        ),
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "stage callback failure should not force logged cache fallback"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: pytest.fail(
+            "stage callback failure should not touch logged cache params"
+        ),
+        build_source_rows_from_hit_tables=lambda _tables: pytest.fail(
+            "stage callback failure should not rebuild source rows"
+        ),
+        simulate_hit_tables=lambda _params: pytest.fail(
+            "stage callback failure should not run fresh simulation"
+        ),
+        last_runtime_simulation_diagnostics=lambda: {"status": "unused"},
+        project_rows=None,
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("q", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        ],
+        live_cache_inventory={"source_snapshot_count": 1},
+        stage_callback=lambda _stage, _payload: (_ for _ in ()).throw(
+            RuntimeError("callback boom")
+        ),
+    )
+
+    assert result.rebuild_source == "live_runtime_cache"
+    assert result.diagnostics["stage_callback_failure_count"] == 5
+    assert (
+        result.diagnostics["stage_callback_last_failed_stage"]
+        == "source_cache_project_rows_ready"
+    )
+
+
 def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_active_pairs() -> None:
     peak_records = [
         {
@@ -13446,6 +13658,8 @@ def test_validate_geometry_fit_live_source_rows_drops_trusted_deadband_branch() 
     )
 
     assert validation["valid"] is False
+    assert validation["branch_mismatch_count"] == 0
+    assert validation["hkl_missing_candidate_count"] == 0
     assert validation["pair_failures"] == [
         {
             "pair_id": "bg0:pair0",
@@ -13458,9 +13672,84 @@ def test_validate_geometry_fit_live_source_rows_drops_trusted_deadband_branch() 
             "source_peak_index": 0,
             "source_branch_index": None,
             "trusted_identity_required": True,
+            "candidate_count_total": 2,
+            "candidate_count_after_hkl_filter": 2,
+            "candidate_count_after_branch_filter": 0,
             "branch_candidates": [],
         }
     ]
+
+
+def test_validate_geometry_fit_live_source_rows_excludes_saved_input_failures_from_rejection_counts() -> None:
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [
+            {
+                "hkl": (1, 0, 0),
+                "q_group_key": ("q", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 0,
+                "source_branch_index": 1,
+                "source_peak_index": 0,
+            },
+            {
+                "hkl": (2, 0, 0),
+                "q_group_key": ("q", 2),
+                "source_reflection_index": 8,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 1,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            },
+        ],
+        required_pairs=[
+            {
+                "pair_id": "missing-branch",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "q_group_key": ("q", 1),
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+            },
+            {
+                "pair_id": "missing-trusted-row",
+                "overlay_match_index": 1,
+                "hkl": (2, 0, 0),
+                "q_group_key": ("q", 2),
+                "source_reflection_index": 8,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 99,
+                "source_branch_index": 1,
+            },
+        ],
+    )
+
+    assert validation["valid"] is False
+    assert validation["missing_required_pair_count"] == 2
+    assert validation["branch_mismatch_count"] == 0
+    assert validation["hkl_missing_candidate_count"] == 0
+    pair_failures = {
+        str(entry["pair_id"]): dict(entry) for entry in validation["pair_failures"]
+    }
+    assert pair_failures["missing-branch"]["reason"] == "missing_branch"
+    assert pair_failures["missing-branch"]["candidate_count_total"] == 1
+    assert pair_failures["missing-branch"]["candidate_count_after_hkl_filter"] == 1
+    assert pair_failures["missing-branch"]["candidate_count_after_branch_filter"] == 0
+    assert (
+        pair_failures["missing-trusted-row"]["reason"]
+        == "missing_trusted_reflection_row"
+    )
+    assert pair_failures["missing-trusted-row"]["candidate_count_total"] == 1
+    assert (
+        pair_failures["missing-trusted-row"]["candidate_count_after_hkl_filter"] == 1
+    )
+    assert (
+        pair_failures["missing-trusted-row"]["candidate_count_after_branch_filter"] == 1
+    )
 
 
 def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> None:

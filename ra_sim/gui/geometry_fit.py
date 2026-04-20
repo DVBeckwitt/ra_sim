@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -12,6 +13,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -124,6 +126,103 @@ def _geometry_fit_raw_azimuth_axis_from_display_axis(
     except Exception:
         return None
     return _geometry_fit_float64_vector(raw_azimuth_vec)
+
+
+def _geometry_fit_projection_signature(
+    payload: Mapping[str, object] | None,
+) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        canonical = json.dumps(
+            _geometry_fit_cache_jsonable(dict(payload)),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except Exception:
+        return None
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+
+
+def _geometry_fit_transform_driven_param_payload(
+    params: Mapping[str, object] | None,
+) -> dict[str, object]:
+    center_row = None
+    center_col = None
+    if isinstance(params, Mapping):
+        center = list(params.get("center", []))
+        if len(center) >= 2:
+            try:
+                center_row = float(center[0])
+                center_col = float(center[1])
+            except Exception:
+                center_row = None
+                center_col = None
+    try:
+        detector_distance = (
+            float(params.get("corto_detector", np.nan))
+            if isinstance(params, Mapping)
+            else float("nan")
+        )
+    except Exception:
+        detector_distance = float("nan")
+    pixel_size_info = _fit_space_pixel_size_provenance(params or {})
+    try:
+        gamma_value = (
+            float(params.get("gamma", np.nan))
+            if isinstance(params, Mapping)
+            else float("nan")
+        )
+    except Exception:
+        gamma_value = float("nan")
+    try:
+        Gamma_value = (
+            float(params.get("Gamma", np.nan))
+            if isinstance(params, Mapping)
+            else float("nan")
+        )
+    except Exception:
+        Gamma_value = float("nan")
+    pixel_size_value = float(pixel_size_info.get("value", np.nan))
+    return {
+        "center_row": center_row,
+        "center_col": center_col,
+        "detector_distance": (
+            float(detector_distance) if np.isfinite(detector_distance) else None
+        ),
+        "pixel_size": (
+            float(pixel_size_value) if np.isfinite(pixel_size_value) else None
+        ),
+        "pixel_size_source": str(pixel_size_info.get("source", "") or ""),
+        "gamma": float(gamma_value) if np.isfinite(gamma_value) else None,
+        "Gamma": float(Gamma_value) if np.isfinite(Gamma_value) else None,
+    }
+
+
+def _geometry_fit_cake_bundle_signature(
+    bundle: CakeTransformBundle | None,
+    *,
+    local_params: Mapping[str, object] | None,
+) -> str | None:
+    if not isinstance(bundle, CakeTransformBundle):
+        return None
+    return _geometry_fit_projection_signature(
+        {
+            "detector_shape": _geometry_fit_cache_jsonable(
+                getattr(bundle, "detector_shape", None)
+            ),
+            "radial_deg": _geometry_fit_cache_jsonable(
+                getattr(bundle, "radial_deg", None)
+            ),
+            "gui_azimuth_deg": _geometry_fit_cache_jsonable(
+                getattr(bundle, "gui_azimuth_deg", None)
+            ),
+            "raw_azimuth_deg": _geometry_fit_cache_jsonable(
+                getattr(bundle, "raw_azimuth_deg", None)
+            ),
+            "local_params": _geometry_fit_transform_driven_param_payload(local_params),
+        }
+    )
 
 
 def _geometry_fit_display_azimuth_axis_from_raw_axis(
@@ -452,6 +551,10 @@ class GeometryFitRuntimeManualDatasetBindings:
             [float, float, Sequence[object] | None],
             tuple[float | None, float | None],
         ]
+        | None
+    ) = None
+    native_detector_coords_to_bundle_detector_coords: (
+        Callable[[float, float], tuple[float | None, float | None]]
         | None
     ) = None
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None
@@ -1337,6 +1440,9 @@ def validate_geometry_fit_live_source_rows(
         failure_reason: str | None = None
         resolution_kind: str | None = None
         branch_candidates: list[dict[str, object]] = []
+        candidate_count_total = 0
+        candidate_count_after_hkl_filter = 0
+        candidate_count_after_branch_filter = 0
 
         if trusted_identity and entry_branch_idx not in {0, 1}:
             failure_reason = str(entry_branch_reason)
@@ -1379,7 +1485,7 @@ def validate_geometry_fit_live_source_rows(
                     candidate = dict(peak_candidate)
                     resolution_kind = "source_peak"
 
-        if candidate is None and not trusted_identity:
+        if candidate is None:
             candidate_pool: list[dict[str, object]] = []
             q_group_key = entry.get("q_group_key")
             if q_group_key is not None:
@@ -1396,13 +1502,17 @@ def validate_geometry_fit_live_source_rows(
                         for item in canonical_by_hkl.get(hkl_key, ())
                         if isinstance(item, Mapping)
                     ]
-            candidate_pool = _geometry_fit_filter_branch_candidates(entry, candidate_pool)
+            candidate_count_total = int(len(candidate_pool))
             candidate_pool = [
                 dict(item)
                 for item in candidate_pool
                 if _geometry_fit_source_entry_hkl_matches(entry, item)
             ]
+            candidate_count_after_hkl_filter = int(len(candidate_pool))
+            candidate_pool = _geometry_fit_filter_branch_candidates(entry, candidate_pool)
+            candidate_count_after_branch_filter = int(len(candidate_pool))
             branch_candidates = _geometry_fit_trace_candidate_inventory(candidate_pool)
+        if candidate is None and not trusted_identity:
             if len(candidate_pool) == 1:
                 candidate = dict(candidate_pool[0])
                 resolution_kind = "q_group_or_hkl"
@@ -1422,6 +1532,13 @@ def validate_geometry_fit_live_source_rows(
                     "source_peak_index": entry.get("source_peak_index"),
                     "source_branch_index": _geometry_fit_source_branch_index(entry),
                     "trusted_identity_required": bool(trusted_identity),
+                    "candidate_count_total": int(candidate_count_total),
+                    "candidate_count_after_hkl_filter": int(
+                        candidate_count_after_hkl_filter
+                    ),
+                    "candidate_count_after_branch_filter": int(
+                        candidate_count_after_branch_filter
+                    ),
                     "branch_candidates": branch_candidates,
                 }
             )
@@ -1441,6 +1558,25 @@ def validate_geometry_fit_live_source_rows(
         for key, count in canonical_id_counts.items()
         if int(count) > 1
     }
+    hkl_missing_candidate_count = 0
+    branch_mismatch_count = 0
+    for failure in pair_failures:
+        if str(failure.get("reason", "") or "") != "missing_canonical_candidate":
+            continue
+        candidate_count_total = int(failure.get("candidate_count_total", 0) or 0)
+        candidate_count_after_hkl_filter = int(
+            failure.get("candidate_count_after_hkl_filter", 0) or 0
+        )
+        candidate_count_after_branch_filter = int(
+            failure.get("candidate_count_after_branch_filter", 0) or 0
+        )
+        if candidate_count_total > 0 and candidate_count_after_hkl_filter == 0:
+            hkl_missing_candidate_count += 1
+        elif (
+            candidate_count_after_hkl_filter > 0
+            and candidate_count_after_branch_filter == 0
+        ):
+            branch_mismatch_count += 1
     return {
         "valid": not pair_failures,
         "row_count": int(len(rows)),
@@ -1449,6 +1585,9 @@ def validate_geometry_fit_live_source_rows(
         "canonical_branch_id_count": int(canonical_branch_count),
         "required_pair_count": int(validated_pair_count),
         "validated_pair_count": int(validated_pair_count),
+        "missing_required_pair_count": int(len(pair_failures)),
+        "branch_mismatch_count": int(branch_mismatch_count),
+        "hkl_missing_candidate_count": int(hkl_missing_candidate_count),
         "pair_failures": pair_failures,
         "resolved_pairs": resolved_pairs,
         "invalid_rows": invalid_rows,
@@ -1498,6 +1637,7 @@ def rebuild_geometry_fit_source_rows(
     live_cache_inventory: Mapping[str, object]
     | Callable[[], Mapping[str, object]]
     | None = None,
+    stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitSourceRowRebuildResult:
     """Rebuild source rows without mutating runtime state."""
 
@@ -1512,6 +1652,47 @@ def rebuild_geometry_fit_source_rows(
     rebuild_attempts: list[str] = []
     live_cache_validation: dict[str, object] | None = None
     live_runtime_cache_metadata: dict[str, object] = {}
+    rebuild_started_at = perf_counter()
+    stage_callback_failure_count = 0
+    stage_callback_last_failed_stage: str | None = None
+
+    def _emit_rebuild_stage(
+        stage: str,
+        *,
+        stage_started_at: float | None = None,
+        **payload: object,
+    ) -> None:
+        nonlocal stage_callback_failure_count, stage_callback_last_failed_stage
+        if not callable(stage_callback):
+            return
+        event_payload = {
+            "background_index": int(background_idx),
+            "background_label": resolved_background_label,
+            "elapsed_s": float(max(0.0, perf_counter() - rebuild_started_at)),
+            **payload,
+        }
+        if stage_started_at is not None:
+            event_payload["stage_elapsed_s"] = float(
+                max(0.0, perf_counter() - stage_started_at)
+            )
+        try:
+            stage_callback(str(stage), dict(event_payload))
+        except Exception:
+            stage_callback_failure_count += 1
+            stage_callback_last_failed_stage = str(stage)
+
+    def _finalize_diagnostics(
+        diagnostics_local: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        finalized = dict(diagnostics_local or {})
+        if stage_callback_failure_count > 0:
+            finalized["stage_callback_failure_count"] = int(
+                stage_callback_failure_count
+            )
+            finalized["stage_callback_last_failed_stage"] = str(
+                stage_callback_last_failed_stage or ""
+            )
+        return finalized
 
     def _copy_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [
@@ -1588,29 +1769,76 @@ def rebuild_geometry_fit_source_rows(
         return merged
 
     def _project_copied_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
+        project_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_project_rows_start",
+            cache_source="projection",
+            row_count=int(len(raw_rows or ())),
+        )
         projected_rows = raw_rows
+        project_status = "projected"
         if callable(project_rows):
             try:
                 projected_rows = project_rows(raw_rows)
-            except Exception:
+            except Exception as exc:
                 projected_rows = raw_rows
-        return _copy_rows(projected_rows)
+                project_status = f"project_rows_exception:{type(exc).__name__}"
+        copied_projected_rows = _copy_rows(projected_rows)
+        _emit_rebuild_stage(
+            "source_cache_project_rows_ready",
+            stage_started_at=project_started_at,
+            cache_source="projection",
+            row_count=int(len(copied_projected_rows)),
+            status=project_status,
+        )
+        return copied_projected_rows
 
     def _build_source_rows_result(
         hit_tables_local: Sequence[object],
+        *,
+        cache_source: str,
     ) -> tuple[
         Sequence[object],
         Sequence[object] | None,
         Sequence[object] | None,
         Sequence[int] | None,
     ]:
+        build_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_build_source_rows_start",
+            cache_source=str(cache_source),
+            hit_table_count=int(len(hit_tables_local or ())),
+        )
         raw_result = build_source_rows_from_hit_tables(hit_tables_local)
+        rows_for_count: Sequence[object] | None = raw_result
         if isinstance(raw_result, tuple):
             if len(raw_result) == 4:
+                rows_for_count = raw_result[0]
+                _emit_rebuild_stage(
+                    "source_cache_build_source_rows_ready",
+                    stage_started_at=build_started_at,
+                    cache_source=str(cache_source),
+                    hit_table_count=int(len(hit_tables_local or ())),
+                    row_count=int(len(rows_for_count or ())),
+                )
                 return raw_result
             if len(raw_result) == 3:
                 rows, peak_table_lattice, returned_hit_tables = raw_result
+                _emit_rebuild_stage(
+                    "source_cache_build_source_rows_ready",
+                    stage_started_at=build_started_at,
+                    cache_source=str(cache_source),
+                    hit_table_count=int(len(hit_tables_local or ())),
+                    row_count=int(len(rows or ())),
+                )
                 return rows, peak_table_lattice, returned_hit_tables, None
+        _emit_rebuild_stage(
+            "source_cache_build_source_rows_ready",
+            stage_started_at=build_started_at,
+            cache_source=str(cache_source),
+            hit_table_count=int(len(hit_tables_local or ())),
+            row_count=int(len(rows_for_count or ())),
+        )
         return raw_result, None, None, None
 
     def _success_result(
@@ -1657,29 +1885,30 @@ def rebuild_geometry_fit_source_rows(
                     )
         diagnostics = _merge_runtime_simulation_diagnostics(
             {
-            "source": "source_snapshot",
-            "cache_family": "source_snapshot",
-            "action": "rebuild",
-            "consumer": lookup_context,
-            "status": "snapshot_hit",
-            "background_index": int(background_idx),
-            "background_label": resolved_background_label,
-            "requested_signature": requested_signature,
-            "requested_signature_summary": requested_signature_summary,
-            "snapshot_signature": requested_signature,
-            "stored_signature_summary": requested_signature_summary,
-            "raw_peak_count": int(len(stored_rows)),
-            "projected_peak_count": int(len(projected_rows)),
-            "created_from": str(rebuild_source),
-            "cache_source": "source_snapshot_rebuild",
-            "rebuild_source": str(rebuild_source),
-            "signature_match": True,
-            "rebuild_attempts": list(rebuild_attempts),
-            "cache_metadata": cache_metadata,
-            "live_cache_inventory": _resolve_live_cache_inventory(),
+                "source": "source_snapshot",
+                "cache_family": "source_snapshot",
+                "action": "rebuild",
+                "consumer": lookup_context,
+                "status": "snapshot_hit",
+                "background_index": int(background_idx),
+                "background_label": resolved_background_label,
+                "requested_signature": requested_signature,
+                "requested_signature_summary": requested_signature_summary,
+                "snapshot_signature": requested_signature,
+                "stored_signature_summary": requested_signature_summary,
+                "raw_peak_count": int(len(stored_rows)),
+                "projected_peak_count": int(len(projected_rows)),
+                "created_from": str(rebuild_source),
+                "cache_source": "source_snapshot_rebuild",
+                "rebuild_source": str(rebuild_source),
+                "signature_match": True,
+                "rebuild_attempts": list(rebuild_attempts),
+                "cache_metadata": cache_metadata,
+                "live_cache_inventory": _resolve_live_cache_inventory(),
             },
             runtime_simulation_diagnostics,
         )
+        diagnostics = _finalize_diagnostics(diagnostics)
         return GeometryFitSourceRowRebuildResult(
             background_index=int(background_idx),
             requested_signature=requested_signature,
@@ -1703,6 +1932,11 @@ def rebuild_geometry_fit_source_rows(
 
     if can_use_live_runtime_cache and callable(build_live_rows):
         rebuild_attempts.append("live_runtime_cache")
+        validation_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_live_runtime_cache_validation_start",
+            cache_source="live_runtime_cache",
+        )
         live_rows, live_runtime_cache_metadata = _resolve_live_rows_payload(
             build_live_rows()
         )
@@ -1711,20 +1945,117 @@ def rebuild_geometry_fit_source_rows(
                 live_rows,
                 required_pairs=required_pairs,
             )
+            _emit_rebuild_stage(
+                "source_cache_live_runtime_cache_validation_ready",
+                stage_started_at=validation_started_at,
+                cache_source="live_runtime_cache",
+                status=str(
+                    live_cache_validation.get("status")
+                    or ("valid" if live_cache_validation.get("valid") else "invalid")
+                ),
+                row_count=int(len(live_rows)),
+                required_pair_count=int(
+                    live_cache_validation.get("required_pair_count", 0) or 0
+                ),
+                validated_pair_count=int(
+                    live_cache_validation.get("validated_pair_count", 0) or 0
+                ),
+                missing_required_pair_count=int(
+                    live_cache_validation.get("missing_required_pair_count", 0) or 0
+                ),
+                branch_mismatch_count=int(
+                    live_cache_validation.get("branch_mismatch_count", 0) or 0
+                ),
+                hkl_missing_candidate_count=int(
+                    live_cache_validation.get("hkl_missing_candidate_count", 0) or 0
+                ),
+            )
             if bool(live_cache_validation.get("valid", False)):
+                _emit_rebuild_stage(
+                    "source_cache_live_runtime_cache_accepted",
+                    cache_source="live_runtime_cache",
+                    status="accepted",
+                    row_count=int(len(live_rows)),
+                    required_pair_count=int(
+                        live_cache_validation.get("required_pair_count", 0) or 0
+                    ),
+                    validated_pair_count=int(
+                        live_cache_validation.get("validated_pair_count", 0) or 0
+                    ),
+                )
                 return _success_result(
                     live_rows,
                     rebuild_source="live_runtime_cache",
                 )
+            _emit_rebuild_stage(
+                "source_cache_live_runtime_cache_rejected",
+                cache_source="live_runtime_cache",
+                status=str(live_cache_validation.get("status") or "validation_failed"),
+                row_count=int(len(live_rows)),
+                required_pair_count=int(
+                    live_cache_validation.get("required_pair_count", 0) or 0
+                ),
+                validated_pair_count=int(
+                    live_cache_validation.get("validated_pair_count", 0) or 0
+                ),
+                missing_required_pair_count=int(
+                    live_cache_validation.get("missing_required_pair_count", 0) or 0
+                ),
+                branch_mismatch_count=int(
+                    live_cache_validation.get("branch_mismatch_count", 0) or 0
+                ),
+                hkl_missing_candidate_count=int(
+                    live_cache_validation.get("hkl_missing_candidate_count", 0) or 0
+                ),
+            )
             rebuild_attempts.append("live_runtime_cache_validation_failed")
+        else:
+            _emit_rebuild_stage(
+                "source_cache_live_runtime_cache_validation_ready",
+                stage_started_at=validation_started_at,
+                cache_source="live_runtime_cache",
+                status="empty_live_runtime_cache",
+                row_count=0,
+                required_pair_count=int(len(required_pairs or ())),
+                validated_pair_count=0,
+                missing_required_pair_count=0,
+                branch_mismatch_count=0,
+                hkl_missing_candidate_count=0,
+            )
+            _emit_rebuild_stage(
+                "source_cache_live_runtime_cache_rejected",
+                cache_source="live_runtime_cache",
+                status="empty_live_runtime_cache",
+                row_count=0,
+                required_pair_count=int(len(required_pairs or ())),
+                validated_pair_count=0,
+                missing_required_pair_count=0,
+                branch_mismatch_count=0,
+                hkl_missing_candidate_count=0,
+            )
 
     if (
         memory_cache_signature is not None
         and memory_cache_signature != requested_signature
     ):
         rebuild_attempts.append("last_intersection_cache_memory_signature_mismatch")
+        _emit_rebuild_stage(
+            "source_cache_memory_intersection_cache_start",
+            cache_source="last_intersection_cache_memory",
+        )
+        _emit_rebuild_stage(
+            "source_cache_memory_intersection_cache_miss",
+            cache_source="last_intersection_cache_memory",
+            status="signature_mismatch",
+            row_count=0,
+        )
     else:
         rebuild_attempts.append("last_intersection_cache_memory")
+        memory_cache_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_memory_intersection_cache_start",
+            cache_source="last_intersection_cache_memory",
+        )
         memory_intersection_cache = (
             list(get_memory_intersection_cache() or ())
             if callable(get_memory_intersection_cache)
@@ -1737,8 +2068,26 @@ def rebuild_geometry_fit_source_rows(
         if memory_intersection_cache:
             memory_rows, memory_lattice, memory_hit_tables, memory_source_reflection_indices = (
                 _build_source_rows_result(
-                    memory_intersection_cache
+                    memory_intersection_cache,
+                    cache_source="last_intersection_cache_memory",
                 )
+            )
+            _emit_rebuild_stage(
+                "source_cache_memory_intersection_cache_ready",
+                stage_started_at=memory_cache_started_at,
+                cache_source="last_intersection_cache_memory",
+                row_count=int(len(memory_rows)),
+                hit_table_count=int(len(memory_intersection_cache)),
+                status="ready",
+            )
+        else:
+            _emit_rebuild_stage(
+                "source_cache_memory_intersection_cache_miss",
+                stage_started_at=memory_cache_started_at,
+                cache_source="last_intersection_cache_memory",
+                row_count=0,
+                hit_table_count=0,
+                status="empty_cache",
             )
         if memory_rows:
             return _success_result(
@@ -1751,6 +2100,11 @@ def rebuild_geometry_fit_source_rows(
             )
 
     rebuild_attempts.append("last_intersection_cache_log")
+    logged_cache_started_at = perf_counter()
+    _emit_rebuild_stage(
+        "source_cache_logged_intersection_cache_start",
+        cache_source="last_intersection_cache_log",
+    )
     logged_intersection_cache: Sequence[object] = []
     logged_metadata: Mapping[str, object] | None = None
     if callable(load_logged_intersection_cache):
@@ -1764,7 +2118,16 @@ def rebuild_geometry_fit_source_rows(
         and logged_cache_matches_params(logged_metadata, normalized_params)
     ):
         logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = _build_source_rows_result(
-            logged_intersection_cache
+            logged_intersection_cache,
+            cache_source="last_intersection_cache_log",
+        )
+        _emit_rebuild_stage(
+            "source_cache_logged_intersection_cache_ready",
+            stage_started_at=logged_cache_started_at,
+            cache_source="last_intersection_cache_log",
+            row_count=int(len(logged_rows)),
+            hit_table_count=int(len(logged_intersection_cache)),
+            status="ready",
         )
         if logged_rows:
             return _success_result(
@@ -1776,8 +2139,26 @@ def rebuild_geometry_fit_source_rows(
                 intersection_cache_local=logged_intersection_cache,
                 metadata=logged_metadata,
             )
+    else:
+        _emit_rebuild_stage(
+            "source_cache_logged_intersection_cache_miss",
+            stage_started_at=logged_cache_started_at,
+            cache_source="last_intersection_cache_log",
+            row_count=0,
+            hit_table_count=int(len(logged_intersection_cache or ())),
+            status=(
+                "params_mismatch"
+                if logged_intersection_cache
+                else "empty_cache"
+            ),
+        )
 
     rebuild_attempts.append("fresh_simulation")
+    fresh_started_at = perf_counter()
+    _emit_rebuild_stage(
+        "source_cache_fresh_simulation_start",
+        cache_source="fresh_simulation",
+    )
     fresh_hit_tables: Sequence[object] = []
     fresh_simulation_exception: Exception | None = None
     if callable(simulate_hit_tables):
@@ -1787,8 +2168,24 @@ def rebuild_geometry_fit_source_rows(
             fresh_simulation_exception = exc
             fresh_hit_tables = []
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
+    _emit_rebuild_stage(
+        (
+            "source_cache_fresh_simulation_failed"
+            if fresh_simulation_exception is not None
+            else "source_cache_fresh_simulation_ready"
+        ),
+        stage_started_at=fresh_started_at,
+        cache_source="fresh_simulation",
+        hit_table_count=int(len(fresh_hit_tables or ())),
+        status=(
+            f"exception:{type(fresh_simulation_exception).__name__}"
+            if fresh_simulation_exception is not None
+            else str(runtime_simulation_diagnostics.get("status") or "ready")
+        ),
+    )
     fresh_rows, fresh_lattice, fresh_hit_tables, fresh_source_reflection_indices = _build_source_rows_result(
-        fresh_hit_tables
+        fresh_hit_tables,
+        cache_source="fresh_simulation",
     )
     if fresh_rows:
         return _success_result(
@@ -1812,26 +2209,27 @@ def rebuild_geometry_fit_source_rows(
 
     diagnostics = _merge_runtime_simulation_diagnostics(
         {
-        "source": "source_snapshot",
-        "cache_family": "source_snapshot",
-        "action": "rebuild",
-        "consumer": lookup_context,
-        "status": failure_status,
-        "background_index": int(background_idx),
-        "background_label": resolved_background_label,
-        "requested_signature": requested_signature,
-        "requested_signature_summary": requested_signature_summary,
-        "raw_peak_count": 0,
-        "projected_peak_count": 0,
-        "signature_match": False,
-        "rebuild_attempts": list(rebuild_attempts),
-        "prior_diagnostics": (
-            dict(prior_diagnostics) if isinstance(prior_diagnostics, Mapping) else {}
-        ),
-        "live_cache_inventory": _resolve_live_cache_inventory(),
+            "source": "source_snapshot",
+            "cache_family": "source_snapshot",
+            "action": "rebuild",
+            "consumer": lookup_context,
+            "status": failure_status,
+            "background_index": int(background_idx),
+            "background_label": resolved_background_label,
+            "requested_signature": requested_signature,
+            "requested_signature_summary": requested_signature_summary,
+            "raw_peak_count": 0,
+            "projected_peak_count": 0,
+            "signature_match": False,
+            "rebuild_attempts": list(rebuild_attempts),
+            "prior_diagnostics": (
+                dict(prior_diagnostics) if isinstance(prior_diagnostics, Mapping) else {}
+            ),
+            "live_cache_inventory": _resolve_live_cache_inventory(),
         },
         runtime_simulation_diagnostics,
     )
+    diagnostics = _finalize_diagnostics(diagnostics)
     if isinstance(live_cache_validation, Mapping) and live_cache_validation:
         diagnostics["live_runtime_cache_validation"] = copy.deepcopy(
             dict(live_cache_validation)
@@ -1886,6 +2284,10 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
             [float, float, Sequence[object] | None],
             tuple[float | None, float | None],
         ]
+        | None
+    ) = None,
+    native_detector_coords_to_bundle_detector_coords: (
+        Callable[[float, float], tuple[float | None, float | None]]
         | None
     ) = None,
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
@@ -1948,6 +2350,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         backend_detector_coords_to_native_detector_coords=(
             backend_detector_coords_to_native_detector_coords
         ),
+        native_detector_coords_to_bundle_detector_coords=(
+            native_detector_coords_to_bundle_detector_coords
+        ),
         pick_uses_caked_space=pick_uses_caked_space,
         geometry_manual_caked_view_for_index=geometry_manual_caked_view_for_index,
         geometry_manual_refresh_pair_entry=geometry_manual_refresh_pair_entry,
@@ -1983,6 +2388,10 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             [float, float, Sequence[object] | None],
             tuple[float | None, float | None],
         ]
+        | None
+    ) = None,
+    native_detector_coords_to_bundle_detector_coords: (
+        Callable[[float, float], tuple[float | None, float | None]]
         | None
     ) = None,
     geometry_manual_source_rows_for_background: Callable[..., object] | None = None,
@@ -2049,6 +2458,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             orient_image_for_fit=orient_image_for_fit,
             backend_detector_coords_to_native_detector_coords=(
                 backend_detector_coords_to_native_detector_coords
+            ),
+            native_detector_coords_to_bundle_detector_coords=(
+                native_detector_coords_to_bundle_detector_coords
             ),
             pick_uses_caked_space=pick_uses_caked_space,
             geometry_manual_caked_view_for_index=(

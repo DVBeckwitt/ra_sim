@@ -54,6 +54,101 @@ TRUST_FIELD_ASSIGNMENT_ALLOWLIST = {
 }
 
 
+def _geometry_fit_worker_live_row() -> dict[str, object]:
+    return {
+        "hkl": (1, 0, 0),
+        "q_group_key": ("q", 1),
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+
+
+def _geometry_fit_worker_required_pair() -> dict[str, object]:
+    return {
+        "pair_id": "bg0:pair0",
+        "overlay_match_index": 0,
+        "hkl": (1, 0, 0),
+        "q_group_key": ("q", 1),
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+
+
+def _make_geometry_fit_worker_job(runtime_session) -> dict[str, object]:
+    event_queue = runtime_session.queue.Queue()
+    return {
+        "job_id": 99,
+        "event_queue": event_queue,
+        "params": {
+            "center": [1.0, 1.0],
+            "corto_detector": 0.5,
+            "pixel_size_m": 1.0e-4,
+            "lambda": 1.54e-10,
+            "theta_initial": 0.0,
+        },
+        "var_names": [],
+        "preserve_live_theta": False,
+        "source_snapshots": {},
+        "source_snapshot_diagnostics": {},
+        "simulation_diagnostics": {},
+        "background_images": {
+            0: {
+                "native": np.ones((4, 4), dtype=np.float64),
+                "display": np.ones((4, 4), dtype=np.float64),
+            }
+        },
+        "requested_signatures": {0: ("sig", 0)},
+        "requested_signature_summaries": {0: "sig-summary"},
+        "background_labels": {0: "bg0.osc"},
+        "live_rows_signature": ("sig", 0),
+        "live_rows_by_background": {0: [_geometry_fit_worker_live_row()]},
+        "live_rows_cache_metadata_by_background": {0: {}},
+        "memory_intersection_cache": [],
+        "memory_intersection_cache_signature": ("sig", 0),
+        "manual_pairs_by_background": {0: [_geometry_fit_worker_required_pair()]},
+        "required_indices": [0],
+        "current_background_index": 0,
+        "image_size": 4,
+        "theta_initial": 0.0,
+        "theta_initial_by_background": {0: 0.0},
+        "theta_base_by_background": {0: 0.0},
+        "geometry_runtime_cfg": {},
+        "fit_config": {},
+        "live_cache_inventory": {"source_snapshot_count": 1},
+        "solver_inputs": SimpleNamespace(miller=[], intensities=[], image_size=4),
+        "selected_background_indices": [0],
+        "joint_background_mode": False,
+        "osc_files": ["bg0.osc"],
+        "selection_applied": True,
+        "theta_metadata_applied": True,
+        "background_theta_values": [0.0],
+        "theta_offset": 0.0,
+        "uses_shared_theta": False,
+        "stamp": "20260420_000000",
+        "log_path": REPO_ROOT / "artifacts" / "geometry_fit_worker_test.log",
+        "enable_live_update_events": False,
+    }
+
+
+def _drain_geometry_fit_worker_events(event_queue) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    while True:
+        try:
+            events.append(event_queue.get_nowait())
+        except Exception:
+            return events
+
+
 def _top_level_import_targets(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     targets: list[str] = []
@@ -10247,6 +10342,536 @@ def test_runtime_impl_distinguishes_preview_and_full_worker_jobs() -> None:
         "if isinstance(ready_result, dict) and not _simulation_result_matches_signature(" in source
     )
     assert '_promote_queued_simulation_job(reason="previous_ready_result_consumed")' in source
+
+
+def test_runtime_impl_source_cache_build_ready_no_longer_inlines_caked_store() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "**dict(_store_worker_caked_view_for_background(bundle) or {})" not in source
+    assert '"source_cache_rows_ready"' in source
+    assert '"source_cache_caked_view_start"' in source
+    assert '"source_cache_caked_view_timeout"' in source
+
+
+def test_runtime_session_source_cache_caked_failure_does_not_hide_row_cache_success(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    dataset_calls: list[int] = []
+    job = _make_geometry_fit_worker_job(runtime_session)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_analysis_integrator",
+        lambda _cfg: object(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_worker_caked_projection_view",
+        lambda **_kwargs: {
+            "radial_axis": np.asarray([1.0, 2.0], dtype=float),
+            "azimuth_axis": np.asarray([3.0, 4.0], dtype=float),
+            "transform_bundle": object(),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cake boom")),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: pytest.fail("failed cake should not build payload"),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda background_index, **_kwargs: dataset_calls.append(int(background_index)) or {},
+    )
+
+    def _prepare_geometry_fit_run(**kwargs):
+        kwargs["build_dataset"](
+            0,
+            theta_base=0.0,
+            base_fit_params={"theta_initial": 0.0},
+            orientation_cfg={},
+            stage_callback=kwargs.get("stage_callback"),
+        )
+        return runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+
+    runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert dataset_calls == [0]
+    assert "source_cache_rows_ready" in kinds
+    assert "source_cache_build_ready" in kinds
+    assert "source_cache_caked_view_failed" in kinds
+    assert kinds.index("source_cache_rows_ready") < kinds.index("source_cache_build_ready")
+    assert kinds.index("source_cache_build_ready") < kinds.index("source_cache_caked_view_failed")
+
+
+def test_runtime_session_source_cache_caked_timeout_does_not_hide_row_cache_success(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    dataset_calls: list[int] = []
+    job = _make_geometry_fit_worker_job(runtime_session)
+    perf_lock = threading.Lock()
+    perf_state = {"value": 0.0}
+
+    def _fake_perf_counter() -> float:
+        with perf_lock:
+            perf_state["value"] += 0.25
+            return float(perf_state["value"])
+
+    monkeypatch.setattr(runtime_session, "perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_analysis_integrator",
+        lambda _cfg: object(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_worker_caked_projection_view",
+        lambda **_kwargs: {
+            "radial_axis": np.asarray([1.0, 2.0], dtype=float),
+            "azimuth_axis": np.asarray([3.0, 4.0], dtype=float),
+            "transform_bundle": object(),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: threading.Event().wait(1.0) or object(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.ones((2, 2), dtype=float),
+            "radial": np.asarray([1.0, 2.0], dtype=float),
+            "azimuth": np.asarray([3.0, 4.0], dtype=float),
+            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=float),
+            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
+            "transform_bundle": object(),
+            "detector_shape": (4, 4),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda background_index, **_kwargs: dataset_calls.append(int(background_index)) or {},
+    )
+
+    def _prepare_geometry_fit_run(**kwargs):
+        kwargs["build_dataset"](
+            0,
+            theta_base=0.0,
+            base_fit_params={"theta_initial": 0.0},
+            orientation_cfg={},
+            stage_callback=kwargs.get("stage_callback"),
+        )
+        return runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+
+    runtime_session._run_async_geometry_fit_worker_job(job)
+    threading.Event().wait(0.25)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert dataset_calls == [0]
+    assert "source_cache_build_ready" in kinds
+    assert "source_cache_caked_view_timeout" in kinds
+    assert kinds.index("source_cache_build_ready") < kinds.index("source_cache_caked_view_timeout")
+
+
+def test_runtime_session_late_caked_event_is_drained_after_worker_exit(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cmd_lines: list[str] = []
+    progress_messages: list[str] = []
+    scheduled_callbacks: list[tuple[int, object]] = []
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((int(delay_ms), callback))
+            return f"after-token-{len(scheduled_callbacks)}"
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_cmd_line",
+        lambda text: cmd_lines.append(str(text)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(
+            config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_event_queue=runtime_session.queue.Queue(),
+            geometry_fit_active_job=None,
+            geometry_fit_future=None,
+            geometry_fit_late_event_poll_token=None,
+            geometry_fit_pending_late_event_tokens=set(),
+            geometry_fit_pending_late_event_deadlines={},
+            geometry_fit_late_event_tail_generation=0,
+        ),
+        raising=False,
+    )
+
+    event_queue = runtime_session.simulation_runtime_state.geometry_fit_event_queue
+    event_queue.put(
+        {
+            "job_id": 99,
+            "kind": "source_cache_caked_view_timeout",
+            "payload": {
+                "background_index": 0,
+                "source_cache_generation_id": 7,
+                "status": "timeout",
+                "elapsed_s": 5.0,
+            },
+        }
+    )
+    runtime_session._drain_geometry_fit_worker_events(job_id=99)
+
+    assert runtime_session.simulation_runtime_state.geometry_fit_pending_late_event_tokens == {
+        (99, 0, 7)
+    }
+    assert len(scheduled_callbacks) == 1
+
+    event_queue.put(
+        {
+            "job_id": 99,
+            "kind": "source_cache_caked_view_ready",
+            "payload": {
+                "background_index": 0,
+                "source_cache_generation_id": 7,
+                "caked_view_stored": True,
+                "caked_view_status": "stored",
+                "late": True,
+            },
+        }
+    )
+    _delay_ms, callback = scheduled_callbacks.pop(0)
+    callback()
+
+    assert runtime_session.simulation_runtime_state.geometry_fit_pending_late_event_tokens == set()
+    assert any(
+        "source_cache_caked_view_ready" in line and "late=true" in line
+        for line in cmd_lines
+    )
+    assert len(progress_messages) == 1
+    assert "source_cache_caked_view_timeout" in progress_messages[0]
+
+
+def test_runtime_session_late_caked_events_do_not_overwrite_progress_text(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cmd_lines: list[str] = []
+    progress_messages: list[str] = []
+
+    monkeypatch.setattr(runtime_session, "root", SimpleNamespace(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_cmd_line",
+        lambda text: cmd_lines.append(str(text)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(
+            config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_late_event_poll_token=None,
+            geometry_fit_pending_late_event_tokens=set(),
+            geometry_fit_pending_late_event_deadlines={},
+            geometry_fit_late_event_tail_generation=0,
+            geometry_fit_active_job=None,
+            geometry_fit_future=None,
+        ),
+        raising=False,
+    )
+
+    runtime_session._handle_geometry_fit_worker_event(
+        "source_cache_build_ready",
+        {
+            "job_id": 99,
+            "background_index": 0,
+            "source_cache_generation_id": 7,
+            "row_count": 3,
+        },
+    )
+    runtime_session._handle_geometry_fit_worker_event(
+        "progress_text",
+        {"text": "solver: iter 1"},
+    )
+    runtime_session._handle_geometry_fit_worker_event(
+        "source_cache_caked_view_ready",
+        {
+            "job_id": 99,
+            "background_index": 0,
+            "source_cache_generation_id": 7,
+            "caked_view_stored": True,
+            "caked_view_status": "stored",
+            "late": True,
+        },
+    )
+
+    assert len(progress_messages) >= 2
+    assert "source_cache_build_ready" in progress_messages[0]
+    assert progress_messages[-1] == "solver: iter 1"
+    assert any(
+        "source_cache_caked_view_ready" in line and "late=true" in line
+        for line in cmd_lines
+    )
+
+
+def test_runtime_session_stale_late_caked_event_does_not_surface_in_new_run(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cmd_lines: list[str] = []
+    scheduled_callbacks: list[tuple[int, object]] = []
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((int(delay_ms), callback))
+            return f"after-token-{len(scheduled_callbacks)}"
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_cmd_line",
+        lambda text: cmd_lines.append(str(text)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_event_queue=runtime_session.queue.Queue(),
+            geometry_fit_active_job=None,
+            geometry_fit_future=None,
+            geometry_fit_late_event_poll_token=None,
+            geometry_fit_pending_late_event_tokens=set(),
+            geometry_fit_pending_late_event_deadlines={},
+            geometry_fit_late_event_tail_generation=0,
+        ),
+        raising=False,
+    )
+
+    event_queue = runtime_session.simulation_runtime_state.geometry_fit_event_queue
+    event_queue.put(
+        {
+            "job_id": 99,
+            "kind": "source_cache_caked_view_timeout",
+            "payload": {
+                "background_index": 0,
+                "source_cache_generation_id": 7,
+                "status": "timeout",
+                "elapsed_s": 5.0,
+            },
+        }
+    )
+    runtime_session._drain_geometry_fit_worker_events(job_id=99)
+
+    assert len(scheduled_callbacks) == 1
+    cmd_lines.clear()
+
+    runtime_session._clear_geometry_fit_late_event_tail_state()
+    runtime_session.simulation_runtime_state.geometry_fit_active_job = {"job_id": 100}
+    runtime_session.simulation_runtime_state.geometry_fit_future = object()
+
+    event_queue.put(
+        {
+            "job_id": 99,
+            "kind": "source_cache_caked_view_ready",
+            "payload": {
+                "background_index": 0,
+                "source_cache_generation_id": 7,
+                "caked_view_stored": True,
+                "caked_view_status": "stored",
+                "late": True,
+            },
+        }
+    )
+
+    _delay_ms, callback = scheduled_callbacks.pop(0)
+    callback()
+
+    assert runtime_session.simulation_runtime_state.geometry_fit_pending_late_event_tokens == set()
+    assert cmd_lines == []
+
+    runtime_session._drain_geometry_fit_worker_events(job_id=100)
+    assert cmd_lines == []
+
+
+def test_runtime_session_late_caked_tail_drain_expires_hung_tokens(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scheduled_callbacks: list[tuple[int, object]] = []
+    perf_state = {"value": 0.0}
+
+    class _Root:
+        def after(self, delay_ms, callback) -> str:
+            scheduled_callbacks.append((int(delay_ms), callback))
+            return f"after-token-{len(scheduled_callbacks)}"
+
+    def _fake_perf_counter() -> float:
+        return float(perf_state["value"])
+
+    monkeypatch.setattr(runtime_session, "root", _Root(), raising=False)
+    monkeypatch.setattr(runtime_session, "perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_tk_after_token",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_cmd_line",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_event_queue=runtime_session.queue.Queue(),
+            geometry_fit_active_job=None,
+            geometry_fit_future=None,
+            geometry_fit_late_event_poll_token=None,
+            geometry_fit_pending_late_event_tokens={(99, 0, 7)},
+            geometry_fit_pending_late_event_deadlines={(99, 0, 7): 1.0},
+            geometry_fit_late_event_tail_generation=0,
+        ),
+        raising=False,
+    )
+
+    runtime_session._schedule_geometry_fit_late_event_tail_drain()
+
+    assert len(scheduled_callbacks) == 1
+
+    perf_state["value"] = 2.0
+    _delay_ms, callback = scheduled_callbacks.pop(0)
+    callback()
+
+    assert runtime_session.simulation_runtime_state.geometry_fit_pending_late_event_tokens == set()
+    assert runtime_session.simulation_runtime_state.geometry_fit_pending_late_event_deadlines == {}
+    assert runtime_session.simulation_runtime_state.geometry_fit_late_event_poll_token is None
+    assert scheduled_callbacks == []
 
 
 def test_runtime_impl_keeps_1d_updates_gated_on_intensity_accumulation() -> None:
