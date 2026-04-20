@@ -732,6 +732,7 @@ def _pair_alignment_rows(
 def validate_manual_caked_fit_space_provenance(
     report_or_rows: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
 ) -> list[str]:
+    has_report_metadata = isinstance(report_or_rows, Mapping)
     if isinstance(report_or_rows, Mapping):
         report = dict(report_or_rows)
         rows = [
@@ -778,7 +779,7 @@ def validate_manual_caked_fit_space_provenance(
         violations.append("new4 invalid_dataset_fit_space_projector_row_count is nonzero")
     if state_name == "new4_fresh_all" and analytic_row_count > 0:
         violations.append("new4 analytic_detector_fit_space_row_count is nonzero")
-    if not exact_available and not exact_reason:
+    if has_report_metadata and not exact_available and not exact_reason:
         violations.append(
             "exact_fit_space_projector_available is false but reason is missing"
         )
@@ -811,12 +812,26 @@ def validate_manual_caked_fit_space_provenance(
         simulated_frame = str(row.get("simulated_detector_input_frame", "") or "")
         measured_count = _int_or_none(row.get("measured_native_frame_conversion_count"))
         simulated_count = _int_or_none(row.get("simulated_native_frame_conversion_count"))
+        explicit_override = bool(row.get("fit_space_anchor_override", False))
 
         if simulated_source != "dataset_fit_space_projector":
             violations.append(
                 f"{pair_id}: simulated_fit_space_source={simulated_source!r}"
             )
-        if not bool(row.get("fit_space_anchor_override", False)) and measured_frame != "explicit_override":
+        if explicit_override:
+            if measured_frame != "explicit_override":
+                violations.append(
+                    f"{pair_id}: fit_space_anchor_override requires explicit_override frame"
+                )
+            if measured_source != "cached_fit_space_anchor":
+                violations.append(
+                    f"{pair_id}: fit_space_anchor_override requires cached_fit_space_anchor"
+                )
+        elif measured_frame == "explicit_override":
+            violations.append(
+                f"{pair_id}: explicit_override frame requires fit_space_anchor_override"
+            )
+        else:
             if measured_source != "dataset_fit_space_projector":
                 violations.append(
                     f"{pair_id}: measured_fit_space_source={measured_source!r}"

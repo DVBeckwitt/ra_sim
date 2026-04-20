@@ -622,6 +622,93 @@ def test_validate_manual_caked_fit_space_provenance_accepts_exact_projector_row(
     assert violations == []
 
 
+def test_validate_manual_caked_fit_space_provenance_accepts_rows_only_exact_row() -> None:
+    module = _load_baseline_module()
+
+    violations = module.validate_manual_caked_fit_space_provenance(
+        [
+            {
+                "pair_id": "pair[0]",
+                "selected_is_minimum_background_distance": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "fit_space_anchor_override": False,
+                "measured_fit_space_source": "dataset_fit_space_projector",
+                "simulated_fit_space_source": "dataset_fit_space_projector",
+                "measured_detector_input_frame": "native_detector",
+                "simulated_detector_input_frame": "fit_detector",
+                "measured_native_frame_conversion_count": 0,
+                "simulated_native_frame_conversion_count": 1,
+                "measured_invalid_projection_reason": None,
+                "simulated_invalid_projection_reason": None,
+                "invalid_projection_reason": None,
+                "cake_bundle_signature": "sig-rows-only",
+            }
+        ]
+    )
+
+    assert violations == []
+
+
+def test_validate_manual_caked_fit_space_provenance_rejects_override_without_explicit_frame() -> None:
+    module = _load_baseline_module()
+
+    violations = module.validate_manual_caked_fit_space_provenance(
+        [
+            {
+                "pair_id": "pair[override-bad-frame]",
+                "selected_is_minimum_background_distance": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "fit_space_anchor_override": True,
+                "measured_fit_space_source": "cached_fit_space_anchor",
+                "simulated_fit_space_source": "dataset_fit_space_projector",
+                "measured_detector_input_frame": "native_detector",
+                "simulated_detector_input_frame": "fit_detector",
+                "measured_native_frame_conversion_count": 0,
+                "simulated_native_frame_conversion_count": 1,
+                "measured_invalid_projection_reason": None,
+                "simulated_invalid_projection_reason": None,
+                "invalid_projection_reason": None,
+                "cake_bundle_signature": "sig-override",
+            }
+        ]
+    )
+
+    assert (
+        "pair[override-bad-frame]: fit_space_anchor_override requires explicit_override frame"
+        in violations
+    )
+
+
+def test_validate_manual_caked_fit_space_provenance_rejects_explicit_frame_without_override() -> None:
+    module = _load_baseline_module()
+
+    violations = module.validate_manual_caked_fit_space_provenance(
+        [
+            {
+                "pair_id": "pair[override-bad-flag]",
+                "selected_is_minimum_background_distance": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "fit_space_anchor_override": False,
+                "measured_fit_space_source": "cached_fit_space_anchor",
+                "simulated_fit_space_source": "dataset_fit_space_projector",
+                "measured_detector_input_frame": "explicit_override",
+                "simulated_detector_input_frame": "fit_detector",
+                "measured_native_frame_conversion_count": 0,
+                "simulated_native_frame_conversion_count": 1,
+                "measured_invalid_projection_reason": None,
+                "simulated_invalid_projection_reason": None,
+                "invalid_projection_reason": None,
+                "cake_bundle_signature": "sig-explicit-frame",
+            }
+        ]
+    )
+
+    assert (
+        "pair[override-bad-flag]: explicit_override frame requires fit_space_anchor_override"
+        in violations
+    )
+
+
 def test_build_quality_report_falls_back_to_preflight_pairs_and_stderr_reason(
     tmp_path: Path,
 ) -> None:
