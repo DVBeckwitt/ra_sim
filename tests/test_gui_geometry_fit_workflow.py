@@ -2958,6 +2958,483 @@ def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
         assert pair["provider_pair_fingerprint"] == pair["dataset_pair_fingerprint"]
 
 
+def _minimal_new4_ladder_context(ladder):
+    del ladder
+    base_prepared_run, _postprocess_config = _make_prepared_run(
+        joint_background_mode=False
+    )
+    prepared_run = replace(
+        base_prepared_run,
+        fit_params={
+            "gamma": 0.2,
+            "Gamma": 0.1,
+            "chi": 0.0,
+            "cor_angle": 0.0,
+            "theta_initial": 3.0,
+            "theta_offset": 0.0,
+            "corto_detector": 0.25,
+            "zs": 0.001,
+            "zb": 0.002,
+            "a": 4.1,
+            "c": 28.0,
+            "psi_z": 0.0,
+            "center_x": 32.0,
+            "center_y": 33.0,
+            "center": [32.0, 33.0],
+        },
+        current_dataset={"measured_for_fit": []},
+        dataset_specs=[],
+        geometry_runtime_cfg={"solver": {}, "optimizer": {}, "bounds": {}},
+    )
+    return {
+        "prepared_run": prepared_run,
+        "solver_inputs": geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller=[],
+            intensities=[],
+            image_size=64,
+        ),
+        "saved_var_names": ["theta_initial"],
+    }
+
+
+def _new4_ladder_provider_identity_pair(index: int, *, full_source: bool = True):
+    hkl = (int(index), 0, 1)
+    identity = {
+        "normalized_hkl": list(hkl),
+        "source_table_index": int(index),
+        "source_row_index": 0,
+        "source_peak_index": int(index % 2),
+        "source_branch_index": int(index % 2),
+        "source_label": "primary",
+        "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
+    }
+    if full_source:
+        identity.update(
+            {
+                "source_reflection_index": int(index),
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+            }
+        )
+    provider_pair = {
+        "pair_index": int(index),
+        "provider_pair_index": int(index),
+        "dataset_pair_index": int(index),
+        "selected_source_identity_canonical": identity,
+        "background_point": [10.0 + index, 20.0 + index],
+        "rebinding_fallback_used": False,
+        "fallback_reason": None,
+    }
+    manual_pair = {
+        "pair_index": int(index),
+        "provider_pair_index": int(index),
+        "dataset_pair_index": int(index),
+        "selected_source_identity_canonical": identity,
+        "solver_measured_point": [10.0 + index, 20.0 + index],
+    }
+    measured_row = {
+        "hkl": hkl,
+        "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
+        "x": 10.0 + index,
+        "y": 20.0 + index,
+        "fit_source_resolution_kind": "q_group_fallback",
+    }
+    return provider_pair, manual_pair, measured_row
+
+
+def _new4_ladder_context_with_provider_rows(*, full_source: bool):
+    base_prepared_run, _postprocess_config = _make_prepared_run(
+        joint_background_mode=False
+    )
+    provider_pairs = []
+    manual_pairs = []
+    measured_rows = []
+    miller = []
+    for index in range(7):
+        provider_pair, manual_pair, measured_row = _new4_ladder_provider_identity_pair(
+            index,
+            full_source=full_source,
+        )
+        provider_pairs.append(provider_pair)
+        manual_pairs.append(manual_pair)
+        measured_rows.append(measured_row)
+        miller.append([index, 0, 1])
+    prepared_run = replace(
+        base_prepared_run,
+        fit_params={
+            "center_x": 32.0,
+            "center_y": 33.0,
+            "theta_initial": 3.0,
+        },
+        current_dataset={
+            "dataset_index": 0,
+            "provider_pairs": provider_pairs,
+            "manual_point_pairs": manual_pairs,
+            "measured_for_fit": measured_rows,
+            "pair_count": 7,
+        },
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "theta_initial": 3.0,
+                "measured_peaks": list(measured_rows),
+            }
+        ],
+        geometry_runtime_cfg={"solver": {}, "optimizer": {}, "bounds": {}},
+    )
+    return {
+        "prepared_run": prepared_run,
+        "solver_inputs": geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller=np.asarray(miller, dtype=float),
+            intensities=np.ones(7, dtype=float),
+            image_size=64,
+        ),
+        "saved_var_names": ["theta_initial"],
+    }
+
+
+def _green_new4_ladder_provider_payload():
+    return {
+        "ok": True,
+        "classification": "point_provider_parity_ok",
+        "manual_picker_pair_count": 7,
+        "point_provider_pair_count": 7,
+        "point_provider_parity_gate": {"ok": True},
+        "dataset_provider_mismatch_count": 0,
+        "fallback_pair_count": 0,
+        "optimizer_called": False,
+        "provider_guard_ok": True,
+        "status": "pass",
+        "pass": True,
+    }
+
+
+def _install_fast_new4_ladder_stubs(monkeypatch, ladder):
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+
+    def _dry_run(_context, *, output_path, max_nfev):
+        del _context, max_nfev
+        payload = {
+            "rung": 1,
+            "rung_name": "objective_dry_run",
+            "status": "ok",
+            "pass": True,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "after_rms_px": 1.0,
+            "after_max_error_px": 2.0,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _sensitivity(_context, *, output_path, max_nfev):
+        del _context, max_nfev
+        payload = {
+            "rung": 2,
+            "rung_name": "sensitivity_scan",
+            "status": "ok",
+            "pass": True,
+            "active_parameters": ["center_x", "center_y"],
+            "near_zero_parameters": [],
+            "unsafe_parameters": [],
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _solver_rung(*, active_names, output_path, rung, rung_name, **_kwargs):
+        payload = {
+            "rung": rung,
+            "rung_name": rung_name,
+            "status": "ok",
+            "pass": True,
+            "active_params": list(active_names),
+            "candidate_param_names": list(active_names),
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "before_rms_px": 1.0,
+            "after_rms_px": 1.0,
+            "before_max_error_px": 2.0,
+            "after_max_error_px": 2.0,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_objective_dry_run", _dry_run)
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _sensitivity)
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver_rung)
+
+
+def test_new4_ladder_runs_provider_guard_before_optimizer(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+
+    def _failing_guard(*, output_path, **_kwargs):
+        payload = {
+            "ok": False,
+            "classification": "point_provider_parity_failed",
+            "provider_guard_ok": False,
+            "provider_guard_failures": ["forced"],
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _optimizer_boundary(*_args, **_kwargs):
+        raise AssertionError("optimizer path should not run after guard failure")
+
+    monkeypatch.setattr(ladder, "run_provider_guard", _failing_guard)
+    monkeypatch.setattr(ladder, "_capture_solver_context", _optimizer_boundary)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="center",
+        timestamp="guard_fail",
+    )
+
+    assert result["status"] == "aborted"
+    assert result["reason"] == "provider_guard_failed"
+    assert (tmp_path / "guard_fail" / "rung_00_provider_guard.json").exists()
+
+
+def test_new4_ladder_one_param_rung_uses_candidate_param_names(monkeypatch) -> None:
+    ladder = _load_new4_ladder_module()
+    request = ladder.build_solver_request(
+        _minimal_new4_ladder_context(ladder),
+        ["gamma"],
+        max_nfev=20,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_solver(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks,
+        var_names,
+        *,
+        candidate_param_names=None,
+        **_kwargs,
+    ):
+        del miller, intensities, image_size, params, measured_peaks
+        captured["var_names"] = list(var_names)
+        captured["candidate_param_names"] = list(candidate_param_names or [])
+        return SimpleNamespace()
+
+    geometry_fit.solve_geometry_fit_request(request, solve_fit=_fake_solver)
+
+    assert captured["var_names"] == ["gamma"]
+    assert captured["candidate_param_names"] == ["gamma"]
+    assert request.candidate_param_names == ["gamma"]
+
+
+def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+
+    def _sleeping_worker(**_kwargs):
+        time.sleep(0.2)
+        return {"status": "ok", "pass": True}
+
+    monkeypatch.setattr(ladder, "_worker_solve_once", _sleeping_worker)
+    output_path = tmp_path / "rung_timeout.json"
+    report = ladder._run_solver_rung_with_timeout(
+        state_path=state_path,
+        background_index=0,
+        active_names=["gamma"],
+        output_path=output_path,
+        max_nfev=20,
+        timeout_seconds=0.01,
+        rung=3,
+        rung_name="one_param_gamma",
+        use_subprocess=False,
+    )
+
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["status"] == "timeout"
+    assert written["status"] == "timeout"
+    assert written["active_params"] == ["gamma"]
+    assert written["candidate_param_names"] == ["gamma"]
+
+
+def test_new4_ladder_does_not_mutate_new4_state(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    repo_root = Path(__file__).resolve().parents[1]
+    state_path = repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+    before_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+
+    def _green_guard(*, output_path, **_kwargs):
+        payload = _green_new4_ladder_provider_payload()
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_provider_guard", _green_guard)
+    _install_fast_new4_ladder_stubs(monkeypatch, ladder)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="center",
+        timestamp="immutability",
+    )
+
+    after_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+    assert result["status"] == "pass"
+    assert after_hash == before_hash
+
+
+def test_new4_ladder_keeps_point_provider_report_green(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    repo_root = Path(__file__).resolve().parents[1]
+    state_path = repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+    _install_fast_new4_ladder_stubs(monkeypatch, ladder)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="center",
+        timestamp="provider_after",
+    )
+    report = ladder.preflight_probe._run_point_provider_report_only(
+        state_path,
+        background_index=0,
+    )
+
+    assert result["status"] == "pass"
+    assert report["ok"] is True
+    assert report["classification"] == "point_provider_parity_ok"
+    assert report["point_provider_parity_gate"]["ok"] is True
+    assert report["manual_picker_pair_count"] == 7
+    assert report["point_provider_pair_count"] == 7
+
+
+def test_new4_ladder_objective_dry_run_rejects_fallback_rows(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=False)
+
+    def _should_not_probe(*_args, **_kwargs):
+        raise AssertionError("objective probe should not run for fallback request")
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _should_not_probe)
+    report = ladder.run_objective_dry_run(
+        context,
+        output_path=tmp_path / "rung_01_objective_dry_run.json",
+        max_nfev=20,
+    )
+
+    assert report["status"] == "failed"
+    assert report["failure_reason"] == "optimizer_request_used_fallback_rows"
+    assert report["optimizer_request_pair_count"] == 7
+    assert report["fallback_row_count"] == 7
+    assert report["fixed_source_resolution_fallback_count"] == 7
+    assert report["missing_fixed_source_count"] == 7
+
+
+def test_new4_ladder_objective_dry_run_preserves_provider_fixed_rows(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    captured: dict[str, object] = {}
+
+    def _fake_probe(request, *, mode):
+        captured["mode"] = mode
+        captured["request"] = request
+        point_match_summary = {
+            "measured_count": 7,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "fixed_source_resolved_count": 7,
+            "fixed_source_reflection_count": 7,
+            "matched_fixed_pair_count": 7,
+            "missing_fixed_pair_count": 0,
+            "fallback_entry_count": 0,
+            "fallback_hkl_count": 0,
+            "subset_fallback_hkl_count": 0,
+            "unweighted_peak_rms_px": 0.5,
+            "unweighted_peak_max_px": 0.75,
+        }
+        return (
+            SimpleNamespace(
+                point_match_summary=point_match_summary,
+                rms_px=0.5,
+                success=True,
+                message="dry-run",
+                nfev=1,
+                x=np.asarray([32.0], dtype=float),
+                geometry_fit_stage_timings={},
+            ),
+            [{"finite": True, "residual_norm": 1.0}],
+        )
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
+    report = ladder.run_objective_dry_run(
+        context,
+        output_path=tmp_path / "rung_01_objective_dry_run.json",
+        max_nfev=20,
+    )
+
+    request = captured["request"]
+    request_rows = list(request.dataset_specs[0]["measured_peaks"])
+    provider_pairs = context["prepared_run"].current_dataset["provider_pairs"]
+    assert report["status"] == "ok"
+    assert report["pass"] is True
+    assert report["optimizer_request_pair_count"] == 7
+    assert report["fixed_source_pair_count"] == 7
+    assert report["fallback_row_count"] == 0
+    assert report["fixed_source_resolution_fallback_count"] == 0
+    assert report["provider_to_optimizer_identity_match"] is True
+    assert report["provider_to_optimizer_point_match"] is True
+    for index, row in enumerate(request_rows):
+        identity = provider_pairs[index]["selected_source_identity_canonical"]
+        assert row["hkl"] == tuple(identity["normalized_hkl"])
+        assert row["source_reflection_index"] == identity["source_reflection_index"]
+        assert row["source_reflection_namespace"] == "full_reflection"
+        assert row["source_peak_index"] == identity["source_peak_index"]
+        assert row["x"] == pytest.approx(10.0 + index)
+        assert row["y"] == pytest.approx(20.0 + index)
+
+
+def test_new4_ladder_does_not_start_solve_if_objective_uses_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=False)
+    called = {"least_squares": False}
+
+    def _raising_least_squares(*_args, **_kwargs):
+        called["least_squares"] = True
+        raise AssertionError("least_squares should not be called")
+
+    monkeypatch.setattr(ladder.opt, "least_squares", _raising_least_squares)
+    report = ladder.run_objective_dry_run(
+        context,
+        output_path=tmp_path / "rung_01_objective_dry_run.json",
+        max_nfev=20,
+    )
+
+    assert report["status"] == "failed"
+    assert report["failure_reason"] == "optimizer_request_used_fallback_rows"
+    assert called["least_squares"] is False
+
+
 def test_build_geometry_manual_fit_dataset_skips_cached_candidate_with_missing_hkl() -> None:
     saved_entries = [
         {

@@ -21,19 +21,18 @@ gates are green.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-20 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
+| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-21 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
-validate the live `new4.json` GUI preflight now that source-cache row
-readiness is split from caked-view support-state work. Nearest-candidate
-rebinding after normalized HKL and branch filtering remains the intended rule;
-the active blocker is source-cache versus caked-view gating and observability.
-The old `new2` and `new3` saved-state gates are retired. Manual Qr/Qz and HKL
-picker alignment for [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
-is resolved and archived below. The archived tracker now also records the
-2026-04-21 raw-only picker-restore guard hardening: serialized active sides are
-authoritative, stale detector caches cannot be republished, and raw hit-table
-picker rows remain usable while active `stored_intersection_cache` stays empty.
+validate `new4.json` point-provider parity before optimizer execution. The
+manual Qr picker selected/refined pairs, geometry-fit provider pairs, and
+dataset manual point rows must match exactly. Optimizer validation now stops at
+bounded ladder rung 1 when the request would use fallback rows; solve rungs wait
+until objective dry-run reports zero fallback and zero missing fixed-source
+rows. The bridge currently copies provider identity into the optimizer request
+and fails before `least_squares` when fixed-source fields are incomplete. The
+old full quality baseline runner remains blocked until the ladder finds a
+stable parameter set. The old `new2` and `new3` saved-state gates are retired.
 
 ## Known bugs
 

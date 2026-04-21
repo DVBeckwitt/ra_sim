@@ -14204,6 +14204,273 @@ def _write_geometry_fit_trace_file(
     return trace_path
 
 
+_GEOMETRY_FIT_PROVIDER_IDENTITY_KEYS = (
+    "normalized_hkl",
+    "source_table_index",
+    "source_reflection_index",
+    "source_row_index",
+    "source_peak_index",
+    "q_group_key",
+    "source_q_group_key",
+    "branch_group_key",
+    "source_branch_index",
+    "source_label",
+    "label",
+    "source_reflection_namespace",
+    "source_reflection_is_full",
+)
+
+
+def _geometry_fit_source_identity_from_pair(
+    *pairs: Mapping[str, object] | None,
+) -> dict[str, object]:
+    for pair in pairs:
+        if not isinstance(pair, Mapping):
+            continue
+        identity = pair.get("selected_source_identity_canonical")
+        if isinstance(identity, Mapping) and identity:
+            return copy.deepcopy(dict(identity))
+    return {}
+
+
+def _geometry_fit_optimizer_point_from_pair(
+    *pairs: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for pair in pairs:
+        if not isinstance(pair, Mapping):
+            continue
+        for key in ("solver_measured_point", "background_point"):
+            raw_point = pair.get(key)
+            if (
+                isinstance(raw_point, Sequence)
+                and not isinstance(raw_point, (str, bytes))
+                and len(raw_point) >= 2
+            ):
+                try:
+                    x_val = float(raw_point[0])
+                    y_val = float(raw_point[1])
+                except Exception:
+                    continue
+                if np.isfinite(x_val) and np.isfinite(y_val):
+                    return float(x_val), float(y_val)
+    return None
+
+
+def _geometry_fit_optimizer_hkl_from_identity(
+    identity: Mapping[str, object],
+) -> tuple[int, int, int] | None:
+    raw_hkl = identity.get("normalized_hkl", identity.get("hkl"))
+    if (
+        isinstance(raw_hkl, Sequence)
+        and not isinstance(raw_hkl, (str, bytes))
+        and len(raw_hkl) >= 3
+    ):
+        try:
+            return (int(raw_hkl[0]), int(raw_hkl[1]), int(raw_hkl[2]))
+        except Exception:
+            return None
+    return None
+
+
+def _geometry_fit_optimizer_row_has_full_source(row: Mapping[str, object]) -> bool:
+    try:
+        reflection_index = int(row.get("source_reflection_index", -1))
+    except Exception:
+        reflection_index = -1
+    if reflection_index < 0:
+        return False
+    namespace = str(row.get("source_reflection_namespace", "") or "").strip().lower()
+    if namespace in {"full", "full_reflection", "miller"}:
+        return True
+    return bool(row.get("source_reflection_is_full", False))
+
+
+def _geometry_fit_full_source_hkl_matches(
+    row: Mapping[str, object],
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+) -> bool:
+    if not _geometry_fit_optimizer_row_has_full_source(row):
+        return False
+    raw_hkl = row.get("hkl")
+    if not (
+        isinstance(raw_hkl, Sequence)
+        and not isinstance(raw_hkl, (str, bytes))
+        and len(raw_hkl) >= 3
+    ):
+        return False
+    try:
+        measured_hkl = (int(raw_hkl[0]), int(raw_hkl[1]), int(raw_hkl[2]))
+        reflection_index = int(row.get("source_reflection_index"))
+        miller = np.asarray(solver_inputs.miller)
+        source_hkl = tuple(int(v) for v in miller[reflection_index][:3])
+    except Exception:
+        return False
+    return tuple(measured_hkl) == tuple(source_hkl)
+
+
+def _geometry_fit_optimizer_identity_matches(
+    identity: Mapping[str, object],
+    row: Mapping[str, object],
+) -> bool:
+    for key, expected in identity.items():
+        if key not in _GEOMETRY_FIT_PROVIDER_IDENTITY_KEYS:
+            continue
+        actual = row.get(key)
+        if _geometry_fit_jsonable(actual) != _geometry_fit_jsonable(expected):
+            return False
+    return True
+
+
+def _geometry_fit_optimizer_point_matches(
+    point: tuple[float, float] | None,
+    row: Mapping[str, object],
+) -> bool:
+    if point is None:
+        return False
+    try:
+        row_point = (float(row.get("x")), float(row.get("y")))
+    except Exception:
+        return False
+    if not (np.isfinite(row_point[0]) and np.isfinite(row_point[1])):
+        return False
+    return bool(
+        abs(float(point[0]) - float(row_point[0])) <= 1.0e-6
+        and abs(float(point[1]) - float(row_point[1])) <= 1.0e-6
+    )
+
+
+def _build_geometry_fit_optimizer_request_rows(
+    *,
+    prepared_run: GeometryFitPreparedRun,
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    dataset = (
+        prepared_run.current_dataset
+        if isinstance(prepared_run.current_dataset, Mapping)
+        else {}
+    )
+    provider_pairs = [
+        dict(pair)
+        for pair in dataset.get("provider_pairs", ()) or ()
+        if isinstance(pair, Mapping)
+    ]
+    manual_pairs = [
+        dict(pair)
+        for pair in dataset.get("manual_point_pairs", ()) or ()
+        if isinstance(pair, Mapping)
+    ]
+    measured_rows = [
+        copy.deepcopy(dict(row))
+        for row in dataset.get("measured_for_fit", ()) or ()
+        if isinstance(row, Mapping)
+    ]
+    if not provider_pairs and not manual_pairs:
+        return [], {}
+    pair_count = max(len(provider_pairs), len(manual_pairs), len(measured_rows))
+    rows: list[dict[str, object]] = []
+    row_reports: list[dict[str, object]] = []
+    provider_identity_match = True
+    provider_point_match = True
+    fixed_source_pair_count = 0
+    fallback_row_count = 0
+    fixed_source_resolution_fallback_count = 0
+    missing_fixed_source_count = 0
+
+    for pair_index in range(pair_count):
+        measured_row = measured_rows[pair_index] if pair_index < len(measured_rows) else {}
+        provider_pair = (
+            provider_pairs[pair_index] if pair_index < len(provider_pairs) else {}
+        )
+        manual_pair = manual_pairs[pair_index] if pair_index < len(manual_pairs) else {}
+        identity = _geometry_fit_source_identity_from_pair(provider_pair, manual_pair)
+        point = _geometry_fit_optimizer_point_from_pair(manual_pair, provider_pair)
+        row = copy.deepcopy(dict(measured_row))
+        for stale_key in (
+            "fit_source_resolution_kind",
+            "resolution_kind",
+            "rebinding_fallback_used",
+            "fallback_reason",
+            "optimizer_request_fallback_row",
+            "optimizer_request_fallback_reason",
+        ):
+            row.pop(stale_key, None)
+        if identity:
+            for key in _GEOMETRY_FIT_PROVIDER_IDENTITY_KEYS:
+                if key in identity:
+                    row[key] = copy.deepcopy(identity[key])
+            hkl = _geometry_fit_optimizer_hkl_from_identity(identity)
+            if hkl is not None:
+                row["hkl"] = tuple(int(value) for value in hkl)
+                row["label"] = str(row.get("label") or f"{hkl[0]},{hkl[1]},{hkl[2]}")
+        row["optimizer_request_pair_index"] = int(pair_index)
+        row["optimizer_request_source"] = "provider_pair"
+        row["provider_selected_source_identity_canonical"] = copy.deepcopy(identity)
+
+        identity_matches = (
+            bool(identity)
+            and _geometry_fit_optimizer_identity_matches(identity, row)
+        )
+        point_matches = _geometry_fit_optimizer_point_matches(point, row)
+        provider_identity_match = provider_identity_match and identity_matches
+        provider_point_match = provider_point_match and point_matches
+
+        fallback_reasons: list[str] = []
+        if bool(provider_pair.get("rebinding_fallback_used", False)):
+            fallback_reasons.append("provider_rebinding_fallback")
+        if not identity:
+            fallback_reasons.append("missing_provider_source_identity")
+        if identity and not _geometry_fit_optimizer_row_has_full_source(row):
+            fallback_reasons.append("missing_provider_full_reflection_identity")
+        elif identity and not _geometry_fit_full_source_hkl_matches(row, solver_inputs):
+            fallback_reasons.append("provider_full_reflection_hkl_mismatch")
+
+        if fallback_reasons:
+            row["fit_source_resolution_kind"] = "provider_fixed_source_unavailable"
+            row["optimizer_request_fallback_row"] = True
+            row["optimizer_request_fallback_reason"] = ",".join(fallback_reasons)
+            fallback_row_count += 1
+            fixed_source_resolution_fallback_count += 1
+            missing_fixed_source_count += 1
+        else:
+            row["fit_source_resolution_kind"] = "provider_fixed_source"
+            row["optimizer_request_fallback_row"] = False
+            row["optimizer_request_has_fixed_source"] = True
+            fixed_source_pair_count += 1
+
+        rows.append(row)
+        row_reports.append(
+            {
+                "pair_index": int(pair_index),
+                "identity_match": bool(identity_matches),
+                "point_match": bool(point_matches),
+                "fallback_row": bool(row.get("optimizer_request_fallback_row", False)),
+                "fallback_reason": row.get("optimizer_request_fallback_reason"),
+                "hkl": row.get("hkl"),
+                "source_reflection_index": row.get("source_reflection_index"),
+                "source_branch_index": row.get("source_branch_index"),
+                "source_peak_index": row.get("source_peak_index"),
+            }
+        )
+
+    summary = {
+        "provider_pair_count": int(len(provider_pairs)),
+        "dataset_pair_count": int(
+            dataset.get("pair_count", len(manual_pairs) or len(measured_rows)) or 0
+        ),
+        "optimizer_request_pair_count": int(len(rows)),
+        "fixed_source_pair_count": int(fixed_source_pair_count),
+        "fallback_row_count": int(fallback_row_count),
+        "fixed_source_resolution_fallback_count": int(
+            fixed_source_resolution_fallback_count
+        ),
+        "missing_fixed_source_count": int(missing_fixed_source_count),
+        "provider_to_optimizer_identity_match": bool(provider_identity_match),
+        "provider_to_optimizer_point_match": bool(provider_point_match),
+        "optimizer_request_pair_handoff": row_reports,
+    }
+    return rows, summary
+
+
 def build_geometry_fit_solver_request(
     *,
     prepared_run: GeometryFitPreparedRun,
@@ -14222,13 +14489,30 @@ def build_geometry_fit_solver_request(
         if isinstance(refinement_config, Mapping)
         else {}
     )
+    measured_peaks, request_handoff_summary = _build_geometry_fit_optimizer_request_rows(
+        prepared_run=prepared_run,
+        solver_inputs=solver_inputs,
+    )
+    if not measured_peaks:
+        measured_peaks = copy.deepcopy(
+            list(prepared_run.current_dataset["measured_for_fit"])
+        )
+    dataset_specs = [
+        copy.deepcopy(dict(spec))
+        for spec in prepared_run.dataset_specs
+        if isinstance(spec, Mapping)
+    ]
+    if measured_peaks and len(dataset_specs) == 1:
+        dataset_specs[0]["measured_peaks"] = copy.deepcopy(measured_peaks)
+    if request_handoff_summary:
+        refinement_config["optimizer_request_handoff_summary"] = request_handoff_summary
 
     return GeometryFitSolverRequest(
         miller=solver_inputs.miller,
         intensities=solver_inputs.intensities,
         image_size=int(solver_inputs.image_size),
         params=dict(prepared_run.fit_params),
-        measured_peaks=prepared_run.current_dataset["measured_for_fit"],
+        measured_peaks=measured_peaks,
         var_names=[str(name) for name in var_names],
         candidate_param_names=(
             [
@@ -14241,7 +14525,7 @@ def build_geometry_fit_solver_request(
             ]
             or None
         ),
-        dataset_specs=list(prepared_run.dataset_specs),
+        dataset_specs=dataset_specs,
         refinement_config=refinement_config,
         runtime_safety_note=runtime_safety_note,
     )

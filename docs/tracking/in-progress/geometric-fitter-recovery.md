@@ -9,19 +9,20 @@ Last updated: 2026-04-21
 
 ## Summary
 
-Point-provider parity is fixed for the manual-geometry handoff layer. The
-manual Qr picker saved/refined pair, the geometry-fit point provider pair, and
-the actual dataset handoff row now agree before any optimizer entrypoint runs.
+Point-provider parity is fixed for the manual-geometry handoff layer, and the
+next validation step is a bounded `new4` optimizer ladder. The manual Qr picker
+saved/refined pair, the geometry-fit point provider pair, and the actual
+dataset handoff row must agree before any optimizer entrypoint runs.
 
 This closes the current point-provider bug/error scope: stale source locators
 are diagnostic when the saved picker assignment still resolves semantically,
 picker-owned saved/refined simulated points overwrite live/caked prefill, and
 `new4` reports 7/7 provider pairs without launching the optimizer.
 
-The geometric optimizer hang/convergence problem remains explicitly out of
-scope for this work item. RMS/max-error improvement and
-`run_geometry_fit_quality_baseline.py` are optional later diagnostics, not the
-stop gate for point-provider parity.
+The geometric optimizer hang/convergence problem is now handled by
+`scripts/debug/run_new4_geometry_fit_ladder.py`, not by the old full baseline
+as the first debug tool. The ladder is currently stopped at rung 1 until the
+optimizer request has zero fallback rows.
 
 ## Current State
 
@@ -41,6 +42,23 @@ stop gate for point-provider parity.
 - The canonical `new4` parity test passes with seven manual pairs, seven
   provider pairs, no fallback, matching identities, matching saved/refined
   points, matching frames, and optimizer call count zero.
+- The ladder runs the provider guard first, then blocks objective dry-run before
+  any optimizer call when the request would use fallback rows. Current `new4`
+  rung 1 reports 7 provider pairs, 7 optimizer request pairs, 7 fallback rows,
+  7 missing fixed-source rows, and `optimizer_called == false`.
+- The dataset-to-optimizer bridge now copies provider canonical identity and
+  measured-point fields into the optimizer request, emits handoff counters on
+  every ladder report, and rejects request-side fallback before `least_squares`.
+- Solve rungs are disabled operationally until objective dry-run reports zero
+  `fallback_row_count` and zero `fixed_source_resolution_fallback_count`.
+
+## Next Actions
+
+- Fix only the dataset-to-optimizer request bridge so the validated provider
+  handoff supplies the fixed-source fields required by the optimizer resolver.
+- Keep provider logic closed unless the provider-only parity gate regresses.
+- Do not run solve rungs, tune parameters, loosen fallback rules, or run the old
+  baseline until rung 1 has seven fixed-source pairs and zero fallback rows.
 
 ## Point-Provider Stop Criteria
 
@@ -84,7 +102,10 @@ the primary point-provider parity result.
 ## Red Flags
 
 - Point-provider tests launch the geometric optimizer.
-- Acceptance depends on RMS/max-error improvement or baseline convergence.
+- Ladder starts before the provider-only parity report is green.
+- Rung 1 reaches `least_squares` while `fallback_row_count > 0`.
+- Acceptance depends on the old full baseline before the bounded ladder finds a
+  stable parameter set.
 - Provider chooses a different simulated source identity than the picker saved.
 - Provider silently rebinds a stale source identity without fallback
   diagnostics.
@@ -108,8 +129,8 @@ the primary point-provider parity result.
 Focused point-provider gate:
 
 ```powershell
-python -m py_compile ra_sim/gui/manual_geometry.py ra_sim/gui/geometry_fit.py scripts/debug/validate_geometry_preflight_rebind.py
-pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer or canonical_geometry_source_identity" -vv
+python -m py_compile ra_sim/gui/manual_geometry.py ra_sim/gui/geometry_fit.py scripts/debug/validate_geometry_preflight_rebind.py scripts/debug/run_new4_geometry_fit_ladder.py
+pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv
 ```
 
 Pinpoint regression gate:
@@ -129,9 +150,18 @@ python scripts/debug/validate_geometry_preflight_rebind.py `
   --report-path artifacts/geometry_fit_gui_states/new4_preflight_report.json
 ```
 
-Do not use `tests/test_geometry_fit_quality_baseline.py` or
-`run_geometry_fit_quality_baseline.py` as acceptance for this point-provider
-task. Optimizer hang/convergence belongs to a later optimizer issue.
+Bounded optimizer ladder:
+
+```powershell
+python scripts/debug/run_new4_geometry_fit_ladder.py `
+  --state artifacts/geometry_fit_gui_states/new4.json `
+  --background-index 0 `
+  --output-root artifacts/geometry_fit_ladder/new4 `
+  --max-rung center
+```
+
+Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
+tool. Run it only after the ladder identifies a stable parameter set.
 
 ## Links
 
