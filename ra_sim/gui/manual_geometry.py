@@ -2258,10 +2258,7 @@ def _geometry_manual_entry_display_point(
 def _geometry_manual_entry_current_view_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    current_view_point = _geometry_manual_finite_point(entry, (("sim_col", "sim_row"),))
-    if current_view_point is not None:
-        return current_view_point
-    return _geometry_manual_entry_explicit_current_view_display_point(entry)
+    return _geometry_manual_entry_detector_display_point(entry)
 
 
 def _geometry_manual_entry_active_view_point(

@@ -32,8 +32,11 @@ refresh/view-change, and place setup keep one mosaic-top seed per normalized
 branch for each real Qr/Qz group while preserving branch/reflection/ray
 provenance. The caked-mode detector-return bug is also closed: selected
 `2theta,phi` Qr/Qz seeds redraw in detector view through the same
-detector-display projection path as simulation markers. Optimizer validation
-now stops at bounded ladder rung 1 when the request would use fallback rows;
+detector-display projection path as simulation markers. The Qr/Qz picker now
+also stays clickable after switching detector to caked or caked to detector,
+even when cached candidate rows still carry stale active-view coordinates.
+Optimizer validation stops at bounded ladder rung 1 when the request would use
+fallback rows;
 solve rungs wait until objective dry-run reports zero fallback and zero missing
 fixed-source rows. The bridge currently copies provider identity into the
 optimizer request and fails before `least_squares` when fixed-source fields are

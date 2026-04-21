@@ -11028,6 +11028,222 @@ def test_runtime_projection_uses_sim_detector_adapter_after_caked_view() -> None
     assert visible["source_ray_id"] == "winning-ray"
 
 
+def _cross_view_selection_callbacks(use_caked, raw_rows):
+    return mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: use_caked["value"],
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 20.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([20.0, 30.0], dtype=float),
+        current_background_display=lambda: np.zeros((256, 256), dtype=float),
+        current_background_native=lambda: np.zeros((256, 256), dtype=float),
+        image_size=256,
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: [
+            dict(row) for row in raw_rows
+        ],
+    )
+
+
+def _toggle_cross_view_selection(grouped, col, row, *, use_caked_space, group_key):
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        float(col),
+        float(row),
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((256, 256), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cross-view", bool(use_caked_space)),
+            "grouped_candidates": grouped,
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=bool(use_caked_space),
+        pick_search_window_px=50.0,
+    )
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert set_sessions[-1]["group_key"] == group_key
+    assert "Selected selected group" in status_messages[-1]
+    return next_session
+
+
+def test_manual_qr_selection_works_detector_then_caked_after_view_change() -> None:
+    use_caked = {"value": False}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "mosaic_weight": 0.8,
+            "native_col": 2.0,
+            "native_row": 4.0,
+        },
+        {
+            "label": "-3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_branch_index": 1,
+            "source_reflection_index": 17,
+            "source_ray_id": "minus-ray",
+            "hkl": (-3, 0, 4),
+            "mosaic_weight": 0.9,
+            "native_col": 3.0,
+            "native_row": 4.0,
+        },
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+
+    detector_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    detector_by_branch = {row["branch_id"]: row for row in detector_rows}
+    assert len(detector_rows) == 2
+    assert detector_by_branch["+x"]["display_col"] == 102.0
+    assert detector_by_branch["+x"]["display_row"] == 204.0
+
+    detector_session = _toggle_cross_view_selection(
+        callbacks.pick_candidates(detector_rows),
+        102.0,
+        204.0,
+        use_caked_space=False,
+        group_key=group_key,
+    )
+    assert detector_session["target_count"] == 2
+    assert len(detector_session["group_entries"]) == 2
+    assert detector_session["tagged_candidate"]["branch_id"] == "+x"
+    assert detector_session["tagged_candidate"]["source_reflection_index"] == 16
+    assert detector_session["tagged_candidate"]["source_ray_id"] == "plus-ray"
+
+    use_caked["value"] = True
+    caked_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    caked_by_branch = {row["branch_id"]: row for row in caked_rows}
+    assert len(caked_rows) == 2
+    assert caked_by_branch["+x"]["display_col"] == 12.0
+    assert caked_by_branch["+x"]["display_row"] == 24.0
+    assert caked_by_branch["+x"]["sim_col_raw"] == 102.0
+    assert caked_by_branch["+x"]["sim_row_raw"] == 204.0
+
+    caked_session = _toggle_cross_view_selection(
+        callbacks.pick_candidates(caked_rows),
+        12.0,
+        24.0,
+        use_caked_space=True,
+        group_key=group_key,
+    )
+    assert caked_session["target_count"] == 2
+    assert len(caked_session["group_entries"]) == 2
+    assert caked_session["tagged_candidate"]["branch_id"] == "+x"
+    assert caked_session["tagged_candidate"]["source_reflection_index"] == 16
+    assert caked_session["tagged_candidate"]["source_ray_id"] == "plus-ray"
+
+
+def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "mosaic_weight": 0.8,
+            "native_col": 2.0,
+            "native_row": 4.0,
+        },
+        {
+            "label": "-3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_branch_index": 1,
+            "source_reflection_index": 17,
+            "source_ray_id": "minus-ray",
+            "hkl": (-3, 0, 4),
+            "mosaic_weight": 0.9,
+            "native_col": 3.0,
+            "native_row": 4.0,
+        },
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+
+    caked_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    caked_by_branch = {row["branch_id"]: row for row in caked_rows}
+    assert len(caked_rows) == 2
+    assert caked_by_branch["-x"]["display_col"] == 13.0
+    assert caked_by_branch["-x"]["display_row"] == 24.0
+    assert caked_by_branch["-x"]["sim_col_raw"] == 103.0
+    assert caked_by_branch["-x"]["sim_row_raw"] == 204.0
+
+    caked_session = _toggle_cross_view_selection(
+        callbacks.pick_candidates(caked_rows),
+        13.0,
+        24.0,
+        use_caked_space=True,
+        group_key=group_key,
+    )
+    assert caked_session["target_count"] == 2
+    assert len(caked_session["group_entries"]) == 2
+    assert caked_session["tagged_candidate"]["branch_id"] == "-x"
+    assert caked_session["tagged_candidate"]["source_reflection_index"] == 17
+    assert caked_session["tagged_candidate"]["source_ray_id"] == "minus-ray"
+
+    stale_caked_rows = []
+    for row in caked_rows:
+        stale = dict(row)
+        stale["sim_col"] = stale["display_col"]
+        stale["sim_row"] = stale["display_row"]
+        stale_caked_rows.append(stale)
+    stale_grouped = callbacks.pick_candidates(stale_caked_rows)
+
+    group_key_found, group_entries, dist = mg.geometry_manual_choose_group_at(
+        stale_grouped,
+        103.0,
+        204.0,
+        window_size_px=50.0,
+        use_caked_display=False,
+    )
+    assert group_key_found == group_key
+    assert len(group_entries) == 2
+    assert dist < 1.0
+
+    use_caked["value"] = False
+    detector_session = _toggle_cross_view_selection(
+        stale_grouped,
+        103.0,
+        204.0,
+        use_caked_space=False,
+        group_key=group_key,
+    )
+    assert detector_session["target_count"] == 2
+    assert len(detector_session["group_entries"]) == 2
+    assert detector_session["tagged_candidate"]["branch_id"] == "-x"
+    assert detector_session["tagged_candidate"]["source_reflection_index"] == 17
+    assert detector_session["tagged_candidate"]["source_ray_id"] == "minus-ray"
+
+
 def test_caked_manual_seed_returns_to_same_detector_visual_position() -> None:
     use_caked = {"value": True}
     group_key = ("q_group", "primary", 3, 4)

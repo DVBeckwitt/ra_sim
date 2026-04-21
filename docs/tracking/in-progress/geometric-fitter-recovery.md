@@ -29,7 +29,11 @@ callers that request it.
 The caked-mode Qr/Qz detector-return bug/error scope is also closed: manual
 picks made in caked `2theta,phi` space now convert back to detector view through
 the same detector-display projection path used by simulation markers, including
-stale-session refresh and refined simulated seed redraw.
+stale-session refresh and refined simulated seed redraw. The adjacent
+cross-view selection regression is closed too: detector-mode Qr/Qz hit-testing
+uses detector provenance (`sim_col_raw/sim_row_raw` or detector-projected
+coordinates) instead of stale caked active-view display fields, so picking works
+after detector-to-caked and caked-to-detector view changes.
 
 The geometric optimizer hang/convergence problem is now handled by
 `scripts/debug/run_new4_geometry_fit_ladder.py`, not by the old full baseline
@@ -76,6 +80,10 @@ optimizer request has zero fallback rows.
   that round-trip through the same LUT/rotation path as the live simulation
   marker projection. Refresh now trusts authoritative caked `2theta,phi` fields
   over stale detector fields.
+- Detector-mode Qr/Qz selection now rejects stale caked display fields as
+  detector click coordinates. Structural cross-view tests cover detector to
+  caked, caked to detector, and stale caked-cache candidates with valid
+  detector provenance.
 - Solve rungs are disabled operationally until objective dry-run reports zero
   `fallback_row_count` and zero `fixed_source_resolution_fallback_count`.
 
@@ -89,7 +97,8 @@ optimizer request has zero fallback rows.
   whole-group-only ray.
 - Keep caked-to-detector Qr/Qz return behavior closed unless the same
   simulated `2theta,phi` seed no longer redraws at the same detector marker
-  position after switching view or refreshing.
+  position after switching view or refreshing, or Qr/Qz seed selection stops
+  recognizing the same visible marker after switching detector/caked views.
 - Do not run solve rungs, tune parameters, loosen fallback rules, or run the old
   baseline until rung 1 has seven fixed-source pairs and zero fallback rows.
 
@@ -179,8 +188,9 @@ pytest tests/test_gui_geometry_q_group_manager.py tests/test_manual_geometry_sel
 git diff --check
 ```
 
-Caked-to-detector return regression is covered in the same gate by structural
-marker tests in `tests/test_manual_geometry_selection_helpers.py`.
+Caked-to-detector return and cross-view Qr/Qz selection regressions are covered
+in the same gate by structural marker/candidate tests in
+`tests/test_manual_geometry_selection_helpers.py`.
 
 Provider-only validator check:
 
