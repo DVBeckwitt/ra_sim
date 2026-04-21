@@ -30,7 +30,10 @@ rebinding after normalized HKL and branch filtering remains the intended rule;
 the active blocker is source-cache versus caked-view gating and observability.
 The old `new2` and `new3` saved-state gates are retired. Manual Qr/Qz and HKL
 picker alignment for [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
-is resolved and archived below.
+is resolved and archived below. The archived tracker now also records the
+2026-04-21 raw-only picker-restore guard hardening: serialized active sides are
+authoritative, stale detector caches cannot be republished, and raw hit-table
+picker rows remain usable while active `stored_intersection_cache` stays empty.
 
 ## Known bugs
 

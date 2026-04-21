@@ -144,6 +144,33 @@ off-by-one, detector HKL fallback, detector Qr raw coordinates, caked HKL
 detector coordinates, caked Qr detector-display leakage, and shifted Qr
 `Line2D` x data.
 
+## Raw-Only Picker Restore Guard
+
+On 2026-04-21, raw-only full GUI simulation was hardened so manual Qr/Qz and
+HKL pickers can restore from raw hit-table rows without publishing detector
+intersection caches. This keeps the engine split unchanged and preserves the
+runtime contract:
+
+- full GUI picker restore requests collect hit tables for each active side;
+- raw-only GUI runs request `build_intersection_cache=False`;
+- active `stored_intersection_cache` remains `[]`;
+- stale stored primary/secondary detector caches are not republished unless
+  every serialized active side has a current detector-cache signature;
+- serialized `active_peak_row_sides` from the job/result is authoritative for
+  result-apply paths, with GUI weight/image recomputation allowed only for
+  legacy callers that pass `None`;
+- partial raw refreshes such as primary fresh plus secondary stale clear old
+  combined picker rows instead of publishing mixed or stale picker state;
+- source snapshots from both normal capture and manual rebuild commits are
+  row-content-aware and only reusable when non-empty and `valid_for_picker`.
+
+Regression coverage now proves the full raw-only chain in
+`tests/test_gui_runtime_import_safe.py`: one simulation call per active side,
+`collect_hit_tables=True`, `build_intersection_cache=False`, no detector
+cache-build helper call, non-empty primary/secondary/combined/peak/source row
+counts, clickable Qr/Qz and HKL candidates, finite detector/display pixels, and
+empty active `stored_intersection_cache`.
+
 ## Main Code Paths
 
 - `ra_sim/gui/geometry_q_group_manager.py`
@@ -173,3 +200,7 @@ Main regression coverage lives near:
 - HKL caked markers agree with the rendered caked simulation spot.
 - Detector/caked HKL and Qr overlays share displayed background coordinates at
   the matrix layer and Matplotlib artist layer.
+- Raw-only full GUI simulations keep detector cache publication empty while Qr
+  and HKL picker rows restore from finite raw hit-table-derived pixels.
+- Stale per-side detector caches can remain stored, but active combined detector
+  cache publication is all-or-nothing across serialized active sides.

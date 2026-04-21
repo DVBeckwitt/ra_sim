@@ -4272,11 +4272,34 @@ def _apply_geometry_manual_pairs_snapshot(
     )
 
 
+def _invalidate_peak_picker_caches(*, clear_source_snapshot: bool = False) -> None:
+    """Drop cached picker-facing simulation/background state."""
+    geometry_runtime_state.manual_pick_cache_signature = None
+    geometry_runtime_state.manual_pick_cache_data = {}
+    payload_cache = globals().get("_hkl_pick_simulation_points_payload_cache")
+    if isinstance(payload_cache, dict):
+        payload_cache.clear()
+    simulation_runtime_state.geometry_q_group_entries_cache_signature = None
+    simulation_runtime_state.geometry_q_group_entries_cache = []
+    if clear_source_snapshot:
+        try:
+            background_index = int(background_runtime_state.current_background_index)
+        except Exception:
+            background_index = None
+        if background_index is not None:
+            source_row_snapshots = getattr(
+                simulation_runtime_state,
+                "source_row_snapshots",
+                None,
+            )
+            if isinstance(source_row_snapshots, dict):
+                source_row_snapshots.pop(background_index, None)
+
+
 def _invalidate_geometry_manual_pick_cache() -> None:
     """Drop cached manual-pick simulation/background state."""
 
-    geometry_runtime_state.manual_pick_cache_signature = None
-    geometry_runtime_state.manual_pick_cache_data = {}
+    _invalidate_peak_picker_caches(clear_source_snapshot=False)
 
 
 def _set_geometry_manual_pick_cache_state(
@@ -5601,9 +5624,7 @@ def _geometry_fit_resolve_targeted_caked_projection_payload(
 
     normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
     if normalized_shape is None and isinstance(resolved_payload, Mapping):
-        normalized_shape = _geometry_fit_detector_shape_2d(
-            resolved_payload.get("detector_shape")
-        )
+        normalized_shape = _geometry_fit_detector_shape_2d(resolved_payload.get("detector_shape"))
     if normalized_shape is None:
         try:
             if int(background_idx) == int(background_runtime_state.current_background_index):
@@ -5623,9 +5644,7 @@ def _geometry_fit_resolve_targeted_caked_projection_payload(
         and normalized_shape is not None
         and isinstance(ai_value, FastAzimuthalIntegrator)
     ):
-        npt_rad, npt_azim = _geometry_fit_targeted_projection_analysis_bins(
-            analysis_preview_bins
-        )
+        npt_rad, npt_azim = _geometry_fit_targeted_projection_analysis_bins(analysis_preview_bins)
         resolved_payload = _geometry_fit_worker_caked_projection_view(
             detector_shape=normalized_shape,
             ai=ai_value,
@@ -5698,9 +5717,15 @@ def _geometry_manual_project_peaks_for_background(
     if not normalized_rows:
         return []
 
-    normalized_mode = str(
-        mode_override if mode_override is not None else _geometry_fit_targeted_projection_view_mode()
-    ).strip().lower()
+    normalized_mode = (
+        str(
+            mode_override
+            if mode_override is not None
+            else _geometry_fit_targeted_projection_view_mode()
+        )
+        .strip()
+        .lower()
+    )
     if normalized_mode not in {"detector", "caked", "q_space"}:
         normalized_mode = "detector"
 
@@ -5712,7 +5737,9 @@ def _geometry_manual_project_peaks_for_background(
     is_current_background = int(background_index) == int(current_background_index)
 
     if normalized_mode == "q_space":
-        if not is_current_background or not callable(_project_geometry_manual_peaks_to_current_view):
+        if not is_current_background or not callable(
+            _project_geometry_manual_peaks_to_current_view
+        ):
             return []
         try:
             return _geometry_fit_rows_for_background(
@@ -5826,15 +5853,13 @@ def _geometry_manual_project_peaks_for_background(
         display_to_native_sim_coords=globals().get("_display_to_native_sim_coords"),
         native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
         get_detector_angular_maps=(
-            (
-                lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
+            lambda ai_value: (
+                globals()["_get_detector_angular_maps"](ai_value)
                 if callable(globals().get("_get_detector_angular_maps"))
                 else None
             )
         ),
-        detector_pixel_to_scattering_angles=globals().get(
-            "_detector_pixel_to_scattering_angles"
-        ),
+        detector_pixel_to_scattering_angles=globals().get("_detector_pixel_to_scattering_angles"),
         backend_detector_coords_to_native_detector_coords=(
             globals().get("_backend_background_to_native_detector_coords")
             or (lambda col, row, *_args, **_kwargs: (float(col), float(row)))
@@ -5845,15 +5870,9 @@ def _geometry_manual_project_peaks_for_background(
         bundle_detector_coords_to_background_display_coords=(
             lambda col, row: (float(col), float(row))
         ),
-        scattering_angles_to_detector_pixel=globals().get(
-            "_scattering_angles_to_detector_pixel"
-        ),
-        filter_simulated_peaks=(
-            lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
-        ),
-        collapse_simulated_peaks=(
-            lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)
-        ),
+        scattering_angles_to_detector_pixel=globals().get("_scattering_angles_to_detector_pixel"),
+        filter_simulated_peaks=(lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)),
+        collapse_simulated_peaks=(lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)),
     )
     try:
         return _geometry_fit_rows_for_background(
@@ -6544,9 +6563,7 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
                     raw_item = value.get(key)
                 except Exception:
                     return None
-                normalized_items.append(
-                    (key_name, _normalize_signature_value(raw_item))
-                )
+                normalized_items.append((key_name, _normalize_signature_value(raw_item)))
             return tuple(normalized_items)
         if isinstance(value, (list, tuple)):
             return tuple(_normalize_signature_value(item) for item in value)
@@ -6560,8 +6577,7 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
 
     def _row_fingerprint(row: dict[str, object]) -> tuple[object, ...]:
         fixed_values = tuple(
-            _normalize_signature_value(row.get(field_name))
-            for field_name in fixed_row_fields
+            _normalize_signature_value(row.get(field_name)) for field_name in fixed_row_fields
         )
         extras: list[tuple[str, object]] = []
         for key in sorted(row.keys(), key=lambda item: str(item)):
@@ -6681,16 +6697,10 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
             if isinstance(grouped_rows, dict):
                 for entries in grouped_rows.values():
                     if isinstance(entries, (list, tuple)):
-                        rows.extend(
-                            dict(entry) for entry in entries if isinstance(entry, dict)
-                        )
+                        rows.extend(dict(entry) for entry in entries if isinstance(entry, dict))
             signature = (
                 "provider",
-                (
-                    _normalized_signature_digest(param_set)
-                    if isinstance(param_set, dict)
-                    else None
-                ),
+                (_normalized_signature_digest(param_set) if isinstance(param_set, dict) else None),
                 len(rows),
                 _rows_content_signature(rows),
             )
@@ -7352,9 +7362,7 @@ def _initialize_runtime_controls_block_09() -> None:
             native_detector_coords_to_detector_display_coords=(
                 _native_detector_coords_to_live_bundle_detector_coords
             ),
-            hkl_pick_simulation_points_factory=(
-                _hkl_pick_simulation_points_from_qr_picker_cache
-            ),
+            hkl_pick_simulation_points_factory=(_hkl_pick_simulation_points_from_qr_picker_cache),
             detector_display_to_native_detector_coords=(
                 _background_display_to_native_detector_coords
             ),
@@ -7793,38 +7801,59 @@ def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
         return
 
 
-def _restore_combined_detector_intersection_cache() -> None:
-    try:
-        primary_weight = float(weight1_var.get())
-    except Exception:
-        primary_weight = 0.0
-    try:
-        secondary_weight = float(weight2_var.get())
-    except Exception:
-        secondary_weight = 0.0
+def _restore_combined_detector_intersection_cache(
+    active_peak_row_sides: Sequence[object] | None = None,
+) -> None:
+    if active_peak_row_sides is None:
+        try:
+            primary_weight = float(weight1_var.get())
+        except Exception:
+            primary_weight = 0.0
+        try:
+            secondary_weight = float(weight2_var.get())
+        except Exception:
+            secondary_weight = 0.0
+        run_primary = bool(
+            simulation_runtime_state.stored_primary_sim_image is not None
+            and abs(primary_weight) > 1.0e-12
+        )
+        run_secondary = bool(
+            simulation_runtime_state.stored_secondary_sim_image is not None
+            and abs(secondary_weight) > 1.0e-12
+        )
+        active_sides = _active_peak_row_sides_for_job(
+            job_kind="full",
+            run_primary=run_primary,
+            run_secondary=run_secondary,
+            secondary_available=run_secondary,
+        )
+    else:
+        active_sides = _normalized_active_peak_row_sides(active_peak_row_sides)
 
-    restored_tables = []
-    if (
-        simulation_runtime_state.stored_primary_sim_image is not None
-        and abs(primary_weight) > 1.0e-12
-        and simulation_runtime_state.stored_primary_intersection_cache is not None
-    ):
-        restored_tables.extend(
-            _copy_intersection_cache_tables(
-                simulation_runtime_state.stored_primary_intersection_cache
+    current_hit_table_signature = getattr(
+        simulation_runtime_state,
+        "stored_hit_table_signature",
+        None,
+    )
+    publish_intersection_cache = bool(active_sides) and all(
+        _side_detector_cache_is_current(side, current_hit_table_signature) for side in active_sides
+    )
+    restored_tables: list[object] = []
+    if publish_intersection_cache:
+        if "primary" in active_sides:
+            restored_tables.extend(
+                _copy_intersection_cache_tables(
+                    simulation_runtime_state.stored_primary_intersection_cache
+                )
             )
-        )
-    if (
-        simulation_runtime_state.stored_secondary_sim_image is not None
-        and abs(secondary_weight) > 1.0e-12
-        and simulation_runtime_state.stored_secondary_intersection_cache is not None
-    ):
-        restored_tables.extend(
-            _copy_intersection_cache_tables(
-                simulation_runtime_state.stored_secondary_intersection_cache
+        if "secondary" in active_sides:
+            restored_tables.extend(
+                _copy_intersection_cache_tables(
+                    simulation_runtime_state.stored_secondary_intersection_cache
+                )
             )
-        )
     simulation_runtime_state.stored_intersection_cache = restored_tables
+    _clear_caked_intersection_cache()
 
 
 def _apply_main_caked_view_toggle() -> None:
@@ -8425,9 +8454,7 @@ def _initialize_runtime_controls_block_16() -> None:
 
 def _get_scale_factor_value(default=1.0):
     display_controls = globals().get("display_controls_view_state")
-    simulation_scale_factor_var = getattr(
-        display_controls, "simulation_scale_factor_var", None
-    )
+    simulation_scale_factor_var = getattr(display_controls, "simulation_scale_factor_var", None)
     if simulation_scale_factor_var is None:
         return default
     try:
@@ -8734,7 +8761,9 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
     if artist is None or source is None or extent is None:
         return False
     try:
-        projection_mode = str(_resolved_primary_analysis_display_mode() or "detector").strip().lower()
+        projection_mode = (
+            str(_resolved_primary_analysis_display_mode() or "detector").strip().lower()
+        )
     except Exception:
         projection_mode = "detector"
     use_live_viewport_projection = bool(
@@ -9233,9 +9262,7 @@ def _refresh_global_detector_buffer_from_unscaled(
             global_image_buffer = np.empty(unscaled_array.shape, dtype=np.float64)
             scaled_buffer = global_image_buffer
     try:
-        scale_value = float(
-            _get_scale_factor_value(default=1.0) if scale is None else scale
-        )
+        scale_value = float(_get_scale_factor_value(default=1.0) if scale is None else scale)
     except Exception:
         scale_value = 1.0
     if not math.isfinite(scale_value):
@@ -9726,8 +9753,8 @@ def caking(
     )
 
 
-def _copy_intersection_cache_tables(cache):
-    return _primary_cache_helpers.copy_intersection_cache_tables(cache)
+def _copy_intersection_cache_tables(cache, **kwargs):
+    return _primary_cache_helpers.copy_intersection_cache_tables(cache, **kwargs)
 
 
 def _copy_hit_tables(hit_tables):
@@ -10037,7 +10064,10 @@ def _prepare_caked_intersection_cache(
 ):
     del pixel_size_m, distance_m, center_row_px, center_col_px
 
-    source_tables = _copy_intersection_cache_tables(intersection_cache)
+    source_tables = _copy_intersection_cache_tables(
+        intersection_cache,
+        allow_abbreviated_detector_cache=True,
+    )
     if not source_tables:
         return source_tables
 
@@ -10669,6 +10699,95 @@ def _hit_table_state_present_for_run_sides(
     return True
 
 
+def _active_peak_row_sides_for_job(
+    *,
+    job_kind: str,
+    run_primary: bool,
+    run_secondary: bool,
+    secondary_available: bool,
+) -> tuple[str, ...]:
+    normalized_job_kind = str(job_kind or "full")
+    if normalized_job_kind == "preview":
+        return ()
+    if normalized_job_kind == "primary_fill":
+        return ("primary",) if bool(run_primary) else ()
+    active_sides: list[str] = []
+    if bool(run_primary):
+        active_sides.append("primary")
+    if bool(run_secondary) and bool(secondary_available):
+        active_sides.append("secondary")
+    return tuple(active_sides)
+
+
+def _normalized_active_peak_row_sides(value: object) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    normalized: list[str] = []
+    for raw_side in value:
+        side = str(raw_side or "").strip().lower()
+        if side not in {"primary", "secondary"} or side in normalized:
+            continue
+        normalized.append(side)
+    return tuple(normalized)
+
+
+def _active_peak_row_sides_have_fresh_raw_rows(
+    active_peak_row_sides: Sequence[object] | None,
+    *,
+    primary_raw_rows_fresh: bool,
+    secondary_raw_rows_fresh: bool,
+) -> bool:
+    active_sides = _normalized_active_peak_row_sides(active_peak_row_sides)
+    if not active_sides:
+        return False
+    for side in active_sides:
+        if side == "primary" and not bool(primary_raw_rows_fresh):
+            return False
+        if side == "secondary" and not bool(secondary_raw_rows_fresh):
+            return False
+    return True
+
+
+def _table_row_count(table_payload: object) -> int:
+    if table_payload is None:
+        return 0
+    if isinstance(table_payload, Mapping):
+        return 1
+    if isinstance(table_payload, np.ndarray):
+        if table_payload.ndim >= 2:
+            return int(table_payload.shape[0])
+        return int(table_payload.size > 0)
+    if not isinstance(table_payload, Sequence) or isinstance(
+        table_payload,
+        (str, bytes),
+    ):
+        try:
+            table_payload = list(table_payload)
+        except Exception:
+            return 0
+    row_count = 0
+    for table in table_payload:
+        if isinstance(table, Mapping):
+            row_count += 1
+            continue
+        try:
+            rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(table)
+        except Exception:
+            rows = []
+        if rows:
+            row_count += int(len(rows))
+            continue
+        try:
+            arr = np.asarray(table)
+        except Exception:
+            continue
+        if arr.ndim >= 2:
+            row_count += int(arr.shape[0])
+        elif arr.size > 0:
+            row_count += 1
+    return int(row_count)
+
+
 def _cached_hit_tables_reusable(
     requested_signature: object,
     *,
@@ -10681,6 +10800,292 @@ def _cached_hit_tables_reusable(
         run_primary=run_primary,
         run_secondary=run_secondary,
     )
+
+
+def _side_detector_cache_is_current(side: str, current_signature: object) -> bool:
+    if current_signature is None:
+        return False
+    normalized_side = str(side or "").strip().lower()
+    if normalized_side == "primary":
+        side_signature = getattr(
+            simulation_runtime_state,
+            "stored_primary_intersection_cache_signature",
+            None,
+        )
+        return (
+            side_signature is not None
+            and current_signature == side_signature
+            and getattr(simulation_runtime_state, "stored_primary_intersection_cache", None)
+            is not None
+        )
+    if normalized_side == "secondary":
+        side_signature = getattr(
+            simulation_runtime_state,
+            "stored_secondary_intersection_cache_signature",
+            None,
+        )
+        return (
+            side_signature is not None
+            and current_signature == side_signature
+            and getattr(simulation_runtime_state, "stored_secondary_intersection_cache", None)
+            is not None
+        )
+    return False
+
+
+def _clear_live_peak_record_cache_after_restore_miss() -> None:
+    simulation_runtime_state.peak_records = []
+    simulation_runtime_state.peak_positions = []
+    simulation_runtime_state.peak_millers = []
+    simulation_runtime_state.peak_intensities = []
+    simulation_runtime_state.peak_positions_filtered = True
+    simulation_runtime_state.selected_peak_record = None
+    simulation_runtime_state.peak_overlay_cache = _empty_peak_overlay_cache()
+    _invalidate_peak_picker_caches(clear_source_snapshot=True)
+
+
+def _publish_combined_simulation_state(
+    *,
+    image_size_value: int,
+    primary_a_value: float,
+    primary_c_value: float,
+    secondary_a_value: float,
+    secondary_c_value: float,
+    active_peak_row_sides: Sequence[object] | None = None,
+) -> dict[str, object]:
+    w1 = float(weight1_var.get())
+    w2 = float(weight2_var.get())
+    run_primary = bool(
+        simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12
+    )
+    run_secondary = bool(
+        simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12
+    )
+    if active_peak_row_sides is None:
+        active_display_sides = (
+            ()
+            if bool(getattr(simulation_runtime_state, "preview_active", False))
+            else _active_peak_row_sides_for_job(
+                job_kind="full",
+                run_primary=run_primary,
+                run_secondary=run_secondary,
+                secondary_available=run_secondary,
+            )
+        )
+    else:
+        active_display_sides = _normalized_active_peak_row_sides(active_peak_row_sides)
+    include_primary_peak_rows = "primary" in active_display_sides
+    include_secondary_peak_rows = "secondary" in active_display_sides
+
+    img1 = (
+        simulation_runtime_state.stored_primary_sim_image
+        if simulation_runtime_state.stored_primary_sim_image is not None
+        else np.zeros((image_size_value, image_size_value), dtype=np.float64)
+    )
+    img2 = (
+        simulation_runtime_state.stored_secondary_sim_image
+        if simulation_runtime_state.stored_secondary_sim_image is not None
+        else np.zeros((image_size_value, image_size_value), dtype=np.float64)
+    )
+    updated_image = w1 * img1 + w2 * img2
+
+    max_positions_local: list[object] = []
+    source_reflection_indices_local: list[int] = []
+    peak_table_lattice_local: list[object] = []
+    primary_max_positions_local: list[object] = []
+    primary_peak_table_lattice_local: list[object] = []
+    if (
+        include_primary_peak_rows
+        and simulation_runtime_state.stored_primary_max_positions is not None
+    ):
+        primary_max_positions_local = list(simulation_runtime_state.stored_primary_max_positions)
+        max_positions_local.extend(primary_max_positions_local)
+        if simulation_runtime_state.stored_primary_source_reflection_indices is not None:
+            source_reflection_indices_local.extend(
+                simulation_runtime_state.stored_primary_source_reflection_indices
+            )
+        if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
+            primary_peak_table_lattice_local = list(
+                simulation_runtime_state.stored_primary_peak_table_lattice
+            )
+
+    secondary_max_positions_local: list[object] = []
+    secondary_peak_table_lattice_local: list[object] = []
+    if (
+        include_secondary_peak_rows
+        and simulation_runtime_state.stored_secondary_max_positions is not None
+    ):
+        secondary_max_positions_local = list(
+            simulation_runtime_state.stored_secondary_max_positions
+        )
+        max_positions_local.extend(secondary_max_positions_local)
+        if simulation_runtime_state.stored_secondary_source_reflection_indices is not None:
+            source_reflection_indices_local.extend(
+                simulation_runtime_state.stored_secondary_source_reflection_indices
+            )
+        if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
+            secondary_peak_table_lattice_local = list(
+                simulation_runtime_state.stored_secondary_peak_table_lattice
+            )
+
+    if len(primary_peak_table_lattice_local) == len(primary_max_positions_local):
+        peak_table_lattice_local.extend(primary_peak_table_lattice_local)
+    else:
+        peak_table_lattice_local.extend(
+            [
+                (float(primary_a_value), float(primary_c_value), "primary")
+                for _ in primary_max_positions_local
+            ]
+        )
+    if len(secondary_peak_table_lattice_local) == len(secondary_max_positions_local):
+        peak_table_lattice_local.extend(secondary_peak_table_lattice_local)
+    else:
+        peak_table_lattice_local.extend(
+            [
+                (float(secondary_a_value), float(secondary_c_value), "secondary")
+                for _ in secondary_max_positions_local
+            ]
+        )
+
+    simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+    row_content_signature = (
+        gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+            max_positions_local
+        )
+    )
+    simulation_runtime_state.stored_q_group_content_signature = row_content_signature
+    simulation_runtime_state.stored_source_reflection_indices_local = (
+        list(source_reflection_indices_local)
+        if len(source_reflection_indices_local) == len(max_positions_local)
+        else None
+    )
+    simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
+
+    current_hit_table_signature = getattr(
+        simulation_runtime_state,
+        "stored_hit_table_signature",
+        None,
+    )
+    publish_intersection_cache = bool(active_display_sides) and all(
+        _side_detector_cache_is_current(side, current_hit_table_signature)
+        for side in active_display_sides
+    )
+    intersection_cache_local: list[object] = []
+    if publish_intersection_cache:
+        if "primary" in active_display_sides:
+            intersection_cache_local.extend(
+                _copy_intersection_cache_tables(
+                    simulation_runtime_state.stored_primary_intersection_cache
+                )
+            )
+        if "secondary" in active_display_sides:
+            intersection_cache_local.extend(
+                _copy_intersection_cache_tables(
+                    simulation_runtime_state.stored_secondary_intersection_cache
+                )
+            )
+    simulation_runtime_state.stored_intersection_cache = list(intersection_cache_local)
+    _clear_caked_intersection_cache()
+    simulation_runtime_state.stored_sim_image = updated_image
+    return {
+        "run_primary": bool(run_primary),
+        "run_secondary": bool(run_secondary),
+        "active_sides": tuple(active_display_sides),
+        "combined_row_count": int(_table_row_count(max_positions_local)),
+        "published_intersection_cache_row_count": int(_table_row_count(intersection_cache_local)),
+        "row_content_signature": row_content_signature,
+    }
+
+
+def _restore_live_peak_rows_from_combined_hit_tables(
+    *,
+    active_peak_row_sides: Sequence[object] | None,
+    primary_raw_rows_fresh: bool,
+    secondary_raw_rows_fresh: bool,
+    previous_row_content_signature: object = None,
+) -> dict[str, object]:
+    active_sides = _normalized_active_peak_row_sides(active_peak_row_sides)
+    input_row_count = _table_row_count(simulation_runtime_state.stored_max_positions_local)
+    diagnostics = {
+        "active_sides": tuple(active_sides),
+        "input_row_count": int(input_row_count),
+        "projected_row_count": 0,
+        "published_peak_record_count": 0,
+        "skipped_reason": None,
+    }
+    if not active_sides:
+        _clear_live_peak_record_cache_after_restore_miss()
+        diagnostics["skipped_reason"] = "no_active_sides"
+        return diagnostics
+    if not _active_peak_row_sides_have_fresh_raw_rows(
+        active_sides,
+        primary_raw_rows_fresh=primary_raw_rows_fresh,
+        secondary_raw_rows_fresh=secondary_raw_rows_fresh,
+    ):
+        _clear_live_peak_record_cache_after_restore_miss()
+        diagnostics["skipped_reason"] = "stale_active_sides"
+        return diagnostics
+    if input_row_count <= 0:
+        _clear_live_peak_record_cache_after_restore_miss()
+        diagnostics["skipped_reason"] = "no_combined_rows"
+        return diagnostics
+    current_row_content_signature = getattr(
+        simulation_runtime_state,
+        "stored_q_group_content_signature",
+        None,
+    )
+    if (
+        simulation_runtime_state.peak_records
+        and previous_row_content_signature == current_row_content_signature
+    ):
+        diagnostics["published_peak_record_count"] = int(len(simulation_runtime_state.peak_records))
+        diagnostics["skipped_reason"] = "unchanged_signature"
+        return diagnostics
+    try:
+        primary_a_value = float(a_var.get())
+    except Exception:
+        primary_a_value = float("nan")
+    try:
+        primary_c_value = float(c_var.get())
+    except Exception:
+        primary_c_value = float("nan")
+    projected_rows = gui_geometry_q_group_manager.build_projected_geometry_fit_simulated_peaks(
+        getattr(simulation_runtime_state, "stored_max_positions_local", None),
+        image_shape=(int(image_size), int(image_size)),
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        peak_table_lattice=getattr(
+            simulation_runtime_state,
+            "stored_peak_table_lattice",
+            None,
+        ),
+        source_reflection_indices=getattr(
+            simulation_runtime_state,
+            "stored_source_reflection_indices_local",
+            None,
+        ),
+        primary_a=float(primary_a_value),
+        primary_c=float(primary_c_value),
+        default_source_label="primary",
+        allow_nominal_hkl_indices=True,
+        native_detector_coords_to_detector_display_coords=(
+            _native_detector_coords_to_live_bundle_detector_coords
+        ),
+        native_detector_coords_to_caked_display_coords=(
+            _native_detector_coords_to_live_caked_coords
+        ),
+        project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
+        caked_view_enabled=_active_caked_primary_view(),
+    )
+    diagnostics["projected_row_count"] = int(len(projected_rows))
+    if not projected_rows:
+        _clear_live_peak_record_cache_after_restore_miss()
+        diagnostics["skipped_reason"] = "no_projected_rows"
+        return diagnostics
+    _geometry_manual_set_runtime_peak_cache_from_projected_rows(projected_rows)
+    diagnostics["published_peak_record_count"] = int(
+        len(getattr(simulation_runtime_state, "peak_records", ()) or ())
+    )
+    return diagnostics
 
 
 def _analysis_job_key(payload: object) -> tuple[object, int, bool, object, object]:
@@ -12102,8 +12507,11 @@ def _build_preview_simulation_job(
     )
     preview_job["collect_primary_hit_tables"] = False
     preview_job["collect_secondary_hit_tables"] = False
+    preview_job["build_primary_intersection_cache"] = False
+    preview_job["build_secondary_intersection_cache"] = False
     preview_job["capture_primary_hit_tables_raw"] = False
     preview_job["capture_secondary_hit_tables_raw"] = False
+    preview_job["active_peak_row_sides"] = ()
     preview_job["job_kind"] = "preview"
     preview_job["is_preview"] = True
     preview_job["preview_sample_count"] = int(preview_indices.size)
@@ -12160,6 +12568,15 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     mosaic_params_job = dict(job["mosaic_params"])
     job_kind = str(job.get("job_kind", "full"))
+    active_peak_row_sides = _normalized_active_peak_row_sides(job.get("active_peak_row_sides", ()))
+    secondary_available = bool(job.get("secondary_available", job.get("run_secondary", False)))
+    if "active_peak_row_sides" not in job:
+        active_peak_row_sides = _active_peak_row_sides_for_job(
+            job_kind=job_kind,
+            run_primary=bool(job.get("run_primary", False)),
+            run_secondary=bool(job.get("run_secondary", False)),
+            secondary_available=secondary_available,
+        )
     image_generation_start_time = perf_counter()
 
     if bool(job.get("qr_cylinder_replace_simulation", False)):
@@ -12171,6 +12588,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "epoch": int(job["epoch"]),
             "run_primary": bool(job.get("run_primary", False)),
             "run_secondary": bool(job.get("run_secondary", False)),
+            "secondary_available": bool(secondary_available),
+            "active_peak_row_sides": tuple(active_peak_row_sides),
             "is_preview": bool(job.get("is_preview", False)),
             "preview_sample_count": (
                 int(job.get("preview_sample_count", 0))
@@ -12181,6 +12600,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "secondary_image": blank.copy(),
             "primary_hit_table_state_refreshed": False,
             "secondary_hit_table_state_refreshed": False,
+            "primary_raw_rows_fresh": False,
+            "secondary_raw_rows_fresh": False,
             "primary_intersection_cache_built": False,
             "secondary_intersection_cache_built": False,
             "primary_max_positions": [],
@@ -12309,12 +12730,13 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         c_val,
         *,
         collect_hit_tables: bool,
+        build_intersection_cache: bool,
         capture_raw_hit_tables: bool,
     ):
         buf = np.zeros((image_size, image_size), dtype=np.float64)
-        request_build_intersection_cache = bool(collect_hit_tables)
+        request_build_intersection_cache = bool(build_intersection_cache)
         request_collect_hit_tables = bool(
-            request_build_intersection_cache or capture_raw_hit_tables
+            collect_hit_tables or request_build_intersection_cache or capture_raw_hit_tables
         )
         if isinstance(data, dict):
             if len(data) == 0:
@@ -12403,10 +12825,10 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     secondary_collect_hit_tables = bool(
         job.get("collect_secondary_hit_tables", job["collect_hit_tables"])
     )
+    primary_build_intersection_cache = bool(job.get("build_primary_intersection_cache", False))
+    secondary_build_intersection_cache = bool(job.get("build_secondary_intersection_cache", False))
     capture_primary_hit_tables_raw = bool(job.get("capture_primary_hit_tables_raw", False))
-    capture_secondary_hit_tables_raw = bool(
-        job.get("capture_secondary_hit_tables_raw", False)
-    )
+    capture_secondary_hit_tables_raw = bool(job.get("capture_secondary_hit_tables_raw", False))
 
     img1 = None
     img2 = None
@@ -12422,6 +12844,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     secondary_hit_table_state_refreshed = False
     primary_intersection_cache_built = False
     secondary_intersection_cache_built = False
+    primary_raw_rows_fresh = False
+    secondary_raw_rows_fresh = False
 
     try:
         if bool(job["run_primary"]):
@@ -12439,8 +12863,10 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 float(job["a_primary"]),
                 float(job["c_primary"]),
                 collect_hit_tables=primary_collect_hit_tables,
+                build_intersection_cache=primary_build_intersection_cache,
                 capture_raw_hit_tables=capture_primary_hit_tables_raw,
             )
+            primary_raw_rows_fresh = bool(primary_hit_table_state_refreshed)
 
         if bool(job["run_secondary"]):
             (
@@ -12457,8 +12883,10 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 float(job["a_secondary"]),
                 float(job["c_secondary"]),
                 collect_hit_tables=secondary_collect_hit_tables,
+                build_intersection_cache=secondary_build_intersection_cache,
                 capture_raw_hit_tables=capture_secondary_hit_tables_raw,
             )
+            secondary_raw_rows_fresh = bool(secondary_hit_table_state_refreshed)
 
         primary_peak_tables = _resolved_peak_table_payload(cache1, raw_hit_tables1)
         secondary_peak_tables = _resolved_peak_table_payload(cache2, raw_hit_tables2)
@@ -12501,6 +12929,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "epoch": int(job["epoch"]),
             "run_primary": bool(job.get("run_primary", False)),
             "run_secondary": bool(job.get("run_secondary", False)),
+            "secondary_available": bool(secondary_available),
+            "active_peak_row_sides": tuple(active_peak_row_sides),
             "is_preview": bool(job.get("is_preview", False)),
             "preview_sample_count": (
                 int(job.get("preview_sample_count", 0))
@@ -12511,13 +12941,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "secondary_image": img2,
             "collected_hit_tables": bool(job["collect_hit_tables"]),
             "primary_hit_table_state_refreshed": bool(primary_hit_table_state_refreshed),
-            "secondary_hit_table_state_refreshed": bool(
-                secondary_hit_table_state_refreshed
-            ),
+            "secondary_hit_table_state_refreshed": bool(secondary_hit_table_state_refreshed),
+            "primary_raw_rows_fresh": bool(primary_raw_rows_fresh),
+            "secondary_raw_rows_fresh": bool(secondary_raw_rows_fresh),
             "primary_intersection_cache_built": bool(primary_intersection_cache_built),
-            "secondary_intersection_cache_built": bool(
-                secondary_intersection_cache_built
-            ),
+            "secondary_intersection_cache_built": bool(secondary_intersection_cache_built),
             "hit_table_signature": job.get("hit_table_signature"),
             "primary_contribution_cache_signature": job.get("primary_contribution_cache_signature"),
             "primary_source_mode": job.get("primary_source_mode"),
@@ -12533,6 +12961,13 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             ),
             "primary_best_sample_indices": np.asarray(
                 best_sample_indices1,
+                dtype=np.int64,
+            ).copy(),
+            "secondary_hit_tables_raw": _copy_hit_tables(
+                raw_hit_tables2 if capture_secondary_hit_tables_raw else []
+            ),
+            "secondary_best_sample_indices": np.asarray(
+                best_sample_indices2,
                 dtype=np.int64,
             ).copy(),
             "primary_max_positions": list(primary_peak_tables),
@@ -12769,15 +13204,27 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
     )
     run_primary = bool(result.get("run_primary", False))
     run_secondary = bool(result.get("run_secondary", False))
-    primary_hit_table_state_refreshed = bool(
-        result.get("primary_hit_table_state_refreshed", False)
-    )
+    primary_hit_table_state_refreshed = bool(result.get("primary_hit_table_state_refreshed", False))
     secondary_hit_table_state_refreshed = bool(
         result.get("secondary_hit_table_state_refreshed", False)
     )
-    primary_intersection_cache_built = bool(
-        result.get("primary_intersection_cache_built", False)
+    primary_raw_rows_fresh = bool(
+        result.get("primary_raw_rows_fresh", primary_hit_table_state_refreshed)
     )
+    secondary_raw_rows_fresh = bool(
+        result.get("secondary_raw_rows_fresh", secondary_hit_table_state_refreshed)
+    )
+    active_peak_row_sides = _normalized_active_peak_row_sides(
+        result.get("active_peak_row_sides", ())
+    )
+    if "active_peak_row_sides" not in result:
+        active_peak_row_sides = _active_peak_row_sides_for_job(
+            job_kind=str(result.get("job_kind", "full")),
+            run_primary=run_primary,
+            run_secondary=run_secondary,
+            secondary_available=bool(result.get("secondary_available", run_secondary)),
+        )
+    primary_intersection_cache_built = bool(result.get("primary_intersection_cache_built", False))
     secondary_intersection_cache_built = bool(
         result.get("secondary_intersection_cache_built", False)
     )
@@ -12786,10 +13233,20 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_primary_intersection_cache = (
             _copy_intersection_cache_tables(result.get("primary_intersection_cache", []))
         )
+        simulation_runtime_state.stored_primary_intersection_cache_signature = result.get(
+            "hit_table_signature"
+        )
+    elif primary_hit_table_state_refreshed:
+        simulation_runtime_state.stored_primary_intersection_cache_signature = None
     if secondary_intersection_cache_built:
         simulation_runtime_state.stored_secondary_intersection_cache = (
             _copy_intersection_cache_tables(result.get("secondary_intersection_cache", []))
         )
+        simulation_runtime_state.stored_secondary_intersection_cache_signature = result.get(
+            "hit_table_signature"
+        )
+    elif secondary_hit_table_state_refreshed:
+        simulation_runtime_state.stored_secondary_intersection_cache_signature = None
 
     if primary_intersection_cache_built:
         resolved_primary_peak_tables = _resolved_peak_table_payload(
@@ -12809,9 +13266,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             result.get("secondary_max_positions", []),
         )
     elif secondary_hit_table_state_refreshed:
-        resolved_secondary_peak_tables = _copy_hit_tables(
-            result.get("secondary_max_positions", [])
-        )
+        resolved_secondary_peak_tables = _copy_hit_tables(result.get("secondary_max_positions", []))
     else:
         resolved_secondary_peak_tables = _copy_hit_tables(
             simulation_runtime_state.stored_secondary_max_positions
@@ -12837,9 +13292,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         )
     )
     if primary_hit_table_state_refreshed:
-        simulation_runtime_state.stored_primary_max_positions = list(
-            resolved_primary_peak_tables
-        )
+        simulation_runtime_state.stored_primary_max_positions = list(resolved_primary_peak_tables)
         simulation_runtime_state.stored_primary_peak_table_lattice = list(
             primary_peak_table_lattice
         )
@@ -12847,9 +13300,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             primary_source_reflection_indices
         )
     elif simulation_runtime_state.stored_primary_max_positions is not None:
-        simulation_runtime_state.stored_primary_max_positions = list(
-            resolved_primary_peak_tables
-        )
+        simulation_runtime_state.stored_primary_max_positions = list(resolved_primary_peak_tables)
         if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
             simulation_runtime_state.stored_primary_peak_table_lattice = list(
                 primary_peak_table_lattice
@@ -12877,19 +13328,19 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             simulation_runtime_state.stored_secondary_peak_table_lattice = list(
                 secondary_peak_table_lattice
             )
-        if (
-            simulation_runtime_state.stored_secondary_source_reflection_indices
-            is not None
-        ):
+        if simulation_runtime_state.stored_secondary_source_reflection_indices is not None:
             simulation_runtime_state.stored_secondary_source_reflection_indices = (
                 secondary_source_reflection_indices
             )
-    if (
-        (not run_primary or primary_hit_table_state_refreshed)
-        and (not run_secondary or secondary_hit_table_state_refreshed)
-        and (run_primary or run_secondary)
-    ):
+    active_peak_rows_fresh = _active_peak_row_sides_have_fresh_raw_rows(
+        active_peak_row_sides,
+        primary_raw_rows_fresh=primary_raw_rows_fresh,
+        secondary_raw_rows_fresh=secondary_raw_rows_fresh,
+    )
+    if active_peak_rows_fresh:
         simulation_runtime_state.stored_hit_table_signature = result.get("hit_table_signature")
+    else:
+        _clear_live_peak_record_cache_after_restore_miss()
     if not bool(result.get("is_preview", False)):
         _store_primary_cache_payload(
             cache_signature=result.get("primary_contribution_cache_signature"),
@@ -13576,7 +14027,10 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     q_space_requested = bool(job.get("q_space_requested", False))
     cached_bg_res2 = job.get("cached_bg_res2")
     cached_bg_caked = job.get("cached_bg_caked")
-    intersection_cache = _copy_intersection_cache_tables(job.get("intersection_cache"))
+    intersection_cache = _copy_intersection_cache_tables(
+        job.get("intersection_cache"),
+        allow_abbreviated_detector_cache=True,
+    )
     job_center = np.asarray(job.get("center", ()), dtype=np.float64).reshape(-1)
     job_center_row_px = float(job_center[0]) if job_center.size >= 2 else None
     job_center_col_px = float(job_center[1]) if job_center.size >= 2 else None
@@ -14126,7 +14580,9 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.stored_primary_peak_table_lattice = None
     simulation_runtime_state.stored_secondary_peak_table_lattice = None
     simulation_runtime_state.stored_primary_intersection_cache = None
+    simulation_runtime_state.stored_primary_intersection_cache_signature = None
     simulation_runtime_state.stored_secondary_intersection_cache = None
+    simulation_runtime_state.stored_secondary_intersection_cache_signature = None
     simulation_runtime_state.stored_intersection_cache = None
     _clear_caked_intersection_cache()
     simulation_runtime_state.last_unscaled_image_signature = None
@@ -14628,6 +15084,16 @@ def do_update():
     secondary_available = (
         secondary_data.ndim == 2 and secondary_data.shape[0] > 0 and secondary_intensities.size > 0
     )
+    try:
+        primary_weight_active = abs(float(weight1_var.get())) > 1.0e-12
+    except Exception:
+        primary_weight_active = True
+    try:
+        secondary_weight_active = abs(float(weight2_var.get())) > 1.0e-12
+    except Exception:
+        secondary_weight_active = False
+    primary_run_available = bool(primary_available and primary_weight_active)
+    secondary_run_available = bool(secondary_available and secondary_weight_active)
     primary_requested_source_mode = str(
         getattr(
             simulation_runtime_state,
@@ -14744,23 +15210,79 @@ def do_update():
         include_mosaic_shape=False,
     )
     primary_contribution_cache_signature = _primary_contribution_cache_signature_base()
-    collect_hit_tables_for_job = bool(
-        collect_hit_tables_requested
-        and not _cached_hit_tables_reusable(
+    hit_tables_reusable = bool(
+        _cached_hit_tables_reusable(
             requested_hit_table_sig,
-            run_primary=primary_available,
-            run_secondary=secondary_available,
+            run_primary=primary_run_available,
+            run_secondary=secondary_run_available,
         )
+    )
+    try:
+        manual_pick_session_active = bool(_geometry_manual_pick_session_active())
+    except Exception:
+        manual_pick_session_active = False
+    selection_peak_cache_needed = bool(
+        getattr(geometry_q_group_state, "refresh_requested", False)
+        or getattr(geometry_runtime_state, "manual_pick_armed", False)
+        or getattr(peak_selection_state, "hkl_pick_armed", False)
+        or getattr(peak_selection_state, "selected_hkl_target", None) is not None
+        or manual_pick_session_active
+    )
+    active_selection_sides = _active_peak_row_sides_for_job(
+        job_kind="full",
+        run_primary=primary_run_available,
+        run_secondary=secondary_run_available,
+        secondary_available=secondary_run_available,
+    )
+    current_hit_table_signature = getattr(
+        simulation_runtime_state,
+        "stored_hit_table_signature",
+        None,
+    )
+    selection_cache_current = bool(
+        active_selection_sides
+        and _table_row_count(getattr(simulation_runtime_state, "stored_intersection_cache", None))
+        > 0
+        and all(
+            _side_detector_cache_is_current(side, current_hit_table_signature)
+            for side in active_selection_sides
+        )
+    )
+    stored_hit_rows_current = bool(
+        hit_tables_reusable
+        and _hit_table_state_present_for_run_sides(
+            run_primary=primary_run_available,
+            run_secondary=secondary_run_available,
+        )
+    )
+    stored_picker_rows_available = bool(
+        selection_cache_current
+        or stored_hit_rows_current
+        or len(getattr(simulation_runtime_state, "peak_records", ()) or ()) > 0
+    )
+    selection_cache_refresh_needed = bool(
+        selection_peak_cache_needed and not stored_picker_rows_available
+    )
+    collect_hit_tables_for_job = bool(
+        (collect_hit_tables_requested and not hit_tables_reusable) or selection_cache_refresh_needed
+    )
+    build_intersection_cache_for_job = bool(
+        selection_peak_cache_needed and collect_hit_tables_for_job
     )
 
     _set_update_trace_stage("simulation_signature")
     new_sim_image_sig = _simulation_signature_base(optics_mode_component=int(optics_mode_flag))
-    new_sim_sig = new_sim_image_sig + (int(collect_hit_tables_for_job),)
+    new_sim_sig = new_sim_image_sig + (
+        int(collect_hit_tables_for_job),
+        int(build_intersection_cache_for_job),
+    )
     _trace_update(
         "do_update_signature",
         optics_mode=int(optics_mode_flag),
         collect_hit_tables=bool(collect_hit_tables_requested),
         collect_hit_tables_for_job=bool(collect_hit_tables_for_job),
+        build_intersection_cache_for_job=bool(build_intersection_cache_for_job),
+        selection_peak_cache_needed=bool(selection_peak_cache_needed),
         num_samples=int(simulation_runtime_state.num_samples),
         image_signature_changed=bool(
             new_sim_image_sig != simulation_runtime_state.last_sim_signature
@@ -14769,6 +15291,8 @@ def do_update():
             new_sim_sig != simulation_runtime_state.last_simulation_signature
         ),
     )
+    applied_peak_row_refresh_payload: dict[str, object] | None = None
+    capture_source_snapshot_after_publish = False
     ready_simulation_result = _consume_ready_simulation_result(new_sim_sig)
     if ready_simulation_result is not None:
         _trace_update(
@@ -14812,8 +15336,8 @@ def do_update():
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
             if _hit_table_state_present_for_run_sides(
-                run_primary=primary_available,
-                run_secondary=secondary_available,
+                run_primary=primary_run_available,
+                run_secondary=secondary_run_available,
             ):
                 simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
             simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
@@ -14822,7 +15346,8 @@ def do_update():
             simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
         simulation_runtime_state.last_sim_signature = new_sim_image_sig
         simulation_runtime_state.last_simulation_signature = new_sim_sig
-        _capture_geometry_source_snapshot()
+        applied_peak_row_refresh_payload = dict(ready_simulation_result)
+        capture_source_snapshot_after_publish = True
         image_generation_cached = False
         image_generation_elapsed_ms = float(
             ready_simulation_result.get("image_generation_elapsed_ms", 0.0)
@@ -14866,12 +15391,37 @@ def do_update():
                 and selected_primary_intensities.size > 0
             )
         )
-        run_secondary_enabled = (
-            bool(secondary_available) if run_secondary_job is None else bool(run_secondary_job)
+        run_primary_job = bool(run_primary_job and primary_weight_active)
+        secondary_available_job = bool(secondary_available and secondary_weight_active)
+        requested_secondary = (
+            bool(secondary_available_job) if run_secondary_job is None else bool(run_secondary_job)
         )
+        run_secondary_enabled = bool(requested_secondary and secondary_available_job)
         job_kind_value = str(job_kind)
+        active_peak_row_sides = _active_peak_row_sides_for_job(
+            job_kind=job_kind_value,
+            run_primary=run_primary_job,
+            run_secondary=run_secondary_enabled,
+            secondary_available=secondary_available_job,
+        )
         capture_primary_raw = bool(run_primary_job and job_kind_value in {"full", "primary_fill"})
         capture_secondary_raw = bool(run_secondary_enabled and job_kind_value == "full")
+        build_intersection_cache_enabled = bool(
+            job_kind_value == "full" and selection_peak_cache_needed and collect_hit_tables_enabled
+        )
+        collect_primary_hit_tables = bool(
+            (collect_hit_tables_enabled or build_intersection_cache_enabled) and run_primary_job
+        )
+        collect_secondary_hit_tables = bool(
+            (collect_hit_tables_enabled or build_intersection_cache_enabled)
+            and run_secondary_enabled
+        )
+        build_primary_intersection_cache = bool(
+            build_intersection_cache_enabled and run_primary_job
+        )
+        build_secondary_intersection_cache = bool(
+            build_intersection_cache_enabled and run_secondary_enabled
+        )
         return {
             "job_kind": job_kind_value,
             "signature": new_sim_sig,
@@ -14939,12 +15489,14 @@ def do_update():
             "debye_y": float(debye_y_updated),
             "optics_mode": int(optics_mode_flag),
             "collect_hit_tables": bool(collect_hit_tables_enabled),
-            "collect_primary_hit_tables": bool(collect_hit_tables_enabled and run_primary_job),
-            "collect_secondary_hit_tables": bool(
-                collect_hit_tables_enabled and run_secondary_enabled
-            ),
+            "collect_primary_hit_tables": collect_primary_hit_tables,
+            "collect_secondary_hit_tables": collect_secondary_hit_tables,
+            "build_primary_intersection_cache": build_primary_intersection_cache,
+            "build_secondary_intersection_cache": build_secondary_intersection_cache,
             "capture_primary_hit_tables_raw": capture_primary_raw,
             "capture_secondary_hit_tables_raw": capture_secondary_raw,
+            "secondary_available": bool(secondary_available_job),
+            "active_peak_row_sides": tuple(active_peak_row_sides),
             "hit_table_signature": requested_hit_table_sig,
             "primary_contribution_cache_signature": primary_contribution_cache_signature,
             "primary_source_mode": primary_requested_source_mode,
@@ -15039,13 +15591,13 @@ def do_update():
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
             if _hit_table_state_present_for_run_sides(
-                run_primary=primary_available,
-                run_secondary=secondary_available,
+                run_primary=primary_run_available,
+                run_secondary=secondary_run_available,
             ):
                 simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
             simulation_runtime_state.last_sim_signature = new_sim_image_sig
             simulation_runtime_state.last_simulation_signature = new_sim_sig
-            _capture_geometry_source_snapshot()
+            capture_source_snapshot_after_publish = True
             image_generation_cached = False
             image_generation_elapsed_ms = (perf_counter() - rematerialize_start_time) * 1e3
             simulation_runtime_state.last_image_generation_ms = float(image_generation_elapsed_ms)
@@ -15150,7 +15702,8 @@ def do_update():
                 simulation_runtime_state.primary_filter_signature = (
                     primary_requested_filter_signature
                 )
-                _capture_geometry_source_snapshot()
+                applied_peak_row_refresh_payload = dict(sync_result)
+                capture_source_snapshot_after_publish = True
                 image_generation_cached = False
                 image_generation_elapsed_ms = float(
                     sync_result.get("image_generation_elapsed_ms", 0.0)
@@ -15203,106 +15756,92 @@ def do_update():
         simulation_runtime_state.update_running = False
         return
 
-    w1 = float(weight1_var.get())
-    w2 = float(weight2_var.get())
-    run_primary = bool(
-        simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12
+    previous_row_content_signature = getattr(
+        simulation_runtime_state,
+        "stored_q_group_content_signature",
+        None,
     )
-    run_secondary = bool(
-        simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12
+    applied_active_peak_row_sides: tuple[str, ...] = ()
+    applied_primary_raw_rows_fresh = False
+    applied_secondary_raw_rows_fresh = False
+    all_active_raw_rows_fresh = False
+    if applied_peak_row_refresh_payload is not None:
+        applied_active_peak_row_sides = _normalized_active_peak_row_sides(
+            applied_peak_row_refresh_payload.get("active_peak_row_sides", ())
+        )
+        if "active_peak_row_sides" not in applied_peak_row_refresh_payload:
+            applied_active_peak_row_sides = _active_peak_row_sides_for_job(
+                job_kind=str(applied_peak_row_refresh_payload.get("job_kind", "full")),
+                run_primary=bool(applied_peak_row_refresh_payload.get("run_primary", False)),
+                run_secondary=bool(applied_peak_row_refresh_payload.get("run_secondary", False)),
+                secondary_available=bool(
+                    applied_peak_row_refresh_payload.get(
+                        "secondary_available",
+                        applied_peak_row_refresh_payload.get("run_secondary", False),
+                    )
+                ),
+            )
+        applied_primary_raw_rows_fresh = bool(
+            applied_peak_row_refresh_payload.get(
+                "primary_raw_rows_fresh",
+                applied_peak_row_refresh_payload.get(
+                    "primary_hit_table_state_refreshed",
+                    False,
+                ),
+            )
+        )
+        applied_secondary_raw_rows_fresh = bool(
+            applied_peak_row_refresh_payload.get(
+                "secondary_raw_rows_fresh",
+                applied_peak_row_refresh_payload.get(
+                    "secondary_hit_table_state_refreshed",
+                    False,
+                ),
+            )
+        )
+        all_active_raw_rows_fresh = _active_peak_row_sides_have_fresh_raw_rows(
+            applied_active_peak_row_sides,
+            primary_raw_rows_fresh=applied_primary_raw_rows_fresh,
+            secondary_raw_rows_fresh=applied_secondary_raw_rows_fresh,
+        )
+    publish_active_peak_row_sides = None
+    if applied_peak_row_refresh_payload is not None:
+        publish_active_peak_row_sides = (
+            applied_active_peak_row_sides if all_active_raw_rows_fresh else ()
+        )
+    combined_state_diagnostics = _publish_combined_simulation_state(
+        image_size_value=int(image_size),
+        primary_a_value=float(a_updated),
+        primary_c_value=float(c_updated),
+        secondary_a_value=float(secondary_a),
+        secondary_c_value=float(secondary_c),
+        active_peak_row_sides=publish_active_peak_row_sides,
     )
+    run_primary = bool(combined_state_diagnostics.get("run_primary", False))
+    run_secondary = bool(combined_state_diagnostics.get("run_secondary", False))
+    updated_image = simulation_runtime_state.stored_sim_image
+    max_positions_local = list(simulation_runtime_state.stored_max_positions_local or [])
 
-    img1 = (
-        simulation_runtime_state.stored_primary_sim_image
-        if simulation_runtime_state.stored_primary_sim_image is not None
-        else np.zeros((image_size, image_size), dtype=np.float64)
-    )
-    img2 = (
-        simulation_runtime_state.stored_secondary_sim_image
-        if simulation_runtime_state.stored_secondary_sim_image is not None
-        else np.zeros((image_size, image_size), dtype=np.float64)
-    )
-
-    updated_image = w1 * img1 + w2 * img2
-    max_positions_local = []
-    source_reflection_indices_local = []
-    peak_table_lattice_local = []
-    primary_max_positions_local = []
-    primary_peak_table_lattice_local = []
-    if run_primary and simulation_runtime_state.stored_primary_max_positions is not None:
-        primary_max_positions_local = list(simulation_runtime_state.stored_primary_max_positions)
-        max_positions_local.extend(primary_max_positions_local)
-        if simulation_runtime_state.stored_primary_source_reflection_indices is not None:
-            source_reflection_indices_local.extend(
-                simulation_runtime_state.stored_primary_source_reflection_indices
-            )
-        if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
-            primary_peak_table_lattice_local = list(
-                simulation_runtime_state.stored_primary_peak_table_lattice
-            )
-    secondary_max_positions_local = []
-    secondary_peak_table_lattice_local = []
-    if run_secondary and simulation_runtime_state.stored_secondary_max_positions is not None:
-        secondary_max_positions_local = list(
-            simulation_runtime_state.stored_secondary_max_positions
-        )
-        max_positions_local.extend(secondary_max_positions_local)
-        if simulation_runtime_state.stored_secondary_source_reflection_indices is not None:
-            source_reflection_indices_local.extend(
-                simulation_runtime_state.stored_secondary_source_reflection_indices
-            )
-        if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
-            secondary_peak_table_lattice_local = list(
-                simulation_runtime_state.stored_secondary_peak_table_lattice
-            )
-
-    if len(primary_peak_table_lattice_local) == len(primary_max_positions_local):
-        peak_table_lattice_local.extend(primary_peak_table_lattice_local)
-    else:
-        peak_table_lattice_local.extend(
-            [
-                (float(a_updated), float(c_updated), "primary")
-                for _ in primary_max_positions_local
-            ]
-        )
-    if len(secondary_peak_table_lattice_local) == len(secondary_max_positions_local):
-        peak_table_lattice_local.extend(secondary_peak_table_lattice_local)
-    else:
-        peak_table_lattice_local.extend(
-            [
-                (float(secondary_a), float(secondary_c), "secondary")
-                for _ in secondary_max_positions_local
-            ]
+    restore_diagnostics: dict[str, object] | None = None
+    if applied_peak_row_refresh_payload is not None:
+        if all_active_raw_rows_fresh:
+            _invalidate_peak_picker_caches(clear_source_snapshot=True)
+        restore_diagnostics = _restore_live_peak_rows_from_combined_hit_tables(
+            active_peak_row_sides=applied_active_peak_row_sides,
+            primary_raw_rows_fresh=applied_primary_raw_rows_fresh,
+            secondary_raw_rows_fresh=applied_secondary_raw_rows_fresh,
+            previous_row_content_signature=previous_row_content_signature,
         )
 
-    simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
-    simulation_runtime_state.stored_q_group_content_signature = (
-        gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
-            max_positions_local
+    snapshot_ready_after_apply = applied_peak_row_refresh_payload is None or (
+        restore_diagnostics is not None
+        and (
+            int(restore_diagnostics.get("published_peak_record_count", 0) or 0) > 0
+            or restore_diagnostics.get("skipped_reason") == "unchanged_signature"
         )
     )
-    simulation_runtime_state.stored_source_reflection_indices_local = (
-        list(source_reflection_indices_local)
-        if len(source_reflection_indices_local) == len(max_positions_local)
-        else None
-    )
-    simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
-    intersection_cache_local = []
-    if run_primary and simulation_runtime_state.stored_primary_intersection_cache is not None:
-        intersection_cache_local.extend(
-            _copy_intersection_cache_tables(
-                simulation_runtime_state.stored_primary_intersection_cache
-            )
-        )
-    if run_secondary and simulation_runtime_state.stored_secondary_intersection_cache is not None:
-        intersection_cache_local.extend(
-            _copy_intersection_cache_tables(
-                simulation_runtime_state.stored_secondary_intersection_cache
-            )
-    )
-    simulation_runtime_state.stored_intersection_cache = intersection_cache_local
-    _clear_caked_intersection_cache()
-    simulation_runtime_state.stored_sim_image = updated_image
+    if capture_source_snapshot_after_publish and snapshot_ready_after_apply:
+        _capture_geometry_source_snapshot()
 
     if not need_hit_table_refresh and gui_controllers.consume_geometry_q_group_refresh_request(
         geometry_q_group_state
@@ -16905,9 +17444,7 @@ def _replace_gui_state_peak_cache(
         if bool(use_caked_display):
             try:
                 native_hint_point = (
-                    gui_manual_geometry._geometry_manual_entry_stronger_native_hint_point(
-                        record
-                    )
+                    gui_manual_geometry._geometry_manual_entry_stronger_native_hint_point(record)
                 )
             except Exception:
                 native_hint_point = None
@@ -18183,31 +18720,6 @@ def _geometry_source_snapshot_signature_for_background(
     primary_c = _geometry_source_signature_numeric(params.get("c"))
     secondary_a = float(av2) if av2 is not None else primary_a
     secondary_c = float(cv2) if cv2 is not None else primary_c
-    requested_hit_table_sig = _geometry_source_snapshot_signature_from_params(
-        params,
-        mosaic_params=mosaic_params,
-        optics_mode_component=0,
-        include_mosaic_shape=False,
-        sf_prune_bias=current_sf_prune_bias(),
-        sf_prune_stats=simulation_runtime_state.sf_prune_stats,
-        ordered_structure_scale=float(_current_ordered_structure_scale()),
-        qr_cylinder_replace_requested=_qr_cylinder_replace_simulation_enabled(),
-        primary_source_signature=primary_source_signature,
-        secondary_source_signature=secondary_source_signature,
-        secondary_a=secondary_a,
-        secondary_c=secondary_c,
-    )
-    collect_hit_tables_requested = False
-    try:
-        collect_hit_tables_requested = bool(_should_collect_hit_tables_for_update())
-    except Exception:
-        collect_hit_tables_requested = False
-    hit_tables_match_request = (
-        requested_hit_table_sig == simulation_runtime_state.stored_hit_table_signature
-    )
-    collect_hit_tables_for_job = bool(collect_hit_tables_requested) or not bool(
-        hit_tables_match_request
-    )
     image_signature = _geometry_source_snapshot_signature_from_params(
         params,
         mosaic_params=mosaic_params,
@@ -18222,22 +18734,53 @@ def _geometry_source_snapshot_signature_for_background(
         secondary_a=secondary_a,
         secondary_c=secondary_c,
     )
-    snapshot = simulation_runtime_state.source_row_snapshots.get(background_idx)
-    if isinstance(snapshot, dict):
-        snapshot_signature = snapshot.get("simulation_signature")
-        if (
-            isinstance(snapshot_signature, tuple)
-            and len(snapshot_signature) == int(len(image_signature)) + 1
-            and tuple(snapshot_signature[:-1]) == tuple(image_signature)
-        ):
-            return snapshot_signature
-    return image_signature + (int(collect_hit_tables_for_job),)
+    row_content_signature = gui_geometry_q_group_manager._geometry_q_group_signature_value(
+        getattr(simulation_runtime_state, "stored_q_group_content_signature", None)
+    )
+    return image_signature + (row_content_signature,)
+
+
+def _geometry_source_snapshot_payload(
+    *,
+    background_index: int,
+    simulation_signature: object,
+    rows: Sequence[Mapping[str, object]] | None,
+    created_from: str,
+    source_reflection_index_count: int,
+    empty_reason: str,
+) -> dict[str, object]:
+    normalized_rows = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+    return {
+        "background_index": int(background_index),
+        "simulation_signature": simulation_signature,
+        "base_simulation_signature": simulation_runtime_state.last_simulation_signature,
+        "simulation_signature_summary": _live_cache_signature_summary(simulation_signature),
+        "row_content_signature": getattr(
+            simulation_runtime_state,
+            "stored_q_group_content_signature",
+            None,
+        ),
+        "rows": normalized_rows,
+        "row_count": int(len(normalized_rows)),
+        "valid_for_picker": bool(normalized_rows),
+        "empty_reason": (None if normalized_rows else str(empty_reason)),
+        "created_from": str(created_from or "unknown"),
+        "source_reflection_index_count": int(source_reflection_index_count),
+    }
 
 
 def _capture_geometry_source_snapshot() -> None:
     background_index = int(background_runtime_state.current_background_index)
     previous_snapshot = dict(
         simulation_runtime_state.source_row_snapshots.get(int(background_index)) or {}
+    )
+    try:
+        current_param_set = dict(_current_geometry_fit_params())
+    except Exception:
+        current_param_set = {}
+    snapshot_signature = _geometry_source_snapshot_signature_for_background(
+        int(background_index),
+        current_param_set,
     )
     try:
         rows = [
@@ -18261,24 +18804,21 @@ def _capture_geometry_source_snapshot() -> None:
             break
     if created_from == "none" and simulation_runtime_state.stored_max_positions_local is not None:
         created_from = "stored_max_positions_local"
-    snapshot_payload = {
-        "background_index": int(background_index),
-        "simulation_signature": simulation_runtime_state.last_simulation_signature,
-        "simulation_signature_summary": _live_cache_signature_summary(
-            simulation_runtime_state.last_simulation_signature
-        ),
-        "rows": rows,
-        "row_count": int(len(rows)),
-        "created_from": created_from,
-        "source_reflection_index_count": int(
+    snapshot_payload = _geometry_source_snapshot_payload(
+        background_index=int(background_index),
+        simulation_signature=snapshot_signature,
+        rows=rows,
+        created_from=created_from,
+        source_reflection_index_count=int(
             len(simulation_runtime_state.stored_source_reflection_indices_local or ())
         ),
-    }
+        empty_reason="no_projected_rows",
+    )
     retain_snapshot_cache = _retain_runtime_optional_cache(
         "source_snapshots",
         feature_needed=True,
     )
-    if retain_snapshot_cache:
+    if retain_snapshot_cache and bool(rows):
         simulation_runtime_state.source_row_snapshots[int(background_index)] = snapshot_payload
     else:
         simulation_runtime_state.source_row_snapshots.pop(int(background_index), None)
@@ -18286,7 +18826,7 @@ def _capture_geometry_source_snapshot() -> None:
         "source_snapshot",
         "store",
         background_index=int(background_index),
-        outcome=("stored" if retain_snapshot_cache else "discarded"),
+        outcome=("stored" if retain_snapshot_cache and bool(rows) else "discarded"),
         overwrite=bool(previous_snapshot),
         previous_row_count=int(previous_snapshot.get("row_count", 0) or 0),
         row_count=int(len(rows)),
@@ -18294,9 +18834,7 @@ def _capture_geometry_source_snapshot() -> None:
         previous_signature_summary=_live_cache_signature_summary(
             previous_snapshot.get("simulation_signature")
         ),
-        signature_summary=_live_cache_signature_summary(
-            simulation_runtime_state.last_simulation_signature
-        ),
+        signature_summary=_live_cache_signature_summary(snapshot_signature),
     )
 
 
@@ -18313,9 +18851,7 @@ def _geometry_manual_set_runtime_peak_cache_from_projected_rows(
         )
     except Exception:
         normalized_projected_rows = [
-            dict(entry)
-            for entry in normalized_projected_rows or ()
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in normalized_projected_rows or () if isinstance(entry, Mapping)
         ]
 
     restored_records: list[dict[str, object]] = []
@@ -18570,9 +19106,15 @@ def _geometry_fit_targeted_projection_view_signature(
     q_space_image: object = None,
     analysis_preview_bins: Sequence[object] | None = None,
 ) -> dict[str, object]:
-    normalized_mode = str(
-        mode_override if mode_override is not None else _geometry_fit_targeted_projection_view_mode()
-    ).strip().lower()
+    normalized_mode = (
+        str(
+            mode_override
+            if mode_override is not None
+            else _geometry_fit_targeted_projection_view_mode()
+        )
+        .strip()
+        .lower()
+    )
     if normalized_mode not in {"detector", "caked", "q_space"}:
         normalized_mode = "detector"
     try:
@@ -18610,15 +19152,15 @@ def _geometry_fit_targeted_projection_view_signature(
             normalized_shape = None
     if normalized_shape is not None:
         signature["detector_shape"] = [int(v) for v in normalized_shape[:2]]
+    if normalized_mode == "detector":
+        signature["available"] = True
+        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
     preview_bins = analysis_preview_bins
     if preview_bins is None:
         preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
     if isinstance(preview_bins, (tuple, list)) and len(preview_bins) >= 2:
         normalized_bins = [int(preview_bins[0]), int(preview_bins[1])]
         signature["analysis_bins"] = list(normalized_bins)
-    if normalized_mode == "detector":
-        signature["available"] = True
-        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
     if normalized_mode == "q_space":
         if int(background_idx) != int(current_background_idx):
             signature["available"] = False
@@ -18635,10 +19177,7 @@ def _geometry_fit_targeted_projection_view_signature(
                 )
             except Exception:
                 resolved_q_space_image = None
-        if (
-            isinstance(resolved_q_space_image, np.ndarray)
-            and resolved_q_space_image.ndim >= 2
-        ):
+        if isinstance(resolved_q_space_image, np.ndarray) and resolved_q_space_image.ndim >= 2:
             signature["image_shape"] = [int(v) for v in resolved_q_space_image.shape[:2]]
         signature["projection_payload_digest"] = gui_geometry_fit._geometry_fit_digest_payload(
             {
@@ -18661,9 +19200,7 @@ def _geometry_fit_targeted_projection_view_signature(
             signature.update(
                 {
                     "available": True,
-                    "detector_shape": list(
-                        tuple(normalized_payload.get("detector_shape", ()))[:2]
-                    ),
+                    "detector_shape": list(tuple(normalized_payload.get("detector_shape", ()))[:2]),
                     "radial_axis": np.asarray(
                         normalized_payload.get("radial_axis"),
                         dtype=np.float64,
@@ -18696,9 +19233,7 @@ def _geometry_fit_targeted_projection_view_signature(
 def _geometry_fit_filter_hit_tables_for_required_branch_groups(
     source_tables: Sequence[object] | None,
     *,
-    required_branch_group_keys: Sequence[
-        tuple[tuple[int, int, int], int | None, object | None]
-    ]
+    required_branch_group_keys: Sequence[tuple[tuple[int, int, int], int | None, object | None]]
     | None,
 ) -> tuple[list[object], dict[str, object]]:
     copied_tables = list(source_tables or ())
@@ -18752,14 +19287,10 @@ def _geometry_fit_filter_hit_tables_for_required_branch_groups(
         if table_hkl not in required_hkls:
             continue
         considered_count += 1
-        matching_keys = [
-            key for key in required_keys if tuple(key[0]) == tuple(table_hkl)
-        ]
+        matching_keys = [key for key in required_keys if tuple(key[0]) == tuple(table_hkl)]
         if not matching_keys:
             continue
-        allowed_branches = {
-            int(key[1]) for key in matching_keys if key[1] is not None
-        }
+        allowed_branches = {int(key[1]) for key in matching_keys if key[1] is not None}
         if not allowed_branches:
             filtered_tables.append(arr.copy())
             expanded_count += 1
@@ -18949,9 +19480,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
                     "diagnostics": copy.deepcopy(diagnostics),
                     "cache_source": str(rebuild_result.rebuild_source or "unknown"),
                     "consumer": str(lookup_context),
-                    "projection_view_mode": str(
-                        _geometry_fit_targeted_projection_view_mode()
-                    ),
+                    "projection_view_mode": str(_geometry_fit_targeted_projection_view_mode()),
                     "projection_view_signature": targeted_projection_signature,
                 },
             )
@@ -18977,18 +19506,14 @@ def _commit_geometry_manual_source_row_rebuild_result(
                 stored_rows
             )
         )
-    simulation_runtime_state.stored_q_group_content_signature = (
-        q_group_content_signature
-    )
+    simulation_runtime_state.stored_q_group_content_signature = q_group_content_signature
     simulation_runtime_state.stored_source_reflection_indices_local = (
         list(rebuild_result.source_reflection_indices)
         if isinstance(rebuild_result.source_reflection_indices, list)
         else None
     )
     if rebuild_result.peak_table_lattice is not None:
-        simulation_runtime_state.stored_peak_table_lattice = list(
-            rebuild_result.peak_table_lattice
-        )
+        simulation_runtime_state.stored_peak_table_lattice = list(rebuild_result.peak_table_lattice)
     simulation_runtime_state.stored_sim_image = np.zeros(
         (int(image_size), int(image_size)),
         dtype=np.float64,
@@ -19005,21 +19530,20 @@ def _commit_geometry_manual_source_row_rebuild_result(
         else:
             _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
 
-    snapshot_payload = {
-        "background_index": int(background_idx),
-        "simulation_signature": rebuild_result.requested_signature,
-        "simulation_signature_summary": _live_cache_signature_summary(
-            rebuild_result.requested_signature
-        ),
-        "rows": [dict(entry) for entry in stored_rows],
-        "row_count": int(len(stored_rows)),
-        "created_from": str(rebuild_result.rebuild_source or "unknown"),
-        "source_reflection_index_count": int(
-            len(rebuild_result.source_reflection_indices or ())
-        ),
-    }
-    if _retain_runtime_optional_cache("source_snapshots", feature_needed=True):
+    snapshot_payload = _geometry_source_snapshot_payload(
+        background_index=int(background_idx),
+        simulation_signature=rebuild_result.requested_signature,
+        rows=stored_rows,
+        created_from=str(rebuild_result.rebuild_source or "unknown"),
+        source_reflection_index_count=int(len(rebuild_result.source_reflection_indices or ())),
+        empty_reason="no_source_rows",
+    )
+    if _retain_runtime_optional_cache("source_snapshots", feature_needed=True) and bool(
+        snapshot_payload.get("valid_for_picker", False)
+    ):
         simulation_runtime_state.source_row_snapshots[int(background_idx)] = snapshot_payload
+    else:
+        simulation_runtime_state.source_row_snapshots.pop(int(background_idx), None)
 
     if diagnostics:
         _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
@@ -19037,13 +19561,9 @@ def _commit_geometry_manual_source_row_rebuild_result(
     )
     if projected_rows:
         return projected_rows
-    if (
-        not is_current_background
-        and str(diagnostics.get("projection_view_mode") or _geometry_fit_targeted_projection_view_mode())
-        .strip()
-        .lower()
-        in {"caked", "q_space"}
-    ):
+    if not is_current_background and str(
+        diagnostics.get("projection_view_mode") or _geometry_fit_targeted_projection_view_mode()
+    ).strip().lower() in {"caked", "q_space"}:
         return []
     return stored_rows
 
@@ -19072,9 +19592,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
-    projection_view_signature = _geometry_fit_targeted_projection_view_signature(
-        background_idx
-    )
+    projection_view_signature = _geometry_fit_targeted_projection_view_signature(background_idx)
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
     projection_payload = (
         _geometry_fit_resolve_targeted_caked_projection_payload(
@@ -19100,26 +19618,24 @@ def _geometry_manual_rebuild_source_rows_for_background(
     required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
         required_manual_fit_targets
     )
-    preflight_mode = (
-        "manual_geometry_targeted" if required_branch_group_keys else "full"
-    )
-    required_branch_group_keys_digest = gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
-        required_branch_group_keys,
-        background_index=int(background_idx),
-        requested_signature=requested_signature,
-        requested_signature_summary=requested_signature_summary,
-        preflight_mode=preflight_mode,
-        consumer=lookup_context,
-        projection_view_mode=projection_view_mode,
-        projection_view_signature=projection_view_signature,
+    preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
+    required_branch_group_keys_digest = (
+        gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
+            required_branch_group_keys,
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            preflight_mode=preflight_mode,
+            consumer=lookup_context,
+            projection_view_mode=projection_view_mode,
+            projection_view_signature=projection_view_signature,
+        )
     )
 
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
         *,
-        required_branch_group_keys: Sequence[
-            tuple[tuple[int, int, int], int | None, object | None]
-        ]
+        required_branch_group_keys: Sequence[tuple[tuple[int, int, int], int | None, object | None]]
         | None = None,
         required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
         preflight_mode: str = "full",
@@ -19270,23 +19786,21 @@ def _geometry_manual_source_rows_for_background(
     required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
         required_manual_fit_targets
     )
-    preflight_mode = (
-        "manual_geometry_targeted" if required_branch_group_keys else "full"
-    )
+    preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
     targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
-    projection_view_signature = _geometry_fit_targeted_projection_view_signature(
-        background_idx
-    )
+    projection_view_signature = _geometry_fit_targeted_projection_view_signature(background_idx)
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
-    required_branch_group_keys_digest = gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
-        required_branch_group_keys,
-        background_index=int(background_idx),
-        requested_signature=normalized_requested_signature,
-        requested_signature_summary=normalized_requested_signature_summary,
-        preflight_mode=preflight_mode,
-        consumer=lookup_context,
-        projection_view_mode=projection_view_mode,
-        projection_view_signature=projection_view_signature,
+    required_branch_group_keys_digest = (
+        gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
+            required_branch_group_keys,
+            background_index=int(background_idx),
+            requested_signature=normalized_requested_signature,
+            requested_signature_summary=normalized_requested_signature_summary,
+            preflight_mode=preflight_mode,
+            consumer=lookup_context,
+            projection_view_mode=projection_view_mode,
+            projection_view_signature=projection_view_signature,
+        )
     )
     manual_target_scoring_digest = gui_geometry_fit._geometry_fit_manual_target_scoring_digest(
         required_manual_fit_targets
@@ -19331,23 +19845,13 @@ def _geometry_manual_source_rows_for_background(
             "required_hkl_branch_keys_digest": str(required_branch_group_keys_digest),
             "manual_target_scoring_digest": str(manual_target_scoring_digest),
             "total_hit_tables_available": int(total_hit_tables_available),
-            "hit_tables_considered_for_rebinding": int(
-                hit_tables_considered_for_rebinding
-            ),
-            "hit_tables_expanded_for_rebinding": int(
-                hit_tables_expanded_for_rebinding
-            ),
+            "hit_tables_considered_for_rebinding": int(hit_tables_considered_for_rebinding),
+            "hit_tables_expanded_for_rebinding": int(hit_tables_expanded_for_rebinding),
             "total_source_rows_available": int(total_source_rows_available),
-            "source_rows_considered_for_rebinding": int(
-                source_rows_considered_for_rebinding
-            ),
-            "source_rows_projected_for_rebinding": int(
-                source_rows_projected_for_rebinding
-            ),
+            "source_rows_considered_for_rebinding": int(source_rows_considered_for_rebinding),
+            "source_rows_projected_for_rebinding": int(source_rows_projected_for_rebinding),
             "candidate_rows_after_hkl_filter": int(candidate_rows_after_hkl_filter),
-            "candidate_rows_after_branch_filter": int(
-                candidate_rows_after_branch_filter
-            ),
+            "candidate_rows_after_branch_filter": int(candidate_rows_after_branch_filter),
             "candidate_rows_scored_for_background_distance": int(
                 candidate_rows_scored_for_background_distance
             ),
@@ -19357,15 +19861,11 @@ def _geometry_manual_source_rows_for_background(
             "unrelated_scored_row_count_for_rebinding": int(
                 unrelated_scored_row_count_for_rebinding
             ),
-            "full_source_rows_built_for_rebinding": bool(
-                full_source_rows_built_for_rebinding
-            ),
+            "full_source_rows_built_for_rebinding": bool(full_source_rows_built_for_rebinding),
             "full_source_rows_projected_for_rebinding": bool(
                 full_source_rows_projected_for_rebinding
             ),
-            "full_fresh_simulation_fallback_used": bool(
-                full_fresh_simulation_fallback_used
-            ),
+            "full_fresh_simulation_fallback_used": bool(full_fresh_simulation_fallback_used),
             "required_manual_fit_targets": copy.deepcopy(required_manual_fit_targets),
         }
         payload["targeted_performance_gate"] = (
@@ -19411,15 +19911,9 @@ def _geometry_manual_source_rows_for_background(
                 payload={
                     "background_index": int(background_idx),
                     "requested_signature": normalized_requested_signature,
-                    "requested_signature_summary": (
-                        normalized_requested_signature_summary
-                    ),
-                    "required_branch_group_keys_digest": str(
-                        required_branch_group_keys_digest
-                    ),
-                    "manual_target_scoring_digest": str(
-                        manual_target_scoring_digest
-                    ),
+                    "requested_signature_summary": (normalized_requested_signature_summary),
+                    "required_branch_group_keys_digest": str(required_branch_group_keys_digest),
+                    "manual_target_scoring_digest": str(manual_target_scoring_digest),
                     "preflight_mode": str(preflight_mode),
                     "consumer": str(lookup_context),
                     "projection_view_mode": str(projection_view_mode),
@@ -19442,12 +19936,13 @@ def _geometry_manual_source_rows_for_background(
         )
         if isinstance(targeted_cache_payload, Mapping):
             requested_signature_matches = (
-                targeted_cache_payload.get("requested_signature")
-                == normalized_requested_signature
+                targeted_cache_payload.get("requested_signature") == normalized_requested_signature
             )
             projection_signature_matches = (
-                targeted_cache_payload.get("projection_view_signature")
-                == gui_geometry_fit._geometry_fit_cache_jsonable(
+                gui_geometry_fit._geometry_fit_stable_projection_view_signature(
+                    targeted_cache_payload.get("projection_view_signature")
+                )
+                == gui_geometry_fit._geometry_fit_stable_projection_view_signature(
                     projection_view_signature
                 )
             )
@@ -19478,9 +19973,7 @@ def _geometry_manual_source_rows_for_background(
                     source_rows_projected_for_rebinding=0,
                     candidate_rows_after_hkl_filter=int(len(targeted_rows)),
                     candidate_rows_after_branch_filter=int(len(targeted_rows)),
-                    candidate_rows_scored_for_background_distance=int(
-                        len(targeted_rows)
-                    ),
+                    candidate_rows_scored_for_background_distance=int(len(targeted_rows)),
                     unrelated_projected_row_count_for_rebinding=0,
                     unrelated_scored_row_count_for_rebinding=0,
                     targeted_cache_hit=True,
@@ -19500,8 +19993,7 @@ def _geometry_manual_source_rows_for_background(
                     raw_peak_count=int(len(targeted_rows)),
                     projected_peak_count=int(len(targeted_rows)),
                     created_from=str(
-                        targeted_cache_payload.get("cache_source")
-                        or "targeted_projected_cache"
+                        targeted_cache_payload.get("cache_source") or "targeted_projected_cache"
                     ),
                     signature_match=True,
                     live_cache_inventory=live_cache_inventory,
@@ -19517,8 +20009,7 @@ def _geometry_manual_source_rows_for_background(
                     requested_signature_summary=requested_signature_summary,
                     stored_signature_summary=requested_signature_summary,
                     created_from=str(
-                        targeted_cache_payload.get("cache_source")
-                        or "targeted_projected_cache"
+                        targeted_cache_payload.get("cache_source") or "targeted_projected_cache"
                     ),
                     raw_peak_count=int(len(targeted_rows)),
                     projected_peak_count=int(len(targeted_rows)),
@@ -19568,6 +20059,13 @@ def _geometry_manual_source_rows_for_background(
     snapshot_signature = snapshot.get("simulation_signature")
     stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
     created_from = snapshot.get("created_from")
+    current_row_content_signature = gui_geometry_q_group_manager._geometry_q_group_signature_value(
+        getattr(simulation_runtime_state, "stored_q_group_content_signature", None)
+    )
+    snapshot_row_content_signature = gui_geometry_q_group_manager._geometry_q_group_signature_value(
+        snapshot.get("row_content_signature")
+    )
+    snapshot_valid_for_picker = bool(snapshot.get("valid_for_picker", False))
     raw_rows = [
         dict(entry)
         for entry in _geometry_fit_rows_for_background(
@@ -19608,6 +20106,30 @@ def _geometry_manual_source_rows_for_background(
             projected_peak_count=0,
             signature_match=False,
         )
+        if allow_source_snapshot_rebuild:
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
+        return []
+    if snapshot_row_content_signature != current_row_content_signature:
+        if allow_source_snapshot_rebuild:
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
+        return []
+    if not snapshot_valid_for_picker:
         if allow_source_snapshot_rebuild:
             rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
                 background_idx,
@@ -19760,12 +20282,10 @@ def _geometry_manual_source_rows_for_background(
         return []
     projected_projection_count = 0
     rows_to_project = filtered_rows if targeted_preflight_enabled else raw_rows
-    projected_rows = (
-        _geometry_manual_project_peaks_for_background(
-            int(background_idx),
-            rows_to_project,
-            mode_override=projection_view_mode,
-        )
+    projected_rows = _geometry_manual_project_peaks_for_background(
+        int(background_idx),
+        rows_to_project,
+        mode_override=projection_view_mode,
     )
     projected_projection_count = int(len(rows_to_project))
     projected_rows = _geometry_fit_rows_for_background(
@@ -23878,13 +24398,10 @@ def on_fit_ordered_structure_click():
                             dtype=np.complex128,
                         ).copy()
                     ),
-                    "_n2_sample_array_source": base_mosaic_params.get(
-                        "_n2_sample_array_source"
-                    ),
+                    "_n2_sample_array_source": base_mosaic_params.get("_n2_sample_array_source"),
                     "_n2_sample_array_wavelength_snapshot": (
                         None
-                        if base_mosaic_params.get("_n2_sample_array_wavelength_snapshot")
-                        is None
+                        if base_mosaic_params.get("_n2_sample_array_wavelength_snapshot") is None
                         else np.asarray(
                             base_mosaic_params["_n2_sample_array_wavelength_snapshot"],
                             dtype=np.float64,
@@ -24559,9 +25076,8 @@ def _analysis_peak_fit_results_text() -> str:
     empty_text = str(
         globals().get("_ANALYSIS_PEAK_EMPTY_RESULTS_TEXT", "Fit results will appear here.")
     )
-    if (
-        not getattr(analysis_peak_selection_state, "radial_fit_results", None)
-        and not getattr(analysis_peak_selection_state, "azimuth_fit_results", None)
+    if not getattr(analysis_peak_selection_state, "radial_fit_results", None) and not getattr(
+        analysis_peak_selection_state, "azimuth_fit_results", None
     ):
         return empty_text
 
@@ -25394,7 +25910,9 @@ def _analysis_curve_selected_window(
             window_mask = (x_arr >= phi_min) | (x_arr <= phi_max)
 
     if np.any(window_mask):
-        return np.asarray(x_arr[window_mask], dtype=float), np.asarray(y_arr[window_mask], dtype=float)
+        return np.asarray(x_arr[window_mask], dtype=float), np.asarray(
+            y_arr[window_mask], dtype=float
+        )
     return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
 
 
@@ -27777,9 +28295,7 @@ def _clear_geometry_fit_late_event_tail_state(*, clear_pending: bool = True) -> 
         )
     except Exception:
         current_generation = 0
-    simulation_runtime_state.geometry_fit_late_event_tail_generation = (
-        int(current_generation) + 1
-    )
+    simulation_runtime_state.geometry_fit_late_event_tail_generation = int(current_generation) + 1
     if clear_pending:
         simulation_runtime_state.geometry_fit_pending_late_event_tokens = set()
         simulation_runtime_state.geometry_fit_pending_late_event_deadlines = {}
@@ -27819,9 +28335,7 @@ def _geometry_fit_pending_late_event_deadlines() -> dict[tuple[int, int, int], f
     if isinstance(deadlines, dict):
         return deadlines
     resolved_deadlines: dict[tuple[int, int, int], float] = {}
-    simulation_runtime_state.geometry_fit_pending_late_event_deadlines = (
-        resolved_deadlines
-    )
+    simulation_runtime_state.geometry_fit_pending_late_event_deadlines = resolved_deadlines
     return resolved_deadlines
 
 
@@ -28247,8 +28761,7 @@ def _build_geometry_fit_async_job(
         native_background = background_payload.get("native")
         try:
             detector_shape = tuple(
-                int(v)
-                for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+                int(v) for v in np.asarray(native_background, dtype=np.float64).shape[:2]
             )
         except Exception:
             detector_shape = None
@@ -28583,9 +29096,7 @@ def _run_async_geometry_fit_worker_job(
             next_generation = (
                 int(source_cache_generation_by_background.get(int(background_index), 0)) + 1
             )
-            source_cache_generation_by_background[int(background_index)] = int(
-                next_generation
-            )
+            source_cache_generation_by_background[int(background_index)] = int(next_generation)
             job_data["source_cache_generation_by_background"] = dict(
                 source_cache_generation_by_background
             )
@@ -28696,8 +29207,7 @@ def _run_async_geometry_fit_worker_job(
         native_background = background_payload.get("native")
         try:
             detector_shape = tuple(
-                int(v)
-                for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+                int(v) for v in np.asarray(native_background, dtype=np.float64).shape[:2]
             )
         except Exception:
             detector_shape = None
@@ -28725,9 +29235,7 @@ def _run_async_geometry_fit_worker_job(
                 )
         else:
             if isinstance(stored_signature, Mapping):
-                resolved_signature = gui_geometry_fit._geometry_fit_cache_jsonable(
-                    stored_signature
-                )
+                resolved_signature = gui_geometry_fit._geometry_fit_cache_jsonable(stored_signature)
             else:
                 resolved_signature = _geometry_fit_targeted_projection_view_signature(
                     background_idx,
@@ -28738,9 +29246,7 @@ def _run_async_geometry_fit_worker_job(
 
         signature_map[background_idx] = copy.deepcopy(dict(resolved_signature))
         if background_idx == int(job_data.get("current_background_index", -1)):
-            job_data["projection_view_signature"] = copy.deepcopy(
-                signature_map[background_idx]
-            )
+            job_data["projection_view_signature"] = copy.deepcopy(signature_map[background_idx])
         return copy.deepcopy(signature_map[background_idx])
 
     def _project_source_rows_for_background(
@@ -28776,8 +29282,7 @@ def _run_async_geometry_fit_worker_job(
         display_background = background_payload.get("display")
         try:
             detector_shape = tuple(
-                int(v)
-                for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+                int(v) for v in np.asarray(native_background, dtype=np.float64).shape[:2]
             )
         except Exception:
             detector_shape = None
@@ -28786,9 +29291,7 @@ def _run_async_geometry_fit_worker_job(
             payload_map = job_data.setdefault("projection_payload_by_background", {})
             resolved_caked_payload = payload_map.get(int(background_index))
             if not isinstance(resolved_caked_payload, Mapping):
-                resolved_caked_payload = _load_caked_view_by_index_snapshot(
-                    int(background_index)
-                )
+                resolved_caked_payload = _load_caked_view_by_index_snapshot(int(background_index))
             if not isinstance(resolved_caked_payload, Mapping):
                 resolved_caked_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
                     int(background_index),
@@ -28800,9 +29303,7 @@ def _run_async_geometry_fit_worker_job(
                 )
                 if isinstance(resolved_caked_payload, Mapping):
                     payload_map[int(background_index)] = (
-                        gui_geometry_fit._geometry_fit_cache_jsonable(
-                            resolved_caked_payload
-                        )
+                        gui_geometry_fit._geometry_fit_cache_jsonable(resolved_caked_payload)
                     )
             if not isinstance(resolved_caked_payload, Mapping):
                 return normalized_rows
@@ -28827,79 +29328,83 @@ def _run_async_geometry_fit_worker_job(
                 detector_shape,
             )
 
-        projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
-            caked_view_enabled=lambda: bool(
-                normalized_mode == "caked" and isinstance(resolved_caked_payload, Mapping)
-            ),
-            last_caked_background_image_unscaled=lambda: (
-                resolved_caked_payload.get("background")
-                if isinstance(resolved_caked_payload, Mapping)
-                else None
-            ),
-            last_caked_radial_values=lambda: (
-                resolved_caked_payload.get("radial_axis")
-                if isinstance(resolved_caked_payload, Mapping)
-                else None
-            ),
-            last_caked_azimuth_values=lambda: (
-                resolved_caked_payload.get("azimuth_axis")
-                if isinstance(resolved_caked_payload, Mapping)
-                else None
-            ),
-            current_background_display=lambda: display_background,
-            current_background_native=lambda: native_background,
-            ai=_worker_geometry_fit_caking_integrator,
-            center=lambda: center_pair,
-            detector_distance=lambda: float(params_local.get("corto_detector", 0.0) or 0.0),
-            pixel_size=float(pixel_size_m),
-            caked_transform_bundle=lambda: (
-                resolved_caked_payload.get("transform_bundle")
-                if isinstance(resolved_caked_payload, Mapping)
-                else None
-            ),
-            wrap_phi_range=(globals().get("raw_phi_to_gui_phi") or (lambda value: float(value))),
-            rotate_point_for_display=(
-                globals().get("_rotate_point_for_display")
-                or (lambda col, row: (float(col), float(row)))
-            ),
-            display_rotate_k=int(job_data.get("display_rotate_k", globals().get("DISPLAY_ROTATE_K", 0))),
-            current_geometry_fit_params=lambda: dict(job_data.get("params", {}) or {}),
-            build_live_preview_simulated_peaks_from_cache=lambda: [],
-            ensure_peak_overlay_data=lambda **_kwargs: False,
-            miller=lambda: job_data["solver_inputs"].miller,
-            intensities=lambda: job_data["solver_inputs"].intensities,
-            image_size=int(job_data.get("image_size", image_size)),
-            display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
-            native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
-            get_detector_angular_maps=(
-                (
-                    lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
-                    if callable(globals().get("_get_detector_angular_maps"))
+        projection_callbacks = (
+            gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+                caked_view_enabled=lambda: bool(
+                    normalized_mode == "caked" and isinstance(resolved_caked_payload, Mapping)
+                ),
+                last_caked_background_image_unscaled=lambda: (
+                    resolved_caked_payload.get("background")
+                    if isinstance(resolved_caked_payload, Mapping)
                     else None
-                )
-            ),
-            detector_pixel_to_scattering_angles=globals().get(
-                "_detector_pixel_to_scattering_angles"
-            ),
-            backend_detector_coords_to_native_detector_coords=(
-                globals().get("_backend_background_to_native_detector_coords")
-                or (lambda col, row, *_args, **_kwargs: (float(col), float(row)))
-            ),
-            native_detector_coords_to_bundle_detector_coords=(
-                _background_native_detector_coords_to_bundle_detector_coords
-            ),
-            bundle_detector_coords_to_background_display_coords=(
-                lambda col, row: (float(col), float(row))
-            ),
-            scattering_angles_to_detector_pixel=globals().get(
-                "_scattering_angles_to_detector_pixel"
-            ),
-            filter_simulated_peaks=(
-                lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
-            ),
-            collapse_simulated_peaks=(
-                lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)
-            ),
+                ),
+                last_caked_radial_values=lambda: (
+                    resolved_caked_payload.get("radial_axis")
+                    if isinstance(resolved_caked_payload, Mapping)
+                    else None
+                ),
+                last_caked_azimuth_values=lambda: (
+                    resolved_caked_payload.get("azimuth_axis")
+                    if isinstance(resolved_caked_payload, Mapping)
+                    else None
+                ),
+                current_background_display=lambda: display_background,
+                current_background_native=lambda: native_background,
+                ai=_worker_geometry_fit_caking_integrator,
+                center=lambda: center_pair,
+                detector_distance=lambda: float(params_local.get("corto_detector", 0.0) or 0.0),
+                pixel_size=float(pixel_size_m),
+                caked_transform_bundle=lambda: (
+                    resolved_caked_payload.get("transform_bundle")
+                    if isinstance(resolved_caked_payload, Mapping)
+                    else None
+                ),
+                wrap_phi_range=(
+                    globals().get("raw_phi_to_gui_phi") or (lambda value: float(value))
+                ),
+                rotate_point_for_display=(
+                    globals().get("_rotate_point_for_display")
+                    or (lambda col, row: (float(col), float(row)))
+                ),
+                display_rotate_k=int(
+                    job_data.get("display_rotate_k", globals().get("DISPLAY_ROTATE_K", 0))
+                ),
+                current_geometry_fit_params=lambda: dict(job_data.get("params", {}) or {}),
+                build_live_preview_simulated_peaks_from_cache=lambda: [],
+                ensure_peak_overlay_data=lambda **_kwargs: False,
+                miller=lambda: job_data["solver_inputs"].miller,
+                intensities=lambda: job_data["solver_inputs"].intensities,
+                image_size=int(job_data.get("image_size", image_size)),
+                display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
+                native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
+                get_detector_angular_maps=(
+                    lambda ai_value: (
+                        globals()["_get_detector_angular_maps"](ai_value)
+                        if callable(globals().get("_get_detector_angular_maps"))
+                        else None
+                    )
+                ),
+                detector_pixel_to_scattering_angles=globals().get(
+                    "_detector_pixel_to_scattering_angles"
+                ),
+                backend_detector_coords_to_native_detector_coords=(
+                    globals().get("_backend_background_to_native_detector_coords")
+                    or (lambda col, row, *_args, **_kwargs: (float(col), float(row)))
+                ),
+                native_detector_coords_to_bundle_detector_coords=(
+                    _background_native_detector_coords_to_bundle_detector_coords
+                ),
+                bundle_detector_coords_to_background_display_coords=(
+                    lambda col, row: (float(col), float(row))
+                ),
+                scattering_angles_to_detector_pixel=globals().get(
+                    "_scattering_angles_to_detector_pixel"
+                ),
+                filter_simulated_peaks=(
+                    lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
+                ),
+                collapse_simulated_peaks=(lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)),
+            )
         )
         try:
             return _geometry_fit_rows_for_background(
@@ -28936,9 +29441,7 @@ def _run_async_geometry_fit_worker_job(
         sorted_rows = sorted(
             projected_rows,
             key=lambda entry: (
-                int(entry.get(order_key))
-                if entry.get(order_key) is not None
-                else int(1e12)
+                int(entry.get(order_key)) if entry.get(order_key) is not None else int(1e12)
             ),
         )
         cleaned_rows: list[dict[str, object]] = []
@@ -29128,7 +29631,9 @@ def _run_async_geometry_fit_worker_job(
     ) -> dict[str, object]:
         helper_started_at = perf_counter()
         background_idx = int(bundle.background_index)
-        resolved_background_label = str(bundle.background_label or f"background {background_idx + 1}")
+        resolved_background_label = str(
+            bundle.background_label or f"background {background_idx + 1}"
+        )
         row_count = int(len(bundle.projected_rows or bundle.stored_rows or ()))
 
         def _emit_caked_stage(
@@ -29186,9 +29691,7 @@ def _run_async_geometry_fit_worker_job(
                 "roi_pixel_count": int(roi_pixel_count),
                 "roi_fraction": float(roi_fraction),
                 "roi_fallback_reason": (
-                    str(roi_fallback_reason)
-                    if roi_fallback_reason is not None
-                    else None
+                    str(roi_fallback_reason) if roi_fallback_reason is not None else None
                 ),
                 "roi_half_width_px": float(roi_half_width_px),
                 "elapsed_s": float(max(0.0, perf_counter() - helper_started_at)),
@@ -29473,9 +29976,7 @@ def _run_async_geometry_fit_worker_job(
         source_tables: Sequence[object] | None,
         *,
         params_local: Mapping[str, object],
-        required_branch_group_keys: Sequence[
-            tuple[tuple[int, int, int], int | None, object | None]
-        ]
+        required_branch_group_keys: Sequence[tuple[tuple[int, int, int], int | None, object | None]]
         | None = None,
         required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
         preflight_mode: str = "full",
@@ -29542,9 +30043,7 @@ def _run_async_geometry_fit_worker_job(
         required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
             required_manual_fit_targets
         )
-        preflight_mode = (
-            "manual_geometry_targeted" if required_branch_group_keys else "full"
-        )
+        preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
         live_rows_signature = job_data.get("live_rows_signature")
         live_rows_cache_metadata = dict(
             copy.deepcopy(
@@ -29637,9 +30136,7 @@ def _run_async_geometry_fit_worker_job(
         )
         projection_payload = (
             dict(
-                job_data.setdefault("projection_payload_by_background", {}).get(
-                    int(background_idx)
-                )
+                job_data.setdefault("projection_payload_by_background", {}).get(int(background_idx))
                 or {}
             )
             or None
@@ -29668,9 +30165,9 @@ def _run_async_geometry_fit_worker_job(
                     allow_generated_payload=True,
                 )
             if isinstance(projection_payload, Mapping):
-                job_data.setdefault("projection_payload_by_background", {})[
-                    int(background_idx)
-                ] = gui_geometry_fit._geometry_fit_cache_jsonable(projection_payload)
+                job_data.setdefault("projection_payload_by_background", {})[int(background_idx)] = (
+                    gui_geometry_fit._geometry_fit_cache_jsonable(projection_payload)
+                )
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
             background_label=str(background_label),
@@ -30152,9 +30649,7 @@ def _run_async_geometry_fit_worker_job(
                         "background_label": str(background_label),
                         "status": failure_status,
                         "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
-                        "stage_elapsed_s": float(
-                            max(0.0, perf_counter() - bundle_started_at)
-                        ),
+                        "stage_elapsed_s": float(max(0.0, perf_counter() - bundle_started_at)),
                         "message": (
                             "preflight: source cache bundle failed for "
                             f"background {int(background_idx) + 1} "
@@ -30164,9 +30659,7 @@ def _run_async_geometry_fit_worker_job(
                 )
                 continue
             bundle_row_count = int(len(bundle.projected_rows or bundle.stored_rows or ()))
-            source_cache_generation_id = int(
-                _current_source_cache_generation(int(background_idx))
-            )
+            source_cache_generation_id = int(_current_source_cache_generation(int(background_idx)))
             bundle_payload = {
                 "background_index": int(background_idx),
                 "background_label": str(background_label),
