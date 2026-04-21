@@ -43,10 +43,15 @@ Optimizer validation has a green `new4` rung 1 objective dry-run checkpoint:
 the provider/dataset/optimizer request all carry seven fixed-source rows, the
 objective resolver resolves all seven without HKL fallback, the provider
 identity and point handoff match exactly, the dry-run residual is finite, and
-`least_squares`/solve are not called. Solve rungs, sensitivity scan, and the old
-full quality baseline runner remain blocked until a separate solve-rung project
-starts from this checkpoint. The old `new2` and `new3` saved-state gates are
-retired.
+`least_squares`/solve are not called. Review hardening keeps duplicate-HKL
+provider-local singleton repair branch-proven so unproven local rows still fail
+instead of becoming silent HKL-like rematches. Rung 2 sensitivity scan now stops
+after provider guard, rung 1 dry-run, and residual probing only; it writes no
+center/solve artifacts, preserves `new4.json`, and reports 9 active parameters,
+4 near-zero parameters, and 0 unsafe/non-finite parameters on the current real
+`new4` run. Solve rungs and the old full quality baseline runner remain blocked
+until a separate solve-rung project starts from this checkpoint. The old `new2`
+and `new3` saved-state gates are retired.
 
 ## Known bugs
 

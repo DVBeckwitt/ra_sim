@@ -252,7 +252,7 @@ def _coerce_active_names(context: Mapping[str, object], names: Sequence[object])
         name = str(raw_name)
         if name == "theta_offset" and "theta_offset" not in fit_params:
             name = "theta_initial"
-        if name not in fit_params and name != "theta_initial":
+        if name not in fit_params:
             continue
         if name not in active:
             active.append(name)
@@ -737,50 +737,185 @@ def _rung_passed(report: Mapping[str, object]) -> bool:
 
 
 class _ProbeLeastSquares:
-    def __init__(self, *, mode: str, step: float = 1.0e-3) -> None:
+    def __init__(self, *, mode: str) -> None:
         self.mode = str(mode)
-        self.step = float(step)
         self.records: list[dict[str, object]] = []
+
+    @staticmethod
+    def _residual_norm(residual: np.ndarray) -> float:
+        finite = residual[np.isfinite(residual)]
+        if not finite.size:
+            return float("nan")
+        return float(np.linalg.norm(finite))
+
+    @staticmethod
+    def _step_for_value(value: float) -> float:
+        if not math.isfinite(value):
+            return 1.0e-6
+        return float(max(abs(float(value)) * 1.0e-4, 1.0e-6))
+
+    @staticmethod
+    def _bounds(kwargs: Mapping[str, object], size: int) -> tuple[np.ndarray | None, np.ndarray | None]:
+        lower, upper = kwargs.get("bounds", (None, None))
+        lower_arr = np.asarray(lower, dtype=float).reshape(-1) if lower is not None else None
+        upper_arr = np.asarray(upper, dtype=float).reshape(-1) if upper is not None else None
+        if lower_arr is not None and lower_arr.size != size:
+            lower_arr = None
+        if upper_arr is not None and upper_arr.size != size:
+            upper_arr = None
+        return lower_arr, upper_arr
+
+    def _safe_eval(
+        self,
+        fun: Callable[[np.ndarray], np.ndarray],
+        vector: np.ndarray,
+        *,
+        label: str,
+        moved: bool = True,
+    ) -> tuple[dict[str, object], np.ndarray | None]:
+        try:
+            residual = np.asarray(fun(np.array(vector, dtype=float)), dtype=float)
+        except Exception as exc:
+            return (
+                {
+                    "label": str(label),
+                    "x": np.asarray(vector, dtype=float).tolist(),
+                    "moved": bool(moved),
+                    "raised": True,
+                    "error_text": str(exc),
+                    "residual_size": 0,
+                    "residual_norm": float("nan"),
+                    "finite": False,
+                },
+                None,
+            )
+        return (
+            {
+                "label": str(label),
+                "x": np.asarray(vector, dtype=float).tolist(),
+                "moved": bool(moved),
+                "raised": False,
+                "error_text": "",
+                "residual_size": int(residual.size),
+                "residual_norm": self._residual_norm(residual),
+                "finite": bool(np.all(np.isfinite(residual))),
+            },
+            residual,
+        )
 
     def __call__(self, fun: Callable[[np.ndarray], np.ndarray], x0, *args, **kwargs):
         del args
         x0_arr = np.asarray(x0, dtype=float).reshape(-1)
-        residual0 = np.asarray(fun(np.array(x0_arr, dtype=float)), dtype=float)
+        if self.mode == "sensitivity":
+            base_eval, residual0 = self._safe_eval(fun, x0_arr, label="base")
+            if residual0 is None:
+                residual0 = np.array([float("nan")], dtype=float)
+        else:
+            residual0 = np.asarray(fun(np.array(x0_arr, dtype=float)), dtype=float)
+            base_eval = {
+                "label": "base",
+                "x": x0_arr.tolist(),
+                "moved": True,
+                "raised": False,
+                "error_text": "",
+                "residual_size": int(residual0.size),
+                "residual_norm": self._residual_norm(residual0),
+                "finite": bool(np.all(np.isfinite(residual0))),
+            }
         record: dict[str, object] = {
             "x0": x0_arr.tolist(),
-            "residual_size": int(residual0.size),
-            "residual_norm": float(np.linalg.norm(residual0[np.isfinite(residual0)]))
-            if np.any(np.isfinite(residual0))
-            else float("nan"),
-            "finite": bool(np.all(np.isfinite(residual0))),
+            "residual_size": int(base_eval.get("residual_size", 0) or 0),
+            "residual_norm": _metric_float(base_eval.get("residual_norm", np.nan)),
+            "finite": bool(base_eval.get("finite", False)),
         }
         if self.mode == "sensitivity" and x0_arr.size:
-            lower, upper = kwargs.get("bounds", (None, None))
-            lower_arr = np.asarray(lower, dtype=float).reshape(-1) if lower is not None else None
-            upper_arr = np.asarray(upper, dtype=float).reshape(-1) if upper is not None else None
-            x1 = np.array(x0_arr, dtype=float)
-            x1[0] = x1[0] + float(self.step)
-            if lower_arr is not None and lower_arr.size == x1.size:
-                x1 = np.maximum(x1, lower_arr)
-            if upper_arr is not None and upper_arr.size == x1.size:
-                x1 = np.minimum(x1, upper_arr)
-            residual1 = np.asarray(fun(x1), dtype=float)
-            delta = (
-                residual1 - residual0
-                if residual1.shape == residual0.shape
-                else np.array([float("nan")], dtype=float)
-            )
+            lower_arr, upper_arr = self._bounds(kwargs, x0_arr.size)
+            base_value = float(x0_arr[0])
+            requested_step = self._step_for_value(base_value)
+
+            def _trial(direction: float) -> tuple[np.ndarray, float, bool]:
+                target = np.array(x0_arr, dtype=float)
+                requested = float(direction) * requested_step
+                target[0] = target[0] + requested
+                clipped = False
+                if lower_arr is not None:
+                    clipped = clipped or bool(np.any(target < lower_arr))
+                    target = np.maximum(target, lower_arr)
+                if upper_arr is not None:
+                    clipped = clipped or bool(np.any(target > upper_arr))
+                    target = np.minimum(target, upper_arr)
+                applied = float(target[0] - x0_arr[0])
+                if not math.isclose(applied, requested, rel_tol=0.0, abs_tol=1.0e-15):
+                    clipped = True
+                return target, applied, clipped
+
+            plus_x, plus_applied, plus_clipped = _trial(1.0)
+            minus_x, minus_applied, minus_clipped = _trial(-1.0)
+
+            evals = [dict(base_eval)]
+            nfev = 1
+            if abs(plus_applied) > 0.0:
+                plus_eval, residual_plus = self._safe_eval(fun, plus_x, label="plus")
+                if residual_plus is not None and residual_plus.shape == residual0.shape:
+                    delta = residual_plus - residual0
+                    plus_eval["delta_norm"] = self._residual_norm(delta)
+                else:
+                    plus_eval["delta_norm"] = float("nan")
+                nfev += 1
+            else:
+                plus_eval = {
+                    "label": "plus",
+                    "x": plus_x.tolist(),
+                    "moved": False,
+                    "raised": False,
+                    "error_text": "",
+                    "residual_size": 0,
+                    "residual_norm": float("nan"),
+                    "finite": False,
+                    "delta_norm": float("nan"),
+                }
+            plus_eval["step_applied"] = float(plus_applied)
+            plus_eval["clipped"] = bool(plus_clipped)
+            evals.append(plus_eval)
+
+            if abs(minus_applied) > 0.0:
+                minus_eval, residual_minus = self._safe_eval(fun, minus_x, label="minus")
+                if residual_minus is not None and residual_minus.shape == residual0.shape:
+                    delta = residual_minus - residual0
+                    minus_eval["delta_norm"] = self._residual_norm(delta)
+                else:
+                    minus_eval["delta_norm"] = float("nan")
+                nfev += 1
+            else:
+                minus_eval = {
+                    "label": "minus",
+                    "x": minus_x.tolist(),
+                    "moved": False,
+                    "raised": False,
+                    "error_text": "",
+                    "residual_size": 0,
+                    "residual_norm": float("nan"),
+                    "finite": False,
+                    "delta_norm": float("nan"),
+                }
+            minus_eval["step_applied"] = float(minus_applied)
+            minus_eval["clipped"] = bool(minus_clipped)
+            evals.append(minus_eval)
+
             record.update(
                 {
-                    "x1": x1.tolist(),
-                    "delta_step": float(x1[0] - x0_arr[0]),
-                    "delta_norm": float(np.linalg.norm(delta[np.isfinite(delta)]))
-                    if np.any(np.isfinite(delta))
-                    else float("nan"),
-                    "delta_finite": bool(np.all(np.isfinite(residual1))),
+                    "requested_step": float(requested_step),
+                    "base_value": float(base_value),
+                    "evals": evals,
+                    "plus_step_applied": float(plus_applied),
+                    "minus_step_applied": float(minus_applied),
+                    "plus_clipped": bool(plus_clipped),
+                    "minus_clipped": bool(minus_clipped),
+                    "delta_step": float(plus_applied),
+                    "delta_norm": _metric_float(plus_eval.get("delta_norm", np.nan)),
+                    "delta_finite": bool(plus_eval.get("finite", False)),
                 }
             )
-            nfev = 2
         else:
             nfev = 1
         self.records.append(record)
@@ -802,16 +937,44 @@ def _run_with_probe_least_squares(
     mode: str,
 ) -> tuple[object, list[dict[str, object]]]:
     probe = _ProbeLeastSquares(mode=mode)
+    live_payloads: list[dict[str, object]] = []
+
+    def _live_update(payload: Mapping[str, object]) -> None:
+        live_payloads.append(dict(payload))
+
     original = opt.least_squares
     opt.least_squares = probe
     try:
         result = gui_geometry_fit.solve_geometry_fit_request(
             request,
             solve_fit=opt.fit_geometry_parameters,
+            live_update_callback=_live_update,
         )
     finally:
         opt.least_squares = original
-    return result, list(probe.records)
+    records = list(probe.records)
+    payload_index = 0
+    for record in records:
+        evals = record.get("evals")
+        if isinstance(evals, list):
+            for entry in evals:
+                if not isinstance(entry, dict) or not bool(entry.get("moved", True)):
+                    continue
+                if payload_index >= len(live_payloads):
+                    continue
+                entry["live_update_payload"] = dict(live_payloads[payload_index])
+                point_summary = live_payloads[payload_index].get("point_match_summary")
+                if isinstance(point_summary, Mapping):
+                    entry["point_match_summary"] = dict(point_summary)
+                payload_index += 1
+            continue
+        if payload_index < len(live_payloads):
+            record["live_update_payload"] = dict(live_payloads[payload_index])
+            point_summary = live_payloads[payload_index].get("point_match_summary")
+            if isinstance(point_summary, Mapping):
+                record["point_match_summary"] = dict(point_summary)
+            payload_index += 1
+    return result, records
 
 
 def _request_only_report(
@@ -949,21 +1112,230 @@ def run_objective_dry_run(
     return report
 
 
-def _active_theta_name(context: Mapping[str, object]) -> str:
+def _active_theta_name(context: Mapping[str, object]) -> str | None:
     saved_var_names = [str(name) for name in context.get("saved_var_names", []) or []]
-    if "theta_offset" in saved_var_names:
+    prepared_run = context.get("prepared_run")
+    fit_params = (
+        dict(getattr(prepared_run, "fit_params", {}) or {})
+        if prepared_run is not None
+        else {}
+    )
+    if "theta_offset" in saved_var_names and "theta_offset" in fit_params:
         return "theta_offset"
-    return "theta_initial"
+    if "theta_initial" in saved_var_names and "theta_initial" in fit_params:
+        return "theta_initial"
+    if "theta_offset" in fit_params and "theta_initial" not in fit_params:
+        return "theta_offset"
+    if "theta_initial" in fit_params:
+        return "theta_initial"
+    return None
 
 
 def _candidate_order(context: Mapping[str, object]) -> list[str]:
     theta_name = _active_theta_name(context)
     ordered: list[str] = []
     for name in ONE_PARAM_ORDER:
+        if name == "theta_initial" and theta_name is None:
+            continue
         actual = theta_name if name == "theta_initial" else name
         if actual not in ordered:
             ordered.append(actual)
     return _coerce_active_names(context, ordered)
+
+
+def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
+    failures: list[str] = []
+    if str(report.get("status", "")) != "ok" or bool(report.get("pass", False)) is not True:
+        failures.append("rung_1_status_not_ok")
+    expected_counts = {
+        "fixed_source_pair_count": 7,
+        "fallback_row_count": 0,
+        "fixed_source_resolution_fallback_count": 0,
+        "missing_fixed_source_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "branch_mismatch_count": 0,
+    }
+    for key, expected in expected_counts.items():
+        try:
+            actual = int(report.get(key, -999999))
+        except Exception:
+            actual = -999999
+        if actual != expected:
+            failures.append(f"{key}_{actual}_expected_{expected}")
+    if bool(report.get("objective_dry_run_residual_finite", False)) is not True:
+        failures.append("objective_dry_run_residual_not_finite")
+    if bool(report.get("least_squares_called", True)):
+        failures.append("least_squares_called")
+    if bool(report.get("optimizer_solve_called", True)):
+        failures.append("optimizer_solve_called")
+    return failures
+
+
+def _eval_int(summary: Mapping[str, object], keys: Sequence[str], default: int = -1) -> int:
+    for key in keys:
+        if key not in summary:
+            continue
+        try:
+            return int(summary.get(key, default) or 0)
+        except Exception:
+            return int(default)
+    return int(default)
+
+
+def _sensitivity_eval_summary(
+    eval_record: Mapping[str, object] | None,
+    *,
+    request_summary: Mapping[str, object],
+) -> dict[str, object]:
+    record = dict(eval_record or {})
+    point_summary = (
+        dict(record.get("point_match_summary", {}))
+        if isinstance(record.get("point_match_summary", {}), Mapping)
+        else {}
+    )
+    fixed_default = _eval_int(request_summary, ("fixed_source_pair_count",), default=-1)
+    fallback_default = _eval_int(
+        request_summary,
+        (
+            "fallback_entry_count",
+            "fallback_row_count",
+            "fixed_source_resolution_fallback_count",
+        ),
+        default=0,
+    )
+    matched_default = _eval_int(
+        request_summary,
+        ("matched_pair_count", "fixed_source_pair_count"),
+        default=fixed_default if fixed_default >= 0 else 0,
+    )
+    missing_default = _eval_int(
+        request_summary,
+        ("missing_pair_count", "missing_fixed_source_count"),
+        default=0,
+    )
+    branch_default = _eval_int(request_summary, ("branch_mismatch_count",), default=0)
+    summary = {
+        "label": str(record.get("label", "")),
+        "moved": bool(record.get("moved", True)),
+        "raised": bool(record.get("raised", False)),
+        "error_text": str(record.get("error_text", "") or ""),
+        "residual_norm": _metric_float(record.get("residual_norm", np.nan)),
+        "finite": bool(record.get("finite", False)),
+        "delta_norm": _metric_float(record.get("delta_norm", np.nan)),
+        "step_applied": _metric_float(record.get("step_applied", 0.0)),
+        "clipped": bool(record.get("clipped", False)),
+        "fixed_source_pair_count": _eval_int(
+            point_summary,
+            (
+                "fixed_source_resolved_count",
+                "matched_fixed_pair_count",
+                "fixed_source_reflection_count",
+            ),
+            default=fixed_default,
+        ),
+        "fallback_entry_count": _eval_int(
+            point_summary,
+            ("fallback_entry_count",),
+            default=fallback_default,
+        ),
+        "matched_pair_count": _eval_int(
+            point_summary,
+            ("matched_pair_count",),
+            default=matched_default,
+        ),
+        "missing_pair_count": _eval_int(
+            point_summary,
+            ("missing_pair_count",),
+            default=missing_default,
+        ),
+        "branch_mismatch_count": _eval_int(
+            point_summary,
+            ("branch_mismatch_count",),
+            default=branch_default,
+        ),
+        "counter_source": "point_match_summary" if point_summary else "request_summary",
+    }
+    failures: list[str] = []
+    for key, expected in (
+        ("fixed_source_pair_count", 7),
+        ("fallback_entry_count", 0),
+        ("matched_pair_count", 7),
+        ("missing_pair_count", 0),
+        ("branch_mismatch_count", 0),
+    ):
+        try:
+            actual = int(summary.get(key, -999999))
+        except Exception:
+            actual = -999999
+        if actual != expected:
+            failures.append(f"{key}_{actual}_expected_{expected}")
+    summary["fixed_source_clean"] = not failures
+    summary["fixed_source_failures"] = failures
+    return summary
+
+
+def _eval_by_label(record: Mapping[str, object], label: str) -> Mapping[str, object] | None:
+    evals = record.get("evals")
+    if not isinstance(evals, Sequence) or isinstance(evals, (str, bytes)):
+        if label == "base":
+            return record
+        return None
+    for entry in evals:
+        if isinstance(entry, Mapping) and str(entry.get("label", "")) == label:
+            return entry
+    return None
+
+
+def _sensitivity_status(
+    *,
+    base_eval: Mapping[str, object],
+    plus_eval: Mapping[str, object],
+    minus_eval: Mapping[str, object],
+    threshold: float,
+) -> tuple[str, list[str], float]:
+    reasons: list[str] = []
+    if bool(base_eval.get("raised", False)):
+        return "unsafe", ["base_eval_raised"], float("nan")
+    if not bool(base_eval.get("fixed_source_clean", False)):
+        return "unsafe", list(base_eval.get("fixed_source_failures", []) or []), float("nan")
+    moved = [
+        eval_report
+        for eval_report in (plus_eval, minus_eval)
+        if bool(eval_report.get("moved", False))
+    ]
+    if not moved:
+        return "unsafe", ["no_valid_movement"], float("nan")
+    for eval_report in moved:
+        label = str(eval_report.get("label", "direction"))
+        if bool(eval_report.get("raised", False)):
+            reasons.append(f"{label}_eval_raised")
+        if not bool(eval_report.get("fixed_source_clean", False)):
+            reasons.extend(
+                f"{label}_{reason}"
+                for reason in eval_report.get("fixed_source_failures", []) or []
+            )
+    if reasons:
+        return "unsafe", reasons, float("nan")
+    if any(not bool(eval_report.get("finite", False)) for eval_report in moved):
+        return "non_finite", ["non_finite_residual"], float("nan")
+    delta_values = [
+        _metric_float(eval_report.get("delta_norm", np.nan))
+        for eval_report in moved
+        if math.isfinite(_metric_float(eval_report.get("delta_norm", np.nan)))
+    ]
+    if not delta_values:
+        return "non_finite", ["non_finite_delta"], float("nan")
+    sensitivity_values: list[float] = []
+    for eval_report in moved:
+        delta_norm = _metric_float(eval_report.get("delta_norm", np.nan))
+        step = abs(_metric_float(eval_report.get("step_applied", np.nan)))
+        if math.isfinite(delta_norm) and math.isfinite(step) and step > 0.0:
+            sensitivity_values.append(float(delta_norm / step))
+    sensitivity_norm = max(sensitivity_values) if sensitivity_values else float("nan")
+    if any(delta > threshold for delta in delta_values):
+        return "active", [], sensitivity_norm
+    return "near_zero", [], sensitivity_norm
 
 
 def run_sensitivity_scan(
@@ -971,37 +1343,95 @@ def run_sensitivity_scan(
     *,
     output_path: Path,
     max_nfev: int,
+    rung_1_report: Mapping[str, object] | None = None,
+    state_path: Path | None = None,
+    state_hash_before: str | None = None,
 ) -> dict[str, object]:
     started = time.monotonic()
+    initial_state_hash = (
+        str(state_hash_before)
+        if state_hash_before is not None
+        else (_state_sha256(Path(state_path)) if state_path is not None else None)
+    )
     entries: list[dict[str, object]] = []
+    rung_1 = dict(rung_1_report or {})
+    residual_probe_called = False
     for name in _candidate_order(context):
         param_started = time.monotonic()
         try:
             request = build_solver_request(context, [name], max_nfev=max_nfev)
+            request_summary = _request_handoff_summary(request)
+            request_failures = _strict_no_fallback_failures(request_summary)
+            if request_failures:
+                entries.append(
+                    {
+                        "param_name": str(name),
+                        "name": str(name),
+                        "status": "unsafe",
+                        "unsafe_reasons": list(request_failures),
+                        "elapsed_seconds": float(max(0.0, time.monotonic() - param_started)),
+                    }
+                )
+                continue
+            residual_probe_called = True
             result, records = _run_with_probe_least_squares(request, mode="sensitivity")
-            point_summary = _point_match_summary(result)
             probe_record = records[-1] if records else {}
-            delta_norm = _metric_float(probe_record.get("delta_norm", np.nan))
-            residual_norm = _metric_float(probe_record.get("residual_norm", np.nan))
-            finite = bool(probe_record.get("finite", False)) and bool(
-                probe_record.get("delta_finite", False)
+            base_eval = _sensitivity_eval_summary(
+                _eval_by_label(probe_record, "base"),
+                request_summary=request_summary,
             )
-            threshold = max(1.0e-7, 1.0e-7 * abs(residual_norm) if math.isfinite(residual_norm) else 0.0)
-            if not finite:
-                classification = "non-finite/unsafe"
-            elif not math.isfinite(delta_norm) or delta_norm <= threshold:
-                classification = "near-zero sensitivity"
-            else:
-                classification = "active/sensitive"
+            plus_eval = _sensitivity_eval_summary(
+                _eval_by_label(probe_record, "plus"),
+                request_summary=request_summary,
+            )
+            minus_eval = _sensitivity_eval_summary(
+                _eval_by_label(probe_record, "minus"),
+                request_summary=request_summary,
+            )
+            residual_norm_base = _metric_float(base_eval.get("residual_norm", np.nan))
+            threshold = max(
+                1.0e-7,
+                1.0e-7 * abs(residual_norm_base)
+                if math.isfinite(residual_norm_base)
+                else 0.0,
+            )
+            status, unsafe_reasons, sensitivity_norm = _sensitivity_status(
+                base_eval=base_eval,
+                plus_eval=plus_eval,
+                minus_eval=minus_eval,
+                threshold=float(threshold),
+            )
+            plus_step = _metric_float(plus_eval.get("step_applied", 0.0))
+            minus_step = _metric_float(minus_eval.get("step_applied", 0.0))
             entries.append(
                 {
+                    "param_name": str(name),
                     "name": str(name),
-                    "classification": classification,
-                    "delta_norm": delta_norm,
-                    "residual_norm": residual_norm,
-                    "matched_pair_count": int(point_summary.get("matched_pair_count", 0) or 0),
-                    "missing_pair_count": int(point_summary.get("missing_pair_count", 0) or 0),
-                    "branch_mismatch_count": int(point_summary.get("branch_mismatch_count", 0) or 0),
+                    "status": str(status),
+                    "classification": str(status),
+                    "base_value": _metric_float(probe_record.get("base_value", np.nan)),
+                    "step_size": _metric_float(probe_record.get("requested_step", np.nan)),
+                    "plus_step_applied": plus_step,
+                    "minus_step_applied": minus_step,
+                    "plus_clipped": bool(plus_eval.get("clipped", False)),
+                    "minus_clipped": bool(minus_eval.get("clipped", False)),
+                    "residual_norm_base": residual_norm_base,
+                    "residual_norm_plus": _metric_float(plus_eval.get("residual_norm", np.nan)),
+                    "residual_norm_minus": _metric_float(minus_eval.get("residual_norm", np.nan)),
+                    "delta_norm_plus": _metric_float(plus_eval.get("delta_norm", np.nan)),
+                    "delta_norm_minus": _metric_float(minus_eval.get("delta_norm", np.nan)),
+                    "sensitivity_norm": sensitivity_norm,
+                    "finite_plus": bool(plus_eval.get("finite", False)),
+                    "finite_minus": bool(minus_eval.get("finite", False)),
+                    "unsafe_reasons": list(unsafe_reasons),
+                    "base_eval": base_eval,
+                    "plus_eval": plus_eval,
+                    "minus_eval": minus_eval,
+                    "fixed_source_pair_count": int(base_eval.get("fixed_source_pair_count", -1)),
+                    "fallback_entry_count": int(base_eval.get("fallback_entry_count", -1)),
+                    "matched_pair_count": int(base_eval.get("matched_pair_count", -1)),
+                    "missing_pair_count": int(base_eval.get("missing_pair_count", -1)),
+                    "branch_mismatch_count": int(base_eval.get("branch_mismatch_count", -1)),
                     "probe_records": records,
                     "elapsed_seconds": float(max(0.0, time.monotonic() - param_started)),
                 }
@@ -1009,35 +1439,60 @@ def run_sensitivity_scan(
         except Exception as exc:
             entries.append(
                 {
+                    "param_name": str(name),
                     "name": str(name),
-                    "classification": "non-finite/unsafe",
+                    "status": "unsafe",
+                    "classification": "unsafe",
                     "error_text": str(exc),
+                    "unsafe_reasons": ["residual_eval_raised"],
                     "elapsed_seconds": float(max(0.0, time.monotonic() - param_started)),
                 }
             )
+    state_hash_after = _state_sha256(Path(state_path)) if state_path is not None else initial_state_hash
+    state_hash_unchanged = (
+        bool(initial_state_hash == state_hash_after)
+        if initial_state_hash is not None and state_hash_after is not None
+        else True
+    )
+    active_params = [str(entry["param_name"]) for entry in entries if entry.get("status") == "active"]
+    near_zero_params = [
+        str(entry["param_name"]) for entry in entries if entry.get("status") == "near_zero"
+    ]
+    non_finite_params = [
+        str(entry["param_name"]) for entry in entries if entry.get("status") == "non_finite"
+    ]
+    unsafe_params = [
+        str(entry["param_name"]) for entry in entries if entry.get("status") == "unsafe"
+    ]
+    status = "ok" if active_params and state_hash_unchanged else "fail"
     payload = {
         "rung": 2,
         "rung_name": "sensitivity_scan",
-        "status": "ok"
-        if all(str(entry.get("classification")) != "non-finite/unsafe" for entry in entries)
-        else "fail",
+        "status": status,
+        "rung_1_status": str(rung_1.get("status", "")),
+        "provider_pair_count": int(rung_1.get("provider_pair_count", 0) or 0),
+        "fixed_source_pair_count": int(rung_1.get("fixed_source_pair_count", 0) or 0),
+        "fallback_entry_count": int(rung_1.get("fallback_entry_count", 0) or 0),
+        "residual_probe_called": bool(residual_probe_called),
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
         "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+        "params": entries,
         "parameters": entries,
-        "active_parameters": [
-            str(entry["name"])
-            for entry in entries
-            if str(entry.get("classification")) == "active/sensitive"
-        ],
-        "near_zero_parameters": [
-            str(entry["name"])
-            for entry in entries
-            if str(entry.get("classification")) == "near-zero sensitivity"
-        ],
-        "unsafe_parameters": [
-            str(entry["name"])
-            for entry in entries
-            if str(entry.get("classification")) == "non-finite/unsafe"
-        ],
+        "active_param_count": int(len(active_params)),
+        "near_zero_param_count": int(len(near_zero_params)),
+        "non_finite_param_count": int(len(non_finite_params)),
+        "unsafe_param_count": int(len(unsafe_params)),
+        "active_params": active_params,
+        "near_zero_params": near_zero_params,
+        "non_finite_params": non_finite_params,
+        "unsafe_params": unsafe_params,
+        "active_parameters": active_params,
+        "near_zero_parameters": near_zero_params,
+        "unsafe_parameters": unsafe_params,
+        "state_sha256_before": initial_state_hash,
+        "state_sha256_after": state_hash_after,
+        "state_hash_unchanged": bool(state_hash_unchanged),
     }
     payload["pass"] = str(payload["status"]) == "ok"
     _write_json(output_path, payload)
@@ -1458,14 +1913,19 @@ def run_ladder(
         max_nfev=int(max_nfev),
     )
     reports.append(dry_report)
-    if not bool(dry_report.get("pass", False)):
+    rung1_failures = _rung1_green_failures(dry_report)
+    if rung1_failures:
         result = {
             "status": "aborted",
             "reason": "objective_dry_run_failed",
+            "rung_1_failures": rung1_failures,
             "run_dir": str(run_dir),
             "reports": reports,
             "state_sha256_before": state_hash_before,
             "state_sha256_after": _state_sha256(state_path),
+            "residual_probe_called": False,
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
         }
         _write_json(run_dir / "ladder_summary.json", result)
         return result
@@ -1474,6 +1934,9 @@ def run_ladder(
         context,
         output_path=_rung_path(run_dir, 2, "sensitivity_scan"),
         max_nfev=int(max_nfev),
+        rung_1_report=dry_report,
+        state_path=state_path,
+        state_hash_before=state_hash_before,
     )
     reports.append(sensitivity)
     if not bool(sensitivity.get("pass", False)):
@@ -1484,6 +1947,22 @@ def run_ladder(
             "reports": reports,
             "state_sha256_before": state_hash_before,
             "state_sha256_after": _state_sha256(state_path),
+        }
+        _write_json(run_dir / "ladder_summary.json", result)
+        return result
+
+    if str(max_rung).strip().lower() == "sensitivity":
+        result = {
+            "status": "pass",
+            "run_dir": str(run_dir),
+            "final_selected_params": list(sensitivity.get("active_params", []) or []),
+            "reports": reports,
+            "state_sha256_before": state_hash_before,
+            "state_sha256_after": _state_sha256(state_path),
+            "state_unchanged": state_hash_before == _state_sha256(state_path),
+            "residual_probe_called": bool(sensitivity.get("residual_probe_called", False)),
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
         }
         _write_json(run_dir / "ladder_summary.json", result)
         return result
@@ -1521,7 +2000,7 @@ def run_ladder(
             return result
 
     passed_params = _passed_params_from_one_param_reports(one_param_reports)
-    theta_name = _active_theta_name(context)
+    theta_name = _active_theta_name(context) or "theta_initial"
     pair_groups = (
         [("center_xy", ["center_x", "center_y"])]
         if center_only
@@ -1645,7 +2124,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", help="Root directory for ladder artifacts.")
     parser.add_argument(
         "--max-rung",
-        choices=("center", "full", "features"),
+        choices=("sensitivity", "center", "full", "features"),
         default="center",
     )
     parser.add_argument("--timeout-seconds", type=float, default=120.0)

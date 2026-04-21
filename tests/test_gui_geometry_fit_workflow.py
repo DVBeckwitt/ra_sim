@@ -3132,27 +3132,21 @@ def _install_fast_new4_ladder_stubs(monkeypatch, ladder):
 
     def _dry_run(_context, *, output_path, max_nfev):
         del _context, max_nfev
-        payload = {
-            "rung": 1,
-            "rung_name": "objective_dry_run",
-            "status": "ok",
-            "pass": True,
-            "matched_pair_count": 7,
-            "missing_pair_count": 0,
-            "branch_mismatch_count": 0,
-            "after_rms_px": 1.0,
-            "after_max_error_px": 2.0,
-        }
+        payload = _green_rung1_report()
+        payload.update({"after_rms_px": 1.0, "after_max_error_px": 2.0})
         ladder._write_json(output_path, payload)
         return payload
 
-    def _sensitivity(_context, *, output_path, max_nfev):
-        del _context, max_nfev
+    def _sensitivity(_context, *, output_path, max_nfev, **kwargs):
+        del _context, max_nfev, kwargs
         payload = {
             "rung": 2,
             "rung_name": "sensitivity_scan",
             "status": "ok",
             "pass": True,
+            "residual_probe_called": True,
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
             "active_parameters": ["center_x", "center_y"],
             "near_zero_parameters": [],
             "unsafe_parameters": [],
@@ -3182,6 +3176,132 @@ def _install_fast_new4_ladder_stubs(monkeypatch, ladder):
     monkeypatch.setattr(ladder, "run_objective_dry_run", _dry_run)
     monkeypatch.setattr(ladder, "run_sensitivity_scan", _sensitivity)
     monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver_rung)
+
+
+def _sensitivity_point_summary(
+    *,
+    fixed: int = 7,
+    fallback: int = 0,
+    matched: int = 7,
+    missing: int = 0,
+    branch_mismatch: int = 0,
+) -> dict[str, object]:
+    return {
+        "fixed_source_resolved_count": int(fixed),
+        "matched_fixed_pair_count": int(fixed),
+        "fallback_entry_count": int(fallback),
+        "matched_pair_count": int(matched),
+        "missing_pair_count": int(missing),
+        "branch_mismatch_count": int(branch_mismatch),
+    }
+
+
+def _sensitivity_eval(
+    label: str,
+    *,
+    residual_norm: float,
+    delta_norm: float = 0.0,
+    finite: bool = True,
+    moved: bool = True,
+    step_applied: float = 0.1,
+    clipped: bool = False,
+    point_summary: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload = {
+        "label": label,
+        "moved": bool(moved),
+        "raised": False,
+        "error_text": "",
+        "residual_norm": float(residual_norm),
+        "delta_norm": float(delta_norm),
+        "finite": bool(finite),
+        "step_applied": float(step_applied),
+        "clipped": bool(clipped),
+        "point_match_summary": point_summary or _sensitivity_point_summary(),
+    }
+    return payload
+
+
+def _sensitivity_probe_record(
+    *,
+    base_value: float = 10.0,
+    requested_step: float = 0.1,
+    plus_delta: float = 1.0,
+    minus_delta: float = 1.0,
+    plus_finite: bool = True,
+    minus_finite: bool = True,
+    plus_summary: dict[str, object] | None = None,
+    minus_summary: dict[str, object] | None = None,
+    plus_moved: bool = True,
+    minus_moved: bool = True,
+    plus_clipped: bool = False,
+    minus_clipped: bool = False,
+    plus_step_applied: float | None = None,
+    minus_step_applied: float | None = None,
+) -> dict[str, object]:
+    plus_step = (
+        float(plus_step_applied)
+        if plus_step_applied is not None
+        else (float(requested_step) if plus_moved else 0.0)
+    )
+    minus_step = (
+        float(minus_step_applied)
+        if minus_step_applied is not None
+        else (-float(requested_step) if minus_moved else 0.0)
+    )
+    return {
+        "base_value": float(base_value),
+        "requested_step": float(requested_step),
+        "evals": [
+            _sensitivity_eval(
+                "base",
+                residual_norm=2.0,
+                step_applied=0.0,
+                point_summary=_sensitivity_point_summary(),
+            ),
+            _sensitivity_eval(
+                "plus",
+                residual_norm=2.0 + float(plus_delta),
+                delta_norm=float(plus_delta),
+                finite=bool(plus_finite),
+                moved=bool(plus_moved),
+                step_applied=plus_step,
+                clipped=bool(plus_clipped),
+                point_summary=plus_summary,
+            ),
+            _sensitivity_eval(
+                "minus",
+                residual_norm=2.0 + float(minus_delta),
+                delta_norm=float(minus_delta),
+                finite=bool(minus_finite),
+                moved=bool(minus_moved),
+                step_applied=minus_step,
+                clipped=bool(minus_clipped),
+                point_summary=minus_summary,
+            ),
+        ],
+    }
+
+
+def _green_rung1_report() -> dict[str, object]:
+    return {
+        "rung": 1,
+        "rung_name": "objective_dry_run",
+        "status": "ok",
+        "pass": True,
+        "provider_pair_count": 7,
+        "fixed_source_pair_count": 7,
+        "fallback_row_count": 0,
+        "fixed_source_resolution_fallback_count": 0,
+        "missing_fixed_source_count": 0,
+        "fallback_entry_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "branch_mismatch_count": 0,
+        "objective_dry_run_residual_finite": True,
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+    }
 
 
 def test_new4_ladder_runs_provider_guard_before_optimizer(monkeypatch, tmp_path) -> None:
@@ -3216,6 +3336,573 @@ def test_new4_ladder_runs_provider_guard_before_optimizer(monkeypatch, tmp_path)
     assert result["status"] == "aborted"
     assert result["reason"] == "provider_guard_failed"
     assert (tmp_path / "guard_fail" / "rung_00_provider_guard.json").exists()
+
+
+def test_new4_ladder_parser_accepts_sensitivity_max_rung() -> None:
+    ladder = _load_new4_ladder_module()
+    parser = ladder.build_arg_parser()
+
+    args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--max-rung",
+            "sensitivity",
+        ]
+    )
+
+    assert args.max_rung == "sensitivity"
+
+
+def test_new4_ladder_sensitivity_max_rung_stops_before_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+
+    def _green_guard(*, output_path, **_kwargs):
+        payload = _green_new4_ladder_provider_payload()
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _dry_run(_context, *, output_path, max_nfev):
+        del _context, max_nfev
+        payload = _green_rung1_report()
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _sensitivity(_context, *, output_path, max_nfev, **kwargs):
+        del _context, max_nfev, kwargs
+        payload = {
+            "rung": 2,
+            "rung_name": "sensitivity_scan",
+            "status": "ok",
+            "pass": True,
+            "residual_probe_called": True,
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
+            "active_params": ["center_x"],
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _solver_rung(**_kwargs):
+        raise AssertionError("solve rung must not run for max_rung=sensitivity")
+
+    monkeypatch.setattr(ladder, "run_provider_guard", _green_guard)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(ladder, "run_objective_dry_run", _dry_run)
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _sensitivity)
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver_rung)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="sensitivity",
+        timestamp="sensitivity_stop",
+    )
+    run_dir = tmp_path / "sensitivity_stop"
+
+    assert result["status"] == "pass"
+    assert (run_dir / "rung_01_objective_dry_run.json").exists()
+    assert (run_dir / "rung_02_sensitivity_scan.json").exists()
+    assert not list(run_dir.glob("rung_03_*.json"))
+    assert result["residual_probe_called"] is True
+    assert result["least_squares_called"] is False
+    assert result["optimizer_solve_called"] is False
+
+
+def test_new4_ladder_aborts_before_sensitivity_when_rung1_not_green(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+
+    def _green_guard(*, output_path, **_kwargs):
+        payload = _green_new4_ladder_provider_payload()
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _fallback_dry_run(_context, *, output_path, max_nfev):
+        del _context, max_nfev
+        payload = dict(_green_rung1_report())
+        payload.update(
+            {
+                "status": "failed",
+                "pass": False,
+                "fallback_row_count": 1,
+                "fixed_source_resolution_fallback_count": 1,
+            }
+        )
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _sensitivity(*_args, **_kwargs):
+        raise AssertionError("sensitivity must not run after rung 1 fallback")
+
+    monkeypatch.setattr(ladder, "run_provider_guard", _green_guard)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(ladder, "run_objective_dry_run", _fallback_dry_run)
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _sensitivity)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="sensitivity",
+        timestamp="rung1_fail",
+    )
+
+    assert result["status"] == "aborted"
+    assert result["reason"] == "objective_dry_run_failed"
+    assert result["residual_probe_called"] is False
+    assert result["least_squares_called"] is False
+    assert not (tmp_path / "rung1_fail" / "rung_02_sensitivity_scan.json").exists()
+
+
+def test_new4_ladder_sensitivity_real_new4_cli_smoke(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = Path("artifacts/geometry_fit_gui_states/new4.json")
+    if not state_path.exists():
+        pytest.skip("new4 artifact is not present")
+    output_root = tmp_path / "ladder"
+    monkeypatch.setattr(ladder, "_run_stamp", lambda: "cli_sensitivity_smoke")
+
+    exit_code = ladder.main(
+        [
+            "--state",
+            str(state_path),
+            "--background-index",
+            "0",
+            "--output-root",
+            str(output_root),
+            "--max-rung",
+            "sensitivity",
+            "--max-nfev",
+            "20",
+            "--timeout-seconds",
+            "120",
+        ]
+    )
+    run_dir = output_root / "cli_sensitivity_smoke"
+    rung1_path = run_dir / "rung_01_objective_dry_run.json"
+    rung2_path = run_dir / "rung_02_sensitivity_scan.json"
+
+    assert exit_code == 0
+    assert rung1_path.exists()
+    assert rung2_path.exists()
+    assert not [
+        path
+        for path in run_dir.glob("rung_*.json")
+        if path.name.startswith(("rung_03_", "rung_04_", "rung_05_"))
+    ]
+    rung1 = json.loads(rung1_path.read_text(encoding="utf-8"))
+    rung2 = json.loads(rung2_path.read_text(encoding="utf-8"))
+    assert rung1["status"] == "ok"
+    assert rung1["fixed_source_pair_count"] == 7
+    assert rung1["fallback_row_count"] == 0
+    assert rung1["least_squares_called"] is False
+    assert rung2["residual_probe_called"] is True
+    assert rung2["least_squares_called"] is False
+    assert rung2["optimizer_solve_called"] is False
+
+
+def test_new4_ladder_sensitivity_does_not_call_real_least_squares(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    called = {"least_squares": False}
+
+    def _raising_least_squares(*_args, **_kwargs):
+        called["least_squares"] = True
+        raise AssertionError("real least_squares must not be called")
+
+    monkeypatch.setattr(ladder.opt, "least_squares", _raising_least_squares)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=tmp_path / "rung_02_sensitivity_scan.json",
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+
+    assert report["residual_probe_called"] is True
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
+    assert called["least_squares"] is False
+
+
+def test_new4_ladder_sensitivity_request_fallback_marks_unsafe_without_probe(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        ladder,
+        "_strict_no_fallback_failures",
+        lambda _summary: ["forced_request_fallback"],
+    )
+
+    def _probe_boundary(*_args, **_kwargs):
+        raise AssertionError("residual probe must not run after request fallback")
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _probe_boundary)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=tmp_path / "rung_02_sensitivity_scan.json",
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+
+    assert report["residual_probe_called"] is False
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
+    assert report["unsafe_param_count"] == len(report["params"])
+    assert all(entry["status"] == "unsafe" for entry in report["params"])
+
+
+def test_new4_ladder_sensitivity_reports_fixed_source_counter_breaks(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    broken_plus = _sensitivity_point_summary(fallback=1)
+    records = {
+        "center_x": _sensitivity_probe_record(plus_delta=1.0, minus_delta=0.5),
+        "center_y": _sensitivity_probe_record(
+            plus_delta=1.0,
+            minus_delta=0.5,
+            plus_summary=broken_plus,
+        ),
+        "theta_initial": _sensitivity_probe_record(
+            plus_delta=0.0,
+            minus_delta=0.0,
+        ),
+    }
+
+    def _fake_probe(request, *, mode):
+        assert mode == "sensitivity"
+        return SimpleNamespace(), [records[request.var_names[0]]]
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=tmp_path / "rung_02_sensitivity_scan.json",
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+    by_name = {entry["param_name"]: entry for entry in report["params"]}
+
+    assert by_name["center_x"]["status"] == "active"
+    assert by_name["center_y"]["status"] == "unsafe"
+    assert by_name["center_y"]["plus_eval"]["fallback_entry_count"] == 1
+    assert by_name["center_y"]["plus_eval"]["fixed_source_clean"] is False
+    assert by_name["theta_initial"]["status"] == "near_zero"
+    for entry in report["params"]:
+        for direction in ("base_eval", "plus_eval", "minus_eval"):
+            eval_report = entry[direction]
+            for key in (
+                "fixed_source_pair_count",
+                "fallback_entry_count",
+                "matched_pair_count",
+                "missing_pair_count",
+                "branch_mismatch_count",
+            ):
+                assert key in eval_report
+
+
+def test_new4_ladder_sensitivity_eval_counters_fall_back_to_request_summary() -> None:
+    ladder = _load_new4_ladder_module()
+
+    summary = ladder._sensitivity_eval_summary(
+        {
+            "label": "plus",
+            "moved": True,
+            "finite": True,
+            "delta_norm": 1.0,
+            "step_applied": 0.5,
+        },
+        request_summary={
+            "fixed_source_pair_count": 7,
+            "fallback_row_count": 0,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+        },
+    )
+
+    assert summary["counter_source"] == "request_summary"
+    assert summary["fixed_source_pair_count"] == 7
+    assert summary["fallback_entry_count"] == 0
+    assert summary["matched_pair_count"] == 7
+    assert summary["missing_pair_count"] == 0
+    assert summary["branch_mismatch_count"] == 0
+    assert summary["fixed_source_clean"] is True
+
+
+def test_new4_ladder_sensitivity_probe_uses_fresh_base_vector() -> None:
+    ladder = _load_new4_ladder_module()
+    probe = ladder._ProbeLeastSquares(mode="sensitivity")
+    seen: list[tuple[float, float]] = []
+
+    def _residual(vector):
+        arr = np.asarray(vector, dtype=float)
+        seen.append((float(arr[0]), float(arr[1])))
+        return np.asarray([arr[0], arr[1]], dtype=float)
+
+    base = np.asarray([10.0, 20.0], dtype=float)
+    bounds = (
+        np.asarray([0.0, 0.0], dtype=float),
+        np.asarray([100.0, 100.0], dtype=float),
+    )
+
+    probe(_residual, base, bounds=bounds)
+    probe(_residual, base, bounds=bounds)
+
+    first = seen[:3]
+    second = seen[3:6]
+    assert first[0] == (10.0, 20.0)
+    assert first[1][0] > 10.0 and first[1][1] == 20.0
+    assert first[2][0] < 10.0 and first[2][1] == 20.0
+    assert second[0] == (10.0, 20.0)
+    assert second[1][0] > 10.0 and second[1][1] == 20.0
+    assert second[2][0] < 10.0 and second[2][1] == 20.0
+
+
+def test_new4_ladder_sensitivity_probe_records_bound_clipping() -> None:
+    ladder = _load_new4_ladder_module()
+
+    def _record(base_value: float, lower: float, upper: float) -> dict[str, object]:
+        probe = ladder._ProbeLeastSquares(mode="sensitivity")
+
+        def _residual(vector):
+            arr = np.asarray(vector, dtype=float)
+            return np.asarray([arr[0]], dtype=float)
+
+        probe(
+            _residual,
+            np.asarray([base_value], dtype=float),
+            bounds=(
+                np.asarray([lower], dtype=float),
+                np.asarray([upper], dtype=float),
+            ),
+        )
+        return probe.records[0]
+
+    both_valid = _record(10.0, 0.0, 20.0)
+    plus_clipped = _record(10.0, 0.0, 10.0)
+    minus_clipped = _record(10.0, 10.0, 20.0)
+    both_clipped = _record(10.0, 10.0, 10.0)
+
+    assert both_valid["plus_step_applied"] > 0.0
+    assert both_valid["minus_step_applied"] < 0.0
+    assert both_valid["plus_clipped"] is False
+    assert both_valid["minus_clipped"] is False
+    assert plus_clipped["plus_step_applied"] == 0.0
+    assert plus_clipped["minus_step_applied"] < 0.0
+    assert plus_clipped["plus_clipped"] is True
+    assert minus_clipped["plus_step_applied"] > 0.0
+    assert minus_clipped["minus_step_applied"] == 0.0
+    assert minus_clipped["minus_clipped"] is True
+    assert both_clipped["plus_step_applied"] == 0.0
+    assert both_clipped["minus_step_applied"] == 0.0
+
+
+def test_new4_ladder_sensitivity_status_uses_applied_step_and_no_move_unsafe(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    records = {
+        "center_x": _sensitivity_probe_record(
+            requested_step=1.0,
+            plus_delta=2.0,
+            minus_delta=0.0,
+            plus_step_applied=0.25,
+            minus_moved=False,
+            plus_clipped=True,
+        ),
+        "center_y": _sensitivity_probe_record(
+            plus_delta=1.0,
+            minus_delta=1.0,
+            plus_moved=False,
+            minus_moved=False,
+            plus_clipped=True,
+            minus_clipped=True,
+        ),
+        "theta_initial": _sensitivity_probe_record(
+            plus_delta=0.0,
+            minus_delta=0.0,
+        ),
+    }
+
+    def _fake_probe(request, *, mode):
+        assert mode == "sensitivity"
+        return SimpleNamespace(), [records[request.var_names[0]]]
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=tmp_path / "rung_02_sensitivity_scan.json",
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+    by_name = {entry["param_name"]: entry for entry in report["params"]}
+
+    assert by_name["center_x"]["plus_clipped"] is True
+    assert by_name["center_x"]["minus_eval"]["moved"] is False
+    assert by_name["center_x"]["sensitivity_norm"] == pytest.approx(8.0)
+    assert by_name["center_y"]["status"] == "unsafe"
+    assert "no_valid_movement" in by_name["center_y"]["unsafe_reasons"]
+
+
+def test_new4_ladder_active_theta_name_selects_one_active_theta() -> None:
+    ladder = _load_new4_ladder_module()
+    base_context = _minimal_new4_ladder_context(ladder)
+    assert ladder._active_theta_name(base_context) == "theta_initial"
+    assert [
+        name
+        for name in ladder._candidate_order(base_context)
+        if name in {"theta_initial", "theta_offset"}
+    ] == ["theta_initial"]
+
+    offset_context = dict(base_context)
+    offset_context["saved_var_names"] = ["theta_offset"]
+    assert ladder._active_theta_name(offset_context) == "theta_offset"
+    assert [
+        name
+        for name in ladder._candidate_order(offset_context)
+        if name in {"theta_initial", "theta_offset"}
+    ] == ["theta_offset"]
+
+    prepared_run = base_context["prepared_run"]
+    no_theta_context = dict(base_context)
+    no_theta_context["prepared_run"] = replace(
+        prepared_run,
+        fit_params={
+            key: value
+            for key, value in prepared_run.fit_params.items()
+            if key not in {"theta_initial", "theta_offset"}
+        },
+    )
+    no_theta_context["saved_var_names"] = []
+    assert ladder._active_theta_name(no_theta_context) is None
+    assert [
+        name
+        for name in ladder._candidate_order(no_theta_context)
+        if name in {"theta_initial", "theta_offset"}
+    ] == []
+
+
+def test_new4_ladder_sensitivity_report_schema_and_summary_counts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    records = {
+        "center_x": _sensitivity_probe_record(plus_delta=1.0, minus_delta=0.5),
+        "center_y": _sensitivity_probe_record(
+            plus_delta=1e-12,
+            minus_delta=1e-12,
+        ),
+        "theta_initial": _sensitivity_probe_record(
+            plus_delta=1.0,
+            minus_delta=1.0,
+            plus_finite=False,
+        ),
+    }
+
+    def _fake_probe(request, *, mode):
+        assert mode == "sensitivity"
+        return SimpleNamespace(), [records[request.var_names[0]]]
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=tmp_path / "rung_02_sensitivity_scan.json",
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+
+    for key in (
+        "status",
+        "rung_1_status",
+        "provider_pair_count",
+        "fixed_source_pair_count",
+        "fallback_entry_count",
+        "residual_probe_called",
+        "least_squares_called",
+        "optimizer_solve_called",
+        "active_param_count",
+        "near_zero_param_count",
+        "non_finite_param_count",
+        "unsafe_param_count",
+        "active_params",
+        "unsafe_params",
+        "state_hash_unchanged",
+        "params",
+    ):
+        assert key in report
+
+    assert report["active_param_count"] == 1
+    assert report["near_zero_param_count"] == 1
+    assert report["non_finite_param_count"] == 1
+    assert report["unsafe_param_count"] == 0
+    assert (
+        report["active_param_count"]
+        + report["near_zero_param_count"]
+        + report["non_finite_param_count"]
+        + report["unsafe_param_count"]
+    ) == len(report["params"])
+    assert report["state_hash_unchanged"] is True
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
 
 
 def test_new4_ladder_one_param_rung_uses_candidate_param_names(monkeypatch) -> None:

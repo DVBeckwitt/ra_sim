@@ -53,15 +53,23 @@ flight instead of being consumed before rows can be captured.
 
 The `new4` rung 1 fixed-source handoff bug/error scope is closed for objective
 dry-run: provider-local fixed-source rows keep provider provenance through
-subset remap, the resolver accepts only provenance-confirmed singleton stale-row
-repairs, and all seven fixed rows resolve without HKL fallback. This is not a
-solve-rung feature; sensitivity scan, center fit, full solve, and baseline runs
-remain blocked until the next project starts.
+subset remap, the resolver accepts only branch-proven singleton stale-row
+repairs for duplicate-HKL local rows, and all seven fixed rows resolve without
+HKL fallback. The review hardening also keeps duplicate-HKL local rows without
+branch provenance in fallback/fail state instead of silently accepting an
+assigned singleton table. This is not a solve-rung feature; center fit, full
+solve, and baseline runs remain blocked until a later solve-rung project starts.
 
 The geometric optimizer hang/convergence problem is now handled by
 `scripts/debug/run_new4_geometry_fit_ladder.py`, not by the old full baseline
 as the first debug tool. Rung 1 objective dry-run is green with provider-fixed
 source handoff, and solve rungs remain a separate next project.
+
+Rung 2 sensitivity scan is now implemented as a residual-probe-only ladder stop
+behind `--max-rung sensitivity`. It requires the rung 1 green counters first,
+hashes `new4.json` before and after, reports fixed-source counters for each
+plus/minus residual probe, distinguishes patched residual probing from real
+`least_squares`, and writes no center/solve rung artifacts.
 
 ## Current State
 
@@ -95,6 +103,10 @@ source handoff, and solve rungs remain a separate next project.
   measured-point fields into the optimizer request, and the optimizer
   subset/resolver preserves provider-local fixed-source rows through objective
   matching without HKL fallback.
+- Duplicate-HKL provider-local subset remap now records whether the assignment
+  came from branch-aware allocation. Singleton stale-row repair is limited to
+  that branch-proven path and reports actual row diagnostics separately from
+  requested branch/peak identity.
 - Qr/Qz UI preview and manual seed paths keep both detector-side branch
   representatives for each real Qr/Qz group, selecting only the mosaic-top row
   within each branch and preserving branch/reflection/ray provenance on the
@@ -130,13 +142,21 @@ source handoff, and solve rungs remain a separate next project.
   changes. The manual Update Listed Peaks action remains available, but it is
   no longer required before detector-mode Qr/Qz picking, and pending manual
   refresh is not consumed until the listing snapshot is actually captured.
-- Solve rungs remain disabled operationally until a separate sensitivity/solve
-  project starts from the green objective dry-run checkpoint.
+- Rung 2 residual sensitivity scan runs with `--max-rung sensitivity` only
+  after rung 1 reports 7 fixed rows, zero fallback/missing rows, a finite dry
+  residual, and no `least_squares` or optimizer solve call. It reports active,
+  near-zero, non-finite, and unsafe parameters without mutating `new4.json`.
+  The current real `new4` scan reports 9 active parameters, 4 near-zero
+  parameters, 0 non-finite parameters, 0 unsafe parameters, and no center/solve
+  rung artifacts.
+- Solve rungs remain disabled operationally until a separate one-parameter solve
+  project starts from the green rung 2 checkpoint.
 
 ## Next Actions
 
-- Start a separate sensitivity scan / first solve rung project; do not mix it
-  into the fixed-source handoff patch.
+- Treat rung 2 sensitivity as complete. Start a separate one-parameter solve
+  project from the most stable sensitive parameter. Do not run solve, center
+  fit, or baseline as part of the rung 2 patch.
 - Keep provider logic closed unless the provider-only parity gate regresses.
 - Keep Qr/Qz branch seed behavior closed unless raw-cache preview, manual
   toggle, refresh, or place setup regresses to either every raw ray or one
@@ -269,7 +289,9 @@ python scripts/debug/run_new4_geometry_fit_ladder.py `
   --state artifacts/geometry_fit_gui_states/new4.json `
   --background-index 0 `
   --output-root artifacts/geometry_fit_ladder/new4 `
-  --max-rung center
+  --max-rung sensitivity `
+  --max-nfev 20 `
+  --timeout-seconds 120
 ```
 
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
