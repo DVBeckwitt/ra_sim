@@ -4706,6 +4706,7 @@ def create_analysis_peak_tools_controls(
     *,
     parent: tk.Misc,
     view_state: AnalysisPeakToolsViewState,
+    on_find_peaks_in_box: Callable[[], None],
     on_toggle_pick_mode: Callable[[], None],
     on_clear_selection: Callable[[], None],
     on_fit_selected_peaks: Callable[[], None],
@@ -4723,9 +4724,16 @@ def create_analysis_peak_tools_controls(
     frame = ttk.Frame(parent)
     frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
+    find_button = ttk.Button(
+        frame,
+        text="Find Peaks in Box",
+        command=on_find_peaks_in_box,
+    )
+    find_button.pack(fill=tk.X, pady=(0, 6))
+
     pick_button = ttk.Button(
         frame,
-        text=("Stop Picking Peaks" if pick_enabled else "Pick Peaks in Region"),
+        text=("Stop Picking Peaks" if pick_enabled else "Pick Peaks Manually"),
         command=on_toggle_pick_mode,
     )
     pick_button.pack(fill=tk.X, pady=(0, 6))
@@ -4820,6 +4828,7 @@ def create_analysis_peak_tools_controls(
     fit_results_label.pack(fill=tk.X)
 
     view_state.frame = frame
+    view_state.find_button = find_button
     view_state.pick_button = pick_button
     view_state.clear_button = clear_button
     view_state.fit_button = fit_button

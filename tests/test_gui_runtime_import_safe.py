@@ -47,6 +47,7 @@ OPTIMIZATION_MOSAIC_PROFILES_SOURCE_PATH = (
 )
 RAW_SOURCE_PEAK_READ_ALLOWLIST = {
     GUI_SOURCE_ROOT / "_runtime" / "runtime_session.py",
+    GUI_SOURCE_ROOT / "analysis_peak_tools.py",
     GUI_SOURCE_ROOT / "geometry_fit.py",
     GUI_SOURCE_ROOT / "manual_geometry.py",
 }
@@ -14979,7 +14980,11 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
     monkeypatch.setattr(
         runtime_session,
         "_analysis_curve_data",
-        lambda axis_kind, source_preference: (x_curve.copy(), y_curve.copy(), "simulated"),
+        lambda axis_kind, source_preference, **_kwargs: (
+            x_curve.copy(),
+            y_curve.copy(),
+            "simulated",
+        ),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -15013,6 +15018,746 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
     assert fit_entry["plot_fit"] is True
     assert np.all(np.asarray(fit_entry["x_fit"], dtype=float) >= 10.0)
     assert np.all(np.asarray(fit_entry["x_fit"], dtype=float) <= 12.0)
+
+
+def test_analysis_caked_peak_sources_returns_background_and_simulated_when_both_available(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_radial_values=np.array([10.0, 11.0, 12.0], dtype=float),
+            last_caked_azimuth_values=np.array([-5.0, 5.0], dtype=float),
+            last_caked_background_image_unscaled=np.ones((2, 3), dtype=float),
+            last_caked_image_unscaled=np.full((2, 3), 2.0, dtype=float),
+            peak_records=[],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(visible=True),
+        raising=False,
+    )
+
+    sources = runtime_session._analysis_caked_peak_sources()
+
+    assert [entry["source"] for entry in sources] == ["background", "simulated"]
+    assert all("radial_axis" in entry for entry in sources)
+    assert all("azimuth_axis" in entry for entry in sources)
+
+
+def test_analysis_caked_peak_sources_includes_simulated_records_without_caked_image(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_caked_radial_values=np.array([10.0, 11.0, 12.0], dtype=float),
+            last_caked_azimuth_values=np.array([-5.0, 5.0], dtype=float),
+            last_caked_background_image_unscaled=None,
+            last_caked_image_unscaled=None,
+            peak_records=[
+                {
+                    "two_theta_deg": 11.0,
+                    "phi_deg": 0.0,
+                    "intensity": 7.5,
+                    "hkl": (1, 1, 1),
+                }
+            ],
+        ),
+        raising=False,
+    )
+
+    sources = runtime_session._analysis_caked_peak_sources()
+
+    assert len(sources) == 1
+    assert sources[0]["source"] == "simulated"
+    assert sources[0].get("image") is None
+    assert len(sources[0]["peak_records"]) == 1
+
+
+def test_find_analysis_peaks_in_selected_box_keeps_background_and_simulated_overlap(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    state = SimpleNamespace(
+        selected_peaks=[],
+        radial_fit_results=[{"stale": True}],
+        azimuth_fit_results=[{"stale": True}],
+    )
+    status_messages: list[str] = []
+    progress_messages: list[str] = []
+
+    def _clear_results(**_kwargs) -> None:
+        state.radial_fit_results = []
+        state.azimuth_fit_results = []
+
+    monkeypatch.setattr(runtime_session, "analysis_peak_selection_state", state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_caked_peak_sources",
+        lambda: [
+            {"source": "background", "image": np.ones((2, 2), dtype=float)},
+            {"source": "simulated", "peak_records": [{"two_theta_deg": 11.0, "phi_deg": 2.0}]},
+        ],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_discover_background_peaks_in_selected_box",
+        lambda _payload, *, max_peaks: [
+            {
+                "two_theta_deg": 11.0,
+                "phi_deg": 2.0,
+                "source": "background",
+                "raw_two_theta_deg": 11.0,
+                "raw_phi_deg": 2.0,
+                "discovery_method": "background_local_max",
+                "prominence_sigma": 8.0,
+                "background_intensity": 25.0,
+            }
+        ][:max_peaks],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_discover_simulated_peaks_in_selected_box",
+        lambda _payload, *, max_peaks: [
+            {
+                "two_theta_deg": 11.01,
+                "phi_deg": 2.01,
+                "source": "simulated",
+                "raw_two_theta_deg": 11.01,
+                "raw_phi_deg": 2.01,
+                "discovery_method": "simulation_peak_record",
+                "intensity": 50.0,
+            }
+        ][:max_peaks],
+    )
+    monkeypatch.setattr(
+        runtime_session, "_analysis_peak_selection_status_text", lambda: "Selected peaks: 2"
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_analysis_peak_selection_status_text",
+        lambda text: status_messages.append(str(text)),
+    )
+    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_fit_results", _clear_results)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(
+            config=lambda **kwargs: progress_messages.append(str(kwargs.get("text", "")))
+        ),
+        raising=False,
+    )
+
+    count = runtime_session._find_analysis_peaks_in_selected_box(replace_existing=True)
+
+    assert count == 2
+    assert len(state.selected_peaks) == 2
+    assert {entry["source"] for entry in state.selected_peaks} == {"background", "simulated"}
+    assert state.radial_fit_results == []
+    assert state.azimuth_fit_results == []
+    assert status_messages == ["Selected peaks: 2"]
+    assert progress_messages[-1] == "Found 1 background and 1 simulated peaks in selected box."
+
+
+def test_find_analysis_peaks_in_selected_box_does_not_include_outside_box_peaks(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    state = SimpleNamespace(selected_peaks=[], radial_fit_results=[], azimuth_fit_results=[])
+
+    monkeypatch.setattr(runtime_session, "analysis_peak_selection_state", state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"tth_min": 10.5, "tth_max": 11.5, "phi_min": -1.0, "phi_max": 1.0},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_caked_peak_sources",
+        lambda: [
+            {
+                "source": "simulated",
+                "radial_axis": np.array([10.0, 11.0, 12.0], dtype=float),
+                "azimuth_axis": np.array([-5.0, 0.0, 5.0], dtype=float),
+                "peak_records": [
+                    {"two_theta_deg": 11.0, "phi_deg": 0.0, "intensity": 5.0},
+                    {"two_theta_deg": 12.0, "phi_deg": 0.0, "intensity": 50.0},
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_discover_background_peaks_in_selected_box",
+        lambda _payload, *, max_peaks: [],
+    )
+    monkeypatch.setattr(
+        runtime_session, "_analysis_peak_selection_status_text", lambda: "Selected peaks: 1"
+    )
+    monkeypatch.setattr(
+        runtime_session, "_set_analysis_peak_selection_status_text", lambda _text: None
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_analysis_peak_fit_results",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    count = runtime_session._find_analysis_peaks_in_selected_box(replace_existing=True)
+
+    assert count == 1
+    assert state.selected_peaks == [
+        {
+            "two_theta_deg": 11.0,
+            "phi_deg": 0.0,
+            "source": "simulated",
+            "raw_two_theta_deg": 11.0,
+            "raw_phi_deg": 0.0,
+            "discovery_method": "simulation_peak_record",
+            "intensity": 5.0,
+        }
+    ]
+
+
+def test_fit_selected_analysis_peaks_fits_both_sources_for_both_axes(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    curve_calls: list[tuple[str, str, bool]] = []
+
+    def _fit_composite_peak_profile(x_values, y_values, center_guesses, *, model, max_nfev=1000):
+        x_arr = np.asarray(x_values, dtype=float)
+        y_arr = np.asarray(y_values, dtype=float)
+        center = float(center_guesses[0])
+        return {
+            "success": True,
+            "model": model,
+            "label": "Gaussian",
+            "baseline": 0.5,
+            "components": [
+                {
+                    "component_index": 0,
+                    "selected_axis_value": center,
+                    "amplitude": 3.0,
+                    "center": center,
+                    "fwhm": 0.25,
+                    "sigma": 0.106,
+                }
+            ],
+            "component_groups": [{"component_index": 0, "center_guess_indices": [0]}],
+            "rmse": 0.01,
+            "rss": 0.001,
+            "x_fit": x_arr,
+            "y_fit": y_arr,
+            "x_window": x_arr,
+            "y_window": y_arr,
+            "nfev": min(int(max_nfev), 5),
+        }
+
+    fake_peak_tools = SimpleNamespace(
+        fit_composite_peak_profile=_fit_composite_peak_profile,
+        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        align_angle_to_axis=lambda value, _axis_values: float(value),
+    )
+
+    x_radial = np.linspace(10.0, 12.0, 41)
+    y_radial = np.linspace(1.0, 4.0, 41)
+    x_azimuth = np.linspace(-10.0, 10.0, 41)
+    y_azimuth = np.linspace(4.0, 1.0, 41)
+
+    def _curve_data(axis_kind, source_preference, *, allow_fallback=True):
+        curve_calls.append((str(axis_kind), str(source_preference), bool(allow_fallback)))
+        if str(axis_kind) == "radial":
+            return x_radial.copy(), y_radial.copy(), str(source_preference)
+        return x_azimuth.copy(), y_azimuth.copy(), str(source_preference)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(
+            selected_peaks=[
+                {"two_theta_deg": 10.8, "phi_deg": -2.0, "source": "background"},
+                {"two_theta_deg": 11.2, "phi_deg": 3.0, "source": "simulated"},
+            ],
+            radial_fit_results=[],
+            azimuth_fit_results=[],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_tools_view_state",
+        SimpleNamespace(
+            fit_gaussian_var=_Var(True),
+            fit_lorentzian_var=_Var(False),
+            fit_pseudo_voigt_var=_Var(False),
+            fit_radial_var=_Var(True),
+            fit_azimuth_var=_Var(True),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_get_analysis_peak_tools_module", lambda: fake_peak_tools)
+    monkeypatch.setattr(runtime_session, "_analysis_curve_data", _curve_data)
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_peak_axis_value",
+        lambda peak_entry, *, axis_kind, axis_values: (
+            float(peak_entry["two_theta_deg"])
+            if str(axis_kind) == "radial"
+            else float(peak_entry["phi_deg"])
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"tth_min": 10.0, "tth_max": 12.0, "phi_min": -10.0, "phi_max": 10.0},
+    )
+    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_fit_results", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_set_analysis_peak_fit_results_text", lambda _text: None)
+    monkeypatch.setattr(runtime_session, "_analysis_peak_fit_results_text", lambda: "")
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._fit_selected_analysis_peaks()
+
+    assert set(curve_calls) == {
+        ("radial", "background", False),
+        ("radial", "simulated", False),
+        ("azimuth", "background", False),
+        ("azimuth", "simulated", False),
+    }
+    assert {
+        entry["curve_source"]
+        for entry in runtime_session.analysis_peak_selection_state.radial_fit_results
+        if entry.get("success")
+    } == {"background", "simulated"}
+    assert {
+        entry["curve_source"]
+        for entry in runtime_session.analysis_peak_selection_state.azimuth_fit_results
+        if entry.get("success")
+    } == {"background", "simulated"}
+
+
+def test_fit_selected_analysis_peaks_does_not_fallback_between_sources(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    fit_calls: list[str] = []
+    curve_calls: list[tuple[str, str, bool]] = []
+    fake_peak_tools = SimpleNamespace(
+        fit_composite_peak_profile=lambda *_args, **_kwargs: fit_calls.append("fit"),
+        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        align_angle_to_axis=lambda value, _axis_values: float(value),
+    )
+
+    def _curve_data(axis_kind, source_preference, *, allow_fallback=True):
+        curve_calls.append((str(axis_kind), str(source_preference), bool(allow_fallback)))
+        if str(source_preference) == "simulated":
+            return np.empty((0,), dtype=float), np.empty((0,), dtype=float), "simulated"
+        return np.linspace(10.0, 12.0, 41), np.linspace(1.0, 2.0, 41), "background"
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(
+            selected_peaks=[{"two_theta_deg": 11.2, "phi_deg": 5.0, "source": "simulated"}],
+            radial_fit_results=[],
+            azimuth_fit_results=[],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_tools_view_state",
+        SimpleNamespace(
+            fit_gaussian_var=_Var(True),
+            fit_lorentzian_var=_Var(False),
+            fit_pseudo_voigt_var=_Var(False),
+            fit_radial_var=_Var(True),
+            fit_azimuth_var=_Var(False),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_get_analysis_peak_tools_module", lambda: fake_peak_tools)
+    monkeypatch.setattr(runtime_session, "_analysis_curve_data", _curve_data)
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_peak_axis_value",
+        lambda peak_entry, *, axis_kind, axis_values: float(peak_entry["two_theta_deg"]),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"tth_min": 10.0, "tth_max": 12.0, "phi_min": -10.0, "phi_max": 10.0},
+    )
+    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_fit_results", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_set_analysis_peak_fit_results_text", lambda _text: None)
+    monkeypatch.setattr(runtime_session, "_analysis_peak_fit_results_text", lambda: "")
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._fit_selected_analysis_peaks()
+
+    assert curve_calls == [("radial", "simulated", False)]
+    assert fit_calls == []
+    assert len(runtime_session.analysis_peak_selection_state.radial_fit_results) == 1
+    failure = runtime_session.analysis_peak_selection_state.radial_fit_results[0]
+    assert failure["success"] is False
+    assert failure["curve_source"] == "simulated"
+    assert "No selected-window 1D data were available for source 'simulated'." in failure["error"]
+
+
+def test_fit_selected_analysis_peaks_auto_discovers_both_sources_when_none_selected(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    discovery_calls: list[bool] = []
+    curve_calls: list[tuple[str, str, bool]] = []
+    state = SimpleNamespace(selected_peaks=[], radial_fit_results=[], azimuth_fit_results=[])
+
+    def _discover(*, replace_existing=True):
+        discovery_calls.append(bool(replace_existing))
+        state.selected_peaks = [
+            {"two_theta_deg": 10.8, "phi_deg": -2.0, "source": "background"},
+            {"two_theta_deg": 11.2, "phi_deg": 3.0, "source": "simulated"},
+        ]
+        return 2
+
+    def _fit_composite_peak_profile(x_values, y_values, center_guesses, *, model, max_nfev=1000):
+        x_arr = np.asarray(x_values, dtype=float)
+        y_arr = np.asarray(y_values, dtype=float)
+        center = float(center_guesses[0])
+        return {
+            "success": True,
+            "model": model,
+            "label": "Gaussian",
+            "baseline": 0.0,
+            "components": [
+                {
+                    "component_index": 0,
+                    "selected_axis_value": center,
+                    "amplitude": 3.0,
+                    "center": center,
+                    "fwhm": 0.2,
+                    "sigma": 0.085,
+                }
+            ],
+            "component_groups": [{"component_index": 0, "center_guess_indices": [0]}],
+            "rmse": 0.01,
+            "rss": 0.001,
+            "x_fit": x_arr,
+            "y_fit": y_arr,
+            "x_window": x_arr,
+            "y_window": y_arr,
+            "nfev": min(int(max_nfev), 5),
+        }
+
+    fake_peak_tools = SimpleNamespace(
+        fit_composite_peak_profile=_fit_composite_peak_profile,
+        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        align_angle_to_axis=lambda value, _axis_values: float(value),
+    )
+
+    def _curve_data(axis_kind, source_preference, *, allow_fallback=True):
+        curve_calls.append((str(axis_kind), str(source_preference), bool(allow_fallback)))
+        if str(axis_kind) == "radial":
+            return np.linspace(10.0, 12.0, 41), np.linspace(1.0, 4.0, 41), str(source_preference)
+        return np.linspace(-10.0, 10.0, 41), np.linspace(4.0, 1.0, 41), str(source_preference)
+
+    monkeypatch.setattr(runtime_session, "analysis_peak_selection_state", state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_tools_view_state",
+        SimpleNamespace(
+            fit_gaussian_var=_Var(True),
+            fit_lorentzian_var=_Var(False),
+            fit_pseudo_voigt_var=_Var(False),
+            fit_radial_var=_Var(True),
+            fit_azimuth_var=_Var(True),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_find_analysis_peaks_in_selected_box", _discover)
+    monkeypatch.setattr(runtime_session, "_get_analysis_peak_tools_module", lambda: fake_peak_tools)
+    monkeypatch.setattr(runtime_session, "_analysis_curve_data", _curve_data)
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_peak_axis_value",
+        lambda peak_entry, *, axis_kind, axis_values: (
+            float(peak_entry["two_theta_deg"])
+            if str(axis_kind) == "radial"
+            else float(peak_entry["phi_deg"])
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"tth_min": 10.0, "tth_max": 12.0, "phi_min": -10.0, "phi_max": 10.0},
+    )
+    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_fit_results", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_set_analysis_peak_fit_results_text", lambda _text: None)
+    monkeypatch.setattr(runtime_session, "_analysis_peak_fit_results_text", lambda: "")
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._fit_selected_analysis_peaks()
+
+    assert discovery_calls == [True]
+    assert set(curve_calls) == {
+        ("radial", "background", False),
+        ("radial", "simulated", False),
+        ("azimuth", "background", False),
+        ("azimuth", "simulated", False),
+    }
+
+
+def test_fit_selected_analysis_peaks_fails_visible_for_unknown_source(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    fake_peak_tools = SimpleNamespace(
+        fit_composite_peak_profile=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unknown-source peaks should not reach composite fitting")
+        ),
+        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        align_angle_to_axis=lambda value, _axis_values: float(value),
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(
+            selected_peaks=[{"two_theta_deg": 11.2, "phi_deg": 5.0, "source": "mystery"}],
+            radial_fit_results=[],
+            azimuth_fit_results=[],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_tools_view_state",
+        SimpleNamespace(
+            fit_gaussian_var=_Var(True),
+            fit_lorentzian_var=_Var(False),
+            fit_pseudo_voigt_var=_Var(False),
+            fit_radial_var=_Var(True),
+            fit_azimuth_var=_Var(False),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_get_analysis_peak_tools_module", lambda: fake_peak_tools)
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_curve_data",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unknown-source peaks should not request curve data")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_peak_axis_value",
+        lambda peak_entry, *, axis_kind, axis_values: float(peak_entry["two_theta_deg"]),
+    )
+    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_fit_results", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_set_analysis_peak_fit_results_text", lambda _text: None)
+    monkeypatch.setattr(runtime_session, "_analysis_peak_fit_results_text", lambda: "")
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._fit_selected_analysis_peaks()
+
+    assert len(runtime_session.analysis_peak_selection_state.radial_fit_results) == 1
+    failure = runtime_session.analysis_peak_selection_state.radial_fit_results[0]
+    assert failure["success"] is False
+    assert failure["source"] == "unknown"
+    assert failure["fit_group_id"] == "radial:unknown:gaussian"
+    assert "could not be resolved" in failure["error"]
+
+
+def test_fit_group_ids_include_source(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    def _fit_composite_peak_profile(x_values, y_values, center_guesses, *, model, max_nfev=1000):
+        x_arr = np.asarray(x_values, dtype=float)
+        y_arr = np.asarray(y_values, dtype=float)
+        center = float(center_guesses[0])
+        return {
+            "success": True,
+            "model": model,
+            "label": "Gaussian",
+            "baseline": 0.0,
+            "components": [
+                {
+                    "component_index": 0,
+                    "selected_axis_value": center,
+                    "amplitude": 2.0,
+                    "center": center,
+                    "fwhm": 0.2,
+                    "sigma": 0.085,
+                }
+            ],
+            "component_groups": [{"component_index": 0, "center_guess_indices": [0]}],
+            "rmse": 0.01,
+            "rss": 0.001,
+            "x_fit": x_arr,
+            "y_fit": y_arr,
+            "x_window": x_arr,
+            "y_window": y_arr,
+            "nfev": min(int(max_nfev), 5),
+        }
+
+    fake_peak_tools = SimpleNamespace(
+        fit_composite_peak_profile=_fit_composite_peak_profile,
+        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        align_angle_to_axis=lambda value, _axis_values: float(value),
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(
+            selected_peaks=[
+                {"two_theta_deg": 10.8, "phi_deg": -2.0, "source": "background"},
+                {"two_theta_deg": 11.2, "phi_deg": 3.0, "source": "simulated"},
+            ],
+            radial_fit_results=[],
+            azimuth_fit_results=[],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_tools_view_state",
+        SimpleNamespace(
+            fit_gaussian_var=_Var(True),
+            fit_lorentzian_var=_Var(False),
+            fit_pseudo_voigt_var=_Var(False),
+            fit_radial_var=_Var(True),
+            fit_azimuth_var=_Var(True),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_get_analysis_peak_tools_module", lambda: fake_peak_tools)
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_curve_data",
+        lambda axis_kind, source_preference, **_kwargs: (
+            (np.linspace(10.0, 12.0, 41), np.linspace(1.0, 4.0, 41), str(source_preference))
+            if str(axis_kind) == "radial"
+            else (np.linspace(-10.0, 10.0, 41), np.linspace(4.0, 1.0, 41), str(source_preference))
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_peak_axis_value",
+        lambda peak_entry, *, axis_kind, axis_values: (
+            float(peak_entry["two_theta_deg"])
+            if str(axis_kind) == "radial"
+            else float(peak_entry["phi_deg"])
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_range_values",
+        lambda: {"tth_min": 10.0, "tth_max": 12.0, "phi_min": -10.0, "phi_max": 10.0},
+    )
+    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_fit_results", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_set_analysis_peak_fit_results_text", lambda _text: None)
+    monkeypatch.setattr(runtime_session, "_analysis_peak_fit_results_text", lambda: "")
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._fit_selected_analysis_peaks()
+
+    fit_group_ids = {
+        entry["fit_group_id"]
+        for entry in (
+            list(runtime_session.analysis_peak_selection_state.radial_fit_results)
+            + list(runtime_session.analysis_peak_selection_state.azimuth_fit_results)
+        )
+    }
+    assert {
+        "radial:background:gaussian",
+        "radial:simulated:gaussian",
+        "azimuth:background:gaussian",
+        "azimuth:simulated:gaussian",
+    } <= fit_group_ids
 
 
 def test_analysis_curve_selected_window_returns_empty_when_selection_excludes_curve(monkeypatch) -> None:

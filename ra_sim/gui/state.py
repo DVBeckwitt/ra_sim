@@ -479,6 +479,7 @@ class AnalysisPeakToolsViewState:
     """Widget references and vars for analysis peak picking and 1D fitting."""
 
     frame: Any = None
+    find_button: Any = None
     pick_button: Any = None
     clear_button: Any = None
     fit_button: Any = None

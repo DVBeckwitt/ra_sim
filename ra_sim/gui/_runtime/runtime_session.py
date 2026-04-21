@@ -24547,7 +24547,7 @@ def _update_analysis_peak_pick_button_label() -> None:
             text=(
                 "Stop Picking Peaks"
                 if bool(analysis_peak_selection_state.pick_armed)
-                else "Pick Peaks in Region"
+                else "Pick Peaks Manually"
             ),
             command=_toggle_analysis_peak_pick_mode,
         )
@@ -24647,42 +24647,652 @@ def _clear_analysis_peak_fit_results(*, redraw: bool, update_text: bool) -> None
             pass
 
 
-def _current_analysis_caked_peak_source() -> dict[str, object] | None:
-    radial_axis = simulation_runtime_state.last_caked_radial_values
-    azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
-    if radial_axis is None or azimuth_axis is None:
-        return None
-    if (
-        bool(background_runtime_state.visible)
-        and simulation_runtime_state.last_caked_background_image_unscaled is not None
-    ):
+def _normalize_analysis_peak_source(
+    value: object,
+    *,
+    default: str | None = None,
+) -> str:
+    alias_map = {
+        "background": "background",
+        "bg": "background",
+        "measured": "background",
+        "simulated": "simulated",
+        "simulation": "simulated",
+        "sim": "simulated",
+        "unknown": "unknown",
+    }
+    text = str(value or "").strip().lower()
+    if text in alias_map:
+        return str(alias_map[text])
+    if default is None:
+        return "unknown"
+    default_text = str(default or "").strip().lower()
+    return str(alias_map.get(default_text, "unknown"))
+
+
+def _analysis_peak_match_config(*, max_peaks: int | None = None) -> dict[str, object]:
+    return {
+        "search_radius_px": 18.0,
+        "local_max_size_px": 5,
+        "smooth_sigma_px": 1.4,
+        "climb_sigma_px": 0.8,
+        "min_prominence_sigma": 1.5,
+        "min_match_prominence_sigma": 1.5,
+        "max_candidate_peaks": max(1, int(10 if max_peaks is None else max_peaks)),
+    }
+
+
+def _analysis_peak_overlay_style(source_name: object) -> dict[str, object]:
+    normalized_source = _normalize_analysis_peak_source(source_name)
+    if normalized_source == "background":
         return {
-            "source": "background",
-            "image": np.asarray(
-                simulation_runtime_state.last_caked_background_image_unscaled,
-                dtype=float,
-            ),
+            "label_prefix": "B",
+            "color": "#00c2ff",
+            "marker": "o",
+            "line_style": ":",
+        }
+    if normalized_source == "simulated":
+        return {
+            "label_prefix": "S",
+            "color": "#ff9f1c",
+            "marker": "s",
+            "line_style": "--",
+        }
+    return {
+        "label_prefix": "U",
+        "color": "#9aa0a6",
+        "marker": "x",
+        "line_style": "-.",
+    }
+
+
+def _analysis_selected_peak_display_entries(
+    selected_peaks: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    source_counts: dict[str, int] = defaultdict(int)
+    entries: list[dict[str, object]] = []
+    for peak_entry in selected_peaks or ():
+        source_name = _normalize_analysis_peak_source(
+            peak_entry.get("source") if isinstance(peak_entry, Mapping) else None
+        )
+        source_counts[source_name] += 1
+        source_peak_index = int(source_counts[source_name])
+        style = _analysis_peak_overlay_style(source_name)
+        entries.append(
+            {
+                "source": source_name,
+                "source_peak_index": source_peak_index,
+                "label": f"{style['label_prefix']}{source_peak_index}",
+                "style": style,
+            }
+        )
+    return entries
+
+
+def _analysis_resolve_caked_coordinate_pair(
+    x_value: float,
+    y_value: float,
+    *,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    convert_indices_if_needed: bool,
+) -> tuple[float, float] | None:
+    if not (np.isfinite(x_value) and np.isfinite(y_value)):
+        return None
+    radial_arr = np.asarray(radial_axis, dtype=float).reshape(-1)
+    azimuth_arr = np.asarray(azimuth_axis, dtype=float).reshape(-1)
+    if radial_arr.size <= 0 or azimuth_arr.size <= 0:
+        return float(x_value), float(y_value)
+
+    finite_radial = radial_arr[np.isfinite(radial_arr)]
+    finite_azimuth = azimuth_arr[np.isfinite(azimuth_arr)]
+    radial_min = float(np.min(finite_radial)) if finite_radial.size else float("nan")
+    radial_max = float(np.max(finite_radial)) if finite_radial.size else float("nan")
+    azimuth_min = float(np.min(finite_azimuth)) if finite_azimuth.size else float("nan")
+    azimuth_max = float(np.max(finite_azimuth)) if finite_azimuth.size else float("nan")
+    looks_like_axis = bool(
+        np.isfinite(radial_min)
+        and np.isfinite(radial_max)
+        and np.isfinite(azimuth_min)
+        and np.isfinite(azimuth_max)
+        and radial_min - 1.0e-9 <= float(x_value) <= radial_max + 1.0e-9
+        and azimuth_min - 1.0e-9 <= float(y_value) <= azimuth_max + 1.0e-9
+    )
+    looks_like_index = bool(
+        0.0 <= float(x_value) <= float(radial_arr.size - 1)
+        and 0.0 <= float(y_value) <= float(azimuth_arr.size - 1)
+    )
+    if convert_indices_if_needed and looks_like_index and not looks_like_axis:
+        return (
+            float(_caked_image_index_to_axis(float(x_value), radial_arr)),
+            float(_caked_image_index_to_axis(float(y_value), azimuth_arr)),
+        )
+    return float(x_value), float(y_value)
+
+
+def _analysis_simulated_peak_entry_from_record(
+    raw_record: Mapping[str, object] | None,
+    *,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+) -> dict[str, object] | None:
+    if not isinstance(raw_record, Mapping):
+        return None
+
+    resolved_pair = None
+    for x_key, y_key, convert_indices_if_needed in (
+        ("refined_sim_caked_x", "refined_sim_caked_y", False),
+        ("caked_two_theta_deg", "caked_phi_deg", False),
+        ("caked_x", "caked_y", False),
+        ("two_theta_deg", "phi_deg", False),
+        ("tth_deg", "phi_deg", False),
+        ("raw_caked_x", "raw_caked_y", True),
+    ):
+        try:
+            x_value = float(raw_record.get(x_key, np.nan))
+            y_value = float(raw_record.get(y_key, np.nan))
+        except Exception:
+            continue
+        resolved_pair = _analysis_resolve_caked_coordinate_pair(
+            x_value,
+            y_value,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            convert_indices_if_needed=bool(convert_indices_if_needed),
+        )
+        if resolved_pair is not None:
+            break
+    if resolved_pair is None:
+        return None
+
+    resolved_two_theta, resolved_phi = resolved_pair
+    if not (np.isfinite(resolved_two_theta) and np.isfinite(resolved_phi)):
+        return None
+
+    wrapped_phi = float(_get_analysis_peak_tools_module().wrap_angle_degrees(resolved_phi))
+    entry: dict[str, object] = {
+        "two_theta_deg": float(resolved_two_theta),
+        "phi_deg": float(wrapped_phi),
+        "source": "simulated",
+        "raw_two_theta_deg": float(resolved_two_theta),
+        "raw_phi_deg": float(wrapped_phi),
+        "discovery_method": "simulation_peak_record",
+    }
+    for key in ("hkl", "hkl_raw", "q_group_key", "source_label"):
+        if key in raw_record:
+            entry[key] = raw_record.get(key)
+    try:
+        intensity_value = float(raw_record.get("intensity", raw_record.get("weight", np.nan)))
+    except Exception:
+        intensity_value = float("nan")
+    if np.isfinite(intensity_value):
+        entry["intensity"] = float(intensity_value)
+    return entry
+
+
+def _analysis_caked_peak_sources() -> list[dict[str, object]]:
+    sources: list[dict[str, object]] = []
+
+    def _coerce_axis(axis_values: object) -> np.ndarray:
+        try:
+            return np.asarray(axis_values, dtype=float).reshape(-1)
+        except Exception:
+            return np.empty((0,), dtype=float)
+
+    radial_axis = _coerce_axis(simulation_runtime_state.last_caked_radial_values)
+    azimuth_axis = _coerce_axis(simulation_runtime_state.last_caked_azimuth_values)
+
+    def _image_payload(source_name: str, image: object) -> dict[str, object] | None:
+        try:
+            image_arr = np.asarray(image, dtype=float)
+        except Exception:
+            return None
+        if image_arr.ndim != 2 or image_arr.size <= 0:
+            return None
+        if (
+            radial_axis.size != int(image_arr.shape[1])
+            or azimuth_axis.size != int(image_arr.shape[0])
+            or radial_axis.size <= 0
+            or azimuth_axis.size <= 0
+        ):
+            return None
+        return {
+            "source": str(source_name),
+            "image": image_arr,
             "radial_axis": np.asarray(radial_axis, dtype=float),
             "azimuth_axis": np.asarray(azimuth_axis, dtype=float),
         }
-    if simulation_runtime_state.last_caked_image_unscaled is None:
+
+    background_payload = _image_payload(
+        "background",
+        simulation_runtime_state.last_caked_background_image_unscaled,
+    )
+    if isinstance(background_payload, dict):
+        sources.append(background_payload)
+
+    simulated_payload = _image_payload(
+        "simulated",
+        simulation_runtime_state.last_caked_image_unscaled,
+    )
+    usable_peak_records = [
+        dict(entry)
+        for entry in (simulation_runtime_state.peak_records or ())
+        if _analysis_simulated_peak_entry_from_record(
+            entry if isinstance(entry, Mapping) else None,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+        )
+        is not None
+    ]
+    if usable_peak_records:
+        if simulated_payload is None:
+            simulated_payload = {
+                "source": "simulated",
+                "radial_axis": np.asarray(radial_axis, dtype=float),
+                "azimuth_axis": np.asarray(azimuth_axis, dtype=float),
+            }
+        simulated_payload["peak_records"] = usable_peak_records
+    if isinstance(simulated_payload, dict):
+        simulated_payload["source"] = "simulated"
+        sources.append(simulated_payload)
+    return sources
+
+
+def _current_analysis_caked_peak_source() -> dict[str, object] | None:
+    source_payloads = [
+        payload
+        for payload in _analysis_caked_peak_sources()
+        if isinstance(payload, dict) and payload.get("image") is not None
+    ]
+    if not source_payloads:
         return None
-    return {
-        "source": "simulated",
-        "image": np.asarray(simulation_runtime_state.last_caked_image_unscaled, dtype=float),
-        "radial_axis": np.asarray(radial_axis, dtype=float),
-        "azimuth_axis": np.asarray(azimuth_axis, dtype=float),
+    if bool(background_runtime_state.visible):
+        for payload in source_payloads:
+            if _normalize_analysis_peak_source(payload.get("source")) == "background":
+                return payload
+    for payload in source_payloads:
+        if _normalize_analysis_peak_source(payload.get("source")) == "simulated":
+            return payload
+    return source_payloads[0]
+
+
+def _analysis_selected_box_index_windows(
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    image_shape: Sequence[int] | None,
+) -> list[dict[str, int | float]]:
+    radial_arr = np.asarray(radial_axis, dtype=float).reshape(-1)
+    azimuth_arr = np.asarray(azimuth_axis, dtype=float).reshape(-1)
+    if image_shape is None or len(tuple(image_shape)) < 2:
+        return []
+    row_count = int(tuple(image_shape)[0])
+    col_count = int(tuple(image_shape)[1])
+    if (
+        radial_arr.size <= 0
+        or azimuth_arr.size <= 0
+        or row_count <= 0
+        or col_count <= 0
+        or radial_arr.size != col_count
+        or azimuth_arr.size != row_count
+    ):
+        return []
+
+    range_values = _current_analysis_range_values()
+    tth_lo, tth_hi = sorted(
+        (
+            float(range_values.get("tth_min", np.nan)),
+            float(range_values.get("tth_max", np.nan)),
+        )
+    )
+    if not (np.isfinite(tth_lo) and np.isfinite(tth_hi)):
+        return []
+    col_lo = float(_caked_axis_to_image_index(tth_lo, radial_arr))
+    col_hi = float(_caked_axis_to_image_index(tth_hi, radial_arr))
+    if not (np.isfinite(col_lo) and np.isfinite(col_hi)):
+        return []
+    col_start = max(0, min(col_count, int(np.floor(min(col_lo, col_hi)))))
+    col_stop = max(0, min(col_count, int(np.ceil(max(col_lo, col_hi))) + 1))
+    if col_stop <= col_start:
+        return []
+
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    phi_min = analysis_peak_tools.align_angle_to_axis(
+        float(range_values.get("phi_min", np.nan)),
+        azimuth_arr,
+    )
+    phi_max = analysis_peak_tools.align_angle_to_axis(
+        float(range_values.get("phi_max", np.nan)),
+        azimuth_arr,
+    )
+    if not (np.isfinite(phi_min) and np.isfinite(phi_max)):
+        return []
+
+    finite_row_mask = np.isfinite(azimuth_arr)
+    if phi_max >= phi_min:
+        row_mask = finite_row_mask & (azimuth_arr >= phi_min) & (azimuth_arr <= phi_max)
+    else:
+        row_mask = finite_row_mask & ((azimuth_arr >= phi_min) | (azimuth_arr <= phi_max))
+    row_indices = np.flatnonzero(row_mask)
+    if row_indices.size <= 0:
+        return []
+
+    windows: list[dict[str, int | float]] = []
+    split_points = np.flatnonzero(np.diff(row_indices) > 1)
+    segment_start = 0
+    for split_point in np.append(split_points, row_indices.size - 1):
+        segment = row_indices[segment_start : int(split_point) + 1]
+        segment_start = int(split_point) + 1
+        if segment.size <= 0:
+            continue
+        row_start = max(0, min(row_count, int(segment[0])))
+        row_stop = max(0, min(row_count, int(segment[-1]) + 1))
+        if row_stop <= row_start:
+            continue
+        segment_phi = np.asarray(azimuth_arr[row_start:row_stop], dtype=float)
+        finite_phi = segment_phi[np.isfinite(segment_phi)]
+        windows.append(
+            {
+                "row_start": int(row_start),
+                "row_stop": int(row_stop),
+                "col_start": int(col_start),
+                "col_stop": int(col_stop),
+                "phi_min": float(np.min(finite_phi)) if finite_phi.size > 0 else float("nan"),
+                "phi_max": float(np.max(finite_phi)) if finite_phi.size > 0 else float("nan"),
+                "two_theta_min": float(tth_lo),
+                "two_theta_max": float(tth_hi),
+            }
+        )
+    return windows
+
+
+def _discover_caked_image_peaks_in_selected_box(
+    source_payload: Mapping[str, object],
+    *,
+    max_peaks: int,
+    source_name: str,
+) -> list[dict[str, object]]:
+    try:
+        source_image = np.asarray(source_payload.get("image"), dtype=float)
+        radial_axis = np.asarray(source_payload.get("radial_axis"), dtype=float).reshape(-1)
+        azimuth_axis = np.asarray(source_payload.get("azimuth_axis"), dtype=float).reshape(-1)
+    except Exception:
+        return []
+    if (
+        source_image.ndim != 2
+        or source_image.size <= 0
+        or radial_axis.size != int(source_image.shape[1])
+        or azimuth_axis.size != int(source_image.shape[0])
+    ):
+        return []
+
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    range_values = _current_analysis_range_values()
+    windows = _analysis_selected_box_index_windows(
+        radial_axis,
+        azimuth_axis,
+        source_image.shape,
+    )
+    if not windows:
+        return []
+
+    cfg = _analysis_peak_match_config(max_peaks=max_peaks)
+    discovered: list[dict[str, object]] = []
+    normalized_source = _normalize_analysis_peak_source(source_name)
+    for window in windows:
+        row_start = int(window["row_start"])
+        row_stop = int(window["row_stop"])
+        col_start = int(window["col_start"])
+        col_stop = int(window["col_stop"])
+        crop = np.asarray(source_image[row_start:row_stop, col_start:col_stop], dtype=float)
+        if crop.ndim != 2 or crop.size <= 0:
+            continue
+        try:
+            background_context = build_background_peak_context(crop, cfg)
+        except Exception:
+            continue
+        for summit_record in background_context.get("summit_records", ()):
+            if not isinstance(summit_record, Mapping):
+                continue
+            try:
+                local_col = float(summit_record.get("center_col", summit_record.get("col", np.nan)))
+                local_row = float(summit_record.get("center_row", summit_record.get("row", np.nan)))
+            except Exception:
+                continue
+            if not (np.isfinite(local_col) and np.isfinite(local_row)):
+                continue
+            full_col = float(local_col + col_start)
+            full_row = float(local_row + row_start)
+            raw_two_theta = float(_caked_image_index_to_axis(full_col, radial_axis))
+            raw_phi = float(_caked_image_index_to_axis(full_row, azimuth_axis))
+            if not (np.isfinite(raw_two_theta) and np.isfinite(raw_phi)):
+                continue
+            refined_two_theta, refined_phi = _refine_caked_peak_center(
+                source_image,
+                radial_axis,
+                azimuth_axis,
+                raw_two_theta,
+                raw_phi,
+            )
+            if not (np.isfinite(refined_two_theta) and np.isfinite(refined_phi)):
+                refined_two_theta = float(raw_two_theta)
+                refined_phi = float(raw_phi)
+            wrapped_phi = float(analysis_peak_tools.wrap_angle_degrees(refined_phi))
+            if not analysis_peak_tools.integration_region_contains(
+                refined_two_theta,
+                wrapped_phi,
+                tth_min=float(range_values.get("tth_min", np.nan)),
+                tth_max=float(range_values.get("tth_max", np.nan)),
+                phi_min=float(range_values.get("phi_min", np.nan)),
+                phi_max=float(range_values.get("phi_max", np.nan)),
+            ):
+                continue
+            peak_entry = {
+                "two_theta_deg": float(refined_two_theta),
+                "phi_deg": float(wrapped_phi),
+                "source": normalized_source,
+                "raw_two_theta_deg": float(raw_two_theta),
+                "raw_phi_deg": float(analysis_peak_tools.wrap_angle_degrees(raw_phi)),
+            }
+            if normalized_source == "background":
+                peak_entry["discovery_method"] = "background_local_max"
+                peak_entry["prominence_sigma"] = float(
+                    summit_record.get("prominence_sigma", np.nan)
+                )
+                peak_entry["background_intensity"] = float(
+                    summit_record.get("background_intensity", np.nan)
+                )
+            else:
+                peak_entry["discovery_method"] = "simulated_image_local_max"
+                peak_entry["simulated_intensity"] = float(
+                    summit_record.get("background_intensity", np.nan)
+                )
+            discovered.append(peak_entry)
+    return discovered
+
+
+def _discover_background_peaks_in_selected_box(
+    source_payload: Mapping[str, object],
+    *,
+    max_peaks: int,
+) -> list[dict[str, object]]:
+    discovered = _discover_caked_image_peaks_in_selected_box(
+        source_payload,
+        max_peaks=max_peaks,
+        source_name="background",
+    )
+    discovered.sort(
+        key=lambda entry: (
+            -float(entry.get("prominence_sigma", -np.inf)),
+            -float(entry.get("background_intensity", -np.inf)),
+            float(entry.get("two_theta_deg", np.inf)),
+            float(entry.get("phi_deg", np.inf)),
+        )
+    )
+    return discovered[: max(1, int(max_peaks))]
+
+
+def _discover_simulated_peaks_in_selected_box(
+    source_payload: Mapping[str, object],
+    *,
+    max_peaks: int,
+) -> list[dict[str, object]]:
+    radial_axis = np.asarray(source_payload.get("radial_axis"), dtype=float).reshape(-1)
+    azimuth_axis = np.asarray(source_payload.get("azimuth_axis"), dtype=float).reshape(-1)
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    range_values = _current_analysis_range_values()
+
+    record_entries: list[dict[str, object]] = []
+    for raw_record in source_payload.get("peak_records", ()):
+        peak_entry = _analysis_simulated_peak_entry_from_record(
+            raw_record if isinstance(raw_record, Mapping) else None,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+        )
+        if peak_entry is None:
+            continue
+        if not analysis_peak_tools.integration_region_contains(
+            float(peak_entry.get("two_theta_deg", np.nan)),
+            float(peak_entry.get("phi_deg", np.nan)),
+            tth_min=float(range_values.get("tth_min", np.nan)),
+            tth_max=float(range_values.get("tth_max", np.nan)),
+            phi_min=float(range_values.get("phi_min", np.nan)),
+            phi_max=float(range_values.get("phi_max", np.nan)),
+        ):
+            continue
+        record_entries.append(peak_entry)
+    if record_entries:
+        record_entries.sort(
+            key=lambda entry: (
+                -float(entry.get("intensity", -np.inf)),
+                float(entry.get("two_theta_deg", np.inf)),
+                float(entry.get("phi_deg", np.inf)),
+            )
+        )
+        return record_entries[: max(1, int(max_peaks))]
+
+    discovered = _discover_caked_image_peaks_in_selected_box(
+        source_payload,
+        max_peaks=max_peaks,
+        source_name="simulated",
+    )
+    discovered.sort(
+        key=lambda entry: (
+            -float(entry.get("simulated_intensity", -np.inf)),
+            float(entry.get("two_theta_deg", np.inf)),
+            float(entry.get("phi_deg", np.inf)),
+        )
+    )
+    return discovered[: max(1, int(max_peaks))]
+
+
+def _analysis_peak_match_index_by_source(
+    peaks: Sequence[object] | None,
+    *,
+    source: object,
+    two_theta_deg: float,
+    phi_deg: float,
+    radial_tolerance_deg: float,
+    azimuth_tolerance_deg: float,
+) -> int | None:
+    target_source = _normalize_analysis_peak_source(source)
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    target_tth = float(two_theta_deg)
+    target_phi = float(analysis_peak_tools.wrap_angle_degrees(phi_deg))
+    radial_tol = max(float(radial_tolerance_deg), 1.0e-6)
+    azimuth_tol = max(float(azimuth_tolerance_deg), 1.0e-6)
+    for idx, entry in enumerate(peaks or ()):
+        if not isinstance(entry, Mapping):
+            continue
+        if _normalize_analysis_peak_source(entry.get("source")) != target_source:
+            continue
+        try:
+            peak_tth = float(entry.get("two_theta_deg", np.nan))
+            peak_phi = float(analysis_peak_tools.wrap_angle_degrees(entry.get("phi_deg", np.nan)))
+        except Exception:
+            continue
+        phi_delta = abs(float(analysis_peak_tools.wrap_angle_degrees(peak_phi - target_phi)))
+        if abs(float(peak_tth) - target_tth) <= radial_tol and phi_delta <= azimuth_tol:
+            return int(idx)
+    return None
+
+
+def _find_analysis_peaks_in_selected_box(
+    *,
+    replace_existing: bool = True,
+) -> int:
+    source_payloads = {
+        _normalize_analysis_peak_source(payload.get("source")): payload
+        for payload in _analysis_caked_peak_sources()
+        if isinstance(payload, Mapping)
     }
+    max_peaks = int(_analysis_peak_match_config().get("max_candidate_peaks", 10))
+    background_peaks = []
+    simulated_peaks = []
+    if isinstance(source_payloads.get("background"), Mapping):
+        background_peaks = _discover_background_peaks_in_selected_box(
+            source_payloads["background"],
+            max_peaks=max_peaks,
+        )
+    if isinstance(source_payloads.get("simulated"), Mapping):
+        simulated_peaks = _discover_simulated_peaks_in_selected_box(
+            source_payloads["simulated"],
+            max_peaks=max_peaks,
+        )
+
+    selected_peaks = (
+        []
+        if bool(replace_existing)
+        else [dict(entry) for entry in analysis_peak_selection_state.selected_peaks]
+    )
+    radial_tol, azimuth_tol = _analysis_peak_duplicate_tolerances()
+    for peak_entry in [*background_peaks, *simulated_peaks]:
+        match_index = _analysis_peak_match_index_by_source(
+            selected_peaks,
+            source=peak_entry.get("source"),
+            two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+            phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+            radial_tolerance_deg=float(radial_tol),
+            azimuth_tolerance_deg=float(azimuth_tol),
+        )
+        if match_index is None:
+            selected_peaks.append(dict(peak_entry))
+        else:
+            selected_peaks[int(match_index)] = dict(peak_entry)
+
+    analysis_peak_selection_state.selected_peaks = selected_peaks
+    _clear_analysis_peak_fit_results(redraw=False, update_text=True)
+    _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
+    if background_peaks or simulated_peaks:
+        status_text = (
+            f"Found {len(background_peaks)} background and "
+            f"{len(simulated_peaks)} simulated peaks in selected box."
+        )
+    elif not source_payloads:
+        status_text = "No background or simulated sources were available in Analyze mode."
+    else:
+        status_text = "No background or simulated peaks were found in selected box."
+    try:
+        progress_label_positions.config(text=status_text)
+    except Exception:
+        pass
+    _render_analysis_peak_overlays(redraw=True)
+    return int(len(selected_peaks))
 
 
 def _analysis_curve_data(
     axis_kind: str,
     source_preference: str,
+    *,
+    allow_fallback: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, str]:
     data = simulation_runtime_state.last_1d_integration_data
     scale = _get_scale_factor_value(default=1.0)
 
     def _extract(source_name: str) -> tuple[np.ndarray, np.ndarray]:
+        if source_name not in {"background", "simulated"}:
+            return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+        if not isinstance(data, Mapping):
+            return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
         source_key = "bg" if str(source_name) == "background" else "sim"
         if str(axis_kind) == "radial":
             x_values = data.get(f"radials_{source_key}")
@@ -24698,11 +25308,14 @@ def _analysis_curve_data(
             y_arr = y_arr * float(scale)
         return x_arr, y_arr
 
-    preferred = str(source_preference or "simulated").strip().lower()
-    resolved = "background" if preferred == "background" else "simulated"
+    resolved = _normalize_analysis_peak_source(source_preference)
+    if resolved not in {"background", "simulated"}:
+        return np.empty((0,), dtype=float), np.empty((0,), dtype=float), resolved
     x_arr, y_arr = _extract(resolved)
     if x_arr.size > 0 and y_arr.size > 0:
         return x_arr, y_arr, resolved
+    if not bool(allow_fallback):
+        return np.empty((0,), dtype=float), np.empty((0,), dtype=float), resolved
     fallback = "simulated" if resolved == "background" else "background"
     x_arr, y_arr = _extract(fallback)
     if x_arr.size > 0 and y_arr.size > 0:
@@ -24842,6 +25455,8 @@ def _analysis_peak_fit_failure_entry(
     selected_axis_value: float,
     two_theta_deg: float,
     phi_deg: float,
+    source: str,
+    source_peak_index: int,
     curve_source: str,
     model: str,
     label: str,
@@ -24857,6 +25472,8 @@ def _analysis_peak_fit_failure_entry(
         "selected_axis_value": float(selected_axis_value),
         "two_theta_deg": float(two_theta_deg),
         "phi_deg": float(phi_deg),
+        "source": str(source),
+        "source_peak_index": int(source_peak_index),
         "curve_source": str(curve_source),
         "model": str(model),
         "label": str(label),
@@ -24950,12 +25567,9 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
         return
 
     selected_peaks = list(_analysis_peak_state_list("selected_peaks"))
-    radial_fit_results = list(
-        _analysis_peak_state_list("radial_fit_results")
-    )
-    azimuth_fit_results = list(
-        _analysis_peak_state_list("azimuth_fit_results")
-    )
+    display_entries = _analysis_selected_peak_display_entries(selected_peaks)
+    radial_fit_results = list(_analysis_peak_state_list("radial_fit_results"))
+    azimuth_fit_results = list(_analysis_peak_state_list("azimuth_fit_results"))
     caked_peak_artists = _analysis_peak_state_list("caked_peak_artists")
     radial_peak_artists = _analysis_peak_state_list("radial_peak_artists")
     azimuth_peak_artists = _analysis_peak_state_list("azimuth_peak_artists")
@@ -24980,29 +25594,30 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
     # Disabled: temporary debug overlay that X-marked cached intersection points.
 
     if show_caked:
-        for idx, peak_entry in enumerate(selected_peaks, start=1):
+        for peak_entry, display_entry in zip(selected_peaks, display_entries, strict=False):
             try:
                 peak_tth = float(peak_entry.get("two_theta_deg"))
                 peak_phi = float(peak_entry.get("phi_deg"))
             except Exception:
                 continue
+            style = dict(display_entry.get("style", {}))
             try:
                 marker_artist = ax.plot(
                     [peak_tth],
                     [peak_phi],
                     linestyle="none",
-                    marker="o",
+                    marker=str(style.get("marker", "o")),
                     markersize=7.0,
                     markerfacecolor="none",
-                    markeredgecolor="#00c2ff",
+                    markeredgecolor=str(style.get("color", "#00c2ff")),
                     markeredgewidth=1.6,
                     zorder=11,
                 )[0]
                 label_artist = ax.text(
                     peak_tth,
                     peak_phi,
-                    f"P{idx}",
-                    color="#00c2ff",
+                    str(display_entry.get("label", "P?")),
+                    color=str(style.get("color", "#00c2ff")),
                     fontsize=8,
                     ha="left",
                     va="bottom",
@@ -25030,10 +25645,12 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
     )
     for axis_kind, axis_obj, marker_store, fit_store, fit_results in axis_specs:
         plotted_fit_group_ids: set[str] = set()
-        for idx, peak_entry in enumerate(selected_peaks, start=1):
+        for peak_entry, display_entry in zip(selected_peaks, display_entries, strict=False):
+            source_name = str(display_entry.get("source", "unknown"))
             x_curve, y_curve, _resolved_source = _analysis_curve_data(
                 axis_kind,
-                str(peak_entry.get("source", "simulated")),
+                source_name,
+                allow_fallback=False,
             )
             if x_curve.size <= 0 or y_curve.size <= 0:
                 continue
@@ -25049,11 +25666,12 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
                 y_curve,
                 axis_value,
             )
+            style = dict(display_entry.get("style", {}))
             try:
                 vline_artist = axis_obj.axvline(
                     axis_value,
-                    color="#7b2cbf",
-                    linestyle=":",
+                    color=str(style.get("color", "#7b2cbf")),
+                    linestyle=str(style.get("line_style", ":")),
                     linewidth=1.0,
                     alpha=0.65,
                 )
@@ -25063,17 +25681,17 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
                         [axis_value],
                         [y_value],
                         linestyle="none",
-                        marker="o",
+                        marker=str(style.get("marker", "o")),
                         markersize=5.5,
-                        color="#7b2cbf",
+                        color=str(style.get("color", "#7b2cbf")),
                         zorder=6,
                     )[0]
                     marker_store.append(marker_artist)
                     label_artist = axis_obj.text(
                         axis_value,
                         y_value,
-                        f"P{idx}",
-                        color="#7b2cbf",
+                        str(display_entry.get("label", "P?")),
+                        color=str(style.get("color", "#7b2cbf")),
                         fontsize=8,
                         ha="left",
                         va="bottom",
@@ -25134,6 +25752,7 @@ def _render_analysis_peak_tools_controls(parent) -> None:
     gui_views.create_analysis_peak_tools_controls(
         parent=parent,
         view_state=analysis_peak_tools_view_state,
+        on_find_peaks_in_box=_find_analysis_peaks_in_selected_box,
         on_toggle_pick_mode=_toggle_analysis_peak_pick_mode,
         on_clear_selection=_clear_selected_analysis_peaks,
         on_fit_selected_peaks=_fit_selected_analysis_peaks,
@@ -25476,15 +26095,11 @@ def _select_analysis_peak_from_canvas_click(
             pass
         return True
 
-    match_cfg = {
-        "search_radius_px": 18.0,
-        "local_max_size_px": 5,
-        "smooth_sigma_px": 1.4,
-        "climb_sigma_px": 0.8,
-        "min_prominence_sigma": 1.5,
-        "min_match_prominence_sigma": 1.5,
-        "max_candidate_peaks": 10,
-    }
+    source_name = _normalize_analysis_peak_source(
+        source_payload.get("source"),
+        default="unknown",
+    )
+    match_cfg = _analysis_peak_match_config()
     refined_tth = float(two_theta_deg)
     refined_phi = float(phi_deg)
     try:
@@ -25522,8 +26137,9 @@ def _select_analysis_peak_from_canvas_click(
 
     radial_tol, azimuth_tol = _analysis_peak_duplicate_tolerances()
     wrapped_refined_phi = float(analysis_peak_tools.wrap_angle_degrees(refined_phi))
-    match_index = analysis_peak_tools.match_selected_peak_index(
+    match_index = _analysis_peak_match_index_by_source(
         analysis_peak_selection_state.selected_peaks,
+        source=source_name,
         two_theta_deg=float(refined_tth),
         phi_deg=float(refined_phi),
         radial_tolerance_deg=float(radial_tol),
@@ -25541,9 +26157,10 @@ def _select_analysis_peak_from_canvas_click(
             {
                 "two_theta_deg": float(refined_tth),
                 "phi_deg": wrapped_refined_phi,
-                "source": str(source_payload.get("source", "simulated")),
+                "source": str(source_name),
                 "raw_two_theta_deg": float(two_theta_deg),
                 "raw_phi_deg": float(phi_deg),
+                "discovery_method": "manual_click",
             }
         )
         status_text = (
@@ -25565,11 +26182,16 @@ def _select_analysis_peak_from_canvas_click(
 def _fit_selected_analysis_peaks() -> None:
     selected_peaks = list(analysis_peak_selection_state.selected_peaks)
     if not selected_peaks:
-        try:
-            progress_label_positions.config(text="Select one or more peaks before fitting.")
-        except Exception:
-            pass
-        return
+        _find_analysis_peaks_in_selected_box(replace_existing=True)
+        selected_peaks = list(analysis_peak_selection_state.selected_peaks)
+        if not selected_peaks:
+            try:
+                progress_label_positions.config(
+                    text="No background or simulated peaks were found in selected box."
+                )
+            except Exception:
+                pass
+            return
 
     analysis_peak_tools = _get_analysis_peak_tools_module()
     model_specs = (
@@ -25612,6 +26234,19 @@ def _fit_selected_analysis_peaks() -> None:
 
     total_success = 0
     total_attempts = 0
+    display_entries = _analysis_selected_peak_display_entries(selected_peaks)
+    indexed_selected_peaks = [
+        {
+            "peak_index": int(peak_index),
+            "peak_entry": peak_entry,
+            "source": str(display_entry.get("source", "unknown")),
+            "source_peak_index": int(display_entry.get("source_peak_index", 0)),
+        }
+        for peak_index, (peak_entry, display_entry) in enumerate(
+            zip(selected_peaks, display_entries, strict=False),
+            start=1,
+        )
+    ]
     model_label_resolver = getattr(
         analysis_peak_tools,
         "profile_model_label",
@@ -25619,25 +26254,84 @@ def _fit_selected_analysis_peaks() -> None:
     )
     for axis_kind in axes_to_fit:
         axis_results: list[dict[str, object]] = []
-        preferred_groups: dict[str, list[dict[str, object]]] = defaultdict(list)
-        for peak_index, peak_entry in enumerate(selected_peaks, start=1):
-            preferred_source = str(peak_entry.get("source", "simulated"))
-            preferred_groups[preferred_source].append(
-                {
-                    "peak_index": int(peak_index),
-                    "peak_entry": peak_entry,
-                    "preferred_source": preferred_source,
-                }
-            )
+        grouped_source_items: dict[str, list[dict[str, object]]] = defaultdict(list)
+        unknown_source_items: list[dict[str, object]] = []
+        for indexed_peak in indexed_selected_peaks:
+            if indexed_peak["source"] in {"background", "simulated"}:
+                grouped_source_items[str(indexed_peak["source"])].append(indexed_peak)
+            else:
+                unknown_source_items.append(indexed_peak)
 
-        resolved_groups: dict[str, dict[str, object]] = {}
-        for preferred_source, grouped_items in preferred_groups.items():
-            x_curve, y_curve, resolved_source = _analysis_curve_data(axis_kind, preferred_source)
+        for model in models:
+            label = str(model_label_resolver(model))
+            fit_group_id = f"{axis_kind}:unknown:{model}"
+            for indexed_peak in unknown_source_items:
+                peak_entry = indexed_peak["peak_entry"]
+                axis_results.append(
+                    _analysis_peak_fit_failure_entry(
+                        peak_index=int(indexed_peak["peak_index"]),
+                        axis_kind=axis_kind,
+                        selected_axis_value=_analysis_peak_axis_value(
+                            peak_entry,
+                            axis_kind=axis_kind,
+                            axis_values=None,
+                        ),
+                        two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+                        phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+                        source="unknown",
+                        source_peak_index=int(indexed_peak["source_peak_index"]),
+                        curve_source="unknown",
+                        model=model,
+                        label=label,
+                        fit_group_id=fit_group_id,
+                        error="Selected peak source could not be resolved.",
+                    )
+                )
+                total_attempts += 1
+
+        for source_name, grouped_items in grouped_source_items.items():
+            x_curve, y_curve, resolved_source = _analysis_curve_data(
+                axis_kind,
+                source_name,
+                allow_fallback=False,
+            )
+            if resolved_source != source_name:
+                for model in models:
+                    label = str(model_label_resolver(model))
+                    fit_group_id = f"{axis_kind}:{source_name}:{model}"
+                    for grouped_item in grouped_items:
+                        peak_entry = grouped_item["peak_entry"]
+                        axis_results.append(
+                            _analysis_peak_fit_failure_entry(
+                                peak_index=int(grouped_item["peak_index"]),
+                                axis_kind=axis_kind,
+                                selected_axis_value=_analysis_peak_axis_value(
+                                    peak_entry,
+                                    axis_kind=axis_kind,
+                                    axis_values=None,
+                                ),
+                                two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+                                phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+                                source=source_name,
+                                source_peak_index=int(grouped_item["source_peak_index"]),
+                                curve_source=resolved_source,
+                                model=model,
+                                label=label,
+                                fit_group_id=fit_group_id,
+                                error=(
+                                    f"Requested source '{source_name}' could not be resolved "
+                                    "for fitting."
+                                ),
+                            )
+                        )
+                        total_attempts += 1
+                continue
+
             x_window, y_window = _analysis_curve_selected_window(axis_kind, x_curve, y_curve)
             if x_window.size < 7 or y_window.size < 7:
                 for model in models:
-                    fit_group_id = f"{axis_kind}:{resolved_source}:{model}"
                     label = str(model_label_resolver(model))
+                    fit_group_id = f"{axis_kind}:{source_name}:{model}"
                     for grouped_item in grouped_items:
                         peak_entry = grouped_item["peak_entry"]
                         axis_results.append(
@@ -25651,40 +26345,23 @@ def _fit_selected_analysis_peaks() -> None:
                                 ),
                                 two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
                                 phi_deg=float(peak_entry.get("phi_deg", np.nan)),
-                                curve_source=resolved_source,
+                                source=source_name,
+                                source_peak_index=int(grouped_item["source_peak_index"]),
+                                curve_source=source_name,
                                 model=model,
                                 label=label,
                                 fit_group_id=fit_group_id,
                                 error=(
-                                    "No valid 1D data were available in the selected "
-                                    "integration window."
+                                    f"No selected-window 1D data were available for source "
+                                    f"'{source_name}'."
                                 ),
                             )
                         )
                         total_attempts += 1
                 continue
 
-            resolved_entry = resolved_groups.setdefault(
-                resolved_source,
-                {
-                    "resolved_source": resolved_source,
-                    "x_curve": np.asarray(x_window, dtype=float),
-                    "y_curve": np.asarray(y_window, dtype=float),
-                    "items": [],
-                },
-            )
-            resolved_entry["items"].extend(grouped_items)
-
-        for resolved_source, resolved_group in resolved_groups.items():
-            x_curve = np.asarray(resolved_group.get("x_curve"), dtype=float)
-            y_curve = np.asarray(resolved_group.get("y_curve"), dtype=float)
-            grouped_items = sorted(
-                list(resolved_group.get("items", [])),
-                key=lambda item: int(item.get("peak_index", 0)),
-            )
-            if x_curve.size <= 0 or y_curve.size <= 0 or x_curve.size != y_curve.size:
-                continue
-
+            x_curve = np.asarray(x_window, dtype=float)
+            y_curve = np.asarray(y_window, dtype=float)
             finite_x = x_curve[np.isfinite(x_curve)]
             if finite_x.size <= 0:
                 continue
@@ -25693,7 +26370,7 @@ def _fit_selected_analysis_peaks() -> None:
 
             valid_fit_items: list[dict[str, object]] = []
             invalid_fit_items: list[dict[str, object]] = []
-            for grouped_item in grouped_items:
+            for grouped_item in sorted(grouped_items, key=lambda item: int(item["peak_index"])):
                 peak_entry = grouped_item["peak_entry"]
                 axis_value = _analysis_peak_axis_value(
                     peak_entry,
@@ -25701,8 +26378,7 @@ def _fit_selected_analysis_peaks() -> None:
                     axis_values=x_curve,
                 )
                 fit_item = {
-                    "peak_index": int(grouped_item["peak_index"]),
-                    "peak_entry": peak_entry,
+                    **grouped_item,
                     "selected_axis_value": float(axis_value),
                 }
                 if (
@@ -25715,7 +26391,7 @@ def _fit_selected_analysis_peaks() -> None:
                     valid_fit_items.append(fit_item)
 
             for model in models:
-                fit_group_id = f"{axis_kind}:{resolved_source}:{model}"
+                fit_group_id = f"{axis_kind}:{source_name}:{model}"
                 label = str(model_label_resolver(model))
 
                 for invalid_fit_item in invalid_fit_items:
@@ -25727,7 +26403,9 @@ def _fit_selected_analysis_peaks() -> None:
                             selected_axis_value=float(invalid_fit_item["selected_axis_value"]),
                             two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
                             phi_deg=float(peak_entry.get("phi_deg", np.nan)),
-                            curve_source=resolved_source,
+                            source=source_name,
+                            source_peak_index=int(invalid_fit_item["source_peak_index"]),
+                            curve_source=source_name,
                             model=model,
                             label=label,
                             fit_group_id=fit_group_id,
@@ -25756,7 +26434,9 @@ def _fit_selected_analysis_peaks() -> None:
                                 selected_axis_value=float(fit_item["selected_axis_value"]),
                                 two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
                                 phi_deg=float(peak_entry.get("phi_deg", np.nan)),
-                                curve_source=resolved_source,
+                                source=source_name,
+                                source_peak_index=int(fit_item["source_peak_index"]),
+                                curve_source=source_name,
                                 model=model,
                                 label=str(fit_result.get("label", label)),
                                 fit_group_id=fit_group_id,
@@ -25768,25 +26448,25 @@ def _fit_selected_analysis_peaks() -> None:
 
                 components = {}
                 for component in fit_result.get("components", []):
-                    if not isinstance(component, dict):
+                    if not isinstance(component, Mapping):
                         continue
                     try:
                         component_index = int(component.get("component_index", -1))
                     except Exception:
                         continue
-                    components[component_index] = component
+                    components[component_index] = dict(component)
 
                 emitted_guess_indices: set[int] = set()
                 plotted_group = False
                 for component_group in fit_result.get("component_groups", []):
-                    if not isinstance(component_group, dict):
+                    if not isinstance(component_group, Mapping):
                         continue
                     try:
                         component_index = int(component_group.get("component_index", -1))
                     except Exception:
                         continue
                     component = components.get(component_index)
-                    if not isinstance(component, dict):
+                    if not isinstance(component, Mapping):
                         continue
                     for guess_index in component_group.get("center_guess_indices", []):
                         try:
@@ -25804,7 +26484,9 @@ def _fit_selected_analysis_peaks() -> None:
                             "selected_axis_value": float(fit_item["selected_axis_value"]),
                             "two_theta_deg": float(peak_entry.get("two_theta_deg", np.nan)),
                             "phi_deg": float(peak_entry.get("phi_deg", np.nan)),
-                            "curve_source": resolved_source,
+                            "source": source_name,
+                            "source_peak_index": int(fit_item["source_peak_index"]),
+                            "curve_source": source_name,
                             "center": float(component.get("center", np.nan)),
                             "fwhm": float(component.get("fwhm", np.nan)),
                             "amplitude": float(component.get("amplitude", np.nan)),
@@ -25821,14 +26503,8 @@ def _fit_selected_analysis_peaks() -> None:
                             if component_field in component:
                                 fit_entry[component_field] = float(component[component_field])
                         if not plotted_group:
-                            fit_entry["x_fit"] = np.asarray(
-                                fit_result.get("x_fit"),
-                                dtype=float,
-                            )
-                            fit_entry["y_fit"] = np.asarray(
-                                fit_result.get("y_fit"),
-                                dtype=float,
-                            )
+                            fit_entry["x_fit"] = np.asarray(fit_result.get("x_fit"), dtype=float)
+                            fit_entry["y_fit"] = np.asarray(fit_result.get("y_fit"), dtype=float)
                             fit_entry["x_window"] = np.asarray(
                                 fit_result.get("x_window"),
                                 dtype=float,
@@ -25858,7 +26534,9 @@ def _fit_selected_analysis_peaks() -> None:
                             selected_axis_value=float(fit_item["selected_axis_value"]),
                             two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
                             phi_deg=float(peak_entry.get("phi_deg", np.nan)),
-                            curve_source=resolved_source,
+                            source=source_name,
+                            source_peak_index=int(fit_item["source_peak_index"]),
+                            curve_source=source_name,
                             model=model,
                             label=str(fit_result.get("label", label)),
                             fit_group_id=fit_group_id,

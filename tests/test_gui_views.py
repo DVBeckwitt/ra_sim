@@ -2814,6 +2814,7 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     views.create_analysis_peak_tools_controls(
         parent=object(),
         view_state=view_state,
+        on_find_peaks_in_box=lambda: calls.append("find"),
         on_toggle_pick_mode=lambda: calls.append("pick"),
         on_clear_selection=lambda: calls.append("clear"),
         on_fit_selected_peaks=lambda: calls.append("fit"),
@@ -2828,9 +2829,11 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     )
 
     assert isinstance(view_state.frame, _FakeFrame)
-    assert view_state.pick_button is _FakeButton.created[0]
-    assert view_state.clear_button is _FakeButton.created[1]
-    assert view_state.fit_button is _FakeButton.created[2]
+    assert view_state.find_button is _FakeButton.created[0]
+    assert view_state.pick_button is _FakeButton.created[1]
+    assert view_state.clear_button is _FakeButton.created[2]
+    assert view_state.fit_button is _FakeButton.created[3]
+    assert view_state.find_button.kwargs["text"] == "Find Peaks in Box"
     assert view_state.pick_button.kwargs["text"] == "Stop Picking Peaks"
     assert view_state.clear_button.kwargs["text"] == "Clear Peaks and Fits"
     assert view_state.fit_button.kwargs["text"] == "Fit Selected Peaks"
@@ -2849,10 +2852,11 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     assert view_state.selection_status_var.get() == "Selected peaks: 2"
     assert view_state.fit_results_var.get() == "Radial fits ready."
 
+    view_state.find_button.command()
     view_state.pick_button.command()
     view_state.clear_button.command()
     view_state.fit_button.command()
-    assert calls == ["pick", "clear", "fit"]
+    assert calls == ["find", "pick", "clear", "fit"]
 
 
 def test_create_integration_range_controls_store_vars_bindings_and_commands(

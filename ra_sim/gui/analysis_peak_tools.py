@@ -448,12 +448,26 @@ def _fit_entry_prefix(entry: Mapping[str, object]) -> str:
     ).strip()
 
     prefix_parts: list[str] = []
+    source_name = str(entry.get("source", "") or "").strip().lower()
+    try:
+        source_peak_index = int(entry.get("source_peak_index", 0))
+    except Exception:
+        source_peak_index = 0
+    if source_peak_index > 0:
+        if source_name == "background":
+            prefix_parts.append(f"B{source_peak_index}")
+        elif source_name == "simulated":
+            prefix_parts.append(f"S{source_peak_index}")
+        elif source_name == "unknown":
+            prefix_parts.append(f"U{source_peak_index}")
     try:
         peak_index = int(entry.get("peak_index", 0))
     except Exception:
         peak_index = 0
-    if peak_index > 0:
+    if peak_index > 0 and not prefix_parts:
         prefix_parts.append(f"P{peak_index}")
+    if source_name == "unknown" and not any(part.startswith("U") for part in prefix_parts):
+        prefix_parts.append("[unknown]")
     if model_label:
         prefix_parts.append(model_label)
     return " ".join(prefix_parts)
