@@ -135,6 +135,101 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
 
 
+def test_simulate_populates_and_reuses_beam_n2_sample_array(monkeypatch) -> None:
+    request = _build_request()
+    request.beam.n2_sample_array = None
+    expected_n2 = np.array([0.95 + 0.02j], dtype=np.complex128)
+    helper_calls: list[int] = []
+    seen: list[np.ndarray] = []
+
+    def fake_helper(*args, **kwargs):
+        del args, kwargs
+        helper_calls.append(1)
+        return expected_n2.copy()
+
+    def fake_runner(*args, **kwargs):
+        seen.append(np.asarray(kwargs["n2_sample_array_override"], dtype=np.complex128).copy())
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    monkeypatch.setattr(engine, "_legacy_kernel_n2_sample_array_from_angstrom", fake_helper)
+
+    simulate(request, peak_runner=fake_runner)
+    simulate(request, peak_runner=fake_runner)
+
+    assert helper_calls == [1]
+    np.testing.assert_array_equal(request.beam.n2_sample_array, expected_n2)
+    assert len(seen) == 2
+    np.testing.assert_array_equal(seen[0], expected_n2)
+    np.testing.assert_array_equal(seen[1], expected_n2)
+
+
+def test_simulate_preserves_valid_supplied_beam_n2_sample_array(monkeypatch) -> None:
+    request = _build_request()
+    supplied = np.array([0.97 + 0.04j], dtype=np.complex128)
+    request.beam.n2_sample_array = supplied.copy()
+    seen: dict[str, np.ndarray] = {}
+
+    def fail_helper(*args, **kwargs):
+        raise AssertionError("fallback helper should not be called")
+
+    def fake_runner(*args, **kwargs):
+        seen["n2"] = np.asarray(kwargs["n2_sample_array_override"], dtype=np.complex128).copy()
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    monkeypatch.setattr(engine, "_legacy_kernel_n2_sample_array_from_angstrom", fail_helper)
+
+    simulate(request, peak_runner=fake_runner)
+
+    np.testing.assert_array_equal(request.beam.n2_sample_array, supplied)
+    np.testing.assert_array_equal(seen["n2"], supplied)
+
+
+def test_simulate_replaces_wrong_length_beam_n2_sample_array(monkeypatch) -> None:
+    request = _build_request()
+    request.beam.n2_sample_array = np.array([1.0 + 0.0j, 0.9 + 0.1j], dtype=np.complex128)
+    expected_n2 = np.array([0.93 + 0.03j], dtype=np.complex128)
+    seen: dict[str, np.ndarray] = {}
+
+    monkeypatch.setattr(
+        engine,
+        "_legacy_kernel_n2_sample_array_from_angstrom",
+        lambda *args, **kwargs: expected_n2.copy(),
+    )
+
+    def fake_runner(*args, **kwargs):
+        seen["n2"] = np.asarray(kwargs["n2_sample_array_override"], dtype=np.complex128).copy()
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    simulate(request, peak_runner=fake_runner)
+
+    np.testing.assert_array_equal(request.beam.n2_sample_array, expected_n2)
+    np.testing.assert_array_equal(seen["n2"], expected_n2)
+
+
 def test_ensure_best_sample_buffer_normalizes_request_storage() -> None:
     request = _build_request()
     request.best_sample_indices_out = [-1]
@@ -249,6 +344,76 @@ def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped
     assert np.isclose(float(table[0, 16]), 0.0)
 
 
+def test_simulate_skips_hidden_rerun_when_intersection_cache_is_disabled() -> None:
+    request = _build_request()
+    request.collect_hit_tables = False
+    request.build_intersection_cache = False
+    calls: list[dict[str, object]] = []
+
+    def fake_runner(*args, **kwargs):
+        calls.append(
+            {
+                "collect_hit_tables": kwargs["collect_hit_tables"],
+                "accumulate_image": kwargs["accumulate_image"],
+            }
+        )
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    result = simulate(request, peak_runner=fake_runner)
+
+    assert calls == [
+        {"collect_hit_tables": False, "accumulate_image": True},
+    ]
+    assert len(result.hit_tables) == 0
+    assert result.intersection_cache == []
+
+
+def test_simulate_can_return_hit_tables_without_building_intersection_cache(
+    monkeypatch,
+) -> None:
+    request = _build_request()
+    request.build_intersection_cache = False
+    calls: list[dict[str, object]] = []
+
+    def fake_build_intersection_cache(*args, **kwargs):
+        raise AssertionError("build_intersection_cache should not be called")
+
+    monkeypatch.setattr(engine, "build_intersection_cache", fake_build_intersection_cache)
+
+    def fake_runner(*args, **kwargs):
+        calls.append(
+            {
+                "collect_hit_tables": kwargs["collect_hit_tables"],
+                "accumulate_image": kwargs["accumulate_image"],
+            }
+        )
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [np.array([[3.0, 4.0, 5.0]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    result = simulate(request, peak_runner=fake_runner)
+
+    assert calls == [
+        {"collect_hit_tables": True, "accumulate_image": True},
+    ]
+    assert len(result.hit_tables) == 1
+    assert result.intersection_cache == []
+
+
 def test_simulate_uses_reserved_cpu_worker_count_for_numba_thread_limit(monkeypatch) -> None:
     request = _build_request()
     seen: list[int] = []
@@ -259,6 +424,7 @@ def test_simulate_uses_reserved_cpu_worker_count_for_numba_thread_limit(monkeypa
         yield
 
     monkeypatch.setattr(engine, "default_reserved_cpu_worker_count", lambda: 10)
+    monkeypatch.setattr(engine, "current_parallel_thread_budget", lambda: 99)
     monkeypatch.setattr(engine, "temporary_numba_thread_limit", fake_thread_limit)
 
     def fake_runner(*args, **kwargs):
@@ -275,6 +441,35 @@ def test_simulate_uses_reserved_cpu_worker_count_for_numba_thread_limit(monkeypa
     simulate(request, peak_runner=fake_runner)
 
     assert seen == [10]
+
+
+def test_simulate_respects_lower_parallel_thread_budget(monkeypatch) -> None:
+    request = _build_request()
+    seen: list[int] = []
+
+    @contextmanager
+    def fake_thread_limit(num_threads):
+        seen.append(int(num_threads))
+        yield
+
+    monkeypatch.setattr(engine, "default_reserved_cpu_worker_count", lambda: 10)
+    monkeypatch.setattr(engine, "current_parallel_thread_budget", lambda: 6)
+    monkeypatch.setattr(engine, "temporary_numba_thread_limit", fake_thread_limit)
+
+    def fake_runner(*args, **kwargs):
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    simulate(request, peak_runner=fake_runner)
+
+    assert seen == [6]
 
 
 def test_forward_warmup_matches_real_startup_overloads(monkeypatch) -> None:
@@ -771,6 +966,41 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
 
 
+def test_simulate_qr_rods_populates_missing_beam_n2_sample_array(monkeypatch) -> None:
+    request = _build_request()
+    request.beam.n2_sample_array = None
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    expected_n2 = np.array([0.92 + 0.01j], dtype=np.complex128)
+    helper_calls: list[int] = []
+    seen: dict[str, np.ndarray] = {}
+
+    def fake_helper(*args, **kwargs):
+        del args, kwargs
+        helper_calls.append(1)
+        return expected_n2.copy()
+
+    def fake_runner(*args, **kwargs):
+        seen["n2"] = np.asarray(kwargs["n2_sample_array_override"], dtype=np.complex128).copy()
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    monkeypatch.setattr(engine, "_legacy_kernel_n2_sample_array_from_angstrom", fake_helper)
+
+    simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert helper_calls == [1]
+    np.testing.assert_array_equal(request.beam.n2_sample_array, expected_n2)
+    np.testing.assert_array_equal(seen["n2"], expected_n2)
+
+
 def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are_skipped() -> None:
     request = _build_request()
     request.collect_hit_tables = False
@@ -822,6 +1052,82 @@ def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are
     assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
 
 
+def test_simulate_qr_rods_skips_hidden_rerun_when_intersection_cache_is_disabled() -> None:
+    request = _build_request()
+    request.collect_hit_tables = False
+    request.build_intersection_cache = False
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    calls: list[dict[str, object]] = []
+
+    def fake_runner(*args, **kwargs):
+        calls.append(
+            {
+                "collect_hit_tables": kwargs["collect_hit_tables"],
+                "accumulate_image": kwargs["accumulate_image"],
+            }
+        )
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert calls == [
+        {"collect_hit_tables": False, "accumulate_image": True},
+    ]
+    assert len(result.hit_tables) == 0
+    assert result.intersection_cache == []
+    assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
+
+
+def test_simulate_qr_rods_can_return_hit_tables_without_building_intersection_cache(
+    monkeypatch,
+) -> None:
+    request = _build_request()
+    request.build_intersection_cache = False
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    calls: list[dict[str, object]] = []
+
+    def fake_build_intersection_cache(*args, **kwargs):
+        raise AssertionError("build_intersection_cache should not be called")
+
+    monkeypatch.setattr(engine, "build_intersection_cache", fake_build_intersection_cache)
+
+    def fake_runner(*args, **kwargs):
+        calls.append(
+            {
+                "collect_hit_tables": kwargs["collect_hit_tables"],
+                "accumulate_image": kwargs["accumulate_image"],
+            }
+        )
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [np.array([[3.0, 4.0, 5.0]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert calls == [
+        {"collect_hit_tables": True, "accumulate_image": True},
+    ]
+    assert len(result.hit_tables) == 1
+    assert result.intersection_cache == []
+    assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
+
+
 def test_simulate_qr_rods_uses_reserved_cpu_worker_count_for_numba_thread_limit(
     monkeypatch,
 ) -> None:
@@ -835,6 +1141,7 @@ def test_simulate_qr_rods_uses_reserved_cpu_worker_count_for_numba_thread_limit(
         yield
 
     monkeypatch.setattr(engine, "default_reserved_cpu_worker_count", lambda: 10)
+    monkeypatch.setattr(engine, "current_parallel_thread_budget", lambda: 99)
     monkeypatch.setattr(engine, "temporary_numba_thread_limit", fake_thread_limit)
 
     def fake_runner(*args, **kwargs):
@@ -852,3 +1159,34 @@ def test_simulate_qr_rods_uses_reserved_cpu_worker_count_for_numba_thread_limit(
     simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
 
     assert seen == [10]
+
+
+def test_simulate_qr_rods_respects_lower_parallel_thread_budget(monkeypatch) -> None:
+    request = _build_request()
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    seen: list[int] = []
+
+    @contextmanager
+    def fake_thread_limit(num_threads):
+        seen.append(int(num_threads))
+        yield
+
+    monkeypatch.setattr(engine, "default_reserved_cpu_worker_count", lambda: 10)
+    monkeypatch.setattr(engine, "current_parallel_thread_budget", lambda: 6)
+    monkeypatch.setattr(engine, "temporary_numba_thread_limit", fake_thread_limit)
+
+    def fake_runner(*args, **kwargs):
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert seen == [6]

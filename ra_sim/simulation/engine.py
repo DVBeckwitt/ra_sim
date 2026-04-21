@@ -7,7 +7,9 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 from ra_sim.utils.parallel import (
+    current_parallel_thread_budget,
     default_reserved_cpu_worker_count,
     temporary_numba_thread_limit,
 )
@@ -64,6 +66,12 @@ def _default_image_buffer(request: SimulationRequest) -> np.ndarray:
     return np.zeros((size, size), dtype=np.float64)
 
 
+def _simulation_worker_count() -> int:
+    reserved = max(int(default_reserved_cpu_worker_count()), 1)
+    budget = max(int(current_parallel_thread_budget()), 1)
+    return max(1, min(reserved, budget))
+
+
 def _ensure_best_sample_buffer(
     request: SimulationRequest,
     *,
@@ -87,6 +95,26 @@ def _ensure_best_sample_buffer(
         return None
     request.best_sample_indices_out = np.full(int(peak_count), -1, dtype=np.int64)
     return request.best_sample_indices_out
+
+
+def _ensure_request_beam_n2_sample_array(request: SimulationRequest) -> np.ndarray:
+    sample_count = int(np.asarray(request.beam.beam_x_array, dtype=np.float64).size)
+    existing = request.beam.n2_sample_array
+    if existing is not None:
+        normalized = np.asarray(existing, dtype=np.complex128).reshape(-1)
+        if normalized.size == sample_count:
+            request.beam.n2_sample_array = np.ascontiguousarray(
+                normalized,
+                dtype=np.complex128,
+            )
+            return request.beam.n2_sample_array
+
+    request.beam.n2_sample_array = _legacy_kernel_n2_sample_array_from_angstrom(
+        request.beam.wavelength_array,
+        nominal_n2=request.n2,
+        sample_count=sample_count,
+    )
+    return request.beam.n2_sample_array
 
 
 def _capture_hit_tables_for_intersection_cache(
@@ -214,7 +242,7 @@ def _run_simulation_request(
     from ra_sim.simulation.projection_debug import start_projection_debug_session
 
     image_buffer = _default_image_buffer(request)
-    worker_count = default_reserved_cpu_worker_count()
+    worker_count = _simulation_worker_count()
     projection_debug_active = projection_debug_logging_enabled()
     projection_debug_buffers = (
         allocate_projection_debug_buffers(
@@ -235,6 +263,7 @@ def _run_simulation_request(
         peak_count=int(np.asarray(request.miller, dtype=np.float64).shape[0]),
         auto_allocate=True,
     )
+    beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
 
     peak_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -256,8 +285,7 @@ def _run_simulation_request(
         peak_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
         peak_kwargs["sample_weights"] = request.beam.sample_weights
-    if request.beam.n2_sample_array is not None:
-        peak_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
+    peak_kwargs["n2_sample_array_override"] = beam_n2_sample_array
     if best_sample_indices_out is not None:
         peak_kwargs["best_sample_indices_out"] = best_sample_indices_out
     if peak_runner is process_peaks_parallel_safe and projection_debug_active:
@@ -270,6 +298,7 @@ def _run_simulation_request(
         )
     safe_run_stats_out: dict[str, Any] | None = None
     used_python_runner: bool | None = None
+    cache_hit_tables: Any = []
     if peak_runner is process_peaks_parallel_safe:
         safe_run_stats_out = {}
         peak_kwargs["_safe_stats_out"] = safe_run_stats_out
@@ -320,14 +349,15 @@ def _run_simulation_request(
             if "used_python_runner" in safe_run_stats_out:
                 used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
             peak_kwargs.pop("_safe_stats_out", None)
-        cache_hit_tables = _capture_hit_tables_for_intersection_cache(
-            hit_tables=hit_tables,
-            collect_hit_tables_requested=bool(request.collect_hit_tables),
-            runner=peak_runner,
-            runner_args=peak_args,
-              runner_kwargs=peak_kwargs,
-              image_arg_index=6,
-          )
+        if request.build_intersection_cache:
+            cache_hit_tables = _capture_hit_tables_for_intersection_cache(
+                hit_tables=hit_tables,
+                collect_hit_tables_requested=bool(request.collect_hit_tables),
+                runner=peak_runner,
+                runner_args=peak_args,
+                runner_kwargs=peak_kwargs,
+                image_arg_index=6,
+            )
     projection_debug_background = None
     projection_debug_log_path = None
     if projection_debug_active:
@@ -355,17 +385,20 @@ def _run_simulation_request(
                 projection_debug_session,
                 projection_debug_background,
             )
-    intersection_cache = build_intersection_cache(
-        cache_hit_tables,
-        request.geometry.av,
-        request.geometry.cv,
-        beam_x_array=request.beam.beam_x_array,
-        beam_y_array=request.beam.beam_y_array,
-        theta_array=request.beam.theta_array,
-        phi_array=request.beam.phi_array,
-        wavelength_array=request.beam.wavelength_array,
-        best_sample_indices_out=best_sample_indices_out,
-    )
+    if request.build_intersection_cache:
+        intersection_cache = build_intersection_cache(
+            cache_hit_tables,
+            request.geometry.av,
+            request.geometry.cv,
+            beam_x_array=request.beam.beam_x_array,
+            beam_y_array=request.beam.beam_y_array,
+            theta_array=request.beam.theta_array,
+            phi_array=request.beam.phi_array,
+            wavelength_array=request.beam.wavelength_array,
+            best_sample_indices_out=best_sample_indices_out,
+        )
+    else:
+        intersection_cache = []
 
     return SimulationResult(
         image=np.asarray(image, dtype=np.float64),
@@ -669,7 +702,7 @@ def simulate_qr_rods(
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
     image_buffer = _default_image_buffer(request)
-    worker_count = default_reserved_cpu_worker_count()
+    worker_count = _simulation_worker_count()
     debug_miller = request.miller
     if debug_miller.size == 0:
         debug_miller, _, _, _ = qr_dict_to_arrays(qr_dict)
@@ -696,6 +729,7 @@ def simulate_qr_rods(
         peak_count=int(np.asarray(debug_miller, dtype=np.float64).shape[0]),
         auto_allocate=True,
     )
+    beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
 
     rod_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -717,14 +751,14 @@ def simulate_qr_rods(
         rod_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
         rod_kwargs["sample_weights"] = request.beam.sample_weights
-    if request.beam.n2_sample_array is not None:
-        rod_kwargs["n2_sample_array_override"] = request.beam.n2_sample_array
+    rod_kwargs["n2_sample_array_override"] = beam_n2_sample_array
     if best_sample_indices_out is not None:
         rod_kwargs["best_sample_indices_out"] = best_sample_indices_out
     if peak_runner is process_qr_rods_parallel_safe and projection_debug_active:
         rod_kwargs["enable_safe_cache"] = False
     safe_run_stats_out: dict[str, Any] | None = None
     used_python_runner: bool | None = None
+    cache_hit_tables: Any = []
     if peak_runner is process_qr_rods_parallel_safe:
         safe_run_stats_out = {}
         rod_kwargs["_safe_stats_out"] = safe_run_stats_out
@@ -774,14 +808,15 @@ def simulate_qr_rods(
             if "used_python_runner" in safe_run_stats_out:
                 used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
             rod_kwargs.pop("_safe_stats_out", None)
-        cache_hit_tables = _capture_hit_tables_for_intersection_cache(
-            hit_tables=hit_tables,
-            collect_hit_tables_requested=bool(request.collect_hit_tables),
-            runner=peak_runner,
-            runner_args=rod_args,
-              runner_kwargs=rod_kwargs,
-              image_arg_index=5,
-          )
+        if request.build_intersection_cache:
+            cache_hit_tables = _capture_hit_tables_for_intersection_cache(
+                hit_tables=hit_tables,
+                collect_hit_tables_requested=bool(request.collect_hit_tables),
+                runner=peak_runner,
+                runner_args=rod_args,
+                runner_kwargs=rod_kwargs,
+                image_arg_index=5,
+            )
     projection_debug_background = None
     projection_debug_log_path = None
     if projection_debug_active:
@@ -809,17 +844,20 @@ def simulate_qr_rods(
                 projection_debug_session,
                 projection_debug_background,
             )
-    intersection_cache = build_intersection_cache(
-        cache_hit_tables,
-        request.geometry.av,
-        request.geometry.cv,
-        beam_x_array=request.beam.beam_x_array,
-        beam_y_array=request.beam.beam_y_array,
-        theta_array=request.beam.theta_array,
-        phi_array=request.beam.phi_array,
-        wavelength_array=request.beam.wavelength_array,
-        best_sample_indices_out=best_sample_indices_out,
-    )
+    if request.build_intersection_cache:
+        intersection_cache = build_intersection_cache(
+            cache_hit_tables,
+            request.geometry.av,
+            request.geometry.cv,
+            beam_x_array=request.beam.beam_x_array,
+            beam_y_array=request.beam.beam_y_array,
+            theta_array=request.beam.theta_array,
+            phi_array=request.beam.phi_array,
+            wavelength_array=request.beam.wavelength_array,
+            best_sample_indices_out=best_sample_indices_out,
+        )
+    else:
+        intersection_cache = []
 
     return SimulationResult(
         image=np.asarray(image, dtype=np.float64),

@@ -74,6 +74,7 @@ class SimulationRequest:
     thickness: float = 0.0
     optics_mode: int | None = None
     collect_hit_tables: bool = True
+    build_intersection_cache: bool = True
     accumulate_image: bool = True
     exit_projection_mode: Literal["internal", "refracted"] = "internal"
     best_sample_indices_out: np.ndarray | None = None

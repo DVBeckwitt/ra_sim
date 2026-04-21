@@ -146,6 +146,7 @@ def test_run_headless_simulation_builds_typed_request(monkeypatch, tmp_path) -> 
     request = seen["request"]
     assert isinstance(request, SimulationRequest)
     assert request.collect_hit_tables is False
+    assert request.build_intersection_cache is False
     assert request.geometry.image_size == 8
     assert request.geometry.distance_m == 0.1
     assert request.geometry.pixel_size_m == 1.0e-4

@@ -219,6 +219,14 @@ def resolve_index_of_refraction_array(*args, **kwargs):
     return _load_calculation_module().resolve_index_of_refraction_array(*args, **kwargs)
 
 
+def _normalize_n2_source_meta(*args, **kwargs):
+    return _load_calculation_module()._normalize_n2_source_meta(*args, **kwargs)
+
+
+def _n2_wavelength_snapshot_from_angstrom(*args, **kwargs):
+    return _load_calculation_module()._n2_wavelength_snapshot_from_angstrom(*args, **kwargs)
+
+
 def simulate_qr_rods(*args, **kwargs):
     return _load_simulation_modules().engine.simulate_qr_rods(*args, **kwargs)
 
@@ -670,6 +678,8 @@ def _build_headless_geometry_mosaic_params(
         np.asarray(wavelength_array, dtype=np.float64) * 1.0e-10,
         cif_path=str(active_cif_path),
     )
+    n2_source_meta = _normalize_n2_source_meta(("cif_path", str(active_cif_path)))
+    n2_wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(wavelength_array)
 
     return (
         {
@@ -679,6 +689,8 @@ def _build_headless_geometry_mosaic_params(
             "phi_array": np.asarray(phi_array, dtype=np.float64),
             "wavelength_array": np.asarray(wavelength_array, dtype=np.float64),
             "n2_sample_array": np.asarray(n2_sample_array, dtype=np.complex128),
+            "_n2_sample_array_source": n2_source_meta,
+            "_n2_sample_array_wavelength_snapshot": n2_wavelength_snapshot,
             "sigma_mosaic_deg": _saved_state_float(saved_variables, "sigma_mosaic_var", 0.0),
             "gamma_mosaic_deg": _saved_state_float(saved_variables, "gamma_mosaic_var", 0.0),
             "eta": _saved_state_float(saved_variables, "eta_var", beam_config.get("eta", 0.0)),
@@ -2179,6 +2191,7 @@ def build_headless_simulation_request(
         record_status=False,
         thickness=defaults.sample_depth_m,
         collect_hit_tables=False,
+        build_intersection_cache=False,
     )
 
 

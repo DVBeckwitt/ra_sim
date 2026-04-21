@@ -52,6 +52,8 @@ from ra_sim.utils.stacking_fault import (
 
 from ra_sim.utils.calculations import (
     IndexofRefraction,
+    _n2_wavelength_snapshot_from_angstrom,
+    _normalize_n2_source_meta,
     resolve_index_of_refraction,
     resolve_index_of_refraction_array,
     source_branch_index_from_phi_deg,
@@ -1064,6 +1066,25 @@ def _current_sample_n2_array(wavelength_angstrom_array, active_cif_path=None):
     return resolve_index_of_refraction_array(
         wavelength_m,
         cif_path=optics_path,
+    )
+
+
+def _current_sample_n2_source_meta(active_cif_path=None):
+    optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
+    return _normalize_n2_source_meta(("cif_path", optics_path))
+
+
+def _current_sample_n2_payload(wavelength_angstrom_array, active_cif_path=None):
+    wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array)
+    source_meta = _current_sample_n2_source_meta(active_cif_path=active_cif_path)
+    n2_sample_array = _current_sample_n2_array(
+        wavelength_snapshot,
+        active_cif_path=(None if source_meta is None else source_meta[1]),
+    )
+    return (
+        np.ascontiguousarray(np.asarray(n2_sample_array, dtype=np.complex128)),
+        source_meta,
+        wavelength_snapshot,
     )
 
 
@@ -2760,6 +2781,10 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
     phi_array = simulation_runtime_state.profile_cache["phi_array"]
     wavelength_array = simulation_runtime_state.profile_cache["wavelength_array"]
     n2_sample_array = simulation_runtime_state.profile_cache.get("n2_sample_array")
+    n2_source_meta = simulation_runtime_state.profile_cache.get("_n2_sample_array_source")
+    n2_wavelength_snapshot = simulation_runtime_state.profile_cache.get(
+        "_n2_sample_array_wavelength_snapshot"
+    )
     sample_weights = simulation_runtime_state.profile_cache.get("sample_weights")
     sampling_signature = tuple(
         simulation_runtime_state.profile_cache.get("_sampling_signature", ())
@@ -2808,7 +2833,11 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
             float(lambda_),
             float(_current_bandwidth_fraction()),
         )
-        n2_sample_array = _current_sample_n2_array(wavelength_array)
+        (
+            n2_sample_array,
+            n2_source_meta,
+            n2_wavelength_snapshot,
+        ) = _current_sample_n2_payload(wavelength_array)
 
     resolved_solve_q_steps = solve_q.steps
     if solve_q_steps is not None:
@@ -2825,6 +2854,8 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
         "wavelength_array": wavelength_array,  #  <<< name fixed
         "sample_weights": sample_weights,
         "n2_sample_array": n2_sample_array,
+        "_n2_sample_array_source": n2_source_meta,
+        "_n2_sample_array_wavelength_snapshot": n2_wavelength_snapshot,
         "sigma_mosaic_deg": sigma_mosaic_var.get(),
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
         "eta": eta_var.get(),
@@ -5524,6 +5555,366 @@ def _current_qr_cylinder_caked_projection_context() -> Mapping[str, object] | No
     )
 
 
+def _geometry_fit_targeted_projection_analysis_bins(
+    analysis_preview_bins: Sequence[object] | None = None,
+) -> tuple[int | None, int | None]:
+    preview_bins = analysis_preview_bins
+    if not (isinstance(preview_bins, (tuple, list)) and len(preview_bins) >= 2):
+        preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
+    try:
+        npt_rad = (
+            int(max(1, preview_bins[0]))
+            if isinstance(preview_bins, (tuple, list)) and len(preview_bins) >= 2
+            else None
+        )
+    except Exception:
+        npt_rad = None
+    try:
+        npt_azim = (
+            int(max(1, preview_bins[1]))
+            if isinstance(preview_bins, (tuple, list)) and len(preview_bins) >= 2
+            else None
+        )
+    except Exception:
+        npt_azim = None
+    return npt_rad, npt_azim
+
+
+def _geometry_fit_resolve_targeted_caked_projection_payload(
+    background_index: int,
+    *,
+    caked_payload: Mapping[str, object] | None = None,
+    detector_shape: Sequence[object] | None = None,
+    ai: FastAzimuthalIntegrator | None = None,
+    analysis_preview_bins: Sequence[object] | None = None,
+    allow_generated_payload: bool = False,
+) -> dict[str, object] | None:
+    background_idx = int(background_index)
+    resolved_payload = caked_payload
+    if not isinstance(resolved_payload, Mapping):
+        resolved_payload = _geometry_fit_caked_view_for_index(background_idx)
+
+    ai_value = ai
+    if ai_value is None:
+        ai_cache = getattr(simulation_runtime_state, "ai_cache", None)
+        ai_value = ai_cache.get("ai") if isinstance(ai_cache, Mapping) else None
+
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None and isinstance(resolved_payload, Mapping):
+        normalized_shape = _geometry_fit_detector_shape_2d(
+            resolved_payload.get("detector_shape")
+        )
+    if normalized_shape is None:
+        try:
+            if int(background_idx) == int(background_runtime_state.current_background_index):
+                native_background = _get_current_background_native()
+            else:
+                native_background, _display_background = _load_background_image_by_index(
+                    int(background_idx)
+                )
+            normalized_shape = _geometry_fit_detector_shape_2d(
+                np.asarray(native_background, dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            normalized_shape = None
+    if (
+        not isinstance(resolved_payload, Mapping)
+        and bool(allow_generated_payload)
+        and normalized_shape is not None
+        and isinstance(ai_value, FastAzimuthalIntegrator)
+    ):
+        npt_rad, npt_azim = _geometry_fit_targeted_projection_analysis_bins(
+            analysis_preview_bins
+        )
+        resolved_payload = _geometry_fit_worker_caked_projection_view(
+            detector_shape=normalized_shape,
+            ai=ai_value,
+            npt_rad=npt_rad,
+            npt_azim=npt_azim,
+        )
+
+    if not isinstance(resolved_payload, Mapping):
+        return None
+    return _normalize_geometry_fit_caked_view_payload(
+        resolved_payload,
+        detector_shape=normalized_shape,
+        ai=ai_value,
+    )
+
+
+def _geometry_fit_rows_for_background(
+    background_index: int,
+    raw_rows: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    normalized_rows: list[dict[str, object]] = []
+    for raw_entry in raw_rows or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        entry.setdefault("background_index", int(background_index))
+        normalized_rows.append(entry)
+    return normalized_rows
+
+
+def _geometry_fit_group_rows_by_background(
+    raw_rows: Sequence[object] | None,
+    *,
+    default_background_index: int,
+    order_key: str | None = None,
+) -> list[tuple[int, list[dict[str, object]]]]:
+    grouped_rows: dict[int, list[dict[str, object]]] = {}
+    ordered_backgrounds: list[int] = []
+    for position, raw_entry in enumerate(raw_rows or ()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        try:
+            background_idx = int(entry.get("background_index"))
+        except Exception:
+            background_idx = int(default_background_index)
+        entry.setdefault("background_index", int(background_idx))
+        if order_key is not None:
+            entry[order_key] = int(position)
+        if int(background_idx) not in grouped_rows:
+            ordered_backgrounds.append(int(background_idx))
+            grouped_rows[int(background_idx)] = []
+        grouped_rows[int(background_idx)].append(entry)
+    return [
+        (int(background_idx), list(grouped_rows.get(int(background_idx), ())))
+        for background_idx in ordered_backgrounds
+    ]
+
+
+def _geometry_manual_project_peaks_for_background(
+    background_index: int,
+    raw_rows: Sequence[object] | None,
+    *,
+    mode_override: str | None = None,
+    caked_payload: Mapping[str, object] | None = None,
+    background_native: object = None,
+    background_display: object = None,
+) -> list[dict[str, object]]:
+    normalized_rows = _geometry_fit_rows_for_background(background_index, raw_rows)
+    if not normalized_rows:
+        return []
+
+    normalized_mode = str(
+        mode_override if mode_override is not None else _geometry_fit_targeted_projection_view_mode()
+    ).strip().lower()
+    if normalized_mode not in {"detector", "caked", "q_space"}:
+        normalized_mode = "detector"
+
+    try:
+        current_background_index = int(background_runtime_state.current_background_index)
+    except Exception:
+        current_background_index = int(background_index)
+
+    is_current_background = int(background_index) == int(current_background_index)
+
+    if normalized_mode == "q_space":
+        if not is_current_background or not callable(_project_geometry_manual_peaks_to_current_view):
+            return []
+        try:
+            return _geometry_fit_rows_for_background(
+                background_index,
+                _project_geometry_manual_peaks_to_current_view(normalized_rows),
+            )
+        except Exception:
+            return []
+
+    if is_current_background and callable(_project_geometry_manual_peaks_to_current_view):
+        try:
+            return _geometry_fit_rows_for_background(
+                background_index,
+                _project_geometry_manual_peaks_to_current_view(normalized_rows),
+            )
+        except Exception:
+            return [] if normalized_mode == "q_space" else normalized_rows
+
+    native_background = background_native
+    display_background = background_display
+    if native_background is None or display_background is None:
+        try:
+            native_background, display_background = _load_background_image_by_index(
+                int(background_index)
+            )
+        except Exception:
+            native_background = background_native
+            display_background = background_display
+    try:
+        detector_shape = tuple(
+            int(v) for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+        )
+    except Exception:
+        detector_shape = None
+
+    resolved_caked_payload = None
+    if normalized_mode == "caked":
+        resolved_caked_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+            int(background_index),
+            caked_payload=caked_payload,
+            detector_shape=detector_shape,
+            allow_generated_payload=True,
+        )
+        if not isinstance(resolved_caked_payload, Mapping):
+            return normalized_rows
+    try:
+        center_pair = [float(center_x_var.get()), float(center_y_var.get())]
+    except Exception:
+        center_pair = None
+    try:
+        detector_distance = float(corto_detector_var.get())
+    except Exception:
+        detector_distance = 0.0
+
+    def _background_native_detector_coords_to_bundle_detector_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float | None, float | None]:
+        return _native_detector_coords_to_bundle_detector_coords(
+            float(col),
+            float(row),
+            detector_shape,
+        )
+
+    projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: bool(
+            normalized_mode == "caked" and isinstance(resolved_caked_payload, Mapping)
+        ),
+        last_caked_background_image_unscaled=lambda: (
+            resolved_caked_payload.get("background")
+            if isinstance(resolved_caked_payload, Mapping)
+            else None
+        ),
+        last_caked_radial_values=lambda: (
+            resolved_caked_payload.get("radial_axis")
+            if isinstance(resolved_caked_payload, Mapping)
+            else None
+        ),
+        last_caked_azimuth_values=lambda: (
+            resolved_caked_payload.get("azimuth_axis")
+            if isinstance(resolved_caked_payload, Mapping)
+            else None
+        ),
+        current_background_display=lambda: display_background,
+        current_background_native=lambda: native_background,
+        ai=lambda: (
+            simulation_runtime_state.ai_cache.get("ai")
+            if isinstance(getattr(simulation_runtime_state, "ai_cache", None), Mapping)
+            else None
+        ),
+        center=lambda: center_pair,
+        detector_distance=lambda: detector_distance,
+        pixel_size=float(pixel_size_m),
+        caked_transform_bundle=lambda: (
+            resolved_caked_payload.get("transform_bundle")
+            if isinstance(resolved_caked_payload, Mapping)
+            else None
+        ),
+        wrap_phi_range=(globals().get("raw_phi_to_gui_phi") or (lambda value: float(value))),
+        rotate_point_for_display=(
+            globals().get("_rotate_point_for_display")
+            or (lambda col, row: (float(col), float(row)))
+        ),
+        display_rotate_k=int(globals().get("DISPLAY_ROTATE_K", 0) or 0),
+        current_geometry_fit_params=lambda: _current_geometry_fit_params(),
+        build_live_preview_simulated_peaks_from_cache=lambda: [],
+        ensure_peak_overlay_data=lambda **_kwargs: False,
+        miller=lambda: miller,
+        intensities=lambda: intensities,
+        image_size=int(image_size),
+        display_to_native_sim_coords=globals().get("_display_to_native_sim_coords"),
+        native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
+        get_detector_angular_maps=(
+            (
+                lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
+                if callable(globals().get("_get_detector_angular_maps"))
+                else None
+            )
+        ),
+        detector_pixel_to_scattering_angles=globals().get(
+            "_detector_pixel_to_scattering_angles"
+        ),
+        backend_detector_coords_to_native_detector_coords=(
+            globals().get("_backend_background_to_native_detector_coords")
+            or (lambda col, row, *_args, **_kwargs: (float(col), float(row)))
+        ),
+        native_detector_coords_to_bundle_detector_coords=(
+            _background_native_detector_coords_to_bundle_detector_coords
+        ),
+        bundle_detector_coords_to_background_display_coords=(
+            lambda col, row: (float(col), float(row))
+        ),
+        scattering_angles_to_detector_pixel=globals().get(
+            "_scattering_angles_to_detector_pixel"
+        ),
+        filter_simulated_peaks=(
+            lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
+        ),
+        collapse_simulated_peaks=(
+            lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)
+        ),
+    )
+    try:
+        return _geometry_fit_rows_for_background(
+            background_index,
+            projection_callbacks.project_peaks_to_current_view(normalized_rows),
+        )
+    except Exception:
+        return [] if normalized_mode == "q_space" else normalized_rows
+
+
+def _geometry_manual_project_peaks_by_row_background(
+    raw_rows: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    try:
+        default_background_index = int(background_runtime_state.current_background_index)
+    except Exception:
+        default_background_index = 0
+    order_key = "__ra_sim_projection_row_order__"
+    grouped_rows = _geometry_fit_group_rows_by_background(
+        raw_rows,
+        default_background_index=default_background_index,
+        order_key=order_key,
+    )
+    if not grouped_rows:
+        return []
+    normalized_mode = _geometry_fit_targeted_projection_view_mode()
+    projected_rows: list[dict[str, object]] = []
+    for background_idx, rows_for_background in grouped_rows:
+        try:
+            projected_rows.extend(
+                dict(entry)
+                for entry in (
+                    _geometry_manual_project_peaks_for_background(
+                        int(background_idx),
+                        rows_for_background,
+                        mode_override=normalized_mode,
+                    )
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            )
+        except Exception:
+            continue
+    sorted_rows = sorted(
+        projected_rows,
+        key=lambda entry: (
+            int(entry.get(order_key))
+            if isinstance(entry, Mapping) and entry.get(order_key) is not None
+            else int(1e12)
+        ),
+    )
+    cleaned_rows: list[dict[str, object]] = []
+    for raw_entry in sorted_rows:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        entry.pop(order_key, None)
+        cleaned_rows.append(entry)
+    return cleaned_rows
+
+
 def _analysis_selected_qr_rod_entries() -> list[dict[str, object]]:
     active_entries_factory = globals().get("active_qr_cylinder_overlay_entries_factory")
     if not callable(active_entries_factory):
@@ -6064,6 +6455,12 @@ def _initialize_runtime_controls_block_04() -> None:
             build_grouped_candidates=_geometry_manual_pick_candidates,
             build_simulated_lookup=_geometry_manual_simulated_lookup,
             project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
+            project_peaks_for_background_view=(
+                lambda background_index, rows: _geometry_manual_project_peaks_for_background(
+                    int(background_index),
+                    rows,
+                )
+            ),
             entry_display_coords=_geometry_manual_entry_display_coords,
             auto_match_background_context=(
                 lambda *args, **kwargs: globals()["_auto_match_background_context"](
@@ -10078,9 +10475,18 @@ def update_mosaic_cache():
         os.path.abspath(str(active_optics_cif_path)),
     )
     if simulation_runtime_state.profile_cache.get("_optics_signature") != optics_signature:
-        simulation_runtime_state.profile_cache["n2_sample_array"] = _current_sample_n2_array(
+        (
+            n2_sample_array,
+            n2_source_meta,
+            n2_wavelength_snapshot,
+        ) = _current_sample_n2_payload(
             simulation_runtime_state.profile_cache.get("wavelength_array", []),
             active_cif_path=active_optics_cif_path,
+        )
+        simulation_runtime_state.profile_cache["n2_sample_array"] = n2_sample_array
+        simulation_runtime_state.profile_cache["_n2_sample_array_source"] = n2_source_meta
+        simulation_runtime_state.profile_cache["_n2_sample_array_wavelength_snapshot"] = (
+            n2_wavelength_snapshot
         )
         simulation_runtime_state.profile_cache["_optics_signature"] = optics_signature
 
@@ -10251,6 +10657,18 @@ def _worker_job_key(payload: object) -> tuple[object, int, str]:
     )
 
 
+def _hit_table_state_present_for_run_sides(
+    *,
+    run_primary: bool,
+    run_secondary: bool,
+) -> bool:
+    if bool(run_primary) and simulation_runtime_state.stored_primary_max_positions is None:
+        return False
+    if bool(run_secondary) and simulation_runtime_state.stored_secondary_max_positions is None:
+        return False
+    return True
+
+
 def _cached_hit_tables_reusable(
     requested_signature: object,
     *,
@@ -10259,11 +10677,10 @@ def _cached_hit_tables_reusable(
 ) -> bool:
     if requested_signature != simulation_runtime_state.stored_hit_table_signature:
         return False
-    if bool(run_primary) and simulation_runtime_state.stored_primary_max_positions is None:
-        return False
-    if bool(run_secondary) and simulation_runtime_state.stored_secondary_max_positions is None:
-        return False
-    return True
+    return _hit_table_state_present_for_run_sides(
+        run_primary=run_primary,
+        run_secondary=run_secondary,
+    )
 
 
 def _analysis_job_key(payload: object) -> tuple[object, int, bool, object, object]:
@@ -11686,6 +12103,7 @@ def _build_preview_simulation_job(
     preview_job["collect_primary_hit_tables"] = False
     preview_job["collect_secondary_hit_tables"] = False
     preview_job["capture_primary_hit_tables_raw"] = False
+    preview_job["capture_secondary_hit_tables_raw"] = False
     preview_job["job_kind"] = "preview"
     preview_job["is_preview"] = True
     preview_job["preview_sample_count"] = int(preview_indices.size)
@@ -11716,6 +12134,17 @@ def _build_preview_simulation_job(
             .reshape(-1)[preview_indices]
             .copy()
         ),
+        "_n2_sample_array_source": mosaic_params.get("_n2_sample_array_source"),
+        "_n2_sample_array_wavelength_snapshot": (
+            None
+            if mosaic_params.get("_n2_sample_array_wavelength_snapshot") is None
+            else np.asarray(
+                mosaic_params["_n2_sample_array_wavelength_snapshot"],
+                dtype=np.float64,
+            )
+            .reshape(-1)[preview_indices]
+            .copy()
+        ),
     }
     return preview_job
 
@@ -11740,6 +12169,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "job_kind": job_kind,
             "signature": job["signature"],
             "epoch": int(job["epoch"]),
+            "run_primary": bool(job.get("run_primary", False)),
+            "run_secondary": bool(job.get("run_secondary", False)),
             "is_preview": bool(job.get("is_preview", False)),
             "preview_sample_count": (
                 int(job.get("preview_sample_count", 0))
@@ -11748,6 +12179,10 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             ),
             "primary_image": blank.copy(),
             "secondary_image": blank.copy(),
+            "primary_hit_table_state_refreshed": False,
+            "secondary_hit_table_state_refreshed": False,
+            "primary_intersection_cache_built": False,
+            "secondary_intersection_cache_built": False,
             "primary_max_positions": [],
             "secondary_max_positions": [],
             "primary_intersection_cache": [],
@@ -11791,6 +12226,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         c_val,
         image_buffer,
         collect_hit_tables,
+        build_intersection_cache,
     ) -> SimulationRequest:
         return SimulationRequest(
             miller=np.asarray(miller_arr, dtype=np.float64),
@@ -11861,6 +12297,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             thickness=float(job["sample_depth_m"]),
             optics_mode=int(job["optics_mode"]),
             collect_hit_tables=bool(collect_hit_tables),
+            build_intersection_cache=bool(build_intersection_cache),
             accumulate_image=bool(job.get("accumulate_image", True)),
             exit_projection_mode=str(job.get("exit_projection_mode", "internal")),
         )
@@ -11875,10 +12312,21 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         capture_raw_hit_tables: bool,
     ):
         buf = np.zeros((image_size, image_size), dtype=np.float64)
-        request_collect_hit_tables = bool(collect_hit_tables or capture_raw_hit_tables)
+        request_build_intersection_cache = bool(collect_hit_tables)
+        request_collect_hit_tables = bool(
+            request_build_intersection_cache or capture_raw_hit_tables
+        )
         if isinstance(data, dict):
             if len(data) == 0:
-                return buf, [], [], np.empty((0,), dtype=np.int64), None
+                return (
+                    buf,
+                    [],
+                    [],
+                    np.empty((0,), dtype=np.int64),
+                    None,
+                    False,
+                    False,
+                )
             request = build_request(
                 np.empty((0, 3), dtype=np.float64),
                 np.empty(0, dtype=np.float64),
@@ -11886,6 +12334,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 c_val=c_val,
                 image_buffer=buf,
                 collect_hit_tables=request_collect_hit_tables,
+                build_intersection_cache=request_build_intersection_cache,
             )
             result = simulate_qr_rods_request(
                 data,
@@ -11897,15 +12346,33 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 _copy_intersection_cache_tables(result.intersection_cache),
                 np.asarray(request.best_sample_indices_out, dtype=np.int64).copy(),
                 result.used_python_runner,
+                request_collect_hit_tables,
+                request_build_intersection_cache,
             )
 
         miller_arr = np.asarray(data, dtype=np.float64)
         intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
         if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
-            return buf, [], [], np.empty((0,), dtype=np.int64), None
+            return (
+                buf,
+                [],
+                [],
+                np.empty((0,), dtype=np.int64),
+                None,
+                False,
+                False,
+            )
         row_count = min(miller_arr.shape[0], intens_vals.shape[0])
         if row_count <= 0:
-            return buf, [], [], np.empty((0,), dtype=np.int64), None
+            return (
+                buf,
+                [],
+                [],
+                np.empty((0,), dtype=np.int64),
+                None,
+                False,
+                False,
+            )
         request = build_request(
             miller_arr[:row_count, :],
             intens_vals[:row_count],
@@ -11913,6 +12380,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             c_val=c_val,
             image_buffer=buf,
             collect_hit_tables=request_collect_hit_tables,
+            build_intersection_cache=request_build_intersection_cache,
         )
         result = simulate_request(request)
         return (
@@ -11921,6 +12389,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             _copy_intersection_cache_tables(result.intersection_cache),
             np.asarray(request.best_sample_indices_out, dtype=np.int64).copy(),
             result.used_python_runner,
+            request_collect_hit_tables,
+            request_build_intersection_cache,
         )
 
     primary_data = job["primary_data"]
@@ -11934,6 +12404,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         job.get("collect_secondary_hit_tables", job["collect_hit_tables"])
     )
     capture_primary_hit_tables_raw = bool(job.get("capture_primary_hit_tables_raw", False))
+    capture_secondary_hit_tables_raw = bool(
+        job.get("capture_secondary_hit_tables_raw", False)
+    )
 
     img1 = None
     img2 = None
@@ -11945,6 +12418,10 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     best_sample_indices2 = np.empty((0,), dtype=np.int64)
     primary_used_python_runner: bool | None = None
     secondary_used_python_runner: bool | None = None
+    primary_hit_table_state_refreshed = False
+    secondary_hit_table_state_refreshed = False
+    primary_intersection_cache_built = False
+    secondary_intersection_cache_built = False
 
     try:
         if bool(job["run_primary"]):
@@ -11954,6 +12431,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 cache1,
                 best_sample_indices1,
                 primary_used_python_runner,
+                primary_hit_table_state_refreshed,
+                primary_intersection_cache_built,
             ) = run_one(
                 primary_data,
                 primary_intensities,
@@ -11970,13 +12449,15 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 cache2,
                 best_sample_indices2,
                 secondary_used_python_runner,
+                secondary_hit_table_state_refreshed,
+                secondary_intersection_cache_built,
             ) = run_one(
                 secondary_data,
                 secondary_intensities,
                 float(job["a_secondary"]),
                 float(job["c_secondary"]),
                 collect_hit_tables=secondary_collect_hit_tables,
-                capture_raw_hit_tables=False,
+                capture_raw_hit_tables=capture_secondary_hit_tables_raw,
             )
 
         primary_peak_tables = _resolved_peak_table_payload(cache1, raw_hit_tables1)
@@ -12018,6 +12499,8 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "job_kind": job_kind,
             "signature": job["signature"],
             "epoch": int(job["epoch"]),
+            "run_primary": bool(job.get("run_primary", False)),
+            "run_secondary": bool(job.get("run_secondary", False)),
             "is_preview": bool(job.get("is_preview", False)),
             "preview_sample_count": (
                 int(job.get("preview_sample_count", 0))
@@ -12027,6 +12510,14 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "primary_image": img1,
             "secondary_image": img2,
             "collected_hit_tables": bool(job["collect_hit_tables"]),
+            "primary_hit_table_state_refreshed": bool(primary_hit_table_state_refreshed),
+            "secondary_hit_table_state_refreshed": bool(
+                secondary_hit_table_state_refreshed
+            ),
+            "primary_intersection_cache_built": bool(primary_intersection_cache_built),
+            "secondary_intersection_cache_built": bool(
+                secondary_intersection_cache_built
+            ),
             "hit_table_signature": job.get("hit_table_signature"),
             "primary_contribution_cache_signature": job.get("primary_contribution_cache_signature"),
             "primary_source_mode": job.get("primary_source_mode"),
@@ -12276,19 +12767,65 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         result.get("secondary_image"),
         dtype=np.float64,
     )
-    simulation_runtime_state.stored_primary_intersection_cache = _copy_intersection_cache_tables(
-        result.get("primary_intersection_cache", [])
+    run_primary = bool(result.get("run_primary", False))
+    run_secondary = bool(result.get("run_secondary", False))
+    primary_hit_table_state_refreshed = bool(
+        result.get("primary_hit_table_state_refreshed", False)
     )
-    simulation_runtime_state.stored_secondary_intersection_cache = _copy_intersection_cache_tables(
-        result.get("secondary_intersection_cache", [])
+    secondary_hit_table_state_refreshed = bool(
+        result.get("secondary_hit_table_state_refreshed", False)
     )
-    resolved_primary_peak_tables = _resolved_peak_table_payload(
-        simulation_runtime_state.stored_primary_intersection_cache,
-        result.get("primary_max_positions", []),
+    primary_intersection_cache_built = bool(
+        result.get("primary_intersection_cache_built", False)
     )
-    resolved_secondary_peak_tables = _resolved_peak_table_payload(
-        simulation_runtime_state.stored_secondary_intersection_cache,
-        result.get("secondary_max_positions", []),
+    secondary_intersection_cache_built = bool(
+        result.get("secondary_intersection_cache_built", False)
+    )
+
+    if primary_intersection_cache_built:
+        simulation_runtime_state.stored_primary_intersection_cache = (
+            _copy_intersection_cache_tables(result.get("primary_intersection_cache", []))
+        )
+    if secondary_intersection_cache_built:
+        simulation_runtime_state.stored_secondary_intersection_cache = (
+            _copy_intersection_cache_tables(result.get("secondary_intersection_cache", []))
+        )
+
+    if primary_intersection_cache_built:
+        resolved_primary_peak_tables = _resolved_peak_table_payload(
+            simulation_runtime_state.stored_primary_intersection_cache,
+            result.get("primary_max_positions", []),
+        )
+    elif primary_hit_table_state_refreshed:
+        resolved_primary_peak_tables = _copy_hit_tables(result.get("primary_max_positions", []))
+    else:
+        resolved_primary_peak_tables = _copy_hit_tables(
+            simulation_runtime_state.stored_primary_max_positions
+        )
+
+    if secondary_intersection_cache_built:
+        resolved_secondary_peak_tables = _resolved_peak_table_payload(
+            simulation_runtime_state.stored_secondary_intersection_cache,
+            result.get("secondary_max_positions", []),
+        )
+    elif secondary_hit_table_state_refreshed:
+        resolved_secondary_peak_tables = _copy_hit_tables(
+            result.get("secondary_max_positions", [])
+        )
+    else:
+        resolved_secondary_peak_tables = _copy_hit_tables(
+            simulation_runtime_state.stored_secondary_max_positions
+        )
+
+    primary_peak_table_lattice = (
+        list(result.get("primary_peak_table_lattice", []))
+        if primary_hit_table_state_refreshed
+        else list(simulation_runtime_state.stored_primary_peak_table_lattice or [])
+    )
+    secondary_peak_table_lattice = (
+        list(result.get("secondary_peak_table_lattice", []))
+        if secondary_hit_table_state_refreshed
+        else list(simulation_runtime_state.stored_secondary_peak_table_lattice or [])
     )
     primary_source_reflection_indices, secondary_source_reflection_indices = (
         gui_geometry_q_group_manager.audited_full_order_source_reflection_index_groups(
@@ -12299,27 +12836,59 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             owner="runtime_session.store_primary_secondary_peak_tables",
         )
     )
-    simulation_runtime_state.stored_primary_peak_table_lattice = list(
-        result.get("primary_peak_table_lattice", [])
-    )
-    simulation_runtime_state.stored_secondary_peak_table_lattice = list(
-        result.get("secondary_peak_table_lattice", [])
-    )
-    simulation_runtime_state.stored_primary_source_reflection_indices = (
-        primary_source_reflection_indices
-    )
-    simulation_runtime_state.stored_secondary_source_reflection_indices = (
-        secondary_source_reflection_indices
-    )
-    if (
-        bool(result.get("collected_hit_tables", False))
-        or "primary_intersection_cache" in result
-        or "secondary_intersection_cache" in result
-    ):
-        simulation_runtime_state.stored_primary_max_positions = list(resolved_primary_peak_tables)
+    if primary_hit_table_state_refreshed:
+        simulation_runtime_state.stored_primary_max_positions = list(
+            resolved_primary_peak_tables
+        )
+        simulation_runtime_state.stored_primary_peak_table_lattice = list(
+            primary_peak_table_lattice
+        )
+        simulation_runtime_state.stored_primary_source_reflection_indices = (
+            primary_source_reflection_indices
+        )
+    elif simulation_runtime_state.stored_primary_max_positions is not None:
+        simulation_runtime_state.stored_primary_max_positions = list(
+            resolved_primary_peak_tables
+        )
+        if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
+            simulation_runtime_state.stored_primary_peak_table_lattice = list(
+                primary_peak_table_lattice
+            )
+        if simulation_runtime_state.stored_primary_source_reflection_indices is not None:
+            simulation_runtime_state.stored_primary_source_reflection_indices = (
+                primary_source_reflection_indices
+            )
+
+    if secondary_hit_table_state_refreshed:
         simulation_runtime_state.stored_secondary_max_positions = list(
             resolved_secondary_peak_tables
         )
+        simulation_runtime_state.stored_secondary_peak_table_lattice = list(
+            secondary_peak_table_lattice
+        )
+        simulation_runtime_state.stored_secondary_source_reflection_indices = (
+            secondary_source_reflection_indices
+        )
+    elif simulation_runtime_state.stored_secondary_max_positions is not None:
+        simulation_runtime_state.stored_secondary_max_positions = list(
+            resolved_secondary_peak_tables
+        )
+        if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
+            simulation_runtime_state.stored_secondary_peak_table_lattice = list(
+                secondary_peak_table_lattice
+            )
+        if (
+            simulation_runtime_state.stored_secondary_source_reflection_indices
+            is not None
+        ):
+            simulation_runtime_state.stored_secondary_source_reflection_indices = (
+                secondary_source_reflection_indices
+            )
+    if (
+        (not run_primary or primary_hit_table_state_refreshed)
+        and (not run_secondary or secondary_hit_table_state_refreshed)
+        and (run_primary or run_secondary)
+    ):
         simulation_runtime_state.stored_hit_table_signature = result.get("hit_table_signature")
     if not bool(result.get("is_preview", False)):
         _store_primary_cache_payload(
@@ -14242,7 +14811,11 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
-            simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
+            if _hit_table_state_present_for_run_sides(
+                run_primary=primary_available,
+                run_secondary=secondary_available,
+            ):
+                simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
             simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
         else:
             _apply_ready_simulation_result(ready_simulation_result)
@@ -14296,8 +14869,11 @@ def do_update():
         run_secondary_enabled = (
             bool(secondary_available) if run_secondary_job is None else bool(run_secondary_job)
         )
+        job_kind_value = str(job_kind)
+        capture_primary_raw = bool(run_primary_job and job_kind_value in {"full", "primary_fill"})
+        capture_secondary_raw = bool(run_secondary_enabled and job_kind_value == "full")
         return {
-            "job_kind": str(job_kind),
+            "job_kind": job_kind_value,
             "signature": new_sim_sig,
             "epoch": int(simulation_runtime_state.simulation_epoch),
             "image_size": int(image_size),
@@ -14326,6 +14902,15 @@ def do_update():
                     else np.asarray(
                         mosaic_params["n2_sample_array"],
                         dtype=np.complex128,
+                    ).copy()
+                ),
+                "_n2_sample_array_source": mosaic_params.get("_n2_sample_array_source"),
+                "_n2_sample_array_wavelength_snapshot": (
+                    None
+                    if mosaic_params.get("_n2_sample_array_wavelength_snapshot") is None
+                    else np.asarray(
+                        mosaic_params["_n2_sample_array_wavelength_snapshot"],
+                        dtype=np.float64,
                     ).copy()
                 ),
                 "sigma_mosaic_deg": float(mosaic_params["sigma_mosaic_deg"]),
@@ -14358,7 +14943,8 @@ def do_update():
             "collect_secondary_hit_tables": bool(
                 collect_hit_tables_enabled and run_secondary_enabled
             ),
-            "capture_primary_hit_tables_raw": bool(run_primary_job),
+            "capture_primary_hit_tables_raw": capture_primary_raw,
+            "capture_secondary_hit_tables_raw": capture_secondary_raw,
             "hit_table_signature": requested_hit_table_sig,
             "primary_contribution_cache_signature": primary_contribution_cache_signature,
             "primary_source_mode": primary_requested_source_mode,
@@ -14452,7 +15038,11 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
-            simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
+            if _hit_table_state_present_for_run_sides(
+                run_primary=primary_available,
+                run_secondary=secondary_available,
+            ):
+                simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
             simulation_runtime_state.last_sim_signature = new_sim_image_sig
             simulation_runtime_state.last_simulation_signature = new_sim_sig
             _capture_geometry_source_snapshot()
@@ -17710,29 +18300,22 @@ def _capture_geometry_source_snapshot() -> None:
     )
 
 
-def _geometry_manual_set_runtime_peak_cache_from_source_rows(
-    source_rows: Sequence[object] | None,
+def _geometry_manual_set_runtime_peak_cache_from_projected_rows(
+    projected_rows: Sequence[object] | None,
 ) -> None:
-    projected_rows = [dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)]
-    if callable(_project_geometry_manual_peaks_to_current_view):
-        try:
-            projected_rows = [
-                dict(entry)
-                for entry in (_project_geometry_manual_peaks_to_current_view(projected_rows) or ())
-                if isinstance(entry, Mapping)
-            ]
-        except Exception:
-            projected_rows = [
-                dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)
-            ]
+    normalized_projected_rows = [
+        dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)
+    ]
     try:
-        projected_rows = gui_controllers.filter_enabled_q_group_rows(
-            projected_rows,
+        normalized_projected_rows = gui_controllers.filter_enabled_q_group_rows(
+            normalized_projected_rows,
             geometry_q_group_state,
         )
     except Exception:
-        projected_rows = [
-            dict(entry) for entry in projected_rows or () if isinstance(entry, Mapping)
+        normalized_projected_rows = [
+            dict(entry)
+            for entry in normalized_projected_rows or ()
+            if isinstance(entry, Mapping)
         ]
 
     restored_records: list[dict[str, object]] = []
@@ -17741,7 +18324,7 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
     restored_intensities: list[float] = []
     use_caked_display = bool(_active_caked_primary_view())
 
-    for raw_entry in projected_rows:
+    for raw_entry in normalized_projected_rows:
         peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
             raw_entry,
             normalize_hkl_key=_normalize_hkl_key,
@@ -17819,6 +18402,24 @@ def _geometry_manual_set_runtime_peak_cache_from_source_rows(
     _invalidate_geometry_manual_pick_cache()
 
 
+def _geometry_manual_set_runtime_peak_cache_from_source_rows(
+    source_rows: Sequence[object] | None,
+) -> None:
+    projected_rows = [dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)]
+    if callable(_project_geometry_manual_peaks_to_current_view):
+        try:
+            projected_rows = [
+                dict(entry)
+                for entry in (_project_geometry_manual_peaks_to_current_view(projected_rows) or ())
+                if isinstance(entry, Mapping)
+            ]
+        except Exception:
+            projected_rows = [
+                dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)
+            ]
+    _geometry_manual_set_runtime_peak_cache_from_projected_rows(projected_rows)
+
+
 def _geometry_manual_build_source_rows_from_hit_tables(
     hit_tables: Sequence[object] | None,
     *,
@@ -17886,6 +18487,14 @@ def _geometry_fit_store_targeted_projected_cache_entry(
 ) -> None:
     if not str(key_digest).strip() or not isinstance(payload, Mapping):
         return
+    if not gui_geometry_fit._geometry_fit_projected_rows_cacheable(
+        background_index=int(background_index),
+        projected_rows=payload.get("projected_rows"),
+        projection_view_signature=payload.get("projection_view_signature"),
+        requested_projection_view_signature=payload.get("projection_view_signature"),
+        consumer=str(payload.get("consumer") or ""),
+    ):
+        return
     cache_store = _geometry_fit_targeted_projected_cache_store()
     background_store = cache_store.setdefault(int(background_index), {})
     background_store[str(key_digest)] = copy.deepcopy(dict(payload))
@@ -17901,7 +18510,43 @@ def _geometry_fit_load_targeted_projected_cache_entry(
     if not isinstance(background_store, Mapping):
         return None
     payload = background_store.get(str(key_digest))
-    return copy.deepcopy(dict(payload)) if isinstance(payload, Mapping) else None
+    if not isinstance(payload, Mapping):
+        return None
+    if not gui_geometry_fit._geometry_fit_projected_rows_cacheable(
+        background_index=int(background_index),
+        projected_rows=payload.get("projected_rows"),
+        projection_view_signature=payload.get("projection_view_signature"),
+        requested_projection_view_signature=payload.get("projection_view_signature"),
+        consumer=str(payload.get("consumer") or ""),
+    ):
+        return None
+    return copy.deepcopy(dict(payload))
+
+
+def _geometry_fit_projection_payload_digest(
+    payload: Mapping[str, object] | None,
+) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    return gui_geometry_fit._geometry_fit_digest_payload(
+        {
+            "detector_shape": gui_geometry_fit._geometry_fit_cache_jsonable(
+                payload.get("detector_shape")
+            ),
+            "radial_axis": gui_geometry_fit._geometry_fit_cache_jsonable(
+                payload.get("radial_axis")
+            ),
+            "azimuth_axis": gui_geometry_fit._geometry_fit_cache_jsonable(
+                payload.get("azimuth_axis")
+            ),
+            "raw_azimuth_axis": gui_geometry_fit._geometry_fit_cache_jsonable(
+                payload.get("raw_azimuth_axis")
+            ),
+            "raw_to_gui_row_permutation": gui_geometry_fit._geometry_fit_cache_jsonable(
+                payload.get("raw_to_gui_row_permutation")
+            ),
+        }
+    )
 
 
 def _geometry_fit_targeted_projection_view_mode() -> str:
@@ -17913,6 +18558,139 @@ def _geometry_fit_targeted_projection_view_mode() -> str:
     if normalized_mode not in {"detector", "caked", "q_space"}:
         return "detector"
     return normalized_mode
+
+
+def _geometry_fit_targeted_projection_view_signature(
+    background_index: int | None = None,
+    *,
+    mode_override: str | None = None,
+    caked_payload: Mapping[str, object] | None = None,
+    detector_shape: Sequence[object] | None = None,
+    ai: FastAzimuthalIntegrator | None = None,
+    q_space_image: object = None,
+    analysis_preview_bins: Sequence[object] | None = None,
+) -> dict[str, object]:
+    normalized_mode = str(
+        mode_override if mode_override is not None else _geometry_fit_targeted_projection_view_mode()
+    ).strip().lower()
+    if normalized_mode not in {"detector", "caked", "q_space"}:
+        normalized_mode = "detector"
+    try:
+        current_background_idx = int(background_runtime_state.current_background_index)
+    except Exception:
+        current_background_idx = int(background_index or 0)
+    try:
+        background_idx = int(
+            current_background_idx if background_index is None else background_index
+        )
+    except Exception:
+        background_idx = int(background_index or 0)
+    signature: dict[str, object] = {
+        "mode": str(normalized_mode),
+        "background_index": int(background_idx),
+        "current_background_index": int(current_background_idx),
+    }
+    ai_value = ai
+    if ai_value is None:
+        ai_cache = getattr(simulation_runtime_state, "ai_cache", None)
+        ai_value = ai_cache.get("ai") if isinstance(ai_cache, Mapping) else None
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
+        try:
+            if int(background_idx) == int(current_background_idx):
+                native_background = _get_current_background_native()
+            else:
+                native_background, _display_background = _load_background_image_by_index(
+                    int(background_idx)
+                )
+            normalized_shape = _geometry_fit_detector_shape_2d(
+                np.asarray(native_background, dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            normalized_shape = None
+    if normalized_shape is not None:
+        signature["detector_shape"] = [int(v) for v in normalized_shape[:2]]
+    preview_bins = analysis_preview_bins
+    if preview_bins is None:
+        preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
+    if isinstance(preview_bins, (tuple, list)) and len(preview_bins) >= 2:
+        normalized_bins = [int(preview_bins[0]), int(preview_bins[1])]
+        signature["analysis_bins"] = list(normalized_bins)
+    if normalized_mode == "detector":
+        signature["available"] = True
+        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+    if normalized_mode == "q_space":
+        if int(background_idx) != int(current_background_idx):
+            signature["available"] = False
+            signature["reason"] = "missing_background_projection_payload"
+            signature["projection_payload_digest"] = None
+            return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+        signature["available"] = True
+        signature["extent"] = list(_resolve_primary_q_space_extent())
+        resolved_q_space_image = q_space_image
+        if resolved_q_space_image is None:
+            try:
+                resolved_q_space_image = np.asarray(
+                    getattr(simulation_runtime_state, "last_q_space_image", None)
+                )
+            except Exception:
+                resolved_q_space_image = None
+        if (
+            isinstance(resolved_q_space_image, np.ndarray)
+            and resolved_q_space_image.ndim >= 2
+        ):
+            signature["image_shape"] = [int(v) for v in resolved_q_space_image.shape[:2]]
+        signature["projection_payload_digest"] = gui_geometry_fit._geometry_fit_digest_payload(
+            {
+                "extent": signature.get("extent"),
+                "image_shape": signature.get("image_shape"),
+                "analysis_bins": signature.get("analysis_bins"),
+            }
+        )
+        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+    if normalized_mode == "caked":
+        normalized_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+            background_idx,
+            caked_payload=caked_payload,
+            detector_shape=detector_shape,
+            ai=ai_value,
+            analysis_preview_bins=analysis_preview_bins,
+            allow_generated_payload=True,
+        )
+        if isinstance(normalized_payload, Mapping):
+            signature.update(
+                {
+                    "available": True,
+                    "detector_shape": list(
+                        tuple(normalized_payload.get("detector_shape", ()))[:2]
+                    ),
+                    "radial_axis": np.asarray(
+                        normalized_payload.get("radial_axis"),
+                        dtype=np.float64,
+                    ).reshape(-1),
+                    "azimuth_axis": np.asarray(
+                        normalized_payload.get("azimuth_axis"),
+                        dtype=np.float64,
+                    ).reshape(-1),
+                    "raw_azimuth_axis": np.asarray(
+                        normalized_payload.get("raw_azimuth_axis"),
+                        dtype=np.float64,
+                    ).reshape(-1),
+                    "raw_to_gui_row_permutation": np.asarray(
+                        normalized_payload.get("raw_to_gui_row_permutation"),
+                        dtype=np.int32,
+                    ).reshape(-1),
+                    "projection_payload_digest": _geometry_fit_projection_payload_digest(
+                        normalized_payload
+                    ),
+                }
+            )
+        else:
+            signature["available"] = False
+            signature["reason"] = "missing_background_caked_payload"
+            signature["projection_payload_digest"] = None
+        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+    return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
 
 
 def _geometry_fit_filter_hit_tables_for_required_branch_groups(
@@ -18107,6 +18885,11 @@ def _commit_geometry_manual_source_row_rebuild_result(
         return []
 
     background_idx = int(rebuild_result.background_index)
+    try:
+        current_background_index = int(background_runtime_state.current_background_index)
+    except Exception:
+        current_background_index = int(background_idx)
+    is_current_background = int(background_idx) == int(current_background_index)
     stored_rows = [
         dict(entry) for entry in (rebuild_result.stored_rows or ()) if isinstance(entry, Mapping)
     ]
@@ -18144,6 +18927,9 @@ def _commit_geometry_manual_source_row_rebuild_result(
 
     if stored_rows:
         if targeted_preflight_enabled and targeted_cache_key_digest:
+            targeted_projection_signature = _geometry_fit_targeted_projection_view_signature(
+                background_idx
+            )
             _geometry_fit_store_targeted_projected_cache_entry(
                 background_index=int(background_idx),
                 key_digest=str(targeted_cache_key_digest),
@@ -18166,6 +18952,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
                     "projection_view_mode": str(
                         _geometry_fit_targeted_projection_view_mode()
                     ),
+                    "projection_view_signature": targeted_projection_signature,
                 },
             )
     hit_tables_local = rebuild_result.hit_tables
@@ -18212,7 +18999,11 @@ def _commit_geometry_manual_source_row_rebuild_result(
         )
         _clear_caked_intersection_cache()
     simulation_runtime_state.last_simulation_signature = rebuild_result.requested_signature
-    _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
+    if is_current_background:
+        if projected_rows:
+            _geometry_manual_set_runtime_peak_cache_from_projected_rows(projected_rows)
+        else:
+            _geometry_manual_set_runtime_peak_cache_from_source_rows(stored_rows)
 
     snapshot_payload = {
         "background_index": int(background_idx),
@@ -18244,7 +19035,17 @@ def _commit_geometry_manual_source_row_rebuild_result(
         projected_peak_count=int(len(projected_rows)),
         rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
     )
-    return projected_rows or stored_rows
+    if projected_rows:
+        return projected_rows
+    if (
+        not is_current_background
+        and str(diagnostics.get("projection_view_mode") or _geometry_fit_targeted_projection_view_mode())
+        .strip()
+        .lower()
+        in {"caked", "q_space"}
+    ):
+        return []
+    return stored_rows
 
 
 def _geometry_manual_rebuild_source_rows_for_background(
@@ -18271,7 +19072,23 @@ def _geometry_manual_rebuild_source_rows_for_background(
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
-    projection_view_mode = _geometry_fit_targeted_projection_view_mode()
+    projection_view_signature = _geometry_fit_targeted_projection_view_signature(
+        background_idx
+    )
+    projection_view_mode = str(projection_view_signature.get("mode") or "detector")
+    projection_payload = (
+        _geometry_fit_resolve_targeted_caked_projection_payload(
+            int(background_idx),
+            analysis_preview_bins=getattr(
+                simulation_runtime_state,
+                "analysis_preview_bins",
+                None,
+            ),
+            allow_generated_payload=True,
+        )
+        if projection_view_mode == "caked"
+        else None
+    )
     required_manual_fit_targets = (
         gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
             required_pairs,
@@ -18294,6 +19111,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
         preflight_mode=preflight_mode,
         consumer=lookup_context,
         projection_view_mode=projection_view_mode,
+        projection_view_signature=projection_view_signature,
     )
 
     def _build_source_rows_for_rebuild(
@@ -18358,6 +19176,8 @@ def _geometry_manual_rebuild_source_rows_for_background(
         can_use_live_runtime_cache=can_use_live_runtime_cache,
         build_live_rows=_build_geometry_fit_live_rows_payload_from_cache,
         projection_view_mode=projection_view_mode,
+        projection_view_signature=projection_view_signature,
+        projection_payload=projection_payload,
         get_memory_intersection_cache=get_last_intersection_cache,
         memory_cache_signature=simulation_runtime_state.last_simulation_signature,
         load_logged_intersection_cache_metadata=(
@@ -18377,9 +19197,19 @@ def _geometry_manual_rebuild_source_rows_for_background(
         ),
         last_runtime_simulation_diagnostics=(_geometry_manual_last_simulation_diagnostics),
         project_rows=(
-            _project_geometry_manual_peaks_to_current_view
-            if callable(_project_geometry_manual_peaks_to_current_view)
-            else None
+            lambda rows: _geometry_manual_project_peaks_for_background(
+                int(background_idx),
+                rows,
+                mode_override=projection_view_mode,
+            )
+        ),
+        project_rows_for_background_view=(
+            lambda rows: _geometry_manual_project_peaks_for_background(
+                int(background_idx),
+                rows,
+                mode_override=projection_view_mode,
+                caked_payload=projection_payload,
+            )
         ),
         required_pairs=required_pairs,
         required_branch_group_keys=required_branch_group_keys,
@@ -18444,7 +19274,10 @@ def _geometry_manual_source_rows_for_background(
         "manual_geometry_targeted" if required_branch_group_keys else "full"
     )
     targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
-    projection_view_mode = _geometry_fit_targeted_projection_view_mode()
+    projection_view_signature = _geometry_fit_targeted_projection_view_signature(
+        background_idx
+    )
+    projection_view_mode = str(projection_view_signature.get("mode") or "detector")
     required_branch_group_keys_digest = gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
         required_branch_group_keys,
         background_index=int(background_idx),
@@ -18453,6 +19286,7 @@ def _geometry_manual_source_rows_for_background(
         preflight_mode=preflight_mode,
         consumer=lookup_context,
         projection_view_mode=projection_view_mode,
+        projection_view_signature=projection_view_signature,
     )
     manual_target_scoring_digest = gui_geometry_fit._geometry_fit_manual_target_scoring_digest(
         required_manual_fit_targets
@@ -18550,15 +19384,25 @@ def _geometry_manual_source_rows_for_background(
             return
         normalized_stored_rows = [
             dict(entry)
-            for entry in (stored_rows or ())
-            if isinstance(entry, Mapping)
+            for entry in _geometry_fit_rows_for_background(
+                int(background_idx),
+                stored_rows,
+            )
         ]
         normalized_projected_rows = [
             dict(entry)
-            for entry in (projected_rows or ())
-            if isinstance(entry, Mapping)
+            for entry in _geometry_fit_rows_for_background(
+                int(background_idx),
+                projected_rows,
+            )
         ]
-        if not normalized_stored_rows and not normalized_projected_rows:
+        if not gui_geometry_fit._geometry_fit_projected_rows_cacheable(
+            background_index=int(background_idx),
+            projected_rows=normalized_projected_rows,
+            projection_view_signature=projection_view_signature,
+            requested_projection_view_signature=projection_view_signature,
+            consumer=lookup_context,
+        ):
             return
         try:
             _geometry_fit_store_targeted_projected_cache_entry(
@@ -18579,6 +19423,9 @@ def _geometry_manual_source_rows_for_background(
                     "preflight_mode": str(preflight_mode),
                     "consumer": str(lookup_context),
                     "projection_view_mode": str(projection_view_mode),
+                    "projection_view_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
+                        projection_view_signature
+                    ),
                     "stored_rows": normalized_stored_rows,
                     "projected_rows": normalized_projected_rows,
                     "cache_source": str(cache_source),
@@ -18598,16 +19445,32 @@ def _geometry_manual_source_rows_for_background(
                 targeted_cache_payload.get("requested_signature")
                 == normalized_requested_signature
             )
+            projection_signature_matches = (
+                targeted_cache_payload.get("projection_view_signature")
+                == gui_geometry_fit._geometry_fit_cache_jsonable(
+                    projection_view_signature
+                )
+            )
             targeted_rows = [
                 dict(entry)
-                for entry in (
-                    targeted_cache_payload.get("projected_rows")
-                    or targeted_cache_payload.get("stored_rows")
-                    or ()
+                for entry in _geometry_fit_rows_for_background(
+                    int(background_idx),
+                    targeted_cache_payload.get("projected_rows"),
                 )
-                if isinstance(entry, Mapping)
             ]
-            if requested_signature_matches and targeted_rows:
+            if (
+                requested_signature_matches
+                and projection_signature_matches
+                and gui_geometry_fit._geometry_fit_projected_rows_cacheable(
+                    background_index=int(background_idx),
+                    projected_rows=targeted_rows,
+                    projection_view_signature=targeted_cache_payload.get(
+                        "projection_view_signature"
+                    ),
+                    requested_projection_view_signature=projection_view_signature,
+                    consumer=str(targeted_cache_payload.get("consumer") or ""),
+                )
+            ):
                 live_cache_inventory = _live_cache_inventory_snapshot()
                 targeted_flags = _targeted_lookup_flags(
                     total_source_rows_available=int(len(targeted_rows)),
@@ -18706,7 +19569,11 @@ def _geometry_manual_source_rows_for_background(
     stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
     created_from = snapshot.get("created_from")
     raw_rows = [
-        dict(entry) for entry in (snapshot.get("rows", ()) or ()) if isinstance(entry, dict)
+        dict(entry)
+        for entry in _geometry_fit_rows_for_background(
+            int(background_idx),
+            snapshot.get("rows", ()),
+        )
     ]
     if snapshot_signature != requested_signature:
         live_cache_inventory = _live_cache_inventory_snapshot()
@@ -18894,15 +19761,17 @@ def _geometry_manual_source_rows_for_background(
     projected_projection_count = 0
     rows_to_project = filtered_rows if targeted_preflight_enabled else raw_rows
     projected_rows = (
-        _project_geometry_manual_peaks_to_current_view(rows_to_project)
-        if callable(_project_geometry_manual_peaks_to_current_view)
-        else rows_to_project
+        _geometry_manual_project_peaks_for_background(
+            int(background_idx),
+            rows_to_project,
+            mode_override=projection_view_mode,
+        )
     )
-    if callable(_project_geometry_manual_peaks_to_current_view):
-        projected_projection_count = int(len(rows_to_project))
-    projected_rows = [
-        dict(entry) for entry in (projected_rows or ()) if isinstance(entry, dict)
-    ]
+    projected_projection_count = int(len(rows_to_project))
+    projected_rows = _geometry_fit_rows_for_background(
+        int(background_idx),
+        projected_rows,
+    )
     live_cache_inventory = _live_cache_inventory_snapshot()
     targeted_flags = (
         _targeted_lookup_flags(
@@ -22746,6 +23615,18 @@ def on_fit_ordered_structure_click():
                                 dtype=np.complex128,
                             ).copy()
                         ),
+                        "_n2_sample_array_source": mask_mosaic_params.get(
+                            "_n2_sample_array_source"
+                        ),
+                        "_n2_sample_array_wavelength_snapshot": (
+                            None
+                            if mask_mosaic_params.get("_n2_sample_array_wavelength_snapshot")
+                            is None
+                            else np.asarray(
+                                mask_mosaic_params["_n2_sample_array_wavelength_snapshot"],
+                                dtype=np.float64,
+                            ).copy()
+                        ),
                         "sigma_mosaic_deg": float(mask_mosaic_params["sigma_mosaic_deg"]),
                         "gamma_mosaic_deg": float(mask_mosaic_params["gamma_mosaic_deg"]),
                         "eta": float(mask_mosaic_params["eta"]),
@@ -22995,6 +23876,18 @@ def on_fit_ordered_structure_click():
                         else np.asarray(
                             base_mosaic_params["n2_sample_array"],
                             dtype=np.complex128,
+                        ).copy()
+                    ),
+                    "_n2_sample_array_source": base_mosaic_params.get(
+                        "_n2_sample_array_source"
+                    ),
+                    "_n2_sample_array_wavelength_snapshot": (
+                        None
+                        if base_mosaic_params.get("_n2_sample_array_wavelength_snapshot")
+                        is None
+                        else np.asarray(
+                            base_mosaic_params["_n2_sample_array_wavelength_snapshot"],
+                            dtype=np.float64,
                         ).copy()
                     ),
                     "sigma_mosaic_deg": float(base_mosaic_params["sigma_mosaic_deg"]),
@@ -23349,6 +24242,12 @@ def save_q_space_representation():
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
         "sample_weights": simulation_runtime_state.profile_cache.get("sample_weights"),
         "n2_sample_array": simulation_runtime_state.profile_cache.get("n2_sample_array"),
+        "_n2_sample_array_source": simulation_runtime_state.profile_cache.get(
+            "_n2_sample_array_source"
+        ),
+        "_n2_sample_array_wavelength_snapshot": simulation_runtime_state.profile_cache.get(
+            "_n2_sample_array_wavelength_snapshot"
+        ),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
@@ -23814,6 +24713,133 @@ def _analysis_peak_axis_value(
     )
 
 
+def _analysis_curve_selected_window(
+    axis_kind: str,
+    x_values: Sequence[float] | None,
+    y_values: Sequence[float] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the selected-window subset of one cached 1D integration curve."""
+
+    x_arr = np.asarray(x_values, dtype=float)
+    y_arr = np.asarray(y_values, dtype=float)
+    if x_arr.ndim != 1 or y_arr.ndim != 1 or x_arr.size != y_arr.size:
+        return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+
+    finite_mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+    if not np.any(finite_mask):
+        return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+
+    x_arr = np.asarray(x_arr[finite_mask], dtype=float)
+    y_arr = np.asarray(y_arr[finite_mask], dtype=float)
+    range_values = _current_analysis_range_values()
+    if str(axis_kind) == "radial":
+        lower_bound, upper_bound = sorted(
+            (
+                float(range_values.get("tth_min", np.min(x_arr))),
+                float(range_values.get("tth_max", np.max(x_arr))),
+            )
+        )
+        window_mask = (x_arr >= lower_bound) & (x_arr <= upper_bound)
+    else:
+        analysis_peak_tools = _get_analysis_peak_tools_module()
+        phi_min = analysis_peak_tools.align_angle_to_axis(
+            float(range_values.get("phi_min", np.min(x_arr))),
+            x_arr,
+        )
+        phi_max = analysis_peak_tools.align_angle_to_axis(
+            float(range_values.get("phi_max", np.max(x_arr))),
+            x_arr,
+        )
+        if phi_max >= phi_min:
+            window_mask = (x_arr >= phi_min) & (x_arr <= phi_max)
+        else:
+            window_mask = (x_arr >= phi_min) | (x_arr <= phi_max)
+
+    if np.any(window_mask):
+        return np.asarray(x_arr[window_mask], dtype=float), np.asarray(y_arr[window_mask], dtype=float)
+    return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+
+
+def _analysis_curve_with_gap_breaks(
+    x_values: Sequence[float] | None,
+    y_values: Sequence[float] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Insert NaN breaks so wrapped selected windows do not plot through excluded gaps."""
+
+    x_arr = np.asarray(x_values, dtype=float)
+    y_arr = np.asarray(y_values, dtype=float)
+    if x_arr.ndim != 1 or y_arr.ndim != 1 or x_arr.size != y_arr.size:
+        return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+
+    finite_mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+    if not np.any(finite_mask):
+        return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+
+    x_arr = np.asarray(x_arr[finite_mask], dtype=float)
+    y_arr = np.asarray(y_arr[finite_mask], dtype=float)
+    if x_arr.size < 3:
+        return x_arr, y_arr
+
+    unique_x = np.unique(x_arr[np.isfinite(x_arr)])
+    if unique_x.size < 2:
+        return x_arr, y_arr
+
+    positive_diffs = np.diff(np.sort(unique_x))
+    positive_diffs = positive_diffs[np.isfinite(positive_diffs) & (positive_diffs > 0.0)]
+    if positive_diffs.size <= 0:
+        return x_arr, y_arr
+
+    axis_step = float(np.nanmedian(positive_diffs))
+    if not np.isfinite(axis_step) or axis_step <= 0.0:
+        return x_arr, y_arr
+
+    gap_threshold = max(180.0, 10.0 * axis_step)
+    gap_indices = np.flatnonzero(np.abs(np.diff(x_arr)) > gap_threshold)
+    if gap_indices.size <= 0:
+        return x_arr, y_arr
+
+    x_segments: list[float] = []
+    y_segments: list[float] = []
+    for idx, (x_value, y_value) in enumerate(zip(x_arr, y_arr, strict=False)):
+        x_segments.append(float(x_value))
+        y_segments.append(float(y_value))
+        if int(idx) in gap_indices:
+            x_segments.append(float("nan"))
+            y_segments.append(float("nan"))
+
+    return np.asarray(x_segments, dtype=float), np.asarray(y_segments, dtype=float)
+
+
+def _analysis_peak_fit_failure_entry(
+    *,
+    peak_index: int,
+    axis_kind: str,
+    selected_axis_value: float,
+    two_theta_deg: float,
+    phi_deg: float,
+    curve_source: str,
+    model: str,
+    label: str,
+    fit_group_id: str,
+    error: str,
+) -> dict[str, object]:
+    """Return one failed Analyze-mode peak-fit entry."""
+
+    return {
+        "success": False,
+        "peak_index": int(peak_index),
+        "axis_kind": str(axis_kind),
+        "selected_axis_value": float(selected_axis_value),
+        "two_theta_deg": float(two_theta_deg),
+        "phi_deg": float(phi_deg),
+        "curve_source": str(curve_source),
+        "model": str(model),
+        "label": str(label),
+        "fit_group_id": str(fit_group_id),
+        "error": " ".join(str(error or "fit failed").split()),
+    }
+
+
 def _analysis_cache_overlay_tables(show_caked: bool) -> list[object]:
     if bool(show_caked):
         cache_tables = []
@@ -23968,6 +24994,7 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
         ),
     )
     for axis_kind, axis_obj, marker_store, fit_store, fit_results in axis_specs:
+        plotted_fit_group_ids: set[str] = set()
         for idx, peak_entry in enumerate(selected_peaks, start=1):
             x_curve, y_curve, _resolved_source = _analysis_curve_data(
                 axis_kind,
@@ -24023,8 +25050,19 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
         for fit_entry in fit_results:
             if not bool(fit_entry.get("success", False)):
                 continue
-            x_window = np.asarray(fit_entry.get("x_window"), dtype=float)
+            if fit_entry.get("plot_fit") is False:
+                continue
+            fit_group_id = str(fit_entry.get("fit_group_id", "") or "").strip()
+            if fit_group_id and fit_group_id in plotted_fit_group_ids:
+                continue
+            x_window = np.asarray(
+                fit_entry.get("x_fit", fit_entry.get("x_window")),
+                dtype=float,
+            )
             y_fit = np.asarray(fit_entry.get("y_fit"), dtype=float)
+            if x_window.size <= 0 or y_fit.size <= 0 or x_window.size != y_fit.size:
+                continue
+            x_window, y_fit = _analysis_curve_with_gap_breaks(x_window, y_fit)
             if x_window.size <= 0 or y_fit.size <= 0 or x_window.size != y_fit.size:
                 continue
             try:
@@ -24040,6 +25078,8 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
                     zorder=5,
                 )[0]
                 fit_store.append(fit_artist)
+                if fit_group_id:
+                    plotted_fit_group_ids.add(fit_group_id)
             except Exception:
                 continue
 
@@ -24537,57 +25577,260 @@ def _fit_selected_analysis_peaks() -> None:
 
     total_success = 0
     total_attempts = 0
+    model_label_resolver = getattr(
+        analysis_peak_tools,
+        "profile_model_label",
+        lambda value: str(value),
+    )
     for axis_kind in axes_to_fit:
         axis_results: list[dict[str, object]] = []
-        for idx, peak_entry in enumerate(selected_peaks):
-            x_curve, y_curve, resolved_source = _analysis_curve_data(
-                axis_kind,
-                str(peak_entry.get("source", "simulated")),
+        preferred_groups: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for peak_index, peak_entry in enumerate(selected_peaks, start=1):
+            preferred_source = str(peak_entry.get("source", "simulated"))
+            preferred_groups[preferred_source].append(
+                {
+                    "peak_index": int(peak_index),
+                    "peak_entry": peak_entry,
+                    "preferred_source": preferred_source,
+                }
             )
-            if x_curve.size < 7 or y_curve.size < 7:
+
+        resolved_groups: dict[str, dict[str, object]] = {}
+        for preferred_source, grouped_items in preferred_groups.items():
+            x_curve, y_curve, resolved_source = _analysis_curve_data(axis_kind, preferred_source)
+            x_window, y_window = _analysis_curve_selected_window(axis_kind, x_curve, y_curve)
+            if x_window.size < 7 or y_window.size < 7:
+                for model in models:
+                    fit_group_id = f"{axis_kind}:{resolved_source}:{model}"
+                    label = str(model_label_resolver(model))
+                    for grouped_item in grouped_items:
+                        peak_entry = grouped_item["peak_entry"]
+                        axis_results.append(
+                            _analysis_peak_fit_failure_entry(
+                                peak_index=int(grouped_item["peak_index"]),
+                                axis_kind=axis_kind,
+                                selected_axis_value=_analysis_peak_axis_value(
+                                    peak_entry,
+                                    axis_kind=axis_kind,
+                                    axis_values=x_window,
+                                ),
+                                two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+                                phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+                                curve_source=resolved_source,
+                                model=model,
+                                label=label,
+                                fit_group_id=fit_group_id,
+                                error=(
+                                    "No valid 1D data were available in the selected "
+                                    "integration window."
+                                ),
+                            )
+                        )
+                        total_attempts += 1
                 continue
-            axis_centers = np.asarray(
-                [
-                    _analysis_peak_axis_value(
-                        entry,
-                        axis_kind=axis_kind,
-                        axis_values=x_curve,
-                    )
-                    for entry in selected_peaks
-                ],
-                dtype=float,
+
+            resolved_entry = resolved_groups.setdefault(
+                resolved_source,
+                {
+                    "resolved_source": resolved_source,
+                    "x_curve": np.asarray(x_window, dtype=float),
+                    "y_curve": np.asarray(y_window, dtype=float),
+                    "items": [],
+                },
             )
-            center_guess = float(axis_centers[idx])
-            window_half_width = analysis_peak_tools.recommended_peak_window_half_width(
-                axis_centers,
-                idx,
-                axis_values=x_curve,
-                axis_kind=axis_kind,
-                region_bounds=(float(x_curve[0]), float(x_curve[-1])),
+            resolved_entry["items"].extend(grouped_items)
+
+        for resolved_source, resolved_group in resolved_groups.items():
+            x_curve = np.asarray(resolved_group.get("x_curve"), dtype=float)
+            y_curve = np.asarray(resolved_group.get("y_curve"), dtype=float)
+            grouped_items = sorted(
+                list(resolved_group.get("items", [])),
+                key=lambda item: int(item.get("peak_index", 0)),
             )
+            if x_curve.size <= 0 or y_curve.size <= 0 or x_curve.size != y_curve.size:
+                continue
+
+            finite_x = x_curve[np.isfinite(x_curve)]
+            if finite_x.size <= 0:
+                continue
+            x_min = float(np.min(finite_x))
+            x_max = float(np.max(finite_x))
+
+            valid_fit_items: list[dict[str, object]] = []
+            invalid_fit_items: list[dict[str, object]] = []
+            for grouped_item in grouped_items:
+                peak_entry = grouped_item["peak_entry"]
+                axis_value = _analysis_peak_axis_value(
+                    peak_entry,
+                    axis_kind=axis_kind,
+                    axis_values=x_curve,
+                )
+                fit_item = {
+                    "peak_index": int(grouped_item["peak_index"]),
+                    "peak_entry": peak_entry,
+                    "selected_axis_value": float(axis_value),
+                }
+                if (
+                    not np.isfinite(axis_value)
+                    or float(axis_value) < (x_min - 1.0e-9)
+                    or float(axis_value) > (x_max + 1.0e-9)
+                ):
+                    invalid_fit_items.append(fit_item)
+                else:
+                    valid_fit_items.append(fit_item)
+
             for model in models:
-                fit_result = analysis_peak_tools.fit_peak_profile(
+                fit_group_id = f"{axis_kind}:{resolved_source}:{model}"
+                label = str(model_label_resolver(model))
+
+                for invalid_fit_item in invalid_fit_items:
+                    peak_entry = invalid_fit_item["peak_entry"]
+                    axis_results.append(
+                        _analysis_peak_fit_failure_entry(
+                            peak_index=int(invalid_fit_item["peak_index"]),
+                            axis_kind=axis_kind,
+                            selected_axis_value=float(invalid_fit_item["selected_axis_value"]),
+                            two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+                            phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+                            curve_source=resolved_source,
+                            model=model,
+                            label=label,
+                            fit_group_id=fit_group_id,
+                            error="Selected peak lies outside the current integration window.",
+                        )
+                    )
+                    total_attempts += 1
+
+                if not valid_fit_items:
+                    continue
+
+                fit_result = analysis_peak_tools.fit_composite_peak_profile(
                     x_curve,
                     y_curve,
-                    center_guess=center_guess,
+                    [item["selected_axis_value"] for item in valid_fit_items],
                     model=model,
-                    window_half_width=float(window_half_width),
                 )
-                fit_entry = dict(fit_result)
-                fit_entry.update(
-                    {
-                        "peak_index": int(idx) + 1,
-                        "axis_kind": axis_kind,
-                        "selected_axis_value": float(center_guess),
-                        "two_theta_deg": float(peak_entry.get("two_theta_deg", np.nan)),
-                        "phi_deg": float(peak_entry.get("phi_deg", np.nan)),
-                        "curve_source": resolved_source,
-                    }
-                )
-                axis_results.append(fit_entry)
-                total_attempts += 1
-                if bool(fit_entry.get("success", False)):
-                    total_success += 1
+                if not bool(fit_result.get("success", False)):
+                    error_text = str(fit_result.get("error") or "fit failed")
+                    for fit_item in valid_fit_items:
+                        peak_entry = fit_item["peak_entry"]
+                        axis_results.append(
+                            _analysis_peak_fit_failure_entry(
+                                peak_index=int(fit_item["peak_index"]),
+                                axis_kind=axis_kind,
+                                selected_axis_value=float(fit_item["selected_axis_value"]),
+                                two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+                                phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+                                curve_source=resolved_source,
+                                model=model,
+                                label=str(fit_result.get("label", label)),
+                                fit_group_id=fit_group_id,
+                                error=error_text,
+                            )
+                        )
+                        total_attempts += 1
+                    continue
+
+                components = {}
+                for component in fit_result.get("components", []):
+                    if not isinstance(component, dict):
+                        continue
+                    try:
+                        component_index = int(component.get("component_index", -1))
+                    except Exception:
+                        continue
+                    components[component_index] = component
+
+                emitted_guess_indices: set[int] = set()
+                plotted_group = False
+                for component_group in fit_result.get("component_groups", []):
+                    if not isinstance(component_group, dict):
+                        continue
+                    try:
+                        component_index = int(component_group.get("component_index", -1))
+                    except Exception:
+                        continue
+                    component = components.get(component_index)
+                    if not isinstance(component, dict):
+                        continue
+                    for guess_index in component_group.get("center_guess_indices", []):
+                        try:
+                            center_guess_index = int(guess_index)
+                        except Exception:
+                            continue
+                        if center_guess_index < 0 or center_guess_index >= len(valid_fit_items):
+                            continue
+                        fit_item = valid_fit_items[center_guess_index]
+                        peak_entry = fit_item["peak_entry"]
+                        fit_entry = {
+                            "success": True,
+                            "peak_index": int(fit_item["peak_index"]),
+                            "axis_kind": axis_kind,
+                            "selected_axis_value": float(fit_item["selected_axis_value"]),
+                            "two_theta_deg": float(peak_entry.get("two_theta_deg", np.nan)),
+                            "phi_deg": float(peak_entry.get("phi_deg", np.nan)),
+                            "curve_source": resolved_source,
+                            "center": float(component.get("center", np.nan)),
+                            "fwhm": float(component.get("fwhm", np.nan)),
+                            "amplitude": float(component.get("amplitude", np.nan)),
+                            "rmse": float(fit_result.get("rmse", np.nan)),
+                            "rss": float(fit_result.get("rss", np.nan)),
+                            "baseline": float(fit_result.get("baseline", np.nan)),
+                            "model": str(fit_result.get("model", model)),
+                            "label": str(fit_result.get("label", label)),
+                            "fit_group_id": fit_group_id,
+                            "component_index": int(component_index),
+                            "plot_fit": not plotted_group,
+                        }
+                        for component_field in ("sigma", "gamma", "eta"):
+                            if component_field in component:
+                                fit_entry[component_field] = float(component[component_field])
+                        if not plotted_group:
+                            fit_entry["x_fit"] = np.asarray(
+                                fit_result.get("x_fit"),
+                                dtype=float,
+                            )
+                            fit_entry["y_fit"] = np.asarray(
+                                fit_result.get("y_fit"),
+                                dtype=float,
+                            )
+                            fit_entry["x_window"] = np.asarray(
+                                fit_result.get("x_window"),
+                                dtype=float,
+                            )
+                            fit_entry["y_window"] = np.asarray(
+                                fit_result.get("y_window"),
+                                dtype=float,
+                            )
+                            plotted_group = True
+                        axis_results.append(fit_entry)
+                        emitted_guess_indices.add(int(center_guess_index))
+                        total_attempts += 1
+                        total_success += 1
+
+                if len(emitted_guess_indices) == len(valid_fit_items):
+                    continue
+
+                missing_error = "Composite fit did not map every selected peak to a component."
+                for guess_index, fit_item in enumerate(valid_fit_items):
+                    if guess_index in emitted_guess_indices:
+                        continue
+                    peak_entry = fit_item["peak_entry"]
+                    axis_results.append(
+                        _analysis_peak_fit_failure_entry(
+                            peak_index=int(fit_item["peak_index"]),
+                            axis_kind=axis_kind,
+                            selected_axis_value=float(fit_item["selected_axis_value"]),
+                            two_theta_deg=float(peak_entry.get("two_theta_deg", np.nan)),
+                            phi_deg=float(peak_entry.get("phi_deg", np.nan)),
+                            curve_source=resolved_source,
+                            model=model,
+                            label=str(fit_result.get("label", label)),
+                            fit_group_id=fit_group_id,
+                            error=missing_error,
+                        )
+                    )
+                    total_attempts += 1
 
         if axis_kind == "radial":
             analysis_peak_selection_state.radial_fit_results = axis_results
@@ -24791,6 +26034,8 @@ def run_debug_simulation():
         "theta_array": simulation_runtime_state.profile_cache.get("theta_array", []),
         "phi_array": simulation_runtime_state.profile_cache.get("phi_array", []),
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        "sample_weights": simulation_runtime_state.profile_cache.get("sample_weights"),
+        "n2_sample_array": simulation_runtime_state.profile_cache.get("n2_sample_array"),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
@@ -24842,6 +26087,9 @@ def run_debug_simulation():
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=1,
+        sample_weights=mosaic_params.get("sample_weights"),
+        pixel_size_m=float(pixel_size_m),
+        n2_sample_array_override=mosaic_params.get("n2_sample_array"),
     )
 
     dump_debug_log()
@@ -26112,6 +27360,7 @@ def _build_geometry_fit_async_job(
 
     background_images: dict[int, dict[str, np.ndarray]] = {}
     caked_views_by_background: dict[int, dict[str, object]] = {}
+    projection_payload_by_background: dict[int, dict[str, object]] = {}
     manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
     source_snapshots: dict[int, dict[str, object]] = {}
     requested_signatures: dict[int, object] = {}
@@ -26234,6 +27483,9 @@ def _build_geometry_fit_async_job(
                         int(v) for v in tuple(caked_view_payload.get("detector_shape", ()))[:2]
                     ),
                 }
+                projection_payload_by_background[int(current_background_index)] = copy.deepcopy(
+                    caked_views_by_background[int(current_background_index)]
+                )
             except Exception:
                 pass
 
@@ -26275,6 +27527,28 @@ def _build_geometry_fit_async_job(
                 int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
             )
 
+    projection_view_mode = _geometry_fit_targeted_projection_view_mode()
+    projection_view_signature_by_background: dict[int, dict[str, object]] = {}
+    for idx in required_indices:
+        background_payload = dict(background_images.get(int(idx)) or {})
+        native_background = background_payload.get("native")
+        try:
+            detector_shape = tuple(
+                int(v)
+                for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            detector_shape = None
+        projection_view_signature_by_background[int(idx)] = (
+            _geometry_fit_targeted_projection_view_signature(
+                int(idx),
+                mode_override=projection_view_mode,
+                caked_payload=dict(caked_views_by_background.get(int(idx)) or {}) or None,
+                detector_shape=detector_shape,
+                analysis_preview_bins=analysis_bins,
+            )
+        )
+
     simulation_runtime_state.geometry_fit_job_counter = (
         int(simulation_runtime_state.geometry_fit_job_counter) + 1
     )
@@ -26314,13 +27588,25 @@ def _build_geometry_fit_async_job(
         "npt_azim": int(analysis_bins[1]),
         "background_images": background_images,
         "caked_views_by_background": caked_views_by_background,
+        "projection_payload_by_background": projection_payload_by_background,
         "manual_pairs_by_background": manual_pairs_by_background,
         "source_snapshots": source_snapshots,
         "background_cache_by_index": {},
         "requested_signatures": requested_signatures,
         "requested_signature_summaries": requested_signature_summaries,
         "background_labels": background_labels,
-        "projection_view_mode": _geometry_fit_targeted_projection_view_mode(),
+        "projection_view_mode": str(projection_view_mode),
+        "projection_view_signature": copy.deepcopy(
+            projection_view_signature_by_background.get(int(current_background_index))
+            or _geometry_fit_targeted_projection_view_signature(
+                int(current_background_index),
+                mode_override=projection_view_mode,
+                analysis_preview_bins=analysis_bins,
+            )
+        ),
+        "projection_view_signature_by_background": copy.deepcopy(
+            projection_view_signature_by_background
+        ),
         "theta_base_by_background": theta_base_by_background,
         "theta_initial_by_background": theta_initial_by_background,
         "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
@@ -26352,11 +27638,6 @@ def _build_geometry_fit_async_job(
         "orient_image_for_fit": manual_dataset_bindings.orient_image_for_fit,
         "apply_background_backend_orientation": (
             manual_dataset_bindings.apply_background_backend_orientation
-        ),
-        "project_rows": (
-            _project_geometry_manual_peaks_to_current_view
-            if callable(_project_geometry_manual_peaks_to_current_view)
-            else None
         ),
         "solver_inputs": execution_bindings.solver_inputs,
         "solve_fit": bindings.solve_fit,
@@ -26638,12 +27919,6 @@ def _run_async_geometry_fit_worker_job(
             ai=_worker_geometry_fit_caking_integrator(),
         )
 
-    def _project_source_rows(raw_rows: Sequence[object] | None) -> Sequence[object]:
-        project_rows = job_data.get("project_rows")
-        if callable(project_rows):
-            return project_rows(raw_rows)
-        return raw_rows or ()
-
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
@@ -26666,15 +27941,315 @@ def _run_async_geometry_fit_worker_job(
             return float(theta_initial_mapping[int(background_index)])
         return float(job_data.get("theta_initial", 0.0))
 
+    def _worker_projection_analysis_bins() -> tuple[int | None, int | None]:
+        analysis_bins = job_data.get("analysis_bins")
+        if not (isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2):
+            analysis_bins = getattr(
+                simulation_runtime_state,
+                "analysis_preview_bins",
+                None,
+            )
+        try:
+            npt_rad = (
+                int(max(1, analysis_bins[0]))
+                if isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2
+                else int(max(1, job_data.get("npt_rad")))
+            )
+        except Exception:
+            npt_rad = None
+        try:
+            npt_azim = (
+                int(max(1, analysis_bins[1]))
+                if isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2
+                else int(max(1, job_data.get("npt_azim")))
+            )
+        except Exception:
+            npt_azim = None
+        return npt_rad, npt_azim
+
+    def _worker_projection_view_signature_for_background(
+        background_index: int,
+    ) -> dict[str, object]:
+        background_idx = int(background_index)
+        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        if normalized_mode not in {"detector", "caked", "q_space"}:
+            normalized_mode = "detector"
+        signature_map = job_data.setdefault("projection_view_signature_by_background", {})
+        payload_map = job_data.setdefault("projection_payload_by_background", {})
+        stored_signature = signature_map.get(background_idx)
+        background_payload = dict(
+            dict(job_data.get("background_images", {}) or {}).get(background_idx) or {}
+        )
+        native_background = background_payload.get("native")
+        try:
+            detector_shape = tuple(
+                int(v)
+                for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            detector_shape = None
+
+        if normalized_mode == "caked":
+            worker_ai = _worker_geometry_fit_caking_integrator()
+            caked_payload = payload_map.get(background_idx)
+            if not isinstance(caked_payload, Mapping):
+                caked_payload = _load_caked_view_by_index_snapshot(background_idx)
+            if isinstance(caked_payload, Mapping):
+                resolved_signature = _geometry_fit_targeted_projection_view_signature(
+                    background_idx,
+                    mode_override=normalized_mode,
+                    caked_payload=caked_payload,
+                    detector_shape=detector_shape,
+                    ai=worker_ai,
+                    analysis_preview_bins=job_data.get("analysis_bins"),
+                )
+            else:
+                resolved_signature = _geometry_fit_targeted_projection_view_signature(
+                    background_idx,
+                    mode_override=normalized_mode,
+                    detector_shape=detector_shape,
+                    analysis_preview_bins=job_data.get("analysis_bins"),
+                )
+        else:
+            if isinstance(stored_signature, Mapping):
+                resolved_signature = gui_geometry_fit._geometry_fit_cache_jsonable(
+                    stored_signature
+                )
+            else:
+                resolved_signature = _geometry_fit_targeted_projection_view_signature(
+                    background_idx,
+                    mode_override=normalized_mode,
+                    detector_shape=detector_shape,
+                    analysis_preview_bins=job_data.get("analysis_bins"),
+                )
+
+        signature_map[background_idx] = copy.deepcopy(dict(resolved_signature))
+        if background_idx == int(job_data.get("current_background_index", -1)):
+            job_data["projection_view_signature"] = copy.deepcopy(
+                signature_map[background_idx]
+            )
+        return copy.deepcopy(signature_map[background_idx])
+
+    def _project_source_rows_for_background(
+        background_index: int,
+        raw_rows: Sequence[object] | None,
+    ) -> Sequence[object]:
+        normalized_rows = _geometry_fit_rows_for_background(background_index, raw_rows)
+        if not normalized_rows:
+            return []
+        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        if normalized_mode not in {"detector", "caked", "q_space"}:
+            normalized_mode = "detector"
+        current_background_index = int(job_data.get("current_background_index", 0))
+        is_current_background = int(background_index) == int(current_background_index)
+        if normalized_mode == "q_space":
+            if not is_current_background:
+                return []
+            projector = job_data.get("project_rows")
+            if not callable(projector):
+                return []
+            try:
+                return _geometry_fit_rows_for_background(
+                    background_index,
+                    projector(normalized_rows),
+                )
+            except Exception:
+                return []
+
+        background_payload = dict(
+            dict(job_data.get("background_images", {}) or {}).get(int(background_index)) or {}
+        )
+        native_background = background_payload.get("native")
+        display_background = background_payload.get("display")
+        try:
+            detector_shape = tuple(
+                int(v)
+                for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            detector_shape = None
+        resolved_caked_payload = None
+        if normalized_mode == "caked":
+            payload_map = job_data.setdefault("projection_payload_by_background", {})
+            resolved_caked_payload = payload_map.get(int(background_index))
+            if not isinstance(resolved_caked_payload, Mapping):
+                resolved_caked_payload = _load_caked_view_by_index_snapshot(
+                    int(background_index)
+                )
+            if not isinstance(resolved_caked_payload, Mapping):
+                resolved_caked_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+                    int(background_index),
+                    caked_payload=None,
+                    detector_shape=detector_shape,
+                    ai=_worker_geometry_fit_caking_integrator(),
+                    analysis_preview_bins=job_data.get("analysis_bins"),
+                    allow_generated_payload=True,
+                )
+                if isinstance(resolved_caked_payload, Mapping):
+                    payload_map[int(background_index)] = (
+                        gui_geometry_fit._geometry_fit_cache_jsonable(
+                            resolved_caked_payload
+                        )
+                    )
+            if not isinstance(resolved_caked_payload, Mapping):
+                return normalized_rows
+
+        params_local = dict(job_data.get("params", {}) or {})
+        center_value = params_local.get("center")
+        if isinstance(center_value, Sequence) and len(center_value) >= 2:
+            try:
+                center_pair = [float(center_value[0]), float(center_value[1])]
+            except Exception:
+                center_pair = None
+        else:
+            center_pair = None
+
+        def _background_native_detector_coords_to_bundle_detector_coords(
+            col: float,
+            row: float,
+        ) -> tuple[float | None, float | None]:
+            return _native_detector_coords_to_bundle_detector_coords(
+                float(col),
+                float(row),
+                detector_shape,
+            )
+
+        projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+            caked_view_enabled=lambda: bool(
+                normalized_mode == "caked" and isinstance(resolved_caked_payload, Mapping)
+            ),
+            last_caked_background_image_unscaled=lambda: (
+                resolved_caked_payload.get("background")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            last_caked_radial_values=lambda: (
+                resolved_caked_payload.get("radial_axis")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            last_caked_azimuth_values=lambda: (
+                resolved_caked_payload.get("azimuth_axis")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            current_background_display=lambda: display_background,
+            current_background_native=lambda: native_background,
+            ai=_worker_geometry_fit_caking_integrator,
+            center=lambda: center_pair,
+            detector_distance=lambda: float(params_local.get("corto_detector", 0.0) or 0.0),
+            pixel_size=float(pixel_size_m),
+            caked_transform_bundle=lambda: (
+                resolved_caked_payload.get("transform_bundle")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            wrap_phi_range=(globals().get("raw_phi_to_gui_phi") or (lambda value: float(value))),
+            rotate_point_for_display=(
+                globals().get("_rotate_point_for_display")
+                or (lambda col, row: (float(col), float(row)))
+            ),
+            display_rotate_k=int(job_data.get("display_rotate_k", globals().get("DISPLAY_ROTATE_K", 0))),
+            current_geometry_fit_params=lambda: dict(job_data.get("params", {}) or {}),
+            build_live_preview_simulated_peaks_from_cache=lambda: [],
+            ensure_peak_overlay_data=lambda **_kwargs: False,
+            miller=lambda: job_data["solver_inputs"].miller,
+            intensities=lambda: job_data["solver_inputs"].intensities,
+            image_size=int(job_data.get("image_size", image_size)),
+            display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
+            native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
+            get_detector_angular_maps=(
+                (
+                    lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
+                    if callable(globals().get("_get_detector_angular_maps"))
+                    else None
+                )
+            ),
+            detector_pixel_to_scattering_angles=globals().get(
+                "_detector_pixel_to_scattering_angles"
+            ),
+            backend_detector_coords_to_native_detector_coords=(
+                globals().get("_backend_background_to_native_detector_coords")
+                or (lambda col, row, *_args, **_kwargs: (float(col), float(row)))
+            ),
+            native_detector_coords_to_bundle_detector_coords=(
+                _background_native_detector_coords_to_bundle_detector_coords
+            ),
+            bundle_detector_coords_to_background_display_coords=(
+                lambda col, row: (float(col), float(row))
+            ),
+            scattering_angles_to_detector_pixel=globals().get(
+                "_scattering_angles_to_detector_pixel"
+            ),
+            filter_simulated_peaks=(
+                lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
+            ),
+            collapse_simulated_peaks=(
+                lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)
+            ),
+        )
+        try:
+            return _geometry_fit_rows_for_background(
+                background_index,
+                projection_callbacks.project_peaks_to_current_view(normalized_rows),
+            )
+        except Exception:
+            return [] if normalized_mode == "q_space" else normalized_rows
+
+    def _project_source_rows_by_row_background(
+        raw_rows: Sequence[object] | None,
+    ) -> list[dict[str, object]]:
+        order_key = "__ra_sim_projection_row_order__"
+        grouped_rows = _geometry_fit_group_rows_by_background(
+            raw_rows,
+            default_background_index=int(job_data.get("current_background_index", 0)),
+            order_key=order_key,
+        )
+        if not grouped_rows:
+            return []
+        projected_rows: list[dict[str, object]] = []
+        for background_index, rows_for_background in grouped_rows:
+            projected_rows.extend(
+                dict(entry)
+                for entry in (
+                    _project_source_rows_for_background(
+                        int(background_index),
+                        rows_for_background,
+                    )
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            )
+        sorted_rows = sorted(
+            projected_rows,
+            key=lambda entry: (
+                int(entry.get(order_key))
+                if entry.get(order_key) is not None
+                else int(1e12)
+            ),
+        )
+        cleaned_rows: list[dict[str, object]] = []
+        for raw_entry in sorted_rows:
+            entry = dict(raw_entry)
+            entry.pop(order_key, None)
+            cleaned_rows.append(entry)
+        return cleaned_rows
+
     def _bundle_rows(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle | None,
     ) -> list[dict[str, object]]:
         if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
             return []
-        rows = _copy_source_rows(bundle.projected_rows)
+        rows = _geometry_fit_rows_for_background(
+            int(bundle.background_index),
+            bundle.projected_rows,
+        )
         if rows:
             return rows
-        return _copy_source_rows(bundle.stored_rows)
+        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        if normalized_mode in {"caked", "q_space"}:
+            return []
+        return _geometry_fit_rows_for_background(int(bundle.background_index), bundle.stored_rows)
 
     def _store_worker_background_cache_bundle(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
@@ -26706,10 +28281,24 @@ def _run_async_geometry_fit_worker_job(
         intersection_cache: Sequence[object] | None = None,
         cache_metadata: Mapping[str, object] | None = None,
     ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle:
-        copied_stored_rows = _copy_source_rows(stored_rows)
-        copied_projected_rows = _copy_source_rows(projected_rows)
-        if not copied_projected_rows:
-            copied_projected_rows = _copy_source_rows(_project_source_rows(copied_stored_rows))
+        copied_stored_rows = _geometry_fit_rows_for_background(
+            int(background_index),
+            stored_rows,
+        )
+        copied_projected_rows = _geometry_fit_rows_for_background(
+            int(background_index),
+            projected_rows,
+        )
+        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        strict_projection_mode = normalized_mode in {"caked", "q_space"}
+        if not copied_projected_rows and not strict_projection_mode:
+            copied_projected_rows = _geometry_fit_rows_for_background(
+                int(background_index),
+                _project_source_rows_for_background(
+                    int(background_index),
+                    copied_stored_rows,
+                ),
+            )
         resolved_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
         resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
         resolved_diagnostics.setdefault(
@@ -26893,6 +28482,10 @@ def _run_async_geometry_fit_worker_job(
             }
 
         caked_views_by_background = job_data.setdefault("caked_views_by_background", {})
+        projection_payload_by_background = job_data.setdefault(
+            "projection_payload_by_background",
+            {},
+        )
         background_images = dict(job_data.get("background_images", {}) or {})
         background_payload = dict(background_images.get(int(bundle.background_index)) or {})
         native_background = background_payload.get("native")
@@ -26921,29 +28514,7 @@ def _run_async_geometry_fit_worker_job(
             # Non-current worker backgrounds need same-axes exact-cake metadata
             # before the first caked payload exists, otherwise ROI projection drops
             # every angle-backed source row on the first pass.
-            analysis_bins = job_data.get("analysis_bins")
-            if not (isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2):
-                analysis_bins = getattr(
-                    simulation_runtime_state,
-                    "analysis_preview_bins",
-                    None,
-                )
-            try:
-                precompute_npt_rad = (
-                    int(max(1, analysis_bins[0]))
-                    if isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2
-                    else int(max(1, job_data.get("npt_rad")))
-                )
-            except Exception:
-                precompute_npt_rad = None
-            try:
-                precompute_npt_azim = (
-                    int(max(1, analysis_bins[1]))
-                    if isinstance(analysis_bins, (tuple, list)) and len(analysis_bins) >= 2
-                    else int(max(1, job_data.get("npt_azim")))
-                )
-            except Exception:
-                precompute_npt_azim = None
+            precompute_npt_rad, precompute_npt_azim = _worker_projection_analysis_bins()
             precomputed_caked_view = _geometry_fit_worker_caked_projection_view(
                 detector_shape=backend_background.shape[:2],
                 ai=worker_ai,
@@ -27134,6 +28705,32 @@ def _run_async_geometry_fit_worker_job(
                 ),
                 "roi_half_width_px": float(roi_half_width_px),
             }
+            projection_payload_by_background[int(bundle.background_index)] = copy.deepcopy(
+                caked_views_by_background[int(bundle.background_index)]
+            )
+            if str(job_data.get("projection_view_mode") or "").strip().lower() == "caked":
+                projection_signature_map = job_data.setdefault(
+                    "projection_view_signature_by_background",
+                    {},
+                )
+                projection_signature_map[int(bundle.background_index)] = (
+                    _geometry_fit_targeted_projection_view_signature(
+                        int(bundle.background_index),
+                        mode_override="caked",
+                        caked_payload=dict(
+                            caked_views_by_background.get(int(bundle.background_index)) or {}
+                        ),
+                        detector_shape=backend_background.shape[:2],
+                        ai=worker_ai,
+                        analysis_preview_bins=job_data.get("analysis_bins"),
+                    )
+                )
+                if int(bundle.background_index) == int(
+                    job_data.get("current_background_index", -1)
+                ):
+                    job_data["projection_view_signature"] = copy.deepcopy(
+                        projection_signature_map[int(bundle.background_index)]
+                    )
         except Exception:
             return _caked_result(
                 "store_caked_payload_failed",
@@ -27321,6 +28918,46 @@ def _run_async_geometry_fit_worker_job(
                 }
             return [dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)]
 
+        projection_view_mode = str(job_data.get("projection_view_mode") or "detector")
+        projection_view_signature = _worker_projection_view_signature_for_background(
+            int(background_idx)
+        )
+        projection_payload = (
+            dict(
+                job_data.setdefault("projection_payload_by_background", {}).get(
+                    int(background_idx)
+                )
+                or {}
+            )
+            or None
+        )
+        if projection_view_mode == "caked" and not isinstance(projection_payload, Mapping):
+            projection_payload = _load_caked_view_by_index_snapshot(int(background_idx))
+            if not isinstance(projection_payload, Mapping):
+                try:
+                    detector_shape = tuple(
+                        int(v)
+                        for v in np.asarray(
+                            dict(job_data.get("background_images", {}) or {})
+                            .get(int(background_idx), {})
+                            .get("native"),
+                            dtype=np.float64,
+                        ).shape[:2]
+                    )
+                except Exception:
+                    detector_shape = None
+                projection_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+                    int(background_idx),
+                    caked_payload=None,
+                    detector_shape=detector_shape,
+                    ai=_worker_geometry_fit_caking_integrator(),
+                    analysis_preview_bins=job_data.get("analysis_bins"),
+                    allow_generated_payload=True,
+                )
+            if isinstance(projection_payload, Mapping):
+                job_data.setdefault("projection_payload_by_background", {})[
+                    int(background_idx)
+                ] = gui_geometry_fit._geometry_fit_cache_jsonable(projection_payload)
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
             background_label=str(background_label),
@@ -27333,7 +28970,9 @@ def _run_async_geometry_fit_worker_job(
             ),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
-            projection_view_mode=str(job_data.get("projection_view_mode") or "detector"),
+            projection_view_mode=projection_view_mode,
+            projection_view_signature=projection_view_signature,
+            projection_payload=projection_payload,
             can_use_live_runtime_cache=(
                 int(background_idx) == int(job_data.get("current_background_index", -1))
             ),
@@ -27366,7 +29005,18 @@ def _run_async_geometry_fit_worker_job(
                 )
             ),
             last_runtime_simulation_diagnostics=_last_worker_simulation_diagnostics,
-            project_rows=_project_source_rows,
+            project_rows=(
+                lambda rows: _project_source_rows_for_background(
+                    int(background_idx),
+                    rows,
+                )
+            ),
+            project_rows_for_background_view=(
+                lambda rows: _project_source_rows_for_background(
+                    int(background_idx),
+                    rows,
+                )
+            ),
             required_pairs=required_pairs,
             required_branch_group_keys=required_branch_group_keys,
             required_manual_fit_targets=required_manual_fit_targets,
@@ -27928,9 +29578,7 @@ def _run_async_geometry_fit_worker_job(
         geometry_manual_entry_display_coords=job_data.get("geometry_manual_entry_display_coords"),
         geometry_manual_refresh_pair_entry=job_data.get("geometry_manual_refresh_pair_entry"),
         geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
-        geometry_manual_project_peaks_to_current_view=job_data.get(
-            "geometry_manual_project_peaks_to_current_view"
-        ),
+        geometry_manual_project_peaks_to_current_view=_project_source_rows_by_row_background,
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
         select_fit_orientation=job_data.get("select_fit_orientation"),
@@ -28390,7 +30038,7 @@ def _initialize_runtime_controls_block_50() -> None:
                 geometry_manual_projection_workflow.refresh_entry_geometry
             ),
             "geometry_manual_project_peaks_to_current_view": (
-                geometry_manual_projection_workflow.project_peaks_to_current_view
+                _geometry_manual_project_peaks_by_row_background
             ),
             "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
             "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),
