@@ -8,7 +8,7 @@ import py_compile
 import subprocess
 import sys
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14518,7 +14518,7 @@ def _load_runtime_session_function(function_name: str):
         if isinstance(node, ast.FunctionDef) and node.name == function_name:
             module = ast.Module(body=[node], type_ignores=[])
             ast.fix_missing_locations(module)
-            namespace = {"np": np}
+            namespace = {"np": np, "Sequence": Sequence}
             exec(compile(module, str(RUNTIME_SESSION_SOURCE_PATH), "exec"), namespace)
             return namespace[function_name]
     raise AssertionError(f"Function {function_name!r} not found in runtime_session.py")
@@ -14844,7 +14844,6 @@ def test_render_analysis_peak_overlays_breaks_wrapped_fit_curve_gap(monkeypatch)
     caked_axis = _Axis()
 
     monkeypatch.setattr(runtime_session, "_resolved_primary_analysis_display_mode", lambda: "caked")
-    monkeypatch.setattr(runtime_session, "_clear_analysis_peak_overlay_artists", lambda **_kwargs: None)
     monkeypatch.setattr(runtime_session, "_analysis_cache_overlay_tables", lambda _show_caked: [])
     monkeypatch.setattr(
         runtime_session,
@@ -14870,12 +14869,6 @@ def test_render_analysis_peak_overlays_breaks_wrapped_fit_curve_gap(monkeypatch)
         runtime_session,
         "analysis_peak_selection_state",
         SimpleNamespace(
-            selected_peaks=[{"two_theta_deg": 10.0, "phi_deg": 175.0, "source": "simulated"}],
-            caked_peak_artists=[],
-            radial_peak_artists=[],
-            azimuth_peak_artists=[],
-            radial_fit_artists=[],
-            azimuth_fit_artists=[],
             radial_fit_results=[],
             azimuth_fit_results=[
                 {
@@ -15054,3 +15047,104 @@ def test_analysis_curve_selected_window_returns_empty_when_selection_excludes_cu
 
     assert selected_x.size == 0
     assert selected_y.size == 0
+
+
+def test_clear_selected_analysis_peaks_clears_stale_fit_results(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Artist:
+        def __init__(self, label: str) -> None:
+            self.label = label
+            self.removed = False
+
+        def remove(self) -> None:
+            self.removed = True
+
+    caked_artist = _Artist("caked")
+    radial_peak_artist = _Artist("radial-peak")
+    azimuth_peak_artist = _Artist("azimuth-peak")
+    radial_fit_artist = _Artist("radial-fit")
+    azimuth_fit_artist = _Artist("azimuth-fit")
+    fit_results_text: list[str] = []
+    selection_status_text: list[str] = []
+    overlay_redraw_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_peak_selection_state",
+        SimpleNamespace(
+            selected_peaks=[{"two_theta_deg": 11.2, "phi_deg": 5.0, "source": "simulated"}],
+            radial_fit_results=[{"success": True, "fit_group_id": "radial:simulated:gaussian"}],
+            azimuth_fit_results=[
+                {"success": True, "fit_group_id": "azimuth:simulated:gaussian"}
+            ],
+            caked_peak_artists=[caked_artist],
+            radial_peak_artists=[radial_peak_artist],
+            azimuth_peak_artists=[azimuth_peak_artist],
+            radial_fit_artists=[radial_fit_artist],
+            azimuth_fit_artists=[azimuth_fit_artist],
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_analysis_peak_fit_results_text",
+        lambda text: fit_results_text.append(str(text)),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_peak_selection_status_text",
+        lambda: "No analysis peaks selected.",
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_analysis_peak_selection_status_text",
+        lambda text: selection_status_text.append(str(text)),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "caked",
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_cache_overlay_tables",
+        lambda _show_caked: [],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_overlay_canvas_redraw",
+        lambda **kwargs: overlay_redraw_calls.append(dict(kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "canvas_1d",
+        SimpleNamespace(draw_idle=lambda: None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._clear_selected_analysis_peaks()
+
+    assert runtime_session.analysis_peak_selection_state.selected_peaks == []
+    assert runtime_session.analysis_peak_selection_state.radial_fit_results == []
+    assert runtime_session.analysis_peak_selection_state.azimuth_fit_results == []
+    assert runtime_session.analysis_peak_selection_state.caked_peak_artists == []
+    assert runtime_session.analysis_peak_selection_state.radial_peak_artists == []
+    assert runtime_session.analysis_peak_selection_state.azimuth_peak_artists == []
+    assert runtime_session.analysis_peak_selection_state.radial_fit_artists == []
+    assert runtime_session.analysis_peak_selection_state.azimuth_fit_artists == []
+    assert caked_artist.removed is True
+    assert radial_peak_artist.removed is True
+    assert azimuth_peak_artist.removed is True
+    assert radial_fit_artist.removed is True
+    assert azimuth_fit_artist.removed is True
+    assert fit_results_text[-1] == "Fit results will appear here."
+    assert selection_status_text[-1] == "No analysis peaks selected."
+    assert overlay_redraw_calls == [{"force": True}]

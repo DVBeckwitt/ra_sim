@@ -24556,11 +24556,14 @@ def _update_analysis_peak_pick_button_label() -> None:
 
 
 def _analysis_peak_fit_results_text() -> str:
+    empty_text = str(
+        globals().get("_ANALYSIS_PEAK_EMPTY_RESULTS_TEXT", "Fit results will appear here.")
+    )
     if (
-        not analysis_peak_selection_state.radial_fit_results
-        and not analysis_peak_selection_state.azimuth_fit_results
+        not getattr(analysis_peak_selection_state, "radial_fit_results", None)
+        and not getattr(analysis_peak_selection_state, "azimuth_fit_results", None)
     ):
-        return _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT
+        return empty_text
 
     analysis_peak_tools = _get_analysis_peak_tools_module()
     lines = [
@@ -24568,18 +24571,33 @@ def _analysis_peak_fit_results_text() -> str:
         for line in (
             analysis_peak_tools.format_peak_fit_axis_summary(
                 "Radial",
-                analysis_peak_selection_state.radial_fit_results,
+                getattr(analysis_peak_selection_state, "radial_fit_results", ()),
             ),
             analysis_peak_tools.format_peak_fit_axis_summary(
                 "Azimuth",
-                analysis_peak_selection_state.azimuth_fit_results,
+                getattr(analysis_peak_selection_state, "azimuth_fit_results", ()),
             ),
         )
         if line
     ]
     if not lines:
-        return _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT
+        return empty_text
     return "\n".join(lines)
+
+
+def _analysis_peak_state_list(field_name: str) -> list[object]:
+    values = getattr(analysis_peak_selection_state, field_name, None)
+    if isinstance(values, list):
+        return values
+    if values is None or isinstance(values, (str, bytes)):
+        values = []
+    else:
+        try:
+            values = list(values)
+        except Exception:
+            values = []
+    setattr(analysis_peak_selection_state, field_name, values)
+    return values
 
 
 def _remove_artist_refs(artists: list[object]) -> None:
@@ -24594,11 +24612,11 @@ def _remove_artist_refs(artists: list[object]) -> None:
 
 
 def _clear_analysis_peak_overlay_artists(*, redraw: bool) -> None:
-    _remove_artist_refs(analysis_peak_selection_state.caked_peak_artists)
-    _remove_artist_refs(analysis_peak_selection_state.radial_peak_artists)
-    _remove_artist_refs(analysis_peak_selection_state.azimuth_peak_artists)
-    _remove_artist_refs(analysis_peak_selection_state.radial_fit_artists)
-    _remove_artist_refs(analysis_peak_selection_state.azimuth_fit_artists)
+    _remove_artist_refs(_analysis_peak_state_list("caked_peak_artists"))
+    _remove_artist_refs(_analysis_peak_state_list("radial_peak_artists"))
+    _remove_artist_refs(_analysis_peak_state_list("azimuth_peak_artists"))
+    _remove_artist_refs(_analysis_peak_state_list("radial_fit_artists"))
+    _remove_artist_refs(_analysis_peak_state_list("azimuth_fit_artists"))
     if redraw:
         try:
             canvas_1d.draw_idle()
@@ -24609,12 +24627,19 @@ def _clear_analysis_peak_overlay_artists(*, redraw: bool) -> None:
 
 
 def _clear_analysis_peak_fit_results(*, redraw: bool, update_text: bool) -> None:
-    analysis_peak_selection_state.radial_fit_results.clear()
-    analysis_peak_selection_state.azimuth_fit_results.clear()
-    _remove_artist_refs(analysis_peak_selection_state.radial_fit_artists)
-    _remove_artist_refs(analysis_peak_selection_state.azimuth_fit_artists)
+    _analysis_peak_state_list("radial_fit_results").clear()
+    _analysis_peak_state_list("azimuth_fit_results").clear()
+    _remove_artist_refs(_analysis_peak_state_list("radial_fit_artists"))
+    _remove_artist_refs(_analysis_peak_state_list("azimuth_fit_artists"))
     if update_text:
-        _set_analysis_peak_fit_results_text(_ANALYSIS_PEAK_EMPTY_RESULTS_TEXT)
+        _set_analysis_peak_fit_results_text(
+            str(
+                globals().get(
+                    "_ANALYSIS_PEAK_EMPTY_RESULTS_TEXT",
+                    "Fit results will appear here.",
+                )
+            )
+        )
     if redraw:
         try:
             canvas_1d.draw_idle()
@@ -24924,10 +24949,22 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
                 _request_overlay_canvas_redraw()
         return
 
-    selected_peaks = list(analysis_peak_selection_state.selected_peaks)
+    selected_peaks = list(_analysis_peak_state_list("selected_peaks"))
+    radial_fit_results = list(
+        _analysis_peak_state_list("radial_fit_results")
+    )
+    azimuth_fit_results = list(
+        _analysis_peak_state_list("azimuth_fit_results")
+    )
+    caked_peak_artists = _analysis_peak_state_list("caked_peak_artists")
+    radial_peak_artists = _analysis_peak_state_list("radial_peak_artists")
+    azimuth_peak_artists = _analysis_peak_state_list("azimuth_peak_artists")
+    radial_fit_artists = _analysis_peak_state_list("radial_fit_artists")
+    azimuth_fit_artists = _analysis_peak_state_list("azimuth_fit_artists")
+    has_fit_results = bool(radial_fit_results or azimuth_fit_results)
     show_caked = True
     cache_tables = _analysis_cache_overlay_tables(show_caked)
-    if not selected_peaks and not cache_tables:
+    if not selected_peaks and not cache_tables and not has_fit_results:
         if redraw:
             try:
                 canvas_1d.draw_idle()
@@ -24971,9 +25008,7 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
                     va="bottom",
                     zorder=12,
                 )
-                analysis_peak_selection_state.caked_peak_artists.extend(
-                    [marker_artist, label_artist]
-                )
+                caked_peak_artists.extend([marker_artist, label_artist])
             except Exception:
                 continue
 
@@ -24981,16 +25016,16 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
         (
             "radial",
             ax_1d_radial,
-            analysis_peak_selection_state.radial_peak_artists,
-            analysis_peak_selection_state.radial_fit_artists,
-            analysis_peak_selection_state.radial_fit_results,
+            radial_peak_artists,
+            radial_fit_artists,
+            radial_fit_results,
         ),
         (
             "azimuth",
             ax_1d_azim,
-            analysis_peak_selection_state.azimuth_peak_artists,
-            analysis_peak_selection_state.azimuth_fit_artists,
-            analysis_peak_selection_state.azimuth_fit_results,
+            azimuth_peak_artists,
+            azimuth_fit_artists,
+            azimuth_fit_results,
         ),
     )
     for axis_kind, axis_obj, marker_store, fit_store, fit_results in axis_specs:
@@ -25055,10 +25090,10 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
             fit_group_id = str(fit_entry.get("fit_group_id", "") or "").strip()
             if fit_group_id and fit_group_id in plotted_fit_group_ids:
                 continue
-            x_window = np.asarray(
-                fit_entry.get("x_fit", fit_entry.get("x_window")),
-                dtype=float,
-            )
+            x_values = fit_entry.get("x_fit")
+            if x_values is None:
+                x_values = fit_entry.get("x_window")
+            x_window = np.asarray(x_values, dtype=float)
             y_fit = np.asarray(fit_entry.get("y_fit"), dtype=float)
             if x_window.size <= 0 or y_fit.size <= 0 or x_window.size != y_fit.size:
                 continue
@@ -25379,7 +25414,7 @@ def _toggle_analysis_peak_pick_mode() -> None:
 
 
 def _clear_selected_analysis_peaks() -> None:
-    analysis_peak_selection_state.selected_peaks.clear()
+    _analysis_peak_state_list("selected_peaks").clear()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
     _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
     try:
