@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import hashlib
+import time
 from dataclasses import replace
 import numpy as np
 from pathlib import Path, PurePosixPath
@@ -618,7 +619,11 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     prepared = result.prepared_run
     assert prepared.current_dataset["label"] == "bg0.osc"
     assert "experimental_image_for_fit" not in prepared.current_dataset
-    assert prepared.dataset_specs == [
+    prepared_spec = dict(prepared.dataset_specs[0])
+    assert prepared_spec.pop("manual_point_pairs") == prepared.current_dataset[
+        "manual_point_pairs"
+    ]
+    assert [prepared_spec] == [
         {
             "dataset_index": 0,
             "label": "bg0.osc",
@@ -773,7 +778,15 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "bg_display": (50.0, 60.0),
             "source_table_index": 1,
             "source_row_index": 2,
+            "selected_source_identity_canonical": {
+                "normalized_hkl": [1, 1, 0],
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "q_group_key": ["q", 1],
+            },
             "sim_display": (9.0, 8.0),
+            "provider_simulated_frame": "display",
+            "provider_simulated_point_source": "live_source_row_projection",
             "bg_native": (30.0, 40.0),
             "sim_native": (1.0, 2.0),
         }
@@ -783,7 +796,9 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert "experimental_image_for_fit" not in dataset
     assert dataset["orientation_choice"] == orientation_choice
     assert dataset["orientation_diag"] == orientation_diag
-    assert dataset["spec"] == {
+    dataset_spec = dict(dataset["spec"])
+    assert dataset_spec.pop("manual_point_pairs") == dataset["manual_point_pairs"]
+    assert dataset_spec == {
         "dataset_index": 0,
         "label": "bg0.osc",
         "theta_initial": 1.5,
@@ -1167,6 +1182,23 @@ def _load_geometry_preflight_probe_module():
     return module
 
 
+def _load_new4_ladder_module():
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "debug"
+        / "run_new4_geometry_fit_ladder.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "run_new4_geometry_fit_ladder",
+        script_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def _write_probe_state(
     tmp_path,
     *,
@@ -1246,7 +1278,7 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
                 "source_row_index": 2,
             }
         },
-        geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=_display_to_native_sim_coords,
         select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
@@ -1861,6 +1893,1069 @@ def test_build_geometry_manual_fit_dataset_rebinds_nonlegacy_stale_source_by_bac
     assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
     assert diag["selected_live_simulated_current_view_point"] == (1003.0, 998.0)
     assert diag["selected_to_background_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+
+
+def test_build_geometry_manual_fit_dataset_rebinds_by_branch_group_key_before_distance() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "branch_group_key": ("branch", "wanted"),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+            "refined_sim_x": 1000.0,
+            "refined_sim_y": 1000.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "branch_group_key": ("branch", "wrong"),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 1000.0,
+            "sim_row": 1000.0,
+        },
+        {
+            "branch_group_key": ("branch", "wanted"),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 1300.0,
+            "sim_row": 1300.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+        refresh_pairs=False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    measured_entry = dataset["measured_for_fit"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert measured_entry["source_reflection_index"] == 204
+    assert measured_entry["source_branch_index"] == 1
+    assert measured_entry["branch_group_key"] == ("branch", "wanted")
+    assert diag["fit_resolution_kind"] == "group_fallback"
+    assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
+    assert diag["selected_live_simulated_current_view_point"] == (1300.0, 1300.0)
+
+
+def _point_provider_optimizer_guard(monkeypatch):
+    state = {
+        "optimizer_guard_installed": True,
+        "optimizer_called": False,
+        "optimizer_call_count": 0,
+        "optimizer_entrypoints_guarded": [],
+    }
+
+    def _guard(name):
+        state["optimizer_entrypoints_guarded"].append(name)
+
+        def _fail(*_args, **_kwargs):
+            state["optimizer_called"] = True
+            state["optimizer_call_count"] += 1
+            raise AssertionError("Optimizer must not run in point-provider parity test")
+
+        return _fail
+
+    for name in (
+        "execute_runtime_geometry_fit",
+        "execute_runtime_geometry_fit_solver_phase",
+        "solve_geometry_fit_request",
+    ):
+        if hasattr(geometry_fit, name):
+            monkeypatch.setattr(geometry_fit, name, _guard(name))
+    monkeypatch.setattr(
+        opt,
+        "fit_geometry_parameters",
+        _guard("ra_sim.fitting.optimization.fit_geometry_parameters"),
+    )
+    return state
+
+
+def _build_point_provider_dataset(saved_entries, simulated_rows):
+    bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+        refresh_pairs=False,
+    )
+    return geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+
+def _build_saved_state_point_provider_report_dataset():
+    return geometry_fit.build_geometry_fit_saved_state_point_provider_dataset(
+        0,
+        [
+            {
+                "q_group_key": ("q_group", "primary", 0, 3),
+                "source_table_index": 1,
+                "source_reflection_index": 1,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+                "source_label": "primary",
+                "hkl": (0, 0, 3),
+                "x": 10.0,
+                "y": 20.0,
+                "refined_sim_x": 11.0,
+                "refined_sim_y": 21.0,
+            }
+        ],
+    )
+
+
+def test_canonical_geometry_source_identity_normalizes_tuple_and_list_fields() -> None:
+    left = {
+        "hkl": (1, 0, 3),
+        "q_group_key": ("q_group", "primary", 1, 3),
+        "source_table_index": np.int64(12),
+        "source_reflection_index": np.int64(44),
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": np.bool_(True),
+        "source_row_index": np.int64(7),
+        "source_branch_index": np.int64(1),
+        "source_peak_index": np.int64(1),
+        "source_label": "primary",
+    }
+    right = {
+        "hkl": [1, 0, 3],
+        "q_group_key": ["q_group", "primary", 1, 3],
+        "source_table_index": 12,
+        "source_reflection_index": 44,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 7,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_label": "primary",
+    }
+
+    assert manual_geometry.canonical_geometry_source_identity(left) == (
+        manual_geometry.canonical_geometry_source_identity(right)
+    )
+
+
+def test_canonical_geometry_source_identity_distinguishes_persisted_source_rows() -> None:
+    left = {
+        "hkl": (1, 0, 3),
+        "q_group_key": ("q_group", "primary", 1, 3),
+        "source_table_index": 12,
+        "source_reflection_index": 44,
+        "source_row_index": 7,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_label": "primary",
+    }
+    right = dict(left)
+    right["source_row_index"] = 8
+
+    assert manual_geometry.canonical_geometry_source_identity(left) != (
+        manual_geometry.canonical_geometry_source_identity(right)
+    )
+
+
+def test_canonical_geometry_source_identity_omits_null_optional_bool() -> None:
+    missing = {"hkl": (1, 0, 3), "source_reflection_index": 44}
+    null_value = {
+        "hkl": [1, 0, 3],
+        "source_reflection_index": 44,
+        "source_reflection_is_full": None,
+    }
+    false_value = {
+        "hkl": [1, 0, 3],
+        "source_reflection_index": 44,
+        "source_reflection_is_full": False,
+    }
+
+    assert manual_geometry.canonical_geometry_source_identity(missing) == (
+        manual_geometry.canonical_geometry_source_identity(null_value)
+    )
+    assert manual_geometry.canonical_geometry_source_identity(missing) != (
+        manual_geometry.canonical_geometry_source_identity(false_value)
+    )
+
+
+def test_geometry_fit_point_provider_matches_manual_qr_picker_assignments() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "x": 10.25,
+            "y": 20.5,
+            "refined_sim_x": 11.75,
+            "refined_sim_y": 21.25,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+        }
+    ]
+
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    report = dataset["point_provider_report"]
+    pair = report["pairs"][0]
+
+    assert report["manual_picker_pair_count"] == 1
+    assert report["point_provider_pair_count"] == 1
+    assert report["pair_count_match"] is True
+    assert report["ordered_pairs_match"] is True
+    assert pair["source_identity_match"] is True
+    assert pair["background_point_match"] is True
+    assert pair["simulated_point_match"] is True
+    assert pair["dataset_points_match_provider_points"] is True
+    assert pair["provider_selected_simulated_point"] == [11.75, 21.25]
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (11.75, 21.25)
+
+
+def test_point_provider_saved_refined_sim_point_beats_live_overlay(monkeypatch) -> None:
+    def _no_refined_override(_entry, resolved_source_entry, **_kwargs):
+        return resolved_source_entry
+
+    monkeypatch.setattr(
+        manual_geometry,
+        "geometry_manual_apply_refined_simulated_override",
+        _no_refined_override,
+    )
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "x": 10.25,
+            "y": 20.5,
+            "refined_sim_x": 11.75,
+            "refined_sim_y": 21.25,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+        }
+    ]
+
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    report_pair = dataset["point_provider_report"]["pairs"][0]
+
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (11.75, 21.25)
+    assert dataset["manual_point_pairs"][0]["simulated_point"] == [11.75, 21.25]
+    assert report_pair["provider_selected_simulated_point"] == [11.75, 21.25]
+    assert report_pair["dataset_simulated_point"] == [11.75, 21.25]
+
+
+def test_point_provider_saved_refined_sim_point_overwrites_caked_prefill(
+    monkeypatch,
+) -> None:
+    def _no_refined_override(_entry, resolved_source_entry, **_kwargs):
+        return resolved_source_entry
+
+    monkeypatch.setattr(
+        manual_geometry,
+        "geometry_manual_apply_refined_simulated_override",
+        _no_refined_override,
+    )
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "x": 10.25,
+            "y": 20.5,
+            "refined_sim_caked_x": 55.5,
+            "refined_sim_caked_y": 66.5,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+            "caked_x": 333.0,
+            "caked_y": 444.0,
+            "two_theta_deg": 333.0,
+            "phi_deg": 444.0,
+        }
+    ]
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=simulated_rows,
+            refresh_pairs=False,
+        ),
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (55.5, 66.5)
+    assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (55.5, 66.5)
+    assert dataset["manual_point_pairs"][0]["simulated_point"] == [55.5, 66.5]
+    assert dataset["spec"]["manual_point_pairs"][0]["simulated_point"] == [
+        55.5,
+        66.5,
+    ]
+    assert dataset["point_provider_report"]["pairs"][0][
+        "provider_selected_simulated_point"
+    ] == [55.5, 66.5]
+    assert dataset["point_provider_report"]["pairs"][0]["dataset_simulated_point"] == [
+        55.5,
+        66.5,
+    ]
+    assert dataset["point_provider_report"]["pairs"][0]["simulated_point_match"] is True
+    assert dataset["point_provider_report"]["pairs"][0][
+        "provider_dataset_fingerprint_match"
+    ] is True
+
+
+def test_point_provider_saved_refined_display_replaces_stale_live_native() -> None:
+    captured: dict[str, object] = {}
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "x": 10.25,
+            "y": 20.5,
+            "refined_sim_x": 11.75,
+            "refined_sim_y": 21.25,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 3),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (1, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+            "native_col": 777.0,
+            "native_row": 888.0,
+        }
+    ]
+
+    def _display_to_native_sim_coords(col, row, shape):
+        return (float(col) + 100.0, float(row) + 100.0)
+
+    def _select_fit_orientation(sim_pts, meas_pts, shape, *, cfg):
+        captured["sim_pts"] = list(sim_pts)
+        return (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        )
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=simulated_rows,
+            refresh_pairs=False,
+        ),
+        display_to_native_sim_coords=_display_to_native_sim_coords,
+        select_fit_orientation=_select_fit_orientation,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_native"] == (111.75, 121.25)
+    assert captured["sim_pts"] == [(111.75, 121.25)]
+
+
+def test_point_provider_preserves_picker_selected_identity_when_resolvable() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 101,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "selected-a",
+            "hkl": (-1, 0, 5),
+            "x": 100.0,
+            "y": 100.0,
+            "refined_sim_x": 300.0,
+            "refined_sim_y": 300.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 101,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "selected-a",
+            "hkl": (-1, 0, 5),
+            "sim_col": 305.0,
+            "sim_row": 305.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 2,
+            "source_reflection_index": 102,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "tempting-b",
+            "hkl": (-1, 0, 5),
+            "sim_col": 101.0,
+            "sim_row": 99.0,
+        },
+    ]
+
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    pair = dataset["point_provider_report"]["pairs"][0]
+
+    assert pair["parity_mode"] == "picker_saved_value_preserved"
+    assert pair["rebinding_fallback_used"] is False
+    assert pair["provider_selected_source_identity_canonical"]["source_label"] == "selected-a"
+    assert pair["provider_selected_simulated_point"] == [300.0, 300.0]
+
+
+def test_point_provider_fallback_matches_picker_rule_when_source_identity_missing() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "wrong-branch",
+            "hkl": (-1, 0, 5),
+            "sim_col": 1000.0,
+            "sim_row": 1000.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 11,
+            "source_reflection_index": 11,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_label": "expected",
+            "hkl": (-1, 0, 5),
+            "sim_col": 1003.0,
+            "sim_row": 998.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 9),
+            "source_table_index": 12,
+            "source_reflection_index": 12,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_label": "wrong-hkl",
+            "hkl": (-1, 0, 9),
+            "sim_col": 1001.0,
+            "sim_row": 999.0,
+        },
+    ]
+
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    provider_pair = dataset["provider_pairs"][0]
+
+    assert provider_pair["parity_mode"] == "picker_rule_fallback"
+    assert provider_pair["rebinding_fallback_used"] is True
+    assert provider_pair["provider_pair_index"] == 0
+    assert provider_pair["selected_source_identity_canonical"]["normalized_hkl"] == [
+        -1,
+        0,
+        5,
+    ]
+    assert provider_pair["selected_source_identity_canonical"]["source_branch_index"] == 1
+    assert provider_pair["simulated_point"] == [1003.0, 998.0]
+
+
+def test_point_provider_stale_locator_is_diagnostic_when_saved_assignment_resolves() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 999,
+            "source_reflection_index": 999,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "saved-picker",
+            "hkl": (-1, 0, 5),
+            "x": 100.0,
+            "y": 100.0,
+            "refined_sim_x": 300.0,
+            "refined_sim_y": 300.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 101,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "live-semantic-match",
+            "hkl": (-1, 0, 5),
+            "sim_col": 101.0,
+            "sim_row": 99.0,
+        }
+    ]
+
+    report = _build_point_provider_dataset(saved_entries, simulated_rows)[
+        "point_provider_report"
+    ]
+    pair = report["pairs"][0]
+
+    assert report["ok"] is True
+    assert report["fallback_pair_count"] == 0
+    assert pair["rebinding_fallback_used"] is False
+    assert pair["fallback_reason"] is None
+    assert pair["source_locator_identity_match"] is False
+    assert pair["source_semantic_identity_match"] is True
+    assert pair["stale_source_identity_diagnostic"] is True
+    assert pair["source_identity_match"] is True
+    assert pair["provider_selected_source_identity_canonical"]["source_table_index"] == 999
+    assert pair["provider_selected_simulated_point"] == [300.0, 300.0]
+
+
+def test_point_provider_marks_stale_saved_identity_as_fallback() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 999,
+            "source_reflection_index": 999,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "stale",
+            "hkl": (-1, 0, 5),
+            "x": 100.0,
+            "y": 100.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 101,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "fallback",
+            "hkl": (-1, 0, 5),
+            "sim_col": 101.0,
+            "sim_row": 99.0,
+        }
+    ]
+
+    report = _build_point_provider_dataset(saved_entries, simulated_rows)[
+        "point_provider_report"
+    ]
+    pair = report["pairs"][0]
+
+    assert report["ok"] is False
+    assert report["fallback_pair_count"] == 1
+    assert pair["rebinding_fallback_used"] is True
+    assert pair["fallback_reason"] == "missing_saved_simulated_point"
+    assert pair["source_identity_match"] is False
+    assert pair["provider_simulated_point_source"] == "fallback_rebind"
+
+
+def test_point_provider_report_is_stable_and_machine_readable() -> None:
+    saved_entries = [
+        {
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (0, 0, 3),
+            "x": 10.0,
+            "y": 20.0,
+            "refined_sim_x": 11.0,
+            "refined_sim_y": 21.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (0, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+        }
+    ]
+
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    rendered = json.dumps(dataset["point_provider_report"], sort_keys=True)
+
+    assert rendered
+    assert "source_rows_for_trace" not in rendered
+    assert dataset["point_provider_report"]["pairs"][0]["dataset_pair_fingerprint"]
+    assert dataset["point_provider_report"]["provider_dataset_fingerprint_match"] is True
+    assert dataset["point_provider_report"]["optimizer_guard_installed"] is False
+
+
+def test_point_provider_report_reads_actual_handoff_rows_not_manual_trace() -> None:
+    saved_entries = [
+        {
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (0, 0, 3),
+            "x": 10.0,
+            "y": 20.0,
+            "refined_sim_x": 11.0,
+            "refined_sim_y": 21.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (0, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+        }
+    ]
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    dataset["initial_pairs_display"][0]["sim_display"] = (999.0, 999.0)
+    dataset["measured_for_fit"][0]["x"] = 888.0
+    dataset["measured_for_fit"][0]["y"] = 777.0
+    dataset["spec"]["measured_peaks"] = [dict(dataset["measured_for_fit"][0])]
+    dataset["manual_point_pairs"][0]["simulated_point"] = [11.0, 21.0]
+
+    report = geometry_fit.build_geometry_fit_point_provider_report(dataset)
+    pair = report["pairs"][0]
+
+    assert report["ok"] is False
+    assert report["dataset_provider_mismatch_count"] == 1
+    assert pair["manual_point_pairs_match_provider_points"] is True
+    assert pair["initial_pairs_match_provider_points"] is False
+    assert pair["measured_for_fit_match_provider_points"] is False
+    assert pair["spec_measured_peaks_match_provider_points"] is False
+    assert pair["provider_dataset_fingerprint_match"] is False
+    assert report["provider_dataset_fingerprint_match"] is False
+    assert pair["dataset_background_point"] == [888.0, 777.0]
+    assert pair["dataset_simulated_point"] == [999.0, 999.0]
+    assert pair["provider_selected_simulated_point"] == [11.0, 21.0]
+
+
+def test_point_provider_report_rejects_measured_and_spec_simulated_point_drift() -> None:
+    dataset = _build_saved_state_point_provider_report_dataset()
+    dataset["measured_for_fit"][0]["sim_display"] = (999.0, 999.0)
+    dataset["spec"]["measured_peaks"][0]["sim_display"] = (999.0, 999.0)
+
+    report = geometry_fit.build_geometry_fit_point_provider_report(dataset)
+    pair = report["pairs"][0]
+
+    assert report["ok"] is False
+    assert report["dataset_provider_mismatch_count"] > 0
+    assert report["measured_for_fit_match_provider_points"] is False
+    assert report["spec_measured_peaks_match_provider_points"] is False
+    assert pair["measured_for_fit_match_provider_points"] is False
+    assert pair["spec_measured_peaks_match_provider_points"] is False
+
+
+def test_point_provider_report_rejects_missing_measured_and_spec_simulated_points() -> None:
+    dataset = _build_saved_state_point_provider_report_dataset()
+    for row in (dataset["measured_for_fit"][0], dataset["spec"]["measured_peaks"][0]):
+        for key in (
+            "sim_display",
+            "sim_native",
+            "simulated_two_theta_deg",
+            "simulated_phi_deg",
+        ):
+            row.pop(key, None)
+
+    report = geometry_fit.build_geometry_fit_point_provider_report(dataset)
+    pair = report["pairs"][0]
+
+    assert report["ok"] is False
+    assert report["dataset_provider_mismatch_count"] > 0
+    assert report["measured_for_fit_match_provider_points"] is False
+    assert report["spec_measured_peaks_match_provider_points"] is False
+    assert pair["measured_for_fit_match_provider_points"] is False
+    assert pair["spec_measured_peaks_match_provider_points"] is False
+
+
+@pytest.mark.parametrize(
+    ("surface", "source_key"),
+    (
+        ("manual_point_pairs", "simulated_point_source"),
+        ("initial_pairs_display", "provider_simulated_point_source"),
+        ("measured_for_fit", "provider_simulated_point_source"),
+        ("spec_measured_peaks", "provider_simulated_point_source"),
+    ),
+)
+def test_point_provider_report_rejects_non_picker_owned_surface_sources(
+    surface,
+    source_key,
+) -> None:
+    dataset = _build_saved_state_point_provider_report_dataset()
+    if surface == "spec_measured_peaks":
+        row = dataset["spec"]["measured_peaks"][0]
+        expected_pair_key = "spec_measured_peaks_point_sources_picker_owned"
+    else:
+        row = dataset[surface][0]
+        expected_pair_key = {
+            "manual_point_pairs": "manual_point_pairs_point_sources_picker_owned",
+            "initial_pairs_display": "initial_pairs_point_sources_picker_owned",
+            "measured_for_fit": "measured_for_fit_point_sources_picker_owned",
+        }[surface]
+    row[source_key] = "fallback_rebind"
+
+    report = geometry_fit.build_geometry_fit_point_provider_report(dataset)
+    pair = report["pairs"][0]
+
+    assert report["ok"] is False
+    assert report["all_point_sources_picker_owned"] is False
+    assert report["dataset_provider_mismatch_count"] > 0
+    assert pair[expected_pair_key] is False
+
+
+@pytest.mark.parametrize(
+    "surface",
+    (
+        "manual_point_pairs",
+        "initial_pairs_display",
+        "measured_for_fit",
+        "spec_measured_peaks",
+    ),
+)
+def test_point_provider_report_counts_extra_handoff_surface_rows(surface) -> None:
+    dataset = _build_saved_state_point_provider_report_dataset()
+    if surface == "spec_measured_peaks":
+        rows = dataset["spec"]["measured_peaks"]
+    else:
+        rows = dataset[surface]
+    rows.append(dict(rows[0]))
+
+    report = geometry_fit.build_geometry_fit_point_provider_report(dataset)
+
+    assert report["ok"] is False
+    assert report["surface_pair_count_match"] is False
+    assert report["surface_pair_count_mismatch_count"] > 0
+    assert report["extra_surface_row_count"] > 0
+    assert report["dataset_provider_mismatch_count"] > 0
+
+
+@pytest.mark.parametrize(
+    "surface",
+    (
+        "manual_point_pairs",
+        "initial_pairs_display",
+        "measured_for_fit",
+        "spec_measured_peaks",
+    ),
+)
+def test_point_provider_report_counts_missing_handoff_surface_rows(surface) -> None:
+    dataset = _build_saved_state_point_provider_report_dataset()
+    if surface == "spec_measured_peaks":
+        dataset["spec"]["measured_peaks"] = []
+    else:
+        dataset[surface] = []
+
+    report = geometry_fit.build_geometry_fit_point_provider_report(dataset)
+
+    assert report["ok"] is False
+    assert report["surface_pair_count_match"] is False
+    assert report["surface_pair_count_mismatch_count"] > 0
+    assert report["missing_surface_row_count"] > 0
+    assert report["dataset_provider_mismatch_count"] > 0
+    assert f"{surface}_row_count_mismatch" in (
+        report["point_provider_parity_gate"]["reason_codes"]
+    )
+
+
+def test_point_provider_does_not_call_optimizer(monkeypatch) -> None:
+    guard_state = _point_provider_optimizer_guard(monkeypatch)
+    saved_entries = [
+        {
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (0, 0, 3),
+            "x": 10.0,
+            "y": 20.0,
+            "refined_sim_x": 11.0,
+            "refined_sim_y": 21.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_table_index": 1,
+            "source_reflection_index": 1,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_label": "primary",
+            "hkl": (0, 0, 3),
+            "sim_col": 111.0,
+            "sim_row": 222.0,
+        }
+    ]
+
+    dataset = _build_point_provider_dataset(saved_entries, simulated_rows)
+    report = geometry_fit.build_geometry_fit_point_provider_report(
+        dataset,
+        optimizer_guard_state=guard_state,
+    )
+
+    assert report["optimizer_guard_installed"] is True
+    assert report["optimizer_called"] is False
+    assert report["optimizer_call_count"] == 0
+    assert set(report["optimizer_entrypoints_guarded"]) >= {
+        "execute_runtime_geometry_fit",
+        "execute_runtime_geometry_fit_solver_phase",
+        "solve_geometry_fit_request",
+        "ra_sim.fitting.optimization.fit_geometry_parameters",
+    }
+
+
+def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
+    monkeypatch,
+) -> None:
+    guard_state = _point_provider_optimizer_guard(monkeypatch)
+    repo_root = Path(__file__).resolve().parents[1]
+    probe = _load_geometry_preflight_probe_module()
+    def _fail_provider_only_boundary(*_args, **_kwargs):
+        raise AssertionError("Provider-only parity must not enter headless preflight")
+
+    monkeypatch.setattr(
+        probe,
+        "_prepare_validation_context",
+        _fail_provider_only_boundary,
+    )
+    monkeypatch.setattr(
+        probe,
+        "_capture_preflight",
+        _fail_provider_only_boundary,
+    )
+    monkeypatch.setattr(
+        probe.hgf,
+        "run_headless_geometry_fit",
+        _fail_provider_only_boundary,
+    )
+    report = probe._run_point_provider_report_only(
+        repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json",
+        background_index=0,
+        optimizer_guard_state=guard_state,
+    )
+
+    assert report["ok"] is True
+    assert report["classification"] == "point_provider_parity_ok"
+    assert report["point_provider_parity_gate"]["ok"] is True
+    assert report["manual_picker_pair_count"] == 7
+    assert report["point_provider_pair_count"] == 7
+    assert report["manual_point_pair_count"] == 7
+    assert report["initial_pairs_display_count"] == 7
+    assert report["measured_for_fit_count"] == 7
+    assert report["spec_measured_peaks_count"] == 7
+    assert report["pair_count_match"] is True
+    assert report["surface_pair_count_match"] is True
+    assert report["ordered_pairs_match"] is True
+    assert report["unordered_pairs_match"] is True
+    assert report["missing_pair_count"] == 0
+    assert report["branch_mismatch_count"] == 0
+    assert report["fallback_pair_count"] == 0
+    assert report["background_point_mismatch_count"] == 0
+    assert report["simulated_point_mismatch_count"] == 0
+    assert report["frame_mismatch_count"] == 0
+    assert report["dataset_provider_mismatch_count"] == 0
+    assert report["manual_point_pairs_match_provider_points"] is True
+    assert report["initial_pairs_match_provider_points"] is True
+    assert report["measured_for_fit_match_provider_points"] is True
+    assert report["spec_measured_peaks_match_provider_points"] is True
+    assert report["provider_dataset_fingerprint_match"] is True
+    assert report["all_dataset_surfaces_match_provider_points"] is True
+    assert report["all_point_sources_picker_owned"] is True
+    assert report["optimizer_guard_installed"] is True
+    assert report["optimizer_called"] is False
+    assert report["optimizer_call_count"] == 0
+    assert report["optimizer_path_entered"] is False
+    assert report["optimizer_entrypoints_called"] == []
+    for pair in report["pairs"]:
+        assert pair["manual_picker_truth_available"] is True
+        assert pair["missing_truth_fields"] == []
+        assert pair["parity_mode"] == "picker_saved_value_preserved"
+        assert pair["rebinding_fallback_used"] is False
+        assert pair["manual_truth_mutated_by_refresh"] is False
+        assert pair["source_identity_match"] is True
+        assert pair["background_frame_match"] is True
+        assert pair["simulated_frame_match"] is True
+        assert pair["background_point_match"] is True
+        assert pair["simulated_point_match"] is True
+        assert pair["selected_to_background_distance_match"] is True
+        assert pair["dataset_points_match_provider_points"] is True
+        assert pair["manual_point_pairs_match_provider_points"] is True
+        assert pair["initial_pairs_match_provider_points"] is True
+        assert pair["measured_for_fit_match_provider_points"] is True
+        assert pair["spec_measured_peaks_match_provider_points"] is True
+        assert pair["provider_dataset_fingerprint_match"] is True
+        assert pair["provider_point_sources_picker_owned"] is True
+        assert pair["dataset_point_sources_picker_owned"] is True
+        assert pair["provider_background_point_source"] in {
+            "manual_picker_saved",
+            "manual_picker_cache",
+        }
+        assert pair["provider_simulated_point_source"] in {
+            "manual_picker_saved",
+            "manual_picker_cache",
+        }
+        assert pair["dataset_background_point_source"] == pair[
+            "provider_background_point_source"
+        ]
+        assert pair["dataset_simulated_point_source"] == pair[
+            "provider_simulated_point_source"
+        ]
+        assert pair["provider_background_point_source"] not in {
+            "live_source_row_projection",
+            "fallback_rebind",
+        }
+        assert pair["provider_simulated_point_source"] not in {
+            "live_source_row_projection",
+            "fallback_rebind",
+        }
+        assert pair["provider_pair_fingerprint"] == pair["dataset_pair_fingerprint"]
 
 
 def test_build_geometry_manual_fit_dataset_skips_cached_candidate_with_missing_hkl() -> None:
@@ -5983,7 +7078,7 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
                 "source_row_index": 2,
             }
         },
-        geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (11.0, 12.0),
         select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
@@ -6012,6 +7107,7 @@ def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> N
 
     assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
+    assert dataset["initial_pairs_display"][0]["bg_display"] == (30.0, 40.0)
     assert dataset["initial_pairs_display"][0]["bg_caked_display"] == (150.0, 160.0)
 
 
@@ -8212,13 +9308,17 @@ def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live
 
     assert result.rebuild_source == "live_runtime_cache"
     assert [stage for stage, _payload in stage_events] == [
+        "source_cache_target_collection_start",
+        "source_cache_target_collection_ready",
+        "source_cache_targeted_projected_cache_start",
+        "source_cache_targeted_projected_cache_miss",
         "source_cache_live_runtime_cache_validation_start",
         "source_cache_live_runtime_cache_validation_ready",
         "source_cache_live_runtime_cache_accepted",
         "source_cache_project_rows_start",
         "source_cache_project_rows_ready",
     ]
-    accepted_payload = stage_events[2][1]
+    accepted_payload = stage_events[6][1]
     assert accepted_payload["row_count"] == 1
     assert accepted_payload["required_pair_count"] == 1
     assert accepted_payload["validated_pair_count"] == 1
@@ -8351,7 +9451,7 @@ def test_rebuild_geometry_fit_source_rows_stage_callback_failure_does_not_abort(
     )
 
     assert result.rebuild_source == "live_runtime_cache"
-    assert result.diagnostics["stage_callback_failure_count"] == 5
+    assert result.diagnostics["stage_callback_failure_count"] == 9
     assert (
         result.diagnostics["stage_callback_last_failed_stage"]
         == "source_cache_project_rows_ready"
@@ -8445,9 +9545,29 @@ def test_targeted_preflight_collects_required_hkl_branch_keys() -> None:
         ((2, 0, 0), None, ("q", 2)),
         ((3, 0, 0), None, None),
     ]
+    rich_targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        [
+            _targeted_required_pair(
+                pair_id="bg0:pair3",
+                hkl=(4, 0, 0),
+                branch_index=1,
+                q_group_key=("preferred", 1),
+                extra={
+                    "source_q_group_key": ("source", 1),
+                    "branch_group_key": ("branch", 1),
+                },
+            )
+        ],
+        background_index=0,
+    )
+
+    assert rich_targets[0]["q_group_key"] == ("preferred", 1)
+    assert geometry_fit._geometry_fit_required_branch_group_keys(rich_targets) == [
+        ((4, 0, 0), 1, ("preferred", 1))
+    ]
 
 
-def test_targeted_preflight_does_not_score_unrelated_hkls_or_branches() -> None:
+def _assert_targeted_preflight_filters_required_groups_only() -> None:
     required_pairs = [
         _targeted_required_pair(
             pair_id="bg0:pair0",
@@ -8520,6 +9640,61 @@ def test_targeted_preflight_does_not_score_unrelated_hkls_or_branches() -> None:
         ((1, 0, 0), 1, ("q", 1)),
         ((2, 0, 0), 0, ("q", 2)),
     ]
+
+
+def test_targeted_preflight_does_not_score_unrelated_hkls_or_branches() -> None:
+    _assert_targeted_preflight_filters_required_groups_only()
+
+
+def test_point_provider_uses_targeted_branch_groups_only() -> None:
+    _assert_targeted_preflight_filters_required_groups_only()
+
+
+def test_targeted_preflight_does_not_score_unrelated_same_branch_groups() -> None:
+    targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+        [
+            _targeted_required_pair(
+                pair_id="bg0:pair0",
+                hkl=(1, 0, 0),
+                branch_index=1,
+                q_group_key=("q", 1),
+            )
+        ],
+        background_index=0,
+    )
+    required_keys = geometry_fit._geometry_fit_required_branch_group_keys(targets)
+    filtered_rows, counts, matched_keys = (
+        geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 2),
+                    sim_col=11.0,
+                    sim_row=21.0,
+                    source_peak_index=1,
+                ),
+            ],
+            required_keys,
+        )
+    )
+
+    assert counts == {
+        "total_count": 2,
+        "after_hkl_filter_count": 2,
+        "after_branch_filter_count": 1,
+        "unrelated_count": 1,
+    }
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0]["q_group_key"] == ("q", 1)
+    assert matched_keys == [((1, 0, 0), 1, ("q", 1))]
 
 
 def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> None:
@@ -8622,6 +9797,85 @@ def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> Non
         consumer="manual_overlay_refresh",
         projection_view_mode="detector",
     )
+    caked_sig_one_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="caked",
+        projection_view_signature={
+            "mode": "caked",
+            "radial_axis": [1.0, 2.0],
+            "azimuth_axis": [-10.0, 10.0],
+        },
+    )
+    caked_sig_two_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="caked",
+        projection_view_signature={
+            "mode": "caked",
+            "radial_axis": [1.0, 2.0, 3.0],
+            "azimuth_axis": [-10.0, 10.0],
+        },
+    )
+    detector_sig_one_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="detector",
+        projection_view_signature={
+            "mode": "detector",
+            "background_index": 0,
+            "current_background_index": 0,
+            "detector_shape": [64, 64],
+            "analysis_bins": [5, 7],
+            "available": True,
+        },
+    )
+    detector_sig_two_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="detector",
+        projection_view_signature={
+            "mode": "detector",
+            "background_index": 0,
+            "current_background_index": 1,
+            "detector_shape": [64, 64],
+            "analysis_bins": [5, 7],
+            "available": True,
+        },
+    )
+    detector_sig_three_digest = geometry_fit._geometry_fit_required_branch_group_keys_digest(
+        first_keys,
+        background_index=0,
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        preflight_mode="manual_geometry_targeted",
+        consumer="geometry_fit_dataset",
+        projection_view_mode="detector",
+        projection_view_signature={
+            "mode": "detector",
+            "background_index": 0,
+            "current_background_index": 1,
+            "detector_shape": [64, 64],
+            "analysis_bins": [11, 13],
+            "available": True,
+        },
+    )
 
     assert first_keys == moved_keys
     assert first_key_digest == moved_key_digest
@@ -8633,6 +9887,9 @@ def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> Non
     assert expanded_key_digest != first_key_digest
     assert caked_key_digest != detector_key_digest
     assert other_consumer_key_digest != detector_key_digest
+    assert caked_sig_one_digest != caked_sig_two_digest
+    assert detector_sig_one_digest == detector_sig_two_digest
+    assert detector_sig_one_digest == detector_sig_three_digest
 
 
 def test_targeted_preflight_projects_only_required_candidate_rows() -> None:
@@ -8799,6 +10056,70 @@ def test_targeted_fresh_simulation_receives_required_branch_group_filter() -> No
     assert result.diagnostics["targeted_performance_gate"]["ok"] is True
 
 
+def test_full_validation_mode_keeps_manual_geometry_targeted_preflight() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    captured_kwargs: dict[str, object] = {}
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "fresh targeted simulation should not touch heavy logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs)
+        or [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="full",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert captured_kwargs["preflight_mode"] == "manual_geometry_targeted"
+    assert result.diagnostics["preflight_mode"] == "manual_geometry_targeted"
+    assert result.diagnostics["targeted_preflight_enabled"] is True
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is True
+
+
 def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_supported() -> None:
     required_pairs = [
         _targeted_required_pair(
@@ -8810,8 +10131,10 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
     ]
     build_kwargs: dict[str, object] = {}
     stage_events: list[tuple[str, dict[str, object]]] = []
+    simulate_calls: list[str] = []
 
     def _simulate_without_targeting(_params):
+        simulate_calls.append("full")
         return [object()]
 
     result = geometry_fit.rebuild_geometry_fit_source_rows(
@@ -8882,6 +10205,7 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
     assert result.diagnostics["full_fresh_simulation_fallback_used"] is True
     assert result.diagnostics["unrelated_scored_row_count_for_rebinding"] == 1
     assert result.diagnostics["targeted_performance_gate"]["ok"] is False
+    assert simulate_calls == ["full"]
     assert [stage for stage, _payload in stage_events] == [
         "source_cache_target_collection_start",
         "source_cache_target_collection_ready",
@@ -8901,6 +10225,143 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
         "source_cache_project_rows_start",
         "source_cache_project_rows_ready",
     ]
+
+
+def test_targeted_fresh_simulation_requires_required_branch_group_filter_support() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    simulate_preflight_modes: list[object] = []
+
+    def _simulate_preflight_only(_params, *, preflight_mode=None):
+        simulate_preflight_modes.append(preflight_mode)
+        return [object()]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "unsupported targeted simulation should not touch heavy logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                )
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=_simulate_preflight_only,
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert simulate_preflight_modes == [None]
+    assert result.diagnostics["targeted_simulation_supported"] is False
+    assert result.diagnostics["targeted_simulation_used"] is False
+    assert result.diagnostics["targeted_simulation_fallback_reason"] == (
+        "simulator_filter_not_supported"
+    )
+    assert result.diagnostics["full_fresh_simulation_fallback_used"] is True
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is False
+
+
+def test_targeted_source_build_requires_required_branch_group_filter_support() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    build_preflight_modes: list[object] = []
+
+    def _build_preflight_only(_tables, *, preflight_mode=None):
+        build_preflight_modes.append(preflight_mode)
+        return (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                )
+            ],
+            None,
+            None,
+            None,
+        )
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [object()],
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "accepted memory cache should not touch logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: pytest.fail(
+            "accepted memory cache should not check logged params"
+        ),
+        build_source_rows_from_hit_tables=_build_preflight_only,
+        simulate_hit_tables=lambda _params: pytest.fail(
+            "accepted memory cache should not run simulation"
+        ),
+        last_runtime_simulation_diagnostics=lambda: {"status": "unused"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert build_preflight_modes == ["manual_geometry_targeted"]
+    assert result.diagnostics["targeted_cache_hit"] is True
+    assert result.diagnostics["full_source_rows_built_for_rebinding"] is True
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is False
 
 
 def test_targeted_simulation_used_follows_runtime_diagnostics() -> None:
@@ -8975,6 +10436,331 @@ def test_targeted_simulation_used_follows_runtime_diagnostics() -> None:
     assert result.diagnostics["targeted_performance_gate"]["ok"] is False
 
 
+def test_stored_rows_only_payload_is_never_projected_cache_hit() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    build_calls: list[int] = []
+    simulation_calls: list[int] = []
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        projection_view_mode="detector",
+        projection_view_signature={"mode": "detector", "detector_shape": [64, 64]},
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "stored-only targeted cache miss should not touch heavy logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            build_calls.append(1)
+            or [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **_kwargs: simulation_calls.append(1) or [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+        get_targeted_projected_cache=lambda _digest: {
+            "requested_signature": geometry_fit._geometry_fit_cache_jsonable(("sig", 0)),
+            "projection_view_signature": {
+                "mode": "detector",
+                "detector_shape": [64, 64],
+            },
+            "consumer": "geometry_fit_dataset",
+            "stored_rows": [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=999.0,
+                    sim_row=999.0,
+                )
+            ],
+            "projected_rows": [],
+            "cache_source": "broken_targeted_cache",
+        },
+        store_targeted_projected_cache=lambda *_args, **_kwargs: None,
+    )
+
+    assert simulation_calls == [1]
+    assert build_calls == [1]
+    assert result.diagnostics["targeted_cache_hit"] is False
+    assert result.diagnostics["cache_source"] != "targeted_projected_cache"
+    assert result.projected_rows[0]["sim_col"] == 10.0
+
+
+def test_detector_targeted_cache_hit_ignores_current_background_signature_drift() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    cached_rows = [
+        _targeted_source_row(
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+            sim_col=33.0,
+            sim_row=44.0,
+        ),
+    ]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        projection_view_mode="detector",
+        projection_view_signature={
+            "mode": "detector",
+            "background_index": 0,
+            "current_background_index": 1,
+            "detector_shape": [64, 64],
+            "analysis_bins": [5, 7],
+            "available": True,
+        },
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "detector targeted cache hit should not touch heavy logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda *_args, **_kwargs: pytest.fail(
+            "detector targeted cache hit should skip fresh row rebuild"
+        ),
+        simulate_hit_tables=lambda *_args, **_kwargs: pytest.fail(
+            "detector targeted cache hit should skip simulation"
+        ),
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda _rows: pytest.fail(
+            "detector targeted cache hit should use cached projected rows"
+        ),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+        get_targeted_projected_cache=lambda _digest: {
+            "requested_signature": geometry_fit._geometry_fit_cache_jsonable(("sig", 0)),
+            "projection_view_signature": {
+                "mode": "detector",
+                "background_index": 0,
+                "current_background_index": 0,
+                "detector_shape": [64, 64],
+                "analysis_bins": [5, 7],
+                "available": True,
+            },
+            "projected_rows": cached_rows,
+            "consumer": "geometry_fit_dataset",
+            "cache_source": "targeted_projected_cache",
+        },
+        store_targeted_projected_cache=lambda *_args, **_kwargs: None,
+    )
+
+    assert result.diagnostics["targeted_cache_hit"] is True
+    assert result.diagnostics["cache_source"] == "targeted_projected_cache"
+    assert result.projected_rows == [dict(cached_rows[0], background_index=0)]
+
+
+def test_detector_targeted_cache_hit_ignores_analysis_bins_drift() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    cached_rows = [
+        _targeted_source_row(
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+            sim_col=55.0,
+            sim_row=66.0,
+        ),
+    ]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        projection_view_mode="detector",
+        projection_view_signature={
+            "mode": "detector",
+            "background_index": 0,
+            "current_background_index": 1,
+            "detector_shape": [64, 64],
+            "analysis_bins": [11, 13],
+            "available": True,
+        },
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "analysis-bin targeted cache miss should not touch heavy logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda *_args, **_kwargs: pytest.fail(
+            "analysis-bin detector cache hit should skip fresh row rebuild"
+        ),
+        simulate_hit_tables=lambda *_args, **_kwargs: pytest.fail(
+            "analysis-bin detector cache hit should skip simulation"
+        ),
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda _rows: pytest.fail(
+            "analysis-bin detector cache hit should use cached projected rows"
+        ),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+        get_targeted_projected_cache=lambda _digest: {
+            "requested_signature": geometry_fit._geometry_fit_cache_jsonable(("sig", 0)),
+            "projection_view_signature": {
+                "mode": "detector",
+                "background_index": 0,
+                "current_background_index": 0,
+                "detector_shape": [64, 64],
+                "analysis_bins": [5, 7],
+                "available": True,
+            },
+            "projected_rows": cached_rows,
+            "consumer": "geometry_fit_dataset",
+            "cache_source": "targeted_projected_cache",
+        },
+        store_targeted_projected_cache=lambda *_args, **_kwargs: None,
+    )
+
+    assert result.diagnostics["targeted_cache_hit"] is True
+    assert result.diagnostics["cache_source"] == "targeted_projected_cache"
+    assert result.projected_rows == [dict(cached_rows[0], background_index=0)]
+
+
+def test_noncurrent_caked_rebuild_uses_caked_payload_failure_reason() -> None:
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=1,
+        background_label="bg1.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 1),
+        requested_signature_summary="sig-summary-1",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        projection_view_mode="caked",
+        projection_view_signature={
+            "mode": "caked",
+            "available": True,
+            "background_index": 1,
+            "current_background_index": 0,
+            "detector_shape": [64, 64],
+            "radial_axis": [1.0, 2.0],
+            "azimuth_axis": [-10.0, 10.0],
+        },
+        projection_payload=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "missing caked payload should reject before heavy logged cache load"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            [
+                _targeted_source_row(
+                    hkl=(1, 0, 0),
+                    branch_index=1,
+                    q_group_key=("q", 1),
+                    sim_col=10.0,
+                    sim_row=20.0,
+                ),
+            ],
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **_kwargs: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda _rows: pytest.fail(
+            "strict caked projection should not use the generic projector"
+        ),
+        project_rows_for_background_view=lambda _rows: pytest.fail(
+            "missing caked payload should reject before background projection"
+        ),
+    )
+
+    assert result.stored_rows
+    assert result.projected_rows == []
+    assert result.diagnostics["projection_failure_reason"] == (
+        "missing_background_caked_payload"
+    )
+
+
 def test_full_fresh_simulation_fallback_does_not_pass_targeted_performance_gate() -> None:
     required_pairs = [
         _targeted_required_pair(
@@ -9037,6 +10823,29 @@ def test_full_fresh_simulation_fallback_does_not_pass_targeted_performance_gate(
     )
     assert result.diagnostics["full_fresh_simulation_fallback_used"] is True
     assert result.diagnostics["targeted_performance_gate"]["ok"] is False
+
+
+def test_simulator_filter_unsupported_never_passes_targeted_performance_gate() -> None:
+    gate = geometry_fit._geometry_fit_targeted_performance_gate_payload(
+        {
+            "preflight_mode": "manual_geometry_targeted",
+            "targeted_preflight_enabled": True,
+            "targeted_simulation_supported": False,
+            "targeted_simulation_used": False,
+            "targeted_cache_hit": True,
+            "full_fresh_simulation_fallback_used": False,
+            "targeted_simulation_fallback_reason": "simulator_filter_not_supported",
+            "required_hkl_branch_group_count": 1,
+            "source_rows_projected_for_rebinding": 1,
+            "candidate_rows_scored_for_background_distance": 1,
+            "unrelated_projected_row_count_for_rebinding": 0,
+            "unrelated_scored_row_count_for_rebinding": 0,
+            "full_source_rows_built_for_rebinding": False,
+            "full_source_rows_projected_for_rebinding": False,
+        }
+    )
+
+    assert gate["ok"] is False
 
 
 def test_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load() -> None:
