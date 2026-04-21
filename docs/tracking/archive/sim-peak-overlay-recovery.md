@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-04-19
+Last updated: 2026-04-21
 
 This page records the resolved detector/caked manual-picking problem for Qr/Qz
 group selection and HKL selection. It replaces the earlier in-progress
@@ -121,6 +121,29 @@ Preserve these rules when touching manual picking again:
 - HKL and Qr/Qz picking should share candidate source identity and current-view
   projection wherever possible.
 
+## Regression Contract
+
+On 2026-04-21, `tests/test_projection_alignment_contract.py` was added as a
+coordinate-level guard for the resolved projection-alignment bug. It checks both
+detector and caked views without screenshot diffs:
+
+- the HKL point and analytic Qr path land on the same transformed background
+  matrix cell;
+- the Matplotlib `Line2D` artist coordinates for HKL points and Qr paths match
+  the displayed background axes;
+- detector HKL overlays are forced through the detector-display coordinate
+  adapter, while caked HKL overlays are forced through cached caked
+  `(two_theta, phi)` values;
+- caked Qr paths are forced through the caked projection path instead of
+  leaking detector-display coordinates.
+
+Status: the original bug remains resolved, and this work adds regression
+coverage only. No production code change was needed. Negative-control source
+mutations killed all six required coordinate regressions: detector rotation
+off-by-one, detector HKL fallback, detector Qr raw coordinates, caked HKL
+detector coordinates, caked Qr detector-display leakage, and shifted Qr
+`Line2D` x data.
+
 ## Main Code Paths
 
 - `ra_sim/gui/geometry_q_group_manager.py`
@@ -135,6 +158,7 @@ Main regression coverage lives near:
 - `tests/test_manual_geometry_selection_helpers.py`
 - `tests/test_gui_peak_selection.py`
 - `tests/test_gui_canvas_interactions.py`
+- `tests/test_projection_alignment_contract.py`
 
 ## Acceptance Criteria Reached
 
@@ -147,3 +171,5 @@ Main regression coverage lives near:
 - HKL caked-view selection uses the same current-view candidate frame as Qr/Qz
   selection.
 - HKL caked markers agree with the rendered caked simulation spot.
+- Detector/caked HKL and Qr overlays share displayed background coordinates at
+  the matrix layer and Matplotlib artist layer.
