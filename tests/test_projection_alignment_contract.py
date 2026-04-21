@@ -241,6 +241,39 @@ def test_detector_sim_hit_overlay_uses_sim_display_coordinates_when_frames_diver
     assert background_normalized[0]["display_row"] == background_detector_display[1]
 
 
+def test_detector_sim_hit_overlay_does_not_use_background_adapter_when_sim_projection_fails() -> (
+    None
+):
+    native_shape = (60, 100)
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("projection-alignment-contract", "detector-drop"),
+        stored_sim_image=np.zeros(native_shape, dtype=np.float64),
+        stored_primary_intersection_cache=[
+            _detector_cache_row(native_col=10.0, native_row=20.0).reshape(1, -1)
+        ],
+    )
+
+    def _sim_display_fails(*_args):
+        raise RuntimeError("sim display projection unavailable")
+
+    def _background_adapter_must_not_run(*_args):
+        raise AssertionError("sim hit overlay must not use background detector frame")
+
+    assert peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=_sim_display_fails,
+        native_detector_coords_to_detector_display_coords=_background_adapter_must_not_run,
+        reflection_q_group_metadata=_reflection_q_group_metadata,
+        max_hits_per_reflection=1,
+        min_separation_px=0.0,
+        force=True,
+    )
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_records == []
+
+
 def test_caked_background_hkl_and_qr_overlays_share_display_coordinates(monkeypatch) -> None:
     detector_shape = (7, 7)
     native_col = 3.0

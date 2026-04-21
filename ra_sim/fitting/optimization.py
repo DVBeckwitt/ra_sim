@@ -2717,6 +2717,7 @@ def _prepare_reflection_subset(
         return None
 
     local_provider_reflection_indices: Dict[int, int] = {}
+    local_provider_assignment_metadata: Dict[int, Dict[str, object]] = {}
     local_provider_groups: Dict[Tuple[int, int, int], List[int]] = {}
     for entry_index, entry in enumerate(normalized_measured):
         if not _is_provider_local_fixed_source(entry):
@@ -2730,7 +2731,24 @@ def _prepare_reflection_subset(
         matching_indices = list(hkl_to_reflection_indices.get(hkl_key, []))
         if not matching_indices:
             continue
+        duplicate_hkl_count = int(len(matching_indices))
         used_indices: set[int] = set()
+
+        def _record_local_provider_assignment(
+            entry_index: int,
+            reflection_idx: int,
+            *,
+            assignment: str,
+            branch_provenance: bool,
+        ) -> None:
+            local_provider_reflection_indices[int(entry_index)] = int(reflection_idx)
+            local_provider_assignment_metadata[int(entry_index)] = {
+                "assignment": str(assignment),
+                "branch_provenance": bool(branch_provenance),
+                "duplicate_hkl_count": int(duplicate_hkl_count),
+                "original_reflection_index": int(reflection_idx),
+            }
+
         for entry_index in entry_indices:
             reflection_idx = _resolve_local_provider_reflection_index(
                 normalized_measured[int(entry_index)]
@@ -2739,7 +2757,16 @@ def _prepare_reflection_subset(
                 continue
             if reflection_idx in used_indices:
                 continue
-            local_provider_reflection_indices[int(entry_index)] = int(reflection_idx)
+            _record_local_provider_assignment(
+                int(entry_index),
+                int(reflection_idx),
+                assignment=(
+                    "provider_local_unique_hkl"
+                    if int(duplicate_hkl_count) <= 1
+                    else "provider_local_explicit_table"
+                ),
+                branch_provenance=False,
+            )
             used_indices.add(int(reflection_idx))
         remaining_indices = [
             int(reflection_idx)
@@ -2751,13 +2778,20 @@ def _prepare_reflection_subset(
             entry_index: int,
             *,
             from_end: bool = False,
+            assignment: str,
+            branch_provenance: bool,
         ) -> None:
             if int(entry_index) in local_provider_reflection_indices:
                 return
             if not remaining_indices:
                 return
             reflection_idx = remaining_indices.pop() if bool(from_end) else remaining_indices.pop(0)
-            local_provider_reflection_indices[int(entry_index)] = int(reflection_idx)
+            _record_local_provider_assignment(
+                int(entry_index),
+                int(reflection_idx),
+                assignment=str(assignment),
+                branch_provenance=bool(branch_provenance),
+            )
 
         branch_zero_entries: List[int] = []
         branch_one_entries: List[int] = []
@@ -2773,11 +2807,38 @@ def _prepare_reflection_subset(
             else:
                 other_entries.append(int(entry_index))
         for entry_index in branch_zero_entries:
-            _assign_local_provider_reflection(int(entry_index), from_end=False)
+            _assign_local_provider_reflection(
+                int(entry_index),
+                from_end=False,
+                assignment=(
+                    "provider_local_duplicate_hkl_branch"
+                    if int(duplicate_hkl_count) > 1
+                    else "provider_local_unique_hkl"
+                ),
+                branch_provenance=bool(int(duplicate_hkl_count) > 1),
+            )
         for entry_index in branch_one_entries:
-            _assign_local_provider_reflection(int(entry_index), from_end=True)
+            _assign_local_provider_reflection(
+                int(entry_index),
+                from_end=True,
+                assignment=(
+                    "provider_local_duplicate_hkl_branch"
+                    if int(duplicate_hkl_count) > 1
+                    else "provider_local_unique_hkl"
+                ),
+                branch_provenance=bool(int(duplicate_hkl_count) > 1),
+            )
         for entry_index in other_entries:
-            _assign_local_provider_reflection(int(entry_index), from_end=False)
+            _assign_local_provider_reflection(
+                int(entry_index),
+                from_end=False,
+                assignment=(
+                    "provider_local_duplicate_hkl_unproven"
+                    if int(duplicate_hkl_count) > 1
+                    else "provider_local_unique_hkl"
+                ),
+                branch_provenance=False,
+            )
 
     selected_original_indices: List[int] = []
     selected_lookup: set[int] = set()
@@ -2791,6 +2852,23 @@ def _prepare_reflection_subset(
             reflection_idx = local_provider_reflection_indices.get(int(entry_index))
             if reflection_idx is None:
                 reflection_idx = _resolve_local_provider_reflection_index(entry)
+                if reflection_idx is not None:
+                    hkl_key = _entry_hkl_key(entry)
+                    duplicate_hkl_count = (
+                        len(hkl_to_reflection_indices.get(hkl_key, []))
+                        if hkl_key is not None
+                        else 0
+                    )
+                    local_provider_assignment_metadata[int(entry_index)] = {
+                        "assignment": (
+                            "provider_local_unique_hkl"
+                            if int(duplicate_hkl_count) <= 1
+                            else "provider_local_explicit_table"
+                        ),
+                        "branch_provenance": False,
+                        "duplicate_hkl_count": int(duplicate_hkl_count),
+                        "original_reflection_index": int(reflection_idx),
+                    }
             local_fixed = reflection_idx is not None
         if reflection_idx is None:
             continue
@@ -2898,6 +2976,9 @@ def _prepare_reflection_subset(
             duplicate_hkl_count = (
                 len(hkl_to_reflection_indices.get(hkl_key, [])) if hkl_key is not None else 0
             )
+            assignment_metadata = dict(
+                local_provider_assignment_metadata.get(int(entry_index), {})
+            )
             source_table_idx = _coerce_index(entry.get("source_table_index"))
             if source_table_idx is None:
                 source_table_idx = _coerce_index(entry.get("resolved_table_index"))
@@ -2911,13 +2992,22 @@ def _prepare_reflection_subset(
             if "source_table_index" in entry and source_table_idx is not None:
                 remapped_entry["source_table_index"] = int(source_table_idx)
             remapped_entry["provider_local_subset_provenance"] = True
-            remapped_entry["provider_local_subset_assignment"] = (
-                "provider_local_duplicate_hkl_branch"
-                if int(duplicate_hkl_count) > 1
-                else "provider_local_unique_hkl"
+            remapped_entry["provider_local_subset_assignment"] = str(
+                assignment_metadata.get(
+                    "assignment",
+                    "provider_local_explicit_table"
+                    if int(duplicate_hkl_count) > 1
+                    else "provider_local_unique_hkl",
+                )
+            )
+            remapped_entry["provider_local_subset_branch_provenance"] = bool(
+                assignment_metadata.get("branch_provenance", False)
+            )
+            remapped_entry["provider_local_subset_duplicate_hkl_count"] = int(
+                assignment_metadata.get("duplicate_hkl_count", duplicate_hkl_count)
             )
             remapped_entry["provider_local_subset_original_reflection_index"] = int(
-                local_reflection_idx
+                assignment_metadata.get("original_reflection_index", local_reflection_idx)
             )
             row_idx = _coerce_index(entry.get("source_row_index"))
             if row_idx is not None:
@@ -10671,62 +10761,85 @@ def _resolve_fixed_source_matches(
         assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
         return assignment.startswith("provider_local_")
 
+    def _provider_local_branch_identity_conflict(entry: Mapping[str, object]) -> bool:
+        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+        if fit_kind != "provider_fixed_source_local":
+            return False
+        requested_values = [
+            int(value)
+            for value in (
+                _nonnegative_index(entry.get("source_branch_index")),
+                _nonnegative_index(entry.get("source_peak_index")),
+                _nonnegative_index(entry.get("resolved_peak_index")),
+            )
+            if value in {0, 1}
+        ]
+        return len(set(requested_values)) > 1
+
     def _provider_local_singleton_row(
         entry: Mapping[str, object],
         row_records: Sequence[Mapping[str, object]],
         *,
         row_reason: str,
-    ) -> Tuple[Optional[np.ndarray], Optional[Dict[str, object]]]:
+    ) -> Tuple[Optional[np.ndarray], Optional[Dict[str, object]], str]:
         if str(row_reason) != "source_row_out_of_range":
-            return None, None
+            return None, None, str(row_reason)
         if not _provider_local_subset_provenance(entry):
-            return None, None
+            return None, None, "provider_local_subset_provenance_missing"
+        assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
+        branch_provenance = bool(entry.get("provider_local_subset_branch_provenance", False))
+        if assignment == "provider_local_duplicate_hkl_unproven":
+            return None, None, "provider_local_duplicate_hkl_unproven"
         if len(row_records) != 1:
-            return None, None
+            return None, None, "provider_local_singleton_row_count_mismatch"
         row_record = row_records[0]
         try:
             row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
         except Exception:
-            return None, None
+            return None, None, "provider_local_singleton_row_parse_failed"
         if row.shape[0] < 7:
-            return None, None
+            return None, None, "provider_local_singleton_row_parse_failed"
         try:
             sim_col = float(row[1])
             sim_row = float(row[2])
             sim_hkl = tuple(int(round(float(v))) for v in row[4:7])
         except Exception:
-            return None, None
+            return None, None, "provider_local_singleton_row_parse_failed"
         if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-            return None, None
+            return None, None, "provider_local_singleton_invalid_simulated_point"
         measured_hkl_key = _normalized_hkl_key(entry.get("hkl"))
         if measured_hkl_key is None or tuple(sim_hkl) != tuple(measured_hkl_key):
-            return None, None
-        assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
-        branch_provenance = assignment in {
-            "provider_local_duplicate_hkl_branch",
-            "provider_local_duplicate_hkl_group",
-        }
+            return None, None, "provider_local_singleton_hkl_mismatch"
         requested_branch = _nonnegative_index(entry.get("source_branch_index"))
         requested_peak = _nonnegative_index(entry.get("source_peak_index"))
+        requested_resolved_peak = _nonnegative_index(entry.get("resolved_peak_index"))
         row_branch = source_branch_index_from_phi_deg(row[3])
-        requested_branch_values = {
-            int(value) for value in (requested_branch, requested_peak) if value in {0, 1}
-        }
-        if (
-            requested_branch_values
-            and row_branch in {0, 1}
-            and int(row_branch) not in requested_branch_values
-            and not branch_provenance
-        ):
-            return None, None
+        requested_branch_values = [
+            int(value)
+            for value in (requested_branch, requested_peak, requested_resolved_peak)
+            if value in {0, 1}
+        ]
+        if len(set(requested_branch_values)) > 1:
+            return None, None, "provider_local_branch_identity_conflict"
+        if row_branch in {0, 1}:
+            if (
+                requested_branch_values
+                and int(row_branch) not in set(requested_branch_values)
+                and not branch_provenance
+            ):
+                return None, None, "provider_local_branch_mismatch"
         if (
             entry.get("q_group_key") is not None or entry.get("branch_group_key") is not None
         ) and not branch_provenance:
-            return None, None
+            return None, None, "provider_local_group_unproven"
         resolved_peak_idx = _nonnegative_index(entry.get("resolved_peak_index"))
         if resolved_peak_idx is None:
             resolved_peak_idx = _measured_source_peak_index(entry)
+        if resolved_peak_idx not in {0, 1} and row_branch in {0, 1}:
+            resolved_peak_idx = int(row_branch)
         stale_row_idx = _nonnegative_index(entry.get("source_row_index"))
+        row_position = _nonnegative_index(row_record.get("row_position"))
+        singleton_row_branch_index = int(row_branch) if row_branch in {0, 1} else None
         payload = {
             "resolution_kind": "fixed_source",
             "resolution_reason": "provider_local_singleton_resolved_table",
@@ -10734,13 +10847,21 @@ def _resolve_fixed_source_matches(
             "resolved_peak_index": (
                 int(resolved_peak_idx) if resolved_peak_idx in {0, 1} else None
             ),
+            "resolved_source_row_position": (
+                int(row_position) if row_position is not None else None
+            ),
+            "singleton_row_branch_index": singleton_row_branch_index,
             "stale_source_row_index": (int(stale_row_idx) if stale_row_idx is not None else None),
             "source_row_count": 1,
             "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
             "provider_local_subset_provenance": True,
             "provider_local_subset_assignment": str(assignment),
+            "provider_local_subset_branch_provenance": bool(branch_provenance),
+            "provider_local_subset_duplicate_hkl_count": _nonnegative_index(
+                entry.get("provider_local_subset_duplicate_hkl_count")
+            ),
         }
-        return np.asarray(row[:7], dtype=float), payload
+        return np.asarray(row[:7], dtype=float), payload, "provider_local_singleton_resolved_table"
 
     for match_input_index, entry in enumerate(measured_entries):
         overlay_match_index = _overlay_index(entry, match_input_index)
@@ -10754,6 +10875,17 @@ def _resolve_fixed_source_matches(
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
             **_copy_source_identity_payload(entry),
         }
+        if _provider_local_branch_identity_conflict(entry):
+            fallback_entries.append(entry)
+            _store_resolution_diag(
+                entry,
+                {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "provider_local_branch_identity_conflict",
+                },
+            )
+            continue
         trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
         source_peak_key = _measured_source_peak_indices(entry)
         source_row_key = _measured_source_indices(entry)
@@ -10919,7 +11051,7 @@ def _resolve_fixed_source_matches(
             row_idx = int(source_row_key[1])
             row_record, row_reason = _resolve_source_row_record(row_records, row_idx)
             if row_record is None:
-                singleton_row, singleton_payload = _provider_local_singleton_row(
+                singleton_row, singleton_payload, singleton_reason = _provider_local_singleton_row(
                     entry,
                     row_records,
                     row_reason=str(row_reason),
@@ -10934,7 +11066,7 @@ def _resolve_fixed_source_matches(
                         {
                             **base_diag,
                             "resolution_kind": "hkl_fallback",
-                            "resolution_reason": str(row_reason),
+                            "resolution_reason": str(singleton_reason or row_reason),
                             "source_row_count": int(len(row_records)),
                         },
                     )

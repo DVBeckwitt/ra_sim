@@ -93,9 +93,7 @@ def _normalize_startup_debug_override(mode: str | None) -> DebugStartupOverride:
     if normalized in {"", "default"}:
         normalized = "inherit"
     if normalized not in {"inherit", "enable_all", "disable_all"}:
-        raise ValueError(
-            "startup debug override must be one of: inherit, enable_all, disable_all"
-        )
+        raise ValueError("startup debug override must be one of: inherit, enable_all, disable_all")
     return normalized  # type: ignore[return-value]
 
 
@@ -181,9 +179,7 @@ def _instrument_root(
     instrument_config: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     raw = (
-        _bundle_instrument_config()
-        if instrument_config is None
-        else _as_mapping(instrument_config)
+        _bundle_instrument_config() if instrument_config is None else _as_mapping(instrument_config)
     )
     nested = raw.get("instrument")
     return _as_mapping(nested) if isinstance(nested, Mapping) else raw
@@ -537,9 +533,9 @@ def _run_bundle_roots() -> dict[str, Path]:
         except Exception:
             continue
     try:
-        roots["intersection_cache_log_root"] = Path(
-            resolve_intersection_cache_log_root()
-        ).expanduser().resolve()
+        roots["intersection_cache_log_root"] = (
+            Path(resolve_intersection_cache_log_root()).expanduser().resolve()
+        )
     except Exception:
         pass
     return roots
@@ -727,6 +723,9 @@ def finalize_run_bundle() -> Path | None:
             return None
         if state.finalized:
             return state.final_zip_path
+
+        for root_name, root in _run_bundle_roots().items():
+            state.roots.setdefault(root_name, root)
 
         debug_log_dir = state.roots.get("debug_log_dir")
         if debug_log_dir is None:

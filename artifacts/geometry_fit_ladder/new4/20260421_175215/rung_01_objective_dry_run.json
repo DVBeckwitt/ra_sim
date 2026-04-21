@@ -11,7 +11,7 @@
     "center_x"
   ],
   "dataset_pair_count": 7,
-  "elapsed_seconds": 0.3214700999960769,
+  "elapsed_seconds": 0.2142603000102099,
   "fallback_entry_count": 0,
   "fallback_hkl_count": 0,
   "fallback_row_count": 0,
@@ -311,8 +311,8 @@
   "solver_message": "dry_run probe",
   "solver_success": true,
   "stage_timing_s": {
-    "central_solve": 0.024155199993401766,
-    "dynamic_seed": 0.05020259998855181
+    "central_solve": 0.012774999981047586,
+    "dynamic_seed": 0.031283099990105256
   },
   "status": "ok",
   "subset_fallback_hkl_count": 0

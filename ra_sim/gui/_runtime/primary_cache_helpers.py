@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Any, cast
 
 import numpy as np
 
@@ -26,6 +27,8 @@ def _iter_table_payload(payload: object) -> list[object]:
             return [arr]
         if arr.ndim == 3:
             return [arr[idx] for idx in range(arr.shape[0])]
+        return []
+    if not isinstance(payload, Iterable):
         return []
     try:
         return list(payload)
@@ -171,7 +174,7 @@ def store_primary_cache_payload(
             if isinstance(best_sample_indices, Sequence) and idx < len(best_sample_indices):
                 try:
                     simulation_runtime_state.primary_best_sample_index_cache[key] = int(
-                        best_sample_indices[idx]
+                        cast(Any, best_sample_indices[idx])
                     )
                 except Exception:
                     pass

@@ -1780,21 +1780,6 @@ def ensure_runtime_peak_overlay_data(
                     ):
                         disp_cx = float(detector_display[0])
                         disp_cy = float(detector_display[1])
-                    elif callable(native_detector_coords_to_detector_display_coords):
-                        detector_display = native_detector_coords_to_detector_display_coords(
-                            float(cx),
-                            float(cy),
-                        )
-                        if (
-                            isinstance(detector_display, tuple)
-                            and len(detector_display) >= 2
-                            and np.isfinite(float(detector_display[0]))
-                            and np.isfinite(float(detector_display[1]))
-                        ):
-                            disp_cx = float(detector_display[0])
-                            disp_cy = float(detector_display[1])
-                        else:
-                            continue
                     else:
                         continue
                 too_close = False

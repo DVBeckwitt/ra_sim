@@ -37,7 +37,7 @@ import math
 from pathlib import Path
 import sys
 from types import SimpleNamespace
-from typing import Any, Dict, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
@@ -49,6 +49,15 @@ from ra_sim.hbn_geometry import load_tilt_hint
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
+
+if TYPE_CHECKING:
+    from ra_sim.simulation.types import (
+        BeamSamples,
+        DebyeWallerParams,
+        DetectorGeometry,
+        MosaicParams,
+        SimulationRequest,
+    )
 
 
 @dataclass(frozen=True)
@@ -423,10 +432,7 @@ def _apply_headless_tilt_hint(
         f"sim γ={gamma_initial:.4f} deg, sim Γ={Gamma_initial:.4f} deg"
     )
     if hinted_distance is not None:
-        print(
-            "Using detector distance default from hBN fit profile: "
-            f"Dist={hinted_distance:.4f} m"
-        )
+        print(f"Using detector distance default from hBN fit profile: Dist={hinted_distance:.4f} m")
 
     return gamma_initial, Gamma_initial, distance_m
 
@@ -603,9 +609,7 @@ def _build_headless_geometry_mosaic_params(
     divergence_sigma = math.radians(
         float(beam_config.get("divergence_fwhm_deg", 0.05)) * fwhm2sigma
     )
-    bandwidth_sigma = (
-        float(beam_config.get("bandwidth_sigma_fraction", 5.0e-5)) * fwhm2sigma
-    )
+    bandwidth_sigma = float(beam_config.get("bandwidth_sigma_fraction", 5.0e-5)) * fwhm2sigma
     bandwidth_percent = float(
         np.clip(
             _saved_state_float(
@@ -723,9 +727,7 @@ def run_headless_geometry_fit(
         report: dict[str, object] = {
             "accepted": bool(shared_result.accepted),
             "log_path": (
-                str(shared_result.log_path)
-                if shared_result.log_path is not None
-                else None
+                str(shared_result.log_path) if shared_result.log_path is not None else None
             ),
             "matched_peaks_path": None,
         }
@@ -797,17 +799,25 @@ def run_headless_geometry_fit(
     fit_geometry_cfg = dict(fit_geometry_cfg) if isinstance(fit_geometry_cfg, Mapping) else {}
 
     image_size = int(detector_cfg.get("image_size", simulation_defaults.image_size))
-    pixel_size_m = float(detector_cfg.get("pixel_size_m", simulation_defaults.geometry.pixel_size_m))
+    pixel_size_m = float(
+        detector_cfg.get("pixel_size_m", simulation_defaults.geometry.pixel_size_m)
+    )
     lambda_angstrom = float(simulation_defaults.geometry.lambda_angstrom)
-    theta_initial_default = float(sample_cfg.get("theta_initial_deg", simulation_defaults.geometry.theta_initial_deg))
+    theta_initial_default = float(
+        sample_cfg.get("theta_initial_deg", simulation_defaults.geometry.theta_initial_deg)
+    )
     cor_angle_default = float(sample_cfg.get("cor_deg", simulation_defaults.geometry.cor_angle_deg))
     chi_default = float(sample_cfg.get("chi_deg", simulation_defaults.geometry.chi_deg))
     psi_default = float(sample_cfg.get("psi_deg", 0.0))
     psi_z_default = float(sample_cfg.get("psi_z_deg", simulation_defaults.geometry.psi_z_deg))
     zs_default = float(sample_cfg.get("zs", simulation_defaults.geometry.zs))
     zb_default = float(sample_cfg.get("zb", simulation_defaults.geometry.zb))
-    sample_width_default = float(sample_cfg.get("width_m", simulation_defaults.geometry.sample_width_m))
-    sample_length_default = float(sample_cfg.get("length_m", simulation_defaults.geometry.sample_length_m))
+    sample_width_default = float(
+        sample_cfg.get("width_m", simulation_defaults.geometry.sample_width_m)
+    )
+    sample_length_default = float(
+        sample_cfg.get("length_m", simulation_defaults.geometry.sample_length_m)
+    )
     sample_depth_default = float(sample_cfg.get("depth_m", simulation_defaults.sample_depth_m))
     gamma_default = float(simulation_defaults.geometry.Gamma_deg)
     Gamma_default = float(simulation_defaults.geometry.gamma_deg)
@@ -817,7 +827,9 @@ def run_headless_geometry_fit(
     debye_x_default = float(debye_cfg.get("x", simulation_defaults.debye_waller.x))
     debye_y_default = float(debye_cfg.get("y", simulation_defaults.debye_waller.y))
 
-    primary_cif_path = str(Path(str(files_state.get("primary_cif_path") or get_path("cif_file"))).expanduser())
+    primary_cif_path = str(
+        Path(str(files_state.get("primary_cif_path") or get_path("cif_file"))).expanduser()
+    )
     if not Path(primary_cif_path).is_file():
         raise FileNotFoundError(f"Primary CIF file not found: {primary_cif_path}")
     secondary_cif_path = None
@@ -835,15 +847,23 @@ def run_headless_geometry_fit(
         secondary_a = float(gui_structure_model.parse_cif_num(secondary_blk.get("_cell_length_a")))
         secondary_c = float(gui_structure_model.parse_cif_num(secondary_blk.get("_cell_length_c")))
 
-    occupancy_labels, occupancy_expanded_map = gui_structure_model.extract_occupancy_site_metadata(primary_blk, primary_cif_path)
-    atom_site_fractional_metadata = gui_structure_model.extract_atom_site_fractional_metadata(primary_blk)
+    occupancy_labels, occupancy_expanded_map = gui_structure_model.extract_occupancy_site_metadata(
+        primary_blk, primary_cif_path
+    )
+    atom_site_fractional_metadata = gui_structure_model.extract_atom_site_fractional_metadata(
+        primary_blk
+    )
     fallback_occ = list(inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0]))
     raw_occ_values = saved_lists.get("occupancy_values", [])
     if not isinstance(raw_occ_values, list):
         raw_occ_values = fallback_occ
-    occ_values = gui_controllers.clamp_site_occupancy_values(raw_occ_values, fallback_values=fallback_occ)
+    occ_values = gui_controllers.clamp_site_occupancy_values(
+        raw_occ_values, fallback_values=fallback_occ
+    )
     if occupancy_labels and len(occ_values) < len(occupancy_labels):
-        occ_values.extend([occ_values[-1] if occ_values else 1.0] * (len(occupancy_labels) - len(occ_values)))
+        occ_values.extend(
+            [occ_values[-1] if occ_values else 1.0] * (len(occupancy_labels) - len(occ_values))
+        )
 
     raw_atom_site_values = saved_lists.get("atom_site_fractional_values", [])
     atom_site_values: list[tuple[float, float, float]] = []
@@ -851,12 +871,22 @@ def run_headless_geometry_fit(
         for idx, row in enumerate(raw_atom_site_values):
             if not isinstance(row, Mapping):
                 continue
-            fallback_row = atom_site_fractional_metadata[idx] if idx < len(atom_site_fractional_metadata) else {"x": 0.0, "y": 0.0, "z": 0.0}
+            fallback_row = (
+                atom_site_fractional_metadata[idx]
+                if idx < len(atom_site_fractional_metadata)
+                else {"x": 0.0, "y": 0.0, "z": 0.0}
+            )
             atom_site_values.append(
                 (
-                    _coerce_finite_float(row.get("x")) if _coerce_finite_float(row.get("x")) is not None else float(fallback_row.get("x", 0.0)),
-                    _coerce_finite_float(row.get("y")) if _coerce_finite_float(row.get("y")) is not None else float(fallback_row.get("y", 0.0)),
-                    _coerce_finite_float(row.get("z")) if _coerce_finite_float(row.get("z")) is not None else float(fallback_row.get("z", 0.0)),
+                    _coerce_finite_float(row.get("x"))
+                    if _coerce_finite_float(row.get("x")) is not None
+                    else float(fallback_row.get("x", 0.0)),
+                    _coerce_finite_float(row.get("y"))
+                    if _coerce_finite_float(row.get("y")) is not None
+                    else float(fallback_row.get("y", 0.0)),
+                    _coerce_finite_float(row.get("z"))
+                    if _coerce_finite_float(row.get("z")) is not None
+                    else float(fallback_row.get("z", 0.0)),
                 )
             )
     while len(atom_site_values) < len(atom_site_fractional_metadata):
@@ -870,33 +900,63 @@ def run_headless_geometry_fit(
     while len(w_defaults) < 3:
         w_defaults.append(0.0)
 
-    theta_initial_var = _HeadlessVar(_saved_state_float(saved_variables, "theta_initial_var", theta_initial_default))
-    cor_angle_var = _HeadlessVar(_saved_state_float(saved_variables, "cor_angle_var", cor_angle_default))
+    theta_initial_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "theta_initial_var", theta_initial_default)
+    )
+    cor_angle_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "cor_angle_var", cor_angle_default)
+    )
     chi_var = _HeadlessVar(_saved_state_float(saved_variables, "chi_var", chi_default))
     psi_z_var = _HeadlessVar(_saved_state_float(saved_variables, "psi_z_var", psi_z_default))
     zs_var = _HeadlessVar(_saved_state_float(saved_variables, "zs_var", zs_default))
     zb_var = _HeadlessVar(_saved_state_float(saved_variables, "zb_var", zb_default))
     gamma_var = _HeadlessVar(_saved_state_float(saved_variables, "gamma_var", gamma_default))
     Gamma_var = _HeadlessVar(_saved_state_float(saved_variables, "Gamma_var", Gamma_default))
-    corto_detector_var = _HeadlessVar(_saved_state_float(saved_variables, "corto_detector_var", distance_default))
+    corto_detector_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "corto_detector_var", distance_default)
+    )
     a_var = _HeadlessVar(_saved_state_float(saved_variables, "a_var", primary_a))
     c_var = _HeadlessVar(_saved_state_float(saved_variables, "c_var", primary_c))
-    center_x_var = _HeadlessVar(_saved_state_float(saved_variables, "center_x_var", center_x_default))
-    center_y_var = _HeadlessVar(_saved_state_float(saved_variables, "center_y_var", center_y_default))
-    sample_width_var = _HeadlessVar(_saved_state_float(saved_variables, "sample_width_var", sample_width_default))
-    sample_length_var = _HeadlessVar(_saved_state_float(saved_variables, "sample_length_var", sample_length_default))
-    sample_depth_var = _HeadlessVar(_saved_state_float(saved_variables, "sample_depth_var", sample_depth_default))
-    sigma_mosaic_var = _HeadlessVar(_saved_state_float(saved_variables, "sigma_mosaic_var", float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8))))
-    gamma_mosaic_var = _HeadlessVar(_saved_state_float(saved_variables, "gamma_mosaic_var", float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7))))
-    eta_var = _HeadlessVar(_saved_state_float(saved_variables, "eta_var", float(beam_cfg.get("eta", 0.0))))
+    center_x_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "center_x_var", center_x_default)
+    )
+    center_y_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "center_y_var", center_y_default)
+    )
+    sample_width_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "sample_width_var", sample_width_default)
+    )
+    sample_length_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "sample_length_var", sample_length_default)
+    )
+    sample_depth_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "sample_depth_var", sample_depth_default)
+    )
+    sigma_mosaic_var = _HeadlessVar(
+        _saved_state_float(
+            saved_variables, "sigma_mosaic_var", float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8))
+        )
+    )
+    gamma_mosaic_var = _HeadlessVar(
+        _saved_state_float(
+            saved_variables, "gamma_mosaic_var", float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7))
+        )
+    )
+    eta_var = _HeadlessVar(
+        _saved_state_float(saved_variables, "eta_var", float(beam_cfg.get("eta", 0.0)))
+    )
     debye_x_var = _HeadlessVar(_saved_state_float(saved_variables, "debye_x_var", debye_x_default))
     debye_y_var = _HeadlessVar(_saved_state_float(saved_variables, "debye_y_var", debye_y_default))
-    geometry_theta_offset_var = _HeadlessVar(_saved_state_text(saved_variables, "geometry_theta_offset_var", "0.0"))
+    geometry_theta_offset_var = _HeadlessVar(
+        _saved_state_text(saved_variables, "geometry_theta_offset_var", "0.0")
+    )
     background_theta_list_var = _HeadlessVar(
         _saved_state_text(
             saved_variables,
             "background_theta_list_var",
-            gui_background_theta.format_background_theta_values([float(theta_initial_var.get())] * len(osc_files)),
+            gui_background_theta.format_background_theta_values(
+                [float(theta_initial_var.get())] * len(osc_files)
+            ),
         )
     )
     geometry_fit_background_selection_var = _HeadlessVar(
@@ -936,8 +996,12 @@ def run_headless_geometry_fit(
             "phi_l_divisor_var",
             ht_cfg.get("phi_l_divisor", stacking_fault.DEFAULT_PHI_L_DIVISOR),
         ),
-        "finite_stack": _saved_state_bool(saved_variables, "finite_stack_var", bool(ht_cfg.get("finite_stack", True))),
-        "stack_layers": max(1, _saved_state_int(saved_variables, "stack_layers_var", ht_cfg.get("stack_layers", 50))),
+        "finite_stack": _saved_state_bool(
+            saved_variables, "finite_stack_var", bool(ht_cfg.get("finite_stack", True))
+        ),
+        "stack_layers": max(
+            1, _saved_state_int(saved_variables, "stack_layers_var", ht_cfg.get("stack_layers", 50))
+        ),
         "phase_delta_expression": str(
             _saved_state_var_value(
                 saved_variables,
@@ -951,7 +1015,9 @@ def run_headless_geometry_fit(
     }
 
     center = np.array([float(center_x_var.get()), float(center_y_var.get())], dtype=np.float64)
-    two_theta_max = detector_two_theta_max(int(image_size), center, float(corto_detector_var.get()), pixel_size=pixel_size_m)
+    two_theta_max = detector_two_theta_max(
+        int(image_size), center, float(corto_detector_var.get()), pixel_size=pixel_size_m
+    )
     structure_model_state = gui_structure_model.build_initial_structure_model_state(
         cif_file=primary_cif_path,
         cf=primary_cf,
@@ -1012,8 +1078,12 @@ def run_headless_geometry_fit(
         ),
         a_axis=float(a_var.get()),
         c_axis=float(c_var.get()),
-        finite_stack_flag=_saved_state_bool(saved_variables, "finite_stack_var", bool(ht_cfg.get("finite_stack", True))),
-        layers=max(1, _saved_state_int(saved_variables, "stack_layers_var", ht_cfg.get("stack_layers", 50))),
+        finite_stack_flag=_saved_state_bool(
+            saved_variables, "finite_stack_var", bool(ht_cfg.get("finite_stack", True))
+        ),
+        layers=max(
+            1, _saved_state_int(saved_variables, "stack_layers_var", ht_cfg.get("stack_layers", 50))
+        ),
         phase_delta_expression_current=str(
             _saved_state_var_value(
                 saved_variables,
@@ -1037,14 +1107,20 @@ def run_headless_geometry_fit(
         build_intensity_dataframes=build_intensity_dataframes,
         apply_bragg_qr_filters=lambda *args, **kwargs: None,
         schedule_update=lambda: None,
-        weight1=_saved_state_float(saved_variables, "weight1_var", 0.5 if secondary_cif_path else 1.0),
-        weight2=_saved_state_float(saved_variables, "weight2_var", 0.5 if secondary_cif_path else 0.0),
+        weight1=_saved_state_float(
+            saved_variables, "weight1_var", 0.5 if secondary_cif_path else 1.0
+        ),
+        weight2=_saved_state_float(
+            saved_variables, "weight2_var", 0.5 if secondary_cif_path else 0.0
+        ),
         force=True,
         trigger_update=False,
     )
 
     theta_defaults = {"theta_initial": theta_initial_default}
-    background_runtime_state = SimpleNamespace(current_background_index=int(current_background_index))
+    background_runtime_state = SimpleNamespace(
+        current_background_index=int(current_background_index)
+    )
 
     def _current_geometry_fit_background_indices(*, strict: bool = False) -> list[int]:
         return gui_background_theta.current_geometry_fit_background_indices(
@@ -1092,7 +1168,9 @@ def run_headless_geometry_fit(
             strict_count=bool(strict_count),
         )
 
-    def _apply_background_theta_metadata(*, trigger_update: bool = False, sync_live_theta: bool = True) -> bool:
+    def _apply_background_theta_metadata(
+        *, trigger_update: bool = False, sync_live_theta: bool = True
+    ) -> bool:
         return gui_background_theta.apply_background_theta_metadata(
             osc_files=osc_files,
             current_background_index=int(background_runtime_state.current_background_index),
@@ -1111,7 +1189,9 @@ def run_headless_geometry_fit(
             sync_live_theta=bool(sync_live_theta),
         )
 
-    def _apply_geometry_fit_background_selection(*, trigger_update: bool = False, sync_live_theta: bool = True) -> bool:
+    def _apply_geometry_fit_background_selection(
+        *, trigger_update: bool = False, sync_live_theta: bool = True
+    ) -> bool:
         return gui_background_theta.apply_geometry_fit_background_selection(
             osc_files=osc_files,
             current_background_index=int(background_runtime_state.current_background_index),
@@ -1135,7 +1215,9 @@ def run_headless_geometry_fit(
     if not _apply_geometry_fit_background_selection(trigger_update=False, sync_live_theta=True):
         raise ValueError("Saved GUI state contains an invalid geometry-fit background selection.")
 
-    n2_value = resolve_index_of_refraction(float(lambda_angstrom) * 1.0e-10, cif_path=str(active_cif_path))
+    n2_value = resolve_index_of_refraction(
+        float(lambda_angstrom) * 1.0e-10, cif_path=str(active_cif_path)
+    )
     mosaic_params, sample_count = _build_headless_geometry_mosaic_params(
         saved_variables=saved_variables,
         beam_config=beam_cfg,
@@ -1185,7 +1267,9 @@ def run_headless_geometry_fit(
             current_geometry_theta_offset=_current_geometry_theta_offset,
             background_theta_for_index=_background_theta_for_index,
             build_mosaic_params=lambda: mosaic_params,
-            current_optics_mode_flag=lambda: _normalize_headless_optics_mode_flag(_saved_state_var_value(saved_variables, "optics_mode_var", "fast")),
+            current_optics_mode_flag=lambda: _normalize_headless_optics_mode_flag(
+                _saved_state_var_value(saved_variables, "optics_mode_var", "fast")
+            ),
             lambda_value=float(lambda_angstrom),
             psi=float(psi_default),
             n2=lambda: n2_value,
@@ -1197,12 +1281,16 @@ def run_headless_geometry_fit(
 
     def _replace_pairs_by_background(new_map: dict[int, list[dict[str, object]]]) -> None:
         pairs_by_background.clear()
-        pairs_by_background.update({int(idx): [dict(entry) for entry in entries] for idx, entries in new_map.items()})
+        pairs_by_background.update(
+            {int(idx): [dict(entry) for entry in entries] for idx, entries in new_map.items()}
+        )
 
     gui_manual_geometry.apply_geometry_manual_pairs_rows(
         geometry_state.get("manual_pairs", []),
         osc_files=osc_files,
-        pairs_for_index=lambda idx: gui_manual_geometry.geometry_manual_pairs_for_index(idx, pairs_by_background=pairs_by_background),
+        pairs_for_index=lambda idx: gui_manual_geometry.geometry_manual_pairs_for_index(
+            idx, pairs_by_background=pairs_by_background
+        ),
         replace_pairs_by_background=_replace_pairs_by_background,
         clear_preview_artists=lambda **kwargs: None,
         cancel_pick_session=lambda **kwargs: None,
@@ -1238,19 +1326,25 @@ def run_headless_geometry_fit(
         background_cache["background_images_display"] = list(updated["background_images_display"])
         if int(index) == int(background_runtime_state.current_background_index):
             background_cache["current_background_image"] = np.asarray(updated["background_image"])
-            background_cache["current_background_display"] = np.asarray(updated["background_display"])
+            background_cache["current_background_display"] = np.asarray(
+                updated["background_display"]
+            )
         return np.asarray(updated["background_image"]), np.asarray(updated["background_display"])
 
     def _current_background_native() -> np.ndarray:
         native = background_cache["current_background_image"]
         if native is None:
-            native, _display = _load_background_by_index(int(background_runtime_state.current_background_index))
+            native, _display = _load_background_by_index(
+                int(background_runtime_state.current_background_index)
+            )
         return np.asarray(native)
 
     def _current_background_display() -> np.ndarray:
         display = background_cache["current_background_display"]
         if display is None:
-            _native, display = _load_background_by_index(int(background_runtime_state.current_background_index))
+            _native, display = _load_background_by_index(
+                int(background_runtime_state.current_background_index)
+            )
         return np.asarray(display)
 
     _load_background_by_index(int(background_runtime_state.current_background_index))
@@ -1285,19 +1379,28 @@ def run_headless_geometry_fit(
             return None, None
         return float(col_val), float(row_val)
 
-    simulation_callbacks = gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-        process_peaks_parallel=process_peaks_parallel,
-        hit_tables_to_max_positions=hit_tables_to_max_positions,
-        native_sim_to_display_coords=lambda col, row, image_shape: gui_geometry_overlay.native_sim_to_display_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
-        peak_table_lattice_factory=None,
-        primary_a_factory=lambda: float(a_var.get()),
-        primary_c_factory=lambda: float(c_var.get()),
-        default_source_label="primary",
-        round_pixel_centers=False,
-        default_solve_q_steps=int(mosaic_params["solve_q_steps"]),
-        default_solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
-        default_solve_q_mode=int(mosaic_params["solve_q_mode"]),
-        prefer_safe_python_runner=True,
+    simulation_callbacks = (
+        gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
+            process_peaks_parallel=process_peaks_parallel,
+            hit_tables_to_max_positions=hit_tables_to_max_positions,
+            native_sim_to_display_coords=lambda col, row, image_shape: (
+                gui_geometry_overlay.native_sim_to_display_coords(
+                    col,
+                    row,
+                    image_shape,
+                    sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K,
+                )
+            ),
+            peak_table_lattice_factory=None,
+            primary_a_factory=lambda: float(a_var.get()),
+            primary_c_factory=lambda: float(c_var.get()),
+            default_source_label="primary",
+            round_pixel_centers=False,
+            default_solve_q_steps=int(mosaic_params["solve_q_steps"]),
+            default_solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
+            default_solve_q_mode=int(mosaic_params["solve_q_mode"]),
+            prefer_safe_python_runner=True,
+        )
     )
 
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
@@ -1316,7 +1419,11 @@ def run_headless_geometry_fit(
         miller=lambda: structure_model_state.miller,
         intensities=lambda: structure_model_state.intensities,
         image_size=int(image_size),
-        display_to_native_sim_coords=lambda col, row, image_shape: gui_geometry_overlay.display_to_native_sim_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            gui_geometry_overlay.display_to_native_sim_coords(
+                col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K
+            )
+        ),
         native_detector_coords_to_bundle_detector_coords=(
             _native_detector_coords_to_live_bundle_detector_coords
         ),
@@ -1420,24 +1527,34 @@ def run_headless_geometry_fit(
         current_background_index=int(background_runtime_state.current_background_index),
         image_size=int(image_size),
         display_rotate_k=HEADLESS_GEOMETRY_BACKGROUND_DISPLAY_ROTATE_K,
-        geometry_manual_pairs_for_index=lambda idx: gui_manual_geometry.geometry_manual_pairs_for_index(idx, pairs_by_background=pairs_by_background),
+        geometry_manual_pairs_for_index=lambda idx: (
+            gui_manual_geometry.geometry_manual_pairs_for_index(
+                idx, pairs_by_background=pairs_by_background
+            )
+        ),
         load_background_by_index=_load_background_by_index,
-        apply_background_backend_orientation=lambda image: gui_background.apply_background_backend_orientation(image, flip_x=backend_flip_x, flip_y=backend_flip_y, rotation_k=backend_rotation_k),
-        backend_detector_coords_to_native_detector_coords=lambda col, row, native_shape=None: gui_background.background_backend_point_to_native_coords(
-            float(col),
-            float(row),
-            native_shape=(
-                tuple(int(v) for v in tuple(native_shape)[:2])
-                if native_shape is not None
-                else np.asarray(
-                    _load_background_by_index(
-                        int(background_runtime_state.current_background_index)
-                    )[0]
-                ).shape[:2]
-            ),
-            flip_x=backend_flip_x,
-            flip_y=backend_flip_y,
-            rotation_k=backend_rotation_k,
+        apply_background_backend_orientation=lambda image: (
+            gui_background.apply_background_backend_orientation(
+                image, flip_x=backend_flip_x, flip_y=backend_flip_y, rotation_k=backend_rotation_k
+            )
+        ),
+        backend_detector_coords_to_native_detector_coords=lambda col, row, native_shape=None: (
+            gui_background.background_backend_point_to_native_coords(
+                float(col),
+                float(row),
+                native_shape=(
+                    tuple(int(v) for v in tuple(native_shape)[:2])
+                    if native_shape is not None
+                    else np.asarray(
+                        _load_background_by_index(
+                            int(background_runtime_state.current_background_index)
+                        )[0]
+                    ).shape[:2]
+                ),
+                flip_x=backend_flip_x,
+                flip_y=backend_flip_y,
+                rotation_k=backend_rotation_k,
+            )
         ),
         geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
         geometry_manual_simulated_lookup=projection_callbacks.simulated_lookup,
@@ -1446,14 +1563,20 @@ def run_headless_geometry_fit(
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
         geometry_manual_refresh_pair_entry=projection_callbacks.refresh_entry_geometry,
         unrotate_display_peaks=gui_geometry_overlay.unrotate_display_peaks,
-        display_to_native_sim_coords=lambda col, row, image_shape: gui_geometry_overlay.display_to_native_sim_coords(col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K),
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            gui_geometry_overlay.display_to_native_sim_coords(
+                col, row, image_shape, sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K
+            )
+        ),
         select_fit_orientation=gui_geometry_overlay.select_fit_orientation,
         apply_orientation_to_entries=gui_geometry_overlay.apply_orientation_to_entries,
         orient_image_for_fit=gui_geometry_overlay.orient_image_for_fit,
     )
 
     current_var_names = value_callbacks.current_var_names()
-    preserve_live_theta = "theta_initial" not in current_var_names and "theta_offset" not in current_var_names
+    preserve_live_theta = (
+        "theta_initial" not in current_var_names and "theta_offset" not in current_var_names
+    )
     prepare_result = gui_geometry_fit.prepare_runtime_geometry_fit_run(
         params=value_callbacks.current_params(),
         var_names=current_var_names,
@@ -1503,12 +1626,16 @@ def run_headless_geometry_fit(
             update_manual_pick_button_label=lambda: None,
             capture_undo_state=lambda: {},
             push_undo_state=lambda _value: None,
-            replace_dataset_cache=lambda payload_value: dataset_cache_state.update({"payload": copy.deepcopy(payload_value)}),
+            replace_dataset_cache=lambda payload_value: dataset_cache_state.update(
+                {"payload": copy.deepcopy(payload_value)}
+            ),
             request_preview_skip_once=lambda: None,
             schedule_update=lambda: None,
             draw_overlay_records=lambda records, marker_limit: None,
             draw_initial_pairs_overlay=lambda pairs, marker_limit: None,
-            set_last_overlay_state=lambda payload_value: overlay_state.update({"payload": copy.deepcopy(payload_value)}),
+            set_last_overlay_state=lambda payload_value: overlay_state.update(
+                {"payload": copy.deepcopy(payload_value)}
+            ),
             set_progress_text=lambda text: progress_state.update({"text": str(text)}),
             cmd_line=lambda text: command_log.append(str(text)),
             solver_inputs=gui_geometry_fit.GeometryFitRuntimeSolverInputs(
@@ -1530,37 +1657,27 @@ def run_headless_geometry_fit(
     if apply_result is None:
         raise RuntimeError("Geometry fit did not return an apply result.")
     if not bool(apply_result.accepted):
-        rejection_reason = str(apply_result.rejection_reason or "geometry fit solution was rejected")
+        rejection_reason = str(
+            apply_result.rejection_reason or "geometry fit solution was rejected"
+        )
         if execution_result.log_path is not None:
             rejection_reason += f" (log: {execution_result.log_path})"
         raise RuntimeError(rejection_reason)
 
     mosaic_shape_report: dict[str, object] | None = None
     if run_mosaic_shape_fit:
-        mosaic_shape_cfg = (
-            fit_cfg.get("mosaic_shape", {})
-            if isinstance(fit_cfg, Mapping)
-            else {}
-        )
-        mosaic_shape_cfg = (
-            dict(mosaic_shape_cfg) if isinstance(mosaic_shape_cfg, Mapping) else {}
-        )
+        mosaic_shape_cfg = fit_cfg.get("mosaic_shape", {}) if isinstance(fit_cfg, Mapping) else {}
+        mosaic_shape_cfg = dict(mosaic_shape_cfg) if isinstance(mosaic_shape_cfg, Mapping) else {}
         solver_cfg_raw = mosaic_shape_cfg.get("solver", {})
-        solver_cfg = (
-            dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
-        )
+        solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
         roi_cfg_raw = mosaic_shape_cfg.get("roi", {})
         roi_cfg = dict(roi_cfg_raw) if isinstance(roi_cfg_raw, Mapping) else {}
         preprocessing_cfg_raw = mosaic_shape_cfg.get("preprocessing", {})
         preprocessing_cfg = (
-            dict(preprocessing_cfg_raw)
-            if isinstance(preprocessing_cfg_raw, Mapping)
-            else {}
+            dict(preprocessing_cfg_raw) if isinstance(preprocessing_cfg_raw, Mapping) else {}
         )
         sampling_cfg_raw = mosaic_shape_cfg.get("sampling", {})
-        sampling_cfg = (
-            dict(sampling_cfg_raw) if isinstance(sampling_cfg_raw, Mapping) else {}
-        )
+        sampling_cfg = dict(sampling_cfg_raw) if isinstance(sampling_cfg_raw, Mapping) else {}
 
         try:
             fit_sample_floor = int(
@@ -1625,13 +1742,13 @@ def run_headless_geometry_fit(
             bool(solver_cfg.get("fit_theta_i", solver_cfg.get("refine_theta", True))),
         )
         if not any((fit_sigma_mosaic, fit_gamma_mosaic, fit_eta, fit_theta_i)):
-            raise RuntimeError(
-                "Mosaic shape fit unavailable: enable at least one fit parameter."
-            )
+            raise RuntimeError("Mosaic shape fit unavailable: enable at least one fit parameter.")
 
-        theta_i_mode = str(
-            solver_cfg.get("theta_i_mode", solver_cfg.get("theta_mode", "auto"))
-        ).strip().lower()
+        theta_i_mode = (
+            str(solver_cfg.get("theta_i_mode", solver_cfg.get("theta_mode", "auto")))
+            .strip()
+            .lower()
+        )
         raw_theta_i_bounds = solver_cfg.get(
             "theta_i_bounds_deg",
             solver_cfg.get("theta_bounds", None),
@@ -1682,9 +1799,7 @@ def run_headless_geometry_fit(
             fit_eta=bool(fit_eta),
         )
         if result.x is None or not np.all(np.isfinite(result.x)):
-            raise RuntimeError(
-                "Mosaic shape fit failed: optimizer returned invalid parameters."
-            )
+            raise RuntimeError("Mosaic shape fit failed: optimizer returned invalid parameters.")
 
         sigma_deg, gamma_deg, eta_val = map(float, np.asarray(result.x[:3], dtype=np.float64))
         sigma_mosaic_var.set(sigma_deg)
@@ -1692,7 +1807,9 @@ def run_headless_geometry_fit(
         eta_var.set(eta_val)
 
         best_params = getattr(result, "best_params", None)
-        if isinstance(best_params, Mapping) and isinstance(best_params.get("mosaic_params"), Mapping):
+        if isinstance(best_params, Mapping) and isinstance(
+            best_params.get("mosaic_params"), Mapping
+        ):
             simulation_runtime_state.profile_cache = copy.deepcopy(
                 dict(best_params["mosaic_params"])
             )
@@ -1717,9 +1834,7 @@ def run_headless_geometry_fit(
         )
         message = str(getattr(result, "message", "") or "").strip()
         roi_count_by_dataset = dict(getattr(result, "roi_count_by_dataset", {}) or {})
-        roi_count = int(
-            getattr(result, "total_roi_count", sum(roi_count_by_dataset.values()))
-        )
+        roi_count = int(getattr(result, "total_roi_count", sum(roi_count_by_dataset.values())))
         dataset_diagnostics = list(getattr(result, "dataset_diagnostics", []) or [])
         dataset_summary = ", ".join(
             f"{diag.get('dataset_label', diag.get('dataset_index'))}={int(diag.get('roi_count', 0))}"
@@ -1827,8 +1942,12 @@ def run_headless_geometry_fit(
         updated_state,
         {
             "accepted": True,
-            "log_path": str(execution_result.log_path) if execution_result.log_path is not None else None,
-            "matched_peaks_path": str(apply_result.postprocess.save_path) if apply_result.postprocess is not None else None,
+            "log_path": str(execution_result.log_path)
+            if execution_result.log_path is not None
+            else None,
+            "matched_peaks_path": str(apply_result.postprocess.save_path)
+            if apply_result.postprocess is not None
+            else None,
             "progress_text": progress_state["text"],
             "command_log": list(command_log),
             "overlay_state": overlay_state["payload"],
@@ -1924,20 +2043,12 @@ def build_headless_simulation_defaults(
     ht_cfg = inst.get("hendricks_teller", {})
 
     resolved_image_size = (
-        int(det_cfg.get("image_size", 3000))
-        if image_size is None
-        else int(image_size)
+        int(det_cfg.get("image_size", 3000)) if image_size is None else int(image_size)
     )
     resolved_samples = (
-        int(det_cfg.get("monte_carlo_samples", 1000))
-        if samples is None
-        else int(samples)
+        int(det_cfg.get("monte_carlo_samples", 1000)) if samples is None else int(samples)
     )
-    resolved_vmax = (
-        float(det_cfg.get("vmax", 1000))
-        if vmax is None
-        else float(vmax)
-    )
+    resolved_vmax = float(det_cfg.get("vmax", 1000)) if vmax is None else float(vmax)
 
     cif_file = get_path("cif_file")
     poni = parse_poni_file(get_path("geometry_poni"))
@@ -1951,9 +2062,7 @@ def build_headless_simulation_defaults(
     lambda_from_poni = wave_m * 1e10
 
     lambda_override = beam_cfg.get("wavelength_angstrom")
-    lambda_ang = float(
-        lambda_override if lambda_override is not None else lambda_from_poni
-    )
+    lambda_ang = float(lambda_override if lambda_override is not None else lambda_from_poni)
     pixel_size_m = float(det_cfg.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
 
     gamma_initial, Gamma_initial, distance_m = _apply_headless_tilt_hint(
@@ -2005,9 +2114,7 @@ def build_headless_simulation_defaults(
     fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
     divergence_fwhm = float(beam_cfg.get("divergence_fwhm_deg", 0.05))
     divergence_sigma = math.radians(divergence_fwhm * fwhm2sigma)
-    bw_sigma = (
-        float(beam_cfg.get("bandwidth_sigma_fraction", 0.05e-3)) * fwhm2sigma
-    )
+    bw_sigma = float(beam_cfg.get("bandwidth_sigma_fraction", 0.05e-3)) * fwhm2sigma
     bandwidth = float(beam_cfg.get("bandwidth_percent", 0.7)) / 100.0
 
     try:
@@ -2056,10 +2163,8 @@ def build_headless_simulation_defaults(
         sample_length_m=sample_length_m,
     )
     mosaic = MosaicParams(
-        sigma_mosaic_deg=float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8))
-        * fwhm2sigma,
-        gamma_mosaic_deg=float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7))
-        * fwhm2sigma,
+        sigma_mosaic_deg=float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8)) * fwhm2sigma,
+        gamma_mosaic_deg=float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7)) * fwhm2sigma,
         eta=float(beam_cfg.get("eta", 0.0)),
         solve_q_steps=solve_q_steps,
         solve_q_rel_tol=solve_q_rel_tol,
@@ -2166,11 +2271,7 @@ def build_headless_simulation_request(
     """Build the typed simulation request consumed by the engine."""
 
     SimulationRequest = _load_simulation_modules().types.SimulationRequest
-    beam = (
-        build_headless_beam_samples(defaults)
-        if beam_samples is None
-        else beam_samples
-    )
+    beam = build_headless_beam_samples(defaults) if beam_samples is None else beam_samples
     n2 = resolve_index_of_refraction(
         defaults.geometry.lambda_angstrom * 1.0e-10,
         cif_path=defaults.cif_file,
@@ -2486,7 +2587,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run the diffraction simulation headlessly and save an image.",
     )
     sim_parser.add_argument("--out", required=True, help="Output image path (e.g., output.png)")
-    sim_parser.add_argument("--image-size", type=int, default=None, help="Simulation image size (pixels)")
+    sim_parser.add_argument(
+        "--image-size", type=int, default=None, help="Simulation image size (pixels)"
+    )
     sim_parser.add_argument("--samples", type=int, default=None, help="Monte Carlo samples")
     sim_parser.add_argument(
         "--vmax", type=float, default=None, help="Max intensity for scaling (default from config)"
@@ -2690,4 +2793,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-
