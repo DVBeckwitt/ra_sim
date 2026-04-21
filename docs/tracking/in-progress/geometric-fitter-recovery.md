@@ -19,6 +19,18 @@ are diagnostic when the saved picker assignment still resolves semantically,
 picker-owned saved/refined simulated points overwrite live/caked prefill, and
 `new4` reports 7/7 provider pairs without launching the optimizer.
 
+The Qr/Qz branch-seed bug/error scope is closed for the picker boundary:
+raw-cache preview, manual toggle, manual refresh/view-change, and manual place
+setup now retain one mosaic-top simulated seed per normalized branch for each
+real Qr/Qz group. The lower-level collapse helper still keeps its legacy
+per-branch default, and whole-group collapse remains explicit-only for fitting
+callers that request it.
+
+The caked-mode Qr/Qz detector-return bug/error scope is also closed: manual
+picks made in caked `2theta,phi` space now convert back to detector view through
+the same detector-display projection path used by simulation markers, including
+stale-session refresh and refined simulated seed redraw.
+
 The geometric optimizer hang/convergence problem is now handled by
 `scripts/debug/run_new4_geometry_fit_ladder.py`, not by the old full baseline
 as the first debug tool. The ladder is currently stopped at rung 1 until the
@@ -49,6 +61,21 @@ optimizer request has zero fallback rows.
 - The dataset-to-optimizer bridge now copies provider canonical identity and
   measured-point fields into the optimizer request, emits handoff counters on
   every ladder report, and rejects request-side fallback before `least_squares`.
+- Qr/Qz UI preview and manual seed paths keep both detector-side branch
+  representatives for each real Qr/Qz group, selecting only the mosaic-top row
+  within each branch and preserving branch/reflection/ray provenance on the
+  kept rows.
+- Raw cache rows that share a Qr/Qz group but differ by
+  `branch_id`, `source_branch_index`, or `source_reflection_index` collapse to
+  branch representatives before initial drawing, before manual session storage,
+  and after refresh. Ungrouped rows with `q_group_key is None` remain separate.
+- `collapse_geometry_fit_simulated_peaks(..., one_per_q_group=True)` remains
+  available for explicit whole-Qr/Qz-group collapse, but default and Qr/Qz UI
+  wrapper behavior remain branch-aware.
+- Caked-mode manual Qr/Qz placements store detector display/native/caked fields
+  that round-trip through the same LUT/rotation path as the live simulation
+  marker projection. Refresh now trusts authoritative caked `2theta,phi` fields
+  over stale detector fields.
 - Solve rungs are disabled operationally until objective dry-run reports zero
   `fallback_row_count` and zero `fixed_source_resolution_fallback_count`.
 
@@ -57,6 +84,12 @@ optimizer request has zero fallback rows.
 - Fix only the dataset-to-optimizer request bridge so the validated provider
   handoff supplies the fixed-source fields required by the optimizer resolver.
 - Keep provider logic closed unless the provider-only parity gate regresses.
+- Keep Qr/Qz branch seed behavior closed unless raw-cache preview, manual
+  toggle, refresh, or place setup regresses to either every raw ray or one
+  whole-group-only ray.
+- Keep caked-to-detector Qr/Qz return behavior closed unless the same
+  simulated `2theta,phi` seed no longer redraws at the same detector marker
+  position after switching view or refreshing.
 - Do not run solve rungs, tune parameters, loosen fallback rules, or run the old
   baseline until rung 1 has seven fixed-source pairs and zero fallback rows.
 
@@ -138,6 +171,16 @@ Pinpoint regression gate:
 ```powershell
 pytest tests/test_gui_geometry_fit_workflow.py::test_point_provider_stale_locator_is_diagnostic_when_saved_assignment_resolves tests/test_gui_geometry_fit_workflow.py::test_point_provider_marks_stale_saved_identity_as_fallback tests/test_gui_geometry_fit_workflow.py::test_point_provider_saved_refined_sim_point_overwrites_caked_prefill -q
 ```
+
+Qr/Qz branch-seed regression gate:
+
+```powershell
+pytest tests/test_gui_geometry_q_group_manager.py tests/test_manual_geometry_selection_helpers.py -q
+git diff --check
+```
+
+Caked-to-detector return regression is covered in the same gate by structural
+marker tests in `tests/test_manual_geometry_selection_helpers.py`.
 
 Provider-only validator check:
 

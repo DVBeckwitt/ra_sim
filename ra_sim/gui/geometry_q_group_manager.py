@@ -2711,8 +2711,9 @@ def make_runtime_geometry_q_group_value_callbacks(
         simulated_peaks: Sequence[dict[str, object]] | None,
         *,
         merge_radius_px: float = 6.0,
+        one_per_q_group: bool = False,
     ) -> tuple[list[dict[str, object]], int]:
-        return collapse_geometry_fit_simulated_peaks(
+        return collapse_qr_qz_selection_peaks(
             simulated_peaks,
             merge_radius_px=merge_radius_px,
             profile_cache=getattr(simulation_runtime_state, "profile_cache", None),
@@ -2982,11 +2983,18 @@ def collapse_geometry_fit_simulated_peaks(
     *,
     merge_radius_px: float = 6.0,
     profile_cache: Mapping[str, object] | None = None,
+    one_per_q_group: bool = False,
 ) -> tuple[list[dict[str, object]], int]:
-    """Collapse overlapping GUI placement seeds within each Qr/Qz group and branch."""
+    """Collapse GUI placement seeds.
+
+    Default behavior keeps the legacy one representative per branch within each
+    Qr/Qz group. ``one_per_q_group=True`` selects one mosaic-top representative
+    across each real Qr/Qz group; ungrouped rows remain independent.
+    """
 
     grouped_entries: dict[object, list[dict[str, object]]] = {}
     ordered_keys: list[object] = []
+    real_group_keys: set[object] = set()
     ungrouped_index = 0
     merge_radius = max(0.0, float(merge_radius_px))
 
@@ -2994,10 +3002,14 @@ def collapse_geometry_fit_simulated_peaks(
         if not isinstance(raw_entry, dict):
             continue
         entry = dict(raw_entry)
-        group_key = entry.get("q_group_key")
-        if group_key is None:
+        real_group_key = gui_mosaic_top.normalize_q_group_key(entry.get("q_group_key"))
+        if real_group_key is None:
             group_key = ("ungrouped", ungrouped_index)
             ungrouped_index += 1
+        else:
+            group_key = real_group_key
+            entry["q_group_key"] = group_key
+            real_group_keys.add(group_key)
         has_branch_hint = any(
             key in entry
             for key in (
@@ -3034,26 +3046,30 @@ def collapse_geometry_fit_simulated_peaks(
         if not entries:
             continue
 
-        branch_buckets: dict[str, list[dict[str, object]]] = {}
-        branch_order: list[str] = []
-        for entry in entries:
-            branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
-                entry,
-                target_key=group_key,
-            )
-            if branch_id not in branch_buckets:
-                branch_buckets[branch_id] = []
-                branch_order.append(branch_id)
-            branch_buckets[branch_id].append(entry)
+        if one_per_q_group and group_key in real_group_keys:
+            clusters: list[tuple[str | None, list[dict[str, object]]]] = [
+                (None, entries)
+            ]
+        else:
+            branch_buckets: dict[str, list[dict[str, object]]] = {}
+            branch_order: list[str] = []
+            for entry in entries:
+                branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+                    entry,
+                    target_key=group_key,
+                )
+                if branch_id not in branch_buckets:
+                    branch_buckets[branch_id] = []
+                    branch_order.append(branch_id)
+                branch_buckets[branch_id].append(entry)
 
-        clusters: list[list[dict[str, object]]] = []
-        for branch_id in branch_order:
-            branch_entries = branch_buckets.get(branch_id, [])
-            if branch_entries:
-                clusters.append(branch_entries)
+            clusters = [
+                (branch_id, branch_buckets[branch_id])
+                for branch_id in branch_order
+                if branch_buckets.get(branch_id)
+            ]
 
-        for cluster_entries in clusters:
-            cluster_branch_id = str(cluster_entries[0].get("branch_id"))
+        for cluster_branch_id, cluster_entries in clusters:
             representative = gui_mosaic_top.select_mosaic_top_representative(
                 cluster_entries,
                 branch_id=cluster_branch_id,
@@ -3089,10 +3105,28 @@ def collapse_geometry_fit_simulated_peaks(
             merged["weight"] = float(total_weight)
             merged["degenerate_count"] = int(len(cluster_entries))
             merged["degenerate_hkls"] = list(degenerate_hkls)
-            collapsed_degenerate_count += max(0, len(cluster_entries) - 1)
+            if group_key in real_group_keys:
+                collapsed_degenerate_count += max(0, len(cluster_entries) - 1)
             collapsed.append(merged)
 
     return collapsed, int(collapsed_degenerate_count)
+
+
+def collapse_qr_qz_selection_peaks(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    *,
+    merge_radius_px: float = 6.0,
+    profile_cache: Mapping[str, object] | None = None,
+    one_per_q_group: bool = False,
+) -> tuple[list[dict[str, object]], int]:
+    """Collapse Qr/Qz UI selection rows to one ray per branch."""
+
+    return collapse_geometry_fit_simulated_peaks(
+        simulated_peaks,
+        merge_radius_px=merge_radius_px,
+        profile_cache=profile_cache,
+        one_per_q_group=False,
+    )
 
 
 def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
@@ -4946,7 +4980,8 @@ def make_runtime_geometry_q_group_bindings_factory(
             image_size=_resolve_runtime_value(image_size_value_factory),
             current_geometry_fit_params_factory=current_geometry_fit_params_factory,
             filter_simulated_peaks=filter_simulated_peaks,
-            collapse_simulated_peaks=collapse_simulated_peaks,
+            collapse_simulated_peaks=collapse_simulated_peaks
+            or collapse_qr_qz_selection_peaks,
             excluded_q_group_count=excluded_q_group_count,
             caked_view_enabled=caked_view_enabled,
             background_visible=_resolve_runtime_value(background_visible_factory),

@@ -360,6 +360,9 @@ def refresh_geometry_manual_pair_entry(
     native_detector_coords_to_caked_display_coords: (
         Callable[[float, float], tuple[float, float] | None] | None
     ) = None,
+    native_detector_coords_to_detector_display_coords: (
+        Callable[[float, float], tuple[float | None, float | None] | None] | None
+    ) = None,
     rotate_point_for_display: Callable[
         [float, float, tuple[int, ...], int],
         tuple[float, float],
@@ -547,8 +550,7 @@ def refresh_geometry_manual_pair_entry(
             detector_point_source = "display_point_inverse_projection"
 
     if (
-        detector_point is None
-        and caked_point is not None
+        caked_point is not None
         and callable(caked_angles_to_background_display_coords)
         and callable(background_display_to_native_detector_coords)
     ):
@@ -663,7 +665,23 @@ def refresh_geometry_manual_pair_entry(
     normalized["sim_native_x"] = float(detector_col)
     normalized["sim_native_y"] = float(detector_row)
 
-    if len(shape) >= 2:
+    projected_display_point = None
+    if callable(native_detector_coords_to_detector_display_coords):
+        try:
+            projected_display_point = _finite_tuple_pair(
+                native_detector_coords_to_detector_display_coords(
+                    float(detector_col),
+                    float(detector_row),
+                )
+            )
+        except Exception:
+            projected_display_point = None
+    if projected_display_point is not None:
+        display_point = (
+            float(projected_display_point[0]),
+            float(projected_display_point[1]),
+        )
+    elif len(shape) >= 2:
         try:
             display_point = rotate_point_for_display(
                 float(detector_col),
@@ -3416,6 +3434,86 @@ def geometry_manual_prioritize_candidate_entries(
     ]
 
 
+def _geometry_manual_real_q_group_key(value: object) -> tuple[object, ...] | None:
+    if isinstance(value, Mapping):
+        value = value.get("q_group_key")
+    return gui_mosaic_top.normalize_q_group_key(value)
+
+
+def _geometry_manual_select_q_group_representative(
+    entries: Sequence[dict[str, object]] | None,
+    *,
+    group_key: object = None,
+    seed_candidate: Mapping[str, object] | None = None,
+    branch_id: str | None = None,
+    profile_cache: Mapping[str, object] | None = None,
+) -> dict[str, object] | None:
+    normalized_key = _geometry_manual_real_q_group_key(group_key)
+    if normalized_key is None:
+        for raw_entry in entries or ():
+            if isinstance(raw_entry, dict):
+                return dict(raw_entry)
+        return None
+    normalized_entries = [
+        {**dict(entry), "q_group_key": normalized_key}
+        for entry in entries or ()
+        if isinstance(entry, dict)
+    ]
+    selected_branch_id = branch_id
+    if selected_branch_id is None and isinstance(seed_candidate, Mapping):
+        selected_branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+            seed_candidate,
+            target_key=normalized_key,
+            profile_cache=profile_cache,
+        )
+    selected = gui_mosaic_top.select_mosaic_top_representative(
+        normalized_entries,
+        branch_id=selected_branch_id,
+        target_key=normalized_key,
+        profile_cache=profile_cache,
+    )
+    return dict(selected) if isinstance(selected, dict) else None
+
+
+def _geometry_manual_collapse_q_group_representatives(
+    entries: Sequence[dict[str, object]] | None,
+    *,
+    profile_cache: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    grouped: dict[tuple[tuple[object, ...], str], list[dict[str, object]]] = {}
+    ordered_keys: list[tuple[tuple[object, ...], str]] = []
+    output: list[dict[str, object]] = []
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        group_key = _geometry_manual_real_q_group_key(entry)
+        if group_key is None:
+            output.append(entry)
+            continue
+        entry["q_group_key"] = group_key
+        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+            entry,
+            target_key=group_key,
+            profile_cache=profile_cache,
+        )
+        bucket_key = (group_key, str(branch_id))
+        if bucket_key not in grouped:
+            grouped[bucket_key] = []
+            ordered_keys.append(bucket_key)
+        grouped[bucket_key].append(entry)
+    for group_key, branch_id in ordered_keys:
+        selected = _geometry_manual_select_q_group_representative(
+            grouped.get((group_key, branch_id), []),
+            group_key=group_key,
+            branch_id=branch_id,
+            profile_cache=profile_cache,
+        )
+        if isinstance(selected, dict):
+            output.append(selected)
+    return output
+
+
 def refresh_geometry_manual_pick_session_candidates(
     pick_session: dict[str, object] | None,
     *,
@@ -3434,6 +3532,7 @@ def refresh_geometry_manual_pick_session_candidates(
         int,
     ]
     | None = None,
+    profile_cache: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Refresh one active manual-pick session against the latest simulated group entries."""
 
@@ -3452,7 +3551,17 @@ def refresh_geometry_manual_pick_session_candidates(
     live_entries_raw = grouped_candidates.get(group_key)
     if not isinstance(live_entries_raw, Sequence):
         return dict(pick_session)
-    live_entries = [dict(entry) for entry in live_entries_raw if isinstance(entry, dict)]
+    live_entries = [
+        {**dict(entry), "q_group_key": group_key}
+        for entry in live_entries_raw
+        if isinstance(entry, dict)
+    ]
+    if not live_entries:
+        return dict(pick_session)
+    live_entries = _geometry_manual_collapse_q_group_representatives(
+        live_entries,
+        profile_cache=profile_cache,
+    )
     if not live_entries:
         return dict(pick_session)
     if group_target_count_fn is None:
@@ -4871,6 +4980,32 @@ def _geometry_manual_candidate_caked_sim_point(
     )
 
 
+def _geometry_manual_pair_provenance_value(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        if int(value.size) > 64:
+            return repr(value)
+        return tuple(_geometry_manual_pair_provenance_value(item) for item in value.tolist())
+    if isinstance(value, tuple):
+        return tuple(_geometry_manual_pair_provenance_value(item) for item in value)
+    if isinstance(value, list):
+        if len(value) > 64:
+            return repr(value)
+        return tuple(_geometry_manual_pair_provenance_value(item) for item in value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _geometry_manual_pair_provenance_value(raw_value)
+            for key, raw_value in sorted(value.items(), key=lambda item: str(item[0]))
+            if raw_value is not None
+        }
+    if isinstance(value, (str, bool, int)) or value is None:
+        return value
+    if isinstance(value, float):
+        return float(value) if np.isfinite(value) else repr(value)
+    return repr(value)
+
+
 def geometry_manual_pair_entry_from_candidate(
     candidate: dict[str, object] | None,
     peak_col: float,
@@ -4908,21 +5043,28 @@ def geometry_manual_pair_entry_from_candidate(
         "source_label": candidate.get("source_label"),
         "q_group_key": group_key,
     }
-    for provenance_key in (
-        "branch_id",
-        "branch_source",
-        "best_sample_index",
-        "mosaic_weight",
-        "mosaic_top_rank_key",
-        "selection_reason",
-    ):
+    provenance_keys = set(
+        key
+        for key in candidate
+        if str(key).startswith(("source_", "ray_", "reflection_"))
+    )
+    provenance_keys.update(
+        (
+            "branch_id",
+            "branch_source",
+            "best_sample_index",
+            "mosaic_weight",
+            "mosaic_top_rank_key",
+            "selection_reason",
+            "selection_scope",
+            "selected_q_group_key",
+        )
+    )
+    for provenance_key in sorted(provenance_keys):
         if provenance_key in candidate:
-            value = candidate.get(provenance_key)
-            if isinstance(value, np.generic):
-                value = value.item()
-            elif isinstance(value, list):
-                value = tuple(value)
-            entry[provenance_key] = value
+            entry[provenance_key] = _geometry_manual_pair_provenance_value(
+                candidate.get(provenance_key)
+            )
     if detector_col is not None and detector_row is not None:
         entry["detector_x"] = float(detector_col)
         entry["detector_y"] = float(detector_row)
@@ -5526,15 +5668,10 @@ def geometry_manual_pick_preview_state(
     candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
     if isinstance(seed_candidate, dict):
         group_key = pick_session.get("group_key") if isinstance(pick_session, dict) else None
-        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
-            seed_candidate,
-            target_key=group_key,
-            profile_cache=profile_cache,
-        )
-        selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+        selected_candidate = _geometry_manual_select_q_group_representative(
             remaining_candidates,
-            branch_id=branch_id,
-            target_key=group_key,
+            group_key=group_key,
+            seed_candidate=seed_candidate,
             profile_cache=profile_cache,
         )
         if isinstance(selected_candidate, dict):
@@ -6495,6 +6632,11 @@ def make_runtime_geometry_manual_projection_callbacks(
         tuple[float, float],
     ]
     | None = None,
+    native_detector_coords_to_detector_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None] | None,
+    ]
+    | None = None,
     get_detector_angular_maps: Callable[[object], tuple[object, object]] = lambda _ai: (None, None),
     detector_pixel_to_scattering_angles: Callable[
         [float, float, Sequence[float] | None, float, float],
@@ -6531,6 +6673,7 @@ def make_runtime_geometry_manual_projection_callbacks(
     collapse_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object]]
     | None = None,
     merge_radius_px: float = 6.0,
+    profile_cache: Callable[[], Mapping[str, object] | None] | Mapping[str, object] | None = None,
 ) -> GeometryManualRuntimeProjectionCallbacks:
     """Build live manual-geometry projection callbacks around shared helpers."""
 
@@ -6695,6 +6838,9 @@ def make_runtime_geometry_manual_projection_callbacks(
             ),
             caked_angles_to_background_display_coords=(_caked_angles_to_background_display),
             native_detector_coords_to_caked_display_coords=(_native_to_caked_display_coords),
+            native_detector_coords_to_detector_display_coords=(
+                native_detector_coords_to_detector_display_coords
+            ),
             rotate_point_for_display=rotate_point_for_display,
             display_rotate_k=int(display_rotate_k),
             allow_legacy_peak_fallback=False,
@@ -6906,7 +7052,16 @@ def make_runtime_geometry_manual_projection_callbacks(
             )
             if native_point is not None:
                 projected_native = None
-                if callable(native_sim_to_display_coords):
+                if callable(native_detector_coords_to_detector_display_coords):
+                    try:
+                        projected_native = native_detector_coords_to_detector_display_coords(
+                            float(native_point[0]),
+                            float(native_point[1]),
+                        )
+                    except Exception:
+                        projected_native = None
+                    projected_native = _finite_projection_point(projected_native)
+                if projected_native is None and callable(native_sim_to_display_coords):
                     try:
                         projected_native = native_sim_to_display_coords(
                             float(native_point[0]),
@@ -6929,12 +7084,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                         )
                     except Exception:
                         projected_native = None
-                if (
-                    isinstance(projected_native, tuple)
-                    and len(projected_native) >= 2
-                    and np.isfinite(float(projected_native[0]))
-                    and np.isfinite(float(projected_native[1]))
-                ):
+                projected_native = _finite_projection_point(projected_native)
+                if projected_native is not None:
                     raw_detector_display = (
                         float(projected_native[0]),
                         float(projected_native[1]),
@@ -7188,13 +7339,23 @@ def make_runtime_geometry_manual_projection_callbacks(
                 filtered_entries = _mapping_entry_list(filtered_result[0])
         collapsed_entries = list(filtered_entries)
         if callable(collapse_simulated_peaks):
-            collapsed_result = collapse_simulated_peaks(
-                filtered_entries,
-                merge_radius_px=float(merge_radius_px),
-            )
+            try:
+                collapsed_result = collapse_simulated_peaks(
+                    filtered_entries,
+                    merge_radius_px=float(merge_radius_px),
+                    one_per_q_group=False,
+                )
+            except TypeError:
+                collapsed_result = collapse_simulated_peaks(
+                    filtered_entries,
+                    merge_radius_px=float(merge_radius_px),
+                )
             if isinstance(collapsed_result, tuple) and collapsed_result:
                 collapsed_entries = _mapping_entry_list(collapsed_result[0])
-        return _mapping_entry_list(collapsed_entries)
+        return _geometry_manual_collapse_q_group_representatives(
+            _mapping_entry_list(collapsed_entries),
+            profile_cache=_resolve_runtime_value(profile_cache),
+        )
 
     def _missing_required_param_keys(
         params_local: Mapping[str, object],
@@ -7928,6 +8089,22 @@ def geometry_manual_toggle_selection_at(
             )
         return False, current_session, False
 
+    raw_best_group_entries = [
+        {**dict(entry), "q_group_key": best_group_key}
+        for entry in best_group_entries
+        if isinstance(entry, dict)
+    ]
+    best_group_entries = _geometry_manual_collapse_q_group_representatives(
+        raw_best_group_entries,
+        profile_cache=profile_cache,
+    )
+    if not best_group_entries:
+        if callable(set_status_text):
+            set_status_text(
+                "No simulated Qr/Qz branches remain available for manual geometry picking."
+            )
+        return False, current_session, False
+
     existing_entries = [dict(entry) for entry in pairs_for_index(int(current_background_index))]
     if any(entry.get("q_group_key") == best_group_key for entry in existing_entries):
         if callable(push_undo_state_fn):
@@ -7976,26 +8153,21 @@ def geometry_manual_toggle_selection_at(
         seed_candidate, seed_dist = nearest_candidate_to_point_fn(
             float(col),
             float(row),
-            best_group_entries,
+            raw_best_group_entries,
             use_caked_display=use_caked_space,
         )
     else:
         seed_candidate, seed_dist = nearest_candidate_to_point_fn(
             float(col),
             float(row),
-            best_group_entries,
+            raw_best_group_entries,
         )
     tagged_candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
     if isinstance(seed_candidate, dict):
-        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
-            seed_candidate,
-            target_key=best_group_key,
-            profile_cache=profile_cache,
-        )
-        selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+        selected_candidate = _geometry_manual_select_q_group_representative(
             best_group_entries,
-            branch_id=branch_id,
-            target_key=best_group_key,
+            group_key=best_group_key,
+            seed_candidate=seed_candidate,
             profile_cache=profile_cache,
         )
         if isinstance(selected_candidate, dict):
@@ -8172,15 +8344,10 @@ def geometry_manual_place_selection_at(
             )
     candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
     if isinstance(seed_candidate, dict):
-        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
-            seed_candidate,
-            target_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
-            profile_cache=profile_cache,
-        )
-        selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+        selected_candidate = _geometry_manual_select_q_group_representative(
             remaining_candidates,
-            branch_id=branch_id,
-            target_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+            group_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+            seed_candidate=seed_candidate,
             profile_cache=profile_cache,
         )
         if isinstance(selected_candidate, dict):

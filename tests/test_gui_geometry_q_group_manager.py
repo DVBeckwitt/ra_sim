@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -2775,6 +2776,266 @@ def test_collapse_geometry_fit_simulated_peaks_prefers_mosaic_top_per_branch() -
     assert all(isinstance(entry["mosaic_top_rank_key"], tuple) for entry in collapsed)
 
 
+def test_collapse_geometry_fit_simulated_peaks_group_wide_keeps_top_provenance() -> None:
+    key = ("q_group", "primary", 2, 4)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "hkl": (2, 0, 4),
+            "source_hkl": (2, 0, 4),
+            "source_branch_index": 0,
+            "source_reflection_index": 20,
+            "source_reflection_key": ("full", 20),
+            "source_ray_id": "ray-low",
+            "mosaic_weight": 0.2,
+            "source_row_index": 1,
+            "weight": 1.0,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "-x",
+            "hkl": (-2, 0, 4),
+            "source_hkl": (-2, 0, 4),
+            "source_branch_index": 1,
+            "source_reflection_index": 21,
+            "source_reflection_key": ("full", 21),
+            "source_ray_id": "ray-top",
+            "mosaic_weight": 0.95,
+            "source_row_index": 2,
+            "weight": 1.0,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "hkl": (2, 0, 4),
+            "source_hkl": (2, 0, 4),
+            "source_branch_index": 0,
+            "source_reflection_index": 22,
+            "source_reflection_key": ("full", 22),
+            "source_ray_id": "ray-mid",
+            "mosaic_weight": 0.55,
+            "source_row_index": 3,
+            "weight": 1.0,
+        },
+    ]
+    original_entries = [dict(entry) for entry in raw_entries]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+        raw_entries,
+        one_per_q_group=True,
+    )
+
+    assert raw_entries == original_entries
+    assert len(collapsed) == 1
+    assert collapsed_count == len(raw_entries) - 1
+    kept = collapsed[0]
+    assert kept["mosaic_weight"] == 0.95
+    assert kept["selection_reason"] == "mosaic_top_per_q_group"
+    assert kept["selection_scope"] == "q_group"
+    assert kept["selected_q_group_key"] == key
+    assert kept["branch_id"] == "-x"
+    assert kept["source_branch_index"] == 1
+    assert kept["source_reflection_index"] == 21
+    assert kept["source_reflection_key"] == ("full", 21)
+    assert kept["source_ray_id"] == "ray-top"
+    assert kept["hkl"] == (-2, 0, 4)
+    assert kept["source_hkl"] == (-2, 0, 4)
+
+
+def test_collapse_geometry_fit_simulated_peaks_default_remains_per_branch() -> None:
+    key = ("q_group", "primary", 2, 4)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "hkl": (2, 0, 4),
+            "source_branch_index": 0,
+            "source_reflection_index": 20,
+            "mosaic_weight": 0.2,
+            "source_row_index": 1,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "-x",
+            "hkl": (-2, 0, 4),
+            "source_branch_index": 1,
+            "source_reflection_index": 21,
+            "mosaic_weight": 0.95,
+            "source_row_index": 2,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "hkl": (2, 0, 4),
+            "source_branch_index": 0,
+            "source_reflection_index": 22,
+            "mosaic_weight": 0.55,
+            "source_row_index": 3,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+        raw_entries,
+    )
+
+    assert len(collapsed) == 2
+    assert collapsed_count == 1
+    by_branch = {entry["branch_id"]: entry for entry in collapsed}
+    assert by_branch["+x"]["source_reflection_index"] == 22
+    assert by_branch["-x"]["source_reflection_index"] == 21
+    assert all(entry["selection_reason"] == "mosaic_top_per_branch" for entry in collapsed)
+    assert all("selection_scope" not in entry for entry in collapsed)
+
+
+def test_collapse_qr_qz_selection_peaks_keeps_one_intersection_per_source_branch() -> None:
+    key = ("q_group", "primary", 5, 2)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "hkl": (5, 0, 2),
+            "source_branch_index": 0,
+            "source_reflection_index": 50,
+            "source_reflection_key": ("full", 50),
+            "source_ray_id": "branch-0-low",
+            "mosaic_weight": 0.1,
+            "source_row_index": 1,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (5, 0, 2),
+            "source_branch_index": 0,
+            "source_reflection_index": 52,
+            "source_reflection_key": ("full", 52),
+            "source_ray_id": "branch-0-top",
+            "mosaic_weight": 0.8,
+            "source_row_index": 2,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (-5, 0, 2),
+            "source_branch_index": 1,
+            "source_reflection_index": 60,
+            "source_reflection_key": ("full", 60),
+            "source_ray_id": "branch-1-low",
+            "mosaic_weight": 0.2,
+            "source_row_index": 3,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (-5, 0, 2),
+            "source_branch_index": 1,
+            "source_reflection_index": 61,
+            "source_reflection_key": ("full", 61),
+            "source_ray_id": "branch-1-top",
+            "mosaic_weight": 0.7,
+            "source_row_index": 4,
+        },
+    ]
+    original_entries = [dict(entry) for entry in raw_entries]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        raw_entries,
+    )
+
+    assert raw_entries == original_entries
+    assert len(collapsed) == 2
+    assert collapsed_count == 2
+    by_source_branch = {entry["source_branch_index"]: entry for entry in collapsed}
+    assert set(by_source_branch) == {0, 1}
+    assert by_source_branch[0]["source_reflection_index"] == 52
+    assert by_source_branch[0]["source_reflection_key"] == ("full", 52)
+    assert by_source_branch[0]["source_ray_id"] == "branch-0-top"
+    assert by_source_branch[0]["hkl"] == (5, 0, 2)
+    assert by_source_branch[0]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_source_branch[1]["source_reflection_index"] == 61
+    assert by_source_branch[1]["source_reflection_key"] == ("full", 61)
+    assert by_source_branch[1]["source_ray_id"] == "branch-1-top"
+    assert by_source_branch[1]["hkl"] == (-5, 0, 2)
+    assert by_source_branch[1]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_source_branch[0]["branch_id"] != by_source_branch[1]["branch_id"]
+
+
+def test_collapse_qr_qz_selection_peaks_00l_has_single_branch() -> None:
+    key = ("q_group", "primary", 0, 3)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "hkl": (0, 0, 3),
+            "source_branch_index": 0,
+            "source_reflection_index": 70,
+            "source_reflection_key": ("full", 70),
+            "source_ray_id": "00l-low",
+            "mosaic_weight": 0.2,
+            "source_row_index": 1,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (0, 0, 3),
+            "source_branch_index": 1,
+            "source_reflection_index": 71,
+            "source_reflection_key": ("full", 71),
+            "source_ray_id": "00l-top",
+            "mosaic_weight": 0.9,
+            "source_row_index": 2,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (0, 0, 3),
+            "source_branch_index": 0,
+            "source_reflection_index": 72,
+            "source_reflection_key": ("full", 72),
+            "source_ray_id": "00l-mid",
+            "mosaic_weight": 0.5,
+            "source_row_index": 3,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        raw_entries,
+    )
+
+    assert len(collapsed) == 1
+    assert collapsed_count == len(raw_entries) - 1
+    kept = collapsed[0]
+    assert kept["branch_id"] == "00l"
+    assert kept["branch_source"] == "generated"
+    assert kept["source_branch_index"] == 1
+    assert kept["source_reflection_index"] == 71
+    assert kept["source_reflection_key"] == ("full", 71)
+    assert kept["source_ray_id"] == "00l-top"
+    assert kept["mosaic_weight"] == 0.9
+    assert kept["selection_reason"] == "mosaic_top_per_branch"
+
+
+def test_collapse_qr_qz_selection_peaks_leaves_ungrouped_rows_independent() -> None:
+    raw_entries = [
+        {
+            "q_group_key": None,
+            "branch_id": "+x",
+            "hkl": (1, 0, 0),
+            "mosaic_weight": 0.1,
+            "source_row_index": 1,
+        },
+        {
+            "q_group_key": None,
+            "branch_id": "-x",
+            "hkl": (0, 1, 0),
+            "mosaic_weight": 0.9,
+            "source_row_index": 2,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        raw_entries,
+    )
+
+    assert len(collapsed) == 2
+    assert collapsed_count == 0
+    assert [entry["source_row_index"] for entry in collapsed] == [1, 2]
+    assert all(entry.get("q_group_key") is None for entry in collapsed)
+
+
 def test_collapse_geometry_fit_simulated_peaks_uses_profile_cache_branch_before_unknown() -> None:
     key = ("q_group", "primary", 1, 0)
     raw_entries = [
@@ -3443,6 +3704,188 @@ def test_geometry_q_group_manager_runtime_live_preview_seed_state_resolution() -
 
     assert success == ([{"collapsed": True}], 2, 6, 3)
     assert success_events == [("collapse", 4.5)]
+
+
+def test_qr_qz_initial_raw_cache_preview_draws_one_top_marker_per_branch() -> None:
+    group_key = ("q_group", "primary", 3, 2)
+    raw_cache_rows = [
+        {
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 30,
+            "source_reflection_key": ("full", 30),
+            "source_ray_id": "ray-a",
+            "hkl": (3, 0, 2),
+            "mosaic_weight": 0.15,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        },
+        {
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_branch_index": 1,
+            "source_reflection_index": 31,
+            "source_reflection_key": ("full", 31),
+            "source_ray_id": "ray-winner",
+            "hkl": (-3, 0, 2),
+            "mosaic_weight": 0.85,
+            "sim_col": 11.0,
+            "sim_row": 21.0,
+        },
+        {
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 32,
+            "source_reflection_key": ("full", 32),
+            "source_ray_id": "ray-b",
+            "hkl": (3, 0, 2),
+            "mosaic_weight": 0.45,
+            "sim_col": 12.0,
+            "sim_row": 22.0,
+        },
+    ]
+    preview_state = state.GeometryPreviewState()
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=preview_state,
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        filter_simulated_peaks=lambda peaks: (list(peaks or []), 0, 1),
+        collapse_simulated_peaks=geometry_q_group_manager.collapse_qr_qz_selection_peaks,
+    )
+
+    seed_state = geometry_q_group_manager.resolve_runtime_live_geometry_preview_seed_state(
+        bindings,
+        raw_cache_rows,
+        preview_auto_match_cfg={"degenerate_merge_radius_px": 4.0},
+        min_matches=1,
+        signature=("raw-cache",),
+    )
+
+    assert seed_state is not None
+    visible_rows, _excluded, _total, collapsed_count = seed_state
+    visible_for_group = [row for row in visible_rows if row.get("q_group_key") == group_key]
+    assert len(visible_for_group) == 2
+    by_branch = {row["branch_id"]: row for row in visible_for_group}
+    assert by_branch["+x"]["mosaic_weight"] == 0.45
+    assert by_branch["+x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["+x"]["source_branch_index"] == 0
+    assert by_branch["+x"]["source_reflection_index"] == 32
+    assert by_branch["+x"]["source_reflection_key"] == ("full", 32)
+    assert by_branch["+x"]["source_ray_id"] == "ray-b"
+    assert by_branch["-x"]["mosaic_weight"] == 0.85
+    assert by_branch["-x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["-x"]["source_branch_index"] == 1
+    assert by_branch["-x"]["source_reflection_index"] == 31
+    assert by_branch["-x"]["source_reflection_key"] == ("full", 31)
+    assert by_branch["-x"]["source_ray_id"] == "ray-winner"
+    assert collapsed_count == len(raw_cache_rows) - 2
+
+    overlay_state = geometry_q_group_manager.build_live_geometry_preview_overlay_state(
+        signature=("raw-cache", "draw"),
+        matched_pairs=[
+            {
+                **dict(row),
+                "x": 100.0,
+                "y": 200.0,
+                "bg_x": 100.0,
+                "bg_y": 200.0,
+            }
+            for row in visible_for_group
+        ],
+        match_stats={
+            "simulated_count": len(visible_rows),
+            "search_radius_px": 4.0,
+            "mean_match_distance_px": 0.0,
+            "p90_match_distance_px": 0.0,
+        },
+        preview_auto_match_cfg={"max_display_markers": 5},
+        auto_match_attempts=[],
+        min_matches=1,
+        q_group_total=1,
+        q_group_excluded=0,
+        excluded_q_peaks=0,
+        collapsed_degenerate_peaks=collapsed_count,
+    )
+    preview_state.overlay.pairs = list(overlay_state["pairs"])
+    preview_state.overlay.simulated_count = int(overlay_state["simulated_count"])
+    preview_state.overlay.min_matches = int(overlay_state["min_matches"])
+    preview_state.overlay.best_radius = float(overlay_state["best_radius"])
+    preview_state.overlay.mean_dist = float(overlay_state["mean_dist"])
+    preview_state.overlay.p90_dist = float(overlay_state["p90_dist"])
+    preview_state.overlay.quality_fail = bool(overlay_state["quality_fail"])
+    preview_state.overlay.max_display_markers = int(overlay_state["max_display_markers"])
+    preview_state.overlay.q_group_total = int(overlay_state["q_group_total"])
+    preview_state.overlay.q_group_excluded = int(overlay_state["q_group_excluded"])
+    preview_state.overlay.collapsed_degenerate_peaks = int(
+        overlay_state["collapsed_degenerate_peaks"]
+    )
+    draw_calls: list[tuple[list[dict[str, object]], int]] = []
+
+    rendered = geometry_q_group_manager.render_live_geometry_preview_overlay_state(
+        preview_state=preview_state,
+        draw_live_geometry_preview_overlay=lambda pairs, *, max_display_markers: draw_calls.append(
+            (list(pairs), int(max_display_markers))
+        ),
+        filter_live_preview_matches=lambda pairs: (list(pairs), 0),
+        set_status_text=lambda _text: None,
+        update_status=True,
+    )
+
+    assert rendered is True
+    drawn_pairs = draw_calls[0][0]
+    drawn_for_group = [row for row in drawn_pairs if row.get("q_group_key") == group_key]
+    assert len(drawn_for_group) == 2
+    drawn_by_branch = {row["branch_id"]: row for row in drawn_for_group}
+    assert drawn_by_branch["+x"]["source_reflection_index"] == 32
+    assert drawn_by_branch["+x"]["source_ray_id"] == "ray-b"
+    assert drawn_by_branch["-x"]["source_reflection_index"] == 31
+    assert drawn_by_branch["-x"]["source_ray_id"] == "ray-winner"
+
+
+def test_qr_qz_ui_paths_use_selection_collapse_wrapper() -> None:
+    gui_dir = Path(geometry_q_group_manager.__file__).parent
+    checked_paths = [
+        gui_dir / "geometry_q_group_manager.py",
+        gui_dir / "manual_geometry.py",
+    ]
+    unexpected: list[str] = []
+    for path in checked_paths:
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "collapse_geometry_fit_simulated_peaks(" not in line:
+                continue
+            if "def collapse_geometry_fit_simulated_peaks" in line:
+                continue
+            if "return collapse_geometry_fit_simulated_peaks" in line:
+                continue
+            unexpected.append(f"{path.name}:{line_number}:{line.strip()}")
+
+    assert unexpected == []
+
+
+def test_runtime_session_keeps_qr_qz_collapse_out_of_fit_internals() -> None:
+    runtime_path = Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    runtime_source = runtime_path.read_text(encoding="utf-8")
+
+    assert "collapse_simulated_peaks=_collapse_qr_qz_selection_peaks" in runtime_source
+    assert 'globals()["_collapse_qr_qz_selection_peaks"]' in runtime_source
+    assert "def _collapse_geometry_fit_simulated_peaks" in runtime_source
+    assert (
+        "gui_geometry_q_group_manager.collapse_geometry_fit_simulated_peaks"
+        in runtime_source
+    )
+    assert (
+        "_collapse_geometry_fit_simulated_peaks = (\n"
+        "        geometry_q_group_runtime_value_callbacks.collapse_simulated_peaks"
+        not in runtime_source
+    )
 
 
 def test_geometry_q_group_manager_runtime_live_preview_match_result_application(

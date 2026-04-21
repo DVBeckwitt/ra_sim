@@ -1908,6 +1908,47 @@ def _native_detector_coords_to_live_bundle_detector_coords(
     )
 
 
+def _geometry_manual_detector_display_from_native(
+    col: float,
+    row: float,
+    native_image_shape: tuple[int, ...],
+) -> tuple[float, float] | None:
+    """Project native detector coords the same way live simulation markers do."""
+
+    try:
+        projected = _native_detector_coords_to_live_bundle_detector_coords(
+            float(col),
+            float(row),
+        )
+    except Exception:
+        projected = None
+    if (
+        isinstance(projected, tuple)
+        and len(projected) >= 2
+        and projected[0] is not None
+        and projected[1] is not None
+        and np.isfinite(float(projected[0]))
+        and np.isfinite(float(projected[1]))
+    ):
+        return float(projected[0]), float(projected[1])
+    try:
+        projected = _native_sim_to_display_coords(
+            float(col),
+            float(row),
+            native_image_shape,
+        )
+    except Exception:
+        projected = None
+    if (
+        isinstance(projected, tuple)
+        and len(projected) >= 2
+        and np.isfinite(float(projected[0]))
+        and np.isfinite(float(projected[1]))
+    ):
+        return float(projected[0]), float(projected[1])
+    return None
+
+
 def _live_bundle_detector_coords_to_background_display_coords(
     col: float,
     row: float,
@@ -3705,14 +3746,11 @@ def _refine_geometry_manual_pair_entry_from_cache(
     ):
         updated_entry["refined_sim_native_x"] = float(native_point[0])
         updated_entry["refined_sim_native_y"] = float(native_point[1])
-        try:
-            refined_display = _native_sim_to_display_coords(
-                float(native_point[0]),
-                float(native_point[1]),
-                native_image_shape,
-            )
-        except Exception:
-            refined_display = None
+        refined_display = _geometry_manual_detector_display_from_native(
+            float(native_point[0]),
+            float(native_point[1]),
+            native_image_shape,
+        )
         if (
             isinstance(refined_display, tuple)
             and len(refined_display) >= 2
@@ -3921,14 +3959,11 @@ def _refine_current_geometry_manual_pairs() -> None:
         ):
             entry["refined_sim_native_x"] = float(native_point[0])
             entry["refined_sim_native_y"] = float(native_point[1])
-            try:
-                refined_display = _native_sim_to_display_coords(
-                    float(native_point[0]),
-                    float(native_point[1]),
-                    native_image_shape,
-                )
-            except Exception:
-                refined_display = None
+            refined_display = _geometry_manual_detector_display_from_native(
+                float(native_point[0]),
+                float(native_point[1]),
+                native_image_shape,
+            )
             if (
                 isinstance(refined_display, tuple)
                 and len(refined_display) >= 2
@@ -5852,6 +5887,9 @@ def _geometry_manual_project_peaks_for_background(
         image_size=int(image_size),
         display_to_native_sim_coords=globals().get("_display_to_native_sim_coords"),
         native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
+        native_detector_coords_to_detector_display_coords=(
+            _background_native_detector_coords_to_bundle_detector_coords
+        ),
         get_detector_angular_maps=(
             lambda ai_value: (
                 globals()["_get_detector_angular_maps"](ai_value)
@@ -5873,6 +5911,7 @@ def _geometry_manual_project_peaks_for_background(
         scattering_angles_to_detector_pixel=globals().get("_scattering_angles_to_detector_pixel"),
         filter_simulated_peaks=(lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)),
         collapse_simulated_peaks=(lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)),
+        profile_cache=lambda: simulation_runtime_state.profile_cache,
     )
     try:
         return _geometry_fit_rows_for_background(
@@ -6363,6 +6402,9 @@ def _initialize_runtime_controls_block_04() -> None:
             image_size=int(image_size),
             display_to_native_sim_coords=_display_to_native_sim_coords,
             native_sim_to_display_coords=_native_sim_to_display_coords,
+            native_detector_coords_to_detector_display_coords=(
+                _native_detector_coords_to_live_bundle_detector_coords
+            ),
             get_detector_angular_maps=(
                 lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
             ),
@@ -6387,11 +6429,12 @@ def _initialize_runtime_controls_block_04() -> None:
                 )
             ),
             collapse_simulated_peaks=(
-                lambda *args, **kwargs: globals()["_collapse_geometry_fit_simulated_peaks"](
+                lambda *args, **kwargs: globals()["_collapse_qr_qz_selection_peaks"](
                     *args,
                     **kwargs,
                 )
             ),
+            profile_cache=lambda: simulation_runtime_state.profile_cache,
         )
     )
     geometry_manual_projection_runtime = geometry_manual_projection_workflow.runtime
@@ -18522,6 +18565,7 @@ def _initialize_runtime_controls_block_38() -> None:
         _build_live_preview_simulated_peaks_from_cache, \
         _last_live_preview_cache_metadata, \
         _filter_geometry_fit_simulated_peaks, \
+        _collapse_qr_qz_selection_peaks, \
         _collapse_geometry_fit_simulated_peaks, \
         _build_geometry_q_group_entries, \
         _clone_geometry_q_group_entries, \
@@ -18572,9 +18616,28 @@ def _initialize_runtime_controls_block_38() -> None:
     _filter_geometry_fit_simulated_peaks = (
         geometry_q_group_runtime_value_callbacks.filter_simulated_peaks
     )
-    _collapse_geometry_fit_simulated_peaks = (
+    _collapse_qr_qz_selection_peaks = (
         geometry_q_group_runtime_value_callbacks.collapse_simulated_peaks
     )
+
+    def _collapse_geometry_fit_simulated_peaks(
+        simulated_peaks,
+        *,
+        merge_radius_px=6.0,
+        profile_cache=None,
+        one_per_q_group=False,
+    ):
+        return gui_geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+            simulated_peaks,
+            merge_radius_px=float(merge_radius_px),
+            profile_cache=(
+                profile_cache
+                if profile_cache is not None
+                else simulation_runtime_state.profile_cache
+            ),
+            one_per_q_group=bool(one_per_q_group),
+        )
+
     _build_geometry_q_group_entries = (
         geometry_q_group_runtime_value_callbacks.build_entries_snapshot
     )
@@ -20445,7 +20508,7 @@ def _initialize_runtime_controls_block_39() -> None:
         image_size_value_factory=lambda: image_size,
         current_geometry_fit_params_factory=_current_geometry_fit_params,
         filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
-        collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
+        collapse_simulated_peaks=_collapse_qr_qz_selection_peaks,
         excluded_q_group_count=_geometry_q_group_excluded_count,
         caked_view_enabled=_active_caked_primary_view,
         background_visible_factory=lambda: bool(background_runtime_state.visible),
@@ -29409,6 +29472,9 @@ def _run_async_geometry_fit_worker_job(
                 image_size=int(job_data.get("image_size", image_size)),
                 display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
                 native_sim_to_display_coords=globals().get("_native_sim_to_display_coords"),
+                native_detector_coords_to_detector_display_coords=(
+                    _background_native_detector_coords_to_bundle_detector_coords
+                ),
                 get_detector_angular_maps=(
                     lambda ai_value: (
                         globals()["_get_detector_angular_maps"](ai_value)
@@ -29436,6 +29502,7 @@ def _run_async_geometry_fit_worker_job(
                     lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
                 ),
                 collapse_simulated_peaks=(lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)),
+                profile_cache=lambda: simulation_runtime_state.profile_cache,
             )
         )
         try:

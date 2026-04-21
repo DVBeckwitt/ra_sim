@@ -8,8 +8,10 @@ from typing import Any
 import numpy as np
 
 
-KNOWN_BRANCH_IDS = {"+x", "-x"}
+ZERO_QR_BRANCH_ID = "00l"
+KNOWN_BRANCH_IDS = {"+x", "-x", ZERO_QR_BRANCH_ID}
 SELECTION_REASON = "mosaic_top_per_branch"
+Q_GROUP_SELECTION_REASON = "mosaic_top_per_q_group"
 
 
 def _finite_float(value: object) -> float | None:
@@ -61,6 +63,11 @@ def normalize_q_group_key(value: object) -> tuple[object, ...] | None:
     return None
 
 
+def _is_q_group_target(value: object) -> bool:
+    key = normalize_q_group_key(value)
+    return bool(key and key[0] == "q_group")
+
+
 def normalize_hkl_key(value: object) -> tuple[int, int, int] | None:
     if isinstance(value, Mapping):
         return normalize_hkl_key(value.get("hkl", value.get("hkl_raw")))
@@ -77,6 +84,26 @@ def normalize_hkl_key(value: object) -> tuple[int, int, int] | None:
             return None
         vals.append(int(round(float(numeric))))
     return (int(vals[0]), int(vals[1]), int(vals[2]))
+
+
+def _q_group_key_is_00l(value: object) -> bool:
+    key = normalize_q_group_key(value)
+    if not key or len(key) < 4 or key[0] != "q_group":
+        return False
+    h_value = _finite_float(key[2])
+    if h_value is None:
+        return False
+    return int(round(float(h_value))) == 0
+
+
+def _entry_is_00l(
+    entry: Mapping[str, object] | None,
+    target_key: object = None,
+) -> bool:
+    hkl_key = normalize_hkl_key(entry) if isinstance(entry, Mapping) else None
+    if hkl_key is not None:
+        return int(hkl_key[0]) == 0 and int(hkl_key[1]) == 0
+    return _q_group_key_is_00l(target_key)
 
 
 def target_key_from_entry(
@@ -107,12 +134,7 @@ def _unknown_branch_id(
     if isinstance(entry, Mapping):
         source_branch = entry.get("source_branch_index")
         if source_branch is not None:
-            source_group = (
-                target_key,
-                entry.get("source_reflection_index"),
-                "source_branch",
-                _plain(source_branch),
-            )
+            source_group = (target_key, "source_branch", _plain(source_branch))
         if source_group is None:
             hkl_key = normalize_hkl_key(entry)
             if hkl_key is not None:
@@ -136,10 +158,14 @@ def normalize_branch_id(
 ) -> tuple[str, str]:
     """Return normalized branch identity without mapping legacy branch indices.
 
-    Known generated branches are the physical signed-x branches ``+x`` and ``-x``.
-    If explicit signed-x branch metadata is absent, the candidate is kept in a
-    stable unknown branch and is never merged into either known branch.
+    Known generated branches are the physical signed-x branches ``+x`` and ``-x``;
+    HK=0 Qr/Qz rows use one canonical ``00l`` branch. If explicit signed-x
+    branch metadata is absent, the candidate is kept in a stable unknown branch
+    and is never merged into either known branch.
     """
+
+    if _entry_is_00l(entry, target_key):
+        return ZERO_QR_BRANCH_ID, "generated"
 
     if isinstance(entry, Mapping):
         raw_branch = entry.get("branch_id")
@@ -466,7 +492,13 @@ def select_mosaic_top_representative(
         return None
     rank_key, selected = min(candidates, key=lambda item: item[0])
     representative = dict(selected)
-    representative["selection_reason"] = SELECTION_REASON
+    if branch_id is None and _is_q_group_target(target_key):
+        representative["selection_reason"] = Q_GROUP_SELECTION_REASON
+        representative["selection_scope"] = "q_group"
+        if target_key is not None:
+            representative["selected_q_group_key"] = _plain(target_key)
+    else:
+        representative["selection_reason"] = SELECTION_REASON
     representative["mosaic_top_rank_key"] = tuple(_json_safe_rank_value(item) for item in rank_key)
     return representative
 

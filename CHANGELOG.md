@@ -89,6 +89,8 @@
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with runtime live-preview enabled/render helpers plus callback-bundle entries for the bound redraw/status path, leaving `ra_sim/gui/runtime.py` without local live-preview enabled/render wrapper functions.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview simulated-peak acquisition/fallback helper, leaving `ra_sim/gui/runtime.py` without the local cached/fallback preview-peak resolution branch.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview seed filter/collapse helper and its empty-state exits, leaving `ra_sim/gui/runtime.py` without the local no-selected-Qr/Qz and no-seeds-after-collapse branches.
+  - Fixed Qr/Qz preview and manual seed selection so raw cache rows, manual toggle, refresh/view-change, and place setup retain one mosaic-top simulated seed per normalized branch for each real Qr/Qz group while preserving branch/reflection/ray provenance.
+  - Fixed caked-mode Qr/Qz manual picks so selected `2theta,phi` seeds map back to detector view through the same detector-display path as simulation markers, including stale-session refresh.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview match-result application helper, leaving `ra_sim/gui/runtime.py` without the local overlay-state build/store/render branch after auto-match completes.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview availability/background gate, leaving `ra_sim/gui/runtime.py` without the local disabled, caked-view, and hidden-background preview exits.
   - Expanded `ra_sim/gui/background_manager.py` with the background visibility toggle workflow used by the workspace action controls and wired it into the runtime callback bundle, leaving `ra_sim/gui/runtime.py` without a standalone background-toggle helper.
@@ -148,6 +150,8 @@
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted runtime live-preview enabled/render helpers and their callback-bundle wiring.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted runtime live-preview simulated-peak acquisition/fallback helper.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted runtime live-preview seed filter/collapse helper and its empty-state exits.
+  - Added Qr/Qz branch-seed regression coverage for default per-branch collapse, explicit whole-group collapse, ungrouped rows, raw-cache preview before view change, manual toggle, refresh, place setup, and structural marker/display counts.
+  - Added structural caked-to-detector regression coverage that verifies the same simulated `2theta,phi` seed returns to the same detector marker position and keeps branch/reflection/ray provenance.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted runtime live-preview match-result application helper.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted runtime live-preview availability/background gate.
   - Extended `tests/test_gui_background_manager.py` with direct coverage for the extracted background visibility toggle helper and callback-bundle wiring.

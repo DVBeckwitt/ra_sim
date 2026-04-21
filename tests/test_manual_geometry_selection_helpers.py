@@ -1901,6 +1901,38 @@ def test_geometry_manual_pair_json_roundtrip_preserves_selection_provenance() ->
     assert restored["mosaic_top_rank_key"] == tuple(serialized["mosaic_top_rank_key"])
 
 
+def test_geometry_manual_pair_entry_sanitizes_wide_provenance_values() -> None:
+    raw_payload = object()
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "1,0,2",
+            "hkl": (1, 0, 2),
+            "source_table_index": 3,
+            "source_row_index": 8,
+            "source_branch_index": 1,
+            "source_reflection_index": 9,
+            "source_reflection_key": ("full", 9),
+            "source_ray_id": "ray-9",
+            "source_payload": raw_payload,
+            "ray_vector": np.asarray([1.0, 2.0, 3.0], dtype=float),
+            "reflection_payload": {"array": np.asarray([4, 5], dtype=np.int64)},
+            "branch_id": "-x",
+            "selection_reason": "mosaic_top_per_q_group",
+        },
+        120.0,
+        240.0,
+        group_key=("q_group", "primary", 1, 2),
+    )
+
+    assert entry is not None
+    assert entry["source_reflection_key"] == ("full", 9)
+    assert entry["source_ray_id"] == "ray-9"
+    assert entry["ray_vector"] == (1.0, 2.0, 3.0)
+    assert entry["reflection_payload"] == {"array": (4, 5)}
+    assert isinstance(entry["source_payload"], str)
+    assert entry["source_payload"] != raw_payload
+
+
 def test_caked_manual_pair_redraws_in_detector_view_from_saved_simulated_anchor_without_live_lookup() -> (
     None
 ):
@@ -4207,6 +4239,7 @@ def test_geometry_manual_pick_preview_state_uses_profile_cache_mosaic_top() -> N
     assert all("mosaic_weight" not in entry for entry in entries)
     assert seen["source_entry"]["source_row_index"] == 31
     assert seen["source_entry"]["branch_id"] == "+x"
+    assert seen["source_entry"]["selection_reason"] == "mosaic_top_per_branch"
     assert seen["source_entry"]["mosaic_weight"] == 0.9
     assert preview["candidate"]["source_row_index"] == 31
 
@@ -4663,7 +4696,7 @@ def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pendin
     assert entries[0]["bg_display"] == (19.0, 21.0)
 
 
-def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_nonbranch_snapshot_by_key() -> (
+def test_refresh_geometry_manual_pick_session_candidates_keeps_one_branch_row_without_branch_hints() -> (
     None
 ):
     session = {
@@ -4729,12 +4762,89 @@ def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_nonbran
     )
 
     assert refreshed["cache_signature"] == ("sim", 2)
-    assert refreshed["target_count"] == 2
+    assert refreshed["target_count"] == 1
+    assert len(refreshed["group_entries"]) == 1
     assert refreshed["group_entries"][0]["label"] == "new-left"
     assert refreshed["group_entries"][0]["sim_col"] == 50.0
-    assert refreshed["group_entries"][1]["label"] == "new-right"
+    assert refreshed["group_entries"][0]["selection_reason"] == "mosaic_top_per_branch"
     assert "tagged_candidate" not in refreshed
+    assert refreshed["tagged_candidate_key"] == ("source", 1, 3)
     assert refreshed["pending_entries"][0]["source_row_index"] == 3
+
+
+def test_refresh_geometry_manual_pick_session_candidates_keeps_one_top_row_per_branch() -> None:
+    group_key = ("q_group", "primary", 4, 2)
+    low_tagged = {
+        "label": "low-tagged",
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 40,
+        "source_reflection_key": ("full", 40),
+        "source_ray_id": "low-ray",
+        "hkl": (4, 0, 2),
+        "mosaic_weight": 0.2,
+        "source_table_index": 1,
+        "source_row_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    top = {
+        "label": "top",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 41,
+        "source_reflection_key": ("full", 41),
+        "source_ray_id": "top-ray",
+        "hkl": (-4, 0, 2),
+        "mosaic_weight": 0.95,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 30.0,
+        "sim_row": 40.0,
+    }
+    session = {
+        "group_key": group_key,
+        "group_entries": [dict(low_tagged)],
+        "pending_entries": [],
+        "background_index": 0,
+        "target_count": 1,
+        "tagged_candidate_key": ("source_branch", 40, 0),
+        "tagged_candidate": dict(low_tagged),
+    }
+
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        session,
+        grouped_candidates={group_key: [dict(low_tagged), dict(top)]},
+        cache_signature=("sig", "refresh"),
+    )
+
+    assert refreshed["target_count"] == 2
+    assert len(refreshed["group_entries"]) == 2
+    by_branch = {entry["branch_id"]: entry for entry in refreshed["group_entries"]}
+    assert by_branch["+x"]["label"] == "low-tagged"
+    assert by_branch["+x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["+x"]["source_branch_index"] == 0
+    assert by_branch["+x"]["source_reflection_index"] == 40
+    assert by_branch["+x"]["source_ray_id"] == "low-ray"
+    assert by_branch["-x"]["label"] == "top"
+    assert by_branch["-x"]["mosaic_weight"] == 0.95
+    assert by_branch["-x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["-x"]["source_branch_index"] == 1
+    assert by_branch["-x"]["source_reflection_index"] == 41
+    assert by_branch["-x"]["source_reflection_key"] == ("full", 41)
+    assert by_branch["-x"]["source_ray_id"] == "top-ray"
+    assert refreshed["tagged_candidate"]["label"] == "low-tagged"
+    displayed = mg.geometry_manual_session_initial_pairs_display(
+        refreshed,
+        current_background_index=0,
+        entry_display_coords=lambda entry: (
+            float(entry.get("sim_col")),
+            float(entry.get("sim_row")),
+        ),
+    )
+    assert len([entry for entry in displayed if entry.get("q_group_key") == group_key]) == 2
 
 
 def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_under_permutation() -> (
@@ -4751,6 +4861,7 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_u
         "source_peak_index": 1,
         "source_table_index": 1,
         "source_row_index": 3,
+        "mosaic_weight": 0.9,
         "sim_col": 30.0,
         "sim_row": 40.0,
     }
@@ -4764,6 +4875,7 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_u
         "source_peak_index": 0,
         "source_table_index": 1,
         "source_row_index": 2,
+        "mosaic_weight": 0.2,
         "sim_col": 10.0,
         "sim_row": 20.0,
     }
@@ -4790,13 +4902,17 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_u
 
     for refreshed in (forward, reversed_order):
         assert refreshed["target_count"] == 2
+        assert len(refreshed["group_entries"]) == 2
         assert refreshed["tagged_candidate_key"] == ("source_branch", 9, 1)
         assert refreshed["tagged_candidate"]["source_reflection_index"] == 9
         assert refreshed["tagged_candidate"]["source_reflection_namespace"] == ("full_reflection")
         assert refreshed["tagged_candidate"]["source_reflection_is_full"] is True
         assert refreshed["tagged_candidate"]["source_branch_index"] == 1
-        assert refreshed["group_entries"][0]["source_reflection_index"] == 9
-        assert refreshed["group_entries"][0]["source_branch_index"] == 1
+        assert refreshed["tagged_candidate"]["selection_reason"] == "mosaic_top_per_branch"
+        by_branch = {entry["source_branch_index"]: entry for entry in refreshed["group_entries"]}
+        assert by_branch[1]["source_reflection_index"] == 9
+        assert by_branch[1]["source_branch_index"] == 1
+        assert by_branch[0]["source_reflection_index"] == 8
 
 
 def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_identity_under_permutation() -> (
@@ -4810,6 +4926,7 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_ide
         "source_row_index": 3,
         "source_branch_index": 1,
         "source_peak_index": 1,
+        "mosaic_weight": 0.9,
         "sim_col": 30.0,
         "sim_row": 40.0,
     }
@@ -4820,6 +4937,7 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_ide
         "source_row_index": 2,
         "source_branch_index": 1,
         "source_peak_index": 1,
+        "mosaic_weight": 0.2,
         "sim_col": 10.0,
         "sim_row": 20.0,
     }
@@ -4845,10 +4963,13 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_ide
     )
 
     for refreshed in (forward, reversed_order):
+        assert refreshed["target_count"] == 1
+        assert len(refreshed["group_entries"]) == 1
         assert refreshed["group_entries"][0]["label"] == "target-right"
         assert refreshed["group_entries"][0]["source_row_index"] == 3
         assert refreshed["tagged_candidate"]["label"] == "target-right"
         assert refreshed["tagged_candidate"]["source_row_index"] == 3
+        assert refreshed["tagged_candidate"]["selection_reason"] == "mosaic_top_per_branch"
 
 
 def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_stored_tagged_candidate_by_key() -> (
@@ -4900,10 +5021,11 @@ def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing
         cache_signature=("sig", 1),
     )
 
+    assert refreshed["target_count"] == 2
+    assert len(refreshed["group_entries"]) == 2
     assert refreshed["group_entries"][0]["label"] == "left"
-    assert refreshed["group_entries"][1]["label"] == "other-right"
-    assert refreshed["tagged_candidate_key"] == ("source_branch", 1, 1)
     assert "tagged_candidate" not in refreshed
+    assert refreshed["tagged_candidate_key"] == ("source_branch", 1, 1)
 
 
 def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_nonbranch_stored_tagged_candidate_by_key() -> (
@@ -4949,10 +5071,11 @@ def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing
         cache_signature=("sig", 1),
     )
 
+    assert refreshed["target_count"] == 2
+    assert len(refreshed["group_entries"]) == 2
     assert refreshed["group_entries"][0]["label"] == "left"
-    assert refreshed["group_entries"][1]["label"] == "other-right"
-    assert refreshed["tagged_candidate_key"] == ("source", 1, 3)
     assert "tagged_candidate" not in refreshed
+    assert refreshed["tagged_candidate_key"] == ("source", 1, 3)
 
 
 def test_refresh_geometry_manual_pick_session_candidates_keeps_cleared_identity_lock_on_second_refresh() -> (
@@ -5007,8 +5130,9 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_cleared_identity_
     assert "tagged_candidate" not in first
     assert second["_tagged_candidate_requires_identity"] is True
     assert second["cache_signature"] == ("sig", 2)
+    assert second["target_count"] == 2
+    assert len(second["group_entries"]) == 2
     assert second["group_entries"][0]["label"] == "left"
-    assert second["group_entries"][1]["label"] == "other-right"
     assert "tagged_candidate" not in second
 
 
@@ -5054,7 +5178,9 @@ def test_refresh_geometry_manual_pick_session_candidates_preserves_legacy_key_on
 
     for refreshed in (first, second):
         assert refreshed["_tagged_candidate_requires_identity"] is False
-        assert refreshed["group_entries"][0]["label"] == "right"
+        assert refreshed["target_count"] == 2
+        assert len(refreshed["group_entries"]) == 2
+        assert any(entry["label"] == "right" for entry in refreshed["group_entries"])
         assert refreshed["tagged_candidate"]["label"] == "right"
         assert refreshed["tagged_candidate_key"] == ("source", 1, 3)
 
@@ -6989,6 +7115,7 @@ def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_
         "sim_row": 95.0,
         "caked_x": 29.0,
         "caked_y": -58.5,
+        "mosaic_weight": 0.2,
     }
     right_candidate = {
         "label": "right",
@@ -9038,24 +9165,42 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
     projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
     diagnostics = callbacks.last_simulation_diagnostics()
 
-    assert projected == [
-        {
-            "label": "1,0,0",
-            "q_group_key": ("q_group", "primary", 1, 0),
-            "source_table_index": 1,
-            "source_row_index": 2,
-            "sim_col": 3.0,
-            "sim_row": 4.0,
-            "native_col": 3.0,
-            "native_row": 4.0,
-            "sim_native_x": 3.0,
-            "sim_native_y": 4.0,
-            "sim_col_raw": 3.0,
-            "sim_row_raw": 4.0,
-            "display_col": 3.0,
-            "display_row": 4.0,
-        }
-    ]
+    assert len(projected) == 1
+    assert {
+        key: projected[0][key]
+        for key in (
+            "label",
+            "q_group_key",
+            "source_table_index",
+            "source_row_index",
+            "sim_col",
+            "sim_row",
+            "native_col",
+            "native_row",
+            "sim_native_x",
+            "sim_native_y",
+            "sim_col_raw",
+            "sim_row_raw",
+            "display_col",
+            "display_row",
+        )
+    } == {
+        "label": "1,0,0",
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 3.0,
+        "sim_row": 4.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "sim_native_x": 3.0,
+        "sim_native_y": 4.0,
+        "sim_col_raw": 3.0,
+        "sim_row_raw": 4.0,
+        "display_col": 3.0,
+        "display_row": 4.0,
+    }
+    assert projected[0]["selection_reason"] == "mosaic_top_per_branch"
     assert diagnostics["source"] == "cache"
     assert diagnostics["status"] == "cache_hit"
 
@@ -9110,24 +9255,22 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstra
     diagnostics = callbacks.last_simulation_diagnostics()
 
     assert ensured == [False]
-    assert projected == [
-        {
-            "label": "1,0,0",
-            "q_group_key": ("q_group", "primary", 1, 0),
-            "source_table_index": 1,
-            "source_row_index": 2,
-            "sim_col": 3.0,
-            "sim_row": 4.0,
-            "native_col": 3.0,
-            "native_row": 4.0,
-            "sim_native_x": 3.0,
-            "sim_native_y": 4.0,
-            "sim_col_raw": 3.0,
-            "sim_row_raw": 4.0,
-            "display_col": 3.0,
-            "display_row": 4.0,
-        }
-    ]
+    assert len(projected) == 1
+    assert projected[0]["label"] == "1,0,0"
+    assert projected[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+    assert projected[0]["source_table_index"] == 1
+    assert projected[0]["source_row_index"] == 2
+    assert projected[0]["sim_col"] == 3.0
+    assert projected[0]["sim_row"] == 4.0
+    assert projected[0]["native_col"] == 3.0
+    assert projected[0]["native_row"] == 4.0
+    assert projected[0]["sim_native_x"] == 3.0
+    assert projected[0]["sim_native_y"] == 4.0
+    assert projected[0]["sim_col_raw"] == 3.0
+    assert projected[0]["sim_row_raw"] == 4.0
+    assert projected[0]["display_col"] == 3.0
+    assert projected[0]["display_row"] == 4.0
+    assert projected[0]["selection_reason"] == "mosaic_top_per_branch"
     assert diagnostics["source"] == "cache"
     assert diagnostics["status"] == "cache_hit"
 
@@ -9242,7 +9385,7 @@ def test_geometry_manual_toggle_selection_at_starts_session() -> None:
     assert "Selected selected group" in status_messages[-1]
 
 
-def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l_group() -> None:
+def test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz_group() -> None:
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []
     calls: list[tuple[str, object]] = []
@@ -9261,18 +9404,26 @@ def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l
                     {
                         "label": "1,0,2",
                         "hkl": (1, 0, 2),
+                        "branch_id": "+x",
+                        "source_branch_index": 0,
+                        "source_reflection_index": 20,
                         "sim_col": 10.0,
                         "sim_row": 20.0,
                         "weight": 1.0,
+                        "mosaic_weight": 0.2,
                         "source_table_index": 1,
                         "source_row_index": 2,
                     },
                     {
                         "label": "right",
                         "hkl": (-1, 0, 2),
+                        "branch_id": "-x",
+                        "source_branch_index": 1,
+                        "source_reflection_index": 21,
                         "sim_col": 30.0,
                         "sim_row": 40.0,
                         "weight": 1.0,
+                        "mosaic_weight": 0.9,
                         "source_table_index": 1,
                         "source_row_index": 3,
                     },
@@ -9301,7 +9452,24 @@ def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l
     assert next_session["target_count"] == 2
     assert set_sessions[-1]["target_count"] == 2
     assert len(next_session["group_entries"]) == 2
-    assert next_session["group_entries"][0]["label"] == "1,0,2"
+    by_branch = {entry["branch_id"]: entry for entry in next_session["group_entries"]}
+    assert by_branch["+x"]["label"] == "1,0,2"
+    assert by_branch["+x"]["source_branch_index"] == 0
+    assert by_branch["+x"]["source_reflection_index"] == 20
+    assert by_branch["+x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["-x"]["label"] == "right"
+    assert by_branch["-x"]["source_branch_index"] == 1
+    assert by_branch["-x"]["source_reflection_index"] == 21
+    assert by_branch["-x"]["selection_reason"] == "mosaic_top_per_branch"
+    displayed = mg.geometry_manual_session_initial_pairs_display(
+        next_session,
+        current_background_index=0,
+        entry_display_coords=lambda entry: (
+            float(entry.get("sim_col")),
+            float(entry.get("sim_row")),
+        ),
+    )
+    assert len([entry for entry in displayed if entry.get("q_group_key") == group_key]) == 2
     assert ("render", False) in calls
     assert ("button", None) in calls
     assert "Tagged seed [1,0,2]" in status_messages[-1]
@@ -9326,18 +9494,26 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
                     {
                         "label": "1,0,2",
                         "hkl": (1, 0, 2),
+                        "branch_id": "+x",
+                        "source_branch_index": 0,
+                        "source_reflection_index": 20,
                         "sim_col": 10.0,
                         "sim_row": 20.0,
                         "weight": 1.0,
+                        "mosaic_weight": 0.2,
                         "source_table_index": 1,
                         "source_row_index": 2,
                     },
                     {
                         "label": "right",
                         "hkl": (-1, 0, 2),
+                        "branch_id": "-x",
+                        "source_branch_index": 1,
+                        "source_reflection_index": 21,
                         "sim_col": 30.0,
                         "sim_row": 40.0,
                         "weight": 1.0,
+                        "mosaic_weight": 0.9,
                         "source_table_index": 1,
                         "source_row_index": 3,
                     },
@@ -9361,11 +9537,17 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
     assert handled is True
     assert suppress_drag is True
     assert next_session["target_count"] == 2
-    assert next_session["tagged_candidate_key"] == ("source", 1, 3)
-    assert next_session["group_entries"][0]["source_row_index"] == 3
+    assert len(next_session["group_entries"]) == 2
+    assert next_session["tagged_candidate_key"] == ("source_branch", 1, 1)
+    by_branch = {entry["branch_id"]: entry for entry in next_session["group_entries"]}
+    assert by_branch["-x"]["source_row_index"] == 3
+    assert by_branch["-x"]["source_branch_index"] == 1
+    assert by_branch["-x"]["source_reflection_index"] == 21
+    assert by_branch["-x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["+x"]["source_branch_index"] == 0
     assert next_session["tagged_candidate"]["label"] == "right"
     assert "Tagged seed [right]" in status_messages[-1]
-    assert set_sessions[-1]["tagged_candidate_key"] == ("source", 1, 3)
+    assert set_sessions[-1]["tagged_candidate_key"] == ("source_branch", 1, 1)
 
 
 def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_permutation() -> None:
@@ -9383,6 +9565,7 @@ def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_perm
         "sim_col": 10.0,
         "sim_row": 20.0,
         "weight": 1.0,
+        "mosaic_weight": 0.2,
     }
     right = {
         "label": "right",
@@ -9397,6 +9580,7 @@ def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_perm
         "sim_col": 30.0,
         "sim_row": 40.0,
         "weight": 1.0,
+        "mosaic_weight": 0.9,
     }
 
     def _run(entries):
@@ -9436,8 +9620,13 @@ def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_perm
         assert session["tagged_candidate"]["source_reflection_namespace"] == ("full_reflection")
         assert session["tagged_candidate"]["source_reflection_is_full"] is True
         assert session["tagged_candidate"]["source_branch_index"] == 1
-        assert session["group_entries"][0]["source_reflection_index"] == 9
-        assert session["group_entries"][0]["source_branch_index"] == 1
+        assert session["tagged_candidate"]["selection_reason"] == "mosaic_top_per_branch"
+        assert session["target_count"] == 2
+        assert len(session["group_entries"]) == 2
+        by_branch = {entry["source_branch_index"]: entry for entry in session["group_entries"]}
+        assert by_branch[1]["source_reflection_index"] == 9
+        assert by_branch[1]["source_branch_index"] == 1
+        assert by_branch[0]["source_reflection_index"] == 8
 
 
 def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_when_window_choose_misses() -> (
@@ -9464,6 +9653,7 @@ def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_wh
                         "q_group_key": group_key,
                         "source_table_index": 1,
                         "source_row_index": 2,
+                        "mosaic_weight": 0.2,
                         "sim_col": 200.0,
                         "sim_row": 210.0,
                     },
@@ -9473,6 +9663,7 @@ def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_wh
                         "q_group_key": group_key,
                         "source_table_index": 1,
                         "source_row_index": 3,
+                        "mosaic_weight": 0.9,
                         "sim_col": 220.0,
                         "sim_row": 230.0,
                     },
@@ -9535,6 +9726,7 @@ def test_geometry_manual_toggle_selection_at_shared_peak_finder_preserves_branch
             "source_peak_index": 0,
             "source_table_index": 9,
             "source_row_index": 0,
+            "mosaic_weight": 0.2,
             "sim_col": 181.0,
             "sim_row": 95.0,
         },
@@ -9549,6 +9741,7 @@ def test_geometry_manual_toggle_selection_at_shared_peak_finder_preserves_branch
             "source_peak_index": 1,
             "source_table_index": 9,
             "source_row_index": 0,
+            "mosaic_weight": 0.9,
             "sim_col": 190.0,
             "sim_row": 96.0,
         },
@@ -9904,7 +10097,7 @@ def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> Non
     assert set_sessions[-1]["pending_entries"][0]["source_row_index"] == 2
 
 
-def test_geometry_manual_select_q_group_at_tags_mosaic_top_candidate_for_clicked_branch() -> None:
+def test_geometry_manual_select_q_group_at_tags_branch_mosaic_top_candidate() -> None:
     key = ("q_group", "primary", 1, 0)
     entries = [
         {
@@ -9966,10 +10159,16 @@ def test_geometry_manual_select_q_group_at_tags_mosaic_top_candidate_for_clicked
 
     assert handled is True
     assert armed is True
+    assert session["target_count"] == 2
+    assert len(session["group_entries"]) == 2
     assert session["tagged_candidate"]["label"] == "top"
     assert session["tagged_candidate"]["branch_id"] == "+x"
+    assert session["tagged_candidate"]["selection_reason"] == "mosaic_top_per_branch"
     assert session["tagged_candidate"]["best_sample_index"] == 0
     assert sessions[-1]["tagged_candidate"]["source_row_index"] == 31
+    by_branch = {entry["branch_id"]: entry for entry in session["group_entries"]}
+    assert by_branch["+x"]["source_row_index"] == 31
+    assert by_branch["-x"]["source_row_index"] == 41
 
 
 def test_geometry_manual_select_q_group_at_uses_profile_cache_sample_weights() -> None:
@@ -10030,10 +10229,16 @@ def test_geometry_manual_select_q_group_at_uses_profile_cache_sample_weights() -
     assert handled is True
     assert armed is True
     assert all("mosaic_weight" not in entry for entry in entries)
+    assert session["target_count"] == 2
+    assert len(session["group_entries"]) == 2
     assert session["tagged_candidate"]["label"] == "top"
     assert session["tagged_candidate"]["branch_id"] == "+x"
+    assert session["tagged_candidate"]["selection_reason"] == "mosaic_top_per_branch"
     assert session["tagged_candidate"]["mosaic_weight"] == 0.9
     assert session["tagged_candidate"]["source_row_index"] == 31
+    by_branch = {entry["branch_id"]: entry for entry in session["group_entries"]}
+    assert by_branch["+x"]["source_row_index"] == 31
+    assert by_branch["-x"]["source_row_index"] == 41
 
 
 def test_geometry_manual_place_selection_at_refines_with_tagged_candidate_context() -> None:
@@ -10166,6 +10371,85 @@ def test_geometry_manual_place_selection_at_uses_profile_cache_representative() 
     assert seen["source_entry"]["mosaic_weight"] == 0.9
     assert saved_entry_sets[-1][0]["source_row_index"] == 31
     assert saved_entry_sets[-1][0]["mosaic_weight"] == 0.9
+
+
+def test_geometry_manual_place_selection_at_uses_tagged_branch_representative() -> None:
+    key = ("q_group", "primary", 6, 2)
+    low = {
+        "label": "low",
+        "q_group_key": key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 60,
+        "source_reflection_key": ("full", 60),
+        "source_ray_id": "low-ray",
+        "hkl": (6, 0, 2),
+        "mosaic_weight": 0.2,
+        "sim_col": 10.0,
+        "sim_row": 10.0,
+        "source_table_index": 1,
+        "source_row_index": 60,
+    }
+    top = {
+        "label": "top",
+        "q_group_key": key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 61,
+        "source_reflection_key": ("full", 61),
+        "source_ray_id": "top-ray",
+        "hkl": (-6, 0, 2),
+        "mosaic_weight": 0.9,
+        "sim_col": 20.0,
+        "sim_row": 20.0,
+        "source_table_index": 1,
+        "source_row_index": 61,
+    }
+    seen: dict[str, object] = {}
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        10.0,
+        10.0,
+        pick_session={
+            "group_key": key,
+            "group_entries": [dict(low), dict(top)],
+            "pending_entries": [],
+            "target_count": 2,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate": dict(low),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda source_entry, raw_col, raw_row, **_kwargs: (
+            seen.setdefault("source_entry", dict(source_entry)) and (float(raw_col), float(raw_row))
+        ),
+        set_pairs_for_index_fn=lambda _idx, rows: (
+            saved_entry_sets.append(list(rows or [])) or list(rows or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (float(col), float(row)),
+    )
+
+    assert handled is True
+    assert seen["source_entry"]["label"] == "low"
+    assert seen["source_entry"]["selection_reason"] == "mosaic_top_per_branch"
+    assert seen["source_entry"]["branch_id"] == "+x"
+    assert seen["source_entry"]["source_branch_index"] == 0
+    assert seen["source_entry"]["source_reflection_index"] == 60
+    assert seen["source_entry"]["source_ray_id"] == "low-ray"
+    assert saved_entry_sets == []
+    assert next_session["pending_entries"][0]["source_reflection_index"] == 60
+    assert next_session["pending_entries"][0]["source_ray_id"] == "low-ray"
+    assert next_session["target_count"] == 2
 
 
 def test_geometry_manual_place_selection_at_caked_background_refines_to_peak_top() -> None:
@@ -10685,6 +10969,217 @@ def test_geometry_manual_place_selection_at_prefers_caked_nearest_candidate_in_c
     assert saved_entry_sets[-1][0]["source_row_index"] == 0
 
 
+def test_runtime_projection_uses_sim_detector_adapter_after_caked_view() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_row = {
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "winning-ray",
+        "hkl": (-3, 0, 4),
+        "mosaic_weight": 0.9,
+        "native_col": 3.0,
+        "native_row": 4.0,
+    }
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: use_caked["value"],
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 20.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([20.0, 30.0], dtype=float),
+        current_background_display=lambda: np.zeros((64, 64), dtype=float),
+        current_background_native=lambda: np.zeros((64, 64), dtype=float),
+        image_size=64,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 900.0,
+            float(row) + 900.0,
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(raw_row)],
+    )
+
+    caked_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    assert len(caked_rows) == 1
+    assert caked_rows[0]["display_col"] == 13.0
+    assert caked_rows[0]["display_row"] == 24.0
+    assert caked_rows[0]["sim_col_raw"] == 103.0
+    assert caked_rows[0]["sim_row_raw"] == 204.0
+
+    use_caked["value"] = False
+    detector_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    assert len(detector_rows) == 1
+    visible = detector_rows[0]
+    assert visible["display_col"] == 103.0
+    assert visible["display_row"] == 204.0
+    assert visible["sim_col"] == 103.0
+    assert visible["sim_row"] == 204.0
+    assert visible["branch_id"] == "-x"
+    assert visible["source_branch_index"] == 1
+    assert visible["source_reflection_index"] == 17
+    assert visible["source_ray_id"] == "winning-ray"
+
+
+def test_caked_manual_seed_returns_to_same_detector_visual_position() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_row = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "winning-ray",
+        "hkl": (-3, 0, 4),
+        "mosaic_weight": 0.9,
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "source_table_index": 2,
+        "source_row_index": 17,
+    }
+
+    def _detector_display(col, row):
+        return float(col) + 100.0, float(row) + 200.0
+
+    def _caked_to_detector(two_theta, phi):
+        return float(two_theta) + 90.0, float(phi) + 180.0
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: use_caked["value"],
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 20.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([20.0, 30.0], dtype=float),
+        current_background_display=lambda: np.zeros((64, 64), dtype=float),
+        current_background_native=lambda: np.zeros((64, 64), dtype=float),
+        image_size=64,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 900.0,
+            float(row) + 900.0,
+        ),
+        native_detector_coords_to_detector_display_coords=_detector_display,
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(raw_row)],
+    )
+    caked_candidate = callbacks.simulated_peaks_for_params(prefer_cache=True)[0]
+
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        13.0,
+        24.0,
+        pick_session={
+            "group_key": group_key,
+            "group_entries": [dict(caked_candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate_key": _source_key(caked_candidate),
+            "tagged_candidate": dict(caked_candidate),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (13.0, 24.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=_caked_to_detector,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved = dict(saved_entry_sets[-1][0])
+    assert saved["x"] == 103.0
+    assert saved["y"] == 204.0
+    assert saved["detector_x"] == 3.0
+    assert saved["detector_y"] == 4.0
+    assert saved["refined_sim_x"] == 103.0
+    assert saved["refined_sim_y"] == 204.0
+    assert saved["refined_sim_native_x"] == 3.0
+    assert saved["refined_sim_native_y"] == 4.0
+    assert saved["refined_sim_caked_x"] == 13.0
+    assert saved["refined_sim_caked_y"] == 24.0
+    assert saved["branch_id"] == "-x"
+    assert saved["source_branch_index"] == 1
+    assert saved["source_reflection_index"] == 17
+    assert saved["source_ray_id"] == "winning-ray"
+
+    stale_detector_saved = {
+        **dict(saved),
+        "x": 999.0,
+        "y": 999.0,
+        "display_col": 999.0,
+        "display_row": 999.0,
+        "detector_x": 30.0,
+        "detector_y": 40.0,
+        "native_col": 30.0,
+        "native_row": 40.0,
+        "sim_native_x": 30.0,
+        "sim_native_y": 40.0,
+    }
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        stale_detector_saved,
+        background_display_shape=(64, 64),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        caked_angles_to_background_display_coords=_caked_to_detector,
+        native_detector_coords_to_detector_display_coords=_detector_display,
+        rotate_point_for_display=lambda *_args: (999.0, 999.0),
+    )
+    assert refreshed is not None
+    assert refreshed["detector_x"] == 3.0
+    assert refreshed["detector_y"] == 4.0
+    assert refreshed["x"] == 103.0
+    assert refreshed["y"] == 204.0
+    assert refreshed["sim_col"] == 103.0
+    assert refreshed["sim_row"] == 204.0
+
+    use_caked["value"] = False
+    displayed = mg.geometry_manual_session_initial_pairs_display(
+        {
+            "group_key": group_key,
+            "group_entries": [dict(caked_candidate)],
+            "pending_entries": [dict(saved)],
+            "target_count": 1,
+            "background_index": 0,
+        },
+        current_background_index=0,
+        use_caked_display=False,
+        refresh_entry_geometry=callbacks.refresh_entry_geometry,
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+    assert len(displayed) == 1
+    assert displayed[0]["sim_display"] == (103.0, 204.0)
+    assert displayed[0]["bg_display"] == (103.0, 204.0)
+
+
 def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
     sibling_candidate = {
         "label": "1,0,5",
@@ -10717,6 +11212,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         "sim_row": 94.0,
         "caked_x": 29.75,
         "caked_y": -57.8,
+        "mosaic_weight": 0.9,
     }
     saved_entry_sets: list[list[dict[str, object]]] = []
 
@@ -10925,3 +11421,200 @@ def test_runtime_projection_callbacks_report_rebuild_disabled_diagnostics() -> N
     assert diagnostics["source"] == "fresh"
     assert diagnostics["requested_prefer_cache"] is False
     assert diagnostics["status"] == "simulated_peak_rebuild_disabled"
+
+
+def test_runtime_projection_callbacks_collapse_raw_cache_qr_qz_rows_before_view_change() -> None:
+    group_key = ("q_group", "primary", 5, 2)
+    raw_rows = [
+        {
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 50,
+            "source_reflection_key": ("full", 50),
+            "source_ray_id": "low-ray",
+            "hkl": (5, 0, 2),
+            "mosaic_weight": 0.1,
+            "native_col": 10.0,
+            "native_row": 20.0,
+        },
+        {
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_branch_index": 1,
+            "source_reflection_index": 51,
+            "source_reflection_key": ("full", 51),
+            "source_ray_id": "top-ray",
+            "hkl": (-5, 0, 2),
+            "mosaic_weight": 0.9,
+            "native_col": 11.0,
+            "native_row": 21.0,
+        },
+        {
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 52,
+            "source_reflection_key": ("full", 52),
+            "source_ray_id": "mid-ray",
+            "hkl": (5, 0, 2),
+            "mosaic_weight": 0.4,
+            "native_col": 12.0,
+            "native_row": 22.0,
+        },
+    ]
+
+    def _old_collapse_stub(entries, *, merge_radius_px):
+        return (list(entries or []), int(merge_radius_px))
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([]),
+        last_caked_azimuth_values=lambda: np.array([]),
+        current_background_display=lambda: np.zeros((64, 64), dtype=float),
+        current_background_native=lambda: np.zeros((64, 64), dtype=float),
+        image_size=64,
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(row) for row in raw_rows],
+        collapse_simulated_peaks=_old_collapse_stub,
+    )
+
+    projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    grouped = callbacks.pick_candidates(projected)
+
+    assert len([row for row in projected if row.get("q_group_key") == group_key]) == 2
+    assert len(grouped[group_key]) == 2
+    by_branch = {row["branch_id"]: row for row in grouped[group_key]}
+    assert by_branch["+x"]["mosaic_weight"] == 0.4
+    assert by_branch["+x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["+x"]["source_branch_index"] == 0
+    assert by_branch["+x"]["source_reflection_index"] == 52
+    assert by_branch["+x"]["source_reflection_key"] == ("full", 52)
+    assert by_branch["+x"]["source_ray_id"] == "mid-ray"
+    assert by_branch["-x"]["mosaic_weight"] == 0.9
+    assert by_branch["-x"]["selection_reason"] == "mosaic_top_per_branch"
+    assert by_branch["-x"]["source_branch_index"] == 1
+    assert by_branch["-x"]["source_reflection_index"] == 51
+    assert by_branch["-x"]["source_reflection_key"] == ("full", 51)
+    assert by_branch["-x"]["source_ray_id"] == "top-ray"
+
+
+def test_runtime_projection_callbacks_collapse_raw_cache_00l_rows_before_first_click() -> None:
+    group_key = ("q_group", "primary", 0, 3)
+    raw_rows = [
+        {
+            "q_group_key": group_key,
+            "source_branch_index": 0,
+            "source_reflection_index": 70,
+            "source_reflection_key": ("full", 70),
+            "source_ray_id": "00l-low",
+            "hkl": (0, 0, 3),
+            "mosaic_weight": 0.1,
+            "native_col": 10.0,
+            "native_row": 20.0,
+            "source_table_index": 1,
+            "source_row_index": 70,
+        },
+        {
+            "q_group_key": group_key,
+            "source_branch_index": 1,
+            "source_reflection_index": 71,
+            "source_reflection_key": ("full", 71),
+            "source_ray_id": "00l-top",
+            "hkl": (0, 0, 3),
+            "mosaic_weight": 0.9,
+            "native_col": 11.0,
+            "native_row": 21.0,
+            "source_table_index": 1,
+            "source_row_index": 71,
+        },
+        {
+            "q_group_key": group_key,
+            "source_branch_index": 0,
+            "source_reflection_index": 72,
+            "source_reflection_key": ("full", 72),
+            "source_ray_id": "00l-mid",
+            "hkl": (0, 0, 3),
+            "mosaic_weight": 0.4,
+            "native_col": 12.0,
+            "native_row": 22.0,
+            "source_table_index": 1,
+            "source_row_index": 72,
+        },
+    ]
+
+    def _old_collapse_stub(entries, *, merge_radius_px):
+        return (list(entries or []), int(merge_radius_px))
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([]),
+        last_caked_azimuth_values=lambda: np.array([]),
+        current_background_display=lambda: np.zeros((64, 64), dtype=float),
+        current_background_native=lambda: np.zeros((64, 64), dtype=float),
+        image_size=64,
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(row) for row in raw_rows],
+        collapse_simulated_peaks=_old_collapse_stub,
+    )
+
+    projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    grouped = callbacks.pick_candidates(projected)
+
+    visible_for_group = [row for row in projected if row.get("q_group_key") == group_key]
+    assert len(visible_for_group) == 1
+    assert len(grouped[group_key]) == 1
+    kept = grouped[group_key][0]
+    assert kept["branch_id"] == "00l"
+    assert kept["selection_reason"] == "mosaic_top_per_branch"
+    assert kept["source_branch_index"] == 1
+    assert kept["source_reflection_index"] == 71
+    assert kept["source_reflection_key"] == ("full", 71)
+    assert kept["source_ray_id"] == "00l-top"
+    assert kept["mosaic_weight"] == 0.9
+
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        11.0,
+        21.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((64, 64), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("raw-cache",),
+            "grouped_candidates": grouped,
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["target_count"] == 1
+    assert len(next_session["group_entries"]) == 1
+    assert next_session["group_entries"][0]["branch_id"] == "00l"
+    assert next_session["group_entries"][0]["source_reflection_index"] == 71
+    assert set_sessions[-1]["target_count"] == 1
+    assert "Click background peak 1 of 1" in status_messages[-1]
+    displayed = mg.geometry_manual_session_initial_pairs_display(
+        next_session,
+        current_background_index=0,
+        entry_display_coords=lambda entry: (
+            float(entry.get("sim_col")),
+            float(entry.get("sim_row")),
+        ),
+    )
+    assert len([entry for entry in displayed if entry.get("q_group_key") == group_key]) == 1
