@@ -6366,11 +6366,7 @@ def _initialize_runtime_controls_block_04() -> None:
         gui_runtime_geometry_interaction.build_runtime_geometry_manual_projection_workflow(
             bootstrap_module=gui_bootstrap,
             manual_geometry_module=gui_manual_geometry,
-            caked_view_enabled=lambda: (
-                bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-                if analysis_view_controls_view_state.show_caked_2d_var is not None
-                else False
-            ),
+            caked_view_enabled=lambda: _active_caked_primary_view(),
             last_caked_background_image_unscaled=(
                 lambda: simulation_runtime_state.last_caked_background_image_unscaled
             ),
@@ -15306,22 +15302,29 @@ def do_update():
             run_secondary=secondary_run_available,
         )
     )
+    _set_update_trace_stage("simulation_signature")
+    new_sim_image_sig = _simulation_signature_base(optics_mode_component=int(optics_mode_flag))
+    initial_image_signature_changed = bool(
+        new_sim_image_sig != simulation_runtime_state.last_sim_signature
+    )
     try:
         manual_pick_session_active = bool(_geometry_manual_pick_session_active())
     except Exception:
         manual_pick_session_active = False
-    selection_peak_cache_needed = bool(
-        getattr(geometry_q_group_state, "refresh_requested", False)
-        or getattr(geometry_runtime_state, "manual_pick_armed", False)
-        or getattr(peak_selection_state, "hkl_pick_armed", False)
-        or getattr(peak_selection_state, "selected_hkl_target", None) is not None
-        or manual_pick_session_active
-    )
     active_selection_sides = _active_peak_row_sides_for_job(
         job_kind="full",
         run_primary=primary_run_available,
         run_secondary=secondary_run_available,
         secondary_available=secondary_run_available,
+    )
+    q_group_auto_refresh_needed = bool(initial_image_signature_changed and active_selection_sides)
+    selection_peak_cache_needed = bool(
+        getattr(geometry_q_group_state, "refresh_requested", False)
+        or q_group_auto_refresh_needed
+        or getattr(geometry_runtime_state, "manual_pick_armed", False)
+        or getattr(peak_selection_state, "hkl_pick_armed", False)
+        or getattr(peak_selection_state, "selected_hkl_target", None) is not None
+        or manual_pick_session_active
     )
     current_hit_table_signature = getattr(
         simulation_runtime_state,
@@ -15345,8 +15348,6 @@ def do_update():
     )
     build_intersection_cache_for_job = bool(selection_cache_refresh_needed)
 
-    _set_update_trace_stage("simulation_signature")
-    new_sim_image_sig = _simulation_signature_base(optics_mode_component=int(optics_mode_flag))
     new_sim_sig = new_sim_image_sig + (
         int(collect_hit_tables_for_job),
         int(build_intersection_cache_for_job),
@@ -15358,10 +15359,9 @@ def do_update():
         collect_hit_tables_for_job=bool(collect_hit_tables_for_job),
         build_intersection_cache_for_job=bool(build_intersection_cache_for_job),
         selection_peak_cache_needed=bool(selection_peak_cache_needed),
+        q_group_auto_refresh_needed=bool(q_group_auto_refresh_needed),
         num_samples=int(simulation_runtime_state.num_samples),
-        image_signature_changed=bool(
-            new_sim_image_sig != simulation_runtime_state.last_sim_signature
-        ),
+        image_signature_changed=bool(initial_image_signature_changed),
         full_signature_changed=bool(
             new_sim_sig != simulation_runtime_state.last_simulation_signature
         ),
@@ -15918,9 +15918,23 @@ def do_update():
     if capture_source_snapshot_after_publish and snapshot_ready_after_apply:
         _capture_geometry_source_snapshot()
 
-    if not need_hit_table_refresh and gui_controllers.consume_geometry_q_group_refresh_request(
-        geometry_q_group_state
+    refresh_q_group_listing_requested = bool(
+        getattr(geometry_q_group_state, "refresh_requested", False)
+    )
+    current_row_content_signature = getattr(
+        simulation_runtime_state,
+        "stored_q_group_content_signature",
+        None,
+    )
+    auto_q_group_list_refresh = bool(
+        current_row_content_signature is not None
+        and current_row_content_signature != previous_row_content_signature
+    )
+    if not need_hit_table_refresh and (
+        refresh_q_group_listing_requested or auto_q_group_list_refresh
     ):
+        if refresh_q_group_listing_requested:
+            gui_controllers.consume_geometry_q_group_refresh_request(geometry_q_group_state)
         listed_entries = (
             gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
                 geometry_q_group_runtime_bindings_factory()

@@ -1037,10 +1037,14 @@ def build_geometry_fit_simulated_peaks(
                 "hkl": hkl,
                 "native_col": float(native_col),
                 "native_row": float(native_row),
+                "coordinate_frame": "simulation_native",
                 "sim_col": float(display_col),
                 "sim_row": float(display_row),
                 "sim_col_raw": float(display_col),
                 "sim_row_raw": float(display_row),
+                "display_col": float(display_col),
+                "display_row": float(display_row),
+                "detector_display_source": "native_sim_to_display",
                 "weight": max(0.0, float(abs(intensity))),
                 "source_label": str(source_label),
                 "source_table_index": int(source_table_index),
@@ -1176,31 +1180,16 @@ def normalize_detector_peak_record_fallback_rows(
             "sim_col_raw",
             "sim_row_raw",
         )
+        background_detector_frame = (
+            gui_manual_geometry.geometry_manual_entry_is_background_detector_frame(entry)
+        )
+        simulation_native_frame = (
+            gui_manual_geometry.geometry_manual_entry_is_simulation_native_frame(entry)
+        )
         if (
             raw_detector_display is None
             and native_point is not None
-            and callable(native_detector_coords_to_detector_display_coords)
-        ):
-            try:
-                projected = native_detector_coords_to_detector_display_coords(
-                    float(native_point[0]),
-                    float(native_point[1]),
-                )
-            except Exception:
-                projected = None
-            if (
-                isinstance(projected, tuple)
-                and len(projected) >= 2
-                and np.isfinite(float(projected[0]))
-                and np.isfinite(float(projected[1]))
-            ):
-                raw_detector_display = (
-                    float(projected[0]),
-                    float(projected[1]),
-                )
-        if (
-            raw_detector_display is None
-            and native_point is not None
+            and not background_detector_frame
             and callable(native_sim_to_display_coords)
             and len(image_shape) >= 2
             and min(image_shape) > 0
@@ -1223,6 +1212,37 @@ def normalize_detector_peak_record_fallback_rows(
                     float(projected[0]),
                     float(projected[1]),
                 )
+                entry["detector_display_source"] = "native_sim_to_display"
+        if (
+            raw_detector_display is None
+            and native_point is not None
+            and callable(native_detector_coords_to_detector_display_coords)
+            and (
+                background_detector_frame
+                or not simulation_native_frame
+                or not callable(native_sim_to_display_coords)
+            )
+        ):
+            try:
+                projected = native_detector_coords_to_detector_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+            except Exception:
+                projected = None
+            if (
+                isinstance(projected, tuple)
+                and len(projected) >= 2
+                and np.isfinite(float(projected[0]))
+                and np.isfinite(float(projected[1]))
+            ):
+                raw_detector_display = (
+                    float(projected[0]),
+                    float(projected[1]),
+                )
+                entry["detector_display_source"] = (
+                    "native_detector_coords_to_detector_display_coords"
+                )
         if raw_detector_display is None:
             continue
         entry["sim_col"] = float(raw_detector_display[0])
@@ -1236,6 +1256,8 @@ def normalize_detector_peak_record_fallback_rows(
             entry["native_row"] = float(native_point[1])
             entry["sim_native_x"] = float(native_point[0])
             entry["sim_native_y"] = float(native_point[1])
+            if simulation_native_frame and not background_detector_frame:
+                entry.setdefault("coordinate_frame", "simulation_native")
         if caked_point is not None:
             entry["caked_x"] = float(caked_point[0])
             entry["caked_y"] = float(caked_point[1])
@@ -3047,9 +3069,7 @@ def collapse_geometry_fit_simulated_peaks(
             continue
 
         if one_per_q_group and group_key in real_group_keys:
-            clusters: list[tuple[str | None, list[dict[str, object]]]] = [
-                (None, entries)
-            ]
+            clusters: list[tuple[str | None, list[dict[str, object]]]] = [(None, entries)]
         else:
             branch_buckets: dict[str, list[dict[str, object]]] = {}
             branch_order: list[str] = []
@@ -4980,8 +5000,7 @@ def make_runtime_geometry_q_group_bindings_factory(
             image_size=_resolve_runtime_value(image_size_value_factory),
             current_geometry_fit_params_factory=current_geometry_fit_params_factory,
             filter_simulated_peaks=filter_simulated_peaks,
-            collapse_simulated_peaks=collapse_simulated_peaks
-            or collapse_qr_qz_selection_peaks,
+            collapse_simulated_peaks=collapse_simulated_peaks or collapse_qr_qz_selection_peaks,
             excluded_q_group_count=excluded_q_group_count,
             caked_view_enabled=caked_view_enabled,
             background_visible=_resolve_runtime_value(background_visible_factory),

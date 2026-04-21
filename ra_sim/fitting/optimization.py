@@ -222,9 +222,7 @@ def _raw_detector_candidate_sort_key(
         -matched_fixed_pair_count,
         branch_mismatch_count,
         float(detector_rms_px) if np.isfinite(detector_rms_px) else float("inf"),
-        float(detector_max_error_px)
-        if np.isfinite(detector_max_error_px)
-        else float("inf"),
+        float(detector_max_error_px) if np.isfinite(detector_max_error_px) else float("inf"),
         outside_radius_count,
         float(weighted_objective) if np.isfinite(weighted_objective) else float("inf"),
         candidate_name,
@@ -260,9 +258,7 @@ def _raw_detector_candidate_alignment_sort_key(
     candidate_name = str(summary.get("candidate_name", "") or "")
     return (
         float(detector_rms_px) if np.isfinite(detector_rms_px) else float("inf"),
-        float(detector_max_error_px)
-        if np.isfinite(detector_max_error_px)
-        else float("inf"),
+        float(detector_max_error_px) if np.isfinite(detector_max_error_px) else float("inf"),
         outside_radius_count,
         float(weighted_objective) if np.isfinite(weighted_objective) else float("inf"),
         candidate_name,
@@ -366,10 +362,8 @@ def _should_promote_best_valid_full_beam_candidate(
         and not preserve_rejected_start
         and not no_op_optimum
         and isinstance(best_valid_raw_candidate, Mapping)
-        and str(best_valid_raw_candidate.get("candidate_name", ""))
-        == "full_beam_polish_result"
-        and str(best_valid_raw_candidate.get("x_vector_source", ""))
-        == "full_beam_polish"
+        and str(best_valid_raw_candidate.get("candidate_name", "")) == "full_beam_polish_result"
+        and str(best_valid_raw_candidate.get("x_vector_source", "")) == "full_beam_polish"
     )
 
 
@@ -1181,17 +1175,11 @@ def _copy_geometry_fit_dataset_context(
         dynamic_reanchor_callback=(
             dataset_ctx.dynamic_reanchor_callback
             if dynamic_reanchor_callback is None
-            else (
-                None
-                if dynamic_reanchor_callback is False
-                else dynamic_reanchor_callback
-            )
+            else (None if dynamic_reanchor_callback is False else dynamic_reanchor_callback)
         ),
         fit_space_projector=dataset_ctx.fit_space_projector,
         fit_space_projector_kind=dataset_ctx.fit_space_projector_kind,
-        fit_space_projector_unavailable_reason=(
-            dataset_ctx.fit_space_projector_unavailable_reason
-        ),
+        fit_space_projector_unavailable_reason=(dataset_ctx.fit_space_projector_unavailable_reason),
     )
 
 
@@ -2768,11 +2756,7 @@ def _prepare_reflection_subset(
                 return
             if not remaining_indices:
                 return
-            reflection_idx = (
-                remaining_indices.pop()
-                if bool(from_end)
-                else remaining_indices.pop(0)
-            )
+            reflection_idx = remaining_indices.pop() if bool(from_end) else remaining_indices.pop(0)
             local_provider_reflection_indices[int(entry_index)] = int(reflection_idx)
 
         branch_zero_entries: List[int] = []
@@ -2781,9 +2765,7 @@ def _prepare_reflection_subset(
         for entry_index in entry_indices:
             if int(entry_index) in local_provider_reflection_indices:
                 continue
-            branch_idx = _local_provider_peak_index(
-                normalized_measured[int(entry_index)]
-            )
+            branch_idx = _local_provider_peak_index(normalized_measured[int(entry_index)])
             if branch_idx == 0:
                 branch_zero_entries.append(int(entry_index))
             elif branch_idx == 1:
@@ -2895,9 +2877,7 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                branch_idx, _branch_source = _measured_source_peak_index_with_source(
-                    entry
-                )
+                branch_idx, _branch_source = _measured_source_peak_index_with_source(entry)
                 if branch_idx in {0, 1}:
                     remapped_entry["source_branch_index"] = int(branch_idx)
                     remapped_entry["resolved_peak_index"] = int(branch_idx)
@@ -2962,9 +2942,7 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                branch_idx, _branch_source = _measured_source_peak_index_with_source(
-                    entry
-                )
+                branch_idx, _branch_source = _measured_source_peak_index_with_source(entry)
                 if branch_idx in {0, 1}:
                     remapped_entry["resolved_peak_index"] = int(branch_idx)
                     if "source_branch_index" in entry:
@@ -3063,9 +3041,9 @@ def _build_geometry_fit_dataset_contexts(
         if not callable(fit_space_projector):
             fit_space_projector = None
         fit_space_projector_kind = str(entry.get("fit_space_projector_kind", "") or "") or None
-        fit_space_projector_unavailable_reason = str(
-            entry.get("fit_space_projector_unavailable_reason", "") or ""
-        ) or None
+        fit_space_projector_unavailable_reason = (
+            str(entry.get("fit_space_projector_unavailable_reason", "") or "") or None
+        )
         subset = _prepare_reflection_subset(miller, intensities, measured_local)
         contexts.append(
             GeometryFitDatasetContext(
@@ -3084,9 +3062,7 @@ def _build_geometry_fit_dataset_contexts(
                 dynamic_reanchor_callback=dynamic_reanchor_callback,
                 fit_space_projector=fit_space_projector,
                 fit_space_projector_kind=fit_space_projector_kind,
-                fit_space_projector_unavailable_reason=(
-                    fit_space_projector_unavailable_reason
-                ),
+                fit_space_projector_unavailable_reason=(fit_space_projector_unavailable_reason),
             )
         )
     return contexts
@@ -3463,9 +3439,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
             )
         except Exception:
             return None
-        if not (
-            np.isfinite(fallback_point[0]) and np.isfinite(fallback_point[1])
-        ):
+        if not (np.isfinite(fallback_point[0]) and np.isfinite(fallback_point[1])):
             return None
         return (float(fallback_point[0]), float(fallback_point[1]))
 
@@ -3566,9 +3540,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
             if measured_point is None:
                 continue
             valid_entries_hkl.append(entry)
-            measured_points.append(
-                (float(measured_point[0]), float(measured_point[1]))
-            )
+            measured_points.append((float(measured_point[0]), float(measured_point[1])))
         if not measured_points:
             continue
         if not sim_list:
@@ -4202,12 +4174,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             elif measured_reason in DETECTOR_DERIVED_FIT_SPACE_ANCHOR_REASONS:
                 fit_space_anchor_count_detector += 1
         measured_fit_space_source = str(
-            measured_anchor_metadata.get("fit_space_source", measured_reason)
-            or measured_reason
+            measured_anchor_metadata.get("fit_space_source", measured_reason) or measured_reason
         )
-        measured_diag_fields = _measured_fit_space_diag_fields(
-            measured_anchor_metadata
-        )
+        measured_diag_fields = _measured_fit_space_diag_fields(measured_anchor_metadata)
         if measured_reason in fit_space_anchor_source_counts:
             fit_space_anchor_source_counts[measured_reason] += 1
         if exact_fit_space_projector_available:
@@ -4657,21 +4626,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "measured_anchor_reanchor_count": int(measured_anchor_reanchor_count),
         "measured_anchor_reanchor_fail_count": int(measured_anchor_reanchor_fail_count),
         "manual_caked_residual_row_count": int(manual_caked_residual_row_count),
-        "dataset_fit_space_projector_row_count": int(
-            dataset_fit_space_projector_row_count
-        ),
+        "dataset_fit_space_projector_row_count": int(dataset_fit_space_projector_row_count),
         "invalid_dataset_fit_space_projector_row_count": int(
             invalid_dataset_fit_space_projector_row_count
         ),
-        "analytic_detector_fit_space_row_count": int(
-            analytic_detector_fit_space_row_count
-        ),
-        "cached_fit_space_anchor_row_count": int(
-            cached_fit_space_anchor_row_count
-        ),
-        "exact_fit_space_projector_available": bool(
-            exact_fit_space_projector_available
-        ),
+        "analytic_detector_fit_space_row_count": int(analytic_detector_fit_space_row_count),
+        "cached_fit_space_anchor_row_count": int(cached_fit_space_anchor_row_count),
+        "exact_fit_space_projector_available": bool(exact_fit_space_projector_available),
         "exact_fit_space_projection_reason": exact_fit_space_projection_reason,
         "fit_space_projector_kind": dataset_ctx.fit_space_projector_kind,
         "_live_cache_records": live_cache_records,
@@ -5460,12 +5421,8 @@ def fit_mosaic_widths_separable(
     kernel_params_base.update(
         {
             "optics_mode": params.get("optics_mode", 0),
-            "sample_depth_m": params.get(
-                "sample_depth_m", params.get("thickness", 0.0)
-            ),
-            "pixel_size_m": params.get(
-                "pixel_size_m", params.get("pixel_size", 100e-6)
-            ),
+            "sample_depth_m": params.get("sample_depth_m", params.get("thickness", 0.0)),
+            "pixel_size_m": params.get("pixel_size_m", params.get("pixel_size", 100e-6)),
             "sample_width_m": params.get("sample_width_m", 0.0),
             "sample_length_m": params.get("sample_length_m", 0.0),
         }
@@ -9182,9 +9139,7 @@ def _simulation_kernel_kwargs(
         )
 
     def _recompute_n2_from_source(source_meta: tuple[str, object] | None) -> np.ndarray:
-        normalized_source = (
-            ("legacy_material", None) if source_meta is None else source_meta
-        )
+        normalized_source = ("legacy_material", None) if source_meta is None else source_meta
         if normalized_source[0] == "cif_path":
             try:
                 n2_array = resolve_index_of_refraction_array(
@@ -10217,10 +10172,7 @@ def build_measured_dict(
 def _valid_hit_rows(hit_table: object) -> List[np.ndarray]:
     """Return filtered hit rows using the same rules as geometry auto-match."""
 
-    return [
-        np.asarray(record["row"], dtype=float)
-        for record in _valid_hit_row_records(hit_table)
-    ]
+    return [np.asarray(record["row"], dtype=float) for record in _valid_hit_row_records(hit_table)]
 
 
 def _valid_hit_row_records(hit_table: object) -> List[Dict[str, object]]:
@@ -10245,9 +10197,7 @@ def _valid_hit_row_records(hit_table: object) -> List[Dict[str, object]]:
             or not np.isfinite(row[6])
         ):
             continue
-        source_table_index, source_row_index, _best_sample_index = extract_hit_row_provenance(
-            row
-        )
+        source_table_index, source_row_index, _best_sample_index = extract_hit_row_provenance(row)
         if source_row_index is None:
             source_row_index = int(row_position)
         rows.append(
@@ -10255,9 +10205,7 @@ def _valid_hit_row_records(hit_table: object) -> List[Dict[str, object]]:
                 "row": np.asarray(row[:7], dtype=float),
                 "row_position": int(row_position),
                 "source_table_index": (
-                    int(source_table_index)
-                    if source_table_index is not None
-                    else None
+                    int(source_table_index) if source_table_index is not None else None
                 ),
                 "source_row_index": int(source_row_index),
             }
@@ -10391,18 +10339,14 @@ def _geometry_fit_prefers_source_row_resolution(
         source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
         resolved_table_index = _nonnegative_index(entry.get("resolved_table_index"))
         pair_id = str(entry.get("pair_id", "") or "").strip()
-        if (
-            source_branch_index in {0, 1}
-            and resolved_table_index is not None
-            and pair_id
-        ):
+        if source_branch_index in {0, 1} and resolved_table_index is not None and pair_id:
             return False
     fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
     if fit_kind != "source_row":
         return False
-    return _nonnegative_index(
-        entry.get("frozen_row_index", entry.get("source_row_index"))
-    ) is not None
+    return (
+        _nonnegative_index(entry.get("frozen_row_index", entry.get("source_row_index"))) is not None
+    )
 
 
 def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, object]:
@@ -10435,13 +10379,9 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
     ):
         table_row_namespace_label = "subset_hit_table"
 
-    branch_namespace_label = (
-        "branch_index" if source_branch_index in {0, 1} else "unset"
-    )
+    branch_namespace_label = "branch_index" if source_branch_index in {0, 1} else "unset"
     peak_namespace_label = (
-        "branch_index"
-        if _nonnegative_index(source_peak_index) in {0, 1}
-        else "unset"
+        "branch_index" if _nonnegative_index(source_peak_index) in {0, 1} else "unset"
     )
 
     return {
@@ -10455,9 +10395,7 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
         "source_reflection_index": source_reflection_index,
         "source_reflection_namespace": source_reflection_namespace,
         "source_reflection_is_full": entry.get("source_reflection_is_full"),
-        "source_reflection_index_namespace": str(
-            reflection_namespace_label or "unset"
-        ),
+        "source_reflection_index_namespace": str(reflection_namespace_label or "unset"),
         "source_table_index": entry.get("source_table_index"),
         "source_table_index_namespace": str(table_row_namespace_label),
         "source_row_index": entry.get("source_row_index"),
@@ -10475,9 +10413,7 @@ def _entry_explicit_trusted_full_reflection_identity(
     if not isinstance(entry, Mapping):
         return False
     namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
-    return namespace == "full_reflection" and bool(
-        entry.get("source_reflection_is_full", False)
-    )
+    return namespace == "full_reflection" and bool(entry.get("source_reflection_is_full", False))
 
 
 def _assert_source_identity_bridge_invariant(
@@ -10616,12 +10552,18 @@ def _resolve_max_position_peak(
     if peak_index not in {0, 1}:
         return None, "missing_source_peak_index"
     if int(peak_index) == 0:
-        if not np.isfinite(max_positions[table_idx, 0]) or float(max_positions[table_idx, 0]) <= 0.0:
+        if (
+            not np.isfinite(max_positions[table_idx, 0])
+            or float(max_positions[table_idx, 0]) <= 0.0
+        ):
             return None, "missing_source_peak"
         sim_col = float(max_positions[table_idx, 1])
         sim_row = float(max_positions[table_idx, 2])
     else:
-        if not np.isfinite(max_positions[table_idx, 3]) or float(max_positions[table_idx, 3]) <= 0.0:
+        if (
+            not np.isfinite(max_positions[table_idx, 3])
+            or float(max_positions[table_idx, 3]) <= 0.0
+        ):
             return None, "missing_source_peak"
         sim_col = float(max_positions[table_idx, 4])
         sim_row = float(max_positions[table_idx, 5])
@@ -10724,9 +10666,9 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": "fixed_source",
-                    "resolution_reason": "missing_source_peak_index",
+                        **base_diag,
+                        "resolution_kind": "fixed_source",
+                        "resolution_reason": "missing_source_peak_index",
                     },
                 )
                 continue
@@ -10734,9 +10676,9 @@ def _resolve_fixed_source_matches(
             _store_resolution_diag(
                 entry,
                 {
-                **base_diag,
-                "resolution_kind": "hkl_fallback",
-                "resolution_reason": "missing_source_indices",
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "missing_source_indices",
                 },
             )
             continue
@@ -10745,11 +10687,11 @@ def _resolve_fixed_source_matches(
             _store_resolution_diag(
                 entry,
                 {
-                **base_diag,
-                "resolution_kind": (
-                    "fixed_source" if trusted_full_reflection else "hkl_fallback"
-                ),
-                "resolution_reason": "duplicate_source_key",
+                    **base_diag,
+                    "resolution_kind": (
+                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                    ),
+                    "resolution_reason": "duplicate_source_key",
                 },
             )
             if trusted_full_reflection:
@@ -10823,11 +10765,11 @@ def _resolve_fixed_source_matches(
                     _store_resolution_diag(
                         entry,
                         {
-                        **base_diag,
-                        "resolution_kind": (
-                            "fixed_source" if trusted_full_reflection else "hkl_fallback"
-                        ),
-                        "resolution_reason": str(legacy_peak_reason),
+                            **base_diag,
+                            "resolution_kind": (
+                                "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                            ),
+                            "resolution_reason": str(legacy_peak_reason),
                         },
                     )
                     if not trusted_full_reflection:
@@ -10837,11 +10779,11 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": (
-                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
-                    ),
-                    "resolution_reason": "missing_source_peak_index",
+                        **base_diag,
+                        "resolution_kind": (
+                            "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                        ),
+                        "resolution_reason": "missing_source_peak_index",
                     },
                 )
                 if not trusted_full_reflection:
@@ -10853,15 +10795,15 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": (
-                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
-                    ),
-                    "resolution_reason": (
-                        "missing_source_peak_index"
-                        if trusted_full_reflection
-                        else "missing_source_indices"
-                    ),
+                        **base_diag,
+                        "resolution_kind": (
+                            "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                        ),
+                        "resolution_reason": (
+                            "missing_source_peak_index"
+                            if trusted_full_reflection
+                            else "missing_source_indices"
+                        ),
                     },
                 )
                 if not trusted_full_reflection:
@@ -10873,10 +10815,10 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": "hkl_fallback",
-                    "resolution_reason": str(row_reason),
-                    "source_row_count": int(len(row_records)),
+                        **base_diag,
+                        "resolution_kind": "hkl_fallback",
+                        "resolution_reason": str(row_reason),
+                        "source_row_count": int(len(row_records)),
                     },
                 )
                 fallback_entries.append(entry)
@@ -10895,9 +10837,9 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": "hkl_fallback",
-                    "resolution_reason": "source_row_parse_failed",
+                        **base_diag,
+                        "resolution_kind": "hkl_fallback",
+                        "resolution_reason": "source_row_parse_failed",
                     },
                 )
                 fallback_entries.append(entry)
@@ -10906,9 +10848,9 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": "hkl_fallback",
-                    "resolution_reason": "invalid_simulated_point",
+                        **base_diag,
+                        "resolution_kind": "hkl_fallback",
+                        "resolution_reason": "invalid_simulated_point",
                     },
                 )
                 fallback_entries.append(entry)
@@ -10929,12 +10871,12 @@ def _resolve_fixed_source_matches(
                 _store_resolution_diag(
                     entry,
                     {
-                    **base_diag,
-                    "resolution_kind": (
-                        "fixed_source" if trusted_full_reflection else "hkl_fallback"
-                    ),
-                    "resolution_reason": "source_hkl_mismatch",
-                    "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
+                        **base_diag,
+                        "resolution_kind": (
+                            "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                        ),
+                        "resolution_reason": "source_hkl_mismatch",
+                        "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
                     },
                 )
                 if not trusted_full_reflection:
@@ -10945,12 +10887,12 @@ def _resolve_fixed_source_matches(
         _store_resolution_diag(
             entry,
             {
-            **base_diag,
-            "resolution_kind": "fixed_source",
-            "resolution_reason": "resolved",
-            "sim_x": float(sim_col),
-            "sim_y": float(sim_row),
-            "sim_hkl": tuple(int(v) for v in sim_hkl or (0, 0, 0)),
+                **base_diag,
+                "resolution_kind": "fixed_source",
+                "resolution_reason": "resolved",
+                "sim_x": float(sim_col),
+                "sim_y": float(sim_row),
+                "sim_hkl": tuple(int(v) for v in sim_hkl or (0, 0, 0)),
             },
         )
         used_source_keys.add(source_key)
@@ -11145,9 +11087,7 @@ def _resolve_geometry_fit_correspondence(
             return fallback
 
     trusted_full_reflection = _entry_trusted_full_reflection_identity(correspondence)
-    prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(
-        correspondence
-    )
+    prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(correspondence)
     frozen_kind = str(correspondence.get("frozen_locator_kind", "") or "").strip().lower()
     frozen_namespace = str(correspondence.get("frozen_table_namespace", "") or "").strip().lower()
     frozen_signature = correspondence.get("frozen_table_signature")
@@ -11224,10 +11164,11 @@ def _resolve_geometry_fit_correspondence(
         elif frozen_kind == "local_branch":
             if frozen_namespace != "current_full_local":
                 return None, _payload("invalid_frozen_locator")
-            if (
-                current_local_table_signature is not None
-                and frozen_signature not in {None, "", current_local_table_signature}
-            ):
+            if current_local_table_signature is not None and frozen_signature not in {
+                None,
+                "",
+                current_local_table_signature,
+            }:
                 return None, _payload(
                     "frozen_table_signature_mismatch",
                     table_idx=table_idx,
@@ -11242,10 +11183,11 @@ def _resolve_geometry_fit_correspondence(
         elif frozen_kind == "local_row":
             if frozen_namespace != "current_full_local":
                 return None, _payload("invalid_frozen_locator")
-            if (
-                current_local_table_signature is not None
-                and frozen_signature not in {None, "", current_local_table_signature}
-            ):
+            if current_local_table_signature is not None and frozen_signature not in {
+                None,
+                "",
+                current_local_table_signature,
+            }:
                 return None, _payload(
                     "frozen_table_signature_mismatch",
                     table_idx=table_idx,
@@ -11341,9 +11283,7 @@ def _resolve_geometry_fit_correspondence(
                     peak_idx=peak_idx,
                     sim_hkl=fallback_hkl,
                     extra={
-                        "trusted_full_reflection_remapped": bool(
-                            trusted_full_reflection_remapped
-                        ),
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                     },
                 )
         elif frozen_kind == "trusted_branch":
@@ -11362,9 +11302,7 @@ def _resolve_geometry_fit_correspondence(
                     peak_idx=peak_idx,
                     sim_hkl=_branch_sim_hkl(trusted_row),
                     extra={
-                        "trusted_full_reflection_remapped": bool(
-                            trusted_full_reflection_remapped
-                        ),
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                     },
                 )
         return None, _payload(
@@ -11569,15 +11507,11 @@ def _project_detector_points_to_fit_space(
                 "native_frame_conversion_source",
                 "native_frame_conversion_count",
             )
-            missing_keys = [
-                key for key in required_keys if key not in projected_map
-            ]
+            missing_keys = [key for key in required_keys if key not in projected_map]
             if missing_keys:
                 meta["fit_space_source"] = "invalid_dataset_fit_space_projector"
                 meta["valid"] = False
-                meta["invalid_reason"] = (
-                    "missing_projector_metadata:" + ",".join(missing_keys)
-                )
+                meta["invalid_reason"] = "missing_projector_metadata:" + ",".join(missing_keys)
                 return nan_two_theta, nan_phi, meta
             try:
                 two_theta_arr = np.asarray(
@@ -11596,17 +11530,14 @@ def _project_detector_points_to_fit_space(
             meta.update(
                 {
                     "fit_space_source": str(
-                        projected_map.get("fit_space_source")
-                        or "dataset_fit_space_projector"
+                        projected_map.get("fit_space_source") or "dataset_fit_space_projector"
                     ),
                     "input_frame": str(projected_map.get("input_frame") or ""),
                     "fit_space_projector_kind": str(
                         projected_map.get("fit_space_projector_kind") or ""
                     )
                     or dataset_ctx.fit_space_projector_kind,
-                    "cake_bundle_signature": projected_map.get(
-                        "cake_bundle_signature"
-                    ),
+                    "cake_bundle_signature": projected_map.get("cake_bundle_signature"),
                     "fit_space_local_params_signature": projected_map.get(
                         "fit_space_local_params_signature"
                     ),
@@ -11712,9 +11643,7 @@ def _measured_fit_space_projection_input(
 
     background_anchor = _finite_pair("background_detector_x", "background_detector_y")
     if background_anchor is not None:
-        background_frame = str(
-            entry.get("background_detector_input_frame", "") or ""
-        ).strip()
+        background_frame = str(entry.get("background_detector_input_frame", "") or "").strip()
         if background_frame == "native_detector":
             return {
                 "status": "projectable",
@@ -11815,10 +11744,14 @@ def _simulated_fit_space_diag_fields(
         "simulated_detector_input_frame": meta.get("input_frame"),
         "simulated_detector_frame_reason": str(frame_reason),
         "simulated_native_col": (
-            float(native_cols[0]) if native_cols.size >= 1 and np.isfinite(native_cols[0]) else float("nan")
+            float(native_cols[0])
+            if native_cols.size >= 1 and np.isfinite(native_cols[0])
+            else float("nan")
         ),
         "simulated_native_row": (
-            float(native_rows[0]) if native_rows.size >= 1 and np.isfinite(native_rows[0]) else float("nan")
+            float(native_rows[0])
+            if native_rows.size >= 1 and np.isfinite(native_rows[0])
+            else float("nan")
         ),
         "simulated_native_frame_conversion_source": meta.get(
             "native_frame_conversion_source",
@@ -11979,21 +11912,13 @@ def _fit_space_provenance_summary(
         "fit_space_anchor_count_detector": int(detector_anchor_count),
         "fit_space_anchor_source_counts": dict(source_counts),
         "manual_caked_residual_row_count": int(manual_caked_residual_row_count),
-        "dataset_fit_space_projector_row_count": int(
-            dataset_fit_space_projector_row_count
-        ),
+        "dataset_fit_space_projector_row_count": int(dataset_fit_space_projector_row_count),
         "invalid_dataset_fit_space_projector_row_count": int(
             invalid_dataset_fit_space_projector_row_count
         ),
-        "analytic_detector_fit_space_row_count": int(
-            analytic_detector_fit_space_row_count
-        ),
-        "cached_fit_space_anchor_row_count": int(
-            cached_fit_space_anchor_row_count
-        ),
-        "exact_fit_space_projector_available": bool(
-            exact_fit_space_projector_available
-        ),
+        "analytic_detector_fit_space_row_count": int(analytic_detector_fit_space_row_count),
+        "cached_fit_space_anchor_row_count": int(cached_fit_space_anchor_row_count),
+        "exact_fit_space_projector_available": bool(exact_fit_space_projector_available),
         "exact_fit_space_projection_reason": exact_fit_space_projection_reason,
         "fit_space_two_theta_adjustment_count": int(adjustment_count),
         "fit_space_two_theta_adjustment_total_abs_deg": float(total_abs_deg),
@@ -12032,12 +11957,14 @@ def _merge_exact_fit_space_provenance_counts(
     )
     summary["cached_fit_space_anchor_row_count"] = int(
         sum(
-            int(item.get("cached_fit_space_anchor_row_count", 0) or 0)
-            for item in dataset_summaries
+            int(item.get("cached_fit_space_anchor_row_count", 0) or 0) for item in dataset_summaries
         )
     )
     summary["exact_fit_space_projector_available"] = bool(
-        any(bool(item.get("exact_fit_space_projector_available", False)) for item in dataset_summaries)
+        any(
+            bool(item.get("exact_fit_space_projector_available", False))
+            for item in dataset_summaries
+        )
     )
     summary["exact_fit_space_projection_reason"] = (
         None
@@ -12202,9 +12129,7 @@ def _measured_fit_space_anchor(
                 "fit_space_projector_kind",
                 metadata.get("fit_space_projector_kind"),
             )
-            metadata["cake_bundle_signature"] = projection_meta.get(
-                "cake_bundle_signature"
-            )
+            metadata["cake_bundle_signature"] = projection_meta.get("cake_bundle_signature")
             metadata["fit_space_local_params_signature"] = projection_meta.get(
                 "fit_space_local_params_signature"
             )
@@ -12226,9 +12151,7 @@ def _measured_fit_space_anchor(
                 metadata["measured_native_col"] = float(native_cols[0])
             if native_rows.size >= 1 and np.isfinite(native_rows[0]):
                 metadata["measured_native_row"] = float(native_rows[0])
-            metadata["invalid_projection_reason"] = projection_meta.get(
-                "invalid_reason"
-            )
+            metadata["invalid_projection_reason"] = projection_meta.get("invalid_reason")
             metadata["valid"] = bool(projection_meta.get("valid", False))
             metadata["two_theta_adjustment_deg"] = 0.0
             if (
@@ -16620,9 +16543,7 @@ def fit_geometry_parameters(
             ):
                 return None
             trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
-            prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(
-                entry
-            )
+            prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(entry)
             source_branch_index, _source_branch_source = _measured_source_peak_index_with_source(
                 entry
             )
@@ -16709,9 +16630,7 @@ def fit_geometry_parameters(
                     normalized_hkl = hkl_value
             else:
                 normalized_hkl = hkl_value
-            source_reflection_index = _nonnegative_index(
-                entry.get("source_reflection_index")
-            )
+            source_reflection_index = _nonnegative_index(entry.get("source_reflection_index"))
             source_branch_index, source_branch_source = _measured_source_peak_index_with_source(
                 entry
             )
@@ -17092,9 +17011,7 @@ def fit_geometry_parameters(
                     matched_pair_count_local += 1
                     matched_distances.append(float(pair_dist))
                     if weighted_matching:
-                        distance_weight = 1.0 / math.sqrt(
-                            1.0 + (pair_dist / solver_f_scale) ** 2
-                        )
+                        distance_weight = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
                     else:
                         distance_weight = 1.0
                     weight_fields = _weight_fields(
@@ -17106,9 +17023,7 @@ def fit_geometry_parameters(
                     )
                     residual_components[slot, 0] = float(weight_fields["weighted_dx_px"])
                     residual_components[slot, 1] = float(weight_fields["weighted_dy_px"])
-                    resolution_reason = str(
-                        resolution_payload.get("resolution_reason", "resolved")
-                    )
+                    resolution_reason = str(resolution_payload.get("resolution_reason", "resolved"))
                     match_radius_exceeded = bool(
                         np.isfinite(pair_dist)
                         and pair_dist > float(full_beam_polish_match_radius_px)
@@ -17121,12 +17036,8 @@ def fit_geometry_parameters(
                             "match_kind": "full_beam_fixed",
                             "match_status": "matched",
                             "resolution_reason": resolution_reason,
-                            "resolved_table_index": resolution_payload.get(
-                                "resolved_table_index"
-                            ),
-                            "resolved_peak_index": resolution_payload.get(
-                                "resolved_peak_index"
-                            ),
+                            "resolved_table_index": resolution_payload.get("resolved_table_index"),
+                            "resolved_peak_index": resolution_payload.get("resolved_peak_index"),
                             "resolved_sim_hkl": resolution_payload.get("resolved_sim_hkl"),
                             "trusted_full_reflection_remapped": bool(
                                 resolution_payload.get(
@@ -17142,9 +17053,7 @@ def fit_geometry_parameters(
                             "dx_px": float(dx),
                             "dy_px": float(dy),
                             "distance_px": float(pair_dist),
-                            "placement_error_px": float(
-                                entry.get("placement_error_px", np.nan)
-                            ),
+                            "placement_error_px": float(entry.get("placement_error_px", np.nan)),
                             "distance_weight": float(distance_weight),
                             "weight": float(
                                 float(distance_weight)
@@ -17564,7 +17473,10 @@ def fit_geometry_parameters(
                 ):
                     branch_mismatch_count += 1
             outside_radius_count = int(
-                sum(int(bool(entry.get("match_radius_exceeded", False))) for entry in matched_entries)
+                sum(
+                    int(bool(entry.get("match_radius_exceeded", False)))
+                    for entry in matched_entries
+                )
             )
 
             def _rms(distances: np.ndarray) -> float:
@@ -17655,21 +17567,20 @@ def fit_geometry_parameters(
                     accept_unmatched_fixed_sources=True,
                 )
                 correspondence_count = int(
-                    sum(
-                        len(entries)
-                        for entries in candidate_fixed_correspondence_map.values()
-                    )
+                    sum(len(entries) for entries in candidate_fixed_correspondence_map.values())
                 )
                 if correspondence_count > 0:
                     seed_source = "prepared_fixed_source_entries"
 
             if correspondence_count > 0:
-                candidate_start_residual, candidate_start_pm_diagnostics, candidate_start_pm_summary = (
-                    _evaluate_full_beam_point_matches(
-                        candidate_local,
-                        candidate_fixed_correspondence_map,
-                        collect_diagnostics=True,
-                    )
+                (
+                    candidate_start_residual,
+                    candidate_start_pm_diagnostics,
+                    candidate_start_pm_summary,
+                ) = _evaluate_full_beam_point_matches(
+                    candidate_local,
+                    candidate_fixed_correspondence_map,
+                    collect_diagnostics=True,
                 )
             else:
                 candidate_start_residual = np.array([], dtype=float)
@@ -17774,9 +17685,8 @@ def fit_geometry_parameters(
                 candidate_x_arr = np.asarray(candidate_x, dtype=float)
             except Exception:
                 return
-            if (
-                candidate_x_arr.ndim != 1
-                or candidate_x_arr.size != int(np.asarray(current_result.x).size)
+            if candidate_x_arr.ndim != 1 or candidate_x_arr.size != int(
+                np.asarray(current_result.x).size
             ):
                 return
             same_start = False
@@ -17813,9 +17723,7 @@ def fit_geometry_parameters(
         ):
             progress_state = getattr(current_result, "geometry_fit_progress", None)
             progress_start_x = (
-                progress_state.get("start_x")
-                if isinstance(progress_state, Mapping)
-                else None
+                progress_state.get("start_x") if isinstance(progress_state, Mapping) else None
             )
             _maybe_consider_start_vector(
                 progress_start_x,
@@ -17880,15 +17788,11 @@ def fit_geometry_parameters(
                 "point_match_cost": float(
                     metrics.get("point_match_cost", bundle.get("start_cost", np.nan))
                 ),
-                "unweighted_peak_rms_px": float(
-                    metrics.get("unweighted_peak_rms_px", np.nan)
-                ),
+                "unweighted_peak_rms_px": float(metrics.get("unweighted_peak_rms_px", np.nan)),
                 "unweighted_peak_median_px": float(
                     metrics.get("unweighted_peak_median_px", np.nan)
                 ),
-                "unweighted_peak_max_px": float(
-                    metrics.get("unweighted_peak_max_px", np.nan)
-                ),
+                "unweighted_peak_max_px": float(metrics.get("unweighted_peak_max_px", np.nan)),
                 "point_match_diagnostics": _copy_point_match_diagnostics_for_summary(
                     bundle.get("start_pm_diagnostics")
                 ),
@@ -17929,9 +17833,7 @@ def fit_geometry_parameters(
         summary["seed_matched_pair_count"] = int(
             selected_start_bundle.get("seed_matched_pair_count", 0)
         )
-        summary["seed_rms_px"] = float(
-            selected_start_bundle.get("seed_rms_px", np.nan)
-        )
+        summary["seed_rms_px"] = float(selected_start_bundle.get("seed_rms_px", np.nan))
         summary["start_vector_source"] = str(
             selected_start_bundle.get("vector_source", "current_result.x")
         )
@@ -17941,9 +17843,7 @@ def fit_geometry_parameters(
 
         fixed_correspondence_map = {
             int(dataset_index): [
-                dict(entry)
-                for entry in dataset_entries
-                if isinstance(entry, Mapping)
+                dict(entry) for entry in dataset_entries if isinstance(entry, Mapping)
             ]
             for dataset_index, dataset_entries in dict(
                 selected_start_bundle.get("fixed_correspondence_map", {})
@@ -18000,10 +17900,10 @@ def fit_geometry_parameters(
         )
         selected_cost = float(start_cost)
         start_matched = int(selected_start_bundle.get("start_matched", 0))
-        start_acceptance_metrics = dict(
-            selected_start_bundle.get("start_acceptance_metrics", {})
+        start_acceptance_metrics = dict(selected_start_bundle.get("start_acceptance_metrics", {}))
+        reference_start_matched = int(
+            detector_reference_start_bundle.get("start_matched", start_matched)
         )
-        reference_start_matched = int(detector_reference_start_bundle.get("start_matched", start_matched))
         reference_start_acceptance_metrics = dict(
             detector_reference_start_bundle.get(
                 "start_acceptance_metrics",
@@ -18074,9 +17974,7 @@ def fit_geometry_parameters(
         except Exception:
             start_point_rms = float("nan")
         try:
-            start_point_match_cost = float(
-                start_acceptance_metrics.get("point_match_cost", np.nan)
-            )
+            start_point_match_cost = float(start_acceptance_metrics.get("point_match_cost", np.nan))
         except Exception:
             start_point_match_cost = float("nan")
         try:
@@ -18148,9 +18046,7 @@ def fit_geometry_parameters(
             )
         )
         summary["detector_reference_start_rms_px"] = float(reference_start_point_rms)
-        summary["detector_reference_start_peak_max_px"] = float(
-            reference_start_unweighted_peak_max
-        )
+        summary["detector_reference_start_peak_max_px"] = float(reference_start_unweighted_peak_max)
         summary["detector_reference_start_outside_radius_count"] = int(
             reference_start_outside_radius_count
         )
@@ -18208,9 +18104,7 @@ def fit_geometry_parameters(
         except Exception:
             start_point_rms = float("nan")
         try:
-            start_point_match_cost = float(
-                start_acceptance_metrics.get("point_match_cost", np.nan)
-            )
+            start_point_match_cost = float(start_acceptance_metrics.get("point_match_cost", np.nan))
         except Exception:
             start_point_match_cost = float("nan")
         try:
@@ -18255,9 +18149,7 @@ def fit_geometry_parameters(
         )
         summary["start_missing_pair_count"] = int(start_missing_pair_count)
         summary["start_total_fixed_pair_count"] = int(start_total_fixed_pair_count)
-        summary["start_resolved_fixed_matched_pair_count"] = int(
-            start_fixed_source_resolved_count
-        )
+        summary["start_resolved_fixed_matched_pair_count"] = int(start_fixed_source_resolved_count)
 
         if int(start_matched) <= 0:
             summary.update(
@@ -18360,9 +18252,7 @@ def fit_geometry_parameters(
         except Exception:
             trial_point_rms = float("nan")
         try:
-            trial_point_match_cost = float(
-                trial_acceptance_metrics.get("point_match_cost", np.nan)
-            )
+            trial_point_match_cost = float(trial_acceptance_metrics.get("point_match_cost", np.nan))
         except Exception:
             trial_point_match_cost = float("nan")
         try:
@@ -18475,8 +18365,7 @@ def fit_geometry_parameters(
             )
         )
         match_radius_ok = bool(
-            candidate_match_radius_exceeded_count
-            <= reference_start_match_radius_exceeded_count
+            candidate_match_radius_exceeded_count <= reference_start_match_radius_exceeded_count
         )
         outside_radius_ok = bool(
             candidate_outside_radius_count <= reference_start_outside_radius_count
@@ -18505,7 +18394,9 @@ def fit_geometry_parameters(
         if accepted:
             selected_x = np.asarray(trial_x, dtype=float)
             selected_fun = np.asarray(trial_fun, dtype=float)
-            selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(trial_pm_diagnostics)
+            selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(
+                trial_pm_diagnostics
+            )
             selected_pm_summary = _copy_point_match_summary_for_summary(trial_pm_summary)
             selected_cost = float(trial_cost)
             final_metric_residual_fn = _full_beam_residual
@@ -18516,7 +18407,9 @@ def fit_geometry_parameters(
             *,
             reference_metrics: Mapping[str, object],
         ) -> Tuple[bool, Dict[str, bool], str]:
-            reference_fixed_total_local = int(max(0, int(reference_start_fixed_source_resolved_count)))
+            reference_fixed_total_local = int(
+                max(0, int(reference_start_fixed_source_resolved_count))
+            )
             trial_matched_local = int(
                 acceptance_metrics.get(
                     "matched_fixed_pair_count",
@@ -18536,9 +18429,7 @@ def fit_geometry_parameters(
                     int(trial_matched_local) + int(trial_missing_local),
                 )
             )
-            trial_branch_mismatch_local = int(
-                acceptance_metrics.get("branch_mismatch_count", 0)
-            )
+            trial_branch_mismatch_local = int(acceptance_metrics.get("branch_mismatch_count", 0))
             trial_outside_radius_local = int(
                 acceptance_metrics.get(
                     "outside_radius_count",
@@ -18673,15 +18564,9 @@ def fit_geometry_parameters(
                 )
             )
             pm_summary_public = _copy_point_match_summary_for_summary(pm_summary)
-            pm_summary_public["matched_fixed_pair_count"] = int(
-                normalized_matched_fixed_pair_count
-            )
-            pm_summary_public["missing_fixed_pair_count"] = int(
-                normalized_missing_fixed_pair_count
-            )
-            pm_summary_public["total_fixed_pair_count"] = int(
-                normalized_total_fixed_pair_count
-            )
+            pm_summary_public["matched_fixed_pair_count"] = int(normalized_matched_fixed_pair_count)
+            pm_summary_public["missing_fixed_pair_count"] = int(normalized_missing_fixed_pair_count)
+            pm_summary_public["total_fixed_pair_count"] = int(normalized_total_fixed_pair_count)
             return {
                 "x": np.asarray(x_arr, dtype=float),
                 "fun": np.asarray(fun, dtype=float),
@@ -18702,28 +18587,18 @@ def fit_geometry_parameters(
                         pm_summary_public.get("missing_pair_count", 0),
                     )
                 ),
-                "matched_fixed_pair_count": int(
-                    normalized_matched_fixed_pair_count
-                ),
-                "missing_fixed_pair_count": int(
-                    normalized_missing_fixed_pair_count
-                ),
-                "total_fixed_pair_count": int(
-                    normalized_total_fixed_pair_count
-                ),
+                "matched_fixed_pair_count": int(normalized_matched_fixed_pair_count),
+                "missing_fixed_pair_count": int(normalized_missing_fixed_pair_count),
+                "total_fixed_pair_count": int(normalized_total_fixed_pair_count),
                 "outside_radius_count": int(
                     acceptance_metrics.get(
                         "outside_radius_count",
                         acceptance_metrics.get("match_radius_exceeded_count", 0),
                     )
                 ),
-                "branch_mismatch_count": int(
-                    acceptance_metrics.get("branch_mismatch_count", 0)
-                ),
+                "branch_mismatch_count": int(acceptance_metrics.get("branch_mismatch_count", 0)),
                 "weighted_rms_px": float(acceptance_metrics.get("weighted_rms_px", np.nan)),
-                "point_match_cost": float(
-                    acceptance_metrics.get("point_match_cost", np.nan)
-                ),
+                "point_match_cost": float(acceptance_metrics.get("point_match_cost", np.nan)),
                 "unweighted_peak_rms_px": float(
                     acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
                 ),
@@ -18934,9 +18809,7 @@ def fit_geometry_parameters(
                 retained_detector_source = "current_result.x"
                 fallback_preservation_reason = "current_result_retained"
         if accepted:
-            retained_detector_summary = _full_beam_trial_detector_summary(
-                accepted_flag=True
-            )
+            retained_detector_summary = _full_beam_trial_detector_summary(accepted_flag=True)
             retained_detector_source = "full_beam_polish"
         elif retained_detector_summary is None:
             retained_detector_summary = {
@@ -18981,12 +18854,8 @@ def fit_geometry_parameters(
                 selected_pm_summary_public.get("missing_pair_count", 0),
             )
         )
-        selected_matched_pair_count = int(
-            retained_detector_summary.get("matched_pair_count", 0)
-        )
-        selected_missing_pair_count = int(
-            retained_detector_summary.get("missing_pair_count", 0)
-        )
+        selected_matched_pair_count = int(retained_detector_summary.get("matched_pair_count", 0))
+        selected_missing_pair_count = int(retained_detector_summary.get("missing_pair_count", 0))
         selected_outside_radius_count = int(
             retained_detector_summary.get("outside_radius_count", 0)
         )
@@ -19107,9 +18976,7 @@ def fit_geometry_parameters(
                         summary_in,
                         "point_match_cost",
                     ),
-                    "accepted_or_rejected": (
-                        "accepted" if valid_raw_candidate else "rejected"
-                    ),
+                    "accepted_or_rejected": ("accepted" if valid_raw_candidate else "rejected"),
                     "rejection_reason": _candidate_gate_reason(checks),
                     "valid_raw_detector_candidate": bool(valid_raw_candidate),
                     "selected": False,
@@ -19196,17 +19063,13 @@ def fit_geometry_parameters(
             selected_candidate_name = "full_beam_polish_result"
             selected_candidate_source = "full_beam_polish"
             retained_detector_source = "full_beam_polish"
-            retained_detector_summary = _full_beam_trial_detector_summary(
-                accepted_flag=True
-            )
+            retained_detector_summary = _full_beam_trial_detector_summary(accepted_flag=True)
             selected_x = np.asarray(trial_x, dtype=float)
             selected_fun = np.asarray(trial_fun, dtype=float)
             selected_pm_diagnostics = _copy_point_match_diagnostics_for_summary(
                 trial_pm_diagnostics_summary
             )
-            selected_pm_summary = _copy_point_match_summary_for_summary(
-                trial_pm_summary_public
-            )
+            selected_pm_summary = _copy_point_match_summary_for_summary(trial_pm_summary_public)
             selected_cost = float(trial_cost)
             final_metric_residual_fn = _full_beam_residual
             final_metric_point_match_evaluator = _full_beam_point_match_evaluator
@@ -19221,11 +19084,7 @@ def fit_geometry_parameters(
             else (
                 "no_op_optimum"
                 if no_op_optimum
-                else (
-                    "retained_start_safe_fallback"
-                    if preserve_rejected_start
-                    else "rejected"
-                )
+                else ("retained_start_safe_fallback" if preserve_rejected_start else "rejected")
             )
         )
         fit_quality_passed = bool(accepted or selected_best_valid_full_beam or no_op_optimum)
@@ -19323,9 +19182,7 @@ def fit_geometry_parameters(
                         "all_resolved_fixed_correspondences",
                     )
                 ),
-                "candidate_match_radius_exceeded_count": int(
-                    candidate_match_radius_exceeded_count
-                ),
+                "candidate_match_radius_exceeded_count": int(candidate_match_radius_exceeded_count),
                 "candidate_outside_radius_count": int(candidate_outside_radius_count),
                 "candidate_branch_mismatch_count": int(candidate_branch_mismatch_count),
                 "candidate_resolved_fixed_matched_pair_count": int(
@@ -19338,9 +19195,7 @@ def fit_geometry_parameters(
                     start_fixed_source_resolved_count
                 ),
                 "current_fixed_source_resolved_count": int(current_fixed_source_resolved_count),
-                "candidate_fixed_source_resolved_count": int(
-                    candidate_fixed_source_resolved_count
-                ),
+                "candidate_fixed_source_resolved_count": int(candidate_fixed_source_resolved_count),
                 "retained_start_vector_source": str(
                     selected_start_bundle.get("vector_source", "current_result.x")
                 ),
@@ -19356,17 +19211,13 @@ def fit_geometry_parameters(
                 "constraint_count": int(constraint_count),
                 "active_fit_variable_count": int(len(active_fit_variables)),
                 "active_fit_variables": list(active_fit_variables),
-                "current_detector_fallback_summary": dict(
-                    current_detector_fallback_summary
-                ),
+                "current_detector_fallback_summary": dict(current_detector_fallback_summary),
                 "rejected_start_detector_fallback_summary": dict(
                     rejected_start_detector_fallback_summary
                 ),
                 "fun": selected_fun,
                 "stage_timing_s": {
-                    "full_beam_polish": float(
-                        max(0.0, acceptance_started_at - polish_started_at)
-                    ),
+                    "full_beam_polish": float(max(0.0, acceptance_started_at - polish_started_at)),
                     "acceptance_diagnostics": float(
                         max(0.0, time.monotonic() - acceptance_started_at)
                     ),
@@ -21561,8 +21412,7 @@ def fit_geometry_parameters(
             == "retained_start_safe_fallback"
         )
         no_op_optimum_status = (
-            str(full_beam_polish_summary.get("status", "")).strip().lower()
-            == "no_op_optimum"
+            str(full_beam_polish_summary.get("status", "")).strip().lower() == "no_op_optimum"
         )
         preserve_rejected_start = bool(
             full_beam_polish_summary.get("preserved_start_on_reject", False)
@@ -21588,10 +21438,10 @@ def fit_geometry_parameters(
                         "because no valid candidate improved raw detector alignment"
                         if no_op_optimum_status
                         else (
-                        "Full-beam polish candidate rejected; retained fixed-correspondence "
-                        "start because current result lost all fixed peak pairs"
-                        if retained_start_status
-                        else "Full-beam polish rejected; preserved fixed-correspondence seed"
+                            "Full-beam polish candidate rejected; retained fixed-correspondence "
+                            "start because current result lost all fixed peak pairs"
+                            if retained_start_status
+                            else "Full-beam polish rejected; preserved fixed-correspondence seed"
                         )
                     ),
                 )
@@ -21693,8 +21543,7 @@ def fit_geometry_parameters(
         final_metric_x = full_beam_polish_summary.get("x")
         if (
             bool(full_beam_polish_summary.get("accepted", False))
-            and
-            isinstance(final_metric_fun, np.ndarray)
+            and isinstance(final_metric_fun, np.ndarray)
             and isinstance(final_metric_x, np.ndarray)
             and np.asarray(final_metric_x, dtype=float).shape
             == np.asarray(result.x, dtype=float).shape

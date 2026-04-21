@@ -1,7 +1,10 @@
+from types import SimpleNamespace
+
 import numpy as np
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
 from ra_sim.gui import manual_geometry as mg
+from ra_sim.gui import peak_selection as ps
 from ra_sim.simulation import exact_cake_portable
 
 
@@ -1586,6 +1589,77 @@ def test_geometry_manual_choose_group_at_picks_nearest_seed() -> None:
     assert group_key == ("q_group", "primary", 1, 0)
     assert len(entries) == 2
     assert best_dist < 1.0
+
+
+def test_geometry_manual_choose_group_at_uses_visible_detector_display_over_raw_provenance() -> (
+    None
+):
+    group_key = ("q_group", "primary", 3, 4)
+    visible_seed = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "visible-ray",
+        "hkl": (-3, 0, 4),
+        "display_col": 150.0,
+        "display_row": 75.0,
+        "display_frame": "detector_display",
+        "sim_col_raw": 103.0,
+        "sim_row_raw": 204.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+    }
+
+    found_key, entries, best_dist = mg.geometry_manual_choose_group_at(
+        {group_key: [visible_seed]},
+        150.0,
+        75.0,
+        window_size_px=10.0,
+        use_caked_display=False,
+    )
+
+    assert found_key == group_key
+    assert best_dist < 1.0
+    assert len(entries) == 1
+    assert entries[0]["branch_id"] == "-x"
+    assert entries[0]["source_branch_index"] == 1
+    assert entries[0]["source_reflection_index"] == 17
+    assert entries[0]["source_ray_id"] == "visible-ray"
+
+
+def test_geometry_manual_choose_group_at_honors_detector_display_frame_when_values_match_caked() -> (
+    None
+):
+    group_key = ("q_group", "primary", 3, 4)
+    visible_seed = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "same-values-ray",
+        "display_col": 13.0,
+        "display_row": 24.0,
+        "display_frame": "detector_display",
+        "sim_col_raw": 103.0,
+        "sim_row_raw": 204.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+    }
+
+    found_key, entries, best_dist = mg.geometry_manual_choose_group_at(
+        {group_key: [visible_seed]},
+        13.0,
+        24.0,
+        window_size_px=10.0,
+        use_caked_display=False,
+    )
+
+    assert found_key == group_key
+    assert best_dist < 1.0
+    assert entries[0]["source_ray_id"] == "same-values-ray"
 
 
 def test_geometry_manual_choose_group_at_ignores_peaks_outside_50px_window() -> None:
@@ -8002,6 +8076,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
             "phi_deg": 2.0,
             "display_col": 13.0,
             "display_row": 2.0,
+            "display_frame": "caked_display",
             "sim_col_global": 13.0,
             "sim_row_global": 2.0,
             "sim_col_local": 3.0,
@@ -8088,6 +8163,7 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "phi_deg": -9.0,
             "display_col": 17.0,
             "display_row": -9.0,
+            "display_frame": "caked_display",
             "sim_col_global": 17.0,
             "sim_row_global": -9.0,
             "sim_col_local": 7.0,
@@ -9183,6 +9259,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
             "sim_row_raw",
             "display_col",
             "display_row",
+            "display_frame",
         )
     } == {
         "label": "1,0,0",
@@ -9199,6 +9276,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
         "sim_row_raw": 4.0,
         "display_col": 3.0,
         "display_row": 4.0,
+        "display_frame": "detector_display",
     }
     assert projected[0]["selection_reason"] == "mosaic_top_per_branch"
     assert diagnostics["source"] == "cache"
@@ -11037,6 +11115,10 @@ def _cross_view_selection_callbacks(use_caked, raw_rows):
         current_background_display=lambda: np.zeros((256, 256), dtype=float),
         current_background_native=lambda: np.zeros((256, 256), dtype=float),
         image_size=256,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
         native_detector_coords_to_detector_display_coords=lambda col, row: (
             float(col) + 100.0,
             float(row) + 200.0,
@@ -11045,10 +11127,151 @@ def _cross_view_selection_callbacks(use_caked, raw_rows):
             float(col) + 10.0,
             float(row) + 20.0,
         ),
-        build_live_preview_simulated_peaks_from_cache=lambda: [
-            dict(row) for row in raw_rows
-        ],
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(row) for row in raw_rows],
     )
+
+
+def test_detector_qr_selection_uses_sim_display_frame_for_hit_table_rows() -> None:
+    group_key = ("q_group", "primary", 3, 4)
+    sim_row = {
+        "label": "sim-hit",
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 16,
+        "source_ray_id": "sim-ray",
+        "source_table_index": 0,
+        "source_row_index": 2,
+        "hkl": (3, 0, 4),
+        "native_col": 10.0,
+        "native_row": 20.0,
+    }
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((80, 100), dtype=float),
+        current_background_native=lambda: np.zeros((80, 100), dtype=float),
+        image_size=100,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col),
+            float(row),
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            79.0,
+            10.0,
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(sim_row)],
+    )
+
+    projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+
+    assert len(projected) == 1
+    assert projected[0]["display_col"] == 10.0
+    assert projected[0]["display_row"] == 20.0
+    assert projected[0]["sim_col_raw"] == 10.0
+    assert projected[0]["sim_row_raw"] == 20.0
+
+    grouped = callbacks.pick_candidates(projected)
+    group_key_found, group_entries, dist = mg.geometry_manual_choose_group_at(
+        grouped,
+        10.0,
+        20.0,
+        window_size_px=10.0,
+        use_caked_display=False,
+    )
+    assert group_key_found == group_key
+    assert len(group_entries) == 1
+    assert dist < 1.0
+
+    wrong_group_key, wrong_entries, wrong_dist = mg.geometry_manual_choose_group_at(
+        grouped,
+        79.0,
+        10.0,
+        window_size_px=10.0,
+        use_caked_display=False,
+    )
+    assert wrong_group_key is None
+    assert wrong_entries == []
+    assert not np.isfinite(wrong_dist)
+
+    runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_positions_filtered=False,
+    )
+    _idx, record, pick_dist, within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        10.0,
+        20.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=5.0,
+        simulation_point_candidates=[dict(projected[0])],
+        use_caked_display=False,
+    )
+    assert within is True
+    assert pick_dist < 1.0
+    assert record is not None
+    assert record["q_group_key"] == group_key
+    assert record["branch_id"] == "+x"
+    assert record["source_reflection_index"] == 16
+    assert record["source_ray_id"] == "sim-ray"
+
+    _idx, wrong_record, _wrong_pick_dist, wrong_within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        79.0,
+        10.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=5.0,
+        simulation_point_candidates=[dict(projected[0])],
+        use_caked_display=False,
+    )
+    assert wrong_record is not None
+    assert wrong_within is False
+
+
+def test_detector_qr_selection_allows_explicit_background_detector_rows() -> None:
+    group_key = ("q_group", "primary", 3, 4)
+    background_row = {
+        "label": "background-hit",
+        "q_group_key": group_key,
+        "coordinate_frame": "background_detector",
+        "detector_display_source": "native_detector_coords_to_detector_display_coords",
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 16,
+        "source_ray_id": "background-ray",
+        "hkl": (3, 0, 4),
+        "native_col": 10.0,
+        "native_row": 20.0,
+    }
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((80, 100), dtype=float),
+        current_background_native=lambda: np.zeros((80, 100), dtype=float),
+        image_size=100,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col),
+            float(row),
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            79.0,
+            10.0,
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: [dict(background_row)],
+    )
+
+    projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+
+    assert len(projected) == 1
+    assert projected[0]["display_col"] == 79.0
+    assert projected[0]["display_row"] == 10.0
+    assert projected[0]["sim_col_raw"] == 79.0
+    assert projected[0]["sim_row_raw"] == 10.0
 
 
 def _toggle_cross_view_selection(grouped, col, row, *, use_caked_space, group_key):
@@ -11242,6 +11465,248 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
     assert detector_session["tagged_candidate"]["branch_id"] == "-x"
     assert detector_session["tagged_candidate"]["source_reflection_index"] == 17
     assert detector_session["tagged_candidate"]["source_ray_id"] == "minus-ray"
+
+
+def test_peak_selection_detector_hit_test_prefers_detector_coords_over_stale_caked_display() -> (
+    None
+):
+    group_key = ("q_group", "primary", 3, 4)
+    candidate = {
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "hkl": (-3, 0, 4),
+        "display_col": 13.0,
+        "display_row": 24.0,
+        "sim_col": 13.0,
+        "sim_row": 24.0,
+        "sim_col_raw": 103.0,
+        "sim_row_raw": 204.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+        "two_theta_deg": 13.0,
+        "phi_deg": 24.0,
+    }
+    runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_positions_filtered=False,
+    )
+
+    _idx, record, dist, within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        103.0,
+        204.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=25.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=False,
+    )
+
+    assert within is True
+    assert dist < 1.0
+    assert record is not None
+    assert record["q_group_key"] == group_key
+    assert record["branch_id"] == "-x"
+    assert record["source_branch_index"] == 1
+    assert record["source_reflection_index"] == 17
+    assert record["source_ray_id"] == "minus-ray"
+
+    _idx, caked_record, caked_dist, caked_within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        13.0,
+        24.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=25.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=True,
+    )
+
+    assert caked_within is True
+    assert caked_dist < 1.0
+    assert caked_record is not None
+    assert caked_record["branch_id"] == "-x"
+    assert caked_record["source_reflection_index"] == 17
+
+
+def test_peak_selection_detector_hit_test_uses_visible_detector_display_before_raw_provenance() -> (
+    None
+):
+    group_key = ("q_group", "primary", 3, 4)
+    candidate = {
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 16,
+        "source_ray_id": "visible-ray",
+        "hkl": (3, 0, 4),
+        "display_col": 150.0,
+        "display_row": 75.0,
+        "display_frame": "detector_display",
+        "sim_col_raw": 103.0,
+        "sim_row_raw": 204.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+    }
+    runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_positions_filtered=False,
+    )
+
+    _idx, record, dist, within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        150.0,
+        75.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=10.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=False,
+    )
+
+    assert within is True
+    assert dist < 1.0
+    assert record is not None
+    assert record["q_group_key"] == group_key
+    assert record["branch_id"] == "+x"
+    assert record["source_branch_index"] == 0
+    assert record["source_reflection_index"] == 16
+    assert record["source_ray_id"] == "visible-ray"
+
+
+def test_peak_selection_detector_hit_test_honors_detector_display_frame_when_values_match_caked() -> (
+    None
+):
+    group_key = ("q_group", "primary", 3, 4)
+    candidate = {
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 16,
+        "source_ray_id": "same-values-ray",
+        "hkl": (3, 0, 4),
+        "display_col": 13.0,
+        "display_row": 24.0,
+        "display_frame": "detector_display",
+        "sim_col_raw": 103.0,
+        "sim_row_raw": 204.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+    }
+    runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_positions_filtered=False,
+    )
+
+    _idx, record, dist, within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        13.0,
+        24.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=10.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=False,
+    )
+
+    assert within is True
+    assert dist < 1.0
+    assert record is not None
+    assert record["source_ray_id"] == "same-values-ray"
+
+
+def test_peak_selection_detector_hit_test_uses_raw_detector_even_when_values_match_caked() -> None:
+    group_key = ("q_group", "primary", 3, 4)
+    candidate = {
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 16,
+        "source_ray_id": "raw-same-values-ray",
+        "hkl": (3, 0, 4),
+        "display_col": 999.0,
+        "display_row": 999.0,
+        "display_frame": "caked_display",
+        "sim_col_raw": 13.0,
+        "sim_row_raw": 24.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+    }
+    runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_positions_filtered=False,
+    )
+
+    _idx, record, dist, within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        13.0,
+        24.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=10.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=False,
+    )
+
+    assert within is True
+    assert dist < 1.0
+    assert record is not None
+    assert record["source_ray_id"] == "raw-same-values-ray"
+
+
+def test_peak_selection_detector_hit_test_rejects_legacy_caked_alias_coords() -> None:
+    group_key = ("q_group", "primary", 3, 4)
+    candidate = {
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "legacy-caked-ray",
+        "hkl": (-3, 0, 4),
+        "x": 13.0,
+        "y": 24.0,
+        "simulated_x": 13.0,
+        "simulated_y": 24.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+        "two_theta_deg": 13.0,
+        "phi_deg": 24.0,
+    }
+    runtime_state = SimpleNamespace(
+        peak_records=[],
+        peak_positions=[],
+        peak_positions_filtered=False,
+    )
+
+    _idx, record, _dist, within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        13.0,
+        24.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=10.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=False,
+    )
+
+    assert within is False
+    assert record is None
+
+    _idx, caked_record, caked_dist, caked_within = ps.find_peak_record_for_canvas_click(
+        runtime_state,
+        13.0,
+        24.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        max_axis_distance_px=10.0,
+        simulation_point_candidates=[dict(candidate)],
+        use_caked_display=True,
+    )
+
+    assert caked_within is True
+    assert caked_dist < 1.0
+    assert caked_record is not None
+    assert caked_record["source_ray_id"] == "legacy-caked-ray"
 
 
 def test_caked_manual_seed_returns_to_same_detector_visual_position() -> None:

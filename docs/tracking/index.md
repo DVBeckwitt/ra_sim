@@ -35,6 +35,10 @@ provenance. The caked-mode detector-return bug is also closed: selected
 detector-display projection path as simulation markers. The Qr/Qz picker now
 also stays clickable after switching detector to caked or caked to detector,
 even when cached candidate rows still carry stale active-view coordinates.
+Detector-view Qr/Qz hit-table rows now use the simulated detector display frame
+for click targets; the background detector adapter applies only to explicitly
+tagged background/native-detector rows. Caked selection and caked-to-detector
+conversion remain locked by regression tests.
 Optimizer validation stops at bounded ladder rung 1 when the request would use
 fallback rows;
 solve rungs wait until objective dry-run reports zero fallback and zero missing

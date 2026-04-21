@@ -31,9 +31,25 @@ picks made in caked `2theta,phi` space now convert back to detector view through
 the same detector-display projection path used by simulation markers, including
 stale-session refresh and refined simulated seed redraw. The adjacent
 cross-view selection regression is closed too: detector-mode Qr/Qz hit-testing
-uses detector provenance (`sim_col_raw/sim_row_raw` or detector-projected
-coordinates) instead of stale caked active-view display fields, so picking works
-after detector-to-caked and caked-to-detector view changes.
+uses the visible detector marker coordinates first, rejects stale caked
+active-view display fields using explicit display-frame metadata before the
+legacy numeric alias fallback, and then falls back to detector provenance, so
+picking works after detector-to-caked and caked-to-detector view changes.
+
+The detector-view Qr/Qz simulation-frame bug/error scope is now closed:
+simulation hit-table rows with `native_col/native_row` are treated as
+simulation-native detector pixels and projected with
+`native_sim_to_display_coords`, while the background detector display adapter is
+reserved for rows explicitly marked as background/native-detector. Guard tests
+lock caked selection and caked-to-detector conversion behavior so this fix does
+not reopen those known-good paths.
+
+The adjacent startup/list-refresh bug is closed: normal simulation updates now
+request the same hit-table/selection cache needed by Qr/Qz picking and refresh
+the listed Qr/Qz peaks automatically when the grouped row content changes, so
+operators no longer need to press Update Listed Peaks after simulation. Manual
+Qr/Qz refresh requests now remain pending while a hit-table refresh is in
+flight instead of being consumed before rows can be captured.
 
 The geometric optimizer hang/convergence problem is now handled by
 `scripts/debug/run_new4_geometry_fit_ladder.py`, not by the old full baseline
@@ -80,10 +96,26 @@ optimizer request has zero fallback rows.
   that round-trip through the same LUT/rotation path as the live simulation
   marker projection. Refresh now trusts authoritative caked `2theta,phi` fields
   over stale detector fields.
-- Detector-mode Qr/Qz selection now rejects stale caked display fields as
+- Detector-mode Qr/Qz selection now clicks the same visible detector marker
+  position that simulation draws, while rejecting stale caked display fields as
   detector click coordinates. Structural cross-view tests cover detector to
-  caked, caked to detector, and stale caked-cache candidates with valid
-  detector provenance.
+  caked, caked to detector, stale caked-cache candidates with valid detector
+  provenance, and visible detector-display coordinates that differ from raw
+  provenance while carrying caked metadata. Projected rows tag `display_frame`
+  as detector or caked so equal numeric detector/caked values do not hide a
+  valid detector marker. Peak-selection hit testing now shares the manual
+  detector-coordinate resolver, so legacy `x/y` and `simulated_x/y` caked
+  aliases cannot be matched as detector pixels.
+- Simulation-native Qr/Qz detector rows now keep the simulated detector image
+  frame through manual projection, peak overlay restoration, and geometry
+  fallback normalization. With divergent detector/simulation rotations on a
+  non-square image, the sim projection wins and the background-detector rotated
+  point is ignored unless the row is explicitly tagged as a background/native
+  detector row.
+- Listed Qr/Qz peak rows update automatically after simulation row content
+  changes. The manual Update Listed Peaks action remains available, but it is
+  no longer required before detector-mode Qr/Qz picking, and pending manual
+  refresh is not consumed until the listing snapshot is actually captured.
 - Solve rungs are disabled operationally until objective dry-run reports zero
   `fallback_row_count` and zero `fixed_source_resolution_fallback_count`.
 
@@ -95,6 +127,12 @@ optimizer request has zero fallback rows.
 - Keep Qr/Qz branch seed behavior closed unless raw-cache preview, manual
   toggle, refresh, or place setup regresses to either every raw ray or one
   whole-group-only ray.
+- Keep Qr/Qz listing/selection behavior closed unless a simulation update stops
+  refreshing listed Qr/Qz peaks automatically, or detector-mode clicks again
+  report no Qr/Qz set when clicking a visible simulated Qr/Qz marker.
+- Keep detector-view Qr/Qz simulation-frame behavior closed unless simulation
+  hit-table rows again project through the background detector adapter by
+  default, or stale caked display fields become detector click targets.
 - Keep caked-to-detector Qr/Qz return behavior closed unless the same
   simulated `2theta,phi` seed no longer redraws at the same detector marker
   position after switching view or refreshing, or Qr/Qz seed selection stops
@@ -191,6 +229,11 @@ git diff --check
 Caked-to-detector return and cross-view Qr/Qz selection regressions are covered
 in the same gate by structural marker/candidate tests in
 `tests/test_manual_geometry_selection_helpers.py`.
+Automatic listed-Qr/Qz refresh is covered by runtime source guards in
+`tests/test_gui_geometry_q_group_manager.py`.
+Detector-view simulation-frame selection is covered by the divergent-rotation
+regression in `tests/test_manual_geometry_selection_helpers.py` and the overlay
+alignment contract in `tests/test_projection_alignment_contract.py`.
 
 Provider-only validator check:
 

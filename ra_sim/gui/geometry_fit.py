@@ -7380,7 +7380,7 @@ def make_runtime_geometry_tool_action_callbacks(
             not armed,
             message=(
                 (
-                    "Manual geometry picking armed in 2D caked phi-vs-2theta view. "
+                    "Manual geometry picking armed. "
                     "Click a Qr/Qz set once, then click the matching background peaks "
                     "for each simulated member of that set."
                 )

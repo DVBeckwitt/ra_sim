@@ -161,25 +161,12 @@ def _assert_overlaps_image_cell(
     assert abs(float(point[1]) - raster_center[1]) <= float(tolerance)
 
 
-def test_detector_background_hkl_and_qr_overlays_share_display_coordinates() -> None:
-    native_shape = (5, 7)
-    native_row = 1.0
-    native_col = 5.0
-    display_rotate_k = 1
-
-    native_background = np.zeros(native_shape, dtype=np.float64)
-    native_background[int(native_row), int(native_col)] = 1.0
-    display_background = np.rot90(native_background, display_rotate_k)
-    display_row, display_col = np.argwhere(display_background == 1.0)[0]
-    expected_display = geometry_overlay.rotate_point_for_display(
-        native_col,
-        native_row,
-        native_shape,
-        display_rotate_k,
-    )
-
-    assert (float(display_col), float(display_row)) == pytest.approx(expected_display)
-
+def test_detector_sim_hit_overlay_uses_sim_display_coordinates_when_frames_diverge() -> None:
+    native_shape = (60, 100)
+    native_col = 10.0
+    native_row = 20.0
+    expected_sim_display = (10.0, 20.0)
+    background_detector_display = (79.0, 10.0)
     runtime_state = state.SimulationRuntimeState(
         last_simulation_signature=("projection-alignment-contract", "detector"),
         stored_sim_image=np.zeros(native_shape, dtype=np.float64),
@@ -188,86 +175,70 @@ def test_detector_background_hkl_and_qr_overlays_share_display_coordinates() -> 
         ],
     )
 
-    def _detector_display(col: float, row: float) -> tuple[float, float]:
-        return geometry_overlay.rotate_point_for_display(
-            col,
-            row,
-            native_shape,
-            display_rotate_k,
-        )
+    def _sim_display(
+        col: float,
+        row: float,
+        image_shape: tuple[int, int],
+    ) -> tuple[float, float]:
+        assert (float(col), float(row)) == pytest.approx((native_col, native_row))
+        assert tuple(image_shape) == native_shape
+        return expected_sim_display
 
-    def _poison_detector_hkl_sim_display(*_args):
-        raise AssertionError("detector HKL overlays must use detector display coordinates")
+    def _detector_display(_col: float, _row: float) -> tuple[float, float]:
+        return background_detector_display
 
     assert peak_selection.ensure_runtime_peak_overlay_data(
         runtime_state,
         primary_a=4.0,
         primary_c=6.0,
-        native_sim_to_display_coords=_poison_detector_hkl_sim_display,
+        native_sim_to_display_coords=_sim_display,
         native_detector_coords_to_detector_display_coords=_detector_display,
         reflection_q_group_metadata=_reflection_q_group_metadata,
         max_hits_per_reflection=1,
         min_separation_px=0.0,
         force=True,
     )
-    assert runtime_state.peak_positions == pytest.approx([expected_display])
+    assert runtime_state.peak_positions == pytest.approx([expected_sim_display])
+    assert runtime_state.peak_records[0]["display_col"] == expected_sim_display[0]
+    assert runtime_state.peak_records[0]["display_row"] == expected_sim_display[1]
+    assert runtime_state.peak_records[0]["native_col"] == native_col
+    assert runtime_state.peak_records[0]["native_row"] == native_row
 
-    def _detector_qr_display(
-        col: float,
-        row: float,
-        _image_shape: tuple[int, int],
-    ) -> tuple[float, float]:
-        return _detector_display(col, row)
-
-    paths = qr_cylinder_overlay.build_qr_cylinder_overlay_paths(
-        [{"source": "primary", "m": 1, "qr": 0.2}],
-        config=_qr_config(
-            render_in_caked_space=False,
-            image_size=max(native_shape),
-            display_rotate_k=display_rotate_k,
-        ),
-        projection_context=None,
-        native_sim_to_display_coords=_detector_qr_display,
-        project_traces=lambda **_kwargs: [_fake_trace_through_native_point(native_col, native_row)],
+    normalized = geometry_q_group_manager.normalize_detector_peak_record_fallback_rows(
+        [
+            {
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "native_col": native_col,
+                "native_row": native_row,
+            }
+        ],
+        image_shape=native_shape,
+        native_sim_to_display_coords=_sim_display,
+        native_detector_coords_to_detector_display_coords=_detector_display,
     )
-    assert len(paths) == 1
-    assert (float(paths[0]["cols"][1]), float(paths[0]["rows"][1])) == pytest.approx(
-        expected_display,
+    assert len(normalized) == 1
+    assert normalized[0]["display_col"] == expected_sim_display[0]
+    assert normalized[0]["display_row"] == expected_sim_display[1]
+
+    background_normalized = geometry_q_group_manager.normalize_detector_peak_record_fallback_rows(
+        [
+            {
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "coordinate_frame": "background_detector",
+                "detector_display_source": "native_detector_coords_to_detector_display_coords",
+                "native_col": native_col,
+                "native_row": native_row,
+            }
+        ],
+        image_shape=native_shape,
+        native_sim_to_display_coords=_sim_display,
+        native_detector_coords_to_detector_display_coords=_detector_display,
     )
-
-    fig, ax = plt.subplots()
-    try:
-        extent = (0.0, float(display_background.shape[1]), float(display_background.shape[0]), 0.0)
-        ax.imshow(display_background, origin="upper", extent=extent, interpolation="nearest")
-        peak_line = ax.plot(
-            [runtime_state.peak_positions[0][0]],
-            [runtime_state.peak_positions[0][1]],
-            "o",
-        )[0]
-        qr_artists = _draw_qr_paths(ax, paths)
-
-        assert (float(peak_line.get_xdata()[0]), float(peak_line.get_ydata()[0])) == pytest.approx(
-            expected_display,
-        )
-        assert (
-            float(qr_artists[0].get_xdata()[1]),
-            float(qr_artists[0].get_ydata()[1]),
-        ) == pytest.approx(expected_display)
-
-        # The matrix contract is exact above. The rendered raster is sampled at cell
-        # centers, while overlays are drawn in pixel-index coordinates, so the visual
-        # check allows the expected half-pixel offset but still catches flips/transposes.
-        raster_center = _image_cell_center(
-            image_shape=display_background.shape,
-            row=int(display_row),
-            col=int(display_col),
-            extent=extent,
-            origin="upper",
-        )
-        assert abs(raster_center[0] - expected_display[0]) <= 0.5
-        assert abs(raster_center[1] - expected_display[1]) <= 0.5
-    finally:
-        plt.close(fig)
+    assert len(background_normalized) == 1
+    assert background_normalized[0]["display_col"] == background_detector_display[0]
+    assert background_normalized[0]["display_row"] == background_detector_display[1]
 
 
 def test_caked_background_hkl_and_qr_overlays_share_display_coordinates(monkeypatch) -> None:

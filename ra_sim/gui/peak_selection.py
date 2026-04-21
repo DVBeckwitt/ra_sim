@@ -1762,11 +1762,16 @@ def ensure_runtime_peak_overlay_data(
                         continue
                     disp_cx = float(caked_coords[0])
                     disp_cy = float(caked_coords[1])
-                elif callable(native_detector_coords_to_detector_display_coords):
-                    detector_display = native_detector_coords_to_detector_display_coords(
-                        float(cx),
-                        float(cy),
-                    )
+                else:
+                    detector_display = None
+                    try:
+                        detector_display = native_sim_to_display_coords(
+                            float(cx),
+                            float(cy),
+                            image_shape,
+                        )
+                    except Exception:
+                        detector_display = None
                     if (
                         isinstance(detector_display, tuple)
                         and len(detector_display) >= 2
@@ -1775,18 +1780,23 @@ def ensure_runtime_peak_overlay_data(
                     ):
                         disp_cx = float(detector_display[0])
                         disp_cy = float(detector_display[1])
-                    else:
-                        disp_cx, disp_cy = native_sim_to_display_coords(
+                    elif callable(native_detector_coords_to_detector_display_coords):
+                        detector_display = native_detector_coords_to_detector_display_coords(
                             float(cx),
                             float(cy),
-                            image_shape,
                         )
-                else:
-                    disp_cx, disp_cy = native_sim_to_display_coords(
-                        float(cx),
-                        float(cy),
-                        image_shape,
-                    )
+                        if (
+                            isinstance(detector_display, tuple)
+                            and len(detector_display) >= 2
+                            and np.isfinite(float(detector_display[0]))
+                            and np.isfinite(float(detector_display[1]))
+                        ):
+                            disp_cx = float(detector_display[0])
+                            disp_cy = float(detector_display[1])
+                        else:
+                            continue
+                    else:
+                        continue
                 too_close = False
                 if min_sep_sq > 0.0:
                     for _, _, _, _, prev_col, prev_row, _ in chosen_rows:
@@ -1873,6 +1883,13 @@ def ensure_runtime_peak_overlay_data(
                     "display_row": float(disp_cy),
                     "native_col": float(cx),
                     "native_row": float(cy),
+                    "coordinate_frame": "simulation_native",
+                    "display_frame": (
+                        "caked_display" if caked_coords is not None else "detector_display"
+                    ),
+                    "detector_display_source": (
+                        "caked_cache" if caked_coords is not None else "native_sim_to_display"
+                    ),
                     "hkl": hkl,
                     "hkl_raw": hkl_raw,
                     "intensity": float(intensity),
@@ -1897,6 +1914,11 @@ def ensure_runtime_peak_overlay_data(
                     "cv": float(cv_used),
                     "q_group_nominal_hkl": True,
                 }
+                if caked_coords is None:
+                    record["sim_col"] = float(disp_cx)
+                    record["sim_row"] = float(disp_cy)
+                    record["sim_col_raw"] = float(disp_cx)
+                    record["sim_row_raw"] = float(disp_cy)
                 if source_table_index is not None:
                     record["source_table_index"] = int(source_table_index)
                 if source_row_index is not None:
@@ -2017,41 +2039,6 @@ def _finite_record_pair(
     return float(col), float(row)
 
 
-def _record_caked_pairs(record: Mapping[str, object] | None) -> list[tuple[float, float]]:
-    """Return finite caked-coordinate pairs carried by one peak record."""
-
-    if not isinstance(record, Mapping):
-        return []
-    pairs: list[tuple[float, float]] = []
-    for x_key, y_key in (
-        ("caked_x", "caked_y"),
-        ("raw_caked_x", "raw_caked_y"),
-        ("two_theta_deg", "phi_deg"),
-        ("refined_sim_caked_x", "refined_sim_caked_y"),
-        ("background_two_theta_deg", "background_phi_deg"),
-        ("simulated_two_theta_deg", "simulated_phi_deg"),
-    ):
-        point = _finite_record_pair(record, x_key, y_key)
-        if point is not None:
-            pairs.append(point)
-    return pairs
-
-
-def _point_matches_any(
-    point: tuple[float, float] | None,
-    candidates: Sequence[tuple[float, float]],
-    *,
-    tol: float = 1.0e-9,
-) -> bool:
-    if point is None:
-        return False
-    return any(
-        abs(float(point[0]) - float(candidate[0])) <= float(tol)
-        and abs(float(point[1]) - float(candidate[1])) <= float(tol)
-        for candidate in candidates
-    )
-
-
 def _record_detector_display_pair(
     record: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
@@ -2067,19 +2054,7 @@ def _record_detector_display_pair(
         if point is not None:
             return point
 
-    caked_pairs = _record_caked_pairs(record)
-    for x_key, y_key in (
-        ("display_col", "display_row"),
-        ("sim_col_raw", "sim_row_raw"),
-        ("sim_col", "sim_row"),
-        ("x", "y"),
-        ("simulated_x", "simulated_y"),
-    ):
-        point = _finite_record_pair(record, x_key, y_key)
-        if point is None or _point_matches_any(point, caked_pairs):
-            continue
-        return point
-    return None
+    return gui_manual_geometry._geometry_manual_entry_detector_display_point(record)
 
 
 def _record_display_pair(
@@ -2453,6 +2428,7 @@ def _refine_selected_hkl_caked_record(
             detector_row = float(detector_display[1])
             selected["display_col"] = detector_col
             selected["display_row"] = detector_row
+            selected["display_frame"] = "detector_display"
             selected["sim_col"] = detector_col
             selected["sim_row"] = detector_row
             selected["sim_col_raw"] = detector_col
@@ -3071,6 +3047,12 @@ def _resolve_peak_record_display_coords(
         or _point("raw_caked_x", "raw_caked_y")
         or _point("two_theta_deg", "phi_deg")
     )
+    background_detector_frame = (
+        gui_manual_geometry.geometry_manual_entry_is_background_detector_frame(raw_record)
+    )
+    simulation_native_frame = gui_manual_geometry.geometry_manual_entry_is_simulation_native_frame(
+        raw_record
+    )
 
     if bool(show_caked):
         if caked_point is not None:
@@ -3090,7 +3072,40 @@ def _resolve_peak_record_display_coords(
             return explicit_display_point
         return None
 
-    if native_point is not None and callable(native_detector_coords_to_detector_display_coords):
+    if raw_detector_display is not None and not background_detector_frame:
+        return raw_detector_display
+
+    if (
+        native_point is not None
+        and not background_detector_frame
+        and simulation_native_frame
+        and callable(native_sim_to_display_coords)
+    ):
+        try:
+            projected = native_sim_to_display_coords(
+                float(native_point[0]),
+                float(native_point[1]),
+                image_shape,
+            )
+        except Exception:
+            projected = None
+        if (
+            isinstance(projected, tuple)
+            and len(projected) >= 2
+            and np.isfinite(float(projected[0]))
+            and np.isfinite(float(projected[1]))
+        ):
+            return (float(projected[0]), float(projected[1]))
+
+    if (
+        native_point is not None
+        and callable(native_detector_coords_to_detector_display_coords)
+        and (
+            background_detector_frame
+            or not simulation_native_frame
+            or not callable(native_sim_to_display_coords)
+        )
+    ):
         try:
             projected = native_detector_coords_to_detector_display_coords(
                 float(native_point[0]),
@@ -3105,7 +3120,6 @@ def _resolve_peak_record_display_coords(
             and np.isfinite(float(projected[1]))
         ):
             return (float(projected[0]), float(projected[1]))
-
     if native_point is not None and callable(native_sim_to_display_coords):
         try:
             projected = native_sim_to_display_coords(
@@ -3295,6 +3309,7 @@ def _restore_peak_overlay_lists_from_cached_records(
             record["sim_row_raw"] = float(detector_display_point[1])
             record["display_col"] = float(detector_display_point[0])
             record["display_row"] = float(detector_display_point[1])
+            record["display_frame"] = "detector_display"
         else:
             record.pop("sim_col", None)
             record.pop("sim_row", None)
@@ -3303,6 +3318,7 @@ def _restore_peak_overlay_lists_from_cached_records(
         if bool(show_caked):
             record["display_col"] = float(display_point[0])
             record["display_row"] = float(display_point[1])
+            record["display_frame"] = "caked_display"
             record["caked_x"] = float(display_point[0])
             record["caked_y"] = float(display_point[1])
             record.setdefault("raw_caked_x", float(display_point[0]))
@@ -3312,6 +3328,7 @@ def _restore_peak_overlay_lists_from_cached_records(
         else:
             record["display_col"] = float(display_point[0])
             record["display_row"] = float(display_point[1])
+            record["display_frame"] = "detector_display"
 
         restored_records.append(record)
         restored_positions.append((float(display_point[0]), float(display_point[1])))
@@ -4659,6 +4676,7 @@ def _reselect_runtime_refined_detector_record(
     selected_record = dict(record)
     selected_record["display_col"] = detector_col
     selected_record["display_row"] = detector_row
+    selected_record["display_frame"] = "detector_display"
     selected_record["sim_col"] = detector_col
     selected_record["sim_row"] = detector_row
     selected_record["sim_col_raw"] = detector_col
